@@ -252,11 +252,52 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
   int? _currentLevelCode;
   int? _desiredLevelCode;
   int? _targetLevelCode;
+  late Future<Map<String, dynamic>> _homeworkScoreFuture;
 
   @override
   void initState() {
     super.initState();
+    _homeworkScoreFuture = _buildHomeworkScoreFuture();
+    HomeworkStore.instance.revision.addListener(_onHomeworkSignalsChanged);
+    HomeworkAssignmentStore.instance.revision.addListener(_onHomeworkSignalsChanged);
+    DataManager.instance.studentsNotifier.addListener(_onHomeworkSignalsChanged);
+    unawaited(HomeworkStore.instance.loadAll());
     unawaited(_load());
+  }
+
+  @override
+  void didUpdateWidget(covariant _StudentStatsView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final prevId = oldWidget.studentWithInfo.student.id.trim();
+    final nextId = widget.studentWithInfo.student.id.trim();
+    if (prevId != nextId) {
+      _refreshHomeworkScoreFuture();
+    }
+  }
+
+  @override
+  void dispose() {
+    HomeworkStore.instance.revision.removeListener(_onHomeworkSignalsChanged);
+    HomeworkAssignmentStore.instance.revision.removeListener(_onHomeworkSignalsChanged);
+    DataManager.instance.studentsNotifier.removeListener(_onHomeworkSignalsChanged);
+    super.dispose();
+  }
+
+  Future<Map<String, dynamic>> _buildHomeworkScoreFuture() {
+    return DataManager.instance.calculateHomeworkScoreWithRankAsync(
+      studentId: widget.studentWithInfo.student.id,
+    );
+  }
+
+  void _refreshHomeworkScoreFuture() {
+    if (!mounted) return;
+    setState(() {
+      _homeworkScoreFuture = _buildHomeworkScoreFuture();
+    });
+  }
+
+  void _onHomeworkSignalsChanged() {
+    _refreshHomeworkScoreFuture();
   }
 
   List<_LevelOption> _fallbackOptions() {
@@ -595,6 +636,204 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
     );
   }
 
+  Widget _buildHomeworkScoreLoadingCard() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF15171C),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: kDlgBorder),
+      ),
+      child: const Row(
+        children: [
+          SizedBox(
+            width: 14,
+            height: 14,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              color: kDlgAccent,
+            ),
+          ),
+          SizedBox(width: 10),
+          Text(
+            '과제 점수를 계산하는 중입니다...',
+            style: TextStyle(color: kDlgTextSub, fontSize: 12.5),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHomeworkScoreErrorCard(Object? error) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF15171C),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: kDlgBorder),
+      ),
+      child: Text(
+        '과제 점수 계산 중 오류가 발생했어요: $error',
+        style: const TextStyle(color: Color(0xFFEF6A6A), fontSize: 12.5, height: 1.35),
+      ),
+    );
+  }
+
+  Widget _buildHomeworkScoreCard(Map<String, dynamic> scoreMap) {
+    final score100 = _asDouble(scoreMap['score100']);
+    final expRaw = _asDouble(scoreMap['expRaw']);
+    final expDecayed = _asDouble(scoreMap['expDecayed']);
+    final assignedExpDecayed = _asDouble(scoreMap['assignedExpDecayed']);
+    final checkExpDecayed = _asDouble(scoreMap['checkExpDecayed']);
+    final completedExpDecayed = _asDouble(scoreMap['completedExpDecayed']);
+    final eventCount = _asInt(scoreMap['eventCount']) ?? 0;
+    final assignedCount = _asInt(scoreMap['assignedCount']) ?? 0;
+    final checkCount = _asInt(scoreMap['checkCount']) ?? 0;
+    final completedCount = _asInt(scoreMap['completedCount']) ?? 0;
+    final halfLifeDays = _asDouble(scoreMap['halfLifeDays']);
+    final scaleK = _asDouble(scoreMap['scaleK']);
+    final formulaVersion = (scoreMap['formulaVersion'] as String?)?.trim();
+    final rank = _asInt(scoreMap['rank']);
+    final cohortSize = _asInt(scoreMap['cohortSize']) ?? 0;
+    final topPercent = _asDouble(scoreMap['topPercent']);
+    final rawLastEventAt = (scoreMap['lastEventAt'] as String?)?.trim();
+    DateTime? lastEventAt;
+    if (rawLastEventAt != null && rawLastEventAt.isNotEmpty) {
+      lastEventAt = DateTime.tryParse(rawLastEventAt)?.toLocal();
+    }
+    final String lastEventText =
+        lastEventAt == null ? '없음' : DateFormat('yyyy.MM.dd').format(lastEventAt);
+
+    if (eventCount <= 0 || expDecayed <= 0) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+        decoration: BoxDecoration(
+          color: const Color(0xFF15171C),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: kDlgBorder),
+        ),
+        child: const Text(
+          '과제 점수를 계산할 기록이 아직 충분하지 않아요. 과제 배정/검사/완료 기록이 누적되면 점수가 표시됩니다.',
+          style: TextStyle(color: kDlgTextSub, fontSize: 12.5, height: 1.4),
+        ),
+      );
+    }
+
+    final double totalExp = expDecayed;
+    final double completedRatio =
+        totalExp > 0 ? (completedExpDecayed / totalExp) * 100.0 : 0.0;
+    final double checkRatio =
+        totalExp > 0 ? (checkExpDecayed / totalExp) * 100.0 : 0.0;
+    final double assignedRatio =
+        totalExp > 0 ? (assignedExpDecayed / totalExp) * 100.0 : 0.0;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF15171C),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: kDlgBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '과제 점수 (EXP)',
+                      style: TextStyle(
+                        color: kDlgText,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    SizedBox(height: 4),
+                    Text(
+                      '배정/검사/완료 이벤트를 누적하고, 오래된 기록은 약하게만 희석해 장기 성실도를 반영합니다.',
+                      style: TextStyle(color: kDlgTextSub, fontSize: 12.5, height: 1.35),
+                    ),
+                  ],
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1E3E63),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: const Color(0xFF35679E)),
+                ),
+                child: Text(
+                  '${score100.toStringAsFixed(1)}점',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _metricChip(
+                label: '완료',
+                value: completedExpDecayed,
+                ratio: completedRatio,
+                color: const Color(0xFF33A373),
+              ),
+              _metricChip(
+                label: '검사',
+                value: checkExpDecayed,
+                ratio: checkRatio,
+                color: const Color(0xFFE09C3D),
+              ),
+              _metricChip(
+                label: '배정',
+                value: assignedExpDecayed,
+                ratio: assignedRatio,
+                color: const Color(0xFF5A8DEE),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            '누적 EXP ${expRaw.toStringAsFixed(1)} · 희석 반영 EXP ${expDecayed.toStringAsFixed(1)}',
+            style: const TextStyle(color: kDlgTextSub, fontSize: 12),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            '반영 이벤트 ${eventCount}건 (완료 ${completedCount} · 검사 ${checkCount} · 배정 ${assignedCount}) · 마지막 반영 ${lastEventText}',
+            style: const TextStyle(color: kDlgTextSub, fontSize: 12),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            '기준: 반감기 ${halfLifeDays.toStringAsFixed(0)}일 · scaleK ${scaleK.toStringAsFixed(0)} · ${formulaVersion ?? 'homework_score_v1'}',
+            style: const TextStyle(color: kDlgTextSub, fontSize: 12),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            (rank != null && cohortSize > 0)
+                ? '재원생 기준 ${rank}등 / ${cohortSize}명 (상위 ${topPercent.toStringAsFixed(1)}%)'
+                : '재원생 순위 계산을 위한 데이터가 부족해요.',
+            style: const TextStyle(color: kDlgTextSub, fontSize: 12.5),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_loading) {
@@ -758,11 +997,26 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
                       title: '개입 가능 변수',
                     ),
                     const Text(
-                      '의도적 훈련/설계로 바꿀 수 있는 변수입니다. 현재는 출석 점수를 1단계로 반영합니다.',
+                      '의도적 훈련/설계로 바꿀 수 있는 변수입니다. 현재는 출석 점수와 과제 점수를 1단계로 반영합니다.',
                       style: TextStyle(color: kDlgTextSub, fontSize: 12.5),
                     ),
                     const SizedBox(height: 10),
                     _buildAttendanceScoreCard(scoreMap),
+                    const SizedBox(height: 12),
+                    FutureBuilder<Map<String, dynamic>>(
+                      future: _homeworkScoreFuture,
+                      builder: (context, snapshot) {
+                        if (snapshot.connectionState == ConnectionState.waiting) {
+                          return _buildHomeworkScoreLoadingCard();
+                        }
+                        if (snapshot.hasError) {
+                          return _buildHomeworkScoreErrorCard(snapshot.error);
+                        }
+                        return _buildHomeworkScoreCard(
+                          snapshot.data ?? const <String, dynamic>{},
+                        );
+                      },
+                    ),
                           ],
                         ),
                       ),

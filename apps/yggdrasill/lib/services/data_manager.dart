@@ -35,6 +35,7 @@ import 'memo_service.dart';
 import 'resource_service.dart';
 import 'answer_key_service.dart';
 import 'attendance_service.dart';
+import 'homework_score_service.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' show RealtimeChannel, PostgresChangeEvent, PostgresChangeFilter, PostgresChangeFilterType, Supabase, AuthState, AuthChangeEvent;
 import 'package:supabase_flutter/supabase_flutter.dart' show RealtimeChannel, Supabase;
 
@@ -5360,6 +5361,108 @@ DateTime? _lastClassesOrderSaveStart;
             ? scoreMap['score100AfterMakeup']
             : scoreMap['score100'],
       );
+      ranked.add(MapEntry<String, double>(id, score));
+    }
+    ranked.sort((a, b) {
+      final byScore = b.value.compareTo(a.value);
+      if (byScore != 0) return byScore;
+      return a.key.compareTo(b.key);
+    });
+
+    double? targetScore;
+    for (final e in ranked) {
+      if (e.key == sid) {
+        targetScore = e.value;
+        break;
+      }
+    }
+    if (targetScore == null) {
+      base.addAll(<String, dynamic>{
+        'rank': null,
+        'cohortSize': ranked.length,
+        'topPercent': null,
+      });
+      return base;
+    }
+
+    const double eps = 1e-9;
+    final double targetScoreValue = targetScore;
+    final int higherCount =
+        ranked.where((e) => e.value > (targetScoreValue + eps)).length;
+    final int rank = higherCount + 1;
+    final int cohortSize = ranked.length;
+    final double topPercent = cohortSize > 0 ? (rank / cohortSize) * 100.0 : 0.0;
+
+    base.addAll(<String, dynamic>{
+      'rank': rank,
+      'cohortSize': cohortSize,
+      'topPercent': topPercent,
+      'rankScore100': targetScoreValue,
+    });
+    return base;
+  }
+  Future<Map<String, dynamic>> calculateHomeworkScoreAsync({
+    required String studentId,
+    DateTime? nowRef,
+  }) =>
+      HomeworkScoreService.instance.calculateHomeworkScore(
+        studentId: studentId,
+        nowRef: nowRef,
+      );
+  Future<Map<String, dynamic>> calculateHomeworkScoreWithRankAsync({
+    required String studentId,
+    DateTime? nowRef,
+    bool excludePausedStudents = false,
+  }) async {
+    double asDouble(dynamic v) {
+      if (v == null) return 0.0;
+      if (v is double) return v;
+      if (v is num) return v.toDouble();
+      if (v is String) return double.tryParse(v) ?? 0.0;
+      return 0.0;
+    }
+
+    final sid = studentId.trim();
+    final now = nowRef ?? DateTime.now();
+    final base = Map<String, dynamic>.from(
+      await calculateHomeworkScoreAsync(studentId: sid, nowRef: now),
+    );
+    if (sid.isEmpty) {
+      base.addAll(<String, dynamic>{
+        'rank': null,
+        'cohortSize': 0,
+        'topPercent': null,
+      });
+      return base;
+    }
+
+    final List<String> cohortIds = <String>[];
+    for (final s in _studentsWithInfo) {
+      final id = s.student.id.trim();
+      if (id.isEmpty) continue;
+      if (excludePausedStudents && getActivePauseForStudent(id) != null) {
+        continue;
+      }
+      cohortIds.add(id);
+    }
+    if (cohortIds.isEmpty) {
+      base.addAll(<String, dynamic>{
+        'rank': null,
+        'cohortSize': 0,
+        'topPercent': null,
+      });
+      return base;
+    }
+
+    final allScoreMaps =
+        await HomeworkScoreService.instance.calculateHomeworkScoresForStudents(
+      studentIds: cohortIds,
+      nowRef: now,
+    );
+    final List<MapEntry<String, double>> ranked = <MapEntry<String, double>>[];
+    for (final id in cohortIds) {
+      final scoreMap = allScoreMaps[id];
+      final score = asDouble(scoreMap?['score100']);
       ranked.add(MapEntry<String, double>(id, score));
     }
     ranked.sort((a, b) {
