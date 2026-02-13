@@ -65,6 +65,20 @@ cd tools
 - 앱의 "업데이트 확인" 버튼은 GitHub Releases의 `releases/latest`에서 `Yggdrasill_portable_x64.zip`을 내려받아 자동 교체/재시작합니다.
 - MSIX/App Installer 기반 업데이트는 Windows 정책에 의해 쉽게 깨질 수 있어 **사용하지 않습니다.**
 
+### 업데이트 UI 디자인 토큰(통일성)
+업데이트 안내 배너/스낵바는 아래 색상 규칙을 유지합니다.
+- **Primary Accent**: `#1976D2` (진행/강조/포커스)
+- **Card Surface**: `#232326` (업데이트 카드/스낵바 바탕)
+- **Border/Track**: `#2A2A2A` (카드 테두리/프로그레스 배경)
+- 변경 위치:
+  - `apps/yggdrasill/lib/main.dart` (`_GlobalStartupUpdateCard`, 업데이트 완료 스낵바)
+  - `apps/yggdrasill/lib/services/update_service.dart` (`_showSnack`)
+
+### 재발 방지 체크포인트(ARM 실행 오류 포함)
+- 빌드 산출물에 VC++ 런타임 DLL(`msvcp140.dll`, `vcruntime140.dll`, `vcruntime140_1.dll`)이 포함되어야 합니다.
+- `build_msix_with_defines.ps1`는 위 DLL이 누락되면 실패하도록 되어 있습니다(배포 차단).
+- 릴리스 직후 `gh release view vX.Y.Z.N --json url` 결과 URL이 `/releases/tag/vX.Y.Z.N` 형태인지 확인합니다.
+
 ### 문제 해결(Troubleshooting)
 - pubspec 인코딩 오류: 아래로 강제 저장
 ```powershell
@@ -75,6 +89,7 @@ Set-Content apps\yggdrasill\pubspec.yaml (Get-Content apps\yggdrasill\pubspec.ya
 - `gh release create` 출력 URL이 `untagged-...`로 보이는 경우:
   - 태그가 원격에 실제로 존재하는지부터 확인: `git push origin vX.Y.Z.N`
   - 그 다음 릴리스를 삭제/재생성 후 재확인: `gh release delete vX.Y.Z.N --yes` → `gh release create vX.Y.Z.N ...`
+  - draft 생성 시 일시적으로 `untagged-...` URL이 보일 수 있으므로, 공개 후 `gh release view vX.Y.Z.N --json url`로 최종 URL을 확인합니다.
 - gh CLI 미설치: https://cli.github.com 설치 후 `gh auth login`
 - ARM64 장비: ARM64 ZIP이 없으면 x64 포터블 ZIP로 자동 폴백됩니다.
 

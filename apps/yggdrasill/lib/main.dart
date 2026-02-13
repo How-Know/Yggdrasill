@@ -464,10 +464,19 @@ void main() async {
   if (showUpdateSnack) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       rootScaffoldMessengerKey.currentState?.showSnackBar(
-        const SnackBar(
-          content: Text('업데이트가 완료되어 새로 시작했어요.'),
-          backgroundColor: Color(0xFF1976D2),
-          duration: Duration(seconds: 3),
+        SnackBar(
+          content: const Text(
+            '업데이트가 완료되어 새로 시작했어요.',
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+          ),
+          backgroundColor: const Color(0xFF232326),
+          behavior: SnackBarBehavior.floating,
+          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+            side: const BorderSide(color: Color(0xFF1976D2), width: 1.1),
+          ),
+          duration: const Duration(seconds: 3),
         ),
       );
     });
@@ -665,8 +674,9 @@ class _GlobalStartupUpdateCardState extends State<_GlobalStartupUpdateCard> {
     final showChecking = _info.phase == UpdatePhase.checking || _info.phase == UpdatePhase.downloading;
     final showReady = _info.phase == UpdatePhase.readyToApply;
     if (!showChecking && !showReady) return const SizedBox.shrink();
-    final theme = Theme.of(context);
-    final primary = theme.colorScheme.primary;
+    const primary = Color(0xFF1976D2);
+    const cardColor = Color(0xFF232326);
+    const borderColor = Color(0xFF2A2A2A);
     final title = showChecking
         ? (_info.phase == UpdatePhase.checking ? '업데이트 확인 중' : '업데이트 다운로드 중')
         : '업데이트 적용 준비 완료';
@@ -689,9 +699,9 @@ class _GlobalStartupUpdateCardState extends State<_GlobalStartupUpdateCard> {
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF1F1F1F),
+                  color: cardColor,
                   borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: const Color(0xFF2A2A2A)),
+                  border: Border.all(color: borderColor),
                   boxShadow: const [
                     BoxShadow(color: Colors.black54, blurRadius: 14, spreadRadius: 0, offset: Offset(0, 6)),
                   ],
@@ -730,13 +740,13 @@ class _GlobalStartupUpdateCardState extends State<_GlobalStartupUpdateCard> {
                                 Container(
                                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                                   decoration: BoxDecoration(
-                                    color: const Color(0xFF2A2A2A),
+                                    color: primary.withOpacity(0.12),
                                     borderRadius: BorderRadius.circular(999),
-                                    border: Border.all(color: Colors.white12),
+                                    border: Border.all(color: primary.withOpacity(0.35)),
                                   ),
                                   child: Text(
                                     _info.tag!,
-                                    style: const TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.w800),
+                                    style: const TextStyle(color: Color(0xFF9CCBFF), fontSize: 11, fontWeight: FontWeight.w800),
                                   ),
                                 ),
                               ],
@@ -753,7 +763,7 @@ class _GlobalStartupUpdateCardState extends State<_GlobalStartupUpdateCard> {
                             child: LinearProgressIndicator(
                               minHeight: 4.5,
                               color: primary,
-                              backgroundColor: const Color(0xFF2A2A2A),
+                              backgroundColor: borderColor,
                             ),
                           ),
                         ],
