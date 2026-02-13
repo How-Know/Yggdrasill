@@ -16,6 +16,12 @@ const Color _rsBorder = Color(0xFF223131);
 const Color _rsText = Color(0xFFEAF2F2);
 const Color _rsTextSub = Color(0xFF9FB3B3);
 const Color _rsAccent = Color(0xFF33A373);
+const String _textbookTypeConcept = '개념서';
+const String _textbookTypeWorkbook = '문제집';
+const Set<String> _allowedTextbookTypes = {
+  _textbookTypeConcept,
+  _textbookTypeWorkbook,
+};
 
 class TextbookScreen extends StatefulWidget {
   const TextbookScreen({super.key});
@@ -40,6 +46,7 @@ class _TextbookScreenState extends State<TextbookScreen> {
   List<_PdfEntry> _solPdfs = [];
   List<_PdfEntry> _ansPdfs = [];
   String? _selectedBodyKey;
+  String _textbookType = _textbookTypeConcept;
   final List<_BigUnitNode> _bigUnits = [];
   final TextEditingController _pageOffsetCtrl = TextEditingController();
   final Map<String, int> _pageOffsetByKey = {};
@@ -132,6 +139,7 @@ class _TextbookScreenState extends State<TextbookScreen> {
           _solPdfs = [];
           _ansPdfs = [];
           _selectedBodyKey = null;
+          _textbookType = _textbookTypeConcept;
           _clearChapterTree();
           _setPageOffsetForSelection();
         }
@@ -155,6 +163,7 @@ class _TextbookScreenState extends State<TextbookScreen> {
       _solPdfs = [];
       _ansPdfs = [];
       _selectedBodyKey = null;
+      _textbookType = _textbookTypeConcept;
     });
     try {
       final data = await _supabase
@@ -351,6 +360,7 @@ class _TextbookScreenState extends State<TextbookScreen> {
     if (book == null || body == null) {
       setState(() {
         _clearChapterTree();
+        _textbookType = _textbookTypeConcept;
         _setPageOffsetForSelection();
         _isLoadingMetadata = false;
       });
@@ -363,7 +373,7 @@ class _TextbookScreenState extends State<TextbookScreen> {
     try {
       final data = await _supabase
           .from('textbook_metadata')
-          .select('page_offset,payload')
+          .select('page_offset,payload,textbook_type')
           .match({
             'academy_id': academyId,
             'book_id': book.id,
@@ -397,9 +407,11 @@ class _TextbookScreenState extends State<TextbookScreen> {
   }) {
     final key = _pageOffsetKey(book.id, body.gradeLabel);
     final bigUnits = _parseBigUnits(row?['payload']);
+    final textbookType = _sanitizeTextbookType(row?['textbook_type']);
     setState(() {
       _clearChapterTree();
       _bigUnits.addAll(bigUnits);
+      _textbookType = textbookType;
       final pageOffset = _toInt(row?['page_offset']);
       if (pageOffset == null) {
         _pageOffsetByKey.remove(key);
@@ -444,8 +456,10 @@ class _TextbookScreenState extends State<TextbookScreen> {
               final smallName = (s['name'] as String?)?.trim() ?? '';
               final start = _toInt(s['start_page']);
               final end = _toInt(s['end_page']);
+              final lv = _toNonNegativeInt(s['lv']);
               final small = _SmallUnitNode(
                 name: smallName,
+                lv: lv?.toString(),
                 startPage: start?.toString(),
                 endPage: end?.toString(),
               );
@@ -487,6 +501,20 @@ class _TextbookScreenState extends State<TextbookScreen> {
     if (value is String) return int.tryParse(value);
     return null;
   }
+
+  int? _toNonNegativeInt(dynamic value) {
+    final parsed = _toInt(value);
+    if (parsed == null || parsed < 0) return null;
+    return parsed;
+  }
+
+  String _sanitizeTextbookType(dynamic value) {
+    final raw = (value as String?)?.trim() ?? '';
+    if (_allowedTextbookTypes.contains(raw)) return raw;
+    return _textbookTypeConcept;
+  }
+
+  bool get _isWorkbookType => _textbookType == _textbookTypeWorkbook;
 
   void _clearChapterTree() {
     for (final unit in _bigUnits) {
@@ -584,6 +612,7 @@ class _TextbookScreenState extends State<TextbookScreen> {
             children: [
               _buildLabeledControl('책', _buildBookDropdown()),
               _buildLabeledControl('본문', _buildBodyDropdown()),
+              _buildLabeledControl('교재 유형', _buildTextbookTypeDropdown()),
               _buildLabeledControl('페이지 보정', _buildPageOffsetField()),
             ],
           );
@@ -665,6 +694,7 @@ class _TextbookScreenState extends State<TextbookScreen> {
           _solPdfs = [];
           _ansPdfs = [];
           _selectedBodyKey = null;
+          _textbookType = _textbookTypeConcept;
           _clearChapterTree();
           _setPageOffsetForSelection();
         });
@@ -728,11 +758,51 @@ class _TextbookScreenState extends State<TextbookScreen> {
       onChanged: (value) {
         setState(() {
           _selectedBodyKey = value;
+          _textbookType = _textbookTypeConcept;
           _setPageOffsetForSelection();
           _clearChapterTree();
         });
         _loadTextbookMetadataForSelection();
       },
+    );
+  }
+
+  Widget _buildTextbookTypeDropdown() {
+    final bool disabled = _selectedBookId == null || _selectedBody == null;
+    return Container(
+      height: 44,
+      constraints: const BoxConstraints(minWidth: 120, maxWidth: 160),
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+      decoration: BoxDecoration(
+        color: disabled ? const Color(0xFF232323) : const Color(0xFF2A2A2A),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFF3A3A3A)),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          value: _textbookType,
+          dropdownColor: const Color(0xFF2A2A2A),
+          style: const TextStyle(color: Colors.white, fontSize: 14),
+          icon: const Icon(Icons.arrow_drop_down, color: Colors.white70, size: 20),
+          isExpanded: true,
+          items: const [
+            DropdownMenuItem(
+              value: _textbookTypeConcept,
+              child: Text(_textbookTypeConcept, overflow: TextOverflow.ellipsis),
+            ),
+            DropdownMenuItem(
+              value: _textbookTypeWorkbook,
+              child: Text(_textbookTypeWorkbook, overflow: TextOverflow.ellipsis),
+            ),
+          ],
+          onChanged: disabled
+              ? null
+              : (value) {
+                  if (value == null) return;
+                  setState(() => _textbookType = value);
+                },
+        ),
+      ),
     );
   }
 
@@ -780,7 +850,8 @@ class _TextbookScreenState extends State<TextbookScreen> {
   }
 
   Widget _buildSaveButton() {
-    final disabled = _selectedBookId == null || _selectedBody == null || _isSaving;
+    final disabled =
+        _selectedBookId == null || _selectedBody == null || _textbookType.isEmpty || _isSaving;
     return SizedBox(
       height: 40,
       child: FilledButton.icon(
@@ -831,6 +902,7 @@ class _TextbookScreenState extends State<TextbookScreen> {
           'academy_id': academyId,
           'book_id': bookId,
           'grade_label': body.gradeLabel,
+          'textbook_type': _textbookType,
           'page_offset': pageOffset,
           'payload': payload,
         },
@@ -904,13 +976,20 @@ class _TextbookScreenState extends State<TextbookScreen> {
         }
         counts[entry.key.toString()] = v;
       }
-      out.add({
+      final row = <String, dynamic>{
         'name': unit.nameCtrl.text.trim(),
         'order_index': i,
         'start_page': start,
         'end_page': end,
         'page_counts': counts,
-      });
+      };
+      if (_isWorkbookType) {
+        final lv = _parseNonNegativeInt(unit.lvCtrl.text);
+        if (lv != null) {
+          row['lv'] = lv;
+        }
+      }
+      out.add(row);
     }
     return out;
   }
@@ -1008,6 +1087,7 @@ class _TextbookScreenState extends State<TextbookScreen> {
                         const SizedBox(height: 12),
                         _infoRow('교재', book?.name ?? '-'),
                         _infoRow('과정', body?.gradeLabel ?? '-'),
+                        _infoRow('교재 유형', _textbookType),
                         _infoRow('본문', body?.fileName ?? '-'),
                         _infoRow('해설', (sol?.url.isNotEmpty ?? false) ? sol!.fileName : '-'),
                         _infoRow('정답', (ans?.url.isNotEmpty ?? false) ? ans!.fileName : '-'),
@@ -1241,6 +1321,19 @@ class _TextbookScreenState extends State<TextbookScreen> {
           _buildUnitLabel('소단원'),
           const SizedBox(width: 8),
           Expanded(child: _buildTextField(unit.nameCtrl, hint: '소단원 이름')),
+          if (_isWorkbookType) ...[
+            const SizedBox(width: 6),
+            SizedBox(
+              width: 64,
+              child: _buildTextField(
+                unit.lvCtrl,
+                hint: 'Lv',
+                keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                textAlign: TextAlign.center,
+              ),
+            ),
+          ],
           const SizedBox(width: 6),
           SizedBox(
             width: 70,
@@ -1546,6 +1639,14 @@ class _TextbookScreenState extends State<TextbookScreen> {
     if (parsed == null || parsed <= 0) return null;
     return parsed;
   }
+
+  int? _parseNonNegativeInt(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) return null;
+    final parsed = int.tryParse(trimmed);
+    if (parsed == null || parsed < 0) return null;
+    return parsed;
+  }
 }
 
 class _BookEntry {
@@ -1611,20 +1712,24 @@ class _MidUnitNode {
 
 class _SmallUnitNode {
   final TextEditingController nameCtrl;
+  final TextEditingController lvCtrl;
   final TextEditingController startPageCtrl;
   final TextEditingController endPageCtrl;
   final Map<int, TextEditingController> pageCountCtrls = {};
 
   _SmallUnitNode({
     String? name,
+    String? lv,
     String? startPage,
     String? endPage,
   })  : nameCtrl = TextEditingController(text: name ?? ''),
+        lvCtrl = TextEditingController(text: lv ?? ''),
         startPageCtrl = TextEditingController(text: startPage ?? ''),
         endPageCtrl = TextEditingController(text: endPage ?? '');
 
   void dispose() {
     nameCtrl.dispose();
+    lvCtrl.dispose();
     startPageCtrl.dispose();
     endPageCtrl.dispose();
     for (final ctrl in pageCountCtrls.values) {

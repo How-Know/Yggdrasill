@@ -1,8 +1,13 @@
+import 'dart:async';
+import 'dart:io';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:open_filex/open_filex.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
+import 'package:syncfusion_flutter_pdf/pdf.dart' as sf;
 import '../services/data_manager.dart';
-import 'dart:async';
-import 'dart:math' as math;
 import '../services/homework_store.dart';
 import '../services/student_flow_store.dart';
 import '../services/homework_assignment_store.dart';
@@ -17,6 +22,7 @@ import '../widgets/homework_assign_dialog.dart';
 import '../app_overlays.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 import '../widgets/flow_setup_dialog.dart';
+import '../widgets/pdf/homework_answer_viewer_dialog.dart';
 
 /// 수업 내용 관리 6번째 페이지 (구조만 정의, 기능 미구현)
 class ClassContentScreen extends StatefulWidget {
@@ -1542,6 +1548,7 @@ Future<void> _openHomeworkEditDialogForHome(
 
 const double _homeworkChipHeight = 120.0;
 const double _homeworkChipMaxSlide = _homeworkChipHeight * 0.5;
+const String _homeworkPrintTempPrefix = 'hw_print_';
 
 
 // ------------------------
@@ -1700,7 +1707,13 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
               unawaited(HomeworkStore.instance.submit(studentId, hw.id));
               break;
             case 3: // 제출 → 확인
-              unawaited(HomeworkStore.instance.confirm(studentId, hw.id));
+              unawaited(
+                _handleSubmittedChipTapWithAnswerViewer(
+                  context: context,
+                  studentId: studentId,
+                  hw: item,
+                ),
+              );
               break;
             case 4: // 확인 → 대기
               unawaited(HomeworkStore.instance.waitPhase(studentId, hw.id));
@@ -1709,6 +1722,18 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
               unawaited(HomeworkStore.instance.start(studentId, hw.id));
           }
         },
+        onLongPress: !isWaiting
+            ? null
+            : () {
+                final item = HomeworkStore.instance.getById(studentId, hw.id);
+                if (item == null || item.phase != 1) return;
+                unawaited(
+                  _handleWaitingChipLongPressPrint(
+                    context: context,
+                    hw: item,
+                  ),
+                );
+              },
         onSlideDown: () {
           final item = HomeworkStore.instance.getById(studentId, hw.id);
           if (item == null) return;
@@ -1855,6 +1880,507 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
     );
   }
   return chips;
+}
+
+class _ResolvedHomeworkPdfLinks {
+  final String bookId;
+  final String gradeLabel;
+  final String bodyPathRaw;
+  final String answerPathRaw;
+  final String solutionPathRaw;
+
+  const _ResolvedHomeworkPdfLinks({
+    required this.bookId,
+    required this.gradeLabel,
+    required this.bodyPathRaw,
+    required this.answerPathRaw,
+    required this.solutionPathRaw,
+  });
+}
+
+bool _isWebUrl(String raw) {
+  final lower = raw.trim().toLowerCase();
+  return lower.startsWith('http://') || lower.startsWith('https://');
+}
+
+String _toLocalFilePath(String rawPath) {
+  final trimmed = rawPath.trim();
+  if (trimmed.isEmpty || _isWebUrl(trimmed)) return '';
+  if (trimmed.toLowerCase().startsWith('file://')) {
+    try {
+      return Uri.parse(trimmed).toFilePath(windows: Platform.isWindows);
+    } catch (_) {
+      return '';
+    }
+  }
+  return trimmed;
+}
+
+void _showHomeworkChipSnackBar(BuildContext context, String message) {
+  if (!context.mounted) return;
+  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+}
+
+String _normalizePageRangeForPrint(String raw) {
+  final cleaned = raw.trim();
+  if (cleaned.isEmpty) return '';
+  var normalized = cleaned
+      .replaceAll(RegExp(r'p\.', caseSensitive: false), '')
+      .replaceAll('페이지', '')
+      .replaceAll('쪽', '')
+      .replaceAll('~', '-')
+      .replaceAll('–', '-')
+      .replaceAll('—', '-');
+  normalized = normalized.replaceAll(RegExp(r'[^0-9,\-]+'), ',');
+  normalized = normalized.replaceAll(RegExp(r',+'), ',');
+  normalized = normalized.replaceAll(RegExp(r'^,+|,+$'), '');
+  return normalized;
+}
+
+List<int> _parsePageRange(String input, int pageCount) {
+  final cleaned = input.trim();
+  if (cleaned.isEmpty) {
+    return List<int>.generate(pageCount, (i) => i);
+  }
+  final normalized = cleaned
+      .replaceAll(RegExp(r'\s+'), '')
+      .replaceAll('~', '-')
+      .replaceAll('–', '-')
+      .replaceAll('—', '-');
+  final tokens = normalized.split(',');
+  final seen = <int>{};
+  final out = <int>[];
+  for (final raw in tokens) {
+    if (raw.isEmpty) continue;
+    if (raw.contains('-')) {
+      final parts = raw.split('-');
+      if (parts.length != 2) continue;
+      final start = int.tryParse(parts[0]);
+      final end = int.tryParse(parts[1]);
+      if (start == null || end == null) continue;
+      var a = start;
+      var b = end;
+      if (a > b) {
+        final tmp = a;
+        a = b;
+        b = tmp;
+      }
+      a = a.clamp(1, pageCount);
+      b = b.clamp(1, pageCount);
+      for (int i = a; i <= b; i++) {
+        final idx = i - 1;
+        if (seen.add(idx)) out.add(idx);
+      }
+    } else {
+      final v = int.tryParse(raw);
+      if (v == null) continue;
+      if (v < 1 || v > pageCount) continue;
+      final idx = v - 1;
+      if (seen.add(idx)) out.add(idx);
+    }
+  }
+  return out;
+}
+
+Future<String?> _buildPdfForPrintRange({
+  required String inputPath,
+  required String pageRange,
+}) async {
+  final inPath = inputPath.trim();
+  if (inPath.isEmpty || !inPath.toLowerCase().endsWith('.pdf')) return null;
+  final srcBytes = await File(inPath).readAsBytes();
+  final src = sf.PdfDocument(inputBytes: srcBytes);
+  final dst = sf.PdfDocument();
+  try {
+    try {
+      dst.pageSettings.margins.all = 0;
+    } catch (_) {}
+    final pageCount = src.pages.count;
+    final indices = _parsePageRange(pageRange, pageCount);
+    if (indices.isEmpty) return null;
+    for (final i in indices) {
+      if (i < 0 || i >= pageCount) continue;
+      final srcPage = src.pages[i];
+      final srcSize = srcPage.size;
+      try {
+        dst.pageSettings.size = srcSize;
+        dst.pageSettings.margins.all = 0;
+      } catch (_) {}
+      final tmpl = srcPage.createTemplate();
+      final newPage = dst.pages.add();
+      final tw = srcSize.width;
+      final th = srcSize.height;
+      final sw = srcSize.width;
+      final sh = srcSize.height;
+      if (tw <= 0 || th <= 0 || sw <= 0 || sh <= 0) {
+        try {
+          newPage.graphics.drawPdfTemplate(tmpl, const Offset(0, 0));
+        } catch (_) {
+          newPage.graphics.drawPdfTemplate(tmpl, const Offset(0, 0));
+        }
+        continue;
+      }
+      // 프린터 여백 영향을 줄이기 위해 약간 확대해서 출력한다.
+      const double overscan = 1.02;
+      final scale = math.max(tw / sw, th / sh) * overscan;
+      final w = sw * scale;
+      final h = sh * scale;
+      final dx = (tw - w) / 2.0;
+      final dy = (th - h) / 2.0;
+      try {
+        newPage.graphics.drawPdfTemplate(tmpl, Offset(dx, dy), Size(w, h));
+      } catch (_) {
+        newPage.graphics.drawPdfTemplate(tmpl, const Offset(0, 0));
+      }
+    }
+    final outBytes = await dst.save();
+    final dir = await getTemporaryDirectory();
+    final outPath = p.join(
+      dir.path,
+      '${_homeworkPrintTempPrefix}${DateTime.now().millisecondsSinceEpoch}.pdf',
+    );
+    await File(outPath).writeAsBytes(outBytes, flush: true);
+    return outPath;
+  } finally {
+    src.dispose();
+    dst.dispose();
+  }
+}
+
+void _scheduleTempDelete(String path) {
+  Future<void>.delayed(const Duration(minutes: 10), () async {
+    try {
+      final file = File(path);
+      if (await file.exists()) {
+        await file.delete();
+      }
+    } catch (_) {}
+  });
+}
+
+Future<void> _openPrintDialogForPath(String path) async {
+  final target = path.trim();
+  if (target.isEmpty) return;
+  try {
+    if (Platform.isWindows) {
+      final q = "'${target.replaceAll("'", "''")}'";
+      await Process.start(
+        'powershell',
+        ['-NoProfile', '-Command', 'Start-Process -FilePath $q -Verb Print'],
+        runInShell: true,
+      );
+      return;
+    }
+  } catch (_) {
+    // fallthrough
+  }
+  await OpenFilex.open(target);
+}
+
+Future<_ResolvedHomeworkPdfLinks> _resolveHomeworkPdfLinks(HomeworkItem hw) async {
+  String bookId = (hw.bookId ?? '').trim();
+  String gradeLabel = (hw.gradeLabel ?? '').trim();
+  final flowId = (hw.flowId ?? '').trim();
+
+  if ((bookId.isEmpty || gradeLabel.isEmpty) && flowId.isNotEmpty) {
+    try {
+      final rows = await DataManager.instance.loadFlowTextbookLinks(flowId);
+      if (rows.isNotEmpty) {
+        Map<String, dynamic>? matched;
+        for (final row in rows) {
+          final rowBookId = '${row['book_id'] ?? ''}'.trim();
+          final rowGrade = '${row['grade_label'] ?? ''}'.trim();
+          final bool bookMatches = bookId.isNotEmpty && rowBookId == bookId;
+          final bool gradeMatches = gradeLabel.isNotEmpty && rowGrade == gradeLabel;
+          if (bookMatches || gradeMatches) {
+            matched = row;
+            break;
+          }
+        }
+        final selected = matched ?? rows.first;
+        if (bookId.isEmpty) {
+          bookId = '${selected['book_id'] ?? ''}'.trim();
+        }
+        if (gradeLabel.isEmpty) {
+          gradeLabel = '${selected['grade_label'] ?? ''}'.trim();
+        }
+      }
+    } catch (_) {}
+  }
+
+  if (bookId.isEmpty || gradeLabel.isEmpty) {
+    return const _ResolvedHomeworkPdfLinks(
+      bookId: '',
+      gradeLabel: '',
+      bodyPathRaw: '',
+      answerPathRaw: '',
+      solutionPathRaw: '',
+    );
+  }
+
+  try {
+    final links = await DataManager.instance.loadResourceFileLinks(bookId);
+    return _ResolvedHomeworkPdfLinks(
+      bookId: bookId,
+      gradeLabel: gradeLabel,
+      bodyPathRaw: (links['$gradeLabel#body'] ?? '').trim(),
+      answerPathRaw: (links['$gradeLabel#ans'] ?? '').trim(),
+      solutionPathRaw: (links['$gradeLabel#sol'] ?? '').trim(),
+    );
+  } catch (_) {
+    return _ResolvedHomeworkPdfLinks(
+      bookId: bookId,
+      gradeLabel: gradeLabel,
+      bodyPathRaw: '',
+      answerPathRaw: '',
+      solutionPathRaw: '',
+    );
+  }
+}
+
+Future<void> _confirmHomeworkIfSubmitted(String studentId, String hwId) async {
+  final latest = HomeworkStore.instance.getById(studentId, hwId);
+  if (latest == null || latest.phase != 3) return;
+  await HomeworkStore.instance.confirm(studentId, hwId);
+}
+
+Future<String?> _showHomeworkPrintConfirmDialog({
+  required BuildContext context,
+  required HomeworkItem hw,
+  required String filePath,
+  required bool isPdf,
+  required String initialRange,
+}) async {
+  final controller = ImeAwareTextEditingController(text: initialRange);
+  bool printWhole = initialRange.isEmpty || !isPdf;
+  final result = await showDialog<String>(
+    context: context,
+    builder: (ctx) {
+      return StatefulBuilder(
+        builder: (ctx, setLocalState) {
+          return AlertDialog(
+            backgroundColor: kDlgBg,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: const Text(
+              '인쇄 설정 확인',
+              style: TextStyle(color: kDlgText, fontWeight: FontWeight.w900),
+            ),
+            content: SizedBox(
+              width: 440,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const YggDialogSectionHeader(
+                    icon: Icons.print_rounded,
+                    title: '출력 정보',
+                  ),
+                  Text(
+                    hw.title.trim().isEmpty ? '(제목 없음)' : hw.title.trim(),
+                    style: const TextStyle(
+                      color: kDlgText,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    p.basename(filePath),
+                    style: const TextStyle(color: kDlgTextSub, fontSize: 12.5),
+                  ),
+                  const SizedBox(height: 14),
+                  if (!isPdf)
+                    const Text(
+                      'PDF가 아니어서 전체 인쇄로 진행됩니다.',
+                      style: TextStyle(color: kDlgTextSub),
+                    )
+                  else ...[
+                    CheckboxListTile(
+                      value: printWhole,
+                      onChanged: (v) {
+                        setLocalState(() {
+                          printWhole = v ?? false;
+                        });
+                      },
+                      contentPadding: EdgeInsets.zero,
+                      controlAffinity: ListTileControlAffinity.leading,
+                      activeColor: kDlgAccent,
+                      title: const Text(
+                        '전체 인쇄',
+                        style: TextStyle(color: kDlgText, fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: controller,
+                      enabled: !printWhole,
+                      style: const TextStyle(color: kDlgText),
+                      cursorColor: kDlgAccent,
+                      decoration: InputDecoration(
+                        hintText: '페이지 범위 (예: 10-15, 20)',
+                        hintStyle: const TextStyle(color: kDlgTextSub),
+                        filled: true,
+                        fillColor: kDlgFieldBg,
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                          borderSide: const BorderSide(color: kDlgBorder),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                          borderSide: const BorderSide(color: kDlgAccent, width: 1.4),
+                        ),
+                        disabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                          borderSide: const BorderSide(color: kDlgBorder),
+                        ),
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 12,
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(null),
+                style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
+                child: const Text('취소'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(ctx).pop(
+                  (isPdf && !printWhole) ? controller.text.trim() : '',
+                ),
+                style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
+                child: const Text('인쇄'),
+              ),
+            ],
+          );
+        },
+      );
+    },
+  );
+  controller.dispose();
+  return result;
+}
+
+Future<void> _handleWaitingChipLongPressPrint({
+  required BuildContext context,
+  required HomeworkItem hw,
+}) async {
+  if (hw.phase != 1) return;
+  final resolved = await _resolveHomeworkPdfLinks(hw);
+  if (!context.mounted) return;
+
+  final bodyRaw = resolved.bodyPathRaw;
+  if (bodyRaw.isEmpty) {
+    _showHomeworkChipSnackBar(context, '연결된 교재 본문 PDF가 없습니다.');
+    return;
+  }
+  if (_isWebUrl(bodyRaw)) {
+    _showHomeworkChipSnackBar(context, 'URL 인쇄는 지원하지 않습니다. 파일 경로를 사용하세요.');
+    return;
+  }
+
+  final bodyPath = _toLocalFilePath(bodyRaw);
+  if (bodyPath.isEmpty) {
+    _showHomeworkChipSnackBar(context, '교재 본문 경로를 확인할 수 없습니다.');
+    return;
+  }
+  if (!await File(bodyPath).exists()) {
+    if (!context.mounted) return;
+    _showHomeworkChipSnackBar(context, '교재 본문 파일을 찾을 수 없습니다.');
+    return;
+  }
+
+  final bool isPdf = bodyPath.toLowerCase().endsWith('.pdf');
+  final initialRange = isPdf ? _normalizePageRangeForPrint(hw.page ?? '') : '';
+  final selectedRange = await _showHomeworkPrintConfirmDialog(
+    context: context,
+    hw: hw,
+    filePath: bodyPath,
+    isPdf: isPdf,
+    initialRange: initialRange,
+  );
+  if (!context.mounted || selectedRange == null) return;
+
+  String pathToPrint = bodyPath;
+  final rangeRaw = _normalizePageRangeForPrint(selectedRange);
+  if (rangeRaw.isNotEmpty) {
+    if (!bodyPath.toLowerCase().endsWith('.pdf')) {
+      _showHomeworkChipSnackBar(context, '페이지 범위 인쇄는 PDF에서만 지원합니다.');
+      return;
+    }
+    final out = await _buildPdfForPrintRange(
+      inputPath: bodyPath,
+      pageRange: rangeRaw,
+    );
+    if (!context.mounted) return;
+    if (out == null || out.isEmpty) {
+      _showHomeworkChipSnackBar(context, '페이지 범위를 확인하세요. (예: 10-15, 20)');
+      return;
+    }
+    pathToPrint = out;
+    _scheduleTempDelete(pathToPrint);
+  }
+
+  await _openPrintDialogForPath(pathToPrint);
+}
+
+Future<void> _handleSubmittedChipTapWithAnswerViewer({
+  required BuildContext context,
+  required String studentId,
+  required HomeworkItem hw,
+}) async {
+  final resolved = await _resolveHomeworkPdfLinks(hw);
+  if (!context.mounted) return;
+
+  final answerRaw = resolved.answerPathRaw;
+  if (answerRaw.isEmpty) {
+    await _confirmHomeworkIfSubmitted(studentId, hw.id);
+    return;
+  }
+  final answerIsUrl = _isWebUrl(answerRaw);
+  final answerPath = answerIsUrl ? answerRaw.trim() : _toLocalFilePath(answerRaw);
+  if (answerPath.isEmpty ||
+      (!answerIsUrl && !answerPath.toLowerCase().endsWith('.pdf'))) {
+    _showHomeworkChipSnackBar(context, '답지 PDF 경로를 확인할 수 없어 바로 확인 처리합니다.');
+    await _confirmHomeworkIfSubmitted(studentId, hw.id);
+    return;
+  }
+  if (!answerIsUrl && !await File(answerPath).exists()) {
+    if (!context.mounted) return;
+    _showHomeworkChipSnackBar(context, '답지 PDF 파일을 찾을 수 없어 바로 확인 처리합니다.');
+    await _confirmHomeworkIfSubmitted(studentId, hw.id);
+    return;
+  }
+
+  String? solutionPath;
+  final solutionRaw = resolved.solutionPathRaw;
+  if (_isWebUrl(solutionRaw)) {
+    solutionPath = solutionRaw.trim();
+  } else if (solutionRaw.isNotEmpty) {
+    final candidate = _toLocalFilePath(solutionRaw);
+    if (candidate.isNotEmpty &&
+        candidate.toLowerCase().endsWith('.pdf') &&
+        await File(candidate).exists()) {
+      solutionPath = candidate;
+    }
+  }
+
+  final confirmed = await openHomeworkAnswerViewerPage(
+    context,
+    filePath: answerPath,
+    title: hw.title.trim().isEmpty ? '답지 확인' : hw.title.trim(),
+    solutionFilePath: solutionPath,
+    cacheKey: 'student:$studentId|answer:$answerPath',
+    enableConfirm: true,
+  );
+  if (!context.mounted) return;
+  if (confirmed == true) {
+    await _confirmHomeworkIfSubmitted(studentId, hw.id);
+  }
 }
 
 Widget _buildHomeworkChipVisual(
@@ -2146,6 +2672,7 @@ class _AttendingStudent {
 class _SlideableHomeworkChip extends StatefulWidget {
   final Widget child;
   final VoidCallback onTap;
+  final VoidCallback? onLongPress;
   final VoidCallback? onDoubleTap;
   final VoidCallback onSlideDown;
   final Future<void> Function() onSlideUp;
@@ -2161,6 +2688,7 @@ class _SlideableHomeworkChip extends StatefulWidget {
     super.key,
     required this.child,
     required this.onTap,
+    this.onLongPress,
     this.onDoubleTap,
     required this.onSlideDown,
     required this.onSlideUp,
@@ -2290,6 +2818,7 @@ class _SlideableHomeworkChipState extends State<_SlideableHomeworkChip> {
           transform: Matrix4.translationValues(0, _offset, 0),
           child: GestureDetector(
             onTap: widget.onTap,
+            onLongPress: widget.onLongPress,
             onDoubleTap: widget.onDoubleTap,
             onVerticalDragUpdate: (details) {
               final delta = details.delta.dy;
