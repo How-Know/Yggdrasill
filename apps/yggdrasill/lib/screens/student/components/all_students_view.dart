@@ -26,6 +26,8 @@ import '../../../widgets/dark_panel_route.dart';
 import '../../../widgets/swipe_action_reveal.dart';
 import '../../../utils/attendance_judgement.dart';
 import '../../../widgets/dialog_tokens.dart';
+import '../../../widgets/textbook_flow_link_action.dart';
+import '../../../app_overlays.dart';
 import 'student_promotion_dialog.dart';
 import 'package:uuid/uuid.dart';
 import '../../../services/student_flow_store.dart';
@@ -243,6 +245,41 @@ class _AllStudentsViewState extends State<AllStudentsView> {
     }
   }
 
+  Future<void> _handleTextbookDropForStudent(String studentId) async {
+    final payload = activeTextbookDragPayload.value;
+    if (payload == null) return;
+    await linkDraggedTextbookToStudentFlow(
+      context: context,
+      studentId: studentId,
+      payload: payload,
+    );
+  }
+
+  Widget _wrapTextbookDropTargetForStudent({
+    required String studentId,
+    required Widget child,
+  }) {
+    return DragTarget<Object>(
+      onWillAccept: (_) => activeTextbookDragPayload.value != null,
+      onAcceptWithDetails: (_) {
+        unawaited(_handleTextbookDropForStudent(studentId));
+      },
+      builder: (context, candidateData, rejectedData) {
+        final bool hovering =
+            candidateData.isNotEmpty && activeTextbookDragPayload.value != null;
+        if (!hovering) return child;
+        return AnimatedContainer(
+          duration: const Duration(milliseconds: 120),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: const Color(0xFF33A373), width: 1.2),
+          ),
+          child: child,
+        );
+      },
+    );
+  }
+
   Widget _buildStudentDraggable({
     required StudentWithInfo student,
     required Widget feedback,
@@ -255,9 +292,12 @@ class _AllStudentsViewState extends State<AllStudentsView> {
 
     if (isPausedNow) {
       // ✅ 휴원 학생은 비활성화(드래그 금지)
-      return Opacity(
-        opacity: 0.45,
-        child: child,
+      return _wrapTextbookDropTargetForStudent(
+        studentId: student.student.id,
+        child: Opacity(
+          opacity: 0.45,
+          child: child,
+        ),
       );
     }
 
@@ -279,7 +319,7 @@ class _AllStudentsViewState extends State<AllStudentsView> {
 
     if (_useImmediateDrag) {
       // 데스크톱(마우스) UX: 시간표 탭과 동일하게 "클릭+이동" 즉시 드래그
-      return Draggable<StudentWithInfo>(
+      final draggable = Draggable<StudentWithInfo>(
         data: student,
         dragAnchorStrategy: pointerDragAnchorStrategy,
         maxSimultaneousDrags: 1,
@@ -289,10 +329,14 @@ class _AllStudentsViewState extends State<AllStudentsView> {
         childWhenDragging: childWhenDragging,
         child: child,
       );
+      return _wrapTextbookDropTargetForStudent(
+        studentId: student.student.id,
+        child: draggable,
+      );
     }
 
     // 모바일/터치 UX: 스크롤/탭과 충돌을 피하려고 기존 롱프레스 드래그 유지
-    return LongPressDraggable<StudentWithInfo>(
+    final draggable = LongPressDraggable<StudentWithInfo>(
       data: student,
       dragAnchorStrategy: pointerDragAnchorStrategy,
       maxSimultaneousDrags: 1,
@@ -301,6 +345,10 @@ class _AllStudentsViewState extends State<AllStudentsView> {
       feedback: feedback,
       childWhenDragging: childWhenDragging,
       child: child,
+    );
+    return _wrapTextbookDropTargetForStudent(
+      studentId: student.student.id,
+      child: draggable,
     );
   }
 
@@ -1807,30 +1855,34 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                       spacing: 4,
                       runSpacing: 8,
                       children: gradeStudents
-                          .map((studentWithInfo) => StudentCard(
-                                key: ValueKey(
-                                    'studentCard_${studentWithInfo.student.id}'),
-                                studentWithInfo: studentWithInfo,
-                                isSelected: _detailsStudent?.student.id ==
-                                    studentWithInfo.student.id,
-                                onShowDetails: (s) {
-                                  _onShowDetails(s);
-                                  widget.onShowDetails(s);
-                                }, // 연결 복구 + 내장 상세
-                                onDelete: widget.onDeleteStudent, // 삭제 콜백 연결
-                                onUpdate: widget.onStudentUpdated,
-                                onOpenStudentPage: (s) {
-                                  Navigator.of(context).push(
-                                    DarkPanelRoute(
-                                      child: StudentProfilePage(
-                                        studentWithInfo: s,
-                                        flows: List<StudentFlow>.from(
-                                          _flowsForStudent(s.student.id),
+                          .map((studentWithInfo) =>
+                              _wrapTextbookDropTargetForStudent(
+                                studentId: studentWithInfo.student.id,
+                                child: StudentCard(
+                                  key: ValueKey(
+                                      'studentCard_${studentWithInfo.student.id}'),
+                                  studentWithInfo: studentWithInfo,
+                                  isSelected: _detailsStudent?.student.id ==
+                                      studentWithInfo.student.id,
+                                  onShowDetails: (s) {
+                                    _onShowDetails(s);
+                                    widget.onShowDetails(s);
+                                  }, // 연결 복구 + 내장 상세
+                                  onDelete: widget.onDeleteStudent, // 삭제 콜백 연결
+                                  onUpdate: widget.onStudentUpdated,
+                                  onOpenStudentPage: (s) {
+                                    Navigator.of(context).push(
+                                      DarkPanelRoute(
+                                        child: StudentProfilePage(
+                                          studentWithInfo: s,
+                                          flows: List<StudentFlow>.from(
+                                            _flowsForStudent(s.student.id),
+                                          ),
                                         ),
                                       ),
-                                    ),
-                                  );
-                                },
+                                    );
+                                  },
+                                ),
                               ))
                           .toList(),
                     ),

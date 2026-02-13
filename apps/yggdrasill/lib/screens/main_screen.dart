@@ -29,13 +29,13 @@ import '../services/student_flow_store.dart';
 import 'learning/homework_quick_add_proxy_dialog.dart';
 import 'learning/homework_edit_dialog.dart';
 import 'class_content_events_dialog.dart';
-import 'timetable/components/student_time_info_dialog.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 import 'timetable/views/makeup_view.dart';
 import '../widgets/dialog_tokens.dart';
 import '../widgets/dark_panel_route.dart';
 import '../widgets/flow_setup_dialog.dart';
 import '../widgets/homework_assign_dialog.dart';
+import '../widgets/textbook_flow_link_action.dart';
 import 'student/student_profile_page.dart';
 import '../app_overlays.dart';
 
@@ -44,11 +44,6 @@ class MainScreen extends StatefulWidget {
 
   @override
   State<MainScreen> createState() => _MainScreenState();
-}
-
-enum _SideSheetBottomView {
-  waiting,
-  allStudents,
 }
 
 class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
@@ -78,8 +73,6 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   Map<String, DateTime?> _arrivalBySetCache = const {};
   Map<String, DateTime?> _departureBySetCache = const {};
   Map<DateTime, List<_AttendanceTarget>> _waitingByTimeCache = SplayTreeMap();
-  _SideSheetBottomView _sideSheetBottomView = _SideSheetBottomView.waiting;
-  final Map<String, bool> _allStudentsExpandedByGrade = <String, bool>{};
   late final ScrollController _attendedScrollCtrl;
   late final ScrollController _waitingScrollCtrl;
   DateTime? _lastPlannedEnsureDay; // 날짜가 바뀔 때만 오늘 planned를 보강 생성
@@ -395,6 +388,68 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     final pos = box.localToGlobal(Offset.zero);
     return pos & box.size;
   }
+
+  Widget _wrapSideSheetDragHoverTarget({required Widget child}) {
+    return DragTarget<Object>(
+      onWillAccept: (_) => activeTextbookDragPayload.value != null,
+      onMove: (_) {
+        if (!isTextbookDraggingOverLeftSideSheet.value) {
+          isTextbookDraggingOverLeftSideSheet.value = true;
+        }
+      },
+      onLeave: (_) {
+        if (isTextbookDraggingOverLeftSideSheet.value) {
+          isTextbookDraggingOverLeftSideSheet.value = false;
+        }
+      },
+      onAcceptWithDetails: (_) {
+        isTextbookDraggingOverLeftSideSheet.value = false;
+      },
+      builder: (context, candidateData, rejectedData) => child,
+    );
+  }
+
+  Future<void> _handleTextbookDropForStudent(String studentId) async {
+    final payload = activeTextbookDragPayload.value;
+    if (payload == null) return;
+    await linkDraggedTextbookToStudentFlow(
+      context: context,
+      studentId: studentId,
+      payload: payload,
+    );
+    isTextbookDraggingOverLeftSideSheet.value = false;
+  }
+
+  Widget _wrapTextbookDropTargetForStudent({
+    required String studentId,
+    required Widget child,
+  }) {
+    return DragTarget<Object>(
+      onWillAccept: (_) => activeTextbookDragPayload.value != null,
+      onMove: (_) {
+        if (!isTextbookDraggingOverLeftSideSheet.value) {
+          isTextbookDraggingOverLeftSideSheet.value = true;
+        }
+      },
+      onAcceptWithDetails: (_) {
+        unawaited(_handleTextbookDropForStudent(studentId));
+      },
+      builder: (context, candidateData, rejectedData) {
+        final bool hovering =
+            candidateData.isNotEmpty && activeTextbookDragPayload.value != null;
+        if (!hovering) return child;
+        return AnimatedContainer(
+          duration: const Duration(milliseconds: 120),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: const Color(0xFF33A373), width: 1.2),
+          ),
+          child: child,
+        );
+      },
+    );
+  }
+
   void _showTooltip(Offset position, String text) {
     // print('[DEBUG] _showTooltip called: position= [38;5;246m$position [0m, text=$text');
     _removeTooltip();
@@ -446,8 +501,15 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     });
   }
 
-  Future<void> _openStudentProfile(StudentWithInfo info) async {
-    final flows = await StudentFlowStore.instance.loadForStudent(info.student.id);
+  Future<void> _openStudentProfileFromAttendance(
+    _AttendanceTarget target,
+  ) async {
+    final info = DataManager.instance.students.firstWhereOrNull(
+      (s) => s.student.id == target.student.id,
+    );
+    if (info == null) return;
+    final flows =
+        await StudentFlowStore.instance.loadForStudent(target.student.id);
     if (!mounted) return;
     Navigator.of(context).push(
       DarkPanelRoute(
@@ -457,16 +519,6 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         ),
       ),
     );
-  }
-
-  Future<void> _openStudentProfileFromAttendance(
-    _AttendanceTarget target,
-  ) async {
-    final info = DataManager.instance.students.firstWhereOrNull(
-      (s) => s.student.id == target.student.id,
-    );
-    if (info == null) return;
-    await _openStudentProfile(info);
   }
 
   void _handleAttendedCardTap(_AttendanceTarget target) {
@@ -515,289 +567,6 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         return '고등';
     }
     return '';
-  }
-
-  static String _educationLevelPrefix(EducationLevel level) {
-    switch (level) {
-      case EducationLevel.elementary:
-        return '초';
-      case EducationLevel.middle:
-        return '중';
-      case EducationLevel.high:
-        return '고';
-    }
-  }
-
-  Map<String, List<StudentWithInfo>> _groupStudentsByGradeForSideSheet(
-    List<StudentWithInfo> students,
-  ) {
-    final Map<String, List<StudentWithInfo>> grouped = <String, List<StudentWithInfo>>{};
-    for (final s in students) {
-      final key = '${_educationLevelPrefix(s.student.educationLevel)}${s.student.grade}';
-      grouped.putIfAbsent(key, () => <StudentWithInfo>[]).add(s);
-    }
-
-    for (final list in grouped.values) {
-      list.sort((a, b) => a.student.name.compareTo(b.student.name));
-    }
-
-    int levelOrder(String key) {
-      if (key.startsWith('초')) return 0;
-      if (key.startsWith('중')) return 1;
-      if (key.startsWith('고')) return 2;
-      return 3;
-    }
-
-    int gradeNum(String key) {
-      final m = RegExp(r'\d+').firstMatch(key);
-      if (m == null) return 0;
-      return int.tryParse(m.group(0)!) ?? 0;
-    }
-
-    final sortedKeys = grouped.keys.toList()
-      ..sort((a, b) {
-        final byLevel = levelOrder(a).compareTo(levelOrder(b));
-        if (byLevel != 0) return byLevel;
-        return gradeNum(a).compareTo(gradeNum(b));
-      });
-    return <String, List<StudentWithInfo>>{
-      for (final k in sortedKeys) k: grouped[k]!,
-    };
-  }
-
-  void _toggleSideSheetBottomView() {
-    setState(() {
-      if (_sideSheetBottomView == _SideSheetBottomView.waiting) {
-        _sideSheetBottomView = _SideSheetBottomView.allStudents;
-        if (_allStudentsExpandedByGrade.isEmpty) {
-          final grouped = _groupStudentsByGradeForSideSheet(DataManager.instance.students);
-          if (grouped.isNotEmpty) {
-            _allStudentsExpandedByGrade[grouped.keys.first] = true;
-          }
-        }
-      } else {
-        _sideSheetBottomView = _SideSheetBottomView.waiting;
-      }
-    });
-  }
-
-  void _toggleAllStudentsGrade(String key) {
-    setState(() {
-      final nextExpanded = !(_allStudentsExpandedByGrade[key] ?? false);
-      _allStudentsExpandedByGrade.clear();
-      if (nextExpanded) {
-        _allStudentsExpandedByGrade[key] = true;
-      }
-    });
-  }
-
-  Widget _buildAllStudentsBottomPanel({
-    required double containerWidth,
-  }) {
-    final scale = ((containerWidth / 420.0).clamp(0.78, 1.0));
-    return Expanded(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(24.0, 0.0, 24.0, 12.0),
-        child: ValueListenableBuilder<List<StudentWithInfo>>(
-          valueListenable: DataManager.instance.studentsNotifier,
-          builder: (context, students, _) {
-            final grouped = _groupStudentsByGradeForSideSheet(students);
-            if (grouped.isEmpty) {
-              return const Center(
-                child: Text(
-                  '등록된 학생이 없습니다.',
-                  style: TextStyle(
-                    color: Color(0xFF9FB3B3),
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              );
-            }
-            final gradeEntries = grouped.entries.toList();
-
-            return Scrollbar(
-              controller: _waitingScrollCtrl,
-              thumbVisibility: true,
-              child: ListView(
-                controller: _waitingScrollCtrl,
-                padding: EdgeInsets.zero,
-                children: [
-                  for (int i = 0; i < gradeEntries.length; i++) ...[
-                    _buildAllStudentsGradeTile(
-                      gradeEntries[i].key,
-                      gradeEntries[i].value,
-                      scale: scale,
-                    ),
-                    if (i != gradeEntries.length - 1)
-                      const Divider(
-                        height: 1,
-                        thickness: 1,
-                        color: Color(0xFF223131),
-                      ),
-                  ],
-                ],
-              ),
-            );
-          },
-        ),
-      ),
-    );
-  }
-
-  Widget _buildAllStudentsGradeTile(
-    String gradeKey,
-    List<StudentWithInfo> students, {
-    required double scale,
-  }) {
-    final isExpanded = _allStudentsExpandedByGrade[gradeKey] ?? false;
-    final String levelName = students.isEmpty
-        ? gradeKey
-        : _educationLevelToKorean(students.first.student.educationLevel);
-    final int grade = students.isEmpty ? 0 : students.first.student.grade;
-    final String gradeLabel = grade > 0 ? '$levelName $grade학년' : levelName;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Column(
-        children: [
-          InkWell(
-            onTap: () => _toggleAllStudentsGrade(gradeKey),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
-              child: Row(
-                children: [
-                  Text(
-                    gradeLabel,
-                    style: TextStyle(
-                      color: const Color(0xFFEAF2F2),
-                      fontSize: 19,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  const Spacer(),
-                  Text(
-                    '${students.length}명',
-                    style: TextStyle(
-                      color: Colors.white70,
-                      fontSize: 14 * scale,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                  Icon(
-                    isExpanded ? Icons.expand_less : Icons.expand_more,
-                    color: Colors.white70,
-                    size: 20,
-                  ),
-                ],
-              ),
-            ),
-          ),
-          if (isExpanded) ...[
-            const Divider(
-              height: 1,
-              thickness: 1,
-              color: Color(0xFF223131),
-            ),
-            const SizedBox(height: 6),
-            for (int i = 0; i < students.length; i++) ...[
-              _buildAllStudentsStudentRow(
-                students[i],
-                scale: scale,
-              ),
-              if (i != students.length - 1)
-                const Divider(
-                  height: 1,
-                  thickness: 1,
-                  color: Color(0xFF223131),
-                ),
-            ],
-            const SizedBox(height: 6),
-          ],
-        ],
-      ),
-    );
-  }
-
-  Widget _buildAllStudentsStudentRow(
-    StudentWithInfo info, {
-    required double scale,
-  }) {
-    final schoolText = info.student.school.trim().isEmpty ? '학교 정보 없음' : info.student.school.trim();
-    final String initial = info.student.name.characters.take(1).toString();
-    return SizedBox(
-      height: _cardActualHeight * 1.3,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8),
-        child: Row(
-          children: [
-            CircleAvatar(
-              radius: 15,
-              backgroundColor: info.student.groupInfo?.color ?? const Color(0xFF2C3A3A),
-              child: Text(
-                initial,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text.rich(
-                TextSpan(
-                  children: [
-                    TextSpan(
-                      text: info.student.name,
-                      style: const TextStyle(
-                        color: Color(0xFFEAF2F2),
-                        fontSize: 19,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                    TextSpan(
-                      text: '  $schoolText',
-                      style: TextStyle(
-                        color: Colors.white70,
-                        fontSize: 13 * scale,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
-                ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-            const SizedBox(width: 10),
-            Tooltip(
-              message: '학생정보 상세내역',
-              child: IconButton(
-                onPressed: () => unawaited(_openStudentProfile(info)),
-                icon: const Icon(Icons.badge_outlined, size: 22, color: Colors.white70),
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 42, minHeight: 42),
-                splashRadius: 22,
-                visualDensity: VisualDensity.standard,
-              ),
-            ),
-            const SizedBox(width: 10),
-            Tooltip(
-              message: '시간 기록',
-              child: IconButton(
-                onPressed: () => unawaited(StudentTimeInfoDialog.show(context, info)),
-                icon: const Icon(Icons.schedule_outlined, size: 22, color: Colors.white70),
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 42, minHeight: 42),
-                splashRadius: 22,
-                visualDensity: VisualDensity.standard,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
   }
 
   @override
@@ -1287,18 +1056,21 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                 _sideSheetWasComplete = isComplete;
               }
               if (!isComplete) {
-                return AnimatedContainer(
-                  duration: const Duration(milliseconds: 160),
-                  curve: Curves.easeInOut,
-                  width: containerWidth,
-                  key: _sideSheetKey,
-                  color: const Color(0xFF0B1112),
+                return _wrapSideSheetDragHoverTarget(
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 160),
+                    curve: Curves.easeInOut,
+                    width: containerWidth,
+                    key: _sideSheetKey,
+                    color: const Color(0xFF0B1112),
+                  ),
                 );
               }
 
-              return ValueListenableBuilder<List<AttendanceRecord>>(
-                valueListenable: DataManager.instance.attendanceRecordsNotifier,
-                builder: (context, _records, _) {
+              return _wrapSideSheetDragHoverTarget(
+                child: ValueListenableBuilder<List<AttendanceRecord>>(
+                  valueListenable: DataManager.instance.attendanceRecordsNotifier,
+                  builder: (context, _records, _) {
                   if (_sideSheetDataDirty) {
                     if (_sideSheetDebug) {
                       debugPrint('[SIDE][recompute-start] recordsLen=${_records.length}');
@@ -1383,26 +1155,6 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                         mainAxisSize: MainAxisSize.min,
                                         children: [
                                           Tooltip(
-                                            message: _sideSheetBottomView == _SideSheetBottomView.waiting
-                                                ? '모든 학생 리스트 보기'
-                                                : '출석 페이지 보기',
-                                            child: IconButton(
-                                              icon: Icon(
-                                                _sideSheetBottomView == _SideSheetBottomView.waiting
-                                                    ? Icons.groups_outlined
-                                                    : Icons.groups,
-                                                color: _sideSheetBottomView == _SideSheetBottomView.waiting
-                                                    ? Colors.white70
-                                                    : const Color(0xFF33A373),
-                                                size: 22,
-                                              ),
-                                              padding: EdgeInsets.zero,
-                                              constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
-                                              onPressed: _toggleSideSheetBottomView,
-                                            ),
-                                          ),
-                                          const SizedBox(width: 10),
-                                          Tooltip(
                                             message: '보강 관리',
                                             child: IconButton(
                                               icon: const Icon(Icons.event_repeat, color: Colors.white70, size: 22),
@@ -1445,145 +1197,140 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                 padding: EdgeInsets.symmetric(horizontal: 24.0),
                                 child: Divider(height: 1, thickness: 1, color: Color(0xFF223131)),
                               ),
-                              if (_sideSheetBottomView == _SideSheetBottomView.waiting) ...[
-                                // 출석 박스
-                                Padding(
-                                  padding: const EdgeInsets.symmetric(horizontal: 24.0),
-                                  child: Container(
-                                    // 헤더(날짜+버튼)와의 간격을 절반으로 축소
-                                    margin: const EdgeInsets.only(top: 0, bottom: 0),
-                                    width: double.infinity,
-                                    constraints: BoxConstraints(
-                                      minHeight: _cardActualHeight * ((containerWidth / 420.0).clamp(0.78, 1.0)),
-                                      maxHeight: _cardActualHeight * ((containerWidth / 420.0).clamp(0.78, 1.0)) * _attendedMaxLines + _attendedRunSpacing * ((containerWidth / 420.0).clamp(0.78, 1.0)) * (_attendedMaxLines - 1),
-                                    ),
-                                    // 내부 여백: 왼쪽/상단은 0으로(요청), 나머지는 유지
-                                    padding: const EdgeInsets.fromLTRB(0, 22.0, 16.0, 24.0),
-                                    child: Scrollbar(
+                              // 출석 박스
+                              Padding(
+                                padding: const EdgeInsets.symmetric(horizontal: 24.0),
+                                child: Container(
+                                  // 헤더(날짜+버튼)와의 간격을 절반으로 축소
+                                  margin: const EdgeInsets.only(top: 0, bottom: 0),
+                                  width: double.infinity,
+                                  constraints: BoxConstraints(
+                                    minHeight: _cardActualHeight * ((containerWidth / 420.0).clamp(0.78, 1.0)),
+                                    maxHeight: _cardActualHeight * ((containerWidth / 420.0).clamp(0.78, 1.0)) * _attendedMaxLines + _attendedRunSpacing * ((containerWidth / 420.0).clamp(0.78, 1.0)) * (_attendedMaxLines - 1),
+                                  ),
+                                  // 내부 여백: 왼쪽/상단은 0으로(요청), 나머지는 유지
+                                  padding: const EdgeInsets.fromLTRB(0, 22.0, 16.0, 24.0),
+                                  child: Scrollbar(
+                                    controller: _attendedScrollCtrl,
+                                    thumbVisibility: true,
+                                    child: SingleChildScrollView(
                                       controller: _attendedScrollCtrl,
-                                      thumbVisibility: true,
-                                      child: SingleChildScrollView(
-                                        controller: _attendedScrollCtrl,
-                                        child: Column(
-                                          mainAxisSize: MainAxisSize.min,
-                                          crossAxisAlignment: CrossAxisAlignment.start,
-                                          children: [
-                                            if (attended.isEmpty && trialAttended.isEmpty)
-                                              const Center(
-                                                child: Padding(
-                                                  padding: EdgeInsets.only(left: 14.0),
-                                                  child: Text(
-                                                    '출석',
-                                                    style: TextStyle(
-                                                      color: Color(0xFF9FB3B3),
-                                                      fontSize: 22,
-                                                      fontWeight: FontWeight.bold,
-                                                    ),
+                                      child: Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          if (attended.isEmpty && trialAttended.isEmpty)
+                                            const Center(
+                                              child: Padding(
+                                                padding: EdgeInsets.only(left: 14.0),
+                                                child: Text(
+                                                  '출석',
+                                                  style: TextStyle(
+                                                    color: Color(0xFF9FB3B3),
+                                                    fontSize: 22,
+                                                    fontWeight: FontWeight.bold,
                                                   ),
                                                 ),
                                               ),
-                                            if (attended.isNotEmpty)
-                                              Column(
-                                                crossAxisAlignment: CrossAxisAlignment.start,
+                                            ),
+                                          if (attended.isNotEmpty)
+                                            Column(
+                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                              children: [
+                                                for (int i = 0; i < attended.length; i++) ...[
+                                                  _buildAttendanceCard(
+                                                    attended[i],
+                                                    status: 'attended',
+                                                    key: ValueKey('attended_${attended[i].setId}'),
+                                                    scale: ((containerWidth / 420.0).clamp(0.78, 1.0)),
+                                                    arrival: arrivalBySet[attended[i].setId],
+                                                    departure: departureBySet[attended[i].setId],
+                                                  ),
+                                                  if (i != attended.length - 1) SizedBox(height: 8 * ((containerWidth / 420.0).clamp(0.78, 1.0))),
+                                                ]
+                                              ],
+                                            ),
+                                          if (trialAttended.isNotEmpty) ...[
+                                            if (attended.isNotEmpty) const SizedBox(height: 8),
+                                            for (int i = 0; i < trialAttended.length; i++) ...[
+                                              _buildTrialLessonAttendanceCard(
+                                                trialAttended[i],
+                                                status: 'attended',
+                                                key: ValueKey('trial_attended_${trialAttended[i].id}'),
+                                                scale: ((containerWidth / 420.0).clamp(0.78, 1.0)),
+                                              ),
+                                              if (i != trialAttended.length - 1)
+                                                SizedBox(height: 8 * ((containerWidth / 420.0).clamp(0.78, 1.0))),
+                                            ],
+                                          ],
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              // 출석(등원한) 영역과 등원 예정 영역 구분선
+                              const Padding(
+                                padding: EdgeInsets.symmetric(horizontal: 24.0),
+                                child: Divider(height: 1, thickness: 1, color: Color(0xFF223131)),
+                              ),
+                              // 출석 전 학생 리스트
+                              if (waitingByTime.isNotEmpty || trialWaitingByTime.isNotEmpty)
+                                Expanded(
+                                  child: Padding(
+                                    padding: const EdgeInsets.only(top: 8, left: 24.0, right: 24.0, bottom: 24.0),
+                                    child: Scrollbar(
+                                      controller: _waitingScrollCtrl,
+                                      thumbVisibility: true,
+                                      child: ListView(
+                                        controller: _waitingScrollCtrl,
+                                        padding: EdgeInsets.zero,
+                                        children: [
+                                          for (final t in (<DateTime>{
+                                            ...waitingByTime.keys,
+                                            ...trialWaitingByTime.keys,
+                                          }.toList()
+                                            ..sort((a, b) => a.compareTo(b)))) ...[
+                                            Padding(
+                                              padding: const EdgeInsets.only(bottom: 4.0),
+                                              child: Center(
+                                                child: Text(
+                                                  _formatTime(t),
+                                                  style: const TextStyle(color: Colors.white54, fontSize: 14, fontWeight: FontWeight.bold),
+                                                ),
+                                              ),
+                                            ),
+                                            Center(
+                                              child: Wrap(
+                                                alignment: WrapAlignment.center,
+                                                spacing: _cardSpacing * ((containerWidth / 420.0).clamp(0.78, 1.0)),
+                                                runSpacing: _cardSpacing * ((containerWidth / 420.0).clamp(0.78, 1.0)),
                                                 children: [
-                                                  for (int i = 0; i < attended.length; i++) ...[
+                                                  for (final w in (waitingByTime[t] ?? const <_AttendanceTarget>[]))
                                                     _buildAttendanceCard(
-                                                      attended[i],
-                                                      status: 'attended',
-                                                      key: ValueKey('attended_${attended[i].setId}'),
+                                                      w,
+                                                      status: 'waiting',
+                                                      key: ValueKey('waiting_${w.setId}'),
                                                       scale: ((containerWidth / 420.0).clamp(0.78, 1.0)),
-                                                      arrival: arrivalBySet[attended[i].setId],
-                                                      departure: departureBySet[attended[i].setId],
+                                                      arrival: arrivalBySet[w.setId],
+                                                      departure: departureBySet[w.setId],
                                                     ),
-                                                    if (i != attended.length - 1) SizedBox(height: 8 * ((containerWidth / 420.0).clamp(0.78, 1.0))),
-                                                  ]
+                                                  for (final s in (trialWaitingByTime[t] ?? const <ConsultTrialLessonSlot>[]))
+                                                    _buildTrialLessonAttendanceCard(
+                                                      s,
+                                                      status: 'waiting',
+                                                      key: ValueKey('trial_waiting_${s.id}'),
+                                                      scale: ((containerWidth / 420.0).clamp(0.78, 1.0)),
+                                                    ),
                                                 ],
                                               ),
-                                            if (trialAttended.isNotEmpty) ...[
-                                              if (attended.isNotEmpty) const SizedBox(height: 8),
-                                              for (int i = 0; i < trialAttended.length; i++) ...[
-                                                _buildTrialLessonAttendanceCard(
-                                                  trialAttended[i],
-                                                  status: 'attended',
-                                                  key: ValueKey('trial_attended_${trialAttended[i].id}'),
-                                                  scale: ((containerWidth / 420.0).clamp(0.78, 1.0)),
-                                                ),
-                                                if (i != trialAttended.length - 1)
-                                                  SizedBox(height: 8 * ((containerWidth / 420.0).clamp(0.78, 1.0))),
-                                              ],
-                                            ],
+                                            ),
+                                            const SizedBox(height: 8),
                                           ],
-                                        ),
+                                        ],
                                       ),
                                     ),
                                   ),
-                                ),
-                                // 출석(등원한) 영역과 등원 예정 영역 구분선
-                                const Padding(
-                                  padding: EdgeInsets.symmetric(horizontal: 24.0),
-                                  child: Divider(height: 1, thickness: 1, color: Color(0xFF223131)),
-                                ),
-                                if (waitingByTime.isNotEmpty || trialWaitingByTime.isNotEmpty)
-                                  Expanded(
-                                    child: Padding(
-                                      padding: const EdgeInsets.only(top: 8, left: 24.0, right: 24.0, bottom: 24.0),
-                                      child: Scrollbar(
-                                        controller: _waitingScrollCtrl,
-                                        thumbVisibility: true,
-                                        child: ListView(
-                                          controller: _waitingScrollCtrl,
-                                          padding: EdgeInsets.zero,
-                                          children: [
-                                            for (final t in (<DateTime>{
-                                              ...waitingByTime.keys,
-                                              ...trialWaitingByTime.keys,
-                                            }.toList()
-                                              ..sort((a, b) => a.compareTo(b)))) ...[
-                                              Padding(
-                                                padding: const EdgeInsets.only(bottom: 4.0),
-                                                child: Center(
-                                                  child: Text(
-                                                    _formatTime(t),
-                                                    style: const TextStyle(color: Colors.white54, fontSize: 14, fontWeight: FontWeight.bold),
-                                                  ),
-                                                ),
-                                              ),
-                                              Center(
-                                                child: Wrap(
-                                                  alignment: WrapAlignment.center,
-                                                  spacing: _cardSpacing * ((containerWidth / 420.0).clamp(0.78, 1.0)),
-                                                  runSpacing: _cardSpacing * ((containerWidth / 420.0).clamp(0.78, 1.0)),
-                                                  children: [
-                                                    for (final w in (waitingByTime[t] ?? const <_AttendanceTarget>[]))
-                                                      _buildAttendanceCard(
-                                                        w,
-                                                        status: 'waiting',
-                                                        key: ValueKey('waiting_${w.setId}'),
-                                                        scale: ((containerWidth / 420.0).clamp(0.78, 1.0)),
-                                                        arrival: arrivalBySet[w.setId],
-                                                        departure: departureBySet[w.setId],
-                                                      ),
-                                                    for (final s in (trialWaitingByTime[t] ?? const <ConsultTrialLessonSlot>[]))
-                                                      _buildTrialLessonAttendanceCard(
-                                                        s,
-                                                        status: 'waiting',
-                                                        key: ValueKey('trial_waiting_${s.id}'),
-                                                        scale: ((containerWidth / 420.0).clamp(0.78, 1.0)),
-                                                      ),
-                                                  ],
-                                                ),
-                                              ),
-                                              const SizedBox(height: 8),
-                                            ],
-                                          ],
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                              ],
-                              if (_sideSheetBottomView == _SideSheetBottomView.allStudents)
-                                _buildAllStudentsBottomPanel(
-                                  containerWidth: containerWidth,
                                 ),
                             ],
                           ),
@@ -1594,7 +1341,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                     );
                     },
                   );
-                },
+                  },
+                ),
               );
             },
           ),
@@ -1742,130 +1490,144 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         key: key,
         mainAxisSize: MainAxisSize.max,
         children: [
-          Dismissible(
-            key: ValueKey('attended_swipe_${t.setId}'),
-            direction: DismissDirection.startToEnd,
-            confirmDismiss: (_) async {
-              final now = DateTime.now();
-              final hasHomeworkItems = HomeworkStore.instance
-                  .items(t.student.id)
-                  .any((e) => e.status != HomeworkStatus.completed);
-              final allPendingItemIds = HomeworkStore.instance
-                  .items(t.student.id)
-                  .where((e) => e.status != HomeworkStatus.completed)
-                  .map((e) => e.id)
-                  .toList();
-              final HomeworkAssignSelection? selection = hasHomeworkItems
-                  ? await showHomeworkAssignDialog(
-                      context,
-                      t.student.id,
-                      anchorTime: t.classDateTime,
-                    )
-                  : const HomeworkAssignSelection(
-                      itemIds: [],
-                      dueDate: null,
-                    );
-              if (selection == null) {
-                return false;
-              }
-              setState(() {
-                _leavedSetIds.add(t.setId);
-                _leaveTimes[t.setId] = now;
-                _sideSheetDataDirty = true;
-              });
-              try {
-                final classDateTime = t.classDateTime;
-                final existing = DataManager.instance.getAttendanceRecord(t.student.id, classDateTime);
-                final DateTime arrival2 = existing?.arrivalTime ?? _attendTimes[t.setId] ?? now;
-                await DataManager.instance.saveOrUpdateAttendance(
-                  studentId: t.student.id,
-                  classDateTime: classDateTime,
-                  classEndTime: classDateTime.add(t.duration),
-                  className: t.classInfo?.name ?? '수업',
-                  isPresent: true,
-                  arrivalTime: arrival2,
-                  departureTime: now,
-                  setId: t.setId,
-                  sessionTypeId: t.classInfo?.id,
-                );
-                // 하원 시 숙제 선택 다이얼로그
-                if (selection != null && selection.itemIds.isNotEmpty) {
-                  HomeworkStore.instance.markItemsAsHomework(
-                    t.student.id,
-                    selection.itemIds,
-                    dueDate: selection.dueDate,
-                  );
-                }
-                final selectedIds = selection?.itemIds.toSet() ?? const <String>{};
-                final unselectedIds = allPendingItemIds
-                    .where((id) => !selectedIds.contains(id))
+          _wrapTextbookDropTargetForStudent(
+            studentId: t.student.id,
+            child: Dismissible(
+              key: ValueKey('attended_swipe_${t.setId}'),
+              direction: DismissDirection.startToEnd,
+              confirmDismiss: (_) async {
+                final now = DateTime.now();
+                final hasHomeworkItems = HomeworkStore.instance
+                    .items(t.student.id)
+                    .any((e) => e.status != HomeworkStatus.completed);
+                final allPendingItemIds = HomeworkStore.instance
+                    .items(t.student.id)
+                    .where((e) => e.status != HomeworkStatus.completed)
+                    .map((e) => e.id)
                     .toList();
-                if (unselectedIds.isNotEmpty) {
-                  HomeworkStore.instance.restoreItemsToWaiting(
-                    t.student.id,
-                    unselectedIds,
-                  );
+                final HomeworkAssignSelection? selection = hasHomeworkItems
+                    ? await showHomeworkAssignDialog(
+                        context,
+                        t.student.id,
+                        anchorTime: t.classDateTime,
+                      )
+                    : const HomeworkAssignSelection(
+                        itemIds: [],
+                        dueDate: null,
+                      );
+                if (selection == null) {
+                  return false;
                 }
-              } catch (e) {
-                print('[ERROR] 출석 기록 동기화 실패: $e');
-              }
-              return false;
-            },
-            background: Container(
-              alignment: Alignment.centerLeft,
-              padding: const EdgeInsets.only(left: 16),
-              child: const Icon(Icons.arrow_forward_rounded, color: Colors.white54, size: 18),
-            ),
-            child: GestureDetector(
-              onTapDown: (details) {
-                _lastTagTapPosition = details.globalPosition;
-              },
-              onTap: () => _handleAttendedCardTap(t),
-              onLongPress: () async {
-                _removeClassTagOverlay();
                 setState(() {
-                  _attendedSetIds.remove(t.setId);
-                  _leavedSetIds.remove(t.setId);
-                  _attendTimes.remove(t.setId);
-                  _leaveTimes.remove(t.setId);
+                  _leavedSetIds.add(t.setId);
+                  _leaveTimes[t.setId] = now;
                   _sideSheetDataDirty = true;
                 });
                 try {
                   final classDateTime = t.classDateTime;
-                  final existing = DataManager.instance.getAttendanceRecord(t.student.id, classDateTime);
-                  if (existing?.id != null) {
-                    await DataManager.instance.deleteAttendanceRecord(existing!.id!);
-                  }
+                  final existing = DataManager.instance
+                      .getAttendanceRecord(t.student.id, classDateTime);
+                  final DateTime arrival2 =
+                      existing?.arrivalTime ?? _attendTimes[t.setId] ?? now;
                   await DataManager.instance.saveOrUpdateAttendance(
                     studentId: t.student.id,
                     classDateTime: classDateTime,
-                    classEndTime: existing?.classEndTime ?? classDateTime.add(t.duration),
-                    className: existing?.className ?? t.classInfo?.name ?? '수업',
-                    isPresent: false,
-                    arrivalTime: null,
-                    departureTime: null,
+                    classEndTime: classDateTime.add(t.duration),
+                    className: t.classInfo?.name ?? '수업',
+                    isPresent: true,
+                    arrivalTime: arrival2,
+                    departureTime: now,
                     setId: t.setId,
-                    sessionTypeId: existing?.sessionTypeId ?? t.classInfo?.id,
-                    cycle: existing?.cycle,
-                    sessionOrder: existing?.sessionOrder,
-                    isPlanned: true,
-                    snapshotId: existing?.snapshotId,
-                    batchSessionId: existing?.batchSessionId,
+                    sessionTypeId: t.classInfo?.id,
                   );
+                  // 하원 시 숙제 선택 다이얼로그
+                  if (selection != null && selection.itemIds.isNotEmpty) {
+                    HomeworkStore.instance.markItemsAsHomework(
+                      t.student.id,
+                      selection.itemIds,
+                      dueDate: selection.dueDate,
+                    );
+                  }
+                  final selectedIds =
+                      selection?.itemIds.toSet() ?? const <String>{};
+                  final unselectedIds = allPendingItemIds
+                      .where((id) => !selectedIds.contains(id))
+                      .toList();
+                  if (unselectedIds.isNotEmpty) {
+                    HomeworkStore.instance.restoreItemsToWaiting(
+                      t.student.id,
+                      unselectedIds,
+                    );
+                  }
                 } catch (e) {
-                  print('[ERROR] 출석 기록 원복 실패: $e');
+                  print('[ERROR] 출석 기록 동기화 실패: $e');
                 }
+                return false;
               },
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                margin: EdgeInsets.zero,
-                padding: const EdgeInsets.fromLTRB(0, 9.5, 18, 9.5),
-                decoration: BoxDecoration(
-                  // 등원 완료(출석) 카드: 테두리 제거
-                  color: Colors.transparent,
-                  borderRadius: BorderRadius.circular(12),
+              background: Container(
+                alignment: Alignment.centerLeft,
+                padding: const EdgeInsets.only(left: 16),
+                child: const Icon(
+                  Icons.arrow_forward_rounded,
+                  color: Colors.white54,
+                  size: 18,
                 ),
-                child: attendedChild,
+              ),
+              child: GestureDetector(
+                onTapDown: (details) {
+                  _lastTagTapPosition = details.globalPosition;
+                },
+                onTap: () => _handleAttendedCardTap(t),
+                onLongPress: () async {
+                  _removeClassTagOverlay();
+                  setState(() {
+                    _attendedSetIds.remove(t.setId);
+                    _leavedSetIds.remove(t.setId);
+                    _attendTimes.remove(t.setId);
+                    _leaveTimes.remove(t.setId);
+                    _sideSheetDataDirty = true;
+                  });
+                  try {
+                    final classDateTime = t.classDateTime;
+                    final existing = DataManager.instance
+                        .getAttendanceRecord(t.student.id, classDateTime);
+                    if (existing?.id != null) {
+                      await DataManager.instance.deleteAttendanceRecord(
+                        existing!.id!,
+                      );
+                    }
+                    await DataManager.instance.saveOrUpdateAttendance(
+                      studentId: t.student.id,
+                      classDateTime: classDateTime,
+                      classEndTime:
+                          existing?.classEndTime ?? classDateTime.add(t.duration),
+                      className: existing?.className ?? t.classInfo?.name ?? '수업',
+                      isPresent: false,
+                      arrivalTime: null,
+                      departureTime: null,
+                      setId: t.setId,
+                      sessionTypeId: existing?.sessionTypeId ?? t.classInfo?.id,
+                      cycle: existing?.cycle,
+                      sessionOrder: existing?.sessionOrder,
+                      isPlanned: true,
+                      snapshotId: existing?.snapshotId,
+                      batchSessionId: existing?.batchSessionId,
+                    );
+                  } catch (e) {
+                    print('[ERROR] 출석 기록 원복 실패: $e');
+                  }
+                },
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
+                  margin: EdgeInsets.zero,
+                  padding: const EdgeInsets.fromLTRB(0, 9.5, 18, 9.5),
+                  decoration: BoxDecoration(
+                    // 등원 완료(출석) 카드: 테두리 제거
+                    color: Colors.transparent,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: attendedChild,
+                ),
               ),
             ),
           ),

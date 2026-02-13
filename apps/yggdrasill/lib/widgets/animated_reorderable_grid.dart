@@ -22,6 +22,8 @@ class AnimatedReorderableGrid<T extends Object> extends StatefulWidget {
     this.autoScrollEdge = 60.0,
     this.autoScrollStep = 18.0,
     this.enableReorder = true,
+    this.onDragStarted,
+    this.onDragEnded,
   });
 
   final List<T> items;
@@ -40,6 +42,8 @@ class AnimatedReorderableGrid<T extends Object> extends StatefulWidget {
   final double autoScrollEdge;
   final double autoScrollStep;
   final bool enableReorder;
+  final void Function(T item)? onDragStarted;
+  final void Function(T item)? onDragEnded;
 
   @override
   State<AnimatedReorderableGrid<T>> createState() => _AnimatedReorderableGridState<T>();
@@ -207,9 +211,16 @@ class _AnimatedReorderableGridState<T extends Object> extends State<AnimatedReor
             _draggingId = widget.itemId(item);
             _pendingDropIndex = index;
           });
+          widget.onDragStarted?.call(item);
         },
-        onDragEnd: (_) => _clearDragState(),
-        onDraggableCanceled: (_, __) => _clearDragState(),
+        onDragEnd: (_) {
+          widget.onDragEnded?.call(item);
+          _clearDragState();
+        },
+        onDraggableCanceled: (_, __) {
+          widget.onDragEnded?.call(item);
+          _clearDragState();
+        },
         child: cell,
       );
     }

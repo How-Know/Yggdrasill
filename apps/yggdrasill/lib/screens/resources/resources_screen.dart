@@ -20,6 +20,8 @@ import 'dart:math' as math;
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 import '../../widgets/pdf/pdf_editor_dialog.dart';
 import '../../widgets/resource_file_meta_dialog.dart';
+import '../../models/textbook_drag_payload.dart';
+import '../../app_overlays.dart';
 
 class _ResColors {
   static const Color container1 = Color(0xFF263238);
@@ -955,6 +957,82 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     setState(() => _fileGradeLabels[file.id] = nextLabel);
   }
 
+  TextbookDragPayload? _buildTextbookDragPayload(_ResourceFile file) {
+    if (_currentCategory != 'textbook') return null;
+    final gradeLabel = (_effectiveGradeLabelForFile(file) ?? file.primaryGrade ?? '').trim();
+    return TextbookDragPayload(
+      bookId: file.id,
+      bookName: file.name,
+      gradeLabel: gradeLabel,
+    );
+  }
+
+  void _setActiveTextbookDragPayload(_ResourceFile file) {
+    activeTextbookDragPayload.value = _buildTextbookDragPayload(file);
+    isTextbookDraggingOverLeftSideSheet.value = false;
+  }
+
+  void _clearActiveTextbookDragPayload() {
+    activeTextbookDragPayload.value = null;
+    isTextbookDraggingOverLeftSideSheet.value = false;
+  }
+
+  Widget _buildCompactTextbookDragFeedback(
+    _ResourceFile file, {
+    required double maxWidth,
+  }) {
+    final double width = math.min(maxWidth * 0.72, 196.0);
+    final String grade = (_effectiveGradeLabelForFile(file) ?? file.primaryGrade ?? '-').trim();
+    return Container(
+      width: width,
+      height: 58,
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFF111A1D),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFF33A373), width: 1.2),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.32),
+            blurRadius: 10,
+            offset: const Offset(0, 5),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Icon(
+            file.icon ?? Icons.menu_book_rounded,
+            size: 18,
+            color: const Color(0xFF9FD5C0),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              file.name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: _rsText,
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            grade.isEmpty ? '-' : grade,
+            style: const TextStyle(
+              color: _rsTextSub,
+              fontSize: 11.5,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _persistFileOrderForParent(String? parentId) async {
     if (parentId == '__FAVORITES__') return;
     final ordered = _childFilesOf(parentId);
@@ -1619,6 +1697,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     for (final c in _gridScrollCtrls) {
       c.dispose();
     }
+    _clearActiveTextbookDragPayload();
     super.dispose();
   }
 
@@ -2523,6 +2602,24 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
               ],
             );
           }
+          Widget buildFeedbackCell(_ResourceFile fi) {
+            final normal = buildCardCell(fi);
+            return ValueListenableBuilder<bool>(
+              valueListenable: isTextbookDraggingOverLeftSideSheet,
+              builder: (context, hoveringSideSheet, _) {
+                final payload = activeTextbookDragPayload.value;
+                final bool compact =
+                    hoveringSideSheet && payload != null && payload.bookId == fi.id;
+                if (!compact) return normal;
+                return Center(
+                  child: _buildCompactTextbookDragFeedback(
+                    fi,
+                    maxWidth: gridCardWidth,
+                  ),
+                );
+              },
+            );
+          }
           return Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -2540,7 +2637,7 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                           items: files,
                           itemId: (file) => file.id,
                           itemBuilder: (context, file) => buildCardCell(file),
-                          feedbackBuilder: (context, file) => buildCardCell(file),
+                          feedbackBuilder: (context, file) => buildFeedbackCell(file),
                           cardWidth: gridCardWidth,
                           cardHeight: gridCardHeight,
                           spacing: spacing,
@@ -2548,6 +2645,8 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                           scrollController: gridScrollCtrl,
                           animationDuration: const Duration(milliseconds: 180),
                           animationCurve: Curves.easeOutCubic,
+                          onDragStarted: (file) => _setActiveTextbookDragPayload(file),
+                          onDragEnded: (_) => _clearActiveTextbookDragPayload(),
                           onReorder: (file, targetIndex) async {
                             if (files.isEmpty) return;
                             final ordered = List<_ResourceFile>.from(files);
