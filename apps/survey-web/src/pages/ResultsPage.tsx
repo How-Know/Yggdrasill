@@ -78,6 +78,31 @@ type SnapshotMeta = {
   scaleBasis: string;
 };
 
+type AxisTypeCode = 'TYPE_A' | 'TYPE_B' | 'TYPE_C' | 'TYPE_D' | 'UNCLASSIFIED';
+
+type SnapshotAxisPoint = {
+  participantId: string;
+  participantName: string;
+  emotionZ: number | null;
+  beliefZ: number | null;
+  typeCode: AxisTypeCode;
+  currentLevelGrade: number | null;
+  currentMathPercentile: number | null;
+};
+
+type SnapshotAxisMeta = {
+  emotionScaleNames: string[];
+  beliefScaleNames: string[];
+};
+
+type SnapshotAxisHover = {
+  point: SnapshotAxisPoint;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
 type Round2LinkStatus = {
   email: string | null;
   sentAt: string | null;
@@ -232,8 +257,200 @@ function formatCurrentLevelDisplay(levelGrade: unknown, percentile: unknown): st
   return `${label} (상위 ${formatPercentileInputValue(pct)}% 추정)`;
 }
 
+type ReportPreset = {
+  studentSummary: string;
+  studentMessage: string;
+  studentFocus: string[];
+  teacherGoal: string;
+  teacherStructure: string[];
+  teacherFeedback: string[];
+  teacherAvoid: string[];
+};
+
+const TYPE_REPORT_PRESETS: Record<Exclude<AxisTypeCode, 'UNCLASSIFIED'>, ReportPreset> = {
+  TYPE_A: {
+    studentSummary: '도전과 이해가 모두 안정적인 상태입니다.',
+    studentMessage: '지금 흐름이 좋아요. 풀이를 정리하는 습관을 붙이면 성장 속도가 더 빨라집니다.',
+    studentFocus: [
+      '어려운 문제에서 검산/반례 확인을 1회 추가하기',
+      '풀이 핵심을 한 문장으로 요약하기',
+    ],
+    teacherGoal: '확장과 정교화를 동시에 유지합니다.',
+    teacherStructure: [
+      '기초 20% + 도전 60% + 확장 20% 비율 운영',
+      '풀이 비교 및 전략 명명(조건분해, 역으로 보기 등)',
+    ],
+    teacherFeedback: [
+      '접근이 논리적이야. 검산만 더하면 완성도가 올라가.',
+      '이 방법이 왜 통하는지 한 문장으로 정리해보자.',
+    ],
+    teacherAvoid: [
+      '난이도만 계속 올리는 운영',
+      '속도 중심 피드백만 반복',
+    ],
+  },
+  TYPE_D: {
+    studentSummary: '할 수 있다는 힘은 충분하고, 감정 에너지만 보강하면 되는 상태입니다.',
+    studentMessage: '실력의 기반은 이미 좋아요. 흥미 포인트를 찾으면 집중이 더 길어집니다.',
+    studentFocus: [
+      '오늘 배운 개념의 재미 포인트 1개 적기',
+      '같은 개념을 다른 문제에 다시 써보기',
+    ],
+    teacherGoal: '신념 기반은 유지하고, 흥미/의미를 회복합니다.',
+    teacherStructure: [
+      '10~12분 단위 활동 전환(설명-연습-토론)',
+      '선택 과제(A/B) 1개로 참여 에너지 강화',
+    ],
+    teacherFeedback: [
+      '이미 할 수 있는 수준이야. 이제 왜 그런지의 재미를 보자.',
+      '오늘은 두 방법 중 네가 하나를 골라보자.',
+    ],
+    teacherAvoid: [
+      '반복 드릴만 과하게 제공',
+      '열정 부족으로 해석하는 피드백',
+    ],
+  },
+  TYPE_C: {
+    studentSummary: '정서 안정과 작은 성공의 누적이 가장 중요한 회복 구간입니다.',
+    studentMessage: '지금은 정답보다 시작이 더 중요합니다. 한 걸음씩 쌓으면 충분히 바뀝니다.',
+    studentFocus: [
+      '문제에서 첫 줄(조건 표시) 먼저 쓰기',
+      '막히면 1단계 힌트부터 다시 시작하기',
+    ],
+    teacherGoal: '정서 안정 후 통제감을 회복합니다.',
+    teacherStructure: [
+      '확실히 풀 수 있는 문항 60% + 힌트 포함 도전 40%',
+      '문제 수를 줄이고 단계형 힌트 제공',
+    ],
+    teacherFeedback: [
+      '틀릴 수 있는 문제야. 지금은 정보를 모으는 단계야.',
+      '오늘 목표는 정답이 아니라 첫 줄을 쓰는 거야.',
+    ],
+    teacherAvoid: [
+      '공개 비교, 순위 중심 언급',
+      '힌트 없이 장시간 방치',
+    ],
+  },
+  TYPE_B: {
+    studentSummary: '흥미는 높고, 할 수 있다는 감각만 구조적으로 보강하면 되는 상태입니다.',
+    studentMessage: '아이디어가 좋은 유형이에요. 전략 틀을 붙이면 점수도 같이 올라갑니다.',
+    studentFocus: [
+      '조건-목표-전략-검산 순서로 풀이 템플릿 적용',
+      '오늘 통제한 행동 1개를 기록하기',
+    ],
+    teacherGoal: '흥미를 유지하면서 통제감을 강화합니다.',
+    teacherStructure: [
+      '풀이 템플릿 기반 수업(조건/목표/전략/점검)',
+      '퍼즐형 1문항 + 기본기 2문항 리듬 운영',
+    ],
+    teacherFeedback: [
+      '좋은 아이디어야. 이제 검증 단계만 붙여보자.',
+      '결과는 네가 고른 방법의 결과야.',
+    ],
+    teacherAvoid: [
+      '흥미 자극만 하고 구조를 주지 않는 수업',
+      '결과 점수만으로 피드백',
+    ],
+  },
+};
+
+const AXIS_TYPE_COLOR_MAP: Record<AxisTypeCode, string> = {
+  TYPE_A: '#4CAF50',
+  TYPE_B: '#FF9800',
+  TYPE_C: '#EF5350',
+  TYPE_D: '#42A5F5',
+  UNCLASSIFIED: '#9E9E9E',
+};
+
+function axisTypeLabel(typeCode: AxisTypeCode): string {
+  if (typeCode === 'TYPE_A') return '확장형';
+  if (typeCode === 'TYPE_B') return '동기형';
+  if (typeCode === 'TYPE_C') return '회복형';
+  if (typeCode === 'TYPE_D') return '안정형';
+  return '미분류';
+}
+
+function parseTagList(raw: unknown): string[] {
+  if (Array.isArray(raw)) {
+    return raw.map((v) => String(v).trim()).filter(Boolean);
+  }
+  const text = String(raw ?? '').trim();
+  if (!text) return [];
+  return text.split(',').map((v) => v.trim()).filter(Boolean);
+}
+
+function tagLeafLabel(path: string): string {
+  const parts = path.split('>').map((v) => v.trim()).filter(Boolean);
+  return parts.length ? parts[parts.length - 1] : path.trim();
+}
+
+function normalizeAxisSourceText(value: string): string {
+  return value.toLowerCase().replace(/\s+/g, '').replace(/[_-]/g, '');
+}
+
+function classifyAxisFromQuestion(
+  tagsRaw: unknown,
+  traitRaw: unknown,
+  textRaw: unknown,
+): 'emotion_pos' | 'emotion_neg' | 'belief' | null {
+  const tags = parseTagList(tagsRaw);
+  const candidates: string[] = [];
+  tags.forEach((tag) => {
+    candidates.push(tag);
+    candidates.push(tagLeafLabel(tag));
+  });
+  if (!candidates.length) {
+    // 태그가 없는 경우에만 최소 fallback 사용
+    candidates.push(String(traitRaw ?? ''));
+    candidates.push(String(textRaw ?? ''));
+  }
+
+  let beliefScore = 0;
+  let emotionPosScore = 0;
+  let emotionNegScore = 0;
+
+  candidates.forEach((raw) => {
+    const key = normalizeAxisSourceText(raw);
+    if (!key) return;
+    if (/(신념|효능|자기효능|성장신념|능력관|통제가능성|통제|노력성과|주도성|실패해석|회복기대|belief|efficacy|growth|mindset|control|attribution|resilien)/.test(key)) {
+      beliefScore += 1;
+    }
+    if (/(흥미|몰입|재미|호기심|정서안정|안정성|즐거움|자신감|interest|engage|enjoy|stability|confidence)/.test(key)) {
+      emotionPosScore += 1;
+    }
+    if (/(불안|긴장|위협|정서반응성|정서반응|반응성|스트레스|좌절|기질적불안민감성|anxiety|stress|threat|reactiv|frustrat|fear)/.test(key)) {
+      emotionNegScore += 1;
+    }
+  });
+
+  const maxScore = Math.max(beliefScore, emotionPosScore, emotionNegScore);
+  if (maxScore <= 0) return null;
+  if (beliefScore === maxScore) return 'belief';
+  if (emotionNegScore === maxScore) return 'emotion_neg';
+  return 'emotion_pos';
+}
+
+function computeMean(values: number[]): number | null {
+  if (!values.length) return null;
+  return values.reduce((sum, v) => sum + v, 0) / values.length;
+}
+
+function classifyEmotionBeliefType(emotionZ: number | null, beliefZ: number | null): AxisTypeCode {
+  if (emotionZ == null || beliefZ == null) return 'UNCLASSIFIED';
+  if (emotionZ >= 0 && beliefZ >= 0) return 'TYPE_A';
+  if (emotionZ >= 0 && beliefZ < 0) return 'TYPE_B';
+  if (emotionZ < 0 && beliefZ < 0) return 'TYPE_C';
+  return 'TYPE_D';
+}
+
+function zToDisplayPercent(value: number | null): number | null {
+  if (value == null || !Number.isFinite(value)) return null;
+  const clamped = Math.max(-2.5, Math.min(2.5, value));
+  return ((clamped + 2.5) / 5) * 100;
+}
+
 export default function ResultsPage() {
-  const [activeTab, setActiveTab] = React.useState<'status' | 'result'>('status');
+  const [activeTab, setActiveTab] = React.useState<'status' | 'result' | 'report'>('status');
   const [rows, setRows] = React.useState<Row[]>([]);
   const [selected, setSelected] = React.useState<Row | null>(null);
   const [answers, setAnswers] = React.useState<any[]>([]);
@@ -258,8 +475,16 @@ export default function ResultsPage() {
   const [snapshotScaleStats, setSnapshotScaleStats] = React.useState<SnapshotScaleStat[]>([]);
   const [snapshotSubjectiveStats, setSnapshotSubjectiveStats] = React.useState<SnapshotSubjectiveStat[]>([]);
   const [snapshotMeta, setSnapshotMeta] = React.useState<SnapshotMeta | null>(null);
+  const [snapshotAxisPoints, setSnapshotAxisPoints] = React.useState<SnapshotAxisPoint[]>([]);
+  const [snapshotAxisMeta, setSnapshotAxisMeta] = React.useState<SnapshotAxisMeta>({
+    emotionScaleNames: [],
+    beliefScaleNames: [],
+  });
+  const [snapshotAxisHover, setSnapshotAxisHover] = React.useState<SnapshotAxisHover | null>(null);
   const [snapshotLoading, setSnapshotLoading] = React.useState(false);
   const [snapshotError, setSnapshotError] = React.useState<string | null>(null);
+  const [reportSearchKeyword, setReportSearchKeyword] = React.useState('');
+  const [selectedReportParticipantId, setSelectedReportParticipantId] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     (async () => {
@@ -565,14 +790,14 @@ export default function ResultsPage() {
         const [answersRes, questionsRes, participantsRes] = await Promise.all([
           supabase
             .from('question_answers')
-            .select('answer_number, answer_text, question_id, response:question_responses(participant_id), question:questions(id, text, trait, type, round_label, min_score, max_score, reverse, is_active)'),
+            .select('answer_number, answer_text, question_id, response:question_responses(participant_id), question:questions(id, text, trait, tags, type, round_label, min_score, max_score, reverse, is_active)'),
           supabase
             .from('questions')
-            .select('id, text, trait, type, round_label, is_active')
+            .select('id, text, trait, tags, type, round_label, is_active')
             .eq('is_active', true),
           supabase
             .from('survey_participants')
-            .select('id'),
+            .select('id, name, current_level_grade, current_math_percentile'),
         ]);
 
         if (answersRes.error) throw answersRes.error;
@@ -584,27 +809,43 @@ export default function ResultsPage() {
             .map((p) => String(p?.id ?? '').trim())
             .filter(Boolean),
         );
+        const participantMetaById: Record<string, { name: string; levelGrade: number | null; percentile: number | null }> = {};
+        (participantsRes.data as any[] || []).forEach((p) => {
+          const pid = String(p?.id ?? '').trim();
+          if (!pid) return;
+          participantMetaById[pid] = {
+            name: String(p?.name ?? '').trim() || pid,
+            levelGrade: normalizeLevelGrade(p?.current_level_grade),
+            percentile: normalizePercentile(p?.current_math_percentile),
+          };
+        });
 
         const scaleItemSetMap: Record<string, Set<string>> = {};
         const supplementaryQuestionMap: Record<string, string> = {};
+        const questionMetaById: Record<string, { text: string; trait: string; tags: string[] }> = {};
         (questionsRes.data as any[] || []).forEach((q) => {
           const qid = String(q?.id ?? '').trim();
           if (!qid) return;
           const roundLabel = String(q?.round_label ?? '').trim();
           const roundNo = roundOrderMap[roundLabel] ?? parseRoundNo(roundLabel) ?? 1;
           if (roundNo !== 1) return;
+          const qText = String(q?.text ?? '').trim();
+          const qTrait = String(q?.trait ?? '').trim();
+          const qTags = parseTagList(q?.tags);
+          questionMetaById[qid] = { text: qText, trait: qTrait, tags: qTags };
           const qType = String(q?.type ?? '').trim();
           if (qType === 'scale') {
-            const scaleName = String(q?.trait ?? '').trim() || '미분류';
+            const scaleName = qTrait || '미분류';
             if (!scaleItemSetMap[scaleName]) scaleItemSetMap[scaleName] = new Set<string>();
             scaleItemSetMap[scaleName].add(qid);
           } else if (qType === 'text') {
-            supplementaryQuestionMap[qid] = String(q?.text ?? '').trim() || `(문항 ${qid})`;
+            supplementaryQuestionMap[qid] = qText || `(문항 ${qid})`;
           }
         });
 
         const coreScoreMap: Record<string, Record<string, Record<string, number>>> = {};
         const supplementaryValuesMap: Record<string, number[]> = {};
+        const questionScoreMap: Record<string, Record<string, number>> = {};
         const participantSet = new Set<string>();
         (answersRes.data as any[] || []).forEach((row) => {
           const pid = String(row?.response?.participant_id ?? '').trim();
@@ -628,11 +869,20 @@ export default function ResultsPage() {
             if (!Number.isFinite(scoreRc)) return;
 
             const scaleName = String(q?.trait ?? '').trim() || '미분류';
+            if (!questionMetaById[qid]) {
+              questionMetaById[qid] = {
+                text: String(q?.text ?? '').trim(),
+                trait: String(q?.trait ?? '').trim(),
+                tags: parseTagList(q?.tags),
+              };
+            }
             if (!scaleItemSetMap[scaleName]) scaleItemSetMap[scaleName] = new Set<string>();
             scaleItemSetMap[scaleName].add(qid);
             if (!coreScoreMap[scaleName]) coreScoreMap[scaleName] = {};
             if (!coreScoreMap[scaleName][pid]) coreScoreMap[scaleName][pid] = {};
             coreScoreMap[scaleName][pid][qid] = scoreRc;
+            if (!questionScoreMap[qid]) questionScoreMap[qid] = {};
+            questionScoreMap[qid][pid] = scoreRc;
             participantSet.add(pid);
           } else if (qType === 'text') {
             const numericTextAnswer = toNumber(row?.answer_number ?? row?.answer_text);
@@ -727,11 +977,80 @@ export default function ResultsPage() {
           })
           .sort((a, b) => a.text.localeCompare(b.text));
 
+        const axisByParticipant: Record<string, { emotion: number[]; belief: number[] }> = {};
+        const emotionAxisLabelSet = new Set<string>();
+        const beliefAxisLabelSet = new Set<string>();
+        Object.entries(questionScoreMap).forEach(([questionId, byStudent]) => {
+          const values = Object.values(byStudent).filter(
+            (v): v is number => typeof v === 'number' && Number.isFinite(v),
+          );
+          if (values.length < 2) return;
+          const mean = computeMean(values);
+          const sd = computeSampleSd(values);
+          if (mean == null || sd == null || sd <= 0) return;
+
+          const questionMeta = questionMetaById[questionId];
+          const axisRole = classifyAxisFromQuestion(
+            questionMeta?.tags,
+            questionMeta?.trait,
+            questionMeta?.text,
+          );
+          if (!axisRole) return;
+
+          const labelSource = (questionMeta?.tags ?? []).map(tagLeafLabel).find(Boolean)
+            || questionMeta?.text
+            || questionMeta?.trait
+            || questionId;
+
+          Object.entries(byStudent).forEach(([participantId, score]) => {
+            if (!Number.isFinite(score)) return;
+            const z = (score - mean) / sd;
+            if (!Number.isFinite(z)) return;
+            if (!axisByParticipant[participantId]) {
+              axisByParticipant[participantId] = { emotion: [], belief: [] };
+            }
+            if (axisRole === 'belief') {
+              axisByParticipant[participantId].belief.push(z);
+              beliefAxisLabelSet.add(labelSource);
+            } else if (axisRole === 'emotion_pos') {
+              axisByParticipant[participantId].emotion.push(z);
+              emotionAxisLabelSet.add(labelSource);
+            } else {
+              // 불안/긴장/위협 계열은 부호를 반전해 "높을수록 안정적인 감정" 축으로 통일
+              axisByParticipant[participantId].emotion.push(-z);
+              emotionAxisLabelSet.add(labelSource);
+            }
+          });
+        });
+
+        const nextAxisPoints: SnapshotAxisPoint[] = Array.from(participantSet)
+          .map((participantId) => {
+            const axis = axisByParticipant[participantId];
+            const emotionZ = axis ? computeMean(axis.emotion) : null;
+            const beliefZ = axis ? computeMean(axis.belief) : null;
+            const meta = participantMetaById[participantId];
+            return {
+              participantId,
+              participantName: meta?.name || participantId,
+              emotionZ,
+              beliefZ,
+              typeCode: classifyEmotionBeliefType(emotionZ, beliefZ),
+              currentLevelGrade: meta?.levelGrade ?? null,
+              currentMathPercentile: meta?.percentile ?? null,
+            };
+          })
+          .sort((a, b) => a.participantName.localeCompare(b.participantName, 'ko'));
+
         if (!cancelled) {
           const coreItemCount = nextStats.reduce((sum, item) => sum + item.itemCount, 0);
           const supplementaryItemCount = nextSubjectiveStats.length;
           setSnapshotScaleStats(nextStats);
           setSnapshotSubjectiveStats(nextSubjectiveStats);
+          setSnapshotAxisPoints(nextAxisPoints);
+          setSnapshotAxisMeta({
+            emotionScaleNames: Array.from(emotionAxisLabelSet).sort((a, b) => a.localeCompare(b)),
+            beliefScaleNames: Array.from(beliefAxisLabelSet).sort((a, b) => a.localeCompare(b)),
+          });
           setSnapshotMeta({
             asOfDate: new Date().toISOString(),
             totalN: participantSet.size,
@@ -739,13 +1058,15 @@ export default function ResultsPage() {
             coreItemCount,
             supplementaryItemCount,
             totalItemCount: coreItemCount + supplementaryItemCount,
-            scaleBasis: 'core=questions.trait / supplementary=numeric text',
+            scaleBasis: 'core=questions.trait, axis=questions.tags / supplementary=numeric text',
           });
         }
       } catch (error: any) {
         if (!cancelled) {
           setSnapshotScaleStats([]);
           setSnapshotSubjectiveStats([]);
+          setSnapshotAxisPoints([]);
+          setSnapshotAxisMeta({ emotionScaleNames: [], beliefScaleNames: [] });
           setSnapshotMeta(null);
           setSnapshotError(error?.message ?? 'Scale_Stats 계산 실패');
         }
@@ -838,6 +1159,58 @@ export default function ResultsPage() {
     () => getLevelBandLabel(filterLevelBand),
     [filterLevelBand],
   );
+
+  const axisPointsWithValues = React.useMemo(
+    () => snapshotAxisPoints.filter(
+      (p) => p.emotionZ != null && Number.isFinite(p.emotionZ) && p.beliefZ != null && Number.isFinite(p.beliefZ),
+    ),
+    [snapshotAxisPoints],
+  );
+
+  const axisTypeCounts = React.useMemo(() => {
+    const counts: Record<AxisTypeCode, number> = {
+      TYPE_A: 0,
+      TYPE_B: 0,
+      TYPE_C: 0,
+      TYPE_D: 0,
+      UNCLASSIFIED: 0,
+    };
+    snapshotAxisPoints.forEach((point) => {
+      counts[point.typeCode] += 1;
+    });
+    return counts;
+  }, [snapshotAxisPoints]);
+
+  const reportCandidatePoints = React.useMemo(() => {
+    const keyword = reportSearchKeyword.trim().toLowerCase();
+    if (!keyword) return snapshotAxisPoints;
+    return snapshotAxisPoints.filter((point) => (
+      `${point.participantName} ${point.participantId}`.toLowerCase().includes(keyword)
+    ));
+  }, [reportSearchKeyword, snapshotAxisPoints]);
+
+  React.useEffect(() => {
+    if (!snapshotAxisPoints.length) {
+      setSelectedReportParticipantId(null);
+      return;
+    }
+    setSelectedReportParticipantId((prev) => {
+      if (prev && snapshotAxisPoints.some((point) => point.participantId === prev)) {
+        return prev;
+      }
+      return snapshotAxisPoints[0].participantId;
+    });
+  }, [snapshotAxisPoints]);
+
+  const selectedReportPoint = React.useMemo(
+    () => snapshotAxisPoints.find((point) => point.participantId === selectedReportParticipantId) ?? null,
+    [selectedReportParticipantId, snapshotAxisPoints],
+  );
+
+  const selectedReportPreset = React.useMemo(() => {
+    if (!selectedReportPoint || selectedReportPoint.typeCode === 'UNCLASSIFIED') return null;
+    return TYPE_REPORT_PRESETS[selectedReportPoint.typeCode];
+  }, [selectedReportPoint]);
 
   function arrayToBase64(arr: ArrayBuffer): string {
     const bytes = new Uint8Array(arr);
@@ -1006,6 +1379,15 @@ export default function ResultsPage() {
             ...(activeTab === 'result' ? chipActiveStyle : {}),
           }}>
           결과
+        </button>
+        <button
+          onClick={() => setActiveTab('report')}
+          style={{
+            ...chipBaseStyle,
+            minWidth: 92,
+            ...(activeTab === 'report' ? chipActiveStyle : {}),
+          }}>
+          리포트
         </button>
       </div>
 
@@ -1412,12 +1794,145 @@ export default function ResultsPage() {
         </div>
       )}
         </>
-      ) : (
+      ) : activeTab === 'result' ? (
         <div>
           <div style={{ marginBottom: 12 }}>
             <div style={{ fontSize: 18, fontWeight: 900 }}>1차 스냅샷 결과 요약</div>
             <div style={{ color: tokens.textDim, fontSize: 12, marginTop: 4 }}>
               round_no=1 · core=questions.trait · supplementary=숫자형 주관식
+            </div>
+          </div>
+
+          <div style={{ border:`1px solid ${tokens.border}`, borderRadius:12, overflow:'hidden', background: tokens.panel, marginBottom: 14 }}>
+            <div style={{ padding:'12px 14px', borderBottom:`1px solid ${tokens.border}`, background: tokens.panelAlt }}>
+              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:12 }}>
+                <div style={{ fontWeight: 900 }}>감정 × 신념 참여 분포</div>
+                <div style={{ color: tokens.textDim, fontSize: 12 }}>
+                  x=감정 · y=신념 · 참여 {snapshotAxisPoints.length.toLocaleString('ko-KR')}명
+                </div>
+              </div>
+            </div>
+            <div style={{ padding:'12px 14px' }}>
+              <div style={{ display:'flex', flexWrap:'wrap', gap:8, marginBottom: 10 }}>
+                {(['TYPE_A', 'TYPE_D', 'TYPE_C', 'TYPE_B'] as AxisTypeCode[]).map((code) => (
+                  <div
+                    key={`axis_count_${code}`}
+                    style={{ display:'inline-flex', alignItems:'center', gap:6, border:`1px solid ${tokens.border}`, borderRadius:999, padding:'4px 10px', fontSize:12 }}
+                  >
+                    <span style={{ width:8, height:8, borderRadius:'50%', background: AXIS_TYPE_COLOR_MAP[code], display:'inline-block' }} />
+                    <span>{axisTypeLabel(code)} {axisTypeCounts[code]}명</span>
+                  </div>
+                ))}
+                <div style={{ display:'inline-flex', alignItems:'center', gap:6, border:`1px solid ${tokens.border}`, borderRadius:999, padding:'4px 10px', fontSize:12 }}>
+                  <span style={{ width:8, height:8, borderRadius:'50%', background: AXIS_TYPE_COLOR_MAP.UNCLASSIFIED, display:'inline-block' }} />
+                  <span>미분류 {axisTypeCounts.UNCLASSIFIED}명</span>
+                </div>
+              </div>
+
+              <div
+                style={{ position:'relative', height: 360, border:`1px solid ${tokens.border}`, borderRadius:10, background: tokens.field, overflow:'hidden' }}
+                onMouseLeave={() => setSnapshotAxisHover(null)}
+              >
+                <div style={{ position:'absolute', left:'50%', top:0, bottom:0, width:1, background: tokens.border }} />
+                <div style={{ position:'absolute', top:'50%', left:0, right:0, height:1, background: tokens.border }} />
+                <div style={{ position:'absolute', right:10, top:10, fontSize:11, color: tokens.textDim }}>확장형</div>
+                <div style={{ position:'absolute', left:10, top:10, fontSize:11, color: tokens.textDim }}>안정형</div>
+                <div style={{ position:'absolute', left:10, bottom:10, fontSize:11, color: tokens.textDim }}>회복형</div>
+                <div style={{ position:'absolute', right:10, bottom:10, fontSize:11, color: tokens.textDim }}>동기형</div>
+                <div style={{ position:'absolute', right:8, top:'calc(50% + 6px)', fontSize:10, color: tokens.textDim }}>감정 +</div>
+                <div style={{ position:'absolute', left:'calc(50% + 6px)', top:8, fontSize:10, color: tokens.textDim }}>신념 +</div>
+
+                {!axisPointsWithValues.length ? (
+                  <div style={{ position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center', color: tokens.textDim, fontSize:12 }}>
+                    축 분포를 계산할 데이터가 없습니다.
+                  </div>
+                ) : null}
+
+                {axisPointsWithValues.map((point) => {
+                  const x = Math.max(-3, Math.min(3, point.emotionZ ?? 0));
+                  const y = Math.max(-3, Math.min(3, point.beliefZ ?? 0));
+                  const left = ((x + 3) / 6) * 100;
+                  const top = (1 - ((y + 3) / 6)) * 100;
+                  return (
+                    <div
+                      key={`axis_point_${point.participantId}`}
+                      title={`${point.participantName} · ${axisTypeLabel(point.typeCode)} · 감정 ${formatNumber(point.emotionZ)} / 신념 ${formatNumber(point.beliefZ)}`}
+                      onMouseEnter={(e) => {
+                        const rect = (e.currentTarget.parentElement as HTMLDivElement | null)?.getBoundingClientRect();
+                        if (!rect) return;
+                        setSnapshotAxisHover({
+                          point,
+                          x: e.clientX - rect.left,
+                          y: e.clientY - rect.top,
+                          width: rect.width,
+                          height: rect.height,
+                        });
+                      }}
+                      onMouseMove={(e) => {
+                        const rect = (e.currentTarget.parentElement as HTMLDivElement | null)?.getBoundingClientRect();
+                        if (!rect) return;
+                        setSnapshotAxisHover({
+                          point,
+                          x: e.clientX - rect.left,
+                          y: e.clientY - rect.top,
+                          width: rect.width,
+                          height: rect.height,
+                        });
+                      }}
+                      onMouseLeave={() => setSnapshotAxisHover(null)}
+                      style={{
+                        position:'absolute',
+                        left:`calc(${left}% - 5px)`,
+                        top:`calc(${top}% - 5px)`,
+                        width:10,
+                        height:10,
+                        borderRadius:'50%',
+                        background: AXIS_TYPE_COLOR_MAP[point.typeCode],
+                        border:'1px solid rgba(0,0,0,0.25)',
+                        opacity: 0.85,
+                      }}
+                    />
+                  );
+                })}
+
+                {snapshotAxisHover ? (
+                  <div
+                    style={{
+                      position:'absolute',
+                      left: Math.min(
+                        Math.max(snapshotAxisHover.x + 10, 8),
+                        Math.max(snapshotAxisHover.width - 220, 8),
+                      ),
+                      top: Math.min(
+                        Math.max(snapshotAxisHover.y + 10, 8),
+                        Math.max(snapshotAxisHover.height - 72, 8),
+                      ),
+                      minWidth: 190,
+                      maxWidth: 240,
+                      border:`1px solid ${tokens.border}`,
+                      borderRadius:8,
+                      background:'rgba(10,10,10,0.92)',
+                      color: tokens.text,
+                      padding:'8px 10px',
+                      fontSize:12,
+                      pointerEvents:'none',
+                      zIndex: 3,
+                      boxShadow: '0 6px 20px rgba(0,0,0,0.35)',
+                    }}
+                  >
+                    <div style={{ fontWeight: 800, marginBottom: 2 }}>{snapshotAxisHover.point.participantName}</div>
+                    <div style={{ color: tokens.textDim }}>
+                      {axisTypeLabel(snapshotAxisHover.point.typeCode)} · 감정 {formatNumber(snapshotAxisHover.point.emotionZ)} · 신념 {formatNumber(snapshotAxisHover.point.beliefZ)}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+
+              <div style={{ color: tokens.textDim, fontSize: 12, marginTop: 8 }}>
+                감정 축 사용 태그/문항: {snapshotAxisMeta.emotionScaleNames.length ? snapshotAxisMeta.emotionScaleNames.join(', ') : '-'}
+                {' · '}
+                신념 축 사용 태그/문항: {snapshotAxisMeta.beliefScaleNames.length ? snapshotAxisMeta.beliefScaleNames.join(', ') : '-'}
+              </div>
             </div>
           </div>
 
@@ -1556,6 +2071,186 @@ export default function ResultsPage() {
                   <div style={{ padding:'14px 12px', color: tokens.textDim }}>보조 문항 데이터가 없습니다.</div>
                 )}
               </div>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div>
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 18, fontWeight: 900 }}>유형 리포트</div>
+            <div style={{ color: tokens.textDim, fontSize: 12, marginTop: 4 }}>
+              학생용 우선 · 교사용 보조 · x=감정 / y=신념
+            </div>
+          </div>
+
+          <div style={{ border:`1px solid ${tokens.border}`, borderRadius:12, overflow:'hidden', background: tokens.panel, marginBottom: 14 }}>
+            <div style={{ padding:'12px 14px', borderBottom:`1px solid ${tokens.border}`, background: tokens.panelAlt }}>
+              <div style={{ fontWeight: 900 }}>학생용 리포트 (우선)</div>
+            </div>
+            <div style={{ padding:'12px 14px' }}>
+              <div style={{ display:'grid', gridTemplateColumns:'1.3fr 2.7fr', gap:12 }}>
+                <div>
+                  <input
+                    value={reportSearchKeyword}
+                    onChange={(e) => setReportSearchKeyword(e.target.value)}
+                    placeholder="학생 이름/ID 검색"
+                    style={{ width:'100%', height:36, padding:'0 10px', background: tokens.field, border:`1px solid ${tokens.border}`, borderRadius:8, color: tokens.text }}
+                  />
+                  <div style={{ marginTop: 8, maxHeight: 320, overflow:'auto', display:'grid', gap:6 }}>
+                    {reportCandidatePoints.length ? reportCandidatePoints.slice(0, 80).map((point) => (
+                      <button
+                        key={`report_candidate_${point.participantId}`}
+                        onClick={() => setSelectedReportParticipantId(point.participantId)}
+                        style={{
+                          textAlign:'left',
+                          height:34,
+                          padding:'0 10px',
+                          borderRadius:8,
+                          border:`1px solid ${tokens.border}`,
+                          background: selectedReportParticipantId === point.participantId ? tokens.accent : tokens.field,
+                          color: selectedReportParticipantId === point.participantId ? '#FFFFFF' : tokens.text,
+                          cursor:'pointer',
+                          fontSize:12,
+                        }}
+                      >
+                        {point.participantName}
+                        <span style={{ color: selectedReportParticipantId === point.participantId ? 'rgba(255,255,255,0.85)' : tokens.textDim, marginLeft: 6 }}>
+                          ({axisTypeLabel(point.typeCode)})
+                        </span>
+                      </button>
+                    )) : (
+                      <div style={{ color: tokens.textDim, fontSize:12, padding:'8px 2px' }}>검색 결과가 없습니다.</div>
+                    )}
+                  </div>
+                </div>
+
+                <div style={{ border:`1px solid ${tokens.border}`, borderRadius:10, padding:'12px 14px', background: tokens.field }}>
+                  {!selectedReportPoint ? (
+                    <div style={{ color: tokens.textDim, fontSize: 12 }}>리포트를 볼 학생을 선택해 주세요.</div>
+                  ) : (
+                    <>
+                      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:10, marginBottom: 10 }}>
+                        <div>
+                          <div style={{ fontSize: 16, fontWeight: 900 }}>{selectedReportPoint.participantName}</div>
+                          <div style={{ color: tokens.textDim, fontSize:12, marginTop:4 }}>
+                            {formatCurrentLevelDisplay(selectedReportPoint.currentLevelGrade, selectedReportPoint.currentMathPercentile)}
+                          </div>
+                        </div>
+                        <div style={{ display:'inline-flex', alignItems:'center', gap:6, border:`1px solid ${tokens.border}`, borderRadius:999, padding:'4px 10px', fontSize:12 }}>
+                          <span style={{ width:8, height:8, borderRadius:'50%', background: AXIS_TYPE_COLOR_MAP[selectedReportPoint.typeCode], display:'inline-block' }} />
+                          <span>{axisTypeLabel(selectedReportPoint.typeCode)}</span>
+                        </div>
+                      </div>
+
+                      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+                        <div>
+                          <div style={{ color: tokens.textDim, fontSize:12, marginBottom:4 }}>감정</div>
+                          {(() => {
+                            const pct = zToDisplayPercent(selectedReportPoint.emotionZ);
+                            return (
+                              <>
+                                <div style={{ height:8, borderRadius:999, background:'#2A2A2A', overflow:'hidden' }}>
+                                  <div style={{ width:`${pct ?? 0}%`, height:'100%', background:'#F59E0B' }} />
+                                </div>
+                                <div style={{ color: tokens.textDim, fontSize:11, marginTop:4 }}>
+                                  z={formatNumber(selectedReportPoint.emotionZ)} {selectedReportPoint.emotionZ == null ? '' : '(높을수록 감정 안정/흥미)'}
+                                </div>
+                              </>
+                            );
+                          })()}
+                        </div>
+                        <div>
+                          <div style={{ color: tokens.textDim, fontSize:12, marginBottom:4 }}>신념</div>
+                          {(() => {
+                            const pct = zToDisplayPercent(selectedReportPoint.beliefZ);
+                            return (
+                              <>
+                                <div style={{ height:8, borderRadius:999, background:'#2A2A2A', overflow:'hidden' }}>
+                                  <div style={{ width:`${pct ?? 0}%`, height:'100%', background:'#60A5FA' }} />
+                                </div>
+                                <div style={{ color: tokens.textDim, fontSize:11, marginTop:4 }}>
+                                  z={formatNumber(selectedReportPoint.beliefZ)} {selectedReportPoint.beliefZ == null ? '' : '(높을수록 학습 신념)'}
+                                </div>
+                              </>
+                            );
+                          })()}
+                        </div>
+                      </div>
+
+                      {selectedReportPreset ? (
+                        <div style={{ marginTop: 12 }}>
+                          <div style={{ fontWeight: 800, marginBottom: 6 }}>학생에게 보이는 상태</div>
+                          <div style={{ color: tokens.text, fontSize: 13, marginBottom: 8 }}>
+                            {selectedReportPreset.studentSummary}
+                          </div>
+                          <div style={{ color: tokens.textDim, fontSize: 12, marginBottom: 6 }}>전달 문장(학생용)</div>
+                          <div style={{ fontSize: 13, marginBottom: 10 }}>
+                            {selectedReportPreset.studentMessage}
+                          </div>
+                          <div style={{ color: tokens.textDim, fontSize: 12, marginBottom: 6 }}>이번 주 학습 포인트</div>
+                          <ul style={{ margin:'0 0 0 16px', padding:0, display:'grid', gap:4 }}>
+                            {selectedReportPreset.studentFocus.map((item) => (
+                              <li key={`student_focus_${selectedReportPoint.participantId}_${item}`}>{item}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      ) : (
+                        <div style={{ marginTop: 12, color: tokens.textDim, fontSize: 12 }}>
+                          축 계산에 필요한 응답이 부족하여 유형을 확정할 수 없습니다.
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div style={{ border:`1px solid ${tokens.border}`, borderRadius:12, overflow:'hidden', background: tokens.panel }}>
+            <div style={{ padding:'12px 14px', borderBottom:`1px solid ${tokens.border}`, background: tokens.panelAlt }}>
+              <div style={{ fontWeight: 900 }}>교사용 리포트</div>
+            </div>
+            <div style={{ padding:'12px 14px' }}>
+              {!selectedReportPoint || !selectedReportPreset ? (
+                <div style={{ color: tokens.textDim, fontSize: 12 }}>
+                  유형이 확정된 학생을 선택하면 교사용 전략이 표시됩니다.
+                </div>
+              ) : (
+                <div style={{ display:'grid', gridTemplateColumns:'repeat(2, minmax(0, 1fr))', gap:14 }}>
+                  <div>
+                    <div style={{ color: tokens.textDim, fontSize:12 }}>1차 목표</div>
+                    <div style={{ marginTop:4 }}>{selectedReportPreset.teacherGoal}</div>
+                  </div>
+                  <div>
+                    <div style={{ color: tokens.textDim, fontSize:12 }}>유형</div>
+                    <div style={{ marginTop:4 }}>{axisTypeLabel(selectedReportPoint.typeCode)}</div>
+                  </div>
+                  <div>
+                    <div style={{ color: tokens.textDim, fontSize:12, marginBottom:4 }}>수업 구조</div>
+                    <ul style={{ margin:'0 0 0 16px', padding:0, display:'grid', gap:4 }}>
+                      {selectedReportPreset.teacherStructure.map((item) => (
+                        <li key={`teacher_structure_${selectedReportPoint.participantId}_${item}`}>{item}</li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div>
+                    <div style={{ color: tokens.textDim, fontSize:12, marginBottom:4 }}>권장 피드백 문장</div>
+                    <ul style={{ margin:'0 0 0 16px', padding:0, display:'grid', gap:4 }}>
+                      {selectedReportPreset.teacherFeedback.map((item) => (
+                        <li key={`teacher_feedback_${selectedReportPoint.participantId}_${item}`}>{item}</li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div style={{ gridColumn:'1 / -1' }}>
+                    <div style={{ color: tokens.textDim, fontSize:12, marginBottom:4 }}>주의/금기</div>
+                    <ul style={{ margin:'0 0 0 16px', padding:0, display:'grid', gap:4 }}>
+                      {selectedReportPreset.teacherAvoid.map((item) => (
+                        <li key={`teacher_avoid_${selectedReportPoint.participantId}_${item}`}>{item}</li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
