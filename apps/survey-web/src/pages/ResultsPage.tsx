@@ -46,6 +46,38 @@ type ItemStatsMeta = {
   avgResponseMs: number | null;
 };
 
+type SnapshotScaleStat = {
+  scaleName: string;
+  itemCount: number;
+  mean: number | null;
+  sd: number | null;
+  min: number | null;
+  max: number | null;
+  nRespondents: number;
+  alpha: number | null;
+  alphaNComplete: number;
+};
+
+type SnapshotSubjectiveStat = {
+  questionId: string;
+  text: string;
+  itemN: number;
+  mean: number | null;
+  sd: number | null;
+  min: number | null;
+  max: number | null;
+};
+
+type SnapshotMeta = {
+  asOfDate: string;
+  totalN: number;
+  scaleCount: number;
+  coreItemCount: number;
+  supplementaryItemCount: number;
+  totalItemCount: number;
+  scaleBasis: string;
+};
+
 type Round2LinkStatus = {
   email: string | null;
   sentAt: string | null;
@@ -118,6 +150,14 @@ function formatDateTime(value?: string) {
   } catch {
     return '-';
   }
+}
+
+function computeSampleSd(values: number[]): number | null {
+  if (!values.length) return null;
+  if (values.length === 1) return 0;
+  const mean = values.reduce((sum, v) => sum + v, 0) / values.length;
+  const variance = values.reduce((sum, v) => sum + ((v - mean) ** 2), 0) / (values.length - 1);
+  return Math.sqrt(variance);
 }
 
 function normalizePercentile(value: unknown): number | null {
@@ -193,6 +233,7 @@ function formatCurrentLevelDisplay(levelGrade: unknown, percentile: unknown): st
 }
 
 export default function ResultsPage() {
+  const [activeTab, setActiveTab] = React.useState<'status' | 'result'>('status');
   const [rows, setRows] = React.useState<Row[]>([]);
   const [selected, setSelected] = React.useState<Row | null>(null);
   const [answers, setAnswers] = React.useState<any[]>([]);
@@ -214,6 +255,11 @@ export default function ResultsPage() {
   const [round2LinksByParticipant, setRound2LinksByParticipant] = React.useState<Record<string, Round2LinkStatus>>({});
   const [savingLevelById, setSavingLevelById] = React.useState<Record<string, boolean>>({});
   const [levelErrorById, setLevelErrorById] = React.useState<Record<string, string | null>>({});
+  const [snapshotScaleStats, setSnapshotScaleStats] = React.useState<SnapshotScaleStat[]>([]);
+  const [snapshotSubjectiveStats, setSnapshotSubjectiveStats] = React.useState<SnapshotSubjectiveStat[]>([]);
+  const [snapshotMeta, setSnapshotMeta] = React.useState<SnapshotMeta | null>(null);
+  const [snapshotLoading, setSnapshotLoading] = React.useState(false);
+  const [snapshotError, setSnapshotError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     (async () => {
@@ -510,6 +556,209 @@ export default function ResultsPage() {
     };
   }, [filterLevelBand, rows]);
 
+  React.useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setSnapshotLoading(true);
+      setSnapshotError(null);
+      try {
+        const [answersRes, questionsRes, participantsRes] = await Promise.all([
+          supabase
+            .from('question_answers')
+            .select('answer_number, answer_text, question_id, response:question_responses(participant_id), question:questions(id, text, trait, type, round_label, min_score, max_score, reverse, is_active)'),
+          supabase
+            .from('questions')
+            .select('id, text, trait, type, round_label, is_active')
+            .eq('is_active', true),
+          supabase
+            .from('survey_participants')
+            .select('id'),
+        ]);
+
+        if (answersRes.error) throw answersRes.error;
+        if (questionsRes.error) throw questionsRes.error;
+        if (participantsRes.error) throw participantsRes.error;
+
+        const validParticipantSet = new Set(
+          (participantsRes.data as any[] || [])
+            .map((p) => String(p?.id ?? '').trim())
+            .filter(Boolean),
+        );
+
+        const scaleItemSetMap: Record<string, Set<string>> = {};
+        const supplementaryQuestionMap: Record<string, string> = {};
+        (questionsRes.data as any[] || []).forEach((q) => {
+          const qid = String(q?.id ?? '').trim();
+          if (!qid) return;
+          const roundLabel = String(q?.round_label ?? '').trim();
+          const roundNo = roundOrderMap[roundLabel] ?? parseRoundNo(roundLabel) ?? 1;
+          if (roundNo !== 1) return;
+          const qType = String(q?.type ?? '').trim();
+          if (qType === 'scale') {
+            const scaleName = String(q?.trait ?? '').trim() || '미분류';
+            if (!scaleItemSetMap[scaleName]) scaleItemSetMap[scaleName] = new Set<string>();
+            scaleItemSetMap[scaleName].add(qid);
+          } else if (qType === 'text') {
+            supplementaryQuestionMap[qid] = String(q?.text ?? '').trim() || `(문항 ${qid})`;
+          }
+        });
+
+        const coreScoreMap: Record<string, Record<string, Record<string, number>>> = {};
+        const supplementaryValuesMap: Record<string, number[]> = {};
+        const participantSet = new Set<string>();
+        (answersRes.data as any[] || []).forEach((row) => {
+          const pid = String(row?.response?.participant_id ?? '').trim();
+          if (!pid || !validParticipantSet.has(pid)) return;
+          const q = row?.question as any;
+          const qid = String(q?.id ?? row?.question_id ?? '').trim();
+          if (!qid) return;
+
+          const roundLabel = String(q?.round_label ?? '').trim();
+          const roundNo = roundOrderMap[roundLabel] ?? parseRoundNo(roundLabel) ?? 1;
+          if (roundNo !== 1) return;
+
+          const qType = String(q?.type ?? '').trim();
+          if (qType === 'scale') {
+            const raw = toNumber(row?.answer_number);
+            if (raw == null) return;
+            const minScore = toNumber(q?.min_score) ?? 1;
+            const maxScore = toNumber(q?.max_score) ?? 10;
+            const reverse = String(q?.reverse ?? 'N').toUpperCase() === 'Y';
+            const scoreRc = reverse ? ((minScore + maxScore) - raw) : raw;
+            if (!Number.isFinite(scoreRc)) return;
+
+            const scaleName = String(q?.trait ?? '').trim() || '미분류';
+            if (!scaleItemSetMap[scaleName]) scaleItemSetMap[scaleName] = new Set<string>();
+            scaleItemSetMap[scaleName].add(qid);
+            if (!coreScoreMap[scaleName]) coreScoreMap[scaleName] = {};
+            if (!coreScoreMap[scaleName][pid]) coreScoreMap[scaleName][pid] = {};
+            coreScoreMap[scaleName][pid][qid] = scoreRc;
+            participantSet.add(pid);
+          } else if (qType === 'text') {
+            const numericTextAnswer = toNumber(row?.answer_number ?? row?.answer_text);
+            if (numericTextAnswer == null) return;
+            if (!supplementaryQuestionMap[qid]) {
+              supplementaryQuestionMap[qid] = String(q?.text ?? '').trim() || `(문항 ${qid})`;
+            }
+            if (!supplementaryValuesMap[qid]) supplementaryValuesMap[qid] = [];
+            supplementaryValuesMap[qid].push(numericTextAnswer);
+            participantSet.add(pid);
+          }
+        });
+
+        const scaleNames = Array.from(
+          new Set([...Object.keys(scaleItemSetMap), ...Object.keys(coreScoreMap)]),
+        ).sort((a, b) => a.localeCompare(b));
+
+        const nextStats: SnapshotScaleStat[] = scaleNames.map((scaleName) => {
+          const itemIds = Array.from(scaleItemSetMap[scaleName] ?? []);
+          const byStudent = coreScoreMap[scaleName] ?? {};
+          const rawScores: number[] = [];
+          const completeRows: number[][] = [];
+
+          Object.values(byStudent).forEach((itemScoreMap) => {
+            const values = Object.values(itemScoreMap).filter(
+              (v): v is number => typeof v === 'number' && Number.isFinite(v),
+            );
+            if (values.length) {
+              const mean = values.reduce((sum, v) => sum + v, 0) / values.length;
+              rawScores.push(mean);
+            }
+
+            if (itemIds.length >= 2) {
+              const rowValues = itemIds.map((itemId) => itemScoreMap[itemId]);
+              const isComplete = rowValues.every((v) => typeof v === 'number' && Number.isFinite(v));
+              if (isComplete) completeRows.push(rowValues as number[]);
+            }
+          });
+
+          const mean = rawScores.length
+            ? rawScores.reduce((sum, v) => sum + v, 0) / rawScores.length
+            : null;
+          const sd = computeSampleSd(rawScores);
+          const min = rawScores.length ? Math.min(...rawScores) : null;
+          const max = rawScores.length ? Math.max(...rawScores) : null;
+
+          let alpha: number | null = null;
+          const alphaNComplete = completeRows.length;
+          if (itemIds.length >= 2 && completeRows.length >= 2) {
+            const k = itemIds.length;
+            let sumItemVar = 0;
+            for (let col = 0; col < k; col += 1) {
+              const colValues = completeRows.map((row) => row[col]);
+              const colMean = colValues.reduce((sum, v) => sum + v, 0) / colValues.length;
+              const colVar = colValues.reduce((sum, v) => sum + ((v - colMean) ** 2), 0) / (colValues.length - 1);
+              sumItemVar += colVar;
+            }
+            const totalScores = completeRows.map((row) => row.reduce((sum, v) => sum + v, 0));
+            const totalMean = totalScores.reduce((sum, v) => sum + v, 0) / totalScores.length;
+            const totalVar = totalScores.reduce((sum, v) => sum + ((v - totalMean) ** 2), 0) / (totalScores.length - 1);
+            if (totalVar > 0) {
+              alpha = (k / (k - 1)) * (1 - (sumItemVar / totalVar));
+              if (!Number.isFinite(alpha)) alpha = null;
+            }
+          }
+
+          return {
+            scaleName,
+            itemCount: itemIds.length,
+            mean,
+            sd,
+            min,
+            max,
+            nRespondents: rawScores.length,
+            alpha,
+            alphaNComplete,
+          };
+        });
+
+        const nextSubjectiveStats: SnapshotSubjectiveStat[] = Object.entries(supplementaryValuesMap)
+          .map(([questionId, values]) => {
+            const valid = values.filter((v) => Number.isFinite(v));
+            return {
+              questionId,
+              text: supplementaryQuestionMap[questionId] || `(문항 ${questionId})`,
+              itemN: valid.length,
+              mean: valid.length ? (valid.reduce((sum, v) => sum + v, 0) / valid.length) : null,
+              sd: computeSampleSd(valid),
+              min: valid.length ? Math.min(...valid) : null,
+              max: valid.length ? Math.max(...valid) : null,
+            };
+          })
+          .sort((a, b) => a.text.localeCompare(b.text));
+
+        if (!cancelled) {
+          const coreItemCount = nextStats.reduce((sum, item) => sum + item.itemCount, 0);
+          const supplementaryItemCount = nextSubjectiveStats.length;
+          setSnapshotScaleStats(nextStats);
+          setSnapshotSubjectiveStats(nextSubjectiveStats);
+          setSnapshotMeta({
+            asOfDate: new Date().toISOString(),
+            totalN: participantSet.size,
+            scaleCount: nextStats.length,
+            coreItemCount,
+            supplementaryItemCount,
+            totalItemCount: coreItemCount + supplementaryItemCount,
+            scaleBasis: 'core=questions.trait / supplementary=numeric text',
+          });
+        }
+      } catch (error: any) {
+        if (!cancelled) {
+          setSnapshotScaleStats([]);
+          setSnapshotSubjectiveStats([]);
+          setSnapshotMeta(null);
+          setSnapshotError(error?.message ?? 'Scale_Stats 계산 실패');
+        }
+      } finally {
+        if (!cancelled) setSnapshotLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [roundOrderMap, rows]);
+
   const filteredItemStats = React.useMemo(() => {
     const keyword = filterText.trim().toLowerCase();
     const filtered = itemStats.filter((item) => {
@@ -662,6 +911,8 @@ export default function ResultsPage() {
   }
 
   const itemGridTemplate = '0.9fr 0.6fr 0.6fr 3.2fr 0.6fr 0.8fr 0.8fr 0.8fr 0.8fr 1fr';
+  const snapshotGridTemplate = '1.3fr 0.7fr 0.8fr 0.8fr 0.8fr 0.8fr 0.9fr 0.9fr 1fr';
+  const snapshotSubjectiveGridTemplate = '2.6fr 0.8fr 0.9fr 0.9fr 0.9fr 0.9fr';
   const chipBaseStyle: React.CSSProperties = {
     height: 32,
     padding: '0 10px',
@@ -737,6 +988,29 @@ export default function ResultsPage() {
 
   return (
     <div>
+      <div style={{ display:'flex', gap:8, marginBottom: 14 }}>
+        <button
+          onClick={() => setActiveTab('status')}
+          style={{
+            ...chipBaseStyle,
+            minWidth: 92,
+            ...(activeTab === 'status' ? chipActiveStyle : {}),
+          }}>
+          현황
+        </button>
+        <button
+          onClick={() => setActiveTab('result')}
+          style={{
+            ...chipBaseStyle,
+            minWidth: 92,
+            ...(activeTab === 'result' ? chipActiveStyle : {}),
+          }}>
+          결과
+        </button>
+      </div>
+
+      {activeTab === 'status' ? (
+        <>
       <div style={{ marginBottom: 12 }}>
         <div style={{ fontSize: 18, fontWeight: 900 }}>모니터링</div>
         <div style={{ color: tokens.textDim, fontSize: 12, marginTop: 4 }}>
@@ -1133,6 +1407,155 @@ export default function ResultsPage() {
                   </div>
                 </div>
               ))}
+            </div>
+          </div>
+        </div>
+      )}
+        </>
+      ) : (
+        <div>
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 18, fontWeight: 900 }}>1차 스냅샷 결과 요약</div>
+            <div style={{ color: tokens.textDim, fontSize: 12, marginTop: 4 }}>
+              round_no=1 · core=questions.trait · supplementary=숫자형 주관식
+            </div>
+          </div>
+
+          <div style={{ border:`1px solid ${tokens.border}`, borderRadius:12, overflow:'hidden', background: tokens.panel, marginBottom: 14 }}>
+            <div style={{ padding:'12px 14px', borderBottom:`1px solid ${tokens.border}`, background: tokens.panelAlt }}>
+              <div style={{ fontWeight: 900 }}>스냅샷 메타</div>
+            </div>
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(6, minmax(0, 1fr))', gap:12, padding:'12px 14px' }}>
+              <div>
+                <div style={{ color: tokens.textDim, fontSize: 12 }}>버전</div>
+                <div style={{ fontWeight: 800 }}>v1.0</div>
+              </div>
+              <div>
+                <div style={{ color: tokens.textDim, fontSize: 12 }}>계산 시점</div>
+                <div style={{ fontWeight: 800 }}>
+                  {snapshotMeta ? formatDateTime(snapshotMeta.asOfDate) : '-'}
+                </div>
+              </div>
+              <div>
+                <div style={{ color: tokens.textDim, fontSize: 12 }}>표본수 (N)</div>
+                <div style={{ fontWeight: 800 }}>
+                  {snapshotMeta ? snapshotMeta.totalN.toLocaleString('ko-KR') : '-'}
+                </div>
+              </div>
+              <div>
+                <div style={{ color: tokens.textDim, fontSize: 12 }}>Scale 수</div>
+                <div style={{ fontWeight: 800 }}>
+                  {snapshotMeta ? snapshotMeta.scaleCount.toLocaleString('ko-KR') : '-'}
+                </div>
+              </div>
+              <div>
+                <div style={{ color: tokens.textDim, fontSize: 12 }}>Core 문항 수</div>
+                <div style={{ fontWeight: 800 }}>
+                  {snapshotMeta ? snapshotMeta.coreItemCount.toLocaleString('ko-KR') : '-'}
+                </div>
+              </div>
+              <div>
+                <div style={{ color: tokens.textDim, fontSize: 12 }}>보조 문항 수</div>
+                <div style={{ fontWeight: 800 }}>
+                  {snapshotMeta ? snapshotMeta.supplementaryItemCount.toLocaleString('ko-KR') : '-'}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div style={{ border:`1px solid ${tokens.border}`, borderRadius:12, overflow:'hidden', background: tokens.panel }}>
+            <div style={{ padding:'12px 14px', borderBottom:`1px solid ${tokens.border}`, background: tokens.panelAlt }}>
+              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap: 12 }}>
+                <div style={{ fontWeight: 900 }}>Scale_Stats_Snapshot_v1</div>
+                <div style={{ color: tokens.textDim, fontSize: 12 }}>
+                  {snapshotMeta
+                    ? `Core ${snapshotMeta.coreItemCount} + 보조 ${snapshotMeta.supplementaryItemCount} = 총 ${snapshotMeta.totalItemCount} · Cronbach α는 complete-case 기준`
+                    : 'Cronbach α는 complete-case 기준'}
+                </div>
+              </div>
+            </div>
+            <div style={{ maxHeight: 520, overflow: 'auto' }}>
+              <div style={{ minWidth: 1050 }}>
+                <div style={{ display:'grid', gridTemplateColumns:snapshotGridTemplate, gap:12, padding:'10px 12px', color:tokens.textDim, fontSize:12, background: tokens.panelAlt, borderBottom:`1px solid ${tokens.border}` }}>
+                  <div>Scale</div>
+                  <div>문항 수</div>
+                  <div>평균</div>
+                  <div>SD</div>
+                  <div>최소</div>
+                  <div>최대</div>
+                  <div>N</div>
+                  <div>Cronbach α</div>
+                  <div>alpha N</div>
+                </div>
+                {snapshotLoading ? (
+                  <div style={{ padding:'14px 12px', color: tokens.textDim }}>Scale_Stats 계산 중...</div>
+                ) : snapshotError ? (
+                  <div style={{ padding:'14px 12px', color: tokens.danger }}>{snapshotError}</div>
+                ) : snapshotScaleStats.length ? (
+                  snapshotScaleStats.map((item) => (
+                    <div
+                      key={`snapshot_scale_${item.scaleName}`}
+                      style={{ display:'grid', gridTemplateColumns:snapshotGridTemplate, gap:12, padding:'10px 12px', borderTop:`1px solid ${tokens.border}`, fontSize:12 }}
+                    >
+                      <div style={{ color: tokens.text }}>{item.scaleName}</div>
+                      <div>{item.itemCount}</div>
+                      <div>{formatNumber(item.mean)}</div>
+                      <div>{formatNumber(item.sd)}</div>
+                      <div>{formatNumber(item.min)}</div>
+                      <div>{formatNumber(item.max)}</div>
+                      <div>{item.nRespondents}</div>
+                      <div>{formatNumber(item.alpha, 3)}</div>
+                      <div>{item.alphaNComplete}</div>
+                    </div>
+                  ))
+                ) : (
+                  <div style={{ padding:'14px 12px', color: tokens.textDim }}>표시할 스냅샷 데이터가 없습니다.</div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div style={{ border:`1px solid ${tokens.border}`, borderRadius:12, overflow:'hidden', background: tokens.panel, marginTop: 14 }}>
+            <div style={{ padding:'12px 14px', borderBottom:`1px solid ${tokens.border}`, background: tokens.panelAlt }}>
+              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap: 12 }}>
+                <div style={{ fontWeight: 900 }}>Subjective_Numeric_Supplementary</div>
+                <div style={{ color: tokens.textDim, fontSize: 12 }}>
+                  기준선 미포함 · 보조 통계만 제공
+                </div>
+              </div>
+            </div>
+            <div style={{ maxHeight: 360, overflow: 'auto' }}>
+              <div style={{ minWidth: 920 }}>
+                <div style={{ display:'grid', gridTemplateColumns:snapshotSubjectiveGridTemplate, gap:12, padding:'10px 12px', color:tokens.textDim, fontSize:12, background: tokens.panelAlt, borderBottom:`1px solid ${tokens.border}` }}>
+                  <div>문항</div>
+                  <div>N</div>
+                  <div>평균</div>
+                  <div>SD</div>
+                  <div>최소</div>
+                  <div>최대</div>
+                </div>
+                {snapshotLoading ? (
+                  <div style={{ padding:'14px 12px', color: tokens.textDim }}>보조 지표 계산 중...</div>
+                ) : snapshotError ? (
+                  <div style={{ padding:'14px 12px', color: tokens.danger }}>{snapshotError}</div>
+                ) : snapshotSubjectiveStats.length ? (
+                  snapshotSubjectiveStats.map((item) => (
+                    <div
+                      key={`snapshot_subjective_${item.questionId}`}
+                      style={{ display:'grid', gridTemplateColumns:snapshotSubjectiveGridTemplate, gap:12, padding:'10px 12px', borderTop:`1px solid ${tokens.border}`, fontSize:12 }}
+                    >
+                      <div style={{ color: tokens.text }}>{item.text}</div>
+                      <div>{item.itemN}</div>
+                      <div>{formatNumber(item.mean)}</div>
+                      <div>{formatNumber(item.sd)}</div>
+                      <div>{formatNumber(item.min)}</div>
+                      <div>{formatNumber(item.max)}</div>
+                    </div>
+                  ))
+                ) : (
+                  <div style={{ padding:'14px 12px', color: tokens.textDim }}>보조 문항 데이터가 없습니다.</div>
+                )}
+              </div>
             </div>
           </div>
         </div>

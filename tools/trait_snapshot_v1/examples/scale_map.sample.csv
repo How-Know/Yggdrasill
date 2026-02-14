@@ -1,0 +1,9 @@
+question_id,scale_name,include_in_alpha,axis_tag,analysis_group
+11111111-1111-1111-1111-111111111111,efficacy_scale,1,efficacy,core_scale
+22222222-2222-2222-2222-222222222222,efficacy_scale,1,efficacy,core_scale
+33333333-3333-3333-3333-333333333333,growth_mindset_scale,1,growth_mindset,core_scale
+44444444-4444-4444-4444-444444444444,growth_mindset_scale,1,growth_mindset,core_scale
+55555555-5555-5555-5555-555555555555,anxiety_scale,1,anxiety,core_scale
+66666666-6666-6666-6666-666666666666,anxiety_scale,1,anxiety,core_scale
+77777777-7777-7777-7777-777777777777,주관식_문항A,0,,supplementary_numeric
+88888888-8888-8888-8888-888888888888,주관식_문항B,0,,supplementary_numeric
