@@ -63,6 +63,7 @@ function newUuid(): string {
 // 설문/결과 페이지는 필요할 때만 로드(lazy import)한다.
 const SurveyPage = React.lazy(() => import('./pages/SurveyPage'));
 const ResultsPage = React.lazy(() => import('./pages/ResultsPage'));
+const ReportPreviewPage = React.lazy(() => import('./pages/ReportPreviewPage'));
 const APP_VERSION = packageJson.version;
 
 function sendToAppViaHash(message: unknown): boolean {
@@ -1188,6 +1189,10 @@ function App() {
       {pathname.startsWith('/results') ? (
         <Suspense fallback={<div style={{ color: tokens.textDim }}>불러오는 중...</div>}>
           <ResultsPage />
+        </Suspense>
+      ) : pathname.startsWith('/report-preview') ? (
+        <Suspense fallback={<div style={{ color: tokens.textDim }}>불러오는 중...</div>}>
+          <ReportPreviewPage />
         </Suspense>
       ) : pathname.startsWith('/survey') ? (
         <Suspense fallback={<div style={{ color: tokens.textDim }}>불러오는 중...</div>}>

@@ -1,0 +1,32 @@
+﻿question_id,scale_name,include_in_alpha,axis_tag,analysis_group
+039091ed-0d7b-4e55-9d29-4e05f1b3b9d2,scale_039091ed,1,anxiety,core_scale
+0975ef15-3056-4dbf-a4cc-7bc50b391c9b,scale_0975ef15,1,efficacy,core_scale
+1c6546cb-979e-44d0-b257-1cbf86a17b9c,scale_1c6546cb,1,efficacy,core_scale
+22100387-9306-4eb0-aadc-2e835e040462,scale_22100387,1,efficacy,core_scale
+25079046-d422-40c6-9e41-e62d8cc6f82f,scale_25079046,1,efficacy,core_scale
+270401a4-823e-4aa7-ad8e-15354d395684,scale_270401a4,1,efficacy,core_scale
+28974e26-cb80-4db5-870a-b3dfeabf58c9,scale_28974e26,1,efficacy,core_scale
+3b84269c-8975-40b2-a9e5-ccc99f3006e3,scale_3b84269c,1,efficacy,core_scale
+3e0773f0-81dc-4807-b04b-74eda65090e2,scale_3e0773f0,1,efficacy,core_scale
+409e0aff-0db4-45f9-ad76-0ed5856589ea,scale_409e0aff,1,efficacy,core_scale
+586d16f6-be5e-43a8-8739-862118457042,scale_586d16f6,1,efficacy,core_scale
+5f93db2e-a862-4382-9c0e-58153137a67a,scale_5f93db2e,1,efficacy,core_scale
+693afd33-f3d4-4d3d-bf2d-220383f41d53,scale_693afd33,1,efficacy,core_scale
+778ab9c4-a45c-4199-a7e2-8db73a800397,scale_778ab9c4,1,efficacy,core_scale
+8b76f724-ab48-40e8-92ce-883e5b5bb642,scale_8b76f724,1,efficacy,core_scale
+8ee73918-7964-4d0e-8ca3-aa60a74bebdf,scale_8ee73918,1,efficacy,core_scale
+97f11d1b-b881-41a5-851a-a611a61ac06e,scale_97f11d1b,1,efficacy,core_scale
+a0f8bba6-01b0-4834-9d01-e55fa30bb850,scale_a0f8bba6,1,efficacy,core_scale
+a64224be-2b3e-4a16-ab9e-512b9d40fb33,scale_a64224be,1,efficacy,core_scale
+a66cf223-b94a-472a-a7d8-c5d5a57f4ba8,scale_a66cf223,1,efficacy,core_scale
+ae21071b-8af5-4f2e-91fd-a2e309e049e6,scale_ae21071b,1,growth_mindset,core_scale
+b8bd0a10-8382-471e-9728-aa2b8ef9434d,나는 모르는 문제를 평균 00분까지는 고민해보고 넘긴다. (단위 : 분),0,,supplementary_numeric
+c33c95a7-e6f7-4f6e-8d3a-bd2eab138a08,scale_c33c95a7,1,efficacy,core_scale
+c952553e-f79c-401e-9d11-0b44c35e4655,모르는 문제를 최대 00분까지 고민해서 풀어본 적이 있다. (단위 : 분),0,,supplementary_numeric
+e7bfe56b-2a4c-4737-a1d3-9d44ce98d011,scale_e7bfe56b,1,efficacy,core_scale
+ec6e556e-e137-4f52-9836-ea5512c2aa66,scale_ec6e556e,1,efficacy,core_scale
+ed872416-aac9-46f2-8dc0-61a8e7a8b580,scale_ed872416,1,efficacy,core_scale
+ee99a89f-1362-4bfc-8535-6946b6a6b496,scale_ee99a89f,1,efficacy,core_scale
+f2646d02-b8a0-4e05-8dcb-8c66baaa4027,scale_f2646d02,1,efficacy,core_scale
+f30ab7e5-e4f3-43f7-b4d6-205eab67d1da,scale_f30ab7e5,1,growth_mindset,core_scale
+f441e53b-223e-446a-bd68-83c52a739bb3,scale_f441e53b,1,efficacy,core_scale

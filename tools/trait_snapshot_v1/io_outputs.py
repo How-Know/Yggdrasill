@@ -103,6 +103,28 @@ def write_student_workbook(
             )
 
 
+def write_type_level_workbook(path: str | Path, sheets: Dict[str, pd.DataFrame]) -> None:
+    output_path = Path(path)
+    ordered_sheet_names = [
+        "Type_Level_Stats",
+        "Group_Difference_Tests",
+        "Ordinal_Regression",
+        "Interaction_Test",
+        "Mismatch_Patterns",
+        "Cross_Validation",
+    ]
+    with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
+        wrote_any = False
+        for sheet_name in ordered_sheet_names:
+            df = sheets.get(sheet_name, pd.DataFrame())
+            if df is None:
+                df = pd.DataFrame()
+            df.to_excel(writer, index=False, sheet_name=sheet_name)
+            wrote_any = True
+        if not wrote_any:
+            pd.DataFrame().to_excel(writer, index=False, sheet_name="Type_Level_Stats")
+
+
 def _json_safe(value):
     if isinstance(value, (np.generic,)):
         return value.item()
@@ -117,6 +139,12 @@ def write_metadata(path: str | Path, metadata: Dict) -> None:
     output_path = Path(path)
     with output_path.open("w", encoding="utf-8") as f:
         json.dump(metadata, f, ensure_ascii=False, indent=2, default=_json_safe)
+
+
+def write_type_level_summary_json(path: str | Path, summary: Dict) -> None:
+    output_path = Path(path)
+    with output_path.open("w", encoding="utf-8") as f:
+        json.dump(summary, f, ensure_ascii=False, indent=2, default=_json_safe)
 
 
 def write_frozen_input(

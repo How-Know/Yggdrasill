@@ -1,0 +1,427 @@
+{
+  "version": "v1.0",
+  "snapshot_date": "2026-02-16T14:59:59+00:00",
+  "total_N": 73,
+  "used_item_ids": [
+    "039091ed-0d7b-4e55-9d29-4e05f1b3b9d2",
+    "0975ef15-3056-4dbf-a4cc-7bc50b391c9b",
+    "1c6546cb-979e-44d0-b257-1cbf86a17b9c",
+    "22100387-9306-4eb0-aadc-2e835e040462",
+    "25079046-d422-40c6-9e41-e62d8cc6f82f",
+    "270401a4-823e-4aa7-ad8e-15354d395684",
+    "28974e26-cb80-4db5-870a-b3dfeabf58c9",
+    "3b84269c-8975-40b2-a9e5-ccc99f3006e3",
+    "3e0773f0-81dc-4807-b04b-74eda65090e2",
+    "409e0aff-0db4-45f9-ad76-0ed5856589ea",
+    "586d16f6-be5e-43a8-8739-862118457042",
+    "5f93db2e-a862-4382-9c0e-58153137a67a",
+    "693afd33-f3d4-4d3d-bf2d-220383f41d53",
+    "778ab9c4-a45c-4199-a7e2-8db73a800397",
+    "8b76f724-ab48-40e8-92ce-883e5b5bb642",
+    "8ee73918-7964-4d0e-8ca3-aa60a74bebdf",
+    "97f11d1b-b881-41a5-851a-a611a61ac06e",
+    "a0f8bba6-01b0-4834-9d01-e55fa30bb850",
+    "a64224be-2b3e-4a16-ab9e-512b9d40fb33",
+    "a66cf223-b94a-472a-a7d8-c5d5a57f4ba8",
+    "ae21071b-8af5-4f2e-91fd-a2e309e049e6",
+    "c33c95a7-e6f7-4f6e-8d3a-bd2eab138a08",
+    "e7bfe56b-2a4c-4737-a1d3-9d44ce98d011",
+    "ec6e556e-e137-4f52-9836-ea5512c2aa66",
+    "ed872416-aac9-46f2-8dc0-61a8e7a8b580",
+    "ee99a89f-1362-4bfc-8535-6946b6a6b496",
+    "f2646d02-b8a0-4e05-8dcb-8c66baaa4027",
+    "f30ab7e5-e4f3-43f7-b4d6-205eab67d1da",
+    "f441e53b-223e-446a-bd68-83c52a739bb3"
+  ],
+  "core_item_ids": [
+    "039091ed-0d7b-4e55-9d29-4e05f1b3b9d2",
+    "0975ef15-3056-4dbf-a4cc-7bc50b391c9b",
+    "1c6546cb-979e-44d0-b257-1cbf86a17b9c",
+    "22100387-9306-4eb0-aadc-2e835e040462",
+    "25079046-d422-40c6-9e41-e62d8cc6f82f",
+    "270401a4-823e-4aa7-ad8e-15354d395684",
+    "28974e26-cb80-4db5-870a-b3dfeabf58c9",
+    "3b84269c-8975-40b2-a9e5-ccc99f3006e3",
+    "3e0773f0-81dc-4807-b04b-74eda65090e2",
+    "409e0aff-0db4-45f9-ad76-0ed5856589ea",
+    "586d16f6-be5e-43a8-8739-862118457042",
+    "5f93db2e-a862-4382-9c0e-58153137a67a",
+    "693afd33-f3d4-4d3d-bf2d-220383f41d53",
+    "778ab9c4-a45c-4199-a7e2-8db73a800397",
+    "8b76f724-ab48-40e8-92ce-883e5b5bb642",
+    "8ee73918-7964-4d0e-8ca3-aa60a74bebdf",
+    "97f11d1b-b881-41a5-851a-a611a61ac06e",
+    "a0f8bba6-01b0-4834-9d01-e55fa30bb850",
+    "a64224be-2b3e-4a16-ab9e-512b9d40fb33",
+    "a66cf223-b94a-472a-a7d8-c5d5a57f4ba8",
+    "ae21071b-8af5-4f2e-91fd-a2e309e049e6",
+    "c33c95a7-e6f7-4f6e-8d3a-bd2eab138a08",
+    "e7bfe56b-2a4c-4737-a1d3-9d44ce98d011",
+    "ec6e556e-e137-4f52-9836-ea5512c2aa66",
+    "ed872416-aac9-46f2-8dc0-61a8e7a8b580",
+    "ee99a89f-1362-4bfc-8535-6946b6a6b496",
+    "f2646d02-b8a0-4e05-8dcb-8c66baaa4027",
+    "f30ab7e5-e4f3-43f7-b4d6-205eab67d1da",
+    "f441e53b-223e-446a-bd68-83c52a739bb3"
+  ],
+  "supplementary_item_ids": [
+    "b8bd0a10-8382-471e-9728-aa2b8ef9434d",
+    "c952553e-f79c-401e-9d11-0b44c35e4655"
+  ],
+  "subjective_in_core": false,
+  "survey_slug": "welcome",
+  "snapshot_cutoff_at": "2026-02-16T14:59:59+00:00",
+  "round_no": 1,
+  "fixed_scale_stats": {
+    "scale_039091ed": {
+      "mean": 4.739726,
+      "sd": 1.950978,
+      "alpha": null,
+      "item_count": 1,
+      "n_respondents": 73,
+      "alpha_n_complete": 0
+    },
+    "scale_0975ef15": {
+      "mean": 7.150685,
+      "sd": 1.737425,
+      "alpha": null,
+      "item_count": 1,
+      "n_respondents": 73,
+      "alpha_n_complete": 0
+    },
+    "scale_1c6546cb": {
+      "mean": 6.328767,
+      "sd": 2.230189,
+      "alpha": null,
+      "item_count": 1,
+      "n_respondents": 73,
+      "alpha_n_complete": 0
+    },
+    "scale_22100387": {
+      "mean": 6.465753,
+      "sd": 1.908186,
+      "alpha": null,
+      "item_count": 1,
+      "n_respondents": 73,
+      "alpha_n_complete": 0
+    },
+    "scale_25079046": {
+      "mean": 7.39726,
+      "sd": 1.525157,
+      "alpha": null,
+      "item_count": 1,
+      "n_respondents": 73,
+      "alpha_n_complete": 0
+    },
+    "scale_270401a4": {
+      "mean": 5.30137,
+      "sd": 1.941398,
+      "alpha": null,
+      "item_count": 1,
+      "n_respondents": 73,
+      "alpha_n_complete": 0
+    },
+    "scale_28974e26": {
+      "mean": 5.369863,
+      "sd": 2.276125,
+      "alpha": null,
+      "item_count": 1,
+      "n_respondents": 73,
+      "alpha_n_complete": 0
+    },
+    "scale_3b84269c": {
+      "mean": 4.863014,
+      "sd": 2.194153,
+      "alpha": null,
+      "item_count": 1,
+      "n_respondents": 73,
+      "alpha_n_complete": 0
+    },
+    "scale_3e0773f0": {
+      "mean": 6.794521,
+      "sd": 1.699337,
+      "alpha": null,
+      "item_count": 1,
+      "n_respondents": 73,
+      "alpha_n_complete": 0
+    },
+    "scale_409e0aff": {
+      "mean": 8.123288,
+      "sd": 1.177865,
+      "alpha": null,
+      "item_count": 1,
+      "n_respondents": 73,
+      "alpha_n_complete": 0
+    },
+    "scale_586d16f6": {
+      "mean": 5.958904,
+      "sd": 1.695077,
+      "alpha": null,
+      "item_count": 1,
+      "n_respondents": 73,
+      "alpha_n_complete": 0
+    },
+    "scale_5f93db2e": {
+      "mean": 8.136986,
+      "sd": 1.377549,
+      "alpha": null,
+      "item_count": 1,
+      "n_respondents": 73,
+      "alpha_n_complete": 0
+    },
+    "scale_693afd33": {
+      "mean": 5.589041,
+      "sd": 2.308412,
+      "alpha": null,
+      "item_count": 1,
+      "n_respondents": 73,
+      "alpha_n_complete": 0
+    },
+    "scale_778ab9c4": {
+      "mean": 7.726027,
+      "sd": 1.304482,
+      "alpha": null,
+      "item_count": 1,
+      "n_respondents": 73,
+      "alpha_n_complete": 0
+    },
+    "scale_8b76f724": {
+      "mean": 5.60274,
+      "sd": 2.10647,
+      "alpha": null,
+      "item_count": 1,
+      "n_respondents": 73,
+      "alpha_n_complete": 0
+    },
+    "scale_8ee73918": {
+      "mean": 6.315068,
+      "sd": 2.197705,
+      "alpha": null,
+      "item_count": 1,
+      "n_respondents": 73,
+      "alpha_n_complete": 0
+    },
+    "scale_97f11d1b": {
+      "mean": 6.424658,
+      "sd": 2.040682,
+      "alpha": null,
+      "item_count": 1,
+      "n_respondents": 73,
+      "alpha_n_complete": 0
+    },
+    "scale_a0f8bba6": {
+      "mean": 6.561644,
+      "sd": 1.707714,
+      "alpha": null,
+      "item_count": 1,
+      "n_respondents": 73,
+      "alpha_n_complete": 0
+    },
+    "scale_a64224be": {
+      "mean": 6.616438,
+      "sd": 2.052303,
+      "alpha": null,
+      "item_count": 1,
+      "n_respondents": 73,
+      "alpha_n_complete": 0
+    },
+    "scale_a66cf223": {
+      "mean": 8.082192,
+      "sd": 1.24447,
+      "alpha": null,
+      "item_count": 1,
+      "n_respondents": 73,
+      "alpha_n_complete": 0
+    },
+    "scale_ae21071b": {
+      "mean": 7.712329,
+      "sd": 1.743874,
+      "alpha": null,
+      "item_count": 1,
+      "n_respondents": 73,
+      "alpha_n_complete": 0
+    },
+    "scale_c33c95a7": {
+      "mean": 6.356164,
+      "sd": 1.924765,
+      "alpha": null,
+      "item_count": 1,
+      "n_respondents": 73,
+      "alpha_n_complete": 0
+    },
+    "scale_e7bfe56b": {
+      "mean": 6.534247,
+      "sd": 1.803409,
+      "alpha": null,
+      "item_count": 1,
+      "n_respondents": 73,
+      "alpha_n_complete": 0
+    },
+    "scale_ec6e556e": {
+      "mean": 6.684932,
+      "sd": 2.408761,
+      "alpha": null,
+      "item_count": 1,
+      "n_respondents": 73,
+      "alpha_n_complete": 0
+    },
+    "scale_ed872416": {
+      "mean": 3.589041,
+      "sd": 1.588462,
+      "alpha": null,
+      "item_count": 1,
+      "n_respondents": 73,
+      "alpha_n_complete": 0
+    },
+    "scale_ee99a89f": {
+      "mean": 4.356164,
+      "sd": 2.10403,
+      "alpha": null,
+      "item_count": 1,
+      "n_respondents": 73,
+      "alpha_n_complete": 0
+    },
+    "scale_f2646d02": {
+      "mean": 6.958904,
+      "sd": 1.636717,
+      "alpha": null,
+      "item_count": 1,
+      "n_respondents": 73,
+      "alpha_n_complete": 0
+    },
+    "scale_f30ab7e5": {
+      "mean": 5.890411,
+      "sd": 2.017711,
+      "alpha": null,
+      "item_count": 1,
+      "n_respondents": 73,
+      "alpha_n_complete": 0
+    },
+    "scale_f441e53b": {
+      "mean": 5.342466,
+      "sd": 1.887232,
+      "alpha": null,
+      "item_count": 1,
+      "n_respondents": 73,
+      "alpha_n_complete": 0
+    }
+  },
+  "level_distribution": {
+    "2": 25,
+    "3": 22,
+    "1": 11,
+    "4": 11,
+    "0": 2,
+    "5": 2
+  },
+  "current_math_percentile_summary": {
+    "count": 0,
+    "mean": null,
+    "sd": null,
+    "min": null,
+    "max": null,
+    "p25": null,
+    "p50": null,
+    "p75": null
+  },
+  "supplementary_item_stats_count": 2,
+  "supplementary_student_rows": 146,
+  "logic_version": "v1.0.0",
+  "data_hash": "52d4d5da12ed6f3a84c258e2afdd1f85b9f975bc20eed495c51f71fa4b4ad5e1",
+  "scale_map_hash": "57f7fe60da6a5dbd2c263f34dfd298fc405be09ca3c911840cadccfd16a39f82",
+  "warnings": [
+    "[scale_039091ed] include_in_alpha 문항 수 < 2 이므로 Cronbach alpha를 계산하지 않았습니다.",
+    "[scale_0975ef15] include_in_alpha 문항 수 < 2 이므로 Cronbach alpha를 계산하지 않았습니다.",
+    "[scale_1c6546cb] include_in_alpha 문항 수 < 2 이므로 Cronbach alpha를 계산하지 않았습니다.",
+    "[scale_22100387] include_in_alpha 문항 수 < 2 이므로 Cronbach alpha를 계산하지 않았습니다.",
+    "[scale_25079046] include_in_alpha 문항 수 < 2 이므로 Cronbach alpha를 계산하지 않았습니다.",
+    "[scale_270401a4] include_in_alpha 문항 수 < 2 이므로 Cronbach alpha를 계산하지 않았습니다.",
+    "[scale_28974e26] include_in_alpha 문항 수 < 2 이므로 Cronbach alpha를 계산하지 않았습니다.",
+    "[scale_3b84269c] include_in_alpha 문항 수 < 2 이므로 Cronbach alpha를 계산하지 않았습니다.",
+    "[scale_3e0773f0] include_in_alpha 문항 수 < 2 이므로 Cronbach alpha를 계산하지 않았습니다.",
+    "[scale_409e0aff] include_in_alpha 문항 수 < 2 이므로 Cronbach alpha를 계산하지 않았습니다.",
+    "[scale_586d16f6] include_in_alpha 문항 수 < 2 이므로 Cronbach alpha를 계산하지 않았습니다.",
+    "[scale_5f93db2e] include_in_alpha 문항 수 < 2 이므로 Cronbach alpha를 계산하지 않았습니다.",
+    "[scale_693afd33] include_in_alpha 문항 수 < 2 이므로 Cronbach alpha를 계산하지 않았습니다.",
+    "[scale_778ab9c4] include_in_alpha 문항 수 < 2 이므로 Cronbach alpha를 계산하지 않았습니다.",
+    "[scale_8b76f724] include_in_alpha 문항 수 < 2 이므로 Cronbach alpha를 계산하지 않았습니다.",
+    "[scale_8ee73918] include_in_alpha 문항 수 < 2 이므로 Cronbach alpha를 계산하지 않았습니다.",
+    "[scale_97f11d1b] include_in_alpha 문항 수 < 2 이므로 Cronbach alpha를 계산하지 않았습니다.",
+    "[scale_a0f8bba6] include_in_alpha 문항 수 < 2 이므로 Cronbach alpha를 계산하지 않았습니다.",
+    "[scale_a64224be] include_in_alpha 문항 수 < 2 이므로 Cronbach alpha를 계산하지 않았습니다.",
+    "[scale_a66cf223] include_in_alpha 문항 수 < 2 이므로 Cronbach alpha를 계산하지 않았습니다.",
+    "[scale_ae21071b] include_in_alpha 문항 수 < 2 이므로 Cronbach alpha를 계산하지 않았습니다.",
+    "[scale_c33c95a7] include_in_alpha 문항 수 < 2 이므로 Cronbach alpha를 계산하지 않았습니다.",
+    "[scale_e7bfe56b] include_in_alpha 문항 수 < 2 이므로 Cronbach alpha를 계산하지 않았습니다.",
+    "[scale_ec6e556e] include_in_alpha 문항 수 < 2 이므로 Cronbach alpha를 계산하지 않았습니다.",
+    "[scale_ed872416] include_in_alpha 문항 수 < 2 이므로 Cronbach alpha를 계산하지 않았습니다.",
+    "[scale_ee99a89f] include_in_alpha 문항 수 < 2 이므로 Cronbach alpha를 계산하지 않았습니다.",
+    "[scale_f2646d02] include_in_alpha 문항 수 < 2 이므로 Cronbach alpha를 계산하지 않았습니다.",
+    "[scale_f30ab7e5] include_in_alpha 문항 수 < 2 이므로 Cronbach alpha를 계산하지 않았습니다.",
+    "[scale_f441e53b] include_in_alpha 문항 수 < 2 이므로 Cronbach alpha를 계산하지 않았습니다.",
+    "표본 제약으로 StratifiedKFold 대신 KFold를 사용했습니다. 교차검증 분산이 커질 수 있습니다."
+  ],
+  "axis_config": {
+    "anxiety": [
+      "scale_039091ed"
+    ],
+    "efficacy": [
+      "scale_0975ef15",
+      "scale_1c6546cb",
+      "scale_22100387",
+      "scale_25079046",
+      "scale_270401a4",
+      "scale_28974e26",
+      "scale_3b84269c",
+      "scale_3e0773f0",
+      "scale_409e0aff",
+      "scale_586d16f6",
+      "scale_5f93db2e",
+      "scale_693afd33",
+      "scale_778ab9c4",
+      "scale_8b76f724",
+      "scale_8ee73918",
+      "scale_97f11d1b",
+      "scale_a0f8bba6",
+      "scale_a64224be",
+      "scale_a66cf223",
+      "scale_c33c95a7",
+      "scale_e7bfe56b",
+      "scale_ec6e556e",
+      "scale_ed872416",
+      "scale_ee99a89f",
+      "scale_f2646d02",
+      "scale_f441e53b"
+    ],
+    "growth_mindset": [
+      "scale_ae21071b",
+      "scale_f30ab7e5"
+    ]
+  },
+  "type_level_validation_summary": {
+    "snapshot_version": "v1.0",
+    "status": "ok",
+    "n_students_total": 73,
+    "n_students_with_level": 73,
+    "n_students_with_type": 73,
+    "kruskal_p_value": 0.018064131268467027,
+    "kruskal_epsilon2": 0.1023167517178168,
+    "interaction_p_value": 0.1352991966345036,
+    "cv_mae_mean": 0.8028571428571428,
+    "cv_qwk_mean": 0.23233774789696912,
+    "interpretation": {
+      "type_explains_current_ability": "유형이 현재 실력과 중간 수준의 연관을 보입니다.",
+      "type_suggests_growth_potential": "현재 분석은 단면 자료 기반이므로 성장 가능성은 추적 조사(2차/3차)로 별도 검증해야 합니다.",
+      "type_as_independent_state": "실력과 일부 연관이 있어도 유형을 원인으로 단정할 수 없으며, 정서·신념 상태 변수로 독립적으로 관찰하는 접근이 필요합니다."
+    },
+    "spearman_emotion_vs_grade": -0.07473900633023227,
+    "spearman_belief_vs_grade": -0.3690010775759033,
+    "type_counts": {
+      "TYPE_A": 16,
+      "TYPE_B": 19,
+      "TYPE_C": 18,
+      "TYPE_D": 20
+    }
+  },
+  "generated_at": "2026-02-16T13:39:42.146527+00:00"
+}

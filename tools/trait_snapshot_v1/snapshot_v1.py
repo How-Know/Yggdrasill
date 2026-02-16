@@ -11,6 +11,7 @@ import pandas as pd
 
 from core_stats import (
     classify_type,
+    compute_type_level_validation,
     compute_scale_stats,
     compute_standard_scores,
 )
@@ -24,6 +25,8 @@ from io_outputs import (
     write_metadata,
     write_scale_workbook,
     write_student_workbook,
+    write_type_level_summary_json,
+    write_type_level_workbook,
 )
 from validators import (
     load_raw_answers_csv,
@@ -352,6 +355,11 @@ def main() -> int:
         supp_df,
         snapshot_version=args.snapshot_version,
     )
+    type_level_sheets, type_level_summary = compute_type_level_validation(
+        student_type=student_type,
+        snapshot_version=args.snapshot_version,
+        warnings=warnings,
+    )
 
     # 재현성을 위해 반올림/정렬 정책 고정
     scale_stats = round_float_columns(scale_stats, decimals=6)
@@ -362,6 +370,9 @@ def main() -> int:
     student_item_matrix = round_float_columns(student_item_matrix, decimals=6)
     subjective_item_stats = round_float_columns(subjective_item_stats, decimals=6)
     student_subjective = round_float_columns(student_subjective, decimals=6)
+    rounded_type_level_sheets: Dict[str, pd.DataFrame] = {}
+    for sheet_name, sheet_df in type_level_sheets.items():
+        rounded_type_level_sheets[sheet_name] = round_float_columns(sheet_df, decimals=6)
 
     scale_stats = scale_stats.sort_values(["scale_name"]).reset_index(drop=True)
     scale_items = scale_items.sort_values(["scale_name", "item_id"]).reset_index(drop=True)
@@ -371,6 +382,23 @@ def main() -> int:
     student_item_matrix = student_item_matrix.sort_values(["student_id"]).reset_index(drop=True)
     subjective_item_stats = subjective_item_stats.sort_values(["scale_name", "item_id"]).reset_index(drop=True)
     student_subjective = student_subjective.sort_values(["student_id", "item_id"]).reset_index(drop=True)
+    for sheet_name, sheet_df in rounded_type_level_sheets.items():
+        if sheet_df.empty:
+            continue
+        sort_cols: List[str] = []
+        if "comparison" in sheet_df.columns:
+            sort_cols = ["comparison"]
+        elif "pattern" in sheet_df.columns:
+            sort_cols = ["pattern"]
+        elif "parameter" in sheet_df.columns:
+            sort_cols = ["model", "parameter"]
+        elif "type_code" in sheet_df.columns:
+            sort_cols = ["type_code"]
+        rounded_type_level_sheets[sheet_name] = (
+            sheet_df.sort_values(sort_cols).reset_index(drop=True)
+            if sort_cols
+            else sheet_df.reset_index(drop=True)
+        )
 
     # 해시 계산
     frozen_input_df = long_df[
@@ -434,6 +462,7 @@ def main() -> int:
         "scale_map_hash": scale_map_hash,
         "warnings": _unique_warnings(warnings),
         "axis_config": {k: sorted(set(v)) for k, v in axis_config.items()},
+        "type_level_validation_summary": type_level_summary,
         "generated_at": pd.Timestamp.utcnow().isoformat(),
     }
 
@@ -442,6 +471,8 @@ def main() -> int:
     student_book = out_dir / "student_standard_scores_v1.xlsx"
     metadata_path = out_dir / "snapshot_metadata.json"
     matrix_book = out_dir / "student_item_matrix_v1.xlsx"
+    type_level_book = out_dir / "type_level_validation_v1.xlsx"
+    type_level_summary_path = out_dir / "type_level_validation_summary_v1.json"
 
     write_scale_workbook(
         path=scale_book,
@@ -465,12 +496,16 @@ def main() -> int:
 
     with pd.ExcelWriter(matrix_book, engine="openpyxl") as writer:
         student_item_matrix.to_excel(writer, index=False, sheet_name="Student_Item_Matrix")
+    write_type_level_workbook(type_level_book, rounded_type_level_sheets)
+    write_type_level_summary_json(type_level_summary_path, type_level_summary)
 
     _print_step(f"출력 완료: {scale_book}")
     _print_step(f"출력 완료: {student_book}")
     _print_step(f"출력 완료: {metadata_path}")
     _print_step(f"권장 출력 완료: {matrix_book}")
     _print_step(f"권장 출력 완료: {frozen_path}")
+    _print_step(f"권장 출력 완료: {type_level_book}")
+    _print_step(f"권장 출력 완료: {type_level_summary_path}")
     _print_step(
         "요약: "
         f"students(core)={total_n}, scales={scale_stats.shape[0]}, "

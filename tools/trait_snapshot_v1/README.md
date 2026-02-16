@@ -65,6 +65,12 @@
 
 ## 실행 방법
 
+권장 의존성 설치:
+
+```bash
+pip install -r tools/trait_snapshot_v1/requirements.txt
+```
+
 ```bash
 python tools/trait_snapshot_v1/snapshot_v1.py ^
   --raw raw_answers.csv ^
@@ -128,11 +134,36 @@ python tools/trait_snapshot_v1/snapshot_v1.py `
 - logic_version
 - data_hash, scale_map_hash
 - warnings
+- type_level_validation_summary
 
 권장 산출물:
 
 - `student_item_matrix_v1.xlsx`
 - `snapshot_input_frozen.csv` (또는 parquet)
+- `type_level_validation_v1.xlsx`
+- `type_level_validation_summary_v1.json`
+
+### `type_level_validation_v1.xlsx` (권장)
+
+- `Type_Level_Stats`
+  - 유형별 등급 평균/분산/중앙값/IQR/N
+- `Group_Difference_Tests`
+  - Kruskal-Wallis + pairwise Mann-Whitney(U) + Holm 보정 + 효과크기
+- `Ordinal_Regression`
+  - 감정/신념/상호작용 순서형 로지스틱 계수
+- `Interaction_Test`
+  - base vs interaction 모델 비교(LR test, pseudo R2)
+- `Mismatch_Patterns`
+  - 실력 높음+유형 낮음 / 실력 낮음+유형 높음 패턴 요약
+- `Cross_Validation`
+  - KFold 기반 MAE/QWK/within-one-rate
+
+### `type_level_validation_summary_v1.json` (권장)
+
+- 핵심 검정 p-value/효과크기
+- 상호작용 유의성
+- 교차검증 성능 요약
+- 해석 프레임 문구(인과 단정 금지)
 
 ## 실패/경고 기준
 
@@ -147,6 +178,13 @@ python tools/trait_snapshot_v1/snapshot_v1.py `
 - total_N < 30
 - alpha 계산 불가 스케일
 - 수준 컬럼 결측 비율 높음
+- statsmodels/scikit-learn 미설치로 고급 검증 스킵
+
+## 해석 원칙 (중요)
+
+- 유형을 실력의 **원인**으로 단정하지 않습니다.
+- 상관과 인과를 구분하고, p-value 단독보다 효과크기와 신뢰구간을 우선합니다.
+- 성장 가능성은 단면(1차)에서 확정하지 않고, 후속 라운드 추적으로 검증합니다.
 
 ## raw CSV 추출 SQL
 

@@ -1,0 +1,25 @@
+{
+  "snapshot_version": "v1.0",
+  "status": "ok",
+  "n_students_total": 73,
+  "n_students_with_level": 73,
+  "n_students_with_type": 73,
+  "kruskal_p_value": 0.018064131268467027,
+  "kruskal_epsilon2": 0.1023167517178168,
+  "interaction_p_value": 0.1352991966345036,
+  "cv_mae_mean": 0.8028571428571428,
+  "cv_qwk_mean": 0.23233774789696912,
+  "interpretation": {
+    "type_explains_current_ability": "유형이 현재 실력과 중간 수준의 연관을 보입니다.",
+    "type_suggests_growth_potential": "현재 분석은 단면 자료 기반이므로 성장 가능성은 추적 조사(2차/3차)로 별도 검증해야 합니다.",
+    "type_as_independent_state": "실력과 일부 연관이 있어도 유형을 원인으로 단정할 수 없으며, 정서·신념 상태 변수로 독립적으로 관찰하는 접근이 필요합니다."
+  },
+  "spearman_emotion_vs_grade": -0.07473900633023227,
+  "spearman_belief_vs_grade": -0.3690010775759033,
+  "type_counts": {
+    "TYPE_A": 16,
+    "TYPE_B": 19,
+    "TYPE_C": 18,
+    "TYPE_D": 20
+  }
+}
