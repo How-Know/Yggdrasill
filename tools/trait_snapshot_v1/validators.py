@@ -40,6 +40,25 @@ SCALE_MAP_OPTIONAL_COLUMNS = [
     "analysis_group",  # core_scale | supplementary_numeric
 ]
 
+AXIS_TAG_CANONICAL_MAP = {
+    "efficacy": "belief_pos",
+    "growth_mindset": "belief_pos",
+    "belief": "belief_pos",
+    "belief_pos": "belief_pos",
+    "belief_neg": "belief_neg",
+    "external_attribution": "belief_neg",
+    "external_attribution_belief": "belief_neg",
+    "anxiety": "emotion_neg",
+    "emotion_neg": "emotion_neg",
+    "emotion_reactivity": "emotion_neg",
+    "emotional_stability": "emotion_pos",
+    "emotion_pos": "emotion_pos",
+    "interest": "emotion_pos",
+}
+
+NEGATIVE_AXIS_TAGS = {"belief_neg", "emotion_neg"}
+POSITIVE_AXIS_TAGS = {"belief_pos", "emotion_pos"}
+
 
 def _validate_required_columns(df: pd.DataFrame, required: List[str], label: str) -> None:
     missing = [c for c in required if c not in df.columns]
@@ -57,6 +76,15 @@ def _to_numeric(df: pd.DataFrame, cols: List[str]) -> None:
     for col in cols:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
+
+
+def _canonical_axis_tag(value: object) -> str | None:
+    if value is None or pd.isna(value):
+        return None
+    raw = str(value).strip().lower()
+    if not raw or raw in {"nan", "<na>"}:
+        return None
+    return AXIS_TAG_CANONICAL_MAP.get(raw, raw)
 
 
 def load_raw_answers_csv(path: str | Path) -> pd.DataFrame:
@@ -125,6 +153,7 @@ def load_scale_map_csv(path: str | Path) -> pd.DataFrame:
 
     # axis_tag는 빈 문자열을 결측으로 처리
     df["axis_tag"] = df["axis_tag"].replace("", pd.NA)
+    df["axis_tag"] = df["axis_tag"].map(_canonical_axis_tag)
     df["analysis_group"] = (
         df["analysis_group"]
         .astype("string")
@@ -232,6 +261,7 @@ def _build_axis_config(scale_map: pd.DataFrame) -> Dict[str, List[str]]:
             .dropna()
             .astype("string")
             .str.strip()
+            .str.lower()
             .replace("", pd.NA)
             .dropna()
             .unique()
@@ -243,7 +273,9 @@ def _build_axis_config(scale_map: pd.DataFrame) -> Dict[str, List[str]]:
                 "scale 단위 axis_tag는 1개만 허용합니다."
             )
         if len(tags) == 1:
-            tag = str(tags[0]).lower()
+            tag = _canonical_axis_tag(tags[0])
+            if tag is None:
+                continue
             axis_config.setdefault(tag, []).append(str(scale_name))
 
     for tag in axis_config:
@@ -253,18 +285,18 @@ def _build_axis_config(scale_map: pd.DataFrame) -> Dict[str, List[str]]:
 
 def _validate_axis_requirements(axis_config: Dict[str, List[str]]) -> None:
     missing_axes: List[str] = []
-    if not axis_config.get("efficacy"):
-        missing_axes.append("efficacy")
-    if not axis_config.get("growth_mindset"):
-        missing_axes.append("growth_mindset")
-    if not axis_config.get("emotional_stability") and not axis_config.get("anxiety"):
-        missing_axes.append("emotional_stability|anxiety")
+    belief_present = bool(axis_config.get("belief_pos")) or bool(axis_config.get("belief_neg"))
+    emotion_present = bool(axis_config.get("emotion_pos")) or bool(axis_config.get("emotion_neg"))
+    if not belief_present:
+        missing_axes.append("belief_pos|belief_neg")
+    if not emotion_present:
+        missing_axes.append("emotion_pos|emotion_neg")
 
     if missing_axes:
         raise ValueError(
             "유형 분류 필수 axis_tag 누락: "
             f"{missing_axes}. "
-            "scale_map.csv의 axis_tag를 확인하세요."
+            "scale_map.csv의 axis_tag를 확인하세요. (legacy: efficacy/growth_mindset/anxiety/emotional_stability는 자동 호환)"
         )
 
 
@@ -414,7 +446,47 @@ def validate_and_prepare_inputs(
         long_df["raw_score"],
     )
     long_df["response_time_sec"] = long_df["response_ms"] / 1000.0
-    long_df["axis_tag"] = long_df["axis_tag"].astype("string").str.strip().str.lower().replace("", pd.NA)
+    long_df["axis_tag"] = (
+        long_df["axis_tag"]
+        .astype("string")
+        .str.strip()
+        .str.lower()
+        .replace("", pd.NA)
+        .map(_canonical_axis_tag)
+    )
+
+    scale_mask = long_df["question_type"] == "scale"
+    reverse_y_mask = long_df["reverse_item"] == "Y"
+    neg_axis_mask = long_df["axis_tag"].isin(list(NEGATIVE_AXIS_TAGS))
+    pos_axis_mask = long_df["axis_tag"].isin(list(POSITIVE_AXIS_TAGS))
+    neg_reverse_n = scale_mask & neg_axis_mask & (~reverse_y_mask)
+    neg_reverse_y = scale_mask & neg_axis_mask & reverse_y_mask
+    pos_reverse_y = scale_mask & pos_axis_mask & reverse_y_mask
+    if int(neg_reverse_n.sum()) > 0:
+        warnings.append(
+            f"negative axis 문항 {int(neg_reverse_n.sum())}건(reverse=N)에 polarity 보정을 적용했습니다."
+        )
+    if int(neg_reverse_y.sum()) > 0:
+        warnings.append(
+            f"negative axis 문항 {int(neg_reverse_y.sum())}건(reverse=Y)은 score_rc를 그대로 사용했습니다."
+        )
+    if int(pos_reverse_y.sum()) > 0:
+        warnings.append(
+            f"positive axis 문항 {int(pos_reverse_y.sum())}건(reverse=Y)은 reverse 코딩 결과(score_rc)를 사용했습니다."
+        )
+
+    long_df["score_oriented"] = long_df["score_rc"]
+    flip_mask = neg_reverse_n & long_df["min_score"].notna() & long_df["max_score"].notna()
+    long_df.loc[flip_mask, "score_oriented"] = (
+        long_df.loc[flip_mask, "min_score"]
+        + long_df.loc[flip_mask, "max_score"]
+        - long_df.loc[flip_mask, "score_rc"]
+    )
+    missing_range_for_flip = neg_reverse_n & (~long_df["min_score"].notna() | ~long_df["max_score"].notna())
+    if int(missing_range_for_flip.sum()) > 0:
+        warnings.append(
+            f"negative axis polarity 보정 대상 중 min/max 누락 {int(missing_range_for_flip.sum())}건은 score_rc를 유지했습니다."
+        )
 
     # 5) axis config 검증 (실제 사용 문항 기준)
     effective_map = (
@@ -422,7 +494,14 @@ def validate_and_prepare_inputs(
         .drop_duplicates()
         .rename(columns={"item_id": "question_id"})
     )
-    effective_map["axis_tag"] = effective_map["axis_tag"].astype("string").str.strip().str.lower().replace("", pd.NA)
+    effective_map["axis_tag"] = (
+        effective_map["axis_tag"]
+        .astype("string")
+        .str.strip()
+        .str.lower()
+        .replace("", pd.NA)
+        .map(_canonical_axis_tag)
+    )
     axis_config = _build_axis_config(effective_map)
     _validate_axis_requirements(axis_config)
 
@@ -438,6 +517,7 @@ def validate_and_prepare_inputs(
         "answered_at",
         "raw_score",
         "score_rc",
+        "score_oriented",
         "response_ms",
         "response_time_sec",
         "reverse_item",

@@ -200,6 +200,9 @@ def compute_standard_scores(
     for (student_id, scale_name), g in df_long.groupby(["student_id", "scale_name"], dropna=False):
         valid_scores = g["score_rc"].dropna()
         raw_score = float(valid_scores.mean()) if not valid_scores.empty else np.nan
+        oriented_series = g["score_oriented"] if "score_oriented" in g.columns else g["score_rc"]
+        valid_oriented_scores = oriented_series.dropna()
+        axis_raw_score = float(valid_oriented_scores.mean()) if not valid_oriented_scores.empty else np.nan
         answered_item_n = int(valid_scores.shape[0])
         total_item_n = int(item_count_map.get(scale_name, 0))
         completion_rate = (
@@ -223,6 +226,8 @@ def compute_standard_scores(
                 "scale_name": scale_name,
                 "raw_score": raw_score,
                 "z_score": z_score,
+                "axis_raw_score": axis_raw_score,
+                "axis_z_score": np.nan,
                 "percentile": np.nan,
                 "answered_item_n": answered_item_n,
                 "total_item_n": total_item_n,
@@ -251,6 +256,19 @@ def compute_standard_scores(
         target_index = row_index[mask]
         out.loc[target_index, "percentile"] = pct
 
+    for scale_name, idx in out.groupby("scale_name").groups.items():
+        row_index = np.array(list(idx))
+        vals = out.loc[row_index, "axis_raw_score"].to_numpy(dtype=float)
+        mask = np.isfinite(vals)
+        if int(mask.sum()) <= 1:
+            continue
+        mean_v = float(vals[mask].mean())
+        sd_v = float(vals[mask].std(ddof=1))
+        if not np.isfinite(sd_v) or sd_v <= 0:
+            continue
+        target_index = row_index[mask]
+        out.loc[target_index, "axis_z_score"] = (vals[mask] - mean_v) / sd_v
+
     out = out.sort_values(["student_id", "scale_name"]).reset_index(drop=True)
     return out
 
@@ -269,8 +287,11 @@ def classify_type(
                 "type_label",
                 "x_efficacy_z",
                 "x_growth_mindset_z",
+                "x_belief_neg_z",
                 "y_source",
                 "y_value_z",
+                "y_emotion_pos_z",
+                "y_emotion_neg_z",
                 "current_level_grade",
                 "current_math_percentile",
             ]
@@ -278,37 +299,74 @@ def classify_type(
 
     student_ids = sorted(df_student_scores["student_id"].dropna().astype(str).unique().tolist())
     base = pd.DataFrame({"student_id": student_ids})
+    axis_value_col = "axis_z_score" if "axis_z_score" in df_student_scores.columns else "z_score"
+    use_oriented_axis = axis_value_col == "axis_z_score"
 
-    def axis_series(axis_tag: str) -> pd.Series:
-        scales = sorted(set(axis_config.get(axis_tag, [])))
+    belief_pos_aliases = ["belief_pos", "efficacy", "growth_mindset", "belief"]
+    belief_neg_aliases = ["belief_neg", "external_attribution", "external_attribution_belief"]
+    emotion_pos_aliases = ["emotion_pos", "emotional_stability", "interest"]
+    emotion_neg_aliases = ["emotion_neg", "anxiety", "emotion_reactivity"]
+
+    def axis_series_by_aliases(aliases: List[str], negative_axis: bool) -> pd.Series:
+        scale_names: List[str] = []
+        for alias in aliases:
+            scale_names.extend(list(axis_config.get(alias, [])))
+        scales = sorted(set(scale_names))
         if not scales:
             return pd.Series(index=student_ids, dtype=float)
-        sub = df_student_scores.loc[df_student_scores["scale_name"].isin(scales), ["student_id", "z_score"]]
-        s = sub.groupby("student_id")["z_score"].mean()
+        sub = df_student_scores.loc[df_student_scores["scale_name"].isin(scales), ["student_id", axis_value_col]].copy()
+        if sub.empty:
+            return pd.Series(index=student_ids, dtype=float)
+        sign = 1.0
+        if negative_axis and not use_oriented_axis:
+            sign = -1.0
+        sub["_axis_value"] = pd.to_numeric(sub[axis_value_col], errors="coerce") * sign
+        s = sub.groupby("student_id")["_axis_value"].mean()
         return s.reindex(student_ids)
 
-    efficacy_z = axis_series("efficacy")
-    growth_z = axis_series("growth_mindset")
-    emotional_stability_z = axis_series("emotional_stability")
-    anxiety_z = axis_series("anxiety")
+    belief_pos_z = axis_series_by_aliases(belief_pos_aliases, negative_axis=False)
+    belief_neg_z = axis_series_by_aliases(belief_neg_aliases, negative_axis=True)
+    emotion_pos_z = axis_series_by_aliases(emotion_pos_aliases, negative_axis=False)
+    emotion_neg_z = axis_series_by_aliases(emotion_neg_aliases, negative_axis=True)
 
-    base["x_efficacy_z"] = efficacy_z.values
-    base["x_growth_mindset_z"] = growth_z.values
+    base["x_efficacy_z"] = belief_pos_z.values
+    base["x_growth_mindset_z"] = belief_pos_z.values
+    base["x_belief_neg_z"] = belief_neg_z.values
+    base["y_emotion_pos_z"] = emotion_pos_z.values
+    base["y_emotion_neg_z"] = emotion_neg_z.values
+
+    base["axis_x"] = (
+        pd.concat([belief_pos_z, belief_neg_z], axis=1)
+        .mean(axis=1, skipna=True)
+        .reindex(student_ids)
+        .to_numpy()
+    )
     base["axis_x"] = np.where(
-        pd.notna(base["x_efficacy_z"]) & pd.notna(base["x_growth_mindset_z"]),
-        (base["x_efficacy_z"] + base["x_growth_mindset_z"]) / 2.0,
+        np.isfinite(base["axis_x"]),
+        base["axis_x"],
         np.nan,
     )
-
-    has_emotional_stability_axis = len(set(axis_config.get("emotional_stability", []))) > 0
-    if has_emotional_stability_axis:
-        base["y_source"] = "emotional_stability"
-        base["y_value_z"] = emotional_stability_z.values
-        base["axis_y"] = base["y_value_z"]
-    else:
-        base["y_source"] = "anxiety_inverse"
-        base["y_value_z"] = anxiety_z.values
-        base["axis_y"] = -base["y_value_z"]
+    base["axis_y"] = (
+        pd.concat([emotion_pos_z, emotion_neg_z], axis=1)
+        .mean(axis=1, skipna=True)
+        .reindex(student_ids)
+        .to_numpy()
+    )
+    base["axis_y"] = np.where(
+        np.isfinite(base["axis_y"]),
+        base["axis_y"],
+        np.nan,
+    )
+    base["y_source"] = np.where(
+        pd.notna(base["y_emotion_pos_z"]) & pd.notna(base["y_emotion_neg_z"]),
+        "emotion_pos+emotion_neg",
+        np.where(
+            pd.notna(base["y_emotion_pos_z"]),
+            "emotion_pos",
+            np.where(pd.notna(base["y_emotion_neg_z"]), "emotion_neg", "missing"),
+        ),
+    )
+    base["y_value_z"] = base["axis_y"]
 
     type_code = np.full(len(base), "UNCLASSIFIED", dtype=object)
     valid = pd.notna(base["axis_x"]) & pd.notna(base["axis_y"])
@@ -348,8 +406,11 @@ def classify_type(
             "type_label",
             "x_efficacy_z",
             "x_growth_mindset_z",
+            "x_belief_neg_z",
             "y_source",
             "y_value_z",
+            "y_emotion_pos_z",
+            "y_emotion_neg_z",
             "current_level_grade",
             "current_math_percentile",
         ]

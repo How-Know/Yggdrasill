@@ -3,13 +3,19 @@ import { supabase } from '../lib/supabaseClient';
 import { tokens } from '../theme';
 import {
   combineSectionText,
+  cloneScaleGuideTemplate,
   cloneFeedbackTemplate,
   DEFAULT_FEEDBACK_TEMPLATES,
+  DEFAULT_SCALE_GUIDE_TEMPLATE,
   FEEDBACK_TYPE_CODES,
   FeedbackTemplate,
   FeedbackTypeCode,
   INTERPRETATION_FRAME_GUARDRAILS,
   mergeTemplateSections,
+  parseScaleGuideTemplate,
+  SCALE_GUIDE_INDICATORS,
+  SCALE_GUIDE_SUBSCALES,
+  ScaleGuideTemplate,
 } from '../lib/traitFeedbackTemplates';
 
 type ParticipantMeta = {
@@ -17,6 +23,31 @@ type ParticipantMeta = {
   name: string;
   current_level_grade: number | null;
   current_math_percentile: number | null;
+};
+
+type ReportMetricValue = {
+  score: number | null;
+  percentile: number | null;
+};
+
+type ParticipantScaleProfile = {
+  indicators: Record<'emotion' | 'belief' | 'learning_style', ReportMetricValue>;
+  subscales: Record<
+    | 'interest'
+    | 'emotion_reactivity'
+    | 'math_mindset'
+    | 'effort_outcome_belief'
+    | 'external_attribution_belief'
+    | 'self_concept'
+    | 'identity'
+    | 'agency_perception'
+    | 'question_understanding_belief'
+    | 'recovery_expectancy_belief'
+    | 'failure_interpretation_belief'
+    | 'metacognition'
+    | 'persistence',
+    ReportMetricValue
+  >;
 };
 
 function parseTypeCode(value: string | null): FeedbackTypeCode | null {
@@ -42,6 +73,16 @@ function formatCurrentLevel(levelGrade: number | null, percentile: number | null
 function formatZ(value: number | null): string {
   if (typeof value !== 'number' || !Number.isFinite(value)) return '-';
   return value.toFixed(2);
+}
+
+function formatScore(value: number | null): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '-';
+  return value.toFixed(2);
+}
+
+function formatPercentileLabel(value: number | null): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '-';
+  return `${value.toFixed(1)}백분위`;
 }
 
 function adjustmentLevelLabel(value: number | null): '높음' | '중간' | '낮음' | '미측정' {
@@ -82,7 +123,9 @@ function buildLearningAdjustmentHints(metacognitionZ: number | null, persistence
 export default function ReportPreviewPage() {
   const [participant, setParticipant] = React.useState<ParticipantMeta | null>(null);
   const [template, setTemplate] = React.useState<FeedbackTemplate | null>(null);
-  const [scaleDescription, setScaleDescription] = React.useState('');
+  const [scaleGuide, setScaleGuide] = React.useState<ScaleGuideTemplate>(
+    () => cloneScaleGuideTemplate(DEFAULT_SCALE_GUIDE_TEMPLATE),
+  );
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
@@ -104,6 +147,17 @@ export default function ReportPreviewPage() {
   const persistenceZ = React.useMemo(() => {
     const n = Number(params.get('persistenceZ'));
     return Number.isFinite(n) ? n : null;
+  }, [params]);
+  const scaleProfile = React.useMemo(() => {
+    const raw = String(params.get('scaleProfile') ?? '').trim();
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+      return parsed as ParticipantScaleProfile;
+    } catch {
+      return null;
+    }
   }, [params]);
 
   React.useEffect(() => {
@@ -163,6 +217,7 @@ export default function ReportPreviewPage() {
           : fallback;
 
         if (!cancelled) {
+          const parsedGuide = parseScaleGuideTemplate(row?.scale_description ?? '');
           setParticipant({
             id: String(p.id),
             name: String(p.name ?? '').trim() || '학생',
@@ -170,7 +225,7 @@ export default function ReportPreviewPage() {
             current_math_percentile: typeof p.current_math_percentile === 'number' ? p.current_math_percentile : null,
           });
           setTemplate(nextTemplate);
-          setScaleDescription(String(row?.scale_description ?? '').trim());
+          setScaleGuide(parsedGuide ?? cloneScaleGuideTemplate(DEFAULT_SCALE_GUIDE_TEMPLATE));
         }
       } catch (error: any) {
         if (!cancelled) {
@@ -263,14 +318,47 @@ export default function ReportPreviewPage() {
             </div>
           </div>
 
-          {scaleDescription ? (
-            <div style={{ border: `1px solid ${tokens.border}`, borderRadius: 12, background: tokens.panel, padding: '12px 14px', marginBottom: 12 }}>
-              <div style={{ fontWeight: 900, marginBottom: 8 }}>척도 설명 (공통)</div>
-              <div style={{ color: tokens.text, fontSize: 14, whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>
-                {scaleDescription}
-              </div>
+          <div style={{ border: `1px solid ${tokens.border}`, borderRadius: 12, background: tokens.panel, padding: '12px 14px', marginBottom: 12 }}>
+            <div style={{ fontWeight: 900, marginBottom: 8 }}>척도 설명 (공통)</div>
+            <div style={{ display: 'grid', gap: 10 }}>
+              {SCALE_GUIDE_INDICATORS.map((indicator) => (
+                <div key={`preview_scale_indicator_${indicator.key}`} style={{ border: `1px solid ${tokens.border}`, borderRadius: 10, background: tokens.field, padding: '10px 12px' }}>
+                  <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
+                    <div style={{ fontWeight: 800 }}>{indicator.title}</div>
+                    <div style={{ textAlign: 'right', fontSize: 12, color: tokens.textDim }}>
+                      {(() => {
+                        const metric = scaleProfile?.indicators[indicator.key] ?? null;
+                        return `${formatScore(metric?.score ?? null)}점 · ${formatPercentileLabel(metric?.percentile ?? null)}`;
+                      })()}
+                    </div>
+                  </div>
+                  <div style={{ color: tokens.textDim, fontSize: 13, marginTop: 4 }}>
+                    {scaleGuide.indicatorDescriptions[indicator.key]}
+                  </div>
+                  <div style={{ display: 'grid', gap: 6, marginTop: 8 }}>
+                    {SCALE_GUIDE_SUBSCALES
+                      .filter((subscale) => subscale.indicatorKey === indicator.key)
+                      .map((subscale) => (
+                        <div key={`preview_scale_sub_${subscale.key}`} style={{ border: `1px solid ${tokens.border}`, borderRadius: 8, background: tokens.panel, padding: '8px 10px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                            <div style={{ fontWeight: 700, fontSize: 13 }}>{subscale.title}</div>
+                            <div style={{ color: tokens.textDim, fontSize: 11 }}>
+                              {(() => {
+                                const metric = scaleProfile?.subscales[subscale.key] ?? null;
+                                return `${formatScore(metric?.score ?? null)}점 · ${formatPercentileLabel(metric?.percentile ?? null)}`;
+                              })()}
+                            </div>
+                          </div>
+                          <div style={{ color: tokens.textDim, fontSize: 12, marginTop: 4 }}>
+                            {scaleGuide.subscaleDescriptions[subscale.key]}
+                          </div>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              ))}
             </div>
-          ) : null}
+          </div>
 
           <div style={{ display: 'grid', gap: 10 }}>
             {template.sections.map((section) => (

@@ -50,7 +50,7 @@
 - `question_id`
 - `scale_name`
 - `include_in_alpha` (0/1)
-- `axis_tag` (`efficacy`, `growth_mindset`, `anxiety`, `emotional_stability` 등)
+- `axis_tag` (`belief_pos`, `belief_neg`, `emotion_pos`, `emotion_neg`)
 
 선택 컬럼:
 
@@ -59,7 +59,15 @@
   - `question_type='text'` 문항은 자동으로 `supplementary_numeric`로 보정됩니다.
 
 `axis_tag`는 4분면 분류에 사용됩니다.  
-필수축(`efficacy`, `growth_mindset`, `anxiety|emotional_stability`)이 누락되면 실행이 실패합니다.
+필수축(`belief_pos|belief_neg`, `emotion_pos|emotion_neg`)이 누락되면 실행이 실패합니다.
+기존 태그(`efficacy`, `growth_mindset`, `anxiety`, `emotional_stability`)는 자동 호환됩니다.
+
+방향성 규칙:
+
+- 기본 점수는 `reverse_item`을 반영한 `score_rc`
+- 유형축/검증용 점수는 `score_oriented`를 사용
+- `emotion_neg`, `belief_neg`는 `reverse_item=N`인 경우에만 추가 polarity 보정
+- 결과 해석은 항상 `axis_x/axis_y가 높을수록 바람직한 상태` 기준
 
 샘플 파일: [examples/scale_map.sample.csv](examples/scale_map.sample.csv)
 
@@ -179,12 +187,14 @@ python tools/trait_snapshot_v1/snapshot_v1.py `
 - alpha 계산 불가 스케일
 - 수준 컬럼 결측 비율 높음
 - statsmodels/scikit-learn 미설치로 고급 검증 스킵
+- negative axis(`emotion_neg`, `belief_neg`) polarity 보정 건수 존재
 
 ## 해석 원칙 (중요)
 
 - 유형을 실력의 **원인**으로 단정하지 않습니다.
 - 상관과 인과를 구분하고, p-value 단독보다 효과크기와 신뢰구간을 우선합니다.
 - 성장 가능성은 단면(1차)에서 확정하지 않고, 후속 라운드 추적으로 검증합니다.
+- 방향성 점검: `corr(정서반응성, 감정축) < 0`, `corr(외적귀인, 신념축) < 0` 조건을 주기적으로 확인합니다.
 
 ## raw CSV 추출 SQL
 

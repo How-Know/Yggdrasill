@@ -5,7 +5,9 @@ import { tokens } from '../theme';
 import {
   combineSectionText,
   cloneFeedbackTemplate,
+  cloneScaleGuideTemplate,
   DEFAULT_FEEDBACK_TEMPLATES,
+  DEFAULT_SCALE_GUIDE_TEMPLATE,
   FEEDBACK_SECTION_DEFINITIONS,
   FEEDBACK_TYPE_CODES,
   FeedbackSectionKey,
@@ -14,6 +16,15 @@ import {
   INTERPRETATION_FRAME_GUIDE_QUESTIONS,
   INTERPRETATION_FRAME_GUARDRAILS,
   mergeTemplateSections,
+  parseScaleGuideTemplate,
+  SCALE_GUIDE_INDICATORS,
+  SCALE_GUIDE_SUBSCALE_POLARITY,
+  SCALE_GUIDE_SUBSCALES,
+  SemanticPolarity,
+  ScaleGuideIndicatorKey,
+  ScaleGuideSubscaleKey,
+  ScaleGuideTemplate,
+  serializeScaleGuideTemplate,
 } from '../lib/traitFeedbackTemplates';
 import TypeLevelValidationPanel, { TypeLevelValidationSummary } from '../components/TypeLevelValidationPanel';
 
@@ -113,6 +124,16 @@ type SnapshotAxisMeta = {
   persistenceLabels: string[];
 };
 
+type ReportMetricValue = {
+  score: number | null;
+  percentile: number | null;
+};
+
+type ParticipantReportScaleProfile = {
+  indicators: Record<ScaleGuideIndicatorKey, ReportMetricValue>;
+  subscales: Record<ScaleGuideSubscaleKey, ReportMetricValue>;
+};
+
 type SnapshotAxisHover = {
   point: SnapshotAxisPoint;
   x: number;
@@ -166,6 +187,11 @@ function toNumber(value: unknown): number | null {
 function formatNumber(value: number | null | undefined, digits = 2) {
   if (typeof value !== 'number' || !Number.isFinite(value)) return '-';
   return value.toFixed(digits);
+}
+
+function formatPercentileLabel(value: number | null | undefined): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '-';
+  return `${value.toFixed(1)}백분위`;
 }
 
 function formatRoundLabel(value?: string | null) {
@@ -378,14 +404,146 @@ function shouldInvertLearningAdjustment(
   return false;
 }
 
+const SUBSCALE_CLASSIFIERS: Array<{ key: ScaleGuideSubscaleKey; pattern: RegExp }> = [
+  { key: 'interest', pattern: /(흥미|재미|관심|호기심|몰입|interest|enjoy|engage)/ },
+  { key: 'emotion_reactivity', pattern: /(정서반응|반응성|불안|긴장|위협|stress|anxiety|reactiv|fear|frustrat)/ },
+  { key: 'math_mindset', pattern: /(수학능력관|능력관|성장신념|고정신념|mindset|growthmindset|entity|incremental)/ },
+  { key: 'effort_outcome_belief', pattern: /(노력성과|노력-성과|노력결과|effort|outcome|성과연결)/ },
+  { key: 'external_attribution_belief', pattern: /(외적귀인|외부귀인|귀인|운|난이도|환경|externalattribution|luck|environment)/ },
+  { key: 'self_concept', pattern: /(자기개념|selfconcept|유능감|자기평가)/ },
+  { key: 'identity', pattern: /(정체성|identity|나와맞|나랑맞|수학은나)/ },
+  { key: 'agency_perception', pattern: /(주도성|주체성|통제가능|통제감|agency|ownership|selfdirect|control)/ },
+  { key: 'question_understanding_belief', pattern: /(질문|이해신념|질문이해|ask|question|understand|clarify)/ },
+  { key: 'recovery_expectancy_belief', pattern: /(회복기대|회복|다시좋아|recover|bounceback|resilien)/ },
+  { key: 'failure_interpretation_belief', pattern: /(실패해석|실패의미|오답해석|틀렸|failureinterpret|errorbelief)/ },
+  { key: 'metacognition', pattern: /(메타인지|자기점검|자기모니터|자기조절|전략점검|반성|metacog|selfmonitor|selfregulat|reflection|monitor)/ },
+  { key: 'persistence', pattern: /(문제지속|지속성|끈기|버티|포기|재도전|persist|grit|tenacit|retry|giveup|quit)/ },
+];
+
+const INDICATOR_SUBSCALE_KEYS: Record<ScaleGuideIndicatorKey, ScaleGuideSubscaleKey[]> = {
+  emotion: ['interest', 'emotion_reactivity'],
+  belief: [
+    'math_mindset',
+    'effort_outcome_belief',
+    'external_attribution_belief',
+    'self_concept',
+    'identity',
+    'agency_perception',
+    'question_understanding_belief',
+    'recovery_expectancy_belief',
+    'failure_interpretation_belief',
+  ],
+  learning_style: ['metacognition', 'persistence'],
+};
+
+type AxisRole = 'emotion_pos' | 'emotion_neg' | 'belief_pos' | 'belief_neg';
+
+function isReverseItem(value: unknown): boolean {
+  return String(value ?? '').trim().toUpperCase() === 'Y';
+}
+
+function axisRoleFromSubscale(subscale: ScaleGuideSubscaleKey | null): AxisRole | null {
+  if (!subscale) return null;
+  if (subscale === 'interest') return 'emotion_pos';
+  if (subscale === 'emotion_reactivity') return 'emotion_neg';
+  if (subscale === 'external_attribution_belief') return 'belief_neg';
+  if (subscale === 'metacognition' || subscale === 'persistence') return null;
+  return 'belief_pos';
+}
+
+function semanticSignForPolarityWithReverse(
+  polarity: SemanticPolarity,
+  reverseRaw: unknown,
+): 1 | -1 {
+  if (polarity === 1) return 1;
+  return isReverseItem(reverseRaw) ? 1 : -1;
+}
+
+function axisContributionSign(axisRole: AxisRole, reverseRaw: unknown): 1 | -1 {
+  if (axisRole === 'emotion_pos' || axisRole === 'belief_pos') return 1;
+  return semanticSignForPolarityWithReverse(-1, reverseRaw);
+}
+
+function orientedDisplayScoreForSubscale(
+  scoreRc: number,
+  subscaleKey: ScaleGuideSubscaleKey,
+  reverseRaw: unknown,
+  minScoreRaw: unknown,
+  maxScoreRaw: unknown,
+): number {
+  const polarity = SCALE_GUIDE_SUBSCALE_POLARITY[subscaleKey];
+  if (polarity === 1) return scoreRc;
+  if (isReverseItem(reverseRaw)) return scoreRc;
+  const minScore = toNumber(minScoreRaw);
+  const maxScore = toNumber(maxScoreRaw);
+  if (minScore == null || maxScore == null || !Number.isFinite(minScore + maxScore)) {
+    return scoreRc;
+  }
+  return (minScore + maxScore) - scoreRc;
+}
+
+function classifySubscaleFromQuestion(
+  tagsRaw: unknown,
+  traitRaw: unknown,
+  textRaw: unknown,
+  questionTypeRaw: unknown,
+): ScaleGuideSubscaleKey | null {
+  const candidates = buildQuestionCandidates(tagsRaw, traitRaw, textRaw);
+  const questionType = String(questionTypeRaw ?? '').trim().toLowerCase();
+  const scores: Record<ScaleGuideSubscaleKey, number> = {
+    interest: 0,
+    emotion_reactivity: 0,
+    math_mindset: 0,
+    effort_outcome_belief: 0,
+    external_attribution_belief: 0,
+    self_concept: 0,
+    identity: 0,
+    agency_perception: 0,
+    question_understanding_belief: 0,
+    recovery_expectancy_belief: 0,
+    failure_interpretation_belief: 0,
+    metacognition: 0,
+    persistence: 0,
+  };
+  candidates.forEach((raw) => {
+    const key = normalizeAxisSourceText(raw);
+    if (!key) return;
+    SUBSCALE_CLASSIFIERS.forEach((entry) => {
+      if (entry.pattern.test(key)) {
+        scores[entry.key] += 1;
+      }
+    });
+  });
+
+  if (questionType === 'text') {
+    if (scores.metacognition > scores.persistence && scores.metacognition > 0) return 'metacognition';
+    return 'persistence';
+  }
+
+  let best: ScaleGuideSubscaleKey | null = null;
+  let bestScore = 0;
+  (Object.entries(scores) as Array<[ScaleGuideSubscaleKey, number]>).forEach(([key, value]) => {
+    if (value > bestScore) {
+      best = key;
+      bestScore = value;
+    }
+  });
+  return bestScore > 0 ? best : null;
+}
+
 function classifyAxisFromQuestion(
   tagsRaw: unknown,
   traitRaw: unknown,
   textRaw: unknown,
-): 'emotion_pos' | 'emotion_neg' | 'belief' | null {
+): AxisRole | null {
+  const subscaleKey = classifySubscaleFromQuestion(tagsRaw, traitRaw, textRaw, 'scale');
+  const axisFromSubscale = axisRoleFromSubscale(subscaleKey);
+  if (axisFromSubscale) return axisFromSubscale;
+
   const candidates = buildQuestionCandidates(tagsRaw, traitRaw, textRaw);
 
-  let beliefScore = 0;
+  let beliefPosScore = 0;
+  let beliefNegScore = 0;
   let emotionPosScore = 0;
   let emotionNegScore = 0;
   let metacognitionScore = 0;
@@ -400,8 +558,11 @@ function classifyAxisFromQuestion(
     if (/(문제지속|지속성|지속|끈기|포기|끝까지|버티|꾸준|재도전|persist|grit|tenacit|retry|giveup|quit)/.test(key)) {
       persistenceScore += 1;
     }
+    if (/(외적귀인|외부귀인|귀인|운|난이도|환경|externalattribution|luck|environment)/.test(key)) {
+      beliefNegScore += 1;
+    }
     if (/(신념|효능|자기효능|성장신념|능력관|통제가능성|통제|노력성과|주도성|실패해석|회복기대|belief|efficacy|growth|mindset|control|attribution|resilien)/.test(key)) {
-      beliefScore += 1;
+      beliefPosScore += 1;
     }
     if (/(흥미|몰입|재미|호기심|정서안정|안정성|즐거움|자신감|interest|engage|enjoy|stability|confidence)/.test(key)) {
       emotionPosScore += 1;
@@ -414,9 +575,10 @@ function classifyAxisFromQuestion(
   // 메타인지/문제지속성 문항은 유형 축(감정/신념)에서 제외하고 보정 변수로 사용
   if (metacognitionScore > 0 || persistenceScore > 0) return null;
 
-  const maxScore = Math.max(beliefScore, emotionPosScore, emotionNegScore);
+  const maxScore = Math.max(beliefPosScore, beliefNegScore, emotionPosScore, emotionNegScore);
   if (maxScore <= 0) return null;
-  if (beliefScore === maxScore) return 'belief';
+  if (beliefNegScore === maxScore) return 'belief_neg';
+  if (beliefPosScore === maxScore) return 'belief_pos';
   if (emotionNegScore === maxScore) return 'emotion_neg';
   return 'emotion_pos';
 }
@@ -424,6 +586,44 @@ function classifyAxisFromQuestion(
 function computeMean(values: number[]): number | null {
   if (!values.length) return null;
   return values.reduce((sum, v) => sum + v, 0) / values.length;
+}
+
+function computePercentileRank(values: number[], target: number | null): number | null {
+  if (target == null || !Number.isFinite(target) || !values.length) return null;
+  const epsilon = 1e-9;
+  const less = values.filter((v) => v < (target - epsilon)).length;
+  const equal = values.filter((v) => Math.abs(v - target) <= epsilon).length;
+  const rank = (less + (equal * 0.5)) / values.length;
+  return Math.max(0, Math.min(100, Math.round(rank * 10000) / 100));
+}
+
+function emptyMetricValue(): ReportMetricValue {
+  return { score: null, percentile: null };
+}
+
+function buildEmptyReportScaleProfile(): ParticipantReportScaleProfile {
+  return {
+    indicators: {
+      emotion: emptyMetricValue(),
+      belief: emptyMetricValue(),
+      learning_style: emptyMetricValue(),
+    },
+    subscales: {
+      interest: emptyMetricValue(),
+      emotion_reactivity: emptyMetricValue(),
+      math_mindset: emptyMetricValue(),
+      effort_outcome_belief: emptyMetricValue(),
+      external_attribution_belief: emptyMetricValue(),
+      self_concept: emptyMetricValue(),
+      identity: emptyMetricValue(),
+      agency_perception: emptyMetricValue(),
+      question_understanding_belief: emptyMetricValue(),
+      recovery_expectancy_belief: emptyMetricValue(),
+      failure_interpretation_belief: emptyMetricValue(),
+      metacognition: emptyMetricValue(),
+      persistence: emptyMetricValue(),
+    },
+  };
 }
 
 function classifyEmotionBeliefType(emotionZ: number | null, beliefZ: number | null): AxisTypeCode {
@@ -445,34 +645,6 @@ function adjustmentLevelLabel(value: number | null): '높음' | '중간' | '낮�
   if (value >= 0.5) return '높음';
   if (value <= -0.5) return '낮음';
   return '중간';
-}
-
-function buildLearningAdjustmentHints(metacognitionZ: number | null, persistenceZ: number | null): string[] {
-  const hints: string[] = [];
-  const metacognitionLevel = adjustmentLevelLabel(metacognitionZ);
-  const persistenceLevel = adjustmentLevelLabel(persistenceZ);
-
-  if (metacognitionLevel === '높음') {
-    hints.push('메타인지가 높아 자기 점검과 전략 수정에 강점이 있습니다.');
-  } else if (metacognitionLevel === '낮음') {
-    hints.push('메타인지가 낮아 풀이 과정을 짧게 언어화하는 점검 루틴이 필요합니다.');
-  } else if (metacognitionLevel === '중간') {
-    hints.push('메타인지는 중간 수준으로, 전략 선택 근거를 말하게 하면 안정적으로 향상됩니다.');
-  } else {
-    hints.push('메타인지 보정값은 응답이 부족해 해석이 제한됩니다.');
-  }
-
-  if (persistenceLevel === '높음') {
-    hints.push('문제지속성이 높아 난도 상향 과제에서도 버티는 힘을 기대할 수 있습니다.');
-  } else if (persistenceLevel === '낮음') {
-    hints.push('문제지속성이 낮아 문제 수를 줄이고 즉시 피드백을 주는 단계형 설계가 효과적입니다.');
-  } else if (persistenceLevel === '중간') {
-    hints.push('문제지속성은 중간 수준으로, 짧은 성공 경험을 누적하면 안정적으로 유지됩니다.');
-  } else {
-    hints.push('문제지속성 보정값은 응답이 부족해 해석이 제한됩니다.');
-  }
-
-  return hints;
 }
 
 function buildDefaultTemplateMap(): Record<FeedbackTypeCode, FeedbackTemplate> {
@@ -511,6 +683,7 @@ export default function ResultsPage() {
   const [snapshotSubjectiveStats, setSnapshotSubjectiveStats] = React.useState<SnapshotSubjectiveStat[]>([]);
   const [snapshotMeta, setSnapshotMeta] = React.useState<SnapshotMeta | null>(null);
   const [snapshotAxisPoints, setSnapshotAxisPoints] = React.useState<SnapshotAxisPoint[]>([]);
+  const [reportScaleProfilesByParticipant, setReportScaleProfilesByParticipant] = React.useState<Record<string, ParticipantReportScaleProfile>>({});
   const [snapshotAxisMeta, setSnapshotAxisMeta] = React.useState<SnapshotAxisMeta>({
     emotionScaleNames: [],
     beliefScaleNames: [],
@@ -533,6 +706,9 @@ export default function ResultsPage() {
   const [templateSaving, setTemplateSaving] = React.useState(false);
   const [templateError, setTemplateError] = React.useState<string | null>(null);
   const [templateScaleDescription, setTemplateScaleDescription] = React.useState('');
+  const [templateScaleGuide, setTemplateScaleGuide] = React.useState<ScaleGuideTemplate>(
+    () => cloneScaleGuideTemplate(DEFAULT_SCALE_GUIDE_TEMPLATE),
+  );
   const [templateScaleDescriptionAvailable, setTemplateScaleDescriptionAvailable] = React.useState(true);
   const [templateCommonDirty, setTemplateCommonDirty] = React.useState(false);
   const [templateDirty, setTemplateDirty] = React.useState<Record<FeedbackTypeCode, boolean>>({
@@ -849,7 +1025,7 @@ export default function ResultsPage() {
             .select('answer_number, answer_text, question_id, response:question_responses(participant_id), question:questions(id, text, trait, tags, type, round_label, min_score, max_score, reverse, is_active)'),
           supabase
             .from('questions')
-            .select('id, text, trait, tags, type, round_label, is_active')
+            .select('id, text, trait, tags, type, round_label, min_score, max_score, reverse, is_active')
             .eq('is_active', true),
           supabase
             .from('survey_participants')
@@ -878,7 +1054,15 @@ export default function ResultsPage() {
 
         const scaleItemSetMap: Record<string, Set<string>> = {};
         const supplementaryQuestionMap: Record<string, string> = {};
-        const questionMetaById: Record<string, { text: string; trait: string; tags: string[]; type: string }> = {};
+        const questionMetaById: Record<string, {
+          text: string;
+          trait: string;
+          tags: string[];
+          type: string;
+          reverse: string;
+          minScore: number | null;
+          maxScore: number | null;
+        }> = {};
         (questionsRes.data as any[] || []).forEach((q) => {
           const qid = String(q?.id ?? '').trim();
           if (!qid) return;
@@ -889,7 +1073,15 @@ export default function ResultsPage() {
           const qTrait = String(q?.trait ?? '').trim();
           const qTags = parseTagList(q?.tags);
           const qType = String(q?.type ?? '').trim();
-          questionMetaById[qid] = { text: qText, trait: qTrait, tags: qTags, type: qType };
+          questionMetaById[qid] = {
+            text: qText,
+            trait: qTrait,
+            tags: qTags,
+            type: qType,
+            reverse: String(q?.reverse ?? 'N').toUpperCase(),
+            minScore: toNumber(q?.min_score),
+            maxScore: toNumber(q?.max_score),
+          };
           if (qType === 'scale') {
             const scaleName = qTrait || '미분류';
             if (!scaleItemSetMap[scaleName]) scaleItemSetMap[scaleName] = new Set<string>();
@@ -932,6 +1124,9 @@ export default function ResultsPage() {
                 trait: String(q?.trait ?? '').trim(),
                 tags: parseTagList(q?.tags),
                 type: 'scale',
+                reverse: String(q?.reverse ?? 'N').toUpperCase(),
+                minScore: toNumber(q?.min_score),
+                maxScore: toNumber(q?.max_score),
               };
             }
             if (!scaleItemSetMap[scaleName]) scaleItemSetMap[scaleName] = new Set<string>();
@@ -953,6 +1148,9 @@ export default function ResultsPage() {
                 trait: String(q?.trait ?? '').trim(),
                 tags: parseTagList(q?.tags),
                 type: 'text',
+                reverse: 'N',
+                minScore: null,
+                maxScore: null,
               };
             }
             if (!supplementaryQuestionMap[qid]) {
@@ -1050,6 +1248,11 @@ export default function ResultsPage() {
         const axisByParticipant: Record<string, { emotion: number[]; belief: number[] }> = {};
         const emotionAxisLabelSet = new Set<string>();
         const beliefAxisLabelSet = new Set<string>();
+        const directionAudit = {
+          negativeWithReverseY: 0,
+          negativeWithReverseN: 0,
+          positiveWithReverseY: 0,
+        };
         Object.entries(typeAxisQuestionScoreMap).forEach(([questionId, byStudent]) => {
           const values = Object.values(byStudent).filter(
             (v): v is number => typeof v === 'number' && Number.isFinite(v),
@@ -1066,6 +1269,13 @@ export default function ResultsPage() {
             questionMeta?.text,
           );
           if (!axisRole) return;
+          const reverseY = isReverseItem(questionMeta?.reverse);
+          if (axisRole === 'emotion_neg' || axisRole === 'belief_neg') {
+            if (reverseY) directionAudit.negativeWithReverseY += 1;
+            else directionAudit.negativeWithReverseN += 1;
+          } else if (reverseY) {
+            directionAudit.positiveWithReverseY += 1;
+          }
 
           const labelSource = (questionMeta?.tags ?? []).map(tagLeafLabel).find(Boolean)
             || questionMeta?.text
@@ -1079,15 +1289,13 @@ export default function ResultsPage() {
             if (!axisByParticipant[participantId]) {
               axisByParticipant[participantId] = { emotion: [], belief: [] };
             }
-            if (axisRole === 'belief') {
-              axisByParticipant[participantId].belief.push(z);
+            const sign = axisContributionSign(axisRole, questionMeta?.reverse);
+            const zOriented = z * sign;
+            if (axisRole === 'belief_pos' || axisRole === 'belief_neg') {
+              axisByParticipant[participantId].belief.push(zOriented);
               beliefAxisLabelSet.add(labelSource);
-            } else if (axisRole === 'emotion_pos') {
-              axisByParticipant[participantId].emotion.push(z);
-              emotionAxisLabelSet.add(labelSource);
-            } else {
-              // 불안/긴장/위협 계열은 부호를 반전해 "높을수록 안정적인 감정" 축으로 통일
-              axisByParticipant[participantId].emotion.push(-z);
+            } else if (axisRole === 'emotion_pos' || axisRole === 'emotion_neg') {
+              axisByParticipant[participantId].emotion.push(zOriented);
               emotionAxisLabelSet.add(labelSource);
             }
           });
@@ -1143,6 +1351,118 @@ export default function ResultsPage() {
           });
         });
 
+        const subscaleKeys = SCALE_GUIDE_SUBSCALES.map((item) => item.key);
+        const subscaleRawByParticipant: Record<ScaleGuideSubscaleKey, Record<string, number[]>> = {
+          interest: {},
+          emotion_reactivity: {},
+          math_mindset: {},
+          effort_outcome_belief: {},
+          external_attribution_belief: {},
+          self_concept: {},
+          identity: {},
+          agency_perception: {},
+          question_understanding_belief: {},
+          recovery_expectancy_belief: {},
+          failure_interpretation_belief: {},
+          metacognition: {},
+          persistence: {},
+        };
+        Object.entries(allQuestionScoreMap).forEach(([questionId, byStudent]) => {
+          const questionMeta = questionMetaById[questionId];
+          const subscaleKey = classifySubscaleFromQuestion(
+            questionMeta?.tags,
+            questionMeta?.trait,
+            questionMeta?.text,
+            questionMeta?.type,
+          );
+          if (!subscaleKey) return;
+          Object.entries(byStudent).forEach(([participantId, score]) => {
+            if (!Number.isFinite(score)) return;
+            const orientedScore = (
+              questionMeta?.type === 'scale'
+                ? orientedDisplayScoreForSubscale(
+                  score,
+                  subscaleKey,
+                  questionMeta?.reverse,
+                  questionMeta?.minScore,
+                  questionMeta?.maxScore,
+                )
+                : score
+            );
+            if (!Number.isFinite(orientedScore)) return;
+            if (!subscaleRawByParticipant[subscaleKey][participantId]) {
+              subscaleRawByParticipant[subscaleKey][participantId] = [];
+            }
+            subscaleRawByParticipant[subscaleKey][participantId].push(orientedScore);
+          });
+        });
+
+        const subscaleScoreByParticipant: Record<string, Partial<Record<ScaleGuideSubscaleKey, number>>> = {};
+        const subscalePopulationValues: Record<ScaleGuideSubscaleKey, number[]> = {
+          interest: [],
+          emotion_reactivity: [],
+          math_mindset: [],
+          effort_outcome_belief: [],
+          external_attribution_belief: [],
+          self_concept: [],
+          identity: [],
+          agency_perception: [],
+          question_understanding_belief: [],
+          recovery_expectancy_belief: [],
+          failure_interpretation_belief: [],
+          metacognition: [],
+          persistence: [],
+        };
+        subscaleKeys.forEach((subscaleKey) => {
+          Object.entries(subscaleRawByParticipant[subscaleKey]).forEach(([participantId, values]) => {
+            const score = computeMean(values);
+            if (score == null || !Number.isFinite(score)) return;
+            if (!subscaleScoreByParticipant[participantId]) subscaleScoreByParticipant[participantId] = {};
+            subscaleScoreByParticipant[participantId][subscaleKey] = score;
+            subscalePopulationValues[subscaleKey].push(score);
+          });
+        });
+
+        const indicatorKeys = SCALE_GUIDE_INDICATORS.map((item) => item.key);
+        const indicatorScoreByParticipant: Record<string, Partial<Record<ScaleGuideIndicatorKey, number>>> = {};
+        const indicatorPopulationValues: Record<ScaleGuideIndicatorKey, number[]> = {
+          emotion: [],
+          belief: [],
+          learning_style: [],
+        };
+        Array.from(participantSet).forEach((participantId) => {
+          indicatorKeys.forEach((indicatorKey) => {
+            const scoreValues = INDICATOR_SUBSCALE_KEYS[indicatorKey]
+              .map((subscaleKey) => subscaleScoreByParticipant[participantId]?.[subscaleKey])
+              .filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
+            const score = computeMean(scoreValues);
+            if (score == null || !Number.isFinite(score)) return;
+            if (!indicatorScoreByParticipant[participantId]) indicatorScoreByParticipant[participantId] = {};
+            indicatorScoreByParticipant[participantId][indicatorKey] = score;
+            indicatorPopulationValues[indicatorKey].push(score);
+          });
+        });
+
+        const nextReportScaleProfilesByParticipant: Record<string, ParticipantReportScaleProfile> = {};
+        Array.from(participantSet).forEach((participantId) => {
+          const profile = buildEmptyReportScaleProfile();
+          subscaleKeys.forEach((subscaleKey) => {
+            const score = subscaleScoreByParticipant[participantId]?.[subscaleKey] ?? null;
+            profile.subscales[subscaleKey] = {
+              score,
+              percentile: computePercentileRank(subscalePopulationValues[subscaleKey], score),
+            };
+          });
+          indicatorKeys.forEach((indicatorKey) => {
+            const score = indicatorScoreByParticipant[participantId]?.[indicatorKey] ?? null;
+            profile.indicators[indicatorKey] = {
+              score,
+              percentile: computePercentileRank(indicatorPopulationValues[indicatorKey], score),
+            };
+          });
+          nextReportScaleProfilesByParticipant[participantId] = profile;
+        });
+
         const nextAxisPoints: SnapshotAxisPoint[] = Array.from(participantSet)
           .map((participantId) => {
             const axis = axisByParticipant[participantId];
@@ -1172,6 +1492,7 @@ export default function ResultsPage() {
           setSnapshotScaleStats(nextStats);
           setSnapshotSubjectiveStats(nextSubjectiveStats);
           setSnapshotAxisPoints(nextAxisPoints);
+          setReportScaleProfilesByParticipant(nextReportScaleProfilesByParticipant);
           setSnapshotAxisMeta({
             emotionScaleNames: Array.from(emotionAxisLabelSet).sort((a, b) => a.localeCompare(b)),
             beliefScaleNames: Array.from(beliefAxisLabelSet).sort((a, b) => a.localeCompare(b)),
@@ -1185,7 +1506,7 @@ export default function ResultsPage() {
             coreItemCount,
             supplementaryItemCount,
             totalItemCount: coreItemCount + supplementaryItemCount,
-            scaleBasis: '유형축=emotion+belief(tags), 보정축=metacognition+persistence(text 포함)',
+            scaleBasis: `유형축=emotion+belief(tags), 보정축=metacognition+persistence(text 포함), 방향보정(neg Y:${directionAudit.negativeWithReverseY}, neg N:${directionAudit.negativeWithReverseN}, pos Y:${directionAudit.positiveWithReverseY})`,
           });
         }
       } catch (error: any) {
@@ -1193,6 +1514,7 @@ export default function ResultsPage() {
           setSnapshotScaleStats([]);
           setSnapshotSubjectiveStats([]);
           setSnapshotAxisPoints([]);
+          setReportScaleProfilesByParticipant({});
           setSnapshotAxisMeta({ emotionScaleNames: [], beliefScaleNames: [], metacognitionLabels: [], persistenceLabels: [] });
           setSnapshotMeta(null);
           setSnapshotError(error?.message ?? 'Scale_Stats 계산 실패');
@@ -1334,6 +1656,15 @@ export default function ResultsPage() {
     [selectedReportParticipantId, snapshotAxisPoints],
   );
 
+  const selectedReportScaleProfile = React.useMemo(
+    () => (
+      selectedReportPoint
+        ? (reportScaleProfilesByParticipant[selectedReportPoint.participantId] ?? buildEmptyReportScaleProfile())
+        : null
+    ),
+    [reportScaleProfilesByParticipant, selectedReportPoint],
+  );
+
   const selectedReportTypeCode = React.useMemo(
     () => (selectedReportPoint ? toFeedbackTypeCode(selectedReportPoint.typeCode) : null),
     [selectedReportPoint],
@@ -1407,9 +1738,13 @@ export default function ResultsPage() {
             updatedAt: row?.updated_at ?? null,
           };
         });
+        const parsedGuide = parseScaleGuideTemplate(sharedScaleDescription);
+        const normalizedGuide = parsedGuide ?? cloneScaleGuideTemplate(DEFAULT_SCALE_GUIDE_TEMPLATE);
+        const serializedGuide = serializeScaleGuideTemplate(normalizedGuide);
         if (!cancelled) {
           setFeedbackTemplates(next);
-          setTemplateScaleDescription(sharedScaleDescription);
+          setTemplateScaleGuide(normalizedGuide);
+          setTemplateScaleDescription(parsedGuide ? sharedScaleDescription : serializedGuide);
           setTemplateScaleDescriptionAvailable(scaleDescriptionAvailable);
           setTemplateCommonDirty(false);
           setTemplateDirty({ TYPE_A: false, TYPE_B: false, TYPE_C: false, TYPE_D: false });
@@ -1605,9 +1940,31 @@ export default function ResultsPage() {
     setTemplateDirty((prev) => ({ ...prev, [editingTemplateType]: true }));
   }
 
-  function updateTemplateScaleDescription(value: string) {
-    setTemplateScaleDescription(value);
+  function updateTemplateScaleGuide(nextGuide: ScaleGuideTemplate) {
+    const normalized = cloneScaleGuideTemplate(nextGuide);
+    setTemplateScaleGuide(normalized);
+    setTemplateScaleDescription(serializeScaleGuideTemplate(normalized));
     setTemplateCommonDirty(true);
+  }
+
+  function updateTemplateScaleIndicatorDescription(key: ScaleGuideIndicatorKey, value: string) {
+    updateTemplateScaleGuide({
+      ...templateScaleGuide,
+      indicatorDescriptions: {
+        ...templateScaleGuide.indicatorDescriptions,
+        [key]: value,
+      },
+    });
+  }
+
+  function updateTemplateSubscaleDescription(key: ScaleGuideSubscaleKey, value: string) {
+    updateTemplateScaleGuide({
+      ...templateScaleGuide,
+      subscaleDescriptions: {
+        ...templateScaleGuide.subscaleDescriptions,
+        [key]: value,
+      },
+    });
   }
 
   function resetEditingTemplateToDefault() {
@@ -1616,6 +1973,10 @@ export default function ResultsPage() {
       [editingTemplateType]: cloneFeedbackTemplate(DEFAULT_FEEDBACK_TEMPLATES[editingTemplateType]),
     }));
     setTemplateDirty((prev) => ({ ...prev, [editingTemplateType]: true }));
+  }
+
+  function resetTemplateScaleGuideToDefault() {
+    updateTemplateScaleGuide(cloneScaleGuideTemplate(DEFAULT_SCALE_GUIDE_TEMPLATE));
   }
 
   async function saveEditingTemplate() {
@@ -1721,8 +2082,156 @@ export default function ResultsPage() {
     if (selectedReportPoint.beliefZ != null) qs.set('beliefZ', String(selectedReportPoint.beliefZ));
     if (selectedReportPoint.metacognitionZ != null) qs.set('metacognitionZ', String(selectedReportPoint.metacognitionZ));
     if (selectedReportPoint.persistenceZ != null) qs.set('persistenceZ', String(selectedReportPoint.persistenceZ));
+    if (selectedReportScaleProfile) qs.set('scaleProfile', JSON.stringify(selectedReportScaleProfile));
     window.location.href = `/report-preview?${qs.toString()}`;
   }
+
+  const templateEditorPanel = (
+    <div style={{ border:`1px solid ${tokens.border}`, borderRadius:12, overflow:'hidden', background: tokens.panel, marginBottom: 14 }}>
+      <div style={{ padding:'12px 14px', borderBottom:`1px solid ${tokens.border}`, background: tokens.panelAlt }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:12 }}>
+          <div style={{ fontWeight: 900 }}>유형별 공통 템플릿 편집 (공통 70% + 미세 조정 30%)</div>
+          <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+            <button
+              onClick={resetEditingTemplateToDefault}
+              style={{ height:34, padding:'0 10px', borderRadius:8, border:`1px solid ${tokens.border}`, background:'#1E1E1E', color: tokens.textDim, cursor:'pointer' }}
+            >
+              유형 기본값
+            </button>
+            <button
+              onClick={resetTemplateScaleGuideToDefault}
+              style={{ height:34, padding:'0 10px', borderRadius:8, border:`1px solid ${tokens.border}`, background:'#1E1E1E', color: tokens.textDim, cursor:'pointer' }}
+            >
+              척도 설명 기본값
+            </button>
+            <button
+              onClick={() => { void saveEditingTemplate(); }}
+              disabled={templateSaving}
+              style={{ height:34, padding:'0 12px', borderRadius:8, border:`1px solid ${tokens.border}`, background: tokens.accent, color:'#fff', cursor:'pointer', opacity: templateSaving ? 0.7 : 1 }}
+            >
+              {templateSaving ? '저장 중...' : '템플릿 저장'}
+            </button>
+          </div>
+        </div>
+      </div>
+      <div style={{ padding:'12px 14px' }}>
+        <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginBottom: 10 }}>
+          {FEEDBACK_TYPE_CODES.map((code) => (
+            <button
+              key={`template_type_${code}`}
+              onClick={() => setEditingTemplateType(code)}
+              style={{
+                ...chipBaseStyle,
+                ...(editingTemplateType === code ? chipActiveStyle : {}),
+              }}
+            >
+              {axisTypeLabel(code)}
+            </button>
+          ))}
+        </div>
+
+        <div style={{ display:'grid', gridTemplateColumns:'1.2fr 1fr', gap:12, marginBottom: 10 }}>
+          <div>
+            <div style={{ color: tokens.textDim, fontSize:12, marginBottom: 6 }}>템플릿 이름</div>
+            <input
+              value={editingTemplate?.templateName ?? ''}
+              onChange={(e) => updateEditingTemplateName(e.target.value)}
+              style={{ width:'100%', height:36, padding:'0 10px', borderRadius:8, border:`1px solid ${tokens.border}`, background: tokens.field, color: tokens.text }}
+            />
+          </div>
+          <div>
+            <div style={{ color: tokens.textDim, fontSize:12, marginBottom: 6 }}>마지막 저장 시각</div>
+            <div style={{ height:36, display:'flex', alignItems:'center', padding:'0 10px', borderRadius:8, border:`1px solid ${tokens.border}`, background: tokens.field, color: tokens.textDim }}>
+              {editingTemplate?.updatedAt ? formatDateTime(editingTemplate.updatedAt) : '저장 이력 없음'}
+            </div>
+          </div>
+        </div>
+
+        <div style={{ marginBottom: 12, border:`1px solid ${tokens.border}`, borderRadius:10, padding:'10px 12px', background: tokens.field }}>
+          <div style={{ fontWeight: 800, marginBottom: 6 }}>공통 지표 설명 (메인 2개 + 보조 1개)</div>
+          <div style={{ color: tokens.textDim, fontSize: 12, marginBottom: 10 }}>
+            학생용 피드백에서 감정/신념/학습 방식 구조로 표시됩니다.
+          </div>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(3, minmax(0, 1fr))', gap:8 }}>
+            {SCALE_GUIDE_INDICATORS.map((indicator) => (
+              <div key={`scale_indicator_editor_${indicator.key}`} style={{ border:`1px solid ${tokens.border}`, borderRadius:8, background: tokens.panel, padding:'8px 10px' }}>
+                <div style={{ fontWeight: 800, fontSize: 12, marginBottom: 4 }}>{indicator.title}</div>
+                <textarea
+                  value={templateScaleGuide.indicatorDescriptions[indicator.key]}
+                  onChange={(e) => updateTemplateScaleIndicatorDescription(indicator.key, e.target.value)}
+                  rows={3}
+                  style={{ width:'100%', resize:'vertical', padding:'8px 10px', borderRadius:8, border:`1px solid ${tokens.border}`, background: tokens.field, color: tokens.text, fontFamily:'inherit', fontSize:12, boxSizing:'border-box' }}
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ marginBottom: 10, border:`1px solid ${tokens.border}`, borderRadius:10, padding:'10px 12px', background: tokens.field }}>
+          <div style={{ fontWeight: 800, marginBottom: 6 }}>하위 척도 설명 (13개)</div>
+          <div style={{ color: tokens.textDim, fontSize: 12, marginBottom: 10 }}>
+            각 척도 설명은 학생용 리포트의 세부 카드에 반영됩니다.
+          </div>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(2, minmax(0, 1fr))', gap:8 }}>
+            {SCALE_GUIDE_SUBSCALES.map((subscale, index) => (
+              <div key={`scale_sub_editor_${subscale.key}`} style={{ border:`1px solid ${tokens.border}`, borderRadius:8, background: tokens.panel, padding:'8px 10px' }}>
+                <div style={{ fontWeight: 800, fontSize: 12, marginBottom: 4 }}>{index + 1}. {subscale.title}</div>
+                <textarea
+                  value={templateScaleGuide.subscaleDescriptions[subscale.key]}
+                  onChange={(e) => updateTemplateSubscaleDescription(subscale.key, e.target.value)}
+                  rows={3}
+                  style={{ width:'100%', resize:'vertical', padding:'8px 10px', borderRadius:8, border:`1px solid ${tokens.border}`, background: tokens.field, color: tokens.text, fontFamily:'inherit', fontSize:12, boxSizing:'border-box' }}
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {!templateScaleDescriptionAvailable ? (
+          <div style={{ color: tokens.danger, fontSize:11, marginBottom: 8 }}>
+            DB 마이그레이션 적용 전에는 척도 설명을 저장할 수 없습니다.
+          </div>
+        ) : null}
+        {templateLoading ? (
+          <div style={{ color: tokens.textDim, fontSize: 12 }}>템플릿 로드 중...</div>
+        ) : null}
+        {templateError ? (
+          <div style={{ color: tokens.danger, fontSize: 12, marginBottom: 8 }}>{templateError}</div>
+        ) : null}
+        {(templateDirty[editingTemplateType] || templateCommonDirty) ? (
+          <div style={{ color: tokens.textDim, fontSize: 12, marginBottom: 8 }}>저장되지 않은 변경 사항이 있습니다.</div>
+        ) : null}
+
+        <div style={{ display:'grid', gap:10 }}>
+          {editingTemplate?.sections.map((section) => (
+            <div key={`template_section_editor_${editingTemplateType}_${section.key}`} style={{ border:`1px solid ${tokens.border}`, borderRadius:10, padding:'10px 12px', background: tokens.field }}>
+              <div style={{ fontWeight: 800, marginBottom: 8 }}>{section.title}</div>
+              <div style={{ display:'grid', gap:8 }}>
+                <div>
+                  <div style={{ color: tokens.textDim, fontSize:12, marginBottom:4 }}>공통 70% (common)</div>
+                  <textarea
+                    value={section.common}
+                    onChange={(e) => updateEditingTemplateSection(section.key, 'common', e.target.value)}
+                    rows={3}
+                    style={{ width:'100%', resize:'vertical', padding:'8px 10px', borderRadius:8, border:`1px solid ${tokens.border}`, background: tokens.panel, color: tokens.text, fontFamily:'inherit', fontSize:13, boxSizing:'border-box' }}
+                  />
+                </div>
+                <div>
+                  <div style={{ color: tokens.textDim, fontSize:12, marginBottom:4 }}>미세 조정 30% (fine_tune)</div>
+                  <textarea
+                    value={section.fine_tune}
+                    onChange={(e) => updateEditingTemplateSection(section.key, 'fine_tune', e.target.value)}
+                    rows={2}
+                    style={{ width:'100%', resize:'vertical', padding:'8px 10px', borderRadius:8, border:`1px solid ${tokens.border}`, background: tokens.panel, color: tokens.text, fontFamily:'inherit', fontSize:13, boxSizing:'border-box' }}
+                  />
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
 
   return (
     <div>
@@ -2555,6 +3064,8 @@ export default function ResultsPage() {
             </div>
           </div>
 
+          {templateEditorPanel}
+
           <div style={{ marginBottom: 14 }}>
             <TypeLevelValidationPanel
               axisPoints={snapshotAxisPoints}
@@ -2631,104 +3142,71 @@ export default function ResultsPage() {
                         </div>
                       </div>
 
-                      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
-                        <div>
-                          <div style={{ color: tokens.textDim, fontSize:12, marginBottom:4 }}>감정</div>
-                          {(() => {
-                            const pct = zToDisplayPercent(selectedReportPoint.emotionZ);
-                            return (
-                              <>
-                                <div style={{ height:8, borderRadius:999, background:'#2A2A2A', overflow:'hidden' }}>
-                                  <div style={{ width:`${pct ?? 0}%`, height:'100%', background:'#F59E0B' }} />
+                      <div style={{ marginTop: 4, display:'grid', gap:10 }}>
+                        {SCALE_GUIDE_INDICATORS.map((indicator) => {
+                          const indicatorMetric = selectedReportScaleProfile?.indicators[indicator.key] ?? emptyMetricValue();
+                          const indicatorColor = (
+                            indicator.key === 'emotion'
+                              ? '#F59E0B'
+                              : indicator.key === 'belief'
+                                ? '#60A5FA'
+                                : '#34D399'
+                          );
+                          const indicatorPct = indicatorMetric.percentile ?? 0;
+                          const relatedSubscales = SCALE_GUIDE_SUBSCALES.filter(
+                            (subscale) => subscale.indicatorKey === indicator.key,
+                          );
+                          return (
+                            <div key={`report_indicator_card_${indicator.key}`} style={{ border:`1px solid ${tokens.border}`, borderRadius:8, padding:'10px 12px', background: tokens.panel }}>
+                              <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap:8 }}>
+                                <div>
+                                  <div style={{ fontWeight: 900, fontSize: 13 }}>{indicator.title}</div>
+                                  <div style={{ color: tokens.textDim, fontSize: 12, marginTop: 4 }}>
+                                    {templateScaleGuide.indicatorDescriptions[indicator.key]}
+                                  </div>
                                 </div>
-                                <div style={{ color: tokens.textDim, fontSize:11, marginTop:4 }}>
-                                  z={formatNumber(selectedReportPoint.emotionZ)} {selectedReportPoint.emotionZ == null ? '' : '(높을수록 감정 안정/흥미)'}
+                                <div style={{ textAlign:'right', fontSize: 12 }}>
+                                  <div>점수 {formatNumber(indicatorMetric.score)}</div>
+                                  <div style={{ color: tokens.textDim, marginTop: 2 }}>
+                                    전체 위치 {formatPercentileLabel(indicatorMetric.percentile)}
+                                  </div>
                                 </div>
-                              </>
-                            );
-                          })()}
-                        </div>
-                        <div>
-                          <div style={{ color: tokens.textDim, fontSize:12, marginBottom:4 }}>신념</div>
-                          {(() => {
-                            const pct = zToDisplayPercent(selectedReportPoint.beliefZ);
-                            return (
-                              <>
-                                <div style={{ height:8, borderRadius:999, background:'#2A2A2A', overflow:'hidden' }}>
-                                  <div style={{ width:`${pct ?? 0}%`, height:'100%', background:'#60A5FA' }} />
-                                </div>
-                                <div style={{ color: tokens.textDim, fontSize:11, marginTop:4 }}>
-                                  z={formatNumber(selectedReportPoint.beliefZ)} {selectedReportPoint.beliefZ == null ? '' : '(높을수록 학습 신념)'}
-                                </div>
-                              </>
-                            );
-                          })()}
-                        </div>
-                      </div>
+                              </div>
 
-                      <div style={{ marginTop: 10, border:`1px solid ${tokens.border}`, borderRadius:8, padding:'10px 12px', background: tokens.panel }}>
-                        <div style={{ fontWeight: 800, fontSize: 12, marginBottom: 8 }}>
-                          학습 방식 보정 (유형 미세조정)
-                        </div>
-                        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
-                          <div>
-                            <div style={{ color: tokens.textDim, fontSize:12, marginBottom:4 }}>메타인지</div>
-                            {(() => {
-                              const pct = zToDisplayPercent(selectedReportPoint.metacognitionZ);
-                              return (
-                                <>
-                                  <div style={{ height:8, borderRadius:999, background:'#2A2A2A', overflow:'hidden' }}>
-                                    <div style={{ width:`${pct ?? 0}%`, height:'100%', background:'#A78BFA' }} />
-                                  </div>
-                                  <div style={{ color: tokens.textDim, fontSize:11, marginTop:4 }}>
-                                    z={formatNumber(selectedReportPoint.metacognitionZ)} {selectedReportPoint.metacognitionZ == null ? '' : '(높을수록 자기 점검/전략화)'}
-                                  </div>
-                                </>
-                              );
-                            })()}
-                          </div>
-                          <div>
-                            <div style={{ color: tokens.textDim, fontSize:12, marginBottom:4 }}>문제지속성</div>
-                            {(() => {
-                              const pct = zToDisplayPercent(selectedReportPoint.persistenceZ);
-                              return (
-                                <>
-                                  <div style={{ height:8, borderRadius:999, background:'#2A2A2A', overflow:'hidden' }}>
-                                    <div style={{ width:`${pct ?? 0}%`, height:'100%', background:'#34D399' }} />
-                                  </div>
-                                  <div style={{ color: tokens.textDim, fontSize:11, marginTop:4 }}>
-                                    z={formatNumber(selectedReportPoint.persistenceZ)} {selectedReportPoint.persistenceZ == null ? '' : '(높을수록 끈기/지속성)'}
-                                  </div>
-                                </>
-                              );
-                            })()}
-                          </div>
-                        </div>
-                        <div style={{ color: tokens.textDim, fontSize: 12, marginTop: 8 }}>
-                          수준: 메타인지 {adjustmentLevelLabel(selectedReportPoint.metacognitionZ)} · 문제지속성 {adjustmentLevelLabel(selectedReportPoint.persistenceZ)}
-                        </div>
-                        <div style={{ marginTop: 8, display:'grid', gap:4 }}>
-                          {buildLearningAdjustmentHints(
-                            selectedReportPoint.metacognitionZ,
-                            selectedReportPoint.persistenceZ,
-                          ).map((hint) => (
-                            <div key={`${selectedReportPoint.participantId}_${hint}`} style={{ color: tokens.textDim, fontSize: 12 }}>
-                              - {hint}
+                              <div style={{ marginTop: 8, height:8, borderRadius:999, background:'#2A2A2A', overflow:'hidden' }}>
+                                <div style={{ width:`${indicatorPct}%`, height:'100%', background: indicatorColor }} />
+                              </div>
+
+                              <div style={{ marginTop: 10, display:'grid', gap:8 }}>
+                                {relatedSubscales.map((subscale) => {
+                                  const metric = selectedReportScaleProfile?.subscales[subscale.key] ?? emptyMetricValue();
+                                  const subscalePct = metric.percentile ?? 0;
+                                  const subscaleIndex = SCALE_GUIDE_SUBSCALES.findIndex((item) => item.key === subscale.key) + 1;
+                                  return (
+                                    <div key={`report_subscale_card_${selectedReportPoint.participantId}_${subscale.key}`} style={{ border:`1px solid ${tokens.border}`, borderRadius:8, padding:'8px 10px', background: tokens.field }}>
+                                      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:8 }}>
+                                        <div style={{ fontWeight: 800, fontSize: 12 }}>{subscaleIndex}. {subscale.title}</div>
+                                        <div style={{ color: tokens.textDim, fontSize: 11 }}>
+                                          {formatNumber(metric.score)}점 · {formatPercentileLabel(metric.percentile)}
+                                        </div>
+                                      </div>
+                                      <div style={{ color: tokens.textDim, fontSize: 12, marginTop: 4, whiteSpace:'pre-wrap' }}>
+                                        {templateScaleGuide.subscaleDescriptions[subscale.key]}
+                                      </div>
+                                      <div style={{ marginTop: 6, height:6, borderRadius:999, background:'#2A2A2A', overflow:'hidden' }}>
+                                        <div style={{ width:`${subscalePct}%`, height:'100%', background: indicatorColor }} />
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
                             </div>
-                          ))}
-                        </div>
+                          );
+                        })}
                       </div>
 
                       {selectedReportTemplate ? (
                         <div style={{ marginTop: 12, display:'grid', gap:10 }}>
-                          {templateScaleDescription.trim() ? (
-                            <div style={{ border:`1px solid ${tokens.border}`, borderRadius:8, padding:'10px 12px', background: tokens.panel }}>
-                              <div style={{ fontWeight: 800, fontSize: 13, marginBottom: 6 }}>척도 설명 (공통)</div>
-                              <div style={{ whiteSpace:'pre-wrap', color: tokens.text, fontSize: 13 }}>
-                                {templateScaleDescription}
-                              </div>
-                            </div>
-                          ) : null}
                           {selectedReportTemplate.sections.map((section) => (
                             <div
                               key={`student_section_${selectedReportPoint.participantId}_${section.key}`}
@@ -2772,12 +3250,6 @@ export default function ResultsPage() {
                     {' '}
                     문제지속성 {formatNumber(selectedReportPoint.persistenceZ)} ({adjustmentLevelLabel(selectedReportPoint.persistenceZ)})
                   </div>
-                  {templateScaleDescription.trim() ? (
-                    <div style={{ border:`1px solid ${tokens.border}`, borderRadius:8, padding:'10px 12px', background: tokens.field }}>
-                      <div style={{ fontWeight: 800, fontSize: 13, marginBottom: 6 }}>척도 설명 (공통)</div>
-                      <div style={{ whiteSpace:'pre-wrap', fontSize:13 }}>{templateScaleDescription}</div>
-                    </div>
-                  ) : null}
                   {FEEDBACK_SECTION_DEFINITIONS.map((def) => (
                     <div
                       key={`teacher_section_${selectedReportPoint.participantId}_${def.key}`}
@@ -2794,115 +3266,6 @@ export default function ResultsPage() {
             </div>
           </div>
 
-          <div style={{ border:`1px solid ${tokens.border}`, borderRadius:12, overflow:'hidden', background: tokens.panel }}>
-            <div style={{ padding:'12px 14px', borderBottom:`1px solid ${tokens.border}`, background: tokens.panelAlt }}>
-              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:12 }}>
-                <div style={{ fontWeight: 900 }}>유형별 공통 템플릿 편집 (공통 70% + 미세 조정 30%)</div>
-                <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-                  <button
-                    onClick={resetEditingTemplateToDefault}
-                    style={{ height:34, padding:'0 10px', borderRadius:8, border:`1px solid ${tokens.border}`, background:'#1E1E1E', color: tokens.textDim, cursor:'pointer' }}
-                  >
-                    기본값 불러오기
-                  </button>
-                  <button
-                    onClick={() => { void saveEditingTemplate(); }}
-                    disabled={templateSaving}
-                    style={{ height:34, padding:'0 12px', borderRadius:8, border:`1px solid ${tokens.border}`, background: tokens.accent, color:'#fff', cursor:'pointer', opacity: templateSaving ? 0.7 : 1 }}
-                  >
-                    {templateSaving ? '저장 중...' : '템플릿 저장'}
-                  </button>
-                </div>
-              </div>
-            </div>
-            <div style={{ padding:'12px 14px' }}>
-              <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginBottom: 10 }}>
-                {FEEDBACK_TYPE_CODES.map((code) => (
-                  <button
-                    key={`template_type_${code}`}
-                    onClick={() => setEditingTemplateType(code)}
-                    style={{
-                      ...chipBaseStyle,
-                      ...(editingTemplateType === code ? chipActiveStyle : {}),
-                    }}
-                  >
-                    {axisTypeLabel(code)}
-                  </button>
-                ))}
-              </div>
-
-              <div style={{ display:'grid', gridTemplateColumns:'1.2fr 1fr', gap:12, marginBottom: 10 }}>
-                <div>
-                  <div style={{ color: tokens.textDim, fontSize:12, marginBottom: 6 }}>템플릿 이름</div>
-                  <input
-                    value={editingTemplate?.templateName ?? ''}
-                    onChange={(e) => updateEditingTemplateName(e.target.value)}
-                    style={{ width:'100%', height:36, padding:'0 10px', borderRadius:8, border:`1px solid ${tokens.border}`, background: tokens.field, color: tokens.text }}
-                  />
-                </div>
-                <div>
-                  <div style={{ color: tokens.textDim, fontSize:12, marginBottom: 6 }}>마지막 저장 시각</div>
-                  <div style={{ height:36, display:'flex', alignItems:'center', padding:'0 10px', borderRadius:8, border:`1px solid ${tokens.border}`, background: tokens.field, color: tokens.textDim }}>
-                    {editingTemplate?.updatedAt ? formatDateTime(editingTemplate.updatedAt) : '저장 이력 없음'}
-                  </div>
-                </div>
-              </div>
-
-              <div style={{ marginBottom: 10 }}>
-                <div style={{ color: tokens.textDim, fontSize:12, marginBottom: 6 }}>척도 설명 (모든 유형 공통)</div>
-                <textarea
-                  value={templateScaleDescription}
-                  onChange={(e) => updateTemplateScaleDescription(e.target.value)}
-                  rows={4}
-                  placeholder={'예) 감정: 수학을 대할 때의 정서 상태, 신념: 배울 수 있다고 느끼는 힘'}
-                  style={{ width:'100%', resize:'vertical', padding:'8px 10px', borderRadius:8, border:`1px solid ${tokens.border}`, background: tokens.field, color: tokens.text, fontFamily:'inherit', fontSize:13, boxSizing:'border-box' }}
-                />
-                {!templateScaleDescriptionAvailable ? (
-                  <div style={{ color: tokens.danger, fontSize:11, marginTop: 6 }}>
-                    DB 마이그레이션 적용 전에는 척도 설명을 저장할 수 없습니다.
-                  </div>
-                ) : null}
-              </div>
-
-              {templateLoading ? (
-                <div style={{ color: tokens.textDim, fontSize: 12 }}>템플릿 로드 중...</div>
-              ) : null}
-              {templateError ? (
-                <div style={{ color: tokens.danger, fontSize: 12, marginBottom: 8 }}>{templateError}</div>
-              ) : null}
-              {(templateDirty[editingTemplateType] || templateCommonDirty) ? (
-                <div style={{ color: tokens.textDim, fontSize: 12, marginBottom: 8 }}>저장되지 않은 변경 사항이 있습니다.</div>
-              ) : null}
-
-              <div style={{ display:'grid', gap:10 }}>
-                {editingTemplate?.sections.map((section) => (
-                  <div key={`template_section_editor_${editingTemplateType}_${section.key}`} style={{ border:`1px solid ${tokens.border}`, borderRadius:10, padding:'10px 12px', background: tokens.field }}>
-                    <div style={{ fontWeight: 800, marginBottom: 8 }}>{section.title}</div>
-                    <div style={{ display:'grid', gap:8 }}>
-                      <div>
-                        <div style={{ color: tokens.textDim, fontSize:12, marginBottom:4 }}>공통 70% (common)</div>
-                        <textarea
-                          value={section.common}
-                          onChange={(e) => updateEditingTemplateSection(section.key, 'common', e.target.value)}
-                          rows={3}
-                          style={{ width:'100%', resize:'vertical', padding:'8px 10px', borderRadius:8, border:`1px solid ${tokens.border}`, background: tokens.panel, color: tokens.text, fontFamily:'inherit', fontSize:13, boxSizing:'border-box' }}
-                        />
-                      </div>
-                      <div>
-                        <div style={{ color: tokens.textDim, fontSize:12, marginBottom:4 }}>미세 조정 30% (fine_tune)</div>
-                        <textarea
-                          value={section.fine_tune}
-                          onChange={(e) => updateEditingTemplateSection(section.key, 'fine_tune', e.target.value)}
-                          rows={2}
-                          style={{ width:'100%', resize:'vertical', padding:'8px 10px', borderRadius:8, border:`1px solid ${tokens.border}`, background: tokens.panel, color: tokens.text, fontFamily:'inherit', fontSize:13, boxSizing:'border-box' }}
-                        />
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
         </div>
       )}
     </div>

@@ -8,6 +8,7 @@ from typing import Dict, List
 
 import numpy as np
 import pandas as pd
+from scipy.stats import spearmanr
 
 from core_stats import (
     classify_type,
@@ -274,6 +275,71 @@ def _fixed_scale_stats_dict(scale_stats: pd.DataFrame) -> Dict[str, Dict]:
     return out
 
 
+def _directional_corr_warnings(df_long: pd.DataFrame, student_type: pd.DataFrame) -> List[str]:
+    warnings: List[str] = []
+    if df_long.empty or student_type.empty:
+        return warnings
+    core = df_long.loc[df_long["analysis_group"] == "core_scale"].copy()
+    if core.empty:
+        return warnings
+
+    neg = core.loc[core["axis_tag"].isin(["emotion_neg", "belief_neg"])].copy()
+    if neg.empty:
+        warnings.append("direction-check: emotion_neg/belief_neg 문항이 없어 상관 부호 점검을 건너뛰었습니다.")
+        return warnings
+
+    neg_reverse_y = (
+        (neg["question_type"] == "scale")
+        & (neg["reverse_item"] == "Y")
+        & neg["min_score"].notna()
+        & neg["max_score"].notna()
+    )
+    neg["negative_trait_score"] = neg["score_rc"]
+    neg.loc[neg_reverse_y, "negative_trait_score"] = (
+        neg.loc[neg_reverse_y, "min_score"]
+        + neg.loc[neg_reverse_y, "max_score"]
+        - neg.loc[neg_reverse_y, "score_rc"]
+    )
+
+    by_student = (
+        neg.groupby(["student_id", "axis_tag"], as_index=False)
+        .agg(negative_trait_score=("negative_trait_score", "mean"))
+        .pivot(index="student_id", columns="axis_tag", values="negative_trait_score")
+        .reset_index()
+    )
+    merged = student_type[["student_id", "axis_x", "axis_y"]].merge(by_student, on="student_id", how="left")
+
+    if "emotion_neg" in merged.columns:
+        frame = merged[["emotion_neg", "axis_y"]].dropna()
+        if frame.shape[0] >= 3:
+            rho = float(spearmanr(frame["emotion_neg"], frame["axis_y"], nan_policy="omit").correlation)
+            if np.isfinite(rho):
+                if rho >= 0:
+                    warnings.append(
+                        f"direction-check 경고: corr(정서반응성, 감정축)={rho:.3f} (기대: < 0)"
+                    )
+                else:
+                    warnings.append(
+                        f"direction-check 통과: corr(정서반응성, 감정축)={rho:.3f} (< 0)"
+                    )
+
+    if "belief_neg" in merged.columns:
+        frame = merged[["belief_neg", "axis_x"]].dropna()
+        if frame.shape[0] >= 3:
+            rho = float(spearmanr(frame["belief_neg"], frame["axis_x"], nan_policy="omit").correlation)
+            if np.isfinite(rho):
+                if rho >= 0:
+                    warnings.append(
+                        f"direction-check 경고: corr(외적귀인, 신념축)={rho:.3f} (기대: < 0)"
+                    )
+                else:
+                    warnings.append(
+                        f"direction-check 통과: corr(외적귀인, 신념축)={rho:.3f} (< 0)"
+                    )
+
+    return warnings
+
+
 def _to_iso_timestamp(value: str) -> str:
     ts = pd.to_datetime(value, utc=True, errors="coerce")
     if pd.isna(ts):
@@ -347,6 +413,7 @@ def main() -> int:
         axis_config=axis_config,
     )
     student_type["snapshot_version"] = args.snapshot_version
+    warnings.extend(_directional_corr_warnings(core_df, student_type))
 
     by_current_level = _build_by_current_level(student_scores)
     student_item_matrix = _build_student_item_matrix(long_df)
@@ -411,6 +478,7 @@ def main() -> int:
             "analysis_group",
             "raw_score",
             "score_rc",
+            "score_oriented",
             "response_ms",
             "response_time_sec",
             "reverse_item",

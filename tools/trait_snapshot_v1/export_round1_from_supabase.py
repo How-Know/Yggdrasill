@@ -157,14 +157,14 @@ def infer_axis_tag(question: dict) -> str:
     text = str(question.get("text") or "").strip()
     candidates = tags + [trait, text]
     keys = [normalize_key(x) for x in candidates if x]
-    if any(re.search(r"growth|mindset|성장신념|능력관", k) for k in keys):
-        return "growth_mindset"
-    if any(re.search(r"efficacy|효능|자기효능|통제|주도|노력성과", k) for k in keys):
-        return "efficacy"
-    if any(re.search(r"anxiety|불안|긴장|위협|스트레스|반응성|fear|threat", k) for k in keys):
-        return "anxiety"
+    if any(re.search(r"외적귀인|외부귀인|귀인|운|난이도|환경|externalattribution|luck|environment", k) for k in keys):
+        return "belief_neg"
+    if any(re.search(r"growth|mindset|성장신념|능력관|efficacy|효능|자기효능|통제|주도|노력성과|회복기대|실패해석|자기개념|정체성|질문|이해", k) for k in keys):
+        return "belief_pos"
+    if any(re.search(r"anxiety|불안|긴장|위협|스트레스|반응성|fear|threat|reactiv", k) for k in keys):
+        return "emotion_neg"
     if any(re.search(r"정서안정|안정성|흥미|몰입|재미|enjoy|stability|interest", k) for k in keys):
-        return "emotional_stability"
+        return "emotion_pos"
     return ""
 
 
@@ -366,10 +366,10 @@ def main() -> int:
     core_indices = [i for i, row in enumerate(scale_map_rows) if row["analysis_group"] == "core_scale"]
     core_axis_tags = {scale_map_rows[i]["axis_tag"] for i in core_indices}
     fill_cursor = 0
-    required = ["efficacy", "growth_mindset"]
-    has_emotion = ("anxiety" in core_axis_tags) or ("emotional_stability" in core_axis_tags)
+    required = ["belief_pos"]
+    has_emotion = ("emotion_neg" in core_axis_tags) or ("emotion_pos" in core_axis_tags)
     if not has_emotion:
-        required.append("anxiety")
+        required.append("emotion_neg")
     for axis_tag in required:
         if axis_tag in core_axis_tags:
             continue
