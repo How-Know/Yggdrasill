@@ -166,6 +166,8 @@ const LEVEL_BAND_OPTIONS: Array<{ code: LevelBandCode; label: string }> = [
   { code: 'G6', label: '6등급 (그 이하)' },
 ];
 
+const PREVIEW_PEER_K = 5;
+
 function parseRoundNo(value: unknown): number | null {
   const raw = String(value ?? '').trim();
   if (!raw) return null;
@@ -242,6 +244,22 @@ function normalizeLevelGrade(value: unknown): number | null {
   if (!Number.isInteger(n)) return null;
   if (n < 0 || n > 6) return null;
   return n;
+}
+
+function resolveLevelGrade(levelGrade: unknown, percentile: unknown): number | null {
+  const explicit = normalizeLevelGrade(levelGrade);
+  if (explicit != null) return explicit;
+  const pct = normalizePercentile(percentile);
+  if (pct == null) return null;
+  return percentileToLevelGrade(pct);
+}
+
+function computeVectorStrengthPercent(emotionZ: number | null, beliefZ: number | null): number | null {
+  if (emotionZ == null || beliefZ == null) return null;
+  if (!Number.isFinite(emotionZ) || !Number.isFinite(beliefZ)) return null;
+  const magnitude = Math.sqrt((emotionZ ** 2) + (beliefZ ** 2));
+  const maxMagnitude = Math.sqrt((3 ** 2) + (3 ** 2));
+  return Math.max(0, Math.min(100, (magnitude / maxMagnitude) * 100));
 }
 
 function formatPercentileInputValue(value: number | null): string {
@@ -1665,6 +1683,63 @@ export default function ResultsPage() {
     [reportScaleProfilesByParticipant, selectedReportPoint],
   );
 
+  const selectedReportPeerSummary = React.useMemo(() => {
+    const empty = {
+      avgLevelGrade: null as number | null,
+      sampleN: 0,
+      source: 'none' as 'none' | 'knn' | 'global',
+    };
+    if (!selectedReportPoint) {
+      return empty;
+    }
+    if (selectedReportPoint.emotionZ == null || selectedReportPoint.beliefZ == null) {
+      return empty;
+    }
+    const anchorX = selectedReportPoint.emotionZ;
+    const anchorY = selectedReportPoint.beliefZ;
+    if (!Number.isFinite(anchorX) || !Number.isFinite(anchorY)) {
+      return empty;
+    }
+
+    const candidatePeers = snapshotAxisPoints
+      .filter((point) => point.participantId !== selectedReportPoint.participantId)
+      .map((point) => {
+        if (point.emotionZ == null || point.beliefZ == null) return null;
+        if (!Number.isFinite(point.emotionZ) || !Number.isFinite(point.beliefZ)) return null;
+        const levelGrade = resolveLevelGrade(point.currentLevelGrade, point.currentMathPercentile);
+        if (levelGrade == null) return null;
+        const dx = point.emotionZ - anchorX;
+        const dy = point.beliefZ - anchorY;
+        return {
+          distance: Math.sqrt((dx ** 2) + (dy ** 2)),
+          levelGrade,
+        };
+      })
+      .filter((row): row is { distance: number; levelGrade: number } => row != null)
+      .sort((a, b) => a.distance - b.distance);
+
+    if (candidatePeers.length > 0) {
+      const neighbors = candidatePeers.slice(0, Math.min(PREVIEW_PEER_K, candidatePeers.length));
+      const avgLevelGrade = neighbors.reduce((sum, row) => sum + row.levelGrade, 0) / neighbors.length;
+      return {
+        avgLevelGrade,
+        sampleN: neighbors.length,
+        source: 'knn' as const,
+      };
+    }
+
+    const globalLevels = snapshotAxisPoints
+      .map((point) => resolveLevelGrade(point.currentLevelGrade, point.currentMathPercentile))
+      .filter((levelGrade): levelGrade is number => levelGrade != null);
+    if (!globalLevels.length) return empty;
+    const globalAvg = globalLevels.reduce((sum, row) => sum + row, 0) / globalLevels.length;
+    return {
+      avgLevelGrade: globalAvg,
+      sampleN: globalLevels.length,
+      source: 'global' as const,
+    };
+  }, [selectedReportPoint, snapshotAxisPoints]);
+
   const selectedReportTypeCode = React.useMemo(
     () => (selectedReportPoint ? toFeedbackTypeCode(selectedReportPoint.typeCode) : null),
     [selectedReportPoint],
@@ -2083,6 +2158,26 @@ export default function ResultsPage() {
     if (selectedReportPoint.metacognitionZ != null) qs.set('metacognitionZ', String(selectedReportPoint.metacognitionZ));
     if (selectedReportPoint.persistenceZ != null) qs.set('persistenceZ', String(selectedReportPoint.persistenceZ));
     if (selectedReportScaleProfile) qs.set('scaleProfile', JSON.stringify(selectedReportScaleProfile));
+    const vectorStrength = computeVectorStrengthPercent(
+      selectedReportPoint.emotionZ,
+      selectedReportPoint.beliefZ,
+    );
+    if (vectorStrength != null) qs.set('vectorStrength', String(vectorStrength));
+
+    const emotionPercentile = selectedReportScaleProfile?.indicators.emotion.percentile ?? null;
+    const beliefPercentile = selectedReportScaleProfile?.indicators.belief.percentile ?? null;
+    const metacognitionPercentile = selectedReportScaleProfile?.subscales.metacognition.percentile ?? null;
+    const persistencePercentile = selectedReportScaleProfile?.subscales.persistence.percentile ?? null;
+    if (emotionPercentile != null) qs.set('emotionPercentile', String(emotionPercentile));
+    if (beliefPercentile != null) qs.set('beliefPercentile', String(beliefPercentile));
+    if (metacognitionPercentile != null) qs.set('metacognitionPercentile', String(metacognitionPercentile));
+    if (persistencePercentile != null) qs.set('persistencePercentile', String(persistencePercentile));
+    qs.set('roundNo', '1');
+    qs.set('peerSampleN', String(selectedReportPeerSummary.sampleN));
+    qs.set('peerSource', selectedReportPeerSummary.source);
+    if (selectedReportPeerSummary.avgLevelGrade != null) {
+      qs.set('peerAvgLevelGrade', String(selectedReportPeerSummary.avgLevelGrade));
+    }
     window.location.href = `/report-preview?${qs.toString()}`;
   }
 
