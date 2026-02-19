@@ -2,6 +2,12 @@ import React from 'react';
 import { supabase } from '../lib/supabaseClient';
 import { tokens } from '../theme';
 import {
+  buildCautionsText,
+  buildCoreStrengthsText,
+  buildGrowthCheckpointText,
+  buildLearningTraitsText,
+  buildProfileSummaryText,
+  buildTeachingStrategyText,
   combineSectionText,
   cloneScaleGuideTemplate,
   cloneFeedbackTemplate,
@@ -10,6 +16,7 @@ import {
   FEEDBACK_TYPE_CODES,
   FeedbackTemplate,
   FeedbackTypeCode,
+  getSubscaleFeedback,
   mergeTemplateSections,
   parseScaleGuideTemplate,
   SCALE_GUIDE_INDICATORS,
@@ -145,6 +152,7 @@ export default function ReportPreviewPage() {
   const peerAvgLevelGradeParam = React.useMemo(() => parseNumberParam(params, 'peerAvgLevelGrade'), [params]);
   const peerSampleNParam = React.useMemo(() => parseNumberParam(params, 'peerSampleN'), [params]);
   const vectorStrengthParam = React.useMemo(() => parseNumberParam(params, 'vectorStrength'), [params]);
+  const studentGradeParam = React.useMemo(() => parseNumberParam(params, 'studentGrade'), [params]);
   const roundNoParam = React.useMemo(() => parseNumberParam(params, 'roundNo'), [params]);
   const peerSourceParam = React.useMemo(() => parsePeerSourceParam(params), [params]);
   const scaleProfile = React.useMemo(() => {
@@ -297,10 +305,65 @@ export default function ReportPreviewPage() {
     () => template?.sections.find((s) => s.key === 'profile_summary') ?? null,
     [template],
   );
+  const profileSummaryText = React.useMemo(() => {
+    const dbText = profileSummarySection ? combineSectionText(profileSummarySection) : '';
+    const isPlaceholder = !dbText || /공통 피드백.*작성하세요|학생별 미세 조정.*작성하세요/.test(dbText);
+    if (!isPlaceholder) return dbText;
+    return buildProfileSummaryText(typeCode, vectorStrength, studentGradeParam, peerAvgLevelGrade);
+  }, [peerAvgLevelGrade, profileSummarySection, studentGradeParam, typeCode, vectorStrength]);
   const nonProfileSections = React.useMemo(
     () => (template?.sections ?? []).filter((s) => s.key !== 'profile_summary'),
     [template],
   );
+
+  const metacognitionPctResolved = React.useMemo(
+    () => barMetrics.find((m) => m.key === 'metacognition')?.percentile ?? null,
+    [barMetrics],
+  );
+  const persistencePctResolved = React.useMemo(
+    () => barMetrics.find((m) => m.key === 'persistence')?.percentile ?? null,
+    [barMetrics],
+  );
+
+  const learningTraitsText = React.useMemo(() => {
+    const ltSection = nonProfileSections.find((s) => s.key === 'learning_traits');
+    const dbText = ltSection ? combineSectionText(ltSection) : '';
+    const isPlaceholder = !dbText || /공통 피드백.*작성하세요|학생별 미세 조정.*작성하세요/.test(dbText);
+    if (!isPlaceholder) return dbText;
+    return buildLearningTraitsText(typeCode, vectorStrength, studentGradeParam, metacognitionPctResolved, persistencePctResolved);
+  }, [metacognitionPctResolved, nonProfileSections, persistencePctResolved, studentGradeParam, typeCode, vectorStrength]);
+
+  const coreStrengthsText = React.useMemo(() => {
+    const swSection = nonProfileSections.find((s) => s.key === 'strength_weakness');
+    const dbText = swSection ? combineSectionText(swSection) : '';
+    const isPlaceholder = !dbText || /공통 피드백.*작성하세요|학생별 미세 조정.*작성하세요/.test(dbText);
+    if (!isPlaceholder) return dbText;
+    return buildCoreStrengthsText(typeCode, vectorStrength, metacognitionPctResolved, persistencePctResolved);
+  }, [metacognitionPctResolved, nonProfileSections, persistencePctResolved, typeCode, vectorStrength]);
+
+  const cautionsText = React.useMemo(() => {
+    const cSection = nonProfileSections.find((s) => s.key === 'cautions');
+    const dbText = cSection ? combineSectionText(cSection) : '';
+    const isPlaceholder = !dbText || /공통 피드백.*작성하세요|학생별 미세 조정.*작성하세요/.test(dbText);
+    if (!isPlaceholder) return dbText;
+    return buildCautionsText(typeCode, vectorStrength, metacognitionPctResolved, persistencePctResolved);
+  }, [metacognitionPctResolved, nonProfileSections, persistencePctResolved, typeCode, vectorStrength]);
+
+  const teachingStrategyText = React.useMemo(() => {
+    const tsSection = nonProfileSections.find((s) => s.key === 'teaching_strategy');
+    const dbText = tsSection ? combineSectionText(tsSection) : '';
+    const isPlaceholder = !dbText || /공통 피드백.*작성하세요|학생별 미세 조정.*작성하세요/.test(dbText);
+    if (!isPlaceholder) return dbText;
+    return buildTeachingStrategyText(typeCode);
+  }, [nonProfileSections, typeCode]);
+
+  const growthCheckpointText = React.useMemo(() => {
+    const gcSection = nonProfileSections.find((s) => s.key === 'growth_checkpoint');
+    const dbText = gcSection ? combineSectionText(gcSection) : '';
+    const isPlaceholder = !dbText || /공통 피드백.*작성하세요|학생별 미세 조정.*작성하세요/.test(dbText);
+    if (!isPlaceholder) return dbText;
+    return buildGrowthCheckpointText(typeCode, vectorStrength);
+  }, [nonProfileSections, typeCode, vectorStrength]);
 
   return (
     <div style={{ maxWidth: 980, margin: '0 auto', paddingBottom: 24 }}>
@@ -450,65 +513,103 @@ export default function ReportPreviewPage() {
             </div>
           </div>
 
-          {/* ── 1. 프로파일 요약 ── */}
+          {/* ── 디바이더 ── */}
+          <div style={{ height: 1, background: tokens.border, margin: '36px 0' }} />
+
+          {/* ── 1. 프로파일 요약 + 자세히 보기 ── */}
           {profileSummarySection ? (
-            <div style={{ marginTop: 32, marginBottom: 16 }}>
-              <div style={{ fontWeight: 900, fontSize: 24, marginBottom: 8 }}>{`1. ${profileSummarySection.title}`}</div>
-              <div style={{ paddingLeft: 20, color: tokens.text, fontSize: 14, whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>
-                {combineSectionText(profileSummarySection) || '내용을 입력해 주세요.'}
+            <div style={{ marginBottom: 28 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 12 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, background: tokens.accent, color: '#fff', fontWeight: 900, fontSize: 14, flexShrink: 0 }}>1</span>
+                  <span style={{ fontWeight: 900, fontSize: 20, color: tokens.accent }}>{profileSummarySection.title.replace(/\s*\(상세점수\s*표시\)\s*/g, '').replace(/\s*\(상세\s*점수\s*표시\)\s*/g, '')}</span>
+                </div>
+                <button
+                  onClick={() => setScaleGuideExpanded((prev) => !prev)}
+                  style={{ height: 32, padding: '0 14px', borderRadius: 8, border: `1px solid ${tokens.border}`, background: 'transparent', color: scaleGuideExpanded ? tokens.accent : tokens.textDim, cursor: 'pointer', fontSize: 13, fontWeight: 700, flexShrink: 0, transition: 'color 0.15s' }}
+                >
+                  {scaleGuideExpanded ? '접기' : '자세히 보기'}
+                </button>
               </div>
+              <div style={{ paddingLeft: 38, color: tokens.text, fontSize: 14, whiteSpace: 'pre-wrap', lineHeight: 1.7 }}>
+                {profileSummaryText || '내용을 입력해 주세요.'}
+              </div>
+
+              {scaleGuideExpanded ? (
+                <div style={{ marginTop: 18, display: 'grid', gap: 50 }}>
+                  {(() => {
+                    let subIdx = 0;
+                    return SCALE_GUIDE_INDICATORS.map((indicator) => {
+                      const indMetric = scaleProfile?.indicators[indicator.key] ?? null;
+                      const subs = SCALE_GUIDE_SUBSCALES.filter((sub) => sub.indicatorKey === indicator.key);
+                      return (
+                        <div key={`sg_ind_${indicator.key}`}>
+                          <div style={{ border: `1px solid ${tokens.border}`, borderRadius: 10, background: tokens.panel, padding: '10px 14px', marginBottom: 12 }}>
+                            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 }}>
+                              <div style={{ fontWeight: 900, fontSize: 18 }}>{indicator.title}</div>
+                              <div style={{ fontSize: 13, color: tokens.textDim, flexShrink: 0 }}>
+                                {scaleGuide.indicatorDescriptions[indicator.key]}
+                              </div>
+                            </div>
+                            <div style={{ fontSize: 12, color: tokens.textDim, marginTop: 4 }}>
+                              {formatScore(indMetric?.score ?? null)}점 · {formatPercentileLabel(indMetric?.percentile ?? null)}
+                            </div>
+                          </div>
+                          <div style={{ display: 'grid', gap: 24 }}>
+                            {subs.map((sub) => {
+                              subIdx += 1;
+                              const circled = String.fromCodePoint(0x2460 + subIdx - 1);
+                              const subMetric = scaleProfile?.subscales[sub.key] ?? null;
+                              const fb = getSubscaleFeedback(sub.key, subMetric?.percentile ?? null);
+                              return (
+                                <div key={`sg_sub_${sub.key}`} style={{ paddingLeft: 8, borderLeft: `2px solid ${tokens.border}` }}>
+                                  <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 }}>
+                                    <div style={{ fontWeight: 700, fontSize: 16 }}>
+                                      <span style={{ marginRight: 6, opacity: 0.5 }}>{circled}</span>{sub.title}
+                                    </div>
+                                    <div style={{ color: tokens.textDim, fontSize: 12, flexShrink: 0 }}>{scaleGuide.subscaleDescriptions[sub.key]}</div>
+                                  </div>
+                                  <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, marginTop: 4 }}>
+                                    {fb ? (
+                                      <div style={{ fontSize: 14, fontWeight: 600, color: fb.color, lineHeight: 1.5, paddingLeft: 12 }}>{fb.text}</div>
+                                    ) : <div />}
+                                    <div style={{ color: tokens.textDim, fontSize: 12, flexShrink: 0 }}>
+                                      {formatScore(subMetric?.score ?? null)}점 · {formatPercentileLabel(subMetric?.percentile ?? null)}
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    });
+                  })()}
+                </div>
+              ) : null}
             </div>
           ) : null}
 
-          {/* ── 자세히 보기 (척도 설명) ── */}
-          <div style={{ marginBottom: 16 }}>
-            <div style={{ display: 'flex', justifyContent: 'center' }}>
-              <button
-                onClick={() => setScaleGuideExpanded((prev) => !prev)}
-                style={{ height: 42, padding: '0 22px', borderRadius: 10, border: `1px solid ${tokens.border}`, background: 'transparent', color: tokens.text, cursor: 'pointer', fontSize: 16, fontWeight: 800 }}
-              >
-                {scaleGuideExpanded ? '접기' : '자세히 보기'}
-              </button>
-            </div>
-            {scaleGuideExpanded ? (
-              <div style={{ border: `1px solid ${tokens.border}`, borderRadius: 12, background: tokens.panel, padding: '12px 14px', marginTop: 8 }}>
-                <div style={{ display: 'grid', gap: 10 }}>
-                  {SCALE_GUIDE_INDICATORS.map((indicator) => (
-                    <div key={`sg_ind_${indicator.key}`} style={{ border: `1px solid ${tokens.border}`, borderRadius: 10, background: tokens.field, padding: '10px 12px' }}>
-                      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
-                        <div style={{ fontWeight: 800 }}>{indicator.title}</div>
-                        <div style={{ textAlign: 'right', fontSize: 12, color: tokens.textDim }}>
-                          {(() => { const m = scaleProfile?.indicators[indicator.key] ?? null; return `${formatScore(m?.score ?? null)}점 · ${formatPercentileLabel(m?.percentile ?? null)}`; })()}
-                        </div>
-                      </div>
-                      <div style={{ color: tokens.textDim, fontSize: 13, marginTop: 4 }}>{scaleGuide.indicatorDescriptions[indicator.key]}</div>
-                      <div style={{ display: 'grid', gap: 6, marginTop: 8 }}>
-                        {SCALE_GUIDE_SUBSCALES.filter((sub) => sub.indicatorKey === indicator.key).map((sub) => (
-                          <div key={`sg_sub_${sub.key}`} style={{ border: `1px solid ${tokens.border}`, borderRadius: 8, background: tokens.panel, padding: '8px 10px' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                              <div style={{ fontWeight: 700, fontSize: 13 }}>{sub.title}</div>
-                              <div style={{ color: tokens.textDim, fontSize: 11 }}>
-                                {(() => { const m = scaleProfile?.subscales[sub.key] ?? null; return `${formatScore(m?.score ?? null)}점 · ${formatPercentileLabel(m?.percentile ?? null)}`; })()}
-                              </div>
-                            </div>
-                            <div style={{ color: tokens.textDim, fontSize: 12, marginTop: 4 }}>{scaleGuide.subscaleDescriptions[sub.key]}</div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-          </div>
-
           {/* ── 2~6. 나머지 섹션 ── */}
-          <div style={{ display: 'grid', gap: 16 }}>
+          <div style={{ display: 'grid', gap: 28 }}>
             {nonProfileSections.map((section, index) => (
               <div key={`sec_${section.key}`}>
-                <div style={{ fontWeight: 900, fontSize: 24, marginBottom: 8 }}>{`${index + 2}. ${section.title}`}</div>
-                <div style={{ paddingLeft: 20, color: tokens.text, fontSize: 14, whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>
-                  {combineSectionText(section) || '내용을 입력해 주세요.'}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, background: tokens.accent, color: '#fff', fontWeight: 900, fontSize: 14, flexShrink: 0 }}>{index + 2}</span>
+                  <span style={{ fontWeight: 900, fontSize: 20, color: tokens.accent }}>{section.title}</span>
+                </div>
+                <div style={{ paddingLeft: 38, color: tokens.text, fontSize: 14, whiteSpace: 'pre-wrap', lineHeight: 1.7 }}>
+                  {section.key === 'learning_traits'
+                    ? (learningTraitsText || '내용을 입력해 주세요.')
+                    : section.key === 'strength_weakness'
+                      ? (coreStrengthsText || '내용을 입력해 주세요.')
+                      : section.key === 'cautions'
+                        ? (cautionsText || '내용을 입력해 주세요.')
+                        : section.key === 'teaching_strategy'
+                          ? (teachingStrategyText || '내용을 입력해 주세요.')
+                          : section.key === 'growth_checkpoint'
+                            ? (growthCheckpointText || '내용을 입력해 주세요.')
+                            : (combineSectionText(section) || '내용을 입력해 주세요.')}
                 </div>
               </div>
             ))}

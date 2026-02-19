@@ -2178,6 +2178,9 @@ export default function ResultsPage() {
     if (selectedReportPeerSummary.avgLevelGrade != null) {
       qs.set('peerAvgLevelGrade', String(selectedReportPeerSummary.avgLevelGrade));
     }
+    if (selectedReportPoint.currentLevelGrade != null) {
+      qs.set('studentGrade', String(selectedReportPoint.currentLevelGrade));
+    }
     window.location.href = `/report-preview?${qs.toString()}`;
   }
 
