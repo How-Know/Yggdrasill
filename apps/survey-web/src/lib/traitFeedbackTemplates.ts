@@ -1330,3 +1330,74 @@ export function buildGrowthCheckpointText(
 
   return gParts.join('\n\n');
 }
+
+/* ────────────────────────────────────────────
+ * Section Summary / Color Legend / Keywords
+ * 리포트 마무리 유틸
+ * ──────────────────────────────────────────── */
+
+export function getSectionSummary(
+  key: FeedbackSectionKey,
+  typeCode: FeedbackTypeCode | null,
+  intensity: IntensityLevel,
+): string {
+  if (!typeCode) return '';
+  switch (key) {
+    case 'profile_summary': {
+      const tpl = PROFILE_SUMMARY_TEMPLATES[typeCode]?.[intensity] ?? '';
+      const parts = tpl.split('.').filter((s) => s.trim());
+      if (parts.length === 0) return '';
+      return parts.slice(0, 2).map((s) => s.trim() + '.').join('\n');
+    }
+    case 'learning_traits': {
+      const raw = LEARNING_TRAITS_COMMON[typeCode] ?? '';
+      const parts = raw.split('.').filter((s) => s.trim());
+      if (parts.length === 0) return '';
+      return parts.slice(0, 2).map((s) => s.trim() + '.').join('\n');
+    }
+    case 'strength_weakness': {
+      const intro = CORE_STRENGTHS_INTRO[typeCode] ?? '';
+      const closing = CORE_STRENGTHS_CLOSING[typeCode] ?? '';
+      return [intro, closing].filter(Boolean).join('\n');
+    }
+    case 'cautions': {
+      const intro = CAUTIONS_INTRO[typeCode] ?? '';
+      const closing = CAUTIONS_CLOSING[typeCode] ?? '';
+      return [intro, closing].filter(Boolean).join('\n');
+    }
+    case 'teaching_strategy': {
+      const closing = STRATEGY_CLOSING[typeCode] ?? '';
+      const label = TYPE_LABEL[typeCode] ?? '';
+      return `${label} 유형에 맞춘 수업 환경과 과제 설계 기준을 제시합니다.\n${closing}`;
+    }
+    case 'growth_checkpoint': {
+      const intro = GROWTH_INTRO[typeCode]?.split('.')[0]?.trim() ?? '';
+      const closing = GROWTH_CLOSING[typeCode] ?? '';
+      return [intro ? intro + '.' : '', closing].filter(Boolean).join('\n');
+    }
+    default:
+      return '';
+  }
+}
+
+export const FEEDBACK_COLOR_LEGEND = [
+  { color: '#4ADE80', label: '매우 높음' },
+  { color: '#22C55E', label: '높음' },
+  { color: '#84CC16', label: '약간 높음' },
+  { color: '#EAB308', label: '보통' },
+  { color: '#F59E0B', label: '약간 낮음' },
+  { color: '#F97316', label: '낮음' },
+  { color: '#EF4444', label: '매우 낮음' },
+] as const;
+
+const TYPE_KEYWORDS: Record<FeedbackTypeCode, string[]> = {
+  TYPE_A: ['구조 이해', '실전 전환', '압축 요약', '확장 과잉 주의', '성장 가속', '점수 연결'],
+  TYPE_D: ['절차 정확', '꾸준함', '계단식 확장', '정체 주의', '반복 변형', '밀도 유지'],
+  TYPE_C: ['감정 안정', '작은 성공', '성공 밀도', '회피 주의', '단계 분해', '시도 유지'],
+  TYPE_B: ['빠른 탐색', '흥미 에너지', '구조 우선', '기복 주의', '흥미-기본기 교차', '수행 안정'],
+};
+
+export function getTypeKeywords(typeCode: FeedbackTypeCode | null): string[] {
+  if (!typeCode) return [];
+  return TYPE_KEYWORDS[typeCode] ?? [];
+}

@@ -13,10 +13,14 @@ import {
   cloneFeedbackTemplate,
   DEFAULT_FEEDBACK_TEMPLATES,
   DEFAULT_SCALE_GUIDE_TEMPLATE,
+  FEEDBACK_COLOR_LEGEND,
   FEEDBACK_TYPE_CODES,
   FeedbackTemplate,
   FeedbackTypeCode,
+  getIntensityLevel,
+  getSectionSummary,
   getSubscaleFeedback,
+  getTypeKeywords,
   mergeTemplateSections,
   parseScaleGuideTemplate,
   SCALE_GUIDE_INDICATORS,
@@ -137,6 +141,7 @@ export default function ReportPreviewPage() {
     () => cloneScaleGuideTemplate(DEFAULT_SCALE_GUIDE_TEMPLATE),
   );
   const [scaleGuideExpanded, setScaleGuideExpanded] = React.useState(false);
+  const [expandedSections, setExpandedSections] = React.useState<Record<string, boolean>>({});
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
@@ -365,17 +370,82 @@ export default function ReportPreviewPage() {
     return buildGrowthCheckpointText(typeCode, vectorStrength);
   }, [nonProfileSections, typeCode, vectorStrength]);
 
+  const intensity = React.useMemo(() => getIntensityLevel(vectorStrength), [vectorStrength]);
+  const keywords = React.useMemo(() => getTypeKeywords(typeCode), [typeCode]);
+
+  const handlePrint = React.useCallback(() => {
+    const prevExpanded = { ...expandedSections };
+    const prevScaleGuide = scaleGuideExpanded;
+
+    const allOpen: Record<string, boolean> = {};
+    for (const s of nonProfileSections) allOpen[s.key] = true;
+    setExpandedSections(allOpen);
+    setScaleGuideExpanded(true);
+
+    const restore = () => {
+      setExpandedSections(prevExpanded);
+      setScaleGuideExpanded(prevScaleGuide);
+      window.removeEventListener('afterprint', restore);
+    };
+    window.addEventListener('afterprint', restore);
+
+    requestAnimationFrame(() => {
+      setTimeout(() => window.print(), 350);
+    });
+  }, [expandedSections, nonProfileSections, scaleGuideExpanded]);
+
   return (
-    <div style={{ maxWidth: 980, margin: '0 auto', paddingBottom: 24 }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-        <div style={{ fontSize: 20, fontWeight: 900 }}>{title}</div>
-        <button
-          onClick={() => { if (window.history.length > 1) { window.history.back(); return; } window.location.href = '/results'; }}
-          style={{ height: 36, padding: '0 12px', borderRadius: 8, border: `1px solid ${tokens.border}`, background: '#1E1E1E', color: tokens.text, cursor: 'pointer' }}
-        >
-          뒤로
-        </button>
-      </div>
+    <>
+      <style>{`
+        @media print {
+          @page { size: A4 portrait; margin: 12mm 10mm; }
+          html, body {
+            background: #fff !important;
+            overflow: visible !important;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+          }
+          body::-webkit-scrollbar { display: none !important; }
+          #root, #root > div {
+            background: transparent !important;
+            overflow: visible !important;
+            min-height: auto !important;
+            padding: 0 !important;
+          }
+          .report-no-print { display: none !important; }
+          .report-print-root {
+            max-width: 100% !important;
+            padding: 0 !important;
+            filter: invert(1) hue-rotate(180deg);
+          }
+          .report-print-root button { display: none !important; }
+          .report-print-only { display: none; }
+          .report-print-root .report-print-only { display: block !important; }
+        }
+      `}</style>
+      <div className="report-print-root" style={{ maxWidth: 980, margin: '0 auto', paddingBottom: 24 }}>
+        <div className="report-no-print" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+          <div style={{ fontSize: 20, fontWeight: 900 }}>{title}</div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button
+              onClick={handlePrint}
+              style={{ height: 36, padding: '0 14px', borderRadius: 8, border: `1px solid ${tokens.border}`, background: tokens.accent, color: '#fff', cursor: 'pointer', fontWeight: 700, fontSize: 13 }}
+            >
+              인쇄
+            </button>
+            <button
+              onClick={() => { if (window.history.length > 1) { window.history.back(); return; } window.location.href = '/results'; }}
+              style={{ height: 36, padding: '0 12px', borderRadius: 8, border: `1px solid ${tokens.border}`, background: '#1E1E1E', color: tokens.text, cursor: 'pointer' }}
+            >
+              뒤로
+            </button>
+          </div>
+        </div>
+
+        <div className="report-print-only" style={{ display: 'none', textAlign: 'center', marginBottom: 28, paddingBottom: 18, borderBottom: `2px solid ${tokens.border}` }}>
+          <div style={{ fontSize: 36, fontWeight: 900, letterSpacing: 3, color: tokens.accent }}>수학 학습 성향 조사</div>
+          <div style={{ marginTop: 6, fontSize: 12, fontWeight: 700, opacity: 0.5, letterSpacing: 2 }}>SISU MATH</div>
+        </div>
 
       {loading ? (
         <div style={{ color: tokens.textDim, fontSize: 13 }}>미리보기 데이터를 불러오는 중...</div>
@@ -395,9 +465,9 @@ export default function ReportPreviewPage() {
                     style={{
                       position: 'relative',
                       background: current
-                        ? 'linear-gradient(135deg, #6366F1, #3B82F6)'
+                        ? 'linear-gradient(135deg, #1F7A52, #33A373)'
                         : reached
-                          ? 'linear-gradient(135deg, rgba(59,130,246,0.5), rgba(30,64,175,0.4))'
+                          ? 'linear-gradient(135deg, rgba(51,163,115,0.4), rgba(31,122,82,0.3))'
                           : '#343434',
                       color: '#fff',
                       borderRadius: 14,
@@ -408,10 +478,10 @@ export default function ReportPreviewPage() {
                     <div style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', fontSize: 34, fontWeight: 900, opacity: 0.18, lineHeight: 1 }}>
                       {'>'}
                     </div>
-                    <div style={{ fontSize: 13, fontWeight: 800, opacity: 0.85 }}>{round.no}회차</div>
-                    <div style={{ marginTop: 4, fontSize: 22, fontWeight: 900, lineHeight: 1.1 }}>{round.name}</div>
+                    <div style={{ fontSize: 11, fontWeight: 800, opacity: 0.85 }}>{round.no}회차</div>
+                    <div style={{ marginTop: 3, fontSize: 18, fontWeight: 900, lineHeight: 1.1 }}>{round.name}</div>
                     {current && (
-                      <div style={{ marginTop: 8, fontSize: 12, lineHeight: 1.5, opacity: 0.9 }}>{round.description}</div>
+                      <div style={{ marginTop: 8, fontSize: 12, lineHeight: 1.5, opacity: 0.9, paddingRight: 28 }}>{round.description}</div>
                     )}
                   </div>
                 );
@@ -425,16 +495,16 @@ export default function ReportPreviewPage() {
               <div>
                 {/* 기본 정보 */}
                 <div style={{ marginBottom: 18 }}>
-                  <div style={{ color: tokens.textDim, fontSize: 12, fontWeight: 700, marginBottom: 6 }}>기본 정보</div>
+                  <div style={{ color: tokens.textDim, fontSize: 13, fontWeight: 800, marginBottom: 6 }}>기본 정보</div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
-                    <div style={{ fontSize: 20 }}>
-                      <span style={{ color: tokens.textDim, fontSize: 14 }}>이름</span> <span style={{ fontWeight: 900 }}>{participant.name}</span>
+                    <div style={{ fontSize: 16 }}>
+                      <span style={{ color: tokens.textDim, fontSize: 12 }}>이름</span> <span style={{ fontWeight: 900 }}>{participant.name}</span>
                     </div>
-                    <div style={{ fontSize: 20 }}>
-                      <span style={{ color: tokens.textDim, fontSize: 14 }}>학교</span> <span style={{ fontWeight: 700 }}>{participant.school ?? '-'}</span>
+                    <div style={{ fontSize: 16 }}>
+                      <span style={{ color: tokens.textDim, fontSize: 12 }}>학교</span> <span style={{ fontWeight: 700 }}>{participant.school ?? '-'}</span>
                     </div>
-                    <div style={{ fontSize: 20 }}>
-                      <span style={{ color: tokens.textDim, fontSize: 14 }}>학년</span> <span style={{ fontWeight: 700 }}>{participant.grade ?? '-'}</span>
+                    <div style={{ fontSize: 16 }}>
+                      <span style={{ color: tokens.textDim, fontSize: 12 }}>학년</span> <span style={{ fontWeight: 700 }}>{participant.grade ?? '-'}</span>
                     </div>
                   </div>
                   <div style={{ marginTop: 6, color: tokens.textDim, fontSize: 11 }}>
@@ -449,10 +519,10 @@ export default function ReportPreviewPage() {
                     return (
                       <div key={`axis_${metric.key}`} style={{ border: `1px solid ${tokens.border}`, borderRadius: 8, background: tokens.field, padding: '8px 10px' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-                          <div style={{ fontWeight: 900, fontSize: 20 }}>{metric.label}</div>
-                          <div style={{ color: tokens.textDim, fontSize: 14 }}>{formatScore(metric.score)}점 · {formatPercentileLabel(metric.percentile)}</div>
+                          <div style={{ fontWeight: 900, fontSize: 16 }}>{metric.label}</div>
+                          <div style={{ color: tokens.textDim, fontSize: 12 }}>{formatScore(metric.score)}점 · {formatPercentileLabel(metric.percentile)}</div>
                         </div>
-                        <div style={{ marginTop: 6, height: 10, borderRadius: 999, background: '#2A2A2A', overflow: 'hidden' }}>
+                        <div style={{ marginTop: 5, height: 8, borderRadius: 999, background: '#2A2A2A', overflow: 'hidden' }}>
                           <div style={{ width: `${barW}%`, height: '100%', background: metric.color }} />
                         </div>
                         <div style={{ marginTop: 6, color: tokens.textDim, fontSize: 13 }}>
@@ -464,7 +534,7 @@ export default function ReportPreviewPage() {
                 </div>
 
                 {/* 보조 지표 */}
-                <div style={{ color: tokens.textDim, fontSize: 16, fontWeight: 800, marginBottom: 8 }}>보조 지표</div>
+                <div style={{ color: tokens.textDim, fontSize: 13, fontWeight: 800, marginBottom: 8 }}>보조 지표</div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 10 }}>
                   {supportMetrics.map((metric) => {
                     const barW = metric.percentile == null ? 0 : Math.max(0, Math.min(100, metric.percentile));
@@ -472,13 +542,13 @@ export default function ReportPreviewPage() {
                     return (
                       <div key={`support_${metric.key}`} style={{ border: `1px solid ${tokens.border}`, borderRadius: 8, background: tokens.field, padding: '8px 10px' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-                          <div style={{ fontWeight: 900, fontSize: 20 }}>{metric.label}</div>
-                          <div style={{ fontSize: 16, fontWeight: 900, color: summary.color }}>{summary.label}</div>
+                          <div style={{ fontWeight: 900, fontSize: 16 }}>{metric.label}</div>
+                          <div style={{ fontSize: 14, fontWeight: 900, color: summary.color }}>{summary.label}</div>
                         </div>
-                        <div style={{ marginTop: 6, height: 10, borderRadius: 999, background: '#2A2A2A', overflow: 'hidden' }}>
+                        <div style={{ marginTop: 5, height: 8, borderRadius: 999, background: '#2A2A2A', overflow: 'hidden' }}>
                           <div style={{ width: `${barW}%`, height: '100%', background: metric.color }} />
                         </div>
-                        <div style={{ marginTop: 8, color: tokens.textDim, fontSize: 14 }}>
+                        <div style={{ marginTop: 6, color: tokens.textDim, fontSize: 12 }}>
                           {formatScore(metric.score)}점 · {formatPercentileLabel(metric.percentile)}
                         </div>
                       </div>
@@ -489,8 +559,8 @@ export default function ReportPreviewPage() {
 
               {/* 유형 + 벡터 */}
               <div>
-                <div style={{ color: tokens.textDim, fontSize: 12, marginBottom: 4 }}>유형</div>
-                <div style={{ fontWeight: 900, fontSize: 22, marginBottom: 10 }}>{typeLabel(typeCode)}</div>
+                <div style={{ color: tokens.textDim, fontSize: 13, fontWeight: 800, marginBottom: 4 }}>유형</div>
+                <div style={{ fontWeight: 900, fontSize: 18, marginBottom: 8 }}>{typeLabel(typeCode)}</div>
                 <div style={{ marginBottom: 6, color: tokens.textDim, fontSize: 12, textAlign: 'center' }}>
                   감정 z={formatZ(emotionZ)} · 신념 z={formatZ(beliefZ)} · 강도 {vectorStrength == null ? '-' : `${vectorStrength.toFixed(0)}%`}
                 </div>
@@ -513,6 +583,20 @@ export default function ReportPreviewPage() {
             </div>
           </div>
 
+          {/* ── 키워드 ── */}
+          {keywords.length > 0 ? (
+            <div style={{ marginTop: 48, textAlign: 'center' }}>
+              <div style={{ fontSize: 18, fontWeight: 800, color: tokens.textDim, marginBottom: 12 }}>키워드</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center' }}>
+                {keywords.map((kw) => (
+                  <span key={kw} style={{ fontSize: 15, fontWeight: 800, color: tokens.accent, background: 'transparent', border: `1px solid ${tokens.border}`, borderRadius: 20, padding: '5px 14px' }}>
+                    {kw}
+                  </span>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
           {/* ── 디바이더 ── */}
           <div style={{ height: 1, background: tokens.border, margin: '36px 0' }} />
 
@@ -531,12 +615,31 @@ export default function ReportPreviewPage() {
                   {scaleGuideExpanded ? '접기' : '자세히 보기'}
                 </button>
               </div>
-              <div style={{ paddingLeft: 38, color: tokens.text, fontSize: 14, whiteSpace: 'pre-wrap', lineHeight: 1.7 }}>
+              {(() => {
+                const s1Summary = getSectionSummary('profile_summary', typeCode, intensity);
+                return s1Summary ? (
+                  <div style={{ marginBottom: 12 }}>
+                    <div data-deco-box style={{ background: tokens.panel, border: `1px solid ${tokens.border}`, borderRadius: 10, padding: '10px 14px', fontSize: 14, color: tokens.text, lineHeight: 1.7, whiteSpace: 'pre-line' }}>
+                      {s1Summary}
+                    </div>
+                  </div>
+                ) : null;
+              })()}
+              <div style={{ paddingLeft: 6, color: tokens.textDim, fontSize: 14, whiteSpace: 'pre-wrap', lineHeight: 1.7 }}>
                 {profileSummaryText || '내용을 입력해 주세요.'}
               </div>
 
               {scaleGuideExpanded ? (
-                <div style={{ marginTop: 18, display: 'grid', gap: 50 }}>
+                <div style={{ marginTop: 54, paddingBottom: 54, display: 'grid', gap: 50 }}>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center', justifyContent: 'center' }}>
+                    <span style={{ fontSize: 12, color: tokens.textDim, marginRight: 4 }}>색상 기준:</span>
+                    {FEEDBACK_COLOR_LEGEND.map((item) => (
+                      <span key={item.label} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, color: tokens.textDim }}>
+                        <span style={{ width: 10, height: 10, borderRadius: '50%', background: item.color, flexShrink: 0 }} />
+                        {item.label}
+                      </span>
+                    ))}
+                  </div>
                   {(() => {
                     let subIdx = 0;
                     return SCALE_GUIDE_INDICATORS.map((indicator) => {
@@ -563,11 +666,11 @@ export default function ReportPreviewPage() {
                               const fb = getSubscaleFeedback(sub.key, subMetric?.percentile ?? null);
                               return (
                                 <div key={`sg_sub_${sub.key}`} style={{ paddingLeft: 8, borderLeft: `2px solid ${tokens.border}` }}>
-                                  <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 }}>
-                                    <div style={{ fontWeight: 700, fontSize: 16 }}>
+                                  <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 }}>
+                                    <div style={{ fontWeight: 700, fontSize: 16, flexShrink: 0, whiteSpace: 'nowrap' }}>
                                       <span style={{ marginRight: 6, opacity: 0.5 }}>{circled}</span>{sub.title}
                                     </div>
-                                    <div style={{ color: tokens.textDim, fontSize: 12, flexShrink: 0 }}>{scaleGuide.subscaleDescriptions[sub.key]}</div>
+                                    <div style={{ color: tokens.textDim, fontSize: 12, textAlign: 'right', lineHeight: 1.5 }}>{scaleGuide.subscaleDescriptions[sub.key]}</div>
                                   </div>
                                   <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, marginTop: 4 }}>
                                     {fb ? (
@@ -592,30 +695,54 @@ export default function ReportPreviewPage() {
 
           {/* ── 2~6. 나머지 섹션 ── */}
           <div style={{ display: 'grid', gap: 28 }}>
-            {nonProfileSections.map((section, index) => (
-              <div key={`sec_${section.key}`}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, background: tokens.accent, color: '#fff', fontWeight: 900, fontSize: 14, flexShrink: 0 }}>{index + 2}</span>
-                  <span style={{ fontWeight: 900, fontSize: 20, color: tokens.accent }}>{section.title}</span>
+            {nonProfileSections.map((section, index) => {
+              const isOpen = !!expandedSections[section.key];
+              return (
+                <div key={`sec_${section.key}`}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 10 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, background: tokens.accent, color: '#fff', fontWeight: 900, fontSize: 14, flexShrink: 0 }}>{index + 2}</span>
+                      <span style={{ fontWeight: 900, fontSize: 20, color: tokens.accent }}>{section.title}</span>
+                    </div>
+                    <button
+                      onClick={() => setExpandedSections((prev) => ({ ...prev, [section.key]: !prev[section.key] }))}
+                      style={{ height: 32, padding: '0 14px', borderRadius: 8, border: `1px solid ${tokens.border}`, background: 'transparent', color: isOpen ? tokens.accent : tokens.textDim, cursor: 'pointer', fontSize: 13, fontWeight: 700, flexShrink: 0, transition: 'color 0.15s' }}
+                    >
+                      {isOpen ? '접기' : '자세히 보기'}
+                    </button>
+                  </div>
+                  {(() => {
+                    const secSummary = getSectionSummary(section.key, typeCode, intensity);
+                    return secSummary ? (
+                      <div style={{ marginBottom: 12 }}>
+                        <div data-deco-box style={{ background: tokens.panel, border: `1px solid ${tokens.border}`, borderRadius: 10, padding: '10px 14px', fontSize: 14, color: tokens.text, lineHeight: 1.7, whiteSpace: 'pre-line' }}>
+                          {secSummary}
+                        </div>
+                      </div>
+                    ) : null;
+                  })()}
+                  {isOpen ? (
+                    <div style={{ paddingLeft: 6, color: tokens.textDim, fontSize: 14, whiteSpace: 'pre-wrap', lineHeight: 1.7 }}>
+                      {section.key === 'learning_traits'
+                        ? (learningTraitsText || '내용을 입력해 주세요.')
+                        : section.key === 'strength_weakness'
+                          ? (coreStrengthsText || '내용을 입력해 주세요.')
+                          : section.key === 'cautions'
+                            ? (cautionsText || '내용을 입력해 주세요.')
+                            : section.key === 'teaching_strategy'
+                              ? (teachingStrategyText || '내용을 입력해 주세요.')
+                              : section.key === 'growth_checkpoint'
+                                ? (growthCheckpointText || '내용을 입력해 주세요.')
+                                : (combineSectionText(section) || '내용을 입력해 주세요.')}
+                    </div>
+                  ) : null}
                 </div>
-                <div style={{ paddingLeft: 38, color: tokens.text, fontSize: 14, whiteSpace: 'pre-wrap', lineHeight: 1.7 }}>
-                  {section.key === 'learning_traits'
-                    ? (learningTraitsText || '내용을 입력해 주세요.')
-                    : section.key === 'strength_weakness'
-                      ? (coreStrengthsText || '내용을 입력해 주세요.')
-                      : section.key === 'cautions'
-                        ? (cautionsText || '내용을 입력해 주세요.')
-                        : section.key === 'teaching_strategy'
-                          ? (teachingStrategyText || '내용을 입력해 주세요.')
-                          : section.key === 'growth_checkpoint'
-                            ? (growthCheckpointText || '내용을 입력해 주세요.')
-                            : (combineSectionText(section) || '내용을 입력해 주세요.')}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </>
       ) : null}
     </div>
+    </>
   );
 }
