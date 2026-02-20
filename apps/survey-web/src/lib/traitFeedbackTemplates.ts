@@ -779,10 +779,10 @@ const CORE_STRENGTHS_ITEMS: Record<FeedbackTypeCode, { mild: string[][]; strong:
 };
 
 const CORE_STRENGTHS_CLOSING: Record<FeedbackTypeCode, string> = {
-  TYPE_A: '이 유형은 꾸준히 성장할 수 있는 힘이 가장 높은 편입니다.',
-  TYPE_D: '이 유형은 공부의 안정감이 높은 편입니다.',
-  TYPE_C: '이 유형은 환경만 바뀌면 크게 달라질 수 있는 잠재력이 있습니다.',
-  TYPE_B: '이 유형은 지금은 불안정하지만, 불꽃이 붙으면 강한 힘을 발휘합니다.',
+  TYPE_A: '구조 이해와 탐색이 자연스러운 만큼, 이를 실전 점수로 연결하는 것이 다음 단계입니다.',
+  TYPE_D: '반복과 절차에 강한 만큼, 확장과 응용 영역에서의 작은 시도가 도약의 열쇠가 됩니다.',
+  TYPE_C: '안전한 환경에서 작은 성공 경험이 쌓이면, 실력 발휘의 안정성이 크게 달라질 수 있습니다.',
+  TYPE_B: '흥미 에너지를 구조화된 학습 흐름에 연결하면, 폭발적인 성장이 가능합니다.',
 };
 
 const CORE_STRENGTHS_DETAIL: Record<FeedbackTypeCode, Record<

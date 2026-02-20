@@ -167,6 +167,8 @@ const LEVEL_BAND_OPTIONS: Array<{ code: LevelBandCode; label: string }> = [
 ];
 
 const PREVIEW_PEER_K = 5;
+const PEER_SHRINKAGE_PRIOR = 3;
+const ADJUSTMENT_AXIS_WEIGHT = 0.35;
 
 function parseRoundNo(value: unknown): number | null {
   const raw = String(value ?? '').trim();
@@ -1648,6 +1650,53 @@ export default function ResultsPage() {
     return counts;
   }, [snapshotAxisPoints]);
 
+  const axisTypeAvgGrade = React.useMemo(() => {
+    const gradesByType: Record<AxisTypeCode, number[]> = {
+      TYPE_A: [], TYPE_B: [], TYPE_C: [], TYPE_D: [], UNCLASSIFIED: [],
+    };
+    snapshotAxisPoints.forEach((point) => {
+      const grade = resolveLevelGrade(point.currentLevelGrade, point.currentMathPercentile);
+      if (grade != null) gradesByType[point.typeCode].push(grade);
+    });
+    const result: Record<AxisTypeCode, number | null> = {
+      TYPE_A: null, TYPE_B: null, TYPE_C: null, TYPE_D: null, UNCLASSIFIED: null,
+    };
+    (Object.keys(gradesByType) as AxisTypeCode[]).forEach((code) => {
+      const arr = gradesByType[code];
+      result[code] = arr.length ? arr.reduce((s, v) => s + v, 0) / arr.length : null;
+    });
+    return result;
+  }, [snapshotAxisPoints]);
+
+  const adjustmentGradeCorr = React.useMemo(() => {
+    const pairs: { meta: number; persist: number; grade: number }[] = [];
+    snapshotAxisPoints.forEach((point) => {
+      const grade = resolveLevelGrade(point.currentLevelGrade, point.currentMathPercentile);
+      if (grade == null || point.metacognitionZ == null || point.persistenceZ == null) return;
+      pairs.push({ meta: point.metacognitionZ, persist: point.persistenceZ, grade });
+    });
+    if (pairs.length < 5) return { metaCorr: 0, persistCorr: 0, n: 0 };
+
+    function pearson(xs: number[], ys: number[]): number {
+      const n = xs.length;
+      const mx = xs.reduce((a, b) => a + b, 0) / n;
+      const my = ys.reduce((a, b) => a + b, 0) / n;
+      let num = 0; let dx2 = 0; let dy2 = 0;
+      for (let i = 0; i < n; i++) {
+        const dxi = xs[i] - mx; const dyi = ys[i] - my;
+        num += dxi * dyi; dx2 += dxi * dxi; dy2 += dyi * dyi;
+      }
+      const denom = Math.sqrt(dx2 * dy2);
+      return denom > 0 ? num / denom : 0;
+    }
+    const grades = pairs.map((p) => p.grade);
+    return {
+      metaCorr: pearson(pairs.map((p) => p.meta), grades),
+      persistCorr: pearson(pairs.map((p) => p.persist), grades),
+      n: pairs.length,
+    };
+  }, [snapshotAxisPoints]);
+
   const reportCandidatePoints = React.useMemo(() => {
     const keyword = reportSearchKeyword.trim().toLowerCase();
     if (!keyword) return snapshotAxisPoints;
@@ -1684,10 +1733,15 @@ export default function ResultsPage() {
   );
 
   const selectedReportPeerSummary = React.useMemo(() => {
+    type PeerNeighbor = { participantId: string; participantName: string; distance: number; levelGrade: number; emotionZ: number; beliefZ: number };
     const empty = {
       avgLevelGrade: null as number | null,
+      knnRawAvg: null as number | null,
+      typeAvg: null as number | null,
+      adjustmentDelta: null as number | null,
       sampleN: 0,
       source: 'none' as 'none' | 'knn' | 'global',
+      neighbors: [] as PeerNeighbor[],
     };
     if (!selectedReportPoint) {
       return empty;
@@ -1711,20 +1765,43 @@ export default function ResultsPage() {
         const dx = point.emotionZ - anchorX;
         const dy = point.beliefZ - anchorY;
         return {
+          participantId: point.participantId,
+          participantName: point.participantName,
           distance: Math.sqrt((dx ** 2) + (dy ** 2)),
           levelGrade,
+          emotionZ: point.emotionZ,
+          beliefZ: point.beliefZ,
         };
       })
-      .filter((row): row is { distance: number; levelGrade: number } => row != null)
+      .filter((row): row is PeerNeighbor => row != null)
       .sort((a, b) => a.distance - b.distance);
 
     if (candidatePeers.length > 0) {
       const neighbors = candidatePeers.slice(0, Math.min(PREVIEW_PEER_K, candidatePeers.length));
-      const avgLevelGrade = neighbors.reduce((sum, row) => sum + row.levelGrade, 0) / neighbors.length;
+      const knnRaw = neighbors.reduce((sum, row) => sum + row.levelGrade, 0) / neighbors.length;
+      const typeAvg = axisTypeAvgGrade[selectedReportPoint.typeCode];
+      const blended = typeAvg != null
+        ? (neighbors.length * knnRaw + PEER_SHRINKAGE_PRIOR * typeAvg) / (neighbors.length + PEER_SHRINKAGE_PRIOR)
+        : knnRaw;
+
+      let adjustmentDelta = 0;
+      const metaZ = selectedReportPoint.metacognitionZ;
+      const persistZ = selectedReportPoint.persistenceZ;
+      if (adjustmentGradeCorr.n >= 5 && metaZ != null && persistZ != null) {
+        adjustmentDelta = ADJUSTMENT_AXIS_WEIGHT * (
+          adjustmentGradeCorr.metaCorr * metaZ + adjustmentGradeCorr.persistCorr * persistZ
+        );
+      }
+      const avgLevelGrade = Math.max(0, Math.min(6, blended + adjustmentDelta));
+
       return {
         avgLevelGrade,
+        knnRawAvg: knnRaw,
+        typeAvg: typeAvg ?? null,
+        adjustmentDelta: adjustmentDelta !== 0 ? adjustmentDelta : null,
         sampleN: neighbors.length,
         source: 'knn' as const,
+        neighbors,
       };
     }
 
@@ -1735,10 +1812,14 @@ export default function ResultsPage() {
     const globalAvg = globalLevels.reduce((sum, row) => sum + row, 0) / globalLevels.length;
     return {
       avgLevelGrade: globalAvg,
+      knnRawAvg: null,
+      typeAvg: null,
+      adjustmentDelta: null,
       sampleN: globalLevels.length,
       source: 'global' as const,
+      neighbors: [] as PeerNeighbor[],
     };
-  }, [selectedReportPoint, snapshotAxisPoints]);
+  }, [selectedReportPoint, snapshotAxisPoints, axisTypeAvgGrade, adjustmentGradeCorr]);
 
   const selectedReportTypeCode = React.useMemo(
     () => (selectedReportPoint ? toFeedbackTypeCode(selectedReportPoint.typeCode) : null),
@@ -2180,6 +2261,15 @@ export default function ResultsPage() {
     }
     if (selectedReportPoint.currentLevelGrade != null) {
       qs.set('studentGrade', String(selectedReportPoint.currentLevelGrade));
+    }
+    const totalWithType = snapshotAxisPoints.filter((p) => p.typeCode !== 'UNCLASSIFIED').length;
+    const typeCount = axisTypeCounts[selectedReportPoint.typeCode] ?? 0;
+    if (totalWithType > 0) {
+      qs.set('typeRatio', String(Math.round((typeCount / totalWithType) * 100)));
+    }
+    const tAvg = axisTypeAvgGrade[selectedReportPoint.typeCode];
+    if (tAvg != null) {
+      qs.set('typeAvgGrade', String(tAvg));
     }
     window.location.href = `/report-preview?${qs.toString()}`;
   }
@@ -2828,15 +2918,47 @@ export default function ResultsPage() {
                   </div>
                 ) : null}
 
+                {/* KNN 연결선 (SVG 오버레이) */}
+                {selectedReportPoint && selectedReportPeerSummary.neighbors.length > 0 && (() => {
+                  const anchorX = Math.max(-3, Math.min(3, selectedReportPoint.emotionZ ?? 0));
+                  const anchorY = Math.max(-3, Math.min(3, selectedReportPoint.beliefZ ?? 0));
+                  const anchorLeft = ((anchorX + 3) / 6) * 100;
+                  const anchorTop = (1 - ((anchorY + 3) / 6)) * 100;
+                  return (
+                    <svg style={{ position:'absolute', inset:0, width:'100%', height:'100%', pointerEvents:'none', zIndex:1 }}>
+                      {selectedReportPeerSummary.neighbors.map((nb) => {
+                        const nx = Math.max(-3, Math.min(3, nb.emotionZ));
+                        const ny = Math.max(-3, Math.min(3, nb.beliefZ));
+                        const nLeft = ((nx + 3) / 6) * 100;
+                        const nTop = (1 - ((ny + 3) / 6)) * 100;
+                        return (
+                          <line
+                            key={`knn_line_${nb.participantId}`}
+                            x1={`${anchorLeft}%`} y1={`${anchorTop}%`}
+                            x2={`${nLeft}%`} y2={`${nTop}%`}
+                            stroke="rgba(255,255,255,0.35)"
+                            strokeWidth={1.5}
+                            strokeDasharray="4 3"
+                          />
+                        );
+                      })}
+                    </svg>
+                  );
+                })()}
+
                 {axisPointsWithValues.map((point) => {
                   const x = Math.max(-3, Math.min(3, point.emotionZ ?? 0));
                   const y = Math.max(-3, Math.min(3, point.beliefZ ?? 0));
                   const left = ((x + 3) / 6) * 100;
                   const top = (1 - ((y + 3) / 6)) * 100;
+                  const isAnchor = selectedReportPoint?.participantId === point.participantId;
+                  const knnNeighbor = selectedReportPeerSummary.neighbors.find((nb) => nb.participantId === point.participantId);
+                  const isKnnNeighbor = !!knnNeighbor;
+                  const dotSize = isAnchor ? 16 : isKnnNeighbor ? 14 : 10;
                   return (
                     <div
                       key={`axis_point_${point.participantId}`}
-                      title={`${point.participantName} · ${axisTypeLabel(point.typeCode)} · 감정 ${formatNumber(point.emotionZ)} / 신념 ${formatNumber(point.beliefZ)} · 메타인지 ${formatNumber(point.metacognitionZ)} / 지속성 ${formatNumber(point.persistenceZ)}`}
+                      title={`${point.participantName} · ${axisTypeLabel(point.typeCode)} · 감정 ${formatNumber(point.emotionZ)} / 신념 ${formatNumber(point.beliefZ)} · 메타인지 ${formatNumber(point.metacognitionZ)} / 지속성 ${formatNumber(point.persistenceZ)}${isKnnNeighbor ? ` · KNN거리 ${knnNeighbor.distance.toFixed(3)} · ${knnNeighbor.levelGrade}등급` : ''}`}
                       onMouseEnter={(e) => {
                         const rect = (e.currentTarget.parentElement as HTMLDivElement | null)?.getBoundingClientRect();
                         if (!rect) return;
@@ -2862,14 +2984,25 @@ export default function ResultsPage() {
                       onMouseLeave={() => setSnapshotAxisHover(null)}
                       style={{
                         position:'absolute',
-                        left:`calc(${left}% - 5px)`,
-                        top:`calc(${top}% - 5px)`,
-                        width:10,
-                        height:10,
+                        left:`calc(${left}% - ${dotSize / 2}px)`,
+                        top:`calc(${top}% - ${dotSize / 2}px)`,
+                        width: dotSize,
+                        height: dotSize,
                         borderRadius:'50%',
                         background: AXIS_TYPE_COLOR_MAP[point.typeCode],
-                        border:'1px solid rgba(0,0,0,0.25)',
-                        opacity: 0.85,
+                        border: isAnchor
+                          ? '3px solid #fff'
+                          : isKnnNeighbor
+                            ? '2.5px solid rgba(255,255,255,0.9)'
+                            : '1px solid rgba(0,0,0,0.25)',
+                        opacity: isAnchor || isKnnNeighbor ? 1 : 0.55,
+                        zIndex: isAnchor ? 4 : isKnnNeighbor ? 3 : 2,
+                        boxShadow: isAnchor
+                          ? '0 0 0 3px rgba(255,255,255,0.3), 0 2px 8px rgba(0,0,0,0.4)'
+                          : isKnnNeighbor
+                            ? '0 0 0 2px rgba(255,255,255,0.2), 0 1px 4px rgba(0,0,0,0.3)'
+                            : 'none',
+                        cursor: 'pointer',
                       }}
                     />
                   );
@@ -2896,20 +3029,105 @@ export default function ResultsPage() {
                       padding:'8px 10px',
                       fontSize:12,
                       pointerEvents:'none',
-                      zIndex: 3,
+                      zIndex: 10,
                       boxShadow: '0 6px 20px rgba(0,0,0,0.35)',
                     }}
                   >
-                    <div style={{ fontWeight: 800, marginBottom: 2 }}>{snapshotAxisHover.point.participantName}</div>
+                    <div style={{ fontWeight: 800, marginBottom: 2 }}>
+                      {snapshotAxisHover.point.participantName}
+                      {selectedReportPoint?.participantId === snapshotAxisHover.point.participantId && (
+                        <span style={{ marginLeft: 6, fontSize: 10, color: '#FFD54F', fontWeight: 600 }}>● 선택됨</span>
+                      )}
+                    </div>
                     <div style={{ color: tokens.textDim }}>
                       {axisTypeLabel(snapshotAxisHover.point.typeCode)} · 감정 {formatNumber(snapshotAxisHover.point.emotionZ)} · 신념 {formatNumber(snapshotAxisHover.point.beliefZ)}
                     </div>
                     <div style={{ color: tokens.textDim, marginTop: 2 }}>
                       보정: 메타인지 {formatNumber(snapshotAxisHover.point.metacognitionZ)} · 지속성 {formatNumber(snapshotAxisHover.point.persistenceZ)}
                     </div>
+                    {(() => {
+                      const nb = selectedReportPeerSummary.neighbors.find((n) => n.participantId === snapshotAxisHover.point.participantId);
+                      if (!nb) return null;
+                      return (
+                        <div style={{ marginTop: 4, padding:'3px 6px', background:'rgba(255,255,255,0.08)', borderRadius: 4, fontSize: 11 }}>
+                          <span style={{ color: '#81C784' }}>KNN 이웃</span>
+                          {' · '}거리 {nb.distance.toFixed(3)} · {nb.levelGrade}등급
+                        </div>
+                      );
+                    })()}
                   </div>
                 ) : null}
               </div>
+
+              {/* KNN 이웃 상세 패널 */}
+              {selectedReportPoint && selectedReportPeerSummary.neighbors.length > 0 && (
+                <div style={{ marginTop: 10, border:`1px solid ${tokens.border}`, borderRadius: 8, overflow:'hidden' }}>
+                  <div style={{ padding:'8px 12px', background: tokens.panelAlt, borderBottom:`1px solid ${tokens.border}` }}>
+                    <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+                      <div style={{ fontSize: 12, fontWeight: 700 }}>
+                        KNN 이웃 상세 (K={selectedReportPeerSummary.sampleN})
+                        <span style={{ fontWeight: 400, color: tokens.textDim, marginLeft: 8 }}>
+                          {selectedReportPoint.participantName} 기준
+                        </span>
+                      </div>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: tokens.accent }}>
+                        보정 {selectedReportPeerSummary.avgLevelGrade?.toFixed(1)}등급
+                      </div>
+                    </div>
+                    {selectedReportPeerSummary.knnRawAvg != null && selectedReportPeerSummary.typeAvg != null && (
+                      <div style={{ display:'flex', alignItems:'center', gap: 6, marginTop: 6, fontSize: 11, color: tokens.textDim, flexWrap:'wrap' }}>
+                        <span>유형보정 (KNN {selectedReportPeerSummary.knnRawAvg.toFixed(2)}×{selectedReportPeerSummary.sampleN} + {axisTypeLabel(selectedReportPoint.typeCode)} {selectedReportPeerSummary.typeAvg.toFixed(2)}×{PEER_SHRINKAGE_PRIOR}) ÷ {selectedReportPeerSummary.sampleN + PEER_SHRINKAGE_PRIOR}</span>
+                        {selectedReportPeerSummary.adjustmentDelta != null && (
+                          <>
+                            <span style={{ color: tokens.textDim }}>→</span>
+                            <span>
+                              보조지표 {selectedReportPeerSummary.adjustmentDelta > 0 ? '+' : ''}{selectedReportPeerSummary.adjustmentDelta.toFixed(2)}
+                              <span style={{ marginLeft: 4, opacity: 0.7 }}>
+                                (r<sub>메타</sub>={adjustmentGradeCorr.metaCorr.toFixed(2)}, r<sub>지속</sub>={adjustmentGradeCorr.persistCorr.toFixed(2)})
+                              </span>
+                            </span>
+                          </>
+                        )}
+                        <span style={{ color: tokens.textDim }}>=</span>
+                        <span style={{ fontWeight: 700, color: tokens.accent }}>{selectedReportPeerSummary.avgLevelGrade?.toFixed(2)}</span>
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ padding:'6px 12px' }}>
+                    <div style={{ display:'grid', gridTemplateColumns:'minmax(60px,auto) repeat(4, 1fr)', gap:'2px 8px', fontSize: 11, color: tokens.textDim, padding:'4px 0', borderBottom:`1px solid ${tokens.border}` }}>
+                      <div style={{ fontWeight: 600 }}>이름</div>
+                      <div style={{ fontWeight: 600, textAlign:'right' }}>감정Z</div>
+                      <div style={{ fontWeight: 600, textAlign:'right' }}>신념Z</div>
+                      <div style={{ fontWeight: 600, textAlign:'right' }}>거리</div>
+                      <div style={{ fontWeight: 600, textAlign:'right' }}>등급</div>
+                    </div>
+                    {selectedReportPeerSummary.neighbors.map((nb, idx) => (
+                      <div
+                        key={`knn_row_${nb.participantId}`}
+                        style={{ display:'grid', gridTemplateColumns:'minmax(60px,auto) repeat(4, 1fr)', gap:'2px 8px', fontSize: 11, padding:'4px 0', borderBottom: idx < selectedReportPeerSummary.neighbors.length - 1 ? `1px solid ${tokens.border}` : 'none' }}
+                      >
+                        <div style={{ fontWeight: 600, display:'flex', alignItems:'center', gap: 4 }}>
+                          <span style={{ width: 6, height: 6, borderRadius:'50%', background:'rgba(255,255,255,0.9)', border:'1.5px solid rgba(255,255,255,0.5)', flexShrink:0 }} />
+                          {nb.participantName}
+                        </div>
+                        <div style={{ textAlign:'right', color: tokens.textDim }}>{nb.emotionZ.toFixed(2)}</div>
+                        <div style={{ textAlign:'right', color: tokens.textDim }}>{nb.beliefZ.toFixed(2)}</div>
+                        <div style={{ textAlign:'right', color: tokens.textDim }}>{nb.distance.toFixed(3)}</div>
+                        <div style={{ textAlign:'right', fontWeight: 700 }}>{nb.levelGrade}</div>
+                      </div>
+                    ))}
+                    <div style={{ display:'grid', gridTemplateColumns:'minmax(60px,auto) repeat(4, 1fr)', gap:'2px 8px', fontSize: 11, padding:'5px 0 3px', borderTop:`1px solid ${tokens.border}`, marginTop: 2 }}>
+                      <div style={{ fontWeight: 600, color: tokens.accent }}>
+                        기준 학생
+                      </div>
+                      <div style={{ textAlign:'right', color: tokens.accent, fontWeight: 600 }}>{(selectedReportPoint.emotionZ ?? 0).toFixed(2)}</div>
+                      <div style={{ textAlign:'right', color: tokens.accent, fontWeight: 600 }}>{(selectedReportPoint.beliefZ ?? 0).toFixed(2)}</div>
+                      <div style={{ textAlign:'right', color: tokens.textDim }}>—</div>
+                      <div style={{ textAlign:'right', fontWeight: 700, color: tokens.accent }}>{selectedReportPoint.currentLevelGrade ?? '—'}</div>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               <div style={{ color: tokens.textDim, fontSize: 12, marginTop: 8 }}>
                 해석 프레임 v3 · 유형축(감정/신념) 사용 태그/문항: 감정 {snapshotAxisMeta.emotionScaleNames.length ? snapshotAxisMeta.emotionScaleNames.join(', ') : '-'}

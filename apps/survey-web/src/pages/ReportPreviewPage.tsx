@@ -84,6 +84,24 @@ function formatScore(value: number | null): string {
   return value.toFixed(2);
 }
 
+const SUMMARY_BOLD_PREFIXES = ['주요 주의점:', '설계 핵심:', '체크 핵심:'];
+
+function renderSummaryText(text: string): React.ReactNode {
+  return text.split('\n').map((line, idx, arr) => {
+    const matched = SUMMARY_BOLD_PREFIXES.find((prefix) => line.trim().startsWith(prefix));
+    if (matched) {
+      const rest = line.trim().slice(matched.length).trim();
+      return (
+        <React.Fragment key={idx}>
+          <span style={{ fontWeight: 700 }}>{'* '}{matched}</span>{rest ? ` ${rest}` : ''}
+          {idx < arr.length - 1 ? '\n' : ''}
+        </React.Fragment>
+      );
+    }
+    return idx < arr.length - 1 ? line + '\n' : line;
+  });
+}
+
 function formatPercentileLabel(value: number | null): string {
   if (typeof value !== 'number' || !Number.isFinite(value)) return '-';
   return `${value.toFixed(1)}백분위`;
@@ -160,6 +178,8 @@ export default function ReportPreviewPage() {
   const studentGradeParam = React.useMemo(() => parseNumberParam(params, 'studentGrade'), [params]);
   const roundNoParam = React.useMemo(() => parseNumberParam(params, 'roundNo'), [params]);
   const peerSourceParam = React.useMemo(() => parsePeerSourceParam(params), [params]);
+  const typeRatioParam = React.useMemo(() => parseNumberParam(params, 'typeRatio'), [params]);
+  const typeAvgGradeParam = React.useMemo(() => parseNumberParam(params, 'typeAvgGrade'), [params]);
   const scaleProfile = React.useMemo(() => {
     const raw = String(params.get('scaleProfile') ?? '').trim();
     if (!raw) return null;
@@ -421,6 +441,11 @@ export default function ReportPreviewPage() {
           .report-print-root button { display: none !important; }
           .report-print-only { display: none; }
           .report-print-root .report-print-only { display: block !important; }
+          .report-print-root .report-header-area {
+            transform: scale(0.9);
+            transform-origin: top left;
+            width: 111.11%;
+          }
         }
       `}</style>
       <div className="report-print-root" style={{ maxWidth: 980, margin: '0 auto', paddingBottom: 24 }}>
@@ -454,7 +479,7 @@ export default function ReportPreviewPage() {
       ) : participant && template ? (
         <>
           {/* ── 회차 안내 ── */}
-          <div style={{ marginBottom: 32 }}>
+          <div className="report-header-area" style={{ marginBottom: 32 }}>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
               {SURVEY_ROUNDS.map((round) => {
                 const reached = round.no <= currentRoundNo;
@@ -490,7 +515,7 @@ export default function ReportPreviewPage() {
           </div>
 
           {/* ── 기본 정보 + 축 점수 + 보조 + 벡터 ── */}
-          <div style={{ marginBottom: 16 }}>
+          <div className="report-header-area" style={{ marginBottom: 16 }}>
             <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 18, alignItems: 'start' }}>
               <div>
                 {/* 기본 정보 */}
@@ -560,7 +585,17 @@ export default function ReportPreviewPage() {
               {/* 유형 + 벡터 */}
               <div>
                 <div style={{ color: tokens.textDim, fontSize: 13, fontWeight: 800, marginBottom: 4 }}>유형</div>
-                <div style={{ fontWeight: 900, fontSize: 18, marginBottom: 8 }}>{typeLabel(typeCode)}</div>
+                <div style={{ fontWeight: 900, fontSize: 18, marginBottom: 8 }}>
+                  {typeLabel(typeCode)}
+                  {(typeRatioParam != null || typeAvgGradeParam != null) && (
+                    <span style={{ fontWeight: 500, fontSize: 12, color: tokens.textDim, marginLeft: 6 }}>
+                      ({[
+                        typeRatioParam != null ? `전체 ${typeRatioParam}%` : null,
+                        typeAvgGradeParam != null ? `평균 ${typeAvgGradeParam.toFixed(1)}등급` : null,
+                      ].filter(Boolean).join(' · ')})
+                    </span>
+                  )}
+                </div>
                 <div style={{ marginBottom: 6, color: tokens.textDim, fontSize: 12, textAlign: 'center' }}>
                   감정 z={formatZ(emotionZ)} · 신념 z={formatZ(beliefZ)} · 강도 {vectorStrength == null ? '-' : `${vectorStrength.toFixed(0)}%`}
                 </div>
@@ -620,7 +655,7 @@ export default function ReportPreviewPage() {
                 return s1Summary ? (
                   <div style={{ marginBottom: 12 }}>
                     <div data-deco-box style={{ background: tokens.panel, border: `1px solid ${tokens.border}`, borderRadius: 10, padding: '10px 14px', fontSize: 14, color: tokens.text, lineHeight: 1.7, whiteSpace: 'pre-line' }}>
-                      {s1Summary}
+                      {renderSummaryText(s1Summary)}
                     </div>
                   </div>
                 ) : null;
@@ -716,7 +751,7 @@ export default function ReportPreviewPage() {
                     return secSummary ? (
                       <div style={{ marginBottom: 12 }}>
                         <div data-deco-box style={{ background: tokens.panel, border: `1px solid ${tokens.border}`, borderRadius: 10, padding: '10px 14px', fontSize: 14, color: tokens.text, lineHeight: 1.7, whiteSpace: 'pre-line' }}>
-                          {secSummary}
+                          {renderSummaryText(secSummary)}
                         </div>
                       </div>
                     ) : null;
