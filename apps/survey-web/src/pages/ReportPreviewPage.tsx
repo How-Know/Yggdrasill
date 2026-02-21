@@ -181,7 +181,47 @@ export default function ReportPreviewPage() {
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
-  const params = React.useMemo(() => new URLSearchParams(window.location.search), []);
+  const urlParams = React.useMemo(() => new URLSearchParams(window.location.search), []);
+  const tokenParam = React.useMemo(() => String(urlParams.get('token') ?? '').trim(), [urlParams]);
+  const [tokenParams, setTokenParams] = React.useState<URLSearchParams | null>(null);
+  const [tokenParticipant, setTokenParticipant] = React.useState<ParticipantMeta | null>(null);
+  const [tokenLoading, setTokenLoading] = React.useState(!!tokenParam);
+
+  React.useEffect(() => {
+    if (!tokenParam) return;
+    let cancelled = false;
+    (async () => {
+      setTokenLoading(true);
+      try {
+        const { data } = await supabase.rpc('get_report_by_token', { p_token: tokenParam });
+        if (!cancelled && data && typeof data === 'object') {
+          const obj = data as Record<string, unknown>;
+          const embedded = obj._participant as Record<string, unknown> | undefined;
+          if (embedded) {
+            setTokenParticipant({
+              id: String(embedded.id ?? ''),
+              name: String(embedded.name ?? '학생'),
+              school: embedded.school != null ? String(embedded.school) : null,
+              grade: embedded.grade != null ? String(embedded.grade) : null,
+            });
+          }
+          const qs = new URLSearchParams();
+          for (const [k, v] of Object.entries(obj)) {
+            if (k === '_participant') continue;
+            if (v != null) qs.set(k, typeof v === 'object' ? JSON.stringify(v) : String(v));
+          }
+          setTokenParams(qs);
+        }
+      } catch (e) {
+        console.error('token load failed', e);
+      } finally {
+        if (!cancelled) setTokenLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [tokenParam]);
+
+  const params = React.useMemo(() => tokenParams ?? urlParams, [tokenParams, urlParams]);
   const participantId = React.useMemo(() => String(params.get('participantId') ?? '').trim(), [params]);
   const typeCode = React.useMemo(() => parseTypeCode(params.get('typeCode')), [params]);
   const emotionZ = React.useMemo(() => parseNumberParam(params, 'emotionZ'), [params]);
@@ -222,6 +262,7 @@ export default function ReportPreviewPage() {
   }, [params]);
 
   React.useEffect(() => {
+    if (tokenLoading) return;
     let cancelled = false;
     (async () => {
       setLoading(true);
@@ -232,25 +273,28 @@ export default function ReportPreviewPage() {
 
         const fallback = cloneFeedbackTemplate(DEFAULT_FEEDBACK_TEMPLATES[typeCode]);
 
-        const participantReq = supabase
-          .from('survey_participants')
-          .select('id, name, school, grade')
-          .eq('id', participantId)
-          .maybeSingle();
-        const templateReq = supabase
+        let p: ParticipantMeta | null = tokenParticipant;
+        if (!p) {
+          const participantRes = await supabase
+            .from('survey_participants')
+            .select('id, name, school, grade')
+            .eq('id', participantId)
+            .maybeSingle();
+          if (participantRes.error) throw participantRes.error;
+          const raw = participantRes.data as any;
+          if (!raw?.id) throw new Error('학생 정보를 찾을 수 없습니다.');
+          p = { id: String(raw.id), name: String(raw.name ?? '').trim() || '학생', school: String(raw.school ?? '').trim() || null, grade: String(raw.grade ?? '').trim() || null };
+        }
+
+        let templateRes = await supabase
           .from('trait_feedback_templates')
           .select('type_code, template_name, sections, scale_description, updated_at, is_active')
           .eq('type_code', typeCode)
           .eq('is_active', true)
           .maybeSingle();
-        const [participantRes, templateResRaw] = await Promise.all([
-          participantReq,
-          templateReq,
-        ]);
 
-        let templateRes = templateResRaw;
-        if (templateResRaw.error) {
-          const message = String(templateResRaw.error?.message ?? '');
+        if (templateRes.error) {
+          const message = String(templateRes.error?.message ?? '');
           if (/scale_description/i.test(message)) {
             templateRes = await supabase
               .from('trait_feedback_templates')
@@ -261,11 +305,7 @@ export default function ReportPreviewPage() {
           }
         }
 
-        if (participantRes.error) throw participantRes.error;
         if (templateRes.error) throw templateRes.error;
-
-        const p = participantRes.data as any;
-        if (!p?.id) throw new Error('학생 정보를 찾을 수 없습니다.');
 
         const row = templateRes.data as any;
         const nextTemplate: FeedbackTemplate = row
@@ -279,12 +319,7 @@ export default function ReportPreviewPage() {
 
         if (!cancelled) {
           const parsedGuide = parseScaleGuideTemplate(row?.scale_description ?? '');
-          setParticipant({
-            id: String(p.id),
-            name: String(p.name ?? '').trim() || '학생',
-            school: String(p.school ?? '').trim() || null,
-            grade: String(p.grade ?? '').trim() || null,
-          });
+          setParticipant(p);
           setTemplate(nextTemplate);
           setScaleGuide(parsedGuide ?? cloneScaleGuideTemplate(DEFAULT_SCALE_GUIDE_TEMPLATE));
         }
@@ -298,9 +333,10 @@ export default function ReportPreviewPage() {
     })();
 
     return () => { cancelled = true; };
-  }, [participantId, typeCode]);
+  }, [participantId, typeCode, tokenLoading, tokenParticipant]);
 
-  const title = '학생 화면 미리보기';
+  const isStudentView = !!tokenParam;
+  const title = isStudentView ? '수학 학습 성향 조사 결과' : '학생 화면 미리보기';
   const currentRoundNo = React.useMemo(() => {
     const raw = roundNoParam == null ? 1 : Math.round(roundNoParam);
     if (raw === 2 || raw === 3) return raw;
@@ -497,12 +533,14 @@ export default function ReportPreviewPage() {
             >
               인쇄
             </button>
-            <button
-              onClick={() => { if (window.history.length > 1) { window.history.back(); return; } window.location.href = '/results'; }}
-              style={{ height: 36, padding: '0 12px', borderRadius: 8, border: `1px solid ${tokens.border}`, background: '#1E1E1E', color: tokens.text, cursor: 'pointer' }}
-            >
-              뒤로
-            </button>
+            {!isStudentView && (
+              <button
+                onClick={() => { if (window.history.length > 1) { window.history.back(); return; } window.location.href = '/results'; }}
+                style={{ height: 36, padding: '0 12px', borderRadius: 8, border: `1px solid ${tokens.border}`, background: '#1E1E1E', color: tokens.text, cursor: 'pointer' }}
+              >
+                뒤로
+              </button>
+            )}
           </div>
         </div>
 
@@ -511,8 +549,8 @@ export default function ReportPreviewPage() {
           <div style={{ marginTop: 6, fontSize: 12, fontWeight: 700, opacity: 0.5, letterSpacing: 2 }}>SISU MATH</div>
         </div>
 
-      {loading ? (
-        <div style={{ color: tokens.textDim, fontSize: 13 }}>미리보기 데이터를 불러오는 중...</div>
+      {(loading || tokenLoading) ? (
+        <div style={{ color: tokens.textDim, fontSize: 13 }}>데이터를 불러오는 중...</div>
       ) : error ? (
         <div style={{ color: tokens.danger, fontSize: 13 }}>{error}</div>
       ) : participant && template ? (

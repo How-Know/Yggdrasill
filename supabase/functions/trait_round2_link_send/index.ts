@@ -88,6 +88,19 @@ Deno.serve(async (req) => {
 
     const link = `${baseUrl.replace(/\/$/, '')}/survey?sid=${participantId}&r2=${token}`;
 
+    // Check if a report token exists for this participant
+    let reportLink: string | null = null;
+    try {
+      const { data: reportToken } = await admin
+        .from('trait_report_tokens')
+        .select('token')
+        .eq('participant_id', participantId)
+        .maybeSingle();
+      if (reportToken?.token) {
+        reportLink = `${baseUrl.replace(/\/$/, '')}/report-preview?token=${reportToken.token}`;
+      }
+    } catch {}
+
     const resendKey = (Deno.env.get('RESEND_API_KEY') ?? '').trim();
     const resendFrom = (Deno.env.get('RESEND_FROM') ?? '').trim();
     if (!resendKey || !resendFrom) {
@@ -104,13 +117,21 @@ Deno.serve(async (req) => {
       return fail('missing_email_provider_config', '메일 발송 설정이 없습니다.');
     }
 
+    const reportSection = reportLink
+      ? `<p style="margin-top: 16px;">1차 조사 결과도 확인해 보세요.</p><p><a href="${reportLink}" style="display: inline-block; padding: 10px 20px; background: #22C55E; color: #fff; text-decoration: none; border-radius: 8px; font-weight: 700;">1차 결과 보기</a></p>`
+      : '';
+    const reportTextSection = reportLink
+      ? `\n\n1차 조사 결과 보기: ${reportLink}`
+      : '';
+
     const subject = '2차 설문 링크';
-    const text = `안녕하세요.\n\n아래 링크를 통해 2차 설문을 진행해 주세요.\n${link}\n\n감사합니다.`;
+    const text = `안녕하세요.\n\n아래 링크를 통해 2차 설문을 진행해 주세요.\n${link}${reportTextSection}\n\n감사합니다.`;
     const html = `
       <div style="font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;">
         <p>안녕하세요.</p>
         <p>아래 링크를 통해 2차 설문을 진행해 주세요.</p>
         <p><a href="${link}">${link}</a></p>
+        ${reportSection}
         <p>감사합니다.</p>
       </div>
     `.trim();

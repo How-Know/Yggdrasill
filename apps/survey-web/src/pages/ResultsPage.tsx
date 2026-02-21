@@ -696,6 +696,11 @@ export default function ResultsPage() {
   const [filterType, setFilterType] = React.useState('ALL');
   const [filterRound, setFilterRound] = React.useState('ALL');
   const [filterLevelBand, setFilterLevelBand] = React.useState<LevelBandCode>('ALL');
+  const [filterParticipantRound, setFilterParticipantRound] = React.useState<'ALL' | number>('ALL');
+  const [filterParticipantPage, setFilterParticipantPage] = React.useState<1 | 2>(1);
+  const [reportTokenCohorts, setReportTokenCohorts] = React.useState<Record<string, string>>({});
+  const [cohortsLoaded, setCohortsLoaded] = React.useState(false);
+  const [tokenSyncStatus, setTokenSyncStatus] = React.useState<'idle' | 'syncing' | 'done' | 'error'>('idle');
   const [round2LinksByParticipant, setRound2LinksByParticipant] = React.useState<Record<string, Round2LinkStatus>>({});
   const [savingLevelById, setSavingLevelById] = React.useState<Record<string, boolean>>({});
   const [levelErrorById, setLevelErrorById] = React.useState<Record<string, string | null>>({});
@@ -1620,8 +1625,21 @@ export default function ResultsPage() {
   }, [rows]);
 
   const filteredRows = React.useMemo(
-    () => rows.filter((row) => matchesLevelBand(row.current_level_grade, row.current_math_percentile, filterLevelBand)),
-    [filterLevelBand, rows],
+    () => rows.filter((row) => {
+      if (!matchesLevelBand(row.current_level_grade, row.current_math_percentile, filterLevelBand)) return false;
+      if (filterParticipantRound !== 'ALL') {
+        const progress = progressByParticipant[row.id];
+        if (!progress || !(progress[filterParticipantRound] > 0)) return false;
+      }
+      const cohort = reportTokenCohorts[row.id];
+      if (filterParticipantPage === 1) {
+        if (cohort && cohort !== 'snapshot') return false;
+      } else {
+        if (!cohort || cohort === 'snapshot') return false;
+      }
+      return true;
+    }),
+    [filterLevelBand, filterParticipantRound, rows, progressByParticipant, filterParticipantPage, reportTokenCohorts],
   );
 
   const selectedLevelBandLabel = React.useMemo(
@@ -2264,6 +2282,215 @@ export default function ResultsPage() {
     })();
   }
 
+  const [batchSendingReport, setBatchSendingReport] = React.useState(false);
+  const [batchSendResult, setBatchSendResult] = React.useState<{ sent: number; total: number; errors: string[] } | null>(null);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data, error } = await supabase
+          .from('trait_report_tokens')
+          .select('participant_id, cohort');
+        if (error) throw error;
+        if (!cancelled && data) {
+          const map: Record<string, string> = {};
+          for (const r of data as any[]) map[String(r.participant_id)] = String(r.cohort ?? 'snapshot');
+          setReportTokenCohorts(map);
+        }
+      } catch (e) {
+        console.error('[load cohorts]', e);
+      } finally {
+        if (!cancelled) setCohortsLoaded(true);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [snapshotAxisPoints]);
+
+  React.useEffect(() => {
+    if (!cohortsLoaded) return;
+    if (!snapshotAxisPoints.length || !Object.keys(reportScaleProfilesByParticipant).length) return;
+    let cancelled = false;
+    (async () => {
+      setTokenSyncStatus('syncing');
+      try {
+        const items: Array<{ participant_id: string; report_params: Record<string, unknown>; cohort: string }> = [];
+        for (const point of snapshotAxisPoints) {
+          const rp = buildReportParamsForPoint(point);
+          if (!rp) continue;
+          items.push({
+            participant_id: point.participantId,
+            report_params: rp,
+            cohort: reportTokenCohorts[point.participantId] ?? 'additional',
+          });
+        }
+        if (items.length === 0) { setTokenSyncStatus('done'); return; }
+        const { error } = await supabase.rpc('batch_upsert_report_tokens', {
+          p_items: items,
+        });
+        if (error) throw error;
+        if (!cancelled) {
+          const nextCohorts = { ...reportTokenCohorts };
+          for (const it of items) {
+            if (!nextCohorts[it.participant_id]) nextCohorts[it.participant_id] = it.cohort;
+          }
+          setReportTokenCohorts(nextCohorts);
+          setTokenSyncStatus('done');
+        }
+      } catch (e) {
+        console.error('[token sync]', e);
+        if (!cancelled) setTokenSyncStatus('error');
+      }
+    })();
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cohortsLoaded, snapshotAxisPoints, reportScaleProfilesByParticipant]);
+
+  function buildReportParamsForPoint(point: SnapshotAxisPoint): Record<string, unknown> | null {
+    const ftc = toFeedbackTypeCode(point.typeCode);
+    if (!ftc) return null;
+    const profile = reportScaleProfilesByParticipant[point.participantId];
+    if (!profile) return null;
+
+    const params: Record<string, unknown> = {
+      participantId: point.participantId,
+      typeCode: ftc,
+      roundNo: 1,
+    };
+    if (point.emotionZ != null) params.emotionZ = point.emotionZ;
+    if (point.beliefZ != null) params.beliefZ = point.beliefZ;
+    if (point.metacognitionZ != null) params.metacognitionZ = point.metacognitionZ;
+    if (point.persistenceZ != null) params.persistenceZ = point.persistenceZ;
+    params.scaleProfile = profile;
+
+    const vs = computeVectorStrengthPercent(point.emotionZ, point.beliefZ);
+    if (vs != null) params.vectorStrength = vs;
+
+    const emPct = profile.indicators.emotion.percentile;
+    const blPct = profile.indicators.belief.percentile;
+    const mtPct = profile.subscales.metacognition.percentile;
+    const prPct = profile.subscales.persistence.percentile;
+    if (emPct != null) params.emotionPercentile = emPct;
+    if (blPct != null) params.beliefPercentile = blPct;
+    if (mtPct != null) params.metacognitionPercentile = mtPct;
+    if (prPct != null) params.persistencePercentile = prPct;
+
+    if (point.currentLevelGrade != null) params.studentGrade = point.currentLevelGrade;
+
+    const totalWithType = snapshotAxisPoints.filter((p) => p.typeCode !== 'UNCLASSIFIED').length;
+    const typeCount = axisTypeCounts[point.typeCode] ?? 0;
+    if (totalWithType > 0) params.typeRatio = Math.round((typeCount / totalWithType) * 100);
+    const tAvg = axisTypeAvgGrade[point.typeCode];
+    if (tAvg != null) params.typeAvgGrade = tAvg;
+
+    // KNN for main 2-axis
+    if (point.emotionZ != null && point.beliefZ != null) {
+      const anchorX = point.emotionZ;
+      const anchorY = point.beliefZ;
+      const peers = snapshotAxisPoints
+        .filter((p) => p.participantId !== point.participantId && p.emotionZ != null && p.beliefZ != null)
+        .map((p) => {
+          const grade = resolveLevelGrade(p.currentLevelGrade, p.currentMathPercentile);
+          if (grade == null || p.emotionZ == null || p.beliefZ == null) return null;
+          return { distance: Math.sqrt(((p.emotionZ - anchorX) ** 2) + ((p.beliefZ - anchorY) ** 2)), grade };
+        })
+        .filter((r): r is { distance: number; grade: number } => r != null)
+        .sort((a, b) => a.distance - b.distance)
+        .slice(0, PREVIEW_PEER_K);
+      if (peers.length > 0) {
+        const knnRaw = peers.reduce((s, n) => s + n.grade, 0) / peers.length;
+        const blended = tAvg != null
+          ? (peers.length * knnRaw + PEER_SHRINKAGE_PRIOR * tAvg) / (peers.length + PEER_SHRINKAGE_PRIOR)
+          : knnRaw;
+        let adj = 0;
+        if (adjustmentGradeCorr.n >= 5 && point.metacognitionZ != null && point.persistenceZ != null) {
+          adj = ADJUSTMENT_AXIS_WEIGHT * (adjustmentGradeCorr.metaCorr * point.metacognitionZ + adjustmentGradeCorr.persistCorr * point.persistenceZ);
+        }
+        params.peerAvgLevelGrade = Math.max(0, Math.min(6, blended + adj));
+        params.peerSampleN = peers.length;
+        params.peerSource = 'knn';
+      }
+    }
+
+    // subscale peer grades
+    const subPeerGrades: Record<string, number | null> = {};
+    const ALL_SUB_KEYS: ScaleGuideSubscaleKey[] = [
+      'interest', 'emotion_reactivity', 'math_mindset', 'effort_outcome_belief',
+      'external_attribution_belief', 'self_concept', 'identity', 'agency_perception',
+      'question_understanding_belief', 'recovery_expectancy_belief', 'failure_interpretation_belief',
+      'metacognition', 'persistence',
+    ];
+    for (const sk of ALL_SUB_KEYS) {
+      const anchorPct = profile.subscales[sk]?.percentile;
+      if (anchorPct == null) { subPeerGrades[sk] = null; continue; }
+      const cands: Array<{ d: number; g: number }> = [];
+      for (const p of snapshotAxisPoints) {
+        if (p.participantId === point.participantId) continue;
+        const g = resolveLevelGrade(p.currentLevelGrade, p.currentMathPercentile);
+        if (g == null) continue;
+        const pp = reportScaleProfilesByParticipant[p.participantId]?.subscales[sk]?.percentile;
+        if (pp == null) continue;
+        cands.push({ d: Math.abs(pp - anchorPct), g });
+      }
+      cands.sort((a, b) => a.d - b.d);
+      if (cands.length === 0) { subPeerGrades[sk] = null; continue; }
+      const nb = cands.slice(0, PREVIEW_PEER_K);
+      const raw = nb.reduce((s, n) => s + n.g, 0) / nb.length;
+      const bl = tAvg != null ? (nb.length * raw + PEER_SHRINKAGE_PRIOR * tAvg) / (nb.length + PEER_SHRINKAGE_PRIOR) : raw;
+      subPeerGrades[sk] = Math.max(0, Math.min(6, bl));
+    }
+    params.subscalePeerGrades = subPeerGrades;
+    return params;
+  }
+
+  async function sendBatchReportLinks() {
+    if (batchSendingReport) return;
+    const eligible = snapshotAxisPoints.filter((p) => {
+      const ftc = toFeedbackTypeCode(p.typeCode);
+      if (!ftc) return false;
+      const row = rows.find((r) => r.id === p.participantId);
+      return !!row?.email;
+    });
+    if (eligible.length === 0) {
+      alert('이메일이 등록된 참여자가 없습니다.');
+      return;
+    }
+    const origin = window.location.origin;
+    if (/localhost|127\.0\.0\.1/.test(origin)) {
+      if (!confirm(`⚠️ 현재 로컬(${origin})에서 실행 중입니다.\n이메일 링크가 로컬 주소로 생성됩니다.\n배포된 사이트에서 발송하는 것을 권장합니다.\n\n그래도 계속하시겠습니까?`)) return;
+    }
+    if (!confirm(`이메일이 등록된 ${eligible.length}명에게 리포트 링크를 발송합니다.\n계속하시겠습니까?`)) return;
+
+    setBatchSendingReport(true);
+    setBatchSendResult(null);
+    try {
+      const items = eligible.map((p) => {
+        const row = rows.find((r) => r.id === p.participantId);
+        const rp = buildReportParamsForPoint(p);
+        return {
+          participant_id: p.participantId,
+          email: row?.email ?? '',
+          name: row?.name ?? p.participantName,
+          report_params: rp ?? {},
+        };
+      }).filter((it) => !!it.email);
+
+      const { data, error } = await supabase.functions.invoke('trait_report_send', {
+        body: { items, base_url: window.location.origin },
+      });
+
+      if (error) throw error;
+      const result = data as any;
+      console.log('[batch_report_send] result:', JSON.stringify(result, null, 2));
+      const errors = (result?.results ?? []).filter((r: any) => r.status !== 'sent').map((r: any) => `${r.participant_id}: [${r.status}] ${r.error ?? ''}`);
+      setBatchSendResult({ sent: result?.sent ?? 0, total: result?.total ?? 0, errors });
+    } catch (e: any) {
+      alert(`발송 실패: ${e?.message ?? e}`);
+    } finally {
+      setBatchSendingReport(false);
+    }
+  }
+
   function openReportPreview() {
     if (!selectedReportPoint) {
       alert('미리보기할 학생을 먼저 선택해 주세요.');
@@ -2695,11 +2922,46 @@ export default function ResultsPage() {
         </div>
       </div>
 
-      <div style={{ marginBottom: 12, fontSize: 18, fontWeight: 900 }}>
-        참여자
-        <span style={{ marginLeft: 8, color: tokens.textDim, fontSize: 12, fontWeight: 500 }}>
-          표시 {filteredRows.length.toLocaleString('ko-KR')} / {rows.length.toLocaleString('ko-KR')} · {selectedLevelBandLabel}
-        </span>
+      <div style={{ marginBottom: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
+          <div style={{ fontSize: 18, fontWeight: 900 }}>참여자</div>
+          <div style={{ display: 'flex', gap: 0, borderRadius: 8, overflow: 'hidden', border: `1px solid ${tokens.border}` }}>
+            <button
+              onClick={() => setFilterParticipantPage(1)}
+              style={{ padding: '6px 14px', fontSize: 13, fontWeight: filterParticipantPage === 1 ? 800 : 500, background: filterParticipantPage === 1 ? tokens.accent : tokens.panel, color: filterParticipantPage === 1 ? '#fff' : tokens.textDim, border: 'none', cursor: 'pointer' }}
+            >
+              1페이지 (스냅샷)
+            </button>
+            <button
+              onClick={() => setFilterParticipantPage(2)}
+              style={{ padding: '6px 14px', fontSize: 13, fontWeight: filterParticipantPage === 2 ? 800 : 500, background: filterParticipantPage === 2 ? tokens.accent : tokens.panel, color: filterParticipantPage === 2 ? '#fff' : tokens.textDim, border: 'none', borderLeft: `1px solid ${tokens.border}`, cursor: 'pointer' }}
+            >
+              2페이지 (추가)
+            </button>
+          </div>
+          <span style={{ color: tokens.textDim, fontSize: 12, fontWeight: 500 }}>
+            표시 {filteredRows.length.toLocaleString('ko-KR')} / {rows.length.toLocaleString('ko-KR')} · {selectedLevelBandLabel}
+            {tokenSyncStatus === 'syncing' && ' · 토큰 동기화 중...'}
+            {tokenSyncStatus === 'done' && ' · 토큰 동기화 완료'}
+          </span>
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          <button
+            onClick={() => setFilterParticipantRound('ALL')}
+            style={{ ...chipBaseStyle, ...(filterParticipantRound === 'ALL' ? chipActiveStyle : {}) }}
+          >
+            전체
+          </button>
+          {roundMeta.map((rm) => (
+            <button
+              key={`pr_filter_${rm.no}`}
+              onClick={() => setFilterParticipantRound(rm.no)}
+              style={{ ...chipBaseStyle, ...(filterParticipantRound === rm.no ? chipActiveStyle : {}) }}
+            >
+              {rm.label} 참여자
+            </button>
+          ))}
+        </div>
       </div>
       <div style={{ border:`1px solid ${tokens.border}`, borderRadius:12, overflow:'hidden', background: tokens.panel }}>
         <div style={{ display:'grid', gridTemplateColumns:'1.2fr 1.4fr 1.6fr 1.5fr 1.2fr 110px', gap:12, padding:'12px 14px', borderBottom:`1px solid ${tokens.border}`, color:tokens.textDim, fontSize:13, background: tokens.panelAlt }}>
@@ -3440,14 +3702,37 @@ export default function ResultsPage() {
             <div style={{ padding:'12px 14px', borderBottom:`1px solid ${tokens.border}`, background: tokens.panelAlt }}>
               <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:12 }}>
                 <div style={{ fontWeight: 900 }}>학생용 리포트 (우선)</div>
-                <button
-                  onClick={openReportPreview}
-                  style={{ height:34, padding:'0 12px', borderRadius:8, border:`1px solid ${tokens.border}`, background:'#1E1E1E', color: tokens.text, cursor:'pointer' }}
-                >
-                  미리보기
-                </button>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    onClick={sendBatchReportLinks}
+                    disabled={batchSendingReport}
+                    style={{ height:34, padding:'0 12px', borderRadius:8, border:`1px solid ${tokens.accent}`, background: tokens.accent, color: '#fff', cursor:'pointer', fontWeight: 700, fontSize: 13, opacity: batchSendingReport ? 0.5 : 1 }}
+                  >
+                    {batchSendingReport ? '발송 중...' : '일괄 리포트 발송'}
+                  </button>
+                  <button
+                    onClick={openReportPreview}
+                    style={{ height:34, padding:'0 12px', borderRadius:8, border:`1px solid ${tokens.border}`, background:'#1E1E1E', color: tokens.text, cursor:'pointer' }}
+                  >
+                    미리보기
+                  </button>
+                </div>
               </div>
             </div>
+            {batchSendResult && (
+              <div style={{ padding: '10px 14px', background: batchSendResult.errors.length ? '#3B1818' : '#183B18', fontSize: 13 }}>
+                <div>{batchSendResult.sent}/{batchSendResult.total}명 발송 완료
+                  {batchSendResult.errors.length > 0 && (
+                    <span style={{ color: tokens.danger, marginLeft: 8 }}>(실패 {batchSendResult.errors.length}건)</span>
+                  )}
+                </div>
+                {batchSendResult.errors.length > 0 && (
+                  <div style={{ marginTop: 6, fontSize: 11, color: tokens.danger, whiteSpace: 'pre-wrap', maxHeight: 120, overflow: 'auto' }}>
+                    {batchSendResult.errors.join('\n')}
+                  </div>
+                )}
+              </div>
+            )}
             <div style={{ padding:'12px 14px' }}>
               <div style={{ display:'grid', gridTemplateColumns:'1.3fr 2.7fr', gap:12 }}>
                 <div>
