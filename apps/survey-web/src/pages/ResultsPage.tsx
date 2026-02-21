@@ -1821,6 +1821,48 @@ export default function ResultsPage() {
     };
   }, [selectedReportPoint, snapshotAxisPoints, axisTypeAvgGrade, adjustmentGradeCorr]);
 
+  const selectedReportSubscalePeerGrades = React.useMemo(() => {
+    const result: Record<string, number | null> = {};
+    if (!selectedReportPoint) return result;
+    const anchorProfile = reportScaleProfilesByParticipant[selectedReportPoint.participantId];
+    if (!anchorProfile) return result;
+    const typeAvg = axisTypeAvgGrade[selectedReportPoint.typeCode] ?? null;
+
+    const ALL_SUBSCALE_KEYS: ScaleGuideSubscaleKey[] = [
+      'interest', 'emotion_reactivity',
+      'math_mindset', 'effort_outcome_belief', 'external_attribution_belief',
+      'self_concept', 'identity', 'agency_perception',
+      'question_understanding_belief', 'recovery_expectancy_belief', 'failure_interpretation_belief',
+      'metacognition', 'persistence',
+    ];
+
+    for (const subKey of ALL_SUBSCALE_KEYS) {
+      const anchorPct = anchorProfile.subscales[subKey]?.percentile;
+      if (anchorPct == null || !Number.isFinite(anchorPct)) { result[subKey] = null; continue; }
+
+      const candidates: Array<{ distance: number; grade: number }> = [];
+      for (const point of snapshotAxisPoints) {
+        if (point.participantId === selectedReportPoint.participantId) continue;
+        const grade = resolveLevelGrade(point.currentLevelGrade, point.currentMathPercentile);
+        if (grade == null) continue;
+        const peerProfile = reportScaleProfilesByParticipant[point.participantId];
+        const peerPct = peerProfile?.subscales[subKey]?.percentile;
+        if (peerPct == null || !Number.isFinite(peerPct)) continue;
+        candidates.push({ distance: Math.abs(peerPct - anchorPct), grade });
+      }
+      candidates.sort((a, b) => a.distance - b.distance);
+
+      if (candidates.length === 0) { result[subKey] = null; continue; }
+      const neighbors = candidates.slice(0, Math.min(PREVIEW_PEER_K, candidates.length));
+      const knnRaw = neighbors.reduce((s, n) => s + n.grade, 0) / neighbors.length;
+      const blended = typeAvg != null
+        ? (neighbors.length * knnRaw + PEER_SHRINKAGE_PRIOR * typeAvg) / (neighbors.length + PEER_SHRINKAGE_PRIOR)
+        : knnRaw;
+      result[subKey] = Math.max(0, Math.min(6, blended));
+    }
+    return result;
+  }, [selectedReportPoint, snapshotAxisPoints, reportScaleProfilesByParticipant, axisTypeAvgGrade]);
+
   const selectedReportTypeCode = React.useMemo(
     () => (selectedReportPoint ? toFeedbackTypeCode(selectedReportPoint.typeCode) : null),
     [selectedReportPoint],
@@ -2270,6 +2312,9 @@ export default function ResultsPage() {
     const tAvg = axisTypeAvgGrade[selectedReportPoint.typeCode];
     if (tAvg != null) {
       qs.set('typeAvgGrade', String(tAvg));
+    }
+    if (Object.keys(selectedReportSubscalePeerGrades).length > 0) {
+      qs.set('subscalePeerGrades', JSON.stringify(selectedReportSubscalePeerGrades));
     }
     window.location.href = `/report-preview?${qs.toString()}`;
   }

@@ -24,6 +24,8 @@ export type FeedbackTemplate = {
 
 export const FEEDBACK_TYPE_CODES: FeedbackTypeCode[] = ['TYPE_A', 'TYPE_B', 'TYPE_C', 'TYPE_D'];
 
+const CIRCLED_NUMBERS = ['①','②','③','④','⑤','⑥','⑦','⑧','⑨','⑩','⑪','⑫'] as const;
+
 export const FEEDBACK_SECTION_DEFINITIONS: Array<{ key: FeedbackSectionKey; title: string }> = [
   { key: 'profile_summary', title: '정서, 신념 프로파일 요약' },
   { key: 'learning_traits', title: '학습 성향 특징' },
@@ -684,7 +686,7 @@ export function buildLearningTraitsText(
     const header = intensity === 'mild'
       ? '다음과 같은 행동이 나타날 수 있습니다:'
       : '다음과 같은 행동이 나타나는 편입니다:';
-    parts.push(`${header}\n${selectedBehaviors.map((b, i) => `${i + 1}. ${b}`).join('\n')}`);
+    parts.push(`${header}\n${selectedBehaviors.map((b, i) => `${CIRCLED_NUMBERS[i] ?? `${i + 1}.`} ${b}`).join('\n')}`);
   }
 
   return parts.join('\n\n');
@@ -822,8 +824,6 @@ const CORE_STRENGTHS_DETAIL: Record<FeedbackTypeCode, Record<
     persist_weak: '탐색 에너지는 강하지만, 어려운 문제를 좀 더 오래 붙잡는 힘이 생기면 강점이 더 안정적으로 나타날 수 있습니다.',
   },
 };
-
-const CIRCLED_NUMBERS = ['①','②','③','④','⑤','⑥','⑦','⑧','⑨','⑩','⑪','⑫'] as const;
 
 function pickStrengthSentence(item: string[], intensity: IntensityLevel): string {
   const idx = intensity === 'mild' ? 0 : intensity === 'moderate' ? 1 : 2;
@@ -1400,4 +1400,44 @@ const TYPE_KEYWORDS: Record<FeedbackTypeCode, string[]> = {
 export function getTypeKeywords(typeCode: FeedbackTypeCode | null): string[] {
   if (!typeCode) return [];
   return TYPE_KEYWORDS[typeCode] ?? [];
+}
+
+/* ────────────────────────────────────────────
+ * One-line Student Summary (마지막 한줄 요약)
+ * ──────────────────────────────────────────── */
+
+const ONE_LINE_SUMMARY: Record<FeedbackTypeCode, [string, string, string]> = {
+  TYPE_A: [
+    '이해와 확장의 에너지를 가진 학생으로, 구조를 정리하고 실전으로 연결하는 것이 성장의 열쇠입니다.',
+    '탐색과 구조 이해가 뚜렷한 학생으로, 넓히는 힘을 압축과 실전으로 연결하면 빠른 성장이 가능합니다.',
+    '강한 확장 에너지를 가진 학생으로, 탐색의 힘을 점수로 전환하는 구조가 핵심 과제입니다.',
+  ],
+  TYPE_D: [
+    '안정된 구조 위에 힘을 쌓아가는 학생으로, 작은 확장의 시도가 도약으로 이어질 수 있습니다.',
+    '꾸준함을 바탕으로 실력을 유지하는 학생으로, 계단식 확장이 정체를 돌파하는 열쇠입니다.',
+    '구조 안에서 매우 안정적인 학생으로, 자발적 확장과 가속 설계가 성장의 핵심 과제입니다.',
+  ],
+  TYPE_C: [
+    '감정의 영향을 받지만 환경에 따라 충분히 달라질 수 있는 학생으로, 안전한 성공 경험이 변화의 시작점입니다.',
+    '긴장 반응이 학습에 영향을 주는 학생으로, 감정 안정과 작은 성공의 누적이 회복의 열쇠입니다.',
+    '감정 반응이 학습 흐름을 크게 좌우하는 학생으로, 안전한 환경에서의 성공 밀도 확보가 핵심 과제입니다.',
+  ],
+  TYPE_B: [
+    '높은 참여 에너지를 가진 학생으로, 그 에너지를 구조화된 학습 흐름에 연결하면 성장이 가능합니다.',
+    '빠른 반응과 탐색 에너지가 뚜렷한 학생으로, 흥미를 기본기와 교차시키는 설계가 안정의 열쇠입니다.',
+    '강한 흥미 에너지를 가진 학생으로, 에너지의 기복을 완충하고 구조를 먼저 고정하는 것이 핵심 과제입니다.',
+  ],
+};
+
+export function buildOneLineSummary(
+  typeCode: FeedbackTypeCode | null,
+  vectorStrength: number | null,
+): string {
+  if (!typeCode) return '';
+  const sentences = ONE_LINE_SUMMARY[typeCode];
+  if (!sentences) return '';
+  const intensity = getIntensityLevel(vectorStrength);
+  if (intensity === 'mild') return sentences[0];
+  if (intensity === 'moderate') return sentences[1];
+  return sentences[2];
 }

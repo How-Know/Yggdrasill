@@ -6,6 +6,7 @@ import {
   buildCoreStrengthsText,
   buildGrowthCheckpointText,
   buildLearningTraitsText,
+  buildOneLineSummary,
   buildProfileSummaryText,
   buildTeachingStrategyText,
   combineSectionText,
@@ -102,6 +103,23 @@ function renderSummaryText(text: string): React.ReactNode {
   });
 }
 
+const CIRCLED_NUM_RE = /^[①②③④⑤⑥⑦⑧⑨⑩⑪⑫]/;
+const SECTION_HEADER_RE = /^\[.+\]$/;
+function renderStrategyText(text: string): React.ReactNode {
+  return text.split('\n').map((line, idx, arr) => {
+    const trimmed = line.trim();
+    const isHeader = SECTION_HEADER_RE.test(trimmed);
+    const isItemTitle = CIRCLED_NUM_RE.test(trimmed) && !trimmed.includes('\n');
+    const isTitleLine = isHeader || isItemTitle;
+    return (
+      <React.Fragment key={idx}>
+        {isTitleLine ? <span style={{ fontWeight: 800 }}>{line}</span> : line}
+        {idx < arr.length - 1 ? '\n' : ''}
+      </React.Fragment>
+    );
+  });
+}
+
 function formatPercentileLabel(value: number | null): string {
   if (typeof value !== 'number' || !Number.isFinite(value)) return '-';
   return `${value.toFixed(1)}백분위`;
@@ -189,6 +207,17 @@ export default function ReportPreviewPage() {
       return parsed as ParticipantScaleProfile;
     } catch {
       return null;
+    }
+  }, [params]);
+  const subscalePeerGrades = React.useMemo<Record<string, number | null>>(() => {
+    const raw = String(params.get('subscalePeerGrades') ?? '').trim();
+    if (!raw) return {};
+    try {
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+      return parsed as Record<string, number | null>;
+    } catch {
+      return {};
     }
   }, [params]);
 
@@ -392,6 +421,7 @@ export default function ReportPreviewPage() {
 
   const intensity = React.useMemo(() => getIntensityLevel(vectorStrength), [vectorStrength]);
   const keywords = React.useMemo(() => getTypeKeywords(typeCode), [typeCode]);
+  const oneLineSummary = React.useMemo(() => buildOneLineSummary(typeCode, vectorStrength), [typeCode, vectorStrength]);
 
   const handlePrint = React.useCallback(() => {
     const prevExpanded = { ...expandedSections };
@@ -445,6 +475,15 @@ export default function ReportPreviewPage() {
             transform: scale(0.9);
             transform-origin: top left;
             width: 111.11%;
+          }
+          .report-print-root .report-keywords .report-keywords-title {
+            font-size: 22px !important;
+          }
+          .report-print-root .report-type-trait {
+            margin-top: 0 !important;
+          }
+          .report-print-root .report-keywords {
+            margin-top: 32px !important;
           }
         }
       `}</style>
@@ -618,10 +657,22 @@ export default function ReportPreviewPage() {
             </div>
           </div>
 
+          {/* ── 유형 전반적 특징 ── */}
+          {typeCode && (
+            <div className="report-type-trait" style={{ marginTop: 32 }}>
+              <div data-deco-box style={{ background: tokens.panel, border: `1px solid ${tokens.border}`, borderRadius: 12, padding: '14px 20px', textAlign: 'center', lineHeight: 1.9, fontSize: 16, color: tokens.text }}>
+                {typeCode === 'TYPE_A' && (<>수학을 이해하고 확장하려는 에너지가 있는 편이며,<br />배운 것을 더 깊게 연결하려는 성향을 가지고 있어요.</>)}
+                {typeCode === 'TYPE_D' && (<>제시된 틀 안에서 이해를 쌓아가는 성향이 비교적 안정적이며,<br />꾸준함을 바탕으로 실력을 유지하는 구조를 가지고 있어요.</>)}
+                {typeCode === 'TYPE_C' && (<>어려운 상황에서 감정이 먼저 반응할 수 있지만,<br />환경과 학습구조에 따라 충분히 달라질 수 있는 가능성을 가지고 있어요.</>)}
+                {typeCode === 'TYPE_B' && (<>새로운 것에 빠르게 반응하고 참여 에너지가 높은 편이며,<br />학습 흐름이 감정 상태에 영향을 받는 학습구조를 가지고 있어요.</>)}
+              </div>
+            </div>
+          )}
+
           {/* ── 키워드 ── */}
           {keywords.length > 0 ? (
-            <div style={{ marginTop: 48, textAlign: 'center' }}>
-              <div style={{ fontSize: 18, fontWeight: 800, color: tokens.textDim, marginBottom: 12 }}>키워드</div>
+            <div className="report-keywords" style={{ marginTop: 16, textAlign: 'center' }}>
+              <div className="report-keywords-title" style={{ fontSize: 18, fontWeight: 800, color: tokens.textDim, marginBottom: 12 }}>키워드</div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center' }}>
                 {keywords.map((kw) => (
                   <span key={kw} style={{ fontSize: 15, fontWeight: 800, color: tokens.accent, background: 'transparent', border: `1px solid ${tokens.border}`, borderRadius: 20, padding: '5px 14px' }}>
@@ -650,17 +701,7 @@ export default function ReportPreviewPage() {
                   {scaleGuideExpanded ? '접기' : '자세히 보기'}
                 </button>
               </div>
-              {(() => {
-                const s1Summary = getSectionSummary('profile_summary', typeCode, intensity);
-                return s1Summary ? (
-                  <div style={{ marginBottom: 12 }}>
-                    <div data-deco-box style={{ background: tokens.panel, border: `1px solid ${tokens.border}`, borderRadius: 10, padding: '10px 14px', fontSize: 14, color: tokens.text, lineHeight: 1.7, whiteSpace: 'pre-line' }}>
-                      {renderSummaryText(s1Summary)}
-                    </div>
-                  </div>
-                ) : null;
-              })()}
-              <div style={{ paddingLeft: 6, color: tokens.textDim, fontSize: 14, whiteSpace: 'pre-wrap', lineHeight: 1.7 }}>
+              <div data-deco-box style={{ background: tokens.panel, border: `1px solid ${tokens.border}`, borderRadius: 10, padding: '10px 14px', fontSize: 14, color: tokens.text, lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>
                 {profileSummaryText || '내용을 입력해 주세요.'}
               </div>
 
@@ -699,6 +740,7 @@ export default function ReportPreviewPage() {
                               const circled = String.fromCodePoint(0x2460 + subIdx - 1);
                               const subMetric = scaleProfile?.subscales[sub.key] ?? null;
                               const fb = getSubscaleFeedback(sub.key, subMetric?.percentile ?? null);
+                              const subPeerGrade = subscalePeerGrades[sub.key] ?? null;
                               return (
                                 <div key={`sg_sub_${sub.key}`} style={{ paddingLeft: 8, borderLeft: `2px solid ${tokens.border}` }}>
                                   <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 }}>
@@ -711,8 +753,13 @@ export default function ReportPreviewPage() {
                                     {fb ? (
                                       <div style={{ fontSize: 14, fontWeight: 600, color: fb.color, lineHeight: 1.5, paddingLeft: 12 }}>{fb.text}</div>
                                     ) : <div />}
-                                    <div style={{ color: tokens.textDim, fontSize: 12, flexShrink: 0 }}>
+                                    <div style={{ color: tokens.textDim, fontSize: 12, flexShrink: 0, textAlign: 'right' }}>
                                       {formatScore(subMetric?.score ?? null)}점 · {formatPercentileLabel(subMetric?.percentile ?? null)}
+                                      {subPeerGrade != null && (
+                                        <div style={{ marginTop: 2, fontSize: 11, opacity: 0.7 }}>
+                                          해당 위치 학생의 평균 등급: {formatLevelGrade(subPeerGrade)}
+                                        </div>
+                                      )}
                                     </div>
                                   </div>
                                 </div>
@@ -765,7 +812,7 @@ export default function ReportPreviewPage() {
                           : section.key === 'cautions'
                             ? (cautionsText || '내용을 입력해 주세요.')
                             : section.key === 'teaching_strategy'
-                              ? (teachingStrategyText || '내용을 입력해 주세요.')
+                              ? (teachingStrategyText ? renderStrategyText(teachingStrategyText) : '내용을 입력해 주세요.')
                               : section.key === 'growth_checkpoint'
                                 ? (growthCheckpointText || '내용을 입력해 주세요.')
                                 : (combineSectionText(section) || '내용을 입력해 주세요.')}
@@ -775,6 +822,16 @@ export default function ReportPreviewPage() {
               );
             })}
           </div>
+
+          {/* ── 한줄 요약 ── */}
+          {oneLineSummary ? (
+            <div style={{ marginTop: 40, padding: '18px 20px', borderRadius: 12, background: tokens.panel, border: `1px solid ${tokens.border}`, textAlign: 'center' }}>
+              <div style={{ fontSize: 15, fontWeight: 800, color: tokens.accent, marginBottom: 8 }}>한줄 요약</div>
+              <div style={{ fontSize: 15, fontWeight: 500, color: tokens.text, lineHeight: 1.7 }}>
+                {oneLineSummary}
+              </div>
+            </div>
+          ) : null}
         </>
       ) : null}
     </div>
