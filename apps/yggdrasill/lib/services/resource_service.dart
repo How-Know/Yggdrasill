@@ -736,7 +736,7 @@ class ResourceService {
       final supa = Supabase.instance.client;
       final row = await supa
           .from('textbook_metadata')
-          .select('page_offset,payload')
+          .select('page_offset,payload,textbook_type')
           .match({
             'academy_id': academyId,
             'book_id': bookId,

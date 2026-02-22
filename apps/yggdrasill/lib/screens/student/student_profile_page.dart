@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../services/data_manager.dart';
 import '../../models/student.dart';
 import '../../models/education_level.dart';
@@ -1093,12 +1094,9 @@ class _StudentTimelineViewState extends State<_StudentTimelineView> {
                 (widget.flows ?? const <StudentFlow>[])
                     .where((f) => f.enabled)
                     .toList();
-            // 요청 반영:
-            // - 태그 타임라인 너비 20% 축소
-            // - 플로우 카드 너비 10% 확대
             const double timelineMaxWidth = 860 * 0.56;
-            const double flowCardWidth = 260 * 1.43;
-            const double flowCardSpacing = 12;
+            const double flowCardWidth = timelineMaxWidth;
+            const double flowCardSpacing = 16;
             final int flowCount = enabledFlows.length;
             final double flowSidebarWidth = flowCount == 0
                 ? 0
@@ -1194,24 +1192,28 @@ class _StudentTimelineViewState extends State<_StudentTimelineView> {
             );
             return Align(
               alignment: Alignment.topCenter,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  SizedBox(width: timelineMaxWidth, child: timelineCard),
-                  if (enabledFlows.isNotEmpty) ...[
-                    const SizedBox(width: flowCardSpacing),
-                    SizedBox(
-                      width: flowSidebarWidth,
-                      child: _FlowHomeworkSidebar(
-                        studentId: widget.studentWithInfo.student.id,
-                        flows: enabledFlows,
-                        cardWidth: flowCardWidth,
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.only(bottom: 2),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SizedBox(width: timelineMaxWidth, child: timelineCard),
+                    if (enabledFlows.isNotEmpty) ...[
+                      const SizedBox(width: flowCardSpacing),
+                      SizedBox(
+                        width: flowSidebarWidth,
+                        child: _FlowHomeworkSidebar(
+                          studentId: widget.studentWithInfo.student.id,
+                          flows: enabledFlows,
+                          cardWidth: flowCardWidth,
+                        ),
                       ),
-                    ),
+                    ],
                   ],
-                ],
+                ),
               ),
             );
           },
@@ -1841,6 +1843,8 @@ class _FlowHomeworkSidebarState extends State<_FlowHomeworkSidebar> {
                                 width: widget.cardWidth,
                                 child: _FlowHomeworkCard(
                                   flow: sortedFlows[i],
+                                  studentId: widget.studentId,
+                                  cardWidth: widget.cardWidth,
                                   items: allItems
                                       .where((e) =>
                                           e.flowId == sortedFlows[i].id)
@@ -1854,7 +1858,7 @@ class _FlowHomeworkSidebarState extends State<_FlowHomeworkSidebar> {
                                 ),
                               ),
                               if (i != sortedFlows.length - 1)
-                                const SizedBox(width: 12),
+                                const SizedBox(width: 16),
                             ],
                           ],
                         );
@@ -1873,12 +1877,16 @@ class _FlowHomeworkSidebarState extends State<_FlowHomeworkSidebar> {
 
 class _FlowHomeworkCard extends StatefulWidget {
   final StudentFlow flow;
+  final String studentId;
+  final double cardWidth;
   final List<HomeworkItem> items;
   final Map<String, List<HomeworkAssignmentBrief>> assignmentsByItem;
   final Map<String, List<HomeworkAssignmentCheck>> checksByItem;
   final VoidCallback? onEditName;
   const _FlowHomeworkCard({
     required this.flow,
+    required this.studentId,
+    required this.cardWidth,
     required this.items,
     required this.assignmentsByItem,
     required this.checksByItem,
@@ -1931,6 +1939,36 @@ class _FlowHomeworkCardState extends State<_FlowHomeworkCard> {
       return '${hours}h ${minutes.toString().padLeft(2, '0')}m';
     }
     return '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
+  }
+
+  DateTime? _completedDate(HomeworkItem hw) {
+    return hw.completedAt ?? hw.confirmedAt;
+  }
+
+  String _completedDateGroupKey(HomeworkItem hw) {
+    final completed = _completedDate(hw);
+    if (completed == null) return '미완료';
+    return DateFormat('yyyy.MM.dd').format(completed);
+  }
+
+  Widget _buildCompletedDateDivider(String key) {
+    final bool pending = key == '미완료';
+    return Row(
+      children: [
+        const Expanded(child: Divider(color: Color(0xFF223131), height: 1)),
+        const SizedBox(width: 8),
+        Text(
+          pending ? '미완료' : key,
+          style: TextStyle(
+            color: pending ? const Color(0xFF7A8787) : const Color(0xFF9FB3B3),
+            fontSize: 12.5,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        const SizedBox(width: 8),
+        const Expanded(child: Divider(color: Color(0xFF223131), height: 1)),
+      ],
+    );
   }
 
   List<_HomeworkRoundData> _buildAssignmentRounds(
@@ -2161,6 +2199,13 @@ class _FlowHomeworkCardState extends State<_FlowHomeworkCard> {
                 children: [
                   _metaItem('페이지', page),
                   _metaItem('문항수', count),
+                ],
+              ),
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 14,
+                runSpacing: 6,
+                children: [
                   _metaItem('시작', _formatTime(startTime)),
                   _metaItem('총 걸린시간', duration),
                   _metaItem('검사횟수', checkCount.toString()),
@@ -2273,8 +2318,9 @@ class _FlowHomeworkCardState extends State<_FlowHomeworkCard> {
   @override
   Widget build(BuildContext context) {
     final sorted = _sortedItems();
+    final bool isWide = widget.cardWidth >= 460;
     return Container(
-      padding: const EdgeInsets.fromLTRB(0, 12, 14, 12),
+      padding: const EdgeInsets.fromLTRB(6, 14, 10, 14),
       decoration: const BoxDecoration(
         border: Border(
           right: BorderSide(color: Color(0xFF223131), width: 1),
@@ -2286,14 +2332,14 @@ class _FlowHomeworkCardState extends State<_FlowHomeworkCard> {
           Row(
             children: [
               const Icon(Icons.account_tree_outlined,
-                  size: 18, color: Color(0xFF9FB3B3)),
+                  size: 20, color: Color(0xFF9FB3B3)),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
                   widget.flow.name,
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: Color(0xFFEAF2F2),
-                    fontSize: 32,
+                    fontSize: isWide ? 34 : 30,
                     fontWeight: FontWeight.w700,
                   ),
                 ),
@@ -2302,22 +2348,48 @@ class _FlowHomeworkCardState extends State<_FlowHomeworkCard> {
                 IconButton(
                   tooltip: '이름 변경',
                   onPressed: widget.onEditName,
-                  icon: const Icon(Icons.edit, size: 18, color: Color(0xFF9FB3B3)),
+                  icon: const Icon(Icons.edit, size: 19, color: Color(0xFF9FB3B3)),
                   padding: EdgeInsets.zero,
                   constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
                 ),
             ],
           ),
           const SizedBox(height: 12),
-          _FlowTextbookSummary(flow: widget.flow),
+          _FlowTextbookSummary(
+            flow: widget.flow,
+            studentId: widget.studentId,
+            homeworkItems: widget.items,
+            cardWidth: widget.cardWidth,
+          ),
           const SizedBox(height: 12),
-          const Text(
-            '과제 목록',
-            style: TextStyle(
-              color: Color(0xFF9FB3B3),
-              fontSize: 15,
-              fontWeight: FontWeight.w700,
-            ),
+          Row(
+            children: [
+              const Text(
+                '과제 목록',
+                style: TextStyle(
+                  color: Color(0xFF9FB3B3),
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF151C21),
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(color: const Color(0xFF223131)),
+                ),
+                child: Text(
+                  '${sorted.length}개',
+                  style: const TextStyle(
+                    color: Color(0xFF9FB3B3),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
           ),
           const SizedBox(height: 10),
           if (sorted.isEmpty)
@@ -2326,13 +2398,28 @@ class _FlowHomeworkCardState extends State<_FlowHomeworkCard> {
               style: TextStyle(color: Color(0xFF9FB3B3), fontSize: 14),
             )
           else
-            Column(
-              children: [
-                for (int i = 0; i < sorted.length; i++) ...[
-                  _buildHomeworkCard(sorted[i]),
-                  if (i != sorted.length - 1) const SizedBox(height: 10),
-                ],
-              ],
+            Builder(
+              builder: (_) {
+                final children = <Widget>[];
+                String? previousGroup;
+                for (int i = 0; i < sorted.length; i++) {
+                  final hw = sorted[i];
+                  final group = _completedDateGroupKey(hw);
+                  if (group != previousGroup) {
+                    if (children.isNotEmpty) {
+                      children.add(const SizedBox(height: 8));
+                    }
+                    children.add(_buildCompletedDateDivider(group));
+                    children.add(const SizedBox(height: 8));
+                    previousGroup = group;
+                  }
+                  children.add(_buildHomeworkCard(hw));
+                  if (i != sorted.length - 1) {
+                    children.add(const SizedBox(height: 10));
+                  }
+                }
+                return Column(children: children);
+              },
             ),
         ],
       ),
@@ -2354,18 +2441,91 @@ class _HomeworkRoundData {
   });
 }
 
+class _ChecklistBigNode {
+  final String name;
+  final int orderIndex;
+  final List<_ChecklistMidNode> middles;
+  bool selected;
+
+  _ChecklistBigNode({
+    required this.name,
+    required this.orderIndex,
+    required this.middles,
+    this.selected = false,
+  });
+}
+
+class _ChecklistMidNode {
+  final String name;
+  final int orderIndex;
+  final List<_ChecklistSmallNode> smalls;
+  bool selected;
+
+  _ChecklistMidNode({
+    required this.name,
+    required this.orderIndex,
+    required this.smalls,
+    this.selected = false,
+  });
+}
+
+class _ChecklistSmallNode {
+  final String name;
+  final int orderIndex;
+  final int? startPage;
+  final int? endPage;
+  final String key;
+  final Set<int> pages;
+  final bool locked;
+  bool selected;
+
+  _ChecklistSmallNode({
+    required this.name,
+    required this.orderIndex,
+    required this.startPage,
+    required this.endPage,
+    required this.key,
+    required this.pages,
+    this.locked = false,
+    this.selected = false,
+  });
+}
+
 class _FlowTextbookSummary extends StatefulWidget {
   final StudentFlow flow;
-  const _FlowTextbookSummary({required this.flow});
+  final String studentId;
+  final List<HomeworkItem> homeworkItems;
+  final double cardWidth;
+  const _FlowTextbookSummary({
+    required this.flow,
+    required this.studentId,
+    required this.homeworkItems,
+    required this.cardWidth,
+  });
 
   @override
   State<_FlowTextbookSummary> createState() => _FlowTextbookSummaryState();
 }
 
 class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
+  static final Map<String, Set<int>> _metadataPagesCacheByBookKey =
+      <String, Set<int>>{};
+  static final Map<String, Map<String, dynamic>?> _metadataPayloadCacheByBookKey =
+      <String, Map<String, dynamic>?>{};
+  static final Map<String, Map<String, Set<int>>> _metadataSmallPagesCacheByBookKey =
+      <String, Map<String, Set<int>>>{};
+  static final Map<String, String> _textbookTypeCacheByBookKey =
+      <String, String>{};
+
   bool _loading = true;
   int _reqId = 0;
   List<Map<String, dynamic>> _linked = const <Map<String, dynamic>>[];
+  Map<String, int> _totalPagesByKey = <String, int>{};
+  Map<String, int> _completedPagesByKey = <String, int>{};
+  Map<String, int> _acknowledgedPageCountByKey = <String, int>{};
+  Map<String, Set<String>> _acknowledgedSmallKeysByBookKey =
+      <String, Set<String>>{};
+  Map<String, String> _typeLabelByKey = <String, String>{};
 
   @override
   void initState() {
@@ -2376,9 +2536,21 @@ class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
   @override
   void didUpdateWidget(covariant _FlowTextbookSummary oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.flow.id != widget.flow.id) {
+    if (oldWidget.flow.id != widget.flow.id ||
+        oldWidget.studentId != widget.studentId) {
       unawaited(_loadLinks());
+      return;
     }
+    _recalculateCompletedProgress();
+  }
+
+  bool _mapsEqual<K, V>(Map<K, V> a, Map<K, V> b) {
+    if (identical(a, b)) return true;
+    if (a.length != b.length) return false;
+    for (final entry in a.entries) {
+      if (b[entry.key] != entry.value) return false;
+    }
+    return true;
   }
 
   String _keyOf(Map<String, dynamic> row) {
@@ -2391,6 +2563,353 @@ class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
     final book = (row['book_name'] as String?)?.trim() ?? '(이름 없음)';
     final grade = (row['grade_label'] as String?)?.trim() ?? '';
     return grade.isEmpty ? book : '$book · $grade';
+  }
+
+  int? _toInt(dynamic value) {
+    if (value == null) return null;
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    if (value is String) return int.tryParse(value.trim());
+    return null;
+  }
+
+  void _addPageRange(Set<int> pages, int? a, int? b) {
+    if (a == null && b == null) return;
+    if (a != null && b != null) {
+      int start = a;
+      int end = b;
+      if (start > end) {
+        final tmp = start;
+        start = end;
+        end = tmp;
+      }
+      if (end - start > 1600) {
+        if (start > 0) pages.add(start);
+        if (end > 0) pages.add(end);
+        return;
+      }
+      for (int p = start; p <= end; p++) {
+        if (p > 0) pages.add(p);
+      }
+      return;
+    }
+    final single = a ?? b;
+    if (single != null && single > 0) {
+      pages.add(single);
+    }
+  }
+
+  Set<int> _pagesFromMetadataPayload(dynamic payload) {
+    final pages = <int>{};
+    void walk(dynamic node) {
+      if (node is Map) {
+        final start = _toInt(node['start_page'] ?? node['startPage']);
+        final end = _toInt(node['end_page'] ?? node['endPage']);
+        _addPageRange(pages, start, end);
+
+        final counts = node['page_counts'] ?? node['pageCounts'];
+        if (counts is Map) {
+          for (final key in counts.keys) {
+            final page = _toInt(key);
+            if (page != null && page > 0) pages.add(page);
+          }
+        }
+
+        for (final value in node.values) {
+          if (value is Map || value is List) {
+            walk(value);
+          }
+        }
+        return;
+      }
+      if (node is List) {
+        for (final item in node) {
+          if (item is Map || item is List) {
+            walk(item);
+          }
+        }
+      }
+    }
+
+    walk(payload);
+    return pages;
+  }
+
+  String _smallKey(int bigOrder, int midOrder, int smallOrder) {
+    return '$bigOrder|$midOrder|$smallOrder';
+  }
+
+  Map<String, Set<int>> _smallPagesFromMetadataPayload(dynamic payload) {
+    final out = <String, Set<int>>{};
+    if (payload is! Map) return out;
+    final unitsRaw = payload['units'];
+    if (unitsRaw is! List) return out;
+    final units = unitsRaw
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+    units.sort(
+      (a, b) => _orderIndex(a['order_index']).compareTo(_orderIndex(b['order_index'])),
+    );
+    for (final big in units) {
+      final bigOrder = _orderIndex(big['order_index']);
+      final midsRaw = big['middles'];
+      if (midsRaw is! List) continue;
+      final mids = midsRaw
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+      mids.sort(
+        (a, b) => _orderIndex(a['order_index']).compareTo(_orderIndex(b['order_index'])),
+      );
+      for (final mid in mids) {
+        final midOrder = _orderIndex(mid['order_index']);
+        final smallsRaw = mid['smalls'];
+        if (smallsRaw is! List) continue;
+        final smalls = smallsRaw
+            .whereType<Map>()
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList();
+        smalls.sort(
+          (a, b) => _orderIndex(a['order_index']).compareTo(_orderIndex(b['order_index'])),
+        );
+        for (final small in smalls) {
+          final smallOrder = _orderIndex(small['order_index']);
+          final pages = <int>{};
+          final start = _toInt(small['start_page']);
+          final end = _toInt(small['end_page']);
+          _addPageRange(pages, start, end);
+          final counts = small['page_counts'];
+          if (counts is Map) {
+            for (final key in counts.keys) {
+              final page = _toInt(key);
+              if (page != null && page > 0) pages.add(page);
+            }
+          }
+          out[_smallKey(bigOrder, midOrder, smallOrder)] = pages;
+        }
+      }
+    }
+    return out;
+  }
+
+  int _orderIndex(dynamic value) => _toInt(value) ?? (1 << 30);
+
+  String _sanitizeTextbookType(dynamic value) {
+    final raw = (value as String?)?.trim() ?? '';
+    if (raw == '개념서' || raw == '문제집') return raw;
+    return '';
+  }
+
+  String _ackPrefsKey(String bookKey) {
+    return 'flow_textbook_ack_units_v1:${widget.studentId}|${widget.flow.id}|$bookKey';
+  }
+
+  Future<Map<String, Set<String>>> _loadAcknowledgedSmallKeysByLinks(
+    List<Map<String, dynamic>> links,
+  ) async {
+    final prefs = await SharedPreferences.getInstance();
+    final out = <String, Set<String>>{};
+    for (final row in links) {
+      final key = _keyOf(row);
+      if (key == '|') continue;
+      final values = prefs.getStringList(_ackPrefsKey(key)) ?? const <String>[];
+      out[key] = values.map((e) => e.trim()).where((e) => e.isNotEmpty).toSet();
+    }
+    return out;
+  }
+
+  Future<void> _saveAcknowledgedSmallKeys(
+    String bookKey,
+    Set<String> selectedKeys,
+  ) async {
+    final prefs = await SharedPreferences.getInstance();
+    final list = selectedKeys.toList()..sort();
+    await prefs.setStringList(_ackPrefsKey(bookKey), list);
+  }
+
+  Set<int> _pagesFromUnitMappings(List<Map<String, dynamic>>? mappings) {
+    final pages = <int>{};
+    if (mappings == null || mappings.isEmpty) return pages;
+    for (final raw in mappings) {
+      final m = Map<String, dynamic>.from(raw);
+      final start = _toInt(m['startPage'] ?? m['start_page']);
+      final end = _toInt(m['endPage'] ?? m['end_page']);
+      _addPageRange(pages, start, end);
+    }
+    return pages;
+  }
+
+  Set<int> _pagesFromRawPageText(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) return <int>{};
+    final normalized = trimmed
+        .replaceAll(RegExp(r'p\.', caseSensitive: false), '')
+        .replaceAll('페이지', '')
+        .replaceAll('쪽', '')
+        .replaceAll('~', '-')
+        .replaceAll('–', '-')
+        .replaceAll('—', '-');
+    final tokens = normalized
+        .split(RegExp(r'[,/\s]+'))
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty);
+    final pages = <int>{};
+    for (final token in tokens) {
+      if (token.contains('-')) {
+        final parts = token
+            .split('-')
+            .map((e) => e.trim())
+            .where((e) => e.isNotEmpty)
+            .toList();
+        if (parts.length != 2) continue;
+        _addPageRange(pages, _toInt(parts[0]), _toInt(parts[1]));
+      } else {
+        final value = _toInt(token);
+        if (value != null && value > 0) {
+          pages.add(value);
+        }
+      }
+    }
+    return pages;
+  }
+
+  bool _isCompletedForProgress(HomeworkItem hw) {
+    return hw.status == HomeworkStatus.completed || hw.phase == 4;
+  }
+
+  Set<int> _completedPagesForHomework(HomeworkItem hw) {
+    final byMapping = _pagesFromUnitMappings(hw.unitMappings);
+    if (byMapping.isNotEmpty) return byMapping;
+    return _pagesFromRawPageText(hw.page ?? '');
+  }
+
+  Future<void> _ensureMetadataCachesForBook(Map<String, dynamic> row) async {
+    final key = _keyOf(row);
+    if (key == '|') return;
+    final hasPages = _metadataPagesCacheByBookKey.containsKey(key);
+    final hasPayload = _metadataPayloadCacheByBookKey.containsKey(key);
+    final hasType = _textbookTypeCacheByBookKey.containsKey(key);
+    final hasSmallPages = _metadataSmallPagesCacheByBookKey.containsKey(key);
+    if (hasPages && hasPayload && hasType && hasSmallPages) return;
+
+    final bookId = (row['book_id'] as String?)?.trim() ?? '';
+    final grade = (row['grade_label'] as String?)?.trim() ?? '';
+    Map<String, dynamic>? payloadRow;
+    if (bookId.isNotEmpty && grade.isNotEmpty) {
+      try {
+        payloadRow = await DataManager.instance.loadTextbookMetadataPayload(
+          bookId: bookId,
+          gradeLabel: grade,
+        );
+      } catch (_) {
+        payloadRow = null;
+      }
+    }
+
+    final payload = payloadRow?['payload'];
+    _metadataPayloadCacheByBookKey[key] =
+        payload is Map ? Map<String, dynamic>.from(payload) : null;
+    _metadataPagesCacheByBookKey[key] = _pagesFromMetadataPayload(payload);
+    _metadataSmallPagesCacheByBookKey[key] =
+        _smallPagesFromMetadataPayload(payload);
+    final metaType = _sanitizeTextbookType(payloadRow?['textbook_type']);
+    _textbookTypeCacheByBookKey[key] = metaType.isEmpty ? '미지정' : metaType;
+  }
+
+  Future<Map<String, int>> _buildTotalPagesByKey(
+    List<Map<String, dynamic>> links,
+  ) async {
+    final out = <String, int>{};
+    for (final row in links) {
+      final key = _keyOf(row);
+      if (key == '|') continue;
+      await _ensureMetadataCachesForBook(row);
+      out[key] = (_metadataPagesCacheByBookKey[key] ?? const <int>{}).length;
+    }
+    return out;
+  }
+
+  Future<Map<String, String>> _buildTypeLabelsByKey(
+    List<Map<String, dynamic>> links,
+  ) async {
+    final out = <String, String>{};
+    for (final row in links) {
+      final key = _keyOf(row);
+      if (key == '|') continue;
+      await _ensureMetadataCachesForBook(row);
+      out[key] = _textbookTypeCacheByBookKey[key] ?? '미지정';
+    }
+    return out;
+  }
+
+  Map<String, int> _buildCompletedPagesByKey(
+    List<Map<String, dynamic>> links, {
+    required Map<String, int> totalPagesByKey,
+    required Map<String, Set<String>> acknowledgedSmallKeysByBookKey,
+    required Map<String, int> acknowledgedPageCountByKeyOut,
+  }) {
+    final completedSets = <String, Set<int>>{};
+    for (final hw in widget.homeworkItems) {
+      if (!_isCompletedForProgress(hw)) continue;
+      final bookId = (hw.bookId ?? '').trim();
+      final grade = (hw.gradeLabel ?? '').trim();
+      if (bookId.isEmpty || grade.isEmpty) continue;
+      final key = '$bookId|$grade';
+      final set = completedSets.putIfAbsent(key, () => <int>{});
+      set.addAll(_completedPagesForHomework(hw));
+    }
+
+    final out = <String, int>{};
+    for (final row in links) {
+      final key = _keyOf(row);
+      final doneSet = <int>{...(completedSets[key] ?? const <int>{})};
+      final ackSmallKeys =
+          acknowledgedSmallKeysByBookKey[key] ?? const <String>{};
+      final smallPagesByKey =
+          _metadataSmallPagesCacheByBookKey[key] ?? const <String, Set<int>>{};
+      final ackPages = <int>{};
+      for (final smallKey in ackSmallKeys) {
+        ackPages.addAll(smallPagesByKey[smallKey] ?? const <int>{});
+      }
+      acknowledgedPageCountByKeyOut[key] = ackPages.length;
+      doneSet.addAll(ackPages);
+      final totalPages = totalPagesByKey[key] ?? 0;
+      if (totalPages <= 0) {
+        out[key] = doneSet.length;
+        continue;
+      }
+      final allowed = _metadataPagesCacheByBookKey[key];
+      if (allowed == null || allowed.isEmpty) {
+        out[key] = doneSet.length.clamp(0, totalPages);
+        continue;
+      }
+      int matched = 0;
+      for (final p in doneSet) {
+        if (allowed.contains(p)) matched++;
+      }
+      out[key] = matched.clamp(0, totalPages);
+    }
+    return out;
+  }
+
+  void _recalculateCompletedProgress() {
+    final ackCountByKey = <String, int>{};
+    final next = _buildCompletedPagesByKey(
+      _linked,
+      totalPagesByKey: _totalPagesByKey,
+      acknowledgedSmallKeysByBookKey: _acknowledgedSmallKeysByBookKey,
+      acknowledgedPageCountByKeyOut: ackCountByKey,
+    );
+    final bool completedChanged = !_mapsEqual(next, _completedPagesByKey);
+    final bool ackChanged =
+        !_mapsEqual(ackCountByKey, _acknowledgedPageCountByKey);
+    if ((completedChanged || ackChanged) && mounted) {
+      setState(() {
+        _completedPagesByKey = next;
+        _acknowledgedPageCountByKey = ackCountByKey;
+      });
+    }
   }
 
   Future<void> _loadLinks() async {
@@ -2406,10 +2925,38 @@ class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
         if (ai != bi) return ai.compareTo(bi);
         return _labelOf(a).compareTo(_labelOf(b));
       });
-      setState(() => _linked = list);
+      final totalPagesByKey = await _buildTotalPagesByKey(list);
+      if (!mounted || id != _reqId) return;
+      final typeLabelByKey = await _buildTypeLabelsByKey(list);
+      if (!mounted || id != _reqId) return;
+      final acknowledgedSmallKeysByBookKey =
+          await _loadAcknowledgedSmallKeysByLinks(list);
+      if (!mounted || id != _reqId) return;
+      final acknowledgedPageCountByKey = <String, int>{};
+      final completedByKey = _buildCompletedPagesByKey(
+        list,
+        totalPagesByKey: totalPagesByKey,
+        acknowledgedSmallKeysByBookKey: acknowledgedSmallKeysByBookKey,
+        acknowledgedPageCountByKeyOut: acknowledgedPageCountByKey,
+      );
+      setState(() {
+        _linked = list;
+        _totalPagesByKey = totalPagesByKey;
+        _typeLabelByKey = typeLabelByKey;
+        _acknowledgedSmallKeysByBookKey = acknowledgedSmallKeysByBookKey;
+        _acknowledgedPageCountByKey = acknowledgedPageCountByKey;
+        _completedPagesByKey = completedByKey;
+      });
     } catch (_) {
       if (!mounted || id != _reqId) return;
-      setState(() => _linked = const <Map<String, dynamic>>[]);
+      setState(() {
+        _linked = const <Map<String, dynamic>>[];
+        _totalPagesByKey = <String, int>{};
+        _completedPagesByKey = <String, int>{};
+        _acknowledgedSmallKeysByBookKey = <String, Set<String>>{};
+        _acknowledgedPageCountByKey = <String, int>{};
+        _typeLabelByKey = <String, String>{};
+      });
     } finally {
       if (mounted && id == _reqId) {
         setState(() => _loading = false);
@@ -2541,13 +3088,723 @@ class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
     }
   }
 
+  bool _allSmallSelected(_ChecklistMidNode mid) {
+    return mid.smalls.isNotEmpty && mid.smalls.every((s) => s.selected);
+  }
+
+  bool _allMidSelected(_ChecklistBigNode big) {
+    return big.middles.isNotEmpty && big.middles.every(_allSmallSelected);
+  }
+
+  bool _hasEditableSmallInMid(_ChecklistMidNode mid) {
+    return mid.smalls.any((s) => !s.locked);
+  }
+
+  bool _hasEditableSmallInBig(_ChecklistBigNode big) {
+    return big.middles.any(_hasEditableSmallInMid);
+  }
+
+  void _toggleBigNode(_ChecklistBigNode big, bool selected) {
+    for (final mid in big.middles) {
+      for (final small in mid.smalls) {
+        if (small.locked) continue;
+        small.selected = selected;
+      }
+      mid.selected = _allSmallSelected(mid);
+    }
+    big.selected = _allMidSelected(big);
+  }
+
+  void _toggleMidNode(
+    _ChecklistBigNode big,
+    _ChecklistMidNode mid,
+    bool selected,
+  ) {
+    for (final small in mid.smalls) {
+      if (small.locked) continue;
+      small.selected = selected;
+    }
+    mid.selected = _allSmallSelected(mid);
+    big.selected = _allMidSelected(big);
+  }
+
+  void _toggleSmallNode(
+    _ChecklistBigNode big,
+    _ChecklistMidNode mid,
+    _ChecklistSmallNode small,
+    bool selected,
+  ) {
+    if (small.locked) return;
+    small.selected = selected;
+    mid.selected = _allSmallSelected(mid);
+    big.selected = _allMidSelected(big);
+  }
+
+  Set<String> _selectedChecklistSmallKeys(List<_ChecklistBigNode> nodes) {
+    final out = <String>{};
+    for (final big in nodes) {
+      for (final mid in big.middles) {
+        for (final small in mid.smalls) {
+          if (small.selected && !small.locked) out.add(small.key);
+        }
+      }
+    }
+    return out;
+  }
+
+  List<_ChecklistBigNode> _parseChecklistNodes(
+    dynamic payload,
+    Set<String> selectedKeys,
+    Set<String> lockedKeys,
+  ) {
+    if (payload is! Map) return const <_ChecklistBigNode>[];
+    final unitsRaw = payload['units'];
+    if (unitsRaw is! List) return const <_ChecklistBigNode>[];
+    final units = unitsRaw
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+    units.sort(
+      (a, b) => _orderIndex(a['order_index']).compareTo(_orderIndex(b['order_index'])),
+    );
+
+    final out = <_ChecklistBigNode>[];
+    for (final bigRaw in units) {
+      final bigOrder = _orderIndex(bigRaw['order_index']);
+      final bigName = (bigRaw['name'] as String?)?.trim().isNotEmpty == true
+          ? (bigRaw['name'] as String).trim()
+          : '대단원';
+
+      final midsRaw = bigRaw['middles'];
+      final midsList = midsRaw is List
+          ? midsRaw
+              .whereType<Map>()
+              .map((e) => Map<String, dynamic>.from(e))
+              .toList()
+          : <Map<String, dynamic>>[];
+      midsList.sort(
+        (a, b) => _orderIndex(a['order_index']).compareTo(_orderIndex(b['order_index'])),
+      );
+
+      final mids = <_ChecklistMidNode>[];
+      for (final midRaw in midsList) {
+        final midOrder = _orderIndex(midRaw['order_index']);
+        final midName = (midRaw['name'] as String?)?.trim().isNotEmpty == true
+            ? (midRaw['name'] as String).trim()
+            : '중단원';
+
+        final smallsRaw = midRaw['smalls'];
+        final smallsList = smallsRaw is List
+            ? smallsRaw
+                .whereType<Map>()
+                .map((e) => Map<String, dynamic>.from(e))
+                .toList()
+            : <Map<String, dynamic>>[];
+        smallsList.sort(
+          (a, b) => _orderIndex(a['order_index']).compareTo(_orderIndex(b['order_index'])),
+        );
+
+        final smalls = <_ChecklistSmallNode>[];
+        for (final smallRaw in smallsList) {
+          final smallOrder = _orderIndex(smallRaw['order_index']);
+          final smallName =
+              (smallRaw['name'] as String?)?.trim().isNotEmpty == true
+                  ? (smallRaw['name'] as String).trim()
+                  : '소단원';
+          final startPage = _toInt(smallRaw['start_page']);
+          final endPage = _toInt(smallRaw['end_page']);
+          final pages = <int>{};
+          _addPageRange(pages, startPage, endPage);
+          final pageCounts = smallRaw['page_counts'];
+          if (pageCounts is Map) {
+            for (final key in pageCounts.keys) {
+              final page = _toInt(key);
+              if (page != null && page > 0) pages.add(page);
+            }
+          }
+          final unitKey = _smallKey(bigOrder, midOrder, smallOrder);
+          smalls.add(
+            _ChecklistSmallNode(
+              name: smallName,
+              orderIndex: smallOrder,
+              startPage: startPage,
+              endPage: endPage,
+              key: unitKey,
+              pages: pages,
+              selected:
+                  selectedKeys.contains(unitKey) || lockedKeys.contains(unitKey),
+              locked: lockedKeys.contains(unitKey),
+            ),
+          );
+        }
+
+        final mid = _ChecklistMidNode(
+          name: midName,
+          orderIndex: midOrder,
+          smalls: smalls,
+        );
+        mid.selected = _allSmallSelected(mid);
+        mids.add(mid);
+      }
+
+      final big = _ChecklistBigNode(
+        name: bigName,
+        orderIndex: bigOrder,
+        middles: mids,
+      );
+      big.selected = _allMidSelected(big);
+      out.add(big);
+    }
+    return out;
+  }
+
+  String _smallPageText(_ChecklistSmallNode small) {
+    if (small.startPage == null && small.endPage == null && small.pages.isEmpty) {
+      return '';
+    }
+    if (small.startPage != null && small.endPage != null) {
+      if (small.startPage == small.endPage) return 'p.${small.startPage}';
+      return 'p.${small.startPage}-${small.endPage}';
+    }
+    if (small.startPage != null) return 'p.${small.startPage}';
+    if (small.endPage != null) return 'p.${small.endPage}';
+    if (small.pages.isNotEmpty) return '${small.pages.length}p';
+    return '';
+  }
+
+  bool _hasPageOverlap(Set<int> a, Set<int> b) {
+    if (a.isEmpty || b.isEmpty) return false;
+    final small = a.length <= b.length ? a : b;
+    final large = identical(small, a) ? b : a;
+    for (final p in small) {
+      if (large.contains(p)) return true;
+    }
+    return false;
+  }
+
+  Set<String> _issuedSmallKeysForBook(Map<String, dynamic> row) {
+    final bookId = (row['book_id'] as String?)?.trim() ?? '';
+    final grade = (row['grade_label'] as String?)?.trim() ?? '';
+    if (bookId.isEmpty || grade.isEmpty) return <String>{};
+    final bookKey = '$bookId|$grade';
+    final smallPagesByKey =
+        _metadataSmallPagesCacheByBookKey[bookKey] ?? const <String, Set<int>>{};
+    if (smallPagesByKey.isEmpty) return <String>{};
+
+    final issued = <String>{};
+    for (final hw in widget.homeworkItems) {
+      final hwBookId = (hw.bookId ?? '').trim();
+      final hwGrade = (hw.gradeLabel ?? '').trim();
+      if (hwBookId != bookId || hwGrade != grade) continue;
+
+      final mappings = hw.unitMappings;
+      if (mappings != null && mappings.isNotEmpty) {
+        for (final raw in mappings) {
+          final m = Map<String, dynamic>.from(raw);
+          final bigOrder = _toInt(m['bigOrder'] ?? m['big_order']);
+          final midOrder = _toInt(m['midOrder'] ?? m['mid_order']);
+          final smallOrder = _toInt(m['smallOrder'] ?? m['small_order']);
+          if (bigOrder == null || midOrder == null || smallOrder == null) continue;
+          issued.add(_smallKey(bigOrder, midOrder, smallOrder));
+        }
+      }
+
+      final pages = _pagesFromRawPageText(hw.page ?? '');
+      if (pages.isEmpty) continue;
+      for (final entry in smallPagesByKey.entries) {
+        if (_hasPageOverlap(pages, entry.value)) {
+          issued.add(entry.key);
+        }
+      }
+    }
+    return issued;
+  }
+
+  Widget _buildChecklistTreeCheckbox({
+    required bool value,
+    required ValueChanged<bool?>? onChanged,
+  }) {
+    return SizedBox(
+      width: 22,
+      height: 22,
+      child: Checkbox(
+        value: value,
+        onChanged: onChanged,
+        activeColor: kDlgAccent,
+        checkColor: Colors.white,
+        side: const BorderSide(color: kDlgBorder),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+        visualDensity: const VisualDensity(horizontal: -2, vertical: -2),
+      ),
+    );
+  }
+
+  Future<void> _openProgressChecklistDialog(Map<String, dynamic> row) async {
+    final key = _keyOf(row);
+    if (key == '|') return;
+    await _ensureMetadataCachesForBook(row);
+    final issuedLockedKeys = _issuedSmallKeysForBook(row);
+    final payload = _metadataPayloadCacheByBookKey[key];
+    final selectedBefore =
+        Set<String>.from(_acknowledgedSmallKeysByBookKey[key] ?? const <String>{});
+    final nodes = _parseChecklistNodes(payload, selectedBefore, issuedLockedKeys);
+    if (!mounted) return;
+    if (nodes.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('메타데이터 단원 정보가 없어 인정 진도를 설정할 수 없습니다.')),
+      );
+      return;
+    }
+
+    final selectedAfter = await showDialog<Set<String>>(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setLocal) {
+            return AlertDialog(
+              backgroundColor: kDlgBg,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              title: const Text(
+                '인행률 체크',
+                style: TextStyle(color: kDlgText, fontWeight: FontWeight.w900),
+              ),
+              content: SizedBox(
+                width: 560,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      '이전 학원 진도/자습 진도를 체크하면 해당 범위를 완료로 인정합니다.',
+                      style: TextStyle(color: kDlgTextSub),
+                    ),
+                    const SizedBox(height: 10),
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(maxHeight: 430),
+                      child: Theme(
+                        data: Theme.of(ctx).copyWith(
+                          dividerColor: Colors.transparent,
+                          splashColor: Colors.transparent,
+                          highlightColor: Colors.transparent,
+                        ),
+                        child: ListView(
+                          shrinkWrap: true,
+                          padding: const EdgeInsets.symmetric(vertical: 2),
+                          children: [
+                            for (final big in nodes)
+                              ExpansionTile(
+                                tilePadding: const EdgeInsets.symmetric(
+                                  horizontal: 2,
+                                  vertical: 2,
+                                ),
+                                childrenPadding:
+                                    const EdgeInsets.fromLTRB(10, 0, 10, 8),
+                                maintainState: true,
+                                iconColor: kDlgTextSub,
+                                collapsedIconColor: kDlgTextSub,
+                                title: Row(
+                                  children: [
+                                    _buildChecklistTreeCheckbox(
+                                      value: big.selected,
+                                      onChanged: _hasEditableSmallInBig(big)
+                                          ? (v) {
+                                              setLocal(() {
+                                                _toggleBigNode(big, v ?? false);
+                                              });
+                                            }
+                                          : null,
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Text(
+                                        big.name,
+                                        style: const TextStyle(
+                                          color: kDlgText,
+                                          fontWeight: FontWeight.w700,
+                                          fontSize: 13.5,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                children: [
+                                  for (final mid in big.middles)
+                                    Padding(
+                                      padding: const EdgeInsets.only(bottom: 6),
+                                      child: ExpansionTile(
+                                        tilePadding: const EdgeInsets.symmetric(
+                                          horizontal: 8,
+                                          vertical: 1,
+                                        ),
+                                        childrenPadding:
+                                            const EdgeInsets.fromLTRB(8, 0, 8, 8),
+                                        maintainState: true,
+                                        iconColor: kDlgTextSub,
+                                        collapsedIconColor: kDlgTextSub,
+                                        title: Row(
+                                          children: [
+                                            _buildChecklistTreeCheckbox(
+                                              value: mid.selected,
+                                              onChanged: _hasEditableSmallInMid(mid)
+                                                  ? (v) {
+                                                      setLocal(() {
+                                                        _toggleMidNode(
+                                                          big,
+                                                          mid,
+                                                          v ?? false,
+                                                        );
+                                                      });
+                                                    }
+                                                  : null,
+                                            ),
+                                            const SizedBox(width: 8),
+                                            Expanded(
+                                              child: Text(
+                                                mid.name,
+                                                style: const TextStyle(
+                                                  color: kDlgText,
+                                                  fontWeight: FontWeight.w600,
+                                                  fontSize: 13,
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        children: [
+                                          for (final small in mid.smalls)
+                                            Padding(
+                                              padding: const EdgeInsets.fromLTRB(
+                                                4,
+                                                3,
+                                                4,
+                                                3,
+                                              ),
+                                              child: InkWell(
+                                                borderRadius:
+                                                    BorderRadius.circular(8),
+                                                onTap: () {
+                                                  if (small.locked) return;
+                                                  setLocal(() {
+                                                    _toggleSmallNode(
+                                                      big,
+                                                      mid,
+                                                      small,
+                                                      !small.selected,
+                                                    );
+                                                  });
+                                                },
+                                                child: AnimatedContainer(
+                                                  duration: const Duration(
+                                                    milliseconds: 140,
+                                                  ),
+                                                  padding:
+                                                      const EdgeInsets.symmetric(
+                                                    horizontal: 8,
+                                                    vertical: 7,
+                                                  ),
+                                                  decoration: BoxDecoration(
+                                                    color: small.selected
+                                                        ? const Color(0x1A33A373)
+                                                        : Colors.transparent,
+                                                    borderRadius:
+                                                        BorderRadius.circular(8),
+                                                    border: Border.all(
+                                                      color: small.selected
+                                                          ? kDlgAccent
+                                                              .withOpacity(0.9)
+                                                          : kDlgBorder
+                                                              .withOpacity(0.8),
+                                                    ),
+                                                  ),
+                                                  child: Row(
+                                                    children: [
+                                                      _buildChecklistTreeCheckbox(
+                                                        value: small.selected,
+                                                        onChanged: small.locked
+                                                            ? null
+                                                            : (v) {
+                                                                setLocal(() {
+                                                                  _toggleSmallNode(
+                                                                    big,
+                                                                    mid,
+                                                                    small,
+                                                                    v ?? false,
+                                                                  );
+                                                                });
+                                                              },
+                                                      ),
+                                                      const SizedBox(width: 8),
+                                                      Expanded(
+                                                        child: Text(
+                                                          small.name,
+                                                          style:
+                                                              TextStyle(
+                                                            color: small.locked
+                                                                ? const Color(
+                                                                    0xFF6D7777)
+                                                                : kDlgTextSub,
+                                                            fontWeight:
+                                                                FontWeight.w600,
+                                                            fontSize: 12.5,
+                                                            height: 1.2,
+                                                          ),
+                                                          overflow: TextOverflow
+                                                              .ellipsis,
+                                                        ),
+                                                      ),
+                                                      const SizedBox(width: 8),
+                                                      if (small.locked) ...[
+                                                        Container(
+                                                          margin:
+                                                              const EdgeInsets.only(
+                                                                  right: 8),
+                                                          padding:
+                                                              const EdgeInsets.symmetric(
+                                                            horizontal: 6,
+                                                            vertical: 2,
+                                                          ),
+                                                          decoration: BoxDecoration(
+                                                            color: const Color(
+                                                                0xFF1A252A),
+                                                            borderRadius:
+                                                                BorderRadius.circular(
+                                                                    999),
+                                                            border: Border.all(
+                                                              color: const Color(
+                                                                  0xFF2D3D42),
+                                                            ),
+                                                          ),
+                                                          child: const Text(
+                                                            '기출제',
+                                                            style: TextStyle(
+                                                              color:
+                                                                  Color(0xFF7D8C8C),
+                                                              fontSize: 10.5,
+                                                              fontWeight:
+                                                                  FontWeight.w700,
+                                                            ),
+                                                          ),
+                                                        ),
+                                                      ],
+                                                      Text(
+                                                        _smallPageText(small),
+                                                        style: TextStyle(
+                                                          color: small.locked
+                                                              ? const Color(
+                                                                  0xFF6D7777)
+                                                              : kDlgTextSub,
+                                                          fontWeight:
+                                                              FontWeight.w700,
+                                                          fontSize: 12,
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                        ],
+                                      ),
+                                    ),
+                                ],
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(null),
+                  style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
+                  child: const Text('취소'),
+                ),
+                FilledButton(
+                  onPressed: () {
+                    Navigator.of(ctx).pop(_selectedChecklistSmallKeys(nodes));
+                  },
+                  style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
+                  child: const Text('저장'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+    if (selectedAfter == null) return;
+
+    await _saveAcknowledgedSmallKeys(key, selectedAfter);
+    if (!mounted) return;
+    final nextAck = <String, Set<String>>{
+      for (final entry in _acknowledgedSmallKeysByBookKey.entries)
+        entry.key: <String>{...entry.value},
+    };
+    nextAck[key] = <String>{...selectedAfter};
+    final ackPageCountByKey = <String, int>{};
+    final nextCompleted = _buildCompletedPagesByKey(
+      _linked,
+      totalPagesByKey: _totalPagesByKey,
+      acknowledgedSmallKeysByBookKey: nextAck,
+      acknowledgedPageCountByKeyOut: ackPageCountByKey,
+    );
+    setState(() {
+      _acknowledgedSmallKeysByBookKey = nextAck;
+      _acknowledgedPageCountByKey = ackPageCountByKey;
+      _completedPagesByKey = nextCompleted;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('인정 진도를 저장했습니다.')),
+    );
+  }
+
+  Widget _buildTypeBadge(String label) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: const Color(0xFF172126),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: const Color(0xFF2B3C42)),
+      ),
+      child: Text(
+        label,
+        style: const TextStyle(
+          color: Color(0xFF9FB3B3),
+          fontSize: 11.5,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLinkedTextbookCard(Map<String, dynamic> row, int index) {
+    final key = _keyOf(row);
+    final totalPages = _totalPagesByKey[key] ?? 0;
+    final donePagesRaw = _completedPagesByKey[key] ?? 0;
+    final donePages = totalPages > 0 ? donePagesRaw.clamp(0, totalPages) : donePagesRaw;
+    final ratio = (totalPages > 0) ? (donePages / totalPages) : 0.0;
+    final typeLabel = _typeLabelByKey[key] ?? '미지정';
+    final ackPages = _acknowledgedPageCountByKey[key] ?? 0;
+    final bool hasTotal = totalPages > 0;
+    final progressText = hasTotal
+        ? '$donePages / $totalPages 페이지 완료${ackPages > 0 ? ' · 인정 ${ackPages}p' : ''}'
+        : (donePages > 0
+              ? '$donePages 페이지 완료 · 메타데이터 전체 페이지 미설정'
+              : '메타데이터 전체 페이지 정보가 없습니다.');
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () => unawaited(_openProgressChecklistDialog(row)),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+          decoration: BoxDecoration(
+            color: const Color(0xFF0D1418),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: const Color(0xFF223131)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Container(
+                    width: 20,
+                    height: 20,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1B2730),
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(color: const Color(0xFF2A3942)),
+                    ),
+                    child: Text(
+                      '${index + 1}',
+                      style: const TextStyle(
+                        color: Color(0xFFCBD8D8),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      _labelOf(row),
+                      style: const TextStyle(
+                        color: Color(0xFFEAF2F2),
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                      ),
+                      softWrap: true,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  _buildTypeBadge(typeLabel),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      progressText,
+                      style: const TextStyle(
+                        color: Color(0xFF9FB3B3),
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    hasTotal ? '${(ratio * 100).round()}%' : '-',
+                    style: const TextStyle(
+                      color: Color(0xFFEAF2F2),
+                      fontSize: 13,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                '클릭해서 진도를 체크하세요.',
+                style: TextStyle(
+                  color: Color(0xFF6F8080),
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 7),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(999),
+                child: LinearProgressIndicator(
+                  value: hasTotal ? ratio : 0,
+                  minHeight: 7,
+                  backgroundColor: const Color(0xFF1B252B),
+                  valueColor:
+                      const AlwaysStoppedAnimation<Color>(Color(0xFF33A373)),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final bool isWide = widget.cardWidth >= 460;
     return Container(
-      padding: const EdgeInsets.all(12),
+      padding: EdgeInsets.all(isWide ? 14 : 12),
       decoration: BoxDecoration(
-        color: const Color(0xFF10171A),
-        borderRadius: BorderRadius.circular(10),
+        color: const Color(0xFF0F181D),
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(color: const Color(0xFF223131)),
       ),
       child: Column(
@@ -2562,8 +3819,25 @@ class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
                 '교재',
                 style: TextStyle(
                   color: Color(0xFFEAF2F2),
-                  fontSize: 15,
+                  fontSize: 16,
                   fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF151C21),
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(color: const Color(0xFF223131)),
+                ),
+                child: Text(
+                  '${_linked.length}권',
+                  style: const TextStyle(
+                    color: Color(0xFF9FB3B3),
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
               ),
               const Spacer(),
@@ -2586,14 +3860,18 @@ class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
               ),
             ],
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 9),
           if (_loading)
-            const SizedBox(
-              width: 18,
-              height: 18,
-              child: CircularProgressIndicator(
-                strokeWidth: 2,
-                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF9FB3B3)),
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 6),
+              child: SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  valueColor:
+                      AlwaysStoppedAnimation<Color>(Color(0xFF9FB3B3)),
+                ),
               ),
             )
           else if (_linked.isEmpty)
@@ -2610,32 +3888,8 @@ class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 for (int i = 0; i < _linked.length; i++) ...[
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Padding(
-                        padding: EdgeInsets.only(top: 6),
-                        child: Icon(
-                          Icons.circle,
-                          size: 6,
-                          color: Color(0xFF9FB3B3),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          _labelOf(_linked[i]),
-                          style: const TextStyle(
-                            color: Color(0xFFCBD8D8),
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
-                          ),
-                          softWrap: true,
-                        ),
-                      ),
-                    ],
-                  ),
-                  if (i != _linked.length - 1) const SizedBox(height: 6),
+                  _buildLinkedTextbookCard(_linked[i], i),
+                  if (i != _linked.length - 1) const SizedBox(height: 8),
                 ],
               ],
             ),
