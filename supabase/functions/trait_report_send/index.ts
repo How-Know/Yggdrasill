@@ -59,11 +59,22 @@ Deno.serve(async (req) => {
 
         const token = existing?.token ?? crypto.randomUUID();
         const now = new Date().toISOString();
+        let cohort: 'snapshot' | 'additional' = 'additional';
+        try {
+          const { data: member } = await admin
+            .from('trait_snapshot_members')
+            .select('participant_id')
+            .eq('snapshot_version', 'v1.0')
+            .eq('participant_id', pid)
+            .maybeSingle();
+          if (member?.participant_id) cohort = 'snapshot';
+        } catch {}
 
         await admin.from('trait_report_tokens').upsert({
           participant_id: pid,
           token,
           report_params: item.report_params ?? {},
+          cohort,
           email,
           updated_at: now,
         }, { onConflict: 'participant_id' });

@@ -913,6 +913,7 @@ function ExistingStudentsPage({
   onBack,
   onRequest,
   onPick,
+  onOpenReport,
 }: {
   isInWebViewHost: boolean;
   loading: boolean;
@@ -921,6 +922,7 @@ function ExistingStudentsPage({
   onBack: () => void;
   onRequest: () => void;
   onPick: (s: ExistingStudent) => void;
+  onOpenReport: (token: string) => void;
 }) {
   const [q, setQ] = useState('');
   const sbCfg = getSupabaseConfig();
@@ -929,6 +931,9 @@ function ExistingStudentsPage({
   const [roundTotals, setRoundTotals] = useState<Record<number, number>>({});
   const [progressMap, setProgressMap] = useState<Record<string, RoundProgressState[]>>({});
   const [progressLoading, setProgressLoading] = useState(false);
+  const [reportTokenMap, setReportTokenMap] = useState<Record<string, string>>({});
+  const [reportTokenLoading, setReportTokenLoading] = useState(false);
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
   const defaultProgress: RoundProgressState[] = ['inactive', 'inactive', 'inactive'];
 
   useEffect(() => {
@@ -946,6 +951,63 @@ function ExistingStudentsPage({
       return hay.includes(needle);
     });
   }, [q, students]);
+
+  const grouped = useMemo(() => {
+    const levelOrder = (level?: EducationLevel): number => {
+      if (level === 'elementary') return 1;
+      if (level === 'middle') return 2;
+      if (level === 'high') return 3;
+      return 9;
+    };
+    const gradeOrder = (grade?: string): number => {
+      const raw = String(grade ?? '').trim();
+      if (!raw) return 99;
+      if (/^\d+$/.test(raw)) return Number(raw);
+      if (/n/i.test(raw)) return 98;
+      return 97;
+    };
+    const groupLabel = (s: ExistingStudent): string => {
+      const lv = levelLabel(s.level);
+      const g = String(s.grade ?? '').trim();
+      if (!g) return `${lv} 미기재`;
+      if (/^\d+$/.test(g)) return `${lv} ${g}학년`;
+      return `${lv} ${g}`;
+    };
+
+    const map: Record<string, ExistingStudent[]> = {};
+    for (const s of filtered) {
+      const key = `${s.level ?? 'unknown'}:${String(s.grade ?? '').trim() || '-'}`;
+      if (!map[key]) map[key] = [];
+      map[key].push(s);
+    }
+
+    return Object.entries(map)
+      .map(([key, list]) => {
+        const first = list[0];
+        return {
+          key,
+          label: groupLabel(first),
+          levelOrd: levelOrder(first.level),
+          gradeOrd: gradeOrder(first.grade),
+          students: list.slice().sort((a, b) => String(a.name ?? '').localeCompare(String(b.name ?? ''), 'ko')),
+        };
+      })
+      .sort((a, b) => (
+        a.levelOrd - b.levelOrd
+        || a.gradeOrd - b.gradeOrd
+        || a.label.localeCompare(b.label, 'ko')
+      ));
+  }, [filtered]);
+
+  useEffect(() => {
+    setExpandedGroups((prev) => {
+      const next: Record<string, boolean> = {};
+      grouped.forEach((group, idx) => {
+        next[group.key] = prev[group.key] ?? (q.trim() ? true : idx === 0);
+      });
+      return next;
+    });
+  }, [grouped, q]);
 
   useEffect(() => {
     if (!canFetchProgress) return;
@@ -1043,6 +1105,48 @@ function ExistingStudentsPage({
     return () => { cancelled = true; };
   }, [canFetchProgress, students, questionRoundMap, roundTotals]);
 
+  useEffect(() => {
+    if (!canFetchProgress) {
+      setReportTokenMap({});
+      return;
+    }
+    if (!students.length) {
+      setReportTokenMap({});
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      setReportTokenLoading(true);
+      const ids = students.map((s) => s.id).filter((id) => isUuid(id));
+      if (!ids.length) {
+        if (!cancelled) {
+          setReportTokenMap({});
+          setReportTokenLoading(false);
+        }
+        return;
+      }
+      const { data, error: tokenErr } = await supabase
+        .from('trait_report_tokens')
+        .select('participant_id, token')
+        .in('participant_id', ids);
+      if (cancelled) return;
+      if (tokenErr) {
+        setReportTokenMap({});
+        setReportTokenLoading(false);
+        return;
+      }
+      const nextMap: Record<string, string> = {};
+      for (const row of (data ?? []) as any[]) {
+        const pid = String(row?.participant_id ?? '');
+        const token = String(row?.token ?? '');
+        if (pid && token) nextMap[pid] = token;
+      }
+      setReportTokenMap(nextMap);
+      setReportTokenLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, [canFetchProgress, students]);
+
   return (
     <div style={{ maxWidth: 900, margin: '32px auto 0' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
@@ -1087,38 +1191,114 @@ function ExistingStudentsPage({
           </div>
 
           <div style={{ marginTop: 12, border: `1px solid ${tokens.border}`, borderRadius: 12, overflow: 'hidden' }}>
-            {filtered.map((s) => (
-              <div
-                key={s.id}
-                onClick={() => onPick(s)}
-                style={{ padding: '12px 16px', cursor: 'pointer', borderBottom: `1px solid ${tokens.border}`, background: 'transparent' }}
-                onMouseEnter={(e) => ((e.currentTarget as HTMLDivElement).style.background = tokens.panelAlt)}
-                onMouseLeave={(e) => ((e.currentTarget as HTMLDivElement).style.background = 'transparent')}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ color: tokens.text, fontWeight: 900 }}>{s.name}</div>
-                    <div style={{ color: tokens.textFaint, marginTop: 2, fontSize: 13 }}>
-                      {(s.school ?? '-') + ' · ' + levelLabel(s.level) + ' ' + (s.grade ?? '-')}
+            {grouped.map((group, groupIdx) => {
+              const isOpen = expandedGroups[group.key] ?? true;
+              return (
+                <div
+                  key={group.key}
+                  style={{ borderBottom: groupIdx < grouped.length - 1 ? `1px solid ${tokens.border}` : 'none' }}
+                >
+                  <button
+                    onClick={() => setExpandedGroups((prev) => ({ ...prev, [group.key]: !isOpen }))}
+                    style={{
+                      width: '100%',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      minHeight: 54,
+                      padding: '15px 14px',
+                      background: tokens.panelAlt,
+                      border: 'none',
+                      color: tokens.text,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <div style={{ fontWeight: 900 }}>
+                      {group.label}
+                      <span style={{ marginLeft: 8, color: tokens.textFaint, fontSize: 12, fontWeight: 600 }}>
+                        {group.students.length}명
+                      </span>
                     </div>
-                  </div>
-                  {isInWebViewHost && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, opacity: progressLoading ? 0.7 : 1 }}>
-                      {(progressMap[s.id] ?? defaultProgress).map((st, i) => {
-                        const color = st === 'done' ? tokens.accent : st === 'active' ? tokens.textDim : tokens.border;
+                    <div style={{ color: tokens.textDim, fontWeight: 900 }}>{isOpen ? 'v' : '>'}</div>
+                  </button>
+                  {isOpen && (
+                    <div>
+                      {group.students.map((s) => {
+                        const progress = progressMap[s.id] ?? defaultProgress;
+                        const firstRoundDone = progress[0] === 'done';
+                        const reportToken = reportTokenMap[s.id];
                         return (
                           <div
-                            key={`${s.id}_${i}`}
-                            style={{ width: 22, height: 8, borderRadius: 999, background: color, border: `1px solid ${tokens.border}` }}
-                          />
+                            key={s.id}
+                            onClick={() => onPick(s)}
+                            style={{
+                              padding: '12px 16px',
+                              cursor: 'pointer',
+                              borderTop: `1px solid ${tokens.border}`,
+                              background: 'transparent',
+                            }}
+                            onMouseEnter={(e) => ((e.currentTarget as HTMLDivElement).style.background = tokens.panelAlt)}
+                            onMouseLeave={(e) => ((e.currentTarget as HTMLDivElement).style.background = 'transparent')}
+                          >
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                              <div style={{ minWidth: 0 }}>
+                                <div style={{ color: tokens.text, fontWeight: 900 }}>{s.name}</div>
+                                <div style={{ color: tokens.textFaint, marginTop: 2, fontSize: 13 }}>
+                                  {(s.school ?? '-') + ' · ' + levelLabel(s.level) + ' ' + (s.grade ?? '-')}
+                                </div>
+                              </div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                {isInWebViewHost && (
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, opacity: progressLoading ? 0.7 : 1 }}>
+                                    {progress.map((st, i) => {
+                                      const color = st === 'done' ? tokens.accent : st === 'active' ? '#EAB308' : tokens.border;
+                                      return (
+                                        <div
+                                          key={`${s.id}_${i}`}
+                                          style={{ width: 22, height: 8, borderRadius: 999, background: color, border: `1px solid ${tokens.border}` }}
+                                        />
+                                      );
+                                    })}
+                                  </div>
+                                )}
+                                {firstRoundDone && (
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      if (!reportToken) {
+                                        alert('1차 결과가 아직 준비되지 않았습니다.');
+                                        return;
+                                      }
+                                      onOpenReport(reportToken);
+                                    }}
+                                    disabled={!reportToken}
+                                    style={{
+                                      height: 30,
+                                      padding: '0 10px',
+                                      borderRadius: 8,
+                                      border: `1px solid ${reportToken ? tokens.accent : tokens.border}`,
+                                      background: reportToken ? tokens.accent : tokens.panel,
+                                      color: reportToken ? '#fff' : tokens.textDim,
+                                      cursor: reportToken ? 'pointer' : 'not-allowed',
+                                      fontSize: 12,
+                                      fontWeight: 800,
+                                      opacity: reportTokenLoading && !reportToken ? 0.7 : 1,
+                                    }}
+                                  >
+                                    {reportToken ? '1차 결과 보기' : '결과 준비중'}
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          </div>
                         );
                       })}
                     </div>
                   )}
                 </div>
-              </div>
-            ))}
-            {!loading && !error && filtered.length === 0 && (
+              );
+            })}
+            {!loading && !error && grouped.length === 0 && (
               <div style={{ padding: 16, color: tokens.textFaint }}>검색 결과가 없습니다.</div>
             )}
           </div>
@@ -1184,6 +1364,12 @@ function App() {
     if (s.grade) qs.set('grade', s.grade);
     navigate(`/survey?${qs.toString()}`);
   }
+
+  function openRound1Report(token: string) {
+    const qs = new URLSearchParams();
+    qs.set('token', token);
+    navigate(`/report-preview?${qs.toString()}`);
+  }
   return (
     <div style={{ color: tokens.text, background: tokens.bg, minHeight: '100vh', padding: appPadding, boxSizing: 'border-box' }}>
       {pathname.startsWith('/results') ? (
@@ -1207,6 +1393,7 @@ function App() {
           onBack={() => navigate('/')}
           onRequest={requestExistingStudents}
           onPick={(s) => goSurveyWithStudent(s)}
+          onOpenReport={openRound1Report}
         />
       ) : pathname.startsWith('/take') ? (
         <NewStudentForm

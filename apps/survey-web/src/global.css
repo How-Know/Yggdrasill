@@ -49,6 +49,8 @@ html, body {
   background: #0B1112;
   overflow-y: auto;
   overflow-x: hidden;
+  /* 스크롤바가 나타나도 레이아웃 폭이 바뀌지 않게 고정 */
+  scrollbar-gutter: stable;
   font-family: KakaoSmallSans, system-ui, -apple-system, 'Segoe UI', Roboto, 'Noto Sans KR', Helvetica, Arial, sans-serif;
 }
 

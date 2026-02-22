@@ -166,6 +166,7 @@ const LEVEL_BAND_OPTIONS: Array<{ code: LevelBandCode; label: string }> = [
   { code: 'G6', label: '6등급 (그 이하)' },
 ];
 
+const SNAPSHOT_VERSION = 'v1.0';
 const PREVIEW_PEER_K = 5;
 const PEER_SHRINKAGE_PRIOR = 3;
 const ADJUSTMENT_AXIS_WEIGHT = 0.35;
@@ -698,6 +699,8 @@ export default function ResultsPage() {
   const [filterLevelBand, setFilterLevelBand] = React.useState<LevelBandCode>('ALL');
   const [filterParticipantRound, setFilterParticipantRound] = React.useState<'ALL' | number>('ALL');
   const [filterParticipantPage, setFilterParticipantPage] = React.useState<1 | 2>(1);
+  const [snapshotMembers, setSnapshotMembers] = React.useState<Record<string, boolean>>({});
+  const [snapshotMembersLoaded, setSnapshotMembersLoaded] = React.useState(false);
   const [reportTokenCohorts, setReportTokenCohorts] = React.useState<Record<string, string>>({});
   const [cohortsLoaded, setCohortsLoaded] = React.useState(false);
   const [tokenSyncStatus, setTokenSyncStatus] = React.useState<'idle' | 'syncing' | 'done' | 'error'>('idle');
@@ -1631,15 +1634,22 @@ export default function ResultsPage() {
         const progress = progressByParticipant[row.id];
         if (!progress || !(progress[filterParticipantRound] > 0)) return false;
       }
-      const cohort = reportTokenCohorts[row.id];
-      if (filterParticipantPage === 1) {
-        if (cohort && cohort !== 'snapshot') return false;
+      const hasSnapshotMembership = Object.keys(snapshotMembers).length > 0;
+      if (snapshotMembersLoaded && hasSnapshotMembership) {
+        const isSnapshotMember = !!snapshotMembers[row.id];
+        if (filterParticipantPage === 1 && !isSnapshotMember) return false;
+        if (filterParticipantPage === 2 && isSnapshotMember) return false;
       } else {
-        if (!cohort || cohort === 'snapshot') return false;
+        const cohort = reportTokenCohorts[row.id];
+        if (filterParticipantPage === 1) {
+          if (cohort && cohort !== 'snapshot') return false;
+        } else {
+          if (!cohort || cohort === 'snapshot') return false;
+        }
       }
       return true;
     }),
-    [filterLevelBand, filterParticipantRound, rows, progressByParticipant, filterParticipantPage, reportTokenCohorts],
+    [filterLevelBand, filterParticipantRound, rows, progressByParticipant, filterParticipantPage, snapshotMembersLoaded, snapshotMembers, reportTokenCohorts],
   );
 
   const selectedLevelBandLabel = React.useMemo(
@@ -2288,6 +2298,36 @@ export default function ResultsPage() {
   React.useEffect(() => {
     let cancelled = false;
     (async () => {
+      setSnapshotMembersLoaded(false);
+      try {
+        await supabase.rpc('ensure_trait_snapshot_members', { p_snapshot_version: SNAPSHOT_VERSION });
+      } catch (e) {
+        console.error('[ensure snapshot members]', e);
+      }
+      try {
+        const { data, error } = await supabase
+          .from('trait_snapshot_members')
+          .select('participant_id')
+          .eq('snapshot_version', SNAPSHOT_VERSION);
+        if (error) throw error;
+        if (!cancelled) {
+          const map: Record<string, boolean> = {};
+          for (const row of data as any[] || []) map[String(row?.participant_id ?? '')] = true;
+          setSnapshotMembers(map);
+        }
+      } catch (e) {
+        console.error('[load snapshot members]', e);
+        if (!cancelled) setSnapshotMembers({});
+      } finally {
+        if (!cancelled) setSnapshotMembersLoaded(true);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    (async () => {
       try {
         const { data, error } = await supabase
           .from('trait_report_tokens')
@@ -2309,19 +2349,23 @@ export default function ResultsPage() {
 
   React.useEffect(() => {
     if (!cohortsLoaded) return;
+    if (!snapshotMembersLoaded) return;
     if (!snapshotAxisPoints.length || !Object.keys(reportScaleProfilesByParticipant).length) return;
     let cancelled = false;
     (async () => {
       setTokenSyncStatus('syncing');
       try {
         const items: Array<{ participant_id: string; report_params: Record<string, unknown>; cohort: string }> = [];
+        const hasSnapshotMembership = Object.keys(snapshotMembers).length > 0;
         for (const point of snapshotAxisPoints) {
           const rp = buildReportParamsForPoint(point);
           if (!rp) continue;
           items.push({
             participant_id: point.participantId,
             report_params: rp,
-            cohort: reportTokenCohorts[point.participantId] ?? 'additional',
+            cohort: hasSnapshotMembership
+              ? (snapshotMembers[point.participantId] ? 'snapshot' : 'additional')
+              : (reportTokenCohorts[point.participantId] ?? 'additional'),
           });
         }
         if (items.length === 0) { setTokenSyncStatus('done'); return; }
@@ -2332,7 +2376,7 @@ export default function ResultsPage() {
         if (!cancelled) {
           const nextCohorts = { ...reportTokenCohorts };
           for (const it of items) {
-            if (!nextCohorts[it.participant_id]) nextCohorts[it.participant_id] = it.cohort;
+            nextCohorts[it.participant_id] = nextCohorts[it.participant_id] ?? it.cohort;
           }
           setReportTokenCohorts(nextCohorts);
           setTokenSyncStatus('done');
@@ -2344,7 +2388,7 @@ export default function ResultsPage() {
     })();
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cohortsLoaded, snapshotAxisPoints, reportScaleProfilesByParticipant]);
+  }, [cohortsLoaded, snapshotMembersLoaded, snapshotMembers, snapshotAxisPoints, reportScaleProfilesByParticipant]);
 
   function buildReportParamsForPoint(point: SnapshotAxisPoint): Record<string, unknown> | null {
     const ftc = toFeedbackTypeCode(point.typeCode);

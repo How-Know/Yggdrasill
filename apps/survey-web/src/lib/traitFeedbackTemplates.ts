@@ -477,12 +477,19 @@ function buildGradeDirectionFragment(
   studentGrade: number | null,
   peerAvgGrade: number | null,
 ): string {
-  if (studentGrade == null || peerAvgGrade == null) return '';
-  if (!Number.isFinite(studentGrade) || !Number.isFinite(peerAvgGrade)) return '';
+  if (peerAvgGrade == null || !Number.isFinite(peerAvgGrade)) return '';
 
   const fav = getTypeFavorability(typeCode);
   const isFavorable = fav === 'favorable' || fav === 'moderate_fav';
   const peerLabel = peerAvgGrade.toFixed(1);
+  if (studentGrade == null || !Number.isFinite(studentGrade)) {
+    if (isFavorable) {
+      return `현재 등급 정보가 없어 직접 비교는 어렵지만, 나와 비슷한 위치의 학생들 평균은 ${peerLabel}등급입니다. ` +
+        `이 값을 단기 목표치로 두고 지금의 감정·신념 흐름을 유지하면 성취가 안정적으로 따라올 가능성이 있습니다.`;
+    }
+    return `현재 등급 정보가 없어 직접 비교는 어렵지만, 나와 비슷한 위치의 학생들 평균은 ${peerLabel}등급입니다. ` +
+      `이 값을 목표치로 두고 감정·신념 안정화를 먼저 만들면 성취로 연결될 가능성이 커질 수 있습니다.`;
+  }
   const diff = studentGrade - peerAvgGrade;
 
   if (Math.abs(diff) < 0.8) {
