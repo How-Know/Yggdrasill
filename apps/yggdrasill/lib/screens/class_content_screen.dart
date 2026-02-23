@@ -35,7 +35,8 @@ class ClassContentScreen extends StatefulWidget {
   State<ClassContentScreen> createState() => _ClassContentScreenState();
 }
 
-class _ClassContentScreenState extends State<ClassContentScreen> with SingleTickerProviderStateMixin {
+class _ClassContentScreenState extends State<ClassContentScreen>
+    with SingleTickerProviderStateMixin {
   late final AnimationController _uiAnimController;
   late final Timer _clockTimer;
   DateTime _now = DateTime.now();
@@ -43,7 +44,9 @@ class _ClassContentScreenState extends State<ClassContentScreen> with SingleTick
   @override
   void initState() {
     super.initState();
-    _uiAnimController = AnimationController(duration: const Duration(milliseconds: 1800), vsync: this)..repeat();
+    _uiAnimController = AnimationController(
+        duration: const Duration(milliseconds: 1800), vsync: this)
+      ..repeat();
     _clockTimer = Timer.periodic(const Duration(seconds: 10), (_) {
       if (!mounted) return;
       setState(() {
@@ -85,12 +88,18 @@ class _ClassContentScreenState extends State<ClassContentScreen> with SingleTick
                               children: [
                                 TextSpan(
                                   text: _formatDateWithWeekdayAndTime(_now),
-                                  style: const TextStyle(color: Colors.white, fontSize: 50, fontWeight: FontWeight.bold),
+                                  style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 50,
+                                      fontWeight: FontWeight.bold),
                                 ),
                                 const WidgetSpan(child: SizedBox(width: 30)),
                                 TextSpan(
                                   text: '등원중: ' + list.length.toString() + '명',
-                                  style: const TextStyle(color: Colors.white60, fontSize: 40, fontWeight: FontWeight.bold),
+                                  style: const TextStyle(
+                                      color: Colors.white60,
+                                      fontSize: 40,
+                                      fontWeight: FontWeight.bold),
                                 ),
                               ],
                             ),
@@ -176,7 +185,8 @@ class _ClassContentScreenState extends State<ClassContentScreen> with SingleTick
                                   child: AnimatedBuilder(
                                     animation: _uiAnimController,
                                     builder: (context, __) {
-                                      final tick = _uiAnimController.value; // 0..1
+                                      final tick =
+                                          _uiAnimController.value; // 0..1
                                       return _buildHomeworkChipsReactiveForStudent(
                                         s.id,
                                         tick,
@@ -212,11 +222,17 @@ class _ClassContentScreenState extends State<ClassContentScreen> with SingleTick
   List<_AttendingStudent> _computeAttendingStudentsStatic() {
     final List<_AttendingStudent> result = [];
     final now = DateTime.now();
-    bool sameDay(DateTime a, DateTime b) => a.year==b.year && a.month==b.month && a.day==b.day;
-    final students = DataManager.instance.students.map((e) => e.student).toList();
+    bool sameDay(DateTime a, DateTime b) =>
+        a.year == b.year && a.month == b.month && a.day == b.day;
+    final students =
+        DataManager.instance.students.map((e) => e.student).toList();
     // 슬라이드 시트와 동일 정렬: 등원 시간 asc
     final records = DataManager.instance.attendanceRecords
-        .where((rec) => rec.isPresent && rec.arrivalTime != null && rec.departureTime == null && sameDay(rec.classDateTime, now))
+        .where((rec) =>
+            rec.isPresent &&
+            rec.arrivalTime != null &&
+            rec.departureTime == null &&
+            sameDay(rec.classDateTime, now))
         .toList()
       ..sort((a, b) => a.arrivalTime!.compareTo(b.arrivalTime!));
 
@@ -240,7 +256,9 @@ class _ClassContentScreenState extends State<ClassContentScreen> with SingleTick
   String? _inferSetIdForStudent(String studentId) {
     final now = DateTime.now();
     final todayIdx = now.weekday - 1;
-    final blocks = DataManager.instance.studentTimeBlocks.where((b) => b.studentId == studentId && b.dayIndex == todayIdx).toList();
+    final blocks = DataManager.instance.studentTimeBlocks
+        .where((b) => b.studentId == studentId && b.dayIndex == todayIdx)
+        .toList();
     if (blocks.isEmpty) return null;
     int nowMin = now.hour * 60 + now.minute;
     String? bestSet;
@@ -255,13 +273,17 @@ class _ClassContentScreenState extends State<ClassContentScreen> with SingleTick
       } else {
         score = (nowMin - start).abs();
       }
-      if (score < bestScore) { bestScore = score; bestSet = b.setId; }
+      if (score < bestScore) {
+        bestScore = score;
+        bestSet = b.setId;
+      }
     }
     return bestSet;
   }
 
   Future<void> _onAddHomework(BuildContext context, String studentId) async {
-    final enabledFlows = await ensureEnabledFlowsForHomework(context, studentId);
+    final enabledFlows =
+        await ensureEnabledFlowsForHomework(context, studentId);
     if (enabledFlows.isEmpty) return;
     final item = await showDialog<dynamic>(
       context: context,
@@ -275,9 +297,12 @@ class _ClassContentScreenState extends State<ClassContentScreen> with SingleTick
     );
     if (item is Map<String, dynamic>) {
       if (item['studentId'] == studentId) {
+        final action = (item['action'] as String?)?.trim() ?? 'add';
+        final isReserve = action == 'reserve';
         final flowId = item['flowId'] as String?;
         final dynamic multiRaw = item['items'];
         final entries = <Map<String, dynamic>>[];
+        final createdItems = <HomeworkItem>[];
         if (multiRaw is List) {
           for (final e in multiRaw) {
             if (e is Map<String, dynamic>) entries.add(e);
@@ -287,7 +312,7 @@ class _ClassContentScreenState extends State<ClassContentScreen> with SingleTick
         }
         for (final entry in entries) {
           final countStr = (entry['count'] as String?)?.trim();
-          HomeworkStore.instance.add(
+          final created = HomeworkStore.instance.add(
             item['studentId'],
             title: (entry['title'] as String?) ?? '',
             body: (entry['body'] as String?) ?? '',
@@ -311,9 +336,22 @@ class _ClassContentScreenState extends State<ClassContentScreen> with SingleTick
                   )
                 : null,
           );
+          createdItems.add(created);
         }
-        final String msg =
-            entries.length > 1 ? '과제를 ${entries.length}개 추가했어요.' : '과제를 추가했어요.';
+        if (isReserve && createdItems.isNotEmpty) {
+          await HomeworkAssignmentStore.instance.recordAssignments(
+            studentId,
+            createdItems,
+            note: HomeworkAssignmentStore.reservationNote,
+          );
+        }
+        final String msg = isReserve
+            ? (entries.length > 1
+                ? '예약 과제를 ${entries.length}개 추가했어요.'
+                : '예약 과제를 추가했어요.')
+            : (entries.length > 1
+                ? '과제를 ${entries.length}개 추가했어요.'
+                : '과제를 추가했어요.');
         ScaffoldMessenger.of(context)
             .showSnackBar(SnackBar(content: Text(msg)));
       }
@@ -372,14 +410,30 @@ class _ClassContentScreenState extends State<ClassContentScreen> with SingleTick
         );
       }
       final selectedIds = selection.itemIds.toSet();
-      final unselectedIds = allPendingItemIds
-          .where((id) => !selectedIds.contains(id))
-          .toList();
+      final unselectedIds =
+          allPendingItemIds.where((id) => !selectedIds.contains(id)).toList();
       if (unselectedIds.isNotEmpty) {
         HomeworkStore.instance.restoreItemsToWaiting(
           studentId,
           unselectedIds,
         );
+      }
+      if (selection.printTodoOnConfirm) {
+        try {
+          await printHomeworkTodoSheet(
+            studentId: studentId,
+            studentName: student.name,
+            classDateTime: record.classDateTime,
+            arrivalTime: arrival,
+            departureTime: now,
+            selectedHomeworkIds: selection.itemIds,
+          );
+        } catch (e) {
+          if (!context.mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('알림장 인쇄에 실패했어요: $e')),
+          );
+        }
       }
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -396,7 +450,8 @@ class _ClassContentScreenState extends State<ClassContentScreen> with SingleTick
   Future<void> _onAddTag(BuildContext context, String studentId) async {
     final setId = _inferSetIdForStudent(studentId);
     if (setId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('현재 수업 세트를 찾지 못했습니다. 시간표를 확인하세요.')));
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('현재 수업 세트를 찾지 못했습니다. 시간표를 확인하세요.')));
       return;
     }
     await _openClassTagDialogLikeSideSheet(context, setId, studentId);
@@ -409,19 +464,37 @@ class _ClassContentScreenState extends State<ClassContentScreen> with SingleTick
       builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFF1F1F1F),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        title: const Text('기록 입력', style: TextStyle(color: Colors.white, fontSize: 20)),
+        title: const Text('기록 입력',
+            style: TextStyle(color: Colors.white, fontSize: 20)),
         content: SizedBox(
           width: 520,
           child: TextField(
             controller: controller,
             maxLines: 3,
-            decoration: const InputDecoration(hintText: '간단히 적어주세요', hintStyle: TextStyle(color: Colors.white38), filled: true, fillColor: Color(0xFF2A2A2A), border: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)), enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)), focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2)))),
+            decoration: const InputDecoration(
+                hintText: '간단히 적어주세요',
+                hintStyle: TextStyle(color: Colors.white38),
+                filled: true,
+                fillColor: Color(0xFF2A2A2A),
+                border: OutlineInputBorder(
+                    borderSide: BorderSide(color: Colors.white24)),
+                enabledBorder: OutlineInputBorder(
+                    borderSide: BorderSide(color: Colors.white24)),
+                focusedBorder: OutlineInputBorder(
+                    borderSide: BorderSide(color: Color(0xFF1976D2)))),
             style: const TextStyle(color: Colors.white),
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(null), child: const Text('취소', style: TextStyle(color: Colors.white70))),
-          ElevatedButton(onPressed: () => Navigator.of(ctx).pop(controller.text.trim()), style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1976D2), foregroundColor: Colors.white), child: const Text('추가')),
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(null),
+              child: const Text('취소', style: TextStyle(color: Colors.white70))),
+          ElevatedButton(
+              onPressed: () => Navigator.of(ctx).pop(controller.text.trim()),
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF1976D2),
+                  foregroundColor: Colors.white),
+              child: const Text('추가')),
         ],
       ),
     );
@@ -435,33 +508,54 @@ Future<String?> _openRecordNoteDialogGlobal(BuildContext context) async {
     builder: (ctx) => AlertDialog(
       backgroundColor: const Color(0xFF1F1F1F),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      title: const Text('기록 입력', style: TextStyle(color: Colors.white, fontSize: 20)),
+      title: const Text('기록 입력',
+          style: TextStyle(color: Colors.white, fontSize: 20)),
       content: SizedBox(
         width: 520,
         child: TextField(
           controller: controller,
           maxLines: 3,
-          decoration: const InputDecoration(hintText: '간단히 적어주세요', hintStyle: TextStyle(color: Colors.white38), filled: true, fillColor: Color(0xFF2A2A2A), border: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)), enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)), focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2)))),
+          decoration: const InputDecoration(
+              hintText: '간단히 적어주세요',
+              hintStyle: TextStyle(color: Colors.white38),
+              filled: true,
+              fillColor: Color(0xFF2A2A2A),
+              border: OutlineInputBorder(
+                  borderSide: BorderSide(color: Colors.white24)),
+              enabledBorder: OutlineInputBorder(
+                  borderSide: BorderSide(color: Colors.white24)),
+              focusedBorder: OutlineInputBorder(
+                  borderSide: BorderSide(color: Color(0xFF1976D2)))),
           style: const TextStyle(color: Colors.white),
         ),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.of(ctx).pop(null), child: const Text('취소', style: TextStyle(color: Colors.white70))),
-        ElevatedButton(onPressed: () => Navigator.of(ctx).pop(controller.text.trim()), style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1976D2), foregroundColor: Colors.white), child: const Text('추가')),
+        TextButton(
+            onPressed: () => Navigator.of(ctx).pop(null),
+            child: const Text('취소', style: TextStyle(color: Colors.white70))),
+        ElevatedButton(
+            onPressed: () => Navigator.of(ctx).pop(controller.text.trim()),
+            style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF1976D2),
+                foregroundColor: Colors.white),
+            child: const Text('추가')),
       ],
     ),
   );
 }
 
-Future<void> _openClassTagDialogLikeSideSheet(BuildContext context, String setId, String studentId) async {
+Future<void> _openClassTagDialogLikeSideSheet(
+    BuildContext context, String setId, String studentId) async {
   final presets = await TagPresetService.instance.loadPresets();
-  List<TagEvent> applied = List<TagEvent>.from(TagStore.instance.getEventsForSet(setId));
+  List<TagEvent> applied =
+      List<TagEvent>.from(TagStore.instance.getEventsForSet(setId));
   await showDialog<void>(
     context: context,
     builder: (ctx) {
       return StatefulBuilder(
         builder: (ctx, setLocal) {
-          Future<void> handleTagPressed(String name, Color color, IconData icon) async {
+          Future<void> handleTagPressed(
+              String name, Color color, IconData icon) async {
             final now = DateTime.now();
             String? note;
             if (name == '기록') {
@@ -469,26 +563,45 @@ Future<void> _openClassTagDialogLikeSideSheet(BuildContext context, String setId
               if (note == null || note.trim().isEmpty) return;
             }
             setLocal(() {
-              applied.add(TagEvent(tagName: name, colorValue: color.value, iconCodePoint: icon.codePoint, timestamp: now, note: note?.trim()));
+              applied.add(TagEvent(
+                  tagName: name,
+                  colorValue: color.value,
+                  iconCodePoint: icon.codePoint,
+                  timestamp: now,
+                  note: note?.trim()));
             });
-            TagStore.instance.appendEvent(setId, studentId, TagEvent(tagName: name, colorValue: color.value, iconCodePoint: icon.codePoint, timestamp: now, note: note?.trim()));
+            TagStore.instance.appendEvent(
+                setId,
+                studentId,
+                TagEvent(
+                    tagName: name,
+                    colorValue: color.value,
+                    iconCodePoint: icon.codePoint,
+                    timestamp: now,
+                    note: note?.trim()));
           }
 
           return AlertDialog(
             backgroundColor: const Color(0xFF1F1F1F),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            title: const Text('수업 태그', style: TextStyle(color: Colors.white, fontSize: 20)),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            title: const Text('수업 태그',
+                style: TextStyle(color: Colors.white, fontSize: 20)),
             content: SizedBox(
               width: 560,
               child: SingleChildScrollView(
-        child: Column(
+                child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Text('적용된 태그', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.bold)),
+                    const Text('적용된 태그',
+                        style: TextStyle(
+                            color: Colors.white70,
+                            fontWeight: FontWeight.bold)),
                     const SizedBox(height: 8),
                     if (applied.isEmpty)
-                      const Text('아직 추가된 태그가 없습니다.', style: TextStyle(color: Colors.white38))
+                      const Text('아직 추가된 태그가 없습니다.',
+                          style: TextStyle(color: Colors.white38))
                     else
                       Column(
                         children: [
@@ -497,28 +610,45 @@ Future<void> _openClassTagDialogLikeSideSheet(BuildContext context, String setId
                               final e = applied[i];
                               return Container(
                                 margin: const EdgeInsets.only(bottom: 8),
-                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 10, vertical: 8),
                                 decoration: BoxDecoration(
                                   color: const Color(0xFF22262C),
                                   borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(color: Color(e.colorValue).withOpacity(0.35), width: 1),
+                                  border: Border.all(
+                                      color:
+                                          Color(e.colorValue).withOpacity(0.35),
+                                      width: 1),
                                 ),
                                 child: Row(
                                   children: [
                                     Row(
                                       mainAxisSize: MainAxisSize.min,
                                       children: [
-                                        Icon(IconData(e.iconCodePoint, fontFamily: 'MaterialIcons'), color: Color(e.colorValue), size: 18),
+                                        Icon(
+                                            IconData(e.iconCodePoint,
+                                                fontFamily: 'MaterialIcons'),
+                                            color: Color(e.colorValue),
+                                            size: 18),
                                         const SizedBox(width: 8),
-                                        Text(e.tagName, style: const TextStyle(color: Colors.white70)),
-                                        if (e.note != null && e.note!.isNotEmpty) ...[
+                                        Text(e.tagName,
+                                            style: const TextStyle(
+                                                color: Colors.white70)),
+                                        if (e.note != null &&
+                                            e.note!.isNotEmpty) ...[
                                           const SizedBox(width: 8),
-                                          Text(e.note!, style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                                          Text(e.note!,
+                                              style: const TextStyle(
+                                                  color: Colors.white54,
+                                                  fontSize: 12)),
                                         ],
                                       ],
                                     ),
                                     const Spacer(),
-                                    Text(_formatDateTime(e.timestamp), style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                                    Text(_formatDateTime(e.timestamp),
+                                        style: const TextStyle(
+                                            color: Colors.white54,
+                                            fontSize: 12)),
                                   ],
                                 ),
                               );
@@ -529,12 +659,17 @@ Future<void> _openClassTagDialogLikeSideSheet(BuildContext context, String setId
                     const SizedBox(height: 16),
                     Row(
                       children: [
-                        const Text('추가 가능한 태그', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.bold)),
+                        const Text('추가 가능한 태그',
+                            style: TextStyle(
+                                color: Colors.white70,
+                                fontWeight: FontWeight.bold)),
                         const Spacer(),
                         IconButton(
                           tooltip: '태그 관리',
                           onPressed: () async {
-                            await showDialog(context: context, builder: (_) => const TagPresetDialog());
+                            await showDialog(
+                                context: context,
+                                builder: (_) => const TagPresetDialog());
                           },
                           icon: const Icon(Icons.style, color: Colors.white70),
                         ),
@@ -547,17 +682,23 @@ Future<void> _openClassTagDialogLikeSideSheet(BuildContext context, String setId
                       children: [
                         for (final p in presets)
                           ActionChip(
-                            onPressed: () => handleTagPressed(p.name, p.color, p.icon),
+                            onPressed: () =>
+                                handleTagPressed(p.name, p.color, p.icon),
                             backgroundColor: const Color(0xFF2A2A2A),
                             label: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
                                 Icon(p.icon, color: p.color, size: 18),
                                 const SizedBox(width: 6),
-                                Text(p.name, style: const TextStyle(color: Colors.white70)),
+                                Text(p.name,
+                                    style:
+                                        const TextStyle(color: Colors.white70)),
                               ],
                             ),
-                            shape: StadiumBorder(side: BorderSide(color: p.color.withOpacity(0.6), width: 1.0)),
+                            shape: StadiumBorder(
+                                side: BorderSide(
+                                    color: p.color.withOpacity(0.6),
+                                    width: 1.0)),
                           ),
                       ],
                     ),
@@ -566,7 +707,10 @@ Future<void> _openClassTagDialogLikeSideSheet(BuildContext context, String setId
               ),
             ),
             actions: [
-              TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('닫기', style: TextStyle(color: Colors.white70))),
+              TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  child: const Text('닫기',
+                      style: TextStyle(color: Colors.white70))),
             ],
           );
         },
@@ -575,103 +719,101 @@ Future<void> _openClassTagDialogLikeSideSheet(BuildContext context, String setId
   );
 }
 
-  String _formatDateShort(DateTime dt) {
-    String two(int v) => v.toString().padLeft(2, '0');
-    return '${two(dt.month)}.${two(dt.day)}';
-  }
+String _formatDateShort(DateTime dt) {
+  String two(int v) => v.toString().padLeft(2, '0');
+  return '${two(dt.month)}.${two(dt.day)}';
+}
 
-  String _formatDateRange(DateTime start, DateTime? end) {
-    final left = _formatDateShort(start);
-    if (end == null) return '$left ~ 미정';
-    return '$left ~ ${_formatDateShort(end)}';
-  }
+String _formatDateRange(DateTime start, DateTime? end) {
+  final left = _formatDateShort(start);
+  if (end == null) return '$left ~ 미정';
+  return '$left ~ ${_formatDateShort(end)}';
+}
 
-  Widget _buildHomeworkBadge(
-    BuildContext context,
-    String studentId, {
-    required VoidCallback onUpdated,
-  }) {
-    return ValueListenableBuilder<int>(
-      valueListenable: HomeworkAssignmentStore.instance.revision,
-      builder: (context, _rev, _) {
-        _activeAssignmentsFutureByStudent[studentId] =
-            HomeworkAssignmentStore.instance.loadActiveAssignments(studentId);
-        _assignmentChecksFutureByStudent[studentId] =
-            HomeworkAssignmentStore.instance.loadChecksForStudent(studentId);
-        final assignmentsFuture = _activeAssignmentsFutureByStudent[studentId]!;
-        final checksFuture = _assignmentChecksFutureByStudent[studentId]!;
-        return FutureBuilder<List<HomeworkAssignmentDetail>>(
-          future: assignmentsFuture,
-          builder: (context, assignmentsSnapshot) {
-            final list =
-                assignmentsSnapshot.data ?? const <HomeworkAssignmentDetail>[];
-            if (list.isEmpty) return const SizedBox.shrink();
-            return FutureBuilder<Map<String, List<HomeworkAssignmentCheck>>>(
-              future: checksFuture,
-              builder: (context, checksSnapshot) {
-                final checksByItem =
-                    checksSnapshot.data ??
-                        const <String, List<HomeworkAssignmentCheck>>{};
-                bool sameDay(DateTime a, DateTime b) =>
-                    a.year == b.year && a.month == b.month && a.day == b.day;
-                final now = DateTime.now();
-                final dueToday = list
-                    .where((a) => a.dueDate != null && sameDay(a.dueDate!, now))
-                    .toList();
-                if (dueToday.isEmpty) return const SizedBox.shrink();
-                bool hasCheck(HomeworkAssignmentDetail a) {
-                  final checks = checksByItem[a.homeworkItemId] ?? const [];
-                  return checks.any((c) => c.assignmentId == a.id);
-                }
+Widget _buildHomeworkBadge(
+  BuildContext context,
+  String studentId, {
+  required VoidCallback onUpdated,
+}) {
+  return ValueListenableBuilder<int>(
+    valueListenable: HomeworkAssignmentStore.instance.revision,
+    builder: (context, _rev, _) {
+      _activeAssignmentsFutureByStudent[studentId] =
+          HomeworkAssignmentStore.instance.loadActiveAssignments(studentId);
+      _assignmentChecksFutureByStudent[studentId] =
+          HomeworkAssignmentStore.instance.loadChecksForStudent(studentId);
+      final assignmentsFuture = _activeAssignmentsFutureByStudent[studentId]!;
+      final checksFuture = _assignmentChecksFutureByStudent[studentId]!;
+      return FutureBuilder<List<HomeworkAssignmentDetail>>(
+        future: assignmentsFuture,
+        builder: (context, assignmentsSnapshot) {
+          final list =
+              assignmentsSnapshot.data ?? const <HomeworkAssignmentDetail>[];
+          if (list.isEmpty) return const SizedBox.shrink();
+          return FutureBuilder<Map<String, List<HomeworkAssignmentCheck>>>(
+            future: checksFuture,
+            builder: (context, checksSnapshot) {
+              final checksByItem = checksSnapshot.data ??
+                  const <String, List<HomeworkAssignmentCheck>>{};
+              bool sameDay(DateTime a, DateTime b) =>
+                  a.year == b.year && a.month == b.month && a.day == b.day;
+              final now = DateTime.now();
+              final dueToday = list
+                  .where((a) => a.dueDate != null && sameDay(a.dueDate!, now))
+                  .toList();
+              if (dueToday.isEmpty) return const SizedBox.shrink();
+              bool hasCheck(HomeworkAssignmentDetail a) {
+                final checks = checksByItem[a.homeworkItemId] ?? const [];
+                return checks.any((c) => c.assignmentId == a.id);
+              }
 
-                final dueUnchecked =
-                    dueToday.where((a) => !hasCheck(a)).toList();
-                if (dueUnchecked.isEmpty) return const SizedBox.shrink();
-                return InkWell(
-                  onTap: () => showHomeworkAssignmentsDialog(
-                    context,
-                    studentId,
-                    onUpdated: onUpdated,
+              final dueUnchecked = dueToday.where((a) => !hasCheck(a)).toList();
+              if (dueUnchecked.isEmpty) return const SizedBox.shrink();
+              return InkWell(
+                onTap: () => showHomeworkAssignmentsDialog(
+                  context,
+                  studentId,
+                  onUpdated: onUpdated,
+                ),
+                borderRadius: BorderRadius.circular(10),
+                child: Container(
+                  height: ClassContentScreen._attendingCardHeight,
+                  alignment: Alignment.center,
+                  padding: const EdgeInsets.symmetric(horizontal: 14),
+                  decoration: BoxDecoration(
+                    color: Colors.transparent,
+                    borderRadius: BorderRadius.circular(10),
+                    border:
+                        Border.all(color: const Color(0xFF2C3E3E), width: 2),
                   ),
-                  borderRadius: BorderRadius.circular(10),
-                  child: Container(
-                    height: ClassContentScreen._attendingCardHeight,
-                    alignment: Alignment.center,
-                    padding: const EdgeInsets.symmetric(horizontal: 14),
-                    decoration: BoxDecoration(
-                      color: Colors.transparent,
-                      borderRadius: BorderRadius.circular(10),
-                      border:
-                          Border.all(color: const Color(0xFF2C3E3E), width: 2),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(
-                          Icons.assignment_outlined,
-                          color: kDlgAccent,
-                          size: 16,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(
+                        Icons.assignment_outlined,
+                        color: kDlgAccent,
+                        size: 16,
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        '숙제 ${dueUnchecked.length}',
+                        style: const TextStyle(
+                          color: kDlgText,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
                         ),
-                        const SizedBox(width: 6),
-                        Text(
-                          '숙제 ${dueUnchecked.length}',
-                          style: const TextStyle(
-                            color: kDlgText,
-                            fontSize: 13,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
-                );
-              },
-            );
-          },
-        );
-      },
-    );
-  }
+                ),
+              );
+            },
+          );
+        },
+      );
+    },
+  );
+}
 
 Future<void> showHomeworkAssignmentsDialog(
   BuildContext context,
@@ -679,559 +821,588 @@ Future<void> showHomeworkAssignmentsDialog(
   VoidCallback? onUpdated,
   bool hideBadgeOnSave = true,
 }) async {
-    final assignments =
-        await HomeworkAssignmentStore.instance.loadActiveAssignments(studentId);
-    if (!context.mounted) return;
-    if (assignments.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('현재 숙제가 없습니다.')),
-      );
-      return;
-    }
-    final counts =
-        await HomeworkAssignmentStore.instance.loadAssignmentCounts(studentId);
-    if (!context.mounted) return;
-    final checksByItem =
-        await HomeworkAssignmentStore.instance.loadChecksForStudent(studentId);
-    if (!context.mounted) return;
+  final assignments =
+      await HomeworkAssignmentStore.instance.loadActiveAssignments(studentId);
+  if (!context.mounted) return;
+  if (assignments.isEmpty) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('현재 숙제가 없습니다.')),
+    );
+    return;
+  }
+  final counts =
+      await HomeworkAssignmentStore.instance.loadAssignmentCounts(studentId);
+  if (!context.mounted) return;
+  final checksByItem =
+      await HomeworkAssignmentStore.instance.loadChecksForStudent(studentId);
+  if (!context.mounted) return;
 
-    final Map<String, int> progressById = {
-      for (final a in assignments) a.id: a.progress,
-    };
-    final Map<String, int> initialProgressById = {
-      for (final a in assignments) a.id: a.progress,
-    };
-    final Map<String, String?> issueTypeById = {
-      for (final a in assignments) a.id: a.issueType,
-    };
-    final Map<String, TextEditingController> noteControllers = {
-      for (final a in assignments)
-        a.id: TextEditingController(text: a.issueNote ?? ''),
-    };
-    final Map<String, TextEditingController> progressControllers = {
-      for (final a in assignments)
-        a.id: TextEditingController(text: a.progress.toString()),
-    };
-    final Map<String, bool> selectedById = {
-      for (final a in assignments) a.id: true,
-    };
-    final Map<String, int> latestProgressByItem = {};
-    for (final entry in checksByItem.entries) {
-      final list = List<HomeworkAssignmentCheck>.from(entry.value);
-      if (list.isEmpty) continue;
-      list.sort((a, b) => a.checkedAt.compareTo(b.checkedAt));
-      latestProgressByItem[entry.key] = list.last.progress;
-    }
-    final Map<String, int> minProgressById = {};
-    for (final a in assignments) {
-      final prev = latestProgressByItem[a.homeworkItemId] ?? 0;
-      final min = math.max(prev, a.progress);
-      minProgressById[a.id] = min;
-      if ((progressById[a.id] ?? 0) < min) {
-        progressById[a.id] = min;
-        final controller = progressControllers[a.id];
-        if (controller != null) {
-          controller.text = min.toString();
-          controller.selection =
-              TextSelection.collapsed(offset: controller.text.length);
-        }
+  final Map<String, int> progressById = {
+    for (final a in assignments) a.id: a.progress,
+  };
+  final Map<String, int> initialProgressById = {
+    for (final a in assignments) a.id: a.progress,
+  };
+  final Map<String, String?> issueTypeById = {
+    for (final a in assignments) a.id: a.issueType,
+  };
+  final Map<String, TextEditingController> noteControllers = {
+    for (final a in assignments)
+      a.id: TextEditingController(text: a.issueNote ?? ''),
+  };
+  final Map<String, TextEditingController> progressControllers = {
+    for (final a in assignments)
+      a.id: TextEditingController(text: a.progress.toString()),
+  };
+  final Map<String, bool> selectedById = {
+    for (final a in assignments) a.id: true,
+  };
+  final Map<String, int> latestProgressByItem = {};
+  for (final entry in checksByItem.entries) {
+    final list = List<HomeworkAssignmentCheck>.from(entry.value);
+    if (list.isEmpty) continue;
+    list.sort((a, b) => a.checkedAt.compareTo(b.checkedAt));
+    latestProgressByItem[entry.key] = list.last.progress;
+  }
+  final Map<String, int> minProgressById = {};
+  for (final a in assignments) {
+    final prev = latestProgressByItem[a.homeworkItemId] ?? 0;
+    final min = math.max(prev, a.progress);
+    minProgressById[a.id] = min;
+    if ((progressById[a.id] ?? 0) < min) {
+      progressById[a.id] = min;
+      final controller = progressControllers[a.id];
+      if (controller != null) {
+        controller.text = min.toString();
+        controller.selection =
+            TextSelection.collapsed(offset: controller.text.length);
       }
     }
-    bool isClosing = false;
+  }
+  bool isClosing = false;
 
-    Future<bool> applyAssignmentUpdates(
-      List<Map<String, dynamic>> updates,
-    ) async {
-      bool ok = true;
-      for (final u in updates) {
-        final saved = await HomeworkAssignmentStore.instance.saveAssignmentCheck(
-          assignmentId: u['id'] as String,
-          studentId: studentId,
-          homeworkItemId: u['homeworkItemId'] as String,
-          progress: u['progress'] as int,
-          issueType: u['issueType'] as String?,
-          issueNote: u['issueNote'] as String?,
-          markCompleted: (u['markCompleted'] as bool?) ?? false,
-        );
-        if (!saved) ok = false;
-        if (saved) {
-          final itemId = u['homeworkItemId'] as String;
-          final bool abandon = (u['abandon'] as bool?) ?? false;
-          if (abandon) {
-            unawaited(HomeworkStore.instance.abandon(studentId, itemId, '분실'));
-          } else {
-            final item = HomeworkStore.instance.getById(studentId, itemId);
-            if (item != null && item.phase < 3) {
-              unawaited(HomeworkStore.instance.submit(studentId, itemId));
-            }
+  Future<bool> applyAssignmentUpdates(
+    List<Map<String, dynamic>> updates,
+  ) async {
+    bool ok = true;
+    for (final u in updates) {
+      final saved = await HomeworkAssignmentStore.instance.saveAssignmentCheck(
+        assignmentId: u['id'] as String,
+        studentId: studentId,
+        homeworkItemId: u['homeworkItemId'] as String,
+        progress: u['progress'] as int,
+        issueType: u['issueType'] as String?,
+        issueNote: u['issueNote'] as String?,
+        markCompleted: (u['markCompleted'] as bool?) ?? false,
+      );
+      if (!saved) ok = false;
+      if (saved) {
+        final itemId = u['homeworkItemId'] as String;
+        final bool abandon = (u['abandon'] as bool?) ?? false;
+        if (abandon) {
+          unawaited(HomeworkStore.instance.abandon(studentId, itemId, '분실'));
+        } else {
+          final item = HomeworkStore.instance.getById(studentId, itemId);
+          if (item != null && item.phase < 3) {
+            unawaited(HomeworkStore.instance.submit(studentId, itemId));
           }
         }
       }
-      if (!context.mounted) return ok;
-      onUpdated?.call();
-      return ok;
     }
+    if (!context.mounted) return ok;
+    onUpdated?.call();
+    return ok;
+  }
 
-    await showDialog<void>(
-      context: context,
-      builder: (ctx) {
-        return StatefulBuilder(
-          builder: (ctx, setState) {
-            return AlertDialog(
-              backgroundColor: kDlgBg,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-              title: const Text('숙제 현황', style: TextStyle(color: kDlgText, fontWeight: FontWeight.w900)),
-              content: SizedBox(
-                width: 720,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const YggDialogSectionHeader(icon: Icons.assignment_turned_in, title: '현재 숙제'),
-                    ConstrainedBox(
-                      constraints: const BoxConstraints(maxHeight: 520),
-                      child: ListView.separated(
-                        shrinkWrap: true,
-                        itemCount: assignments.length,
-                        separatorBuilder: (_, __) => const SizedBox(height: 10),
-                        itemBuilder: (ctx, idx) {
-                          final a = assignments[idx];
-                          final progress = progressById[a.id] ?? 0;
-                          final progressController = progressControllers[a.id]!;
-                          final issueType = issueTypeById[a.id];
-                          final bool selected = selectedById[a.id] ?? true;
-                          final int minProgress = minProgressById[a.id] ?? 0;
-                          final bool lockProgress =
-                              !selected || issueType == 'lost';
-                          final String type = (a.type ?? '').trim();
-                          final String page = (a.page ?? '').trim();
-                          final String count = a.count != null ? a.count.toString() : '';
-                          final String meta = [
-                            if (type.isNotEmpty) type,
-                            if (page.isNotEmpty) 'p.$page',
-                            if (count.isNotEmpty) '${count}문항',
-                          ].join(' · ');
-                          final int assignCount = counts[a.homeworkItemId] ?? 1;
-                          final String reassignText =
-                              assignCount > 1 ? '재숙제 ${assignCount}회' : '';
-                          const double progressThumbRadius = 8;
-                          return Container(
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: kDlgPanelBg,
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: kDlgBorder),
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  children: [
-                                    Checkbox(
-                                      value: selected,
-                                      onChanged: isClosing
-                                          ? null
-                                          : (v) {
-                                              setState(() {
-                                                selectedById[a.id] = v ?? false;
-                                              });
-                                            },
-                                      activeColor: kDlgAccent,
-                                      checkColor: Colors.white,
-                                      side: const BorderSide(color: kDlgBorder),
-                                      materialTapTargetSize:
-                                          MaterialTapTargetSize.shrinkWrap,
-                                      visualDensity: VisualDensity.compact,
-                                    ),
-                                    const SizedBox(width: 6),
-                                    Expanded(
-                                      child: Text(
-                                        a.title.isEmpty ? '(제목 없음)' : a.title,
-                                        style: const TextStyle(
-                                          color: kDlgText,
-                                          fontWeight: FontWeight.w800,
-                                          fontSize: 19,
-                                        ),
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
+  await showDialog<void>(
+    context: context,
+    builder: (ctx) {
+      return StatefulBuilder(
+        builder: (ctx, setState) {
+          return AlertDialog(
+            backgroundColor: kDlgBg,
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: const Text('숙제 현황',
+                style: TextStyle(color: kDlgText, fontWeight: FontWeight.w900)),
+            content: SizedBox(
+              width: 720,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const YggDialogSectionHeader(
+                      icon: Icons.assignment_turned_in, title: '현재 숙제'),
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxHeight: 520),
+                    child: ListView.separated(
+                      shrinkWrap: true,
+                      itemCount: assignments.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 10),
+                      itemBuilder: (ctx, idx) {
+                        final a = assignments[idx];
+                        final progress = progressById[a.id] ?? 0;
+                        final progressController = progressControllers[a.id]!;
+                        final issueType = issueTypeById[a.id];
+                        final bool selected = selectedById[a.id] ?? true;
+                        final int minProgress = minProgressById[a.id] ?? 0;
+                        final bool lockProgress =
+                            !selected || issueType == 'lost';
+                        final String type = (a.type ?? '').trim();
+                        final String page = (a.page ?? '').trim();
+                        final String count =
+                            a.count != null ? a.count.toString() : '';
+                        final String meta = [
+                          if (type.isNotEmpty) type,
+                          if (page.isNotEmpty) 'p.$page',
+                          if (count.isNotEmpty) '${count}문항',
+                        ].join(' · ');
+                        final int assignCount = counts[a.homeworkItemId] ?? 1;
+                        final String reassignText =
+                            assignCount > 1 ? '재숙제 ${assignCount}회' : '';
+                        const double progressThumbRadius = 8;
+                        return Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: kDlgPanelBg,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: kDlgBorder),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Checkbox(
+                                    value: selected,
+                                    onChanged: isClosing
+                                        ? null
+                                        : (v) {
+                                            setState(() {
+                                              selectedById[a.id] = v ?? false;
+                                            });
+                                          },
+                                    activeColor: kDlgAccent,
+                                    checkColor: Colors.white,
+                                    side: const BorderSide(color: kDlgBorder),
+                                    materialTapTargetSize:
+                                        MaterialTapTargetSize.shrinkWrap,
+                                    visualDensity: VisualDensity.compact,
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Expanded(
+                                    child: Text(
+                                      a.title.isEmpty ? '(제목 없음)' : a.title,
+                                      style: const TextStyle(
+                                        color: kDlgText,
+                                        fontWeight: FontWeight.w800,
+                                        fontSize: 19,
                                       ),
-                                    ),
-                                    if (reassignText.isNotEmpty)
-                                      Text(
-                                        reassignText,
-                                        style: const TextStyle(
-                                          color: kDlgTextSub,
-                                          fontSize: 13,
-                                          fontWeight: FontWeight.w600,
-                                        ),
-                                      ),
-                                  ],
-                                ),
-                                if (meta.isNotEmpty) ...[
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    meta,
-                                    style: const TextStyle(
-                                      color: kDlgTextSub,
-                                      fontSize: 14,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
                                     ),
                                   ),
+                                  if (reassignText.isNotEmpty)
+                                    Text(
+                                      reassignText,
+                                      style: const TextStyle(
+                                        color: kDlgTextSub,
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
                                 ],
-                                const SizedBox(height: 6),
+                              ),
+                              if (meta.isNotEmpty) ...[
+                                const SizedBox(height: 4),
                                 Text(
-                                  _formatDateRange(a.assignedAt, a.dueDate),
+                                  meta,
                                   style: const TextStyle(
                                     color: kDlgTextSub,
                                     fontSize: 14,
                                   ),
                                 ),
-                                const SizedBox(height: 10),
-                                Opacity(
-                                  opacity: lockProgress ? 0.4 : 1,
-                                  child: IgnorePointer(
-                                    ignoring: lockProgress,
-                                    child: Row(
-                                      children: [
-                                        const Text('수행률',
-                                            style: TextStyle(color: kDlgTextSub)),
-                                        const SizedBox(width: 10),
-                                        Expanded(
-                                          child: Column(
-                                            mainAxisSize: MainAxisSize.min,
-                                            children: [
-                                              SliderTheme(
-                                                data: SliderTheme.of(ctx).copyWith(
-                                                  trackHeight: 4,
-                                                  activeTrackColor: kDlgAccent,
-                                                  inactiveTrackColor: kDlgBorder,
-                                                  thumbColor: kDlgAccent,
-                                                  overlayColor:
-                                                      kDlgAccent.withOpacity(0.12),
-                                                  thumbShape: RoundSliderThumbShape(
-                                                    enabledThumbRadius:
-                                                        progressThumbRadius,
-                                                  ),
-                                                  tickMarkShape:
-                                                      const RoundSliderTickMarkShape(
-                                                    tickMarkRadius: 0,
-                                                  ),
-                                                  activeTickMarkColor: kDlgAccent,
-                                                  inactiveTickMarkColor: kDlgBorder,
-                                                  overlayShape:
-                                                      const RoundSliderOverlayShape(
-                                                    overlayRadius: 14,
-                                                  ),
-                                                  valueIndicatorColor: kDlgAccent,
-                                                  valueIndicatorTextStyle:
-                                                      const TextStyle(
-                                                    color: Colors.white,
-                                                  ),
-                                                ),
-                                                child: Slider(
-                                                  value: progress.toDouble(),
-                                                  min: 0,
-                                                  max: 150,
-                                                  divisions: 15,
-                                                  label: '$progress%',
-                                                  onChanged: (v) {
-                                                    if (isClosing) return;
-                                                    final next = ((v / 10).round() * 10)
-                                                        .clamp(minProgress, 150);
-                                                    setState(() {
-                                                      progressById[a.id] = next;
-                                                      final text = next.toString();
-                                                      if (progressController.text != text) {
-                                                        progressController.text = text;
-                                                        progressController.selection =
-                                                            TextSelection.collapsed(
-                                                                offset: text.length);
-                                                      }
-                                                    });
-                                                  },
-                                                ),
-                                              ),
-                                              const SizedBox(height: 4),
-                                              Padding(
-                                                padding: EdgeInsets.symmetric(
-                                                    horizontal: progressThumbRadius),
-                                                child: SizedBox(
-                                                  height: 22,
-                                                  child: Stack(
-                                                    clipBehavior: Clip.none,
-                                                    children: [
-                                                      for (final v in const [
-                                                        0,
-                                                        50,
-                                                        100,
-                                                        150
-                                                      ])
-                                                        Align(
-                                                          alignment: Alignment(
-                                                              -1 + (v / 150) * 2,
-                                                              -1),
-                                                          child: Column(
-                                                            mainAxisSize:
-                                                                MainAxisSize.min,
-                                                            children: [
-                                                              Container(
-                                                                width: 1,
-                                                                height: 6,
-                                                                color: kDlgBorder,
-                                                              ),
-                                                              const SizedBox(height: 2),
-                                                              Text(
-                                                                '$v%',
-                                                                style: const TextStyle(
-                                                                  color: kDlgTextSub,
-                                                                  fontSize: 10,
-                                                                  fontWeight:
-                                                                      FontWeight.w600,
-                                                                ),
-                                                              ),
-                                                            ],
-                                                          ),
-                                                        ),
-                                                    ],
-                                                  ),
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                        const SizedBox(width: 10),
-                                        SizedBox(
-                                          width: 64,
-                                          child: TextField(
-                                            controller: progressController,
-                                            enabled: !lockProgress,
-                                            keyboardType: TextInputType.number,
-                                            inputFormatters: [
-                                              FilteringTextInputFormatter.digitsOnly
-                                            ],
-                                            textAlign: TextAlign.center,
-                                            style: const TextStyle(
-                                              color: kDlgText,
-                                              fontSize: 14,
-                                              fontWeight: FontWeight.w800,
-                                            ),
-                                            decoration: InputDecoration(
-                                              suffixText: '%',
-                                              suffixStyle:
-                                                  const TextStyle(color: kDlgTextSub),
-                                              filled: true,
-                                              fillColor: kDlgFieldBg,
-                                              enabledBorder: OutlineInputBorder(
-                                                borderRadius:
-                                                    BorderRadius.circular(8),
-                                                borderSide: const BorderSide(
-                                                  color: kDlgBorder,
-                                                ),
-                                              ),
-                                              focusedBorder: OutlineInputBorder(
-                                                borderRadius:
-                                                    BorderRadius.circular(8),
-                                                borderSide: const BorderSide(
-                                                  color: kDlgAccent,
-                                                  width: 1.4,
-                                                ),
-                                              ),
-                                              contentPadding:
-                                                  const EdgeInsets.symmetric(
-                                                horizontal: 6,
-                                                vertical: 8,
-                                              ),
-                                            ),
-                                            onChanged: (v) {
-                                              if (isClosing) return;
-                                              final parsed = int.tryParse(v);
-                                              if (parsed == null) return;
-                                              final safe =
-                                                  parsed.clamp(minProgress, 150);
-                                              setState(() {
-                                                progressById[a.id] = safe;
-                                              });
-                                              final safeText = safe.toString();
-                                              if (safeText != v) {
-                                                progressController.text = safeText;
-                                                progressController.selection =
-                                                    TextSelection.collapsed(
-                                                        offset: safeText.length);
-                                              }
-                                            },
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
+                              ],
+                              const SizedBox(height: 6),
+                              Text(
+                                _formatDateRange(a.assignedAt, a.dueDate),
+                                style: const TextStyle(
+                                  color: kDlgTextSub,
+                                  fontSize: 14,
                                 ),
-                                const SizedBox(height: 12),
-                                Opacity(
-                                  opacity: selected ? 1 : 0.4,
-                                  child: IgnorePointer(
-                                    ignoring: !selected,
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Wrap(
-                                          spacing: 8,
+                              ),
+                              const SizedBox(height: 10),
+                              Opacity(
+                                opacity: lockProgress ? 0.4 : 1,
+                                child: IgnorePointer(
+                                  ignoring: lockProgress,
+                                  child: Row(
+                                    children: [
+                                      const Text('수행률',
+                                          style: TextStyle(color: kDlgTextSub)),
+                                      const SizedBox(width: 10),
+                                      Expanded(
+                                        child: Column(
+                                          mainAxisSize: MainAxisSize.min,
                                           children: [
-                                            YggDialogFilterChip(
-                                              label: '분실',
-                                              selected: issueType == 'lost',
-                                              onSelected: (v) {
-                                                if (isClosing) return;
-                                                setState(() {
-                                                  issueTypeById[a.id] =
-                                                      v ? 'lost' : null;
-                                                  if (issueTypeById[a.id] != 'other') {
-                                                    noteControllers[a.id]?.text = '';
-                                                  }
-                                                });
-                                              },
+                                            SliderTheme(
+                                              data:
+                                                  SliderTheme.of(ctx).copyWith(
+                                                trackHeight: 4,
+                                                activeTrackColor: kDlgAccent,
+                                                inactiveTrackColor: kDlgBorder,
+                                                thumbColor: kDlgAccent,
+                                                overlayColor: kDlgAccent
+                                                    .withOpacity(0.12),
+                                                thumbShape:
+                                                    RoundSliderThumbShape(
+                                                  enabledThumbRadius:
+                                                      progressThumbRadius,
+                                                ),
+                                                tickMarkShape:
+                                                    const RoundSliderTickMarkShape(
+                                                  tickMarkRadius: 0,
+                                                ),
+                                                activeTickMarkColor: kDlgAccent,
+                                                inactiveTickMarkColor:
+                                                    kDlgBorder,
+                                                overlayShape:
+                                                    const RoundSliderOverlayShape(
+                                                  overlayRadius: 14,
+                                                ),
+                                                valueIndicatorColor: kDlgAccent,
+                                                valueIndicatorTextStyle:
+                                                    const TextStyle(
+                                                  color: Colors.white,
+                                                ),
+                                              ),
+                                              child: Slider(
+                                                value: progress.toDouble(),
+                                                min: 0,
+                                                max: 150,
+                                                divisions: 15,
+                                                label: '$progress%',
+                                                onChanged: (v) {
+                                                  if (isClosing) return;
+                                                  final next =
+                                                      ((v / 10).round() * 10)
+                                                          .clamp(
+                                                              minProgress, 150);
+                                                  setState(() {
+                                                    progressById[a.id] = next;
+                                                    final text =
+                                                        next.toString();
+                                                    if (progressController
+                                                            .text !=
+                                                        text) {
+                                                      progressController.text =
+                                                          text;
+                                                      progressController
+                                                              .selection =
+                                                          TextSelection
+                                                              .collapsed(
+                                                                  offset: text
+                                                                      .length);
+                                                    }
+                                                  });
+                                                },
+                                              ),
                                             ),
-                                            YggDialogFilterChip(
-                                              label: '잊음',
-                                              selected: issueType == 'forgot',
-                                              onSelected: (v) {
-                                                if (isClosing) return;
-                                                setState(() {
-                                                  issueTypeById[a.id] =
-                                                      v ? 'forgot' : null;
-                                                  if (issueTypeById[a.id] != 'other') {
-                                                    noteControllers[a.id]?.text = '';
-                                                  }
-                                                });
-                                              },
-                                            ),
-                                            YggDialogFilterChip(
-                                              label: '기타',
-                                              selected: issueType == 'other',
-                                              onSelected: (v) {
-                                                if (isClosing) return;
-                                                setState(() {
-                                                  issueTypeById[a.id] =
-                                                      v ? 'other' : null;
-                                                  if (!v) {
-                                                    noteControllers[a.id]?.text = '';
-                                                  }
-                                                });
-                                              },
+                                            const SizedBox(height: 4),
+                                            Padding(
+                                              padding: EdgeInsets.symmetric(
+                                                  horizontal:
+                                                      progressThumbRadius),
+                                              child: SizedBox(
+                                                height: 22,
+                                                child: Stack(
+                                                  clipBehavior: Clip.none,
+                                                  children: [
+                                                    for (final v in const [
+                                                      0,
+                                                      50,
+                                                      100,
+                                                      150
+                                                    ])
+                                                      Align(
+                                                        alignment: Alignment(
+                                                            -1 + (v / 150) * 2,
+                                                            -1),
+                                                        child: Column(
+                                                          mainAxisSize:
+                                                              MainAxisSize.min,
+                                                          children: [
+                                                            Container(
+                                                              width: 1,
+                                                              height: 6,
+                                                              color: kDlgBorder,
+                                                            ),
+                                                            const SizedBox(
+                                                                height: 2),
+                                                            Text(
+                                                              '$v%',
+                                                              style:
+                                                                  const TextStyle(
+                                                                color:
+                                                                    kDlgTextSub,
+                                                                fontSize: 10,
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .w600,
+                                                              ),
+                                                            ),
+                                                          ],
+                                                        ),
+                                                      ),
+                                                  ],
+                                                ),
+                                              ),
                                             ),
                                           ],
                                         ),
-                                        if (issueType == 'other') ...[
-                                          const SizedBox(height: 8),
-                                          TextField(
-                                            controller: noteControllers[a.id],
-                                            minLines: 1,
-                                            maxLines: 2,
-                                            style: const TextStyle(color: kDlgText),
-                                            decoration: InputDecoration(
-                                              hintText: '사유를 입력하세요',
-                                              hintStyle:
-                                                  const TextStyle(color: Color(0xFF6E7E7E)),
-                                              filled: true,
-                                              fillColor: kDlgFieldBg,
-                                              enabledBorder: OutlineInputBorder(
-                                                borderRadius:
-                                                    BorderRadius.circular(10),
-                                                borderSide: const BorderSide(
-                                                  color: kDlgBorder,
-                                                ),
-                                              ),
-                                              focusedBorder: OutlineInputBorder(
-                                                borderRadius:
-                                                    BorderRadius.circular(10),
-                                                borderSide: const BorderSide(
-                                                  color: kDlgAccent,
-                                                  width: 1.4,
-                                                ),
-                                              ),
-                                              contentPadding:
-                                                  const EdgeInsets.symmetric(
-                                                horizontal: 12,
-                                                vertical: 10,
+                                      ),
+                                      const SizedBox(width: 10),
+                                      SizedBox(
+                                        width: 64,
+                                        child: TextField(
+                                          controller: progressController,
+                                          enabled: !lockProgress,
+                                          keyboardType: TextInputType.number,
+                                          inputFormatters: [
+                                            FilteringTextInputFormatter
+                                                .digitsOnly
+                                          ],
+                                          textAlign: TextAlign.center,
+                                          style: const TextStyle(
+                                            color: kDlgText,
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.w800,
+                                          ),
+                                          decoration: InputDecoration(
+                                            suffixText: '%',
+                                            suffixStyle: const TextStyle(
+                                                color: kDlgTextSub),
+                                            filled: true,
+                                            fillColor: kDlgFieldBg,
+                                            enabledBorder: OutlineInputBorder(
+                                              borderRadius:
+                                                  BorderRadius.circular(8),
+                                              borderSide: const BorderSide(
+                                                color: kDlgBorder,
                                               ),
                                             ),
+                                            focusedBorder: OutlineInputBorder(
+                                              borderRadius:
+                                                  BorderRadius.circular(8),
+                                              borderSide: const BorderSide(
+                                                color: kDlgAccent,
+                                                width: 1.4,
+                                              ),
+                                            ),
+                                            contentPadding:
+                                                const EdgeInsets.symmetric(
+                                              horizontal: 6,
+                                              vertical: 8,
+                                            ),
                                           ),
-                                        ],
-                                      ],
-                                    ),
+                                          onChanged: (v) {
+                                            if (isClosing) return;
+                                            final parsed = int.tryParse(v);
+                                            if (parsed == null) return;
+                                            final safe =
+                                                parsed.clamp(minProgress, 150);
+                                            setState(() {
+                                              progressById[a.id] = safe;
+                                            });
+                                            final safeText = safe.toString();
+                                            if (safeText != v) {
+                                              progressController.text =
+                                                  safeText;
+                                              progressController.selection =
+                                                  TextSelection.collapsed(
+                                                      offset: safeText.length);
+                                            }
+                                          },
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                 ),
-                              ],
-                            ),
-                          );
-                        },
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(ctx).pop(),
-                  style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
-                  child: const Text('닫기'),
-                ),
-                FilledButton(
-                  onPressed: () async {
-                    final updates = <Map<String, dynamic>>[];
-                    for (final a in assignments) {
-                      if (!(selectedById[a.id] ?? true)) {
-                        continue;
-                      }
-                      final raw = progressControllers[a.id]?.text.trim() ?? '';
-                      final parsed = int.tryParse(raw);
-                      final progress =
-                          (parsed ?? (progressById[a.id] ?? 0)).clamp(0, 150);
-                      final issueType = issueTypeById[a.id];
-                      final issueNote =
-                          (issueType == 'other')
-                              ? noteControllers[a.id]?.text.trim()
-                              : null;
-                      updates.add({
-                        'id': a.id,
-                        'homeworkItemId': a.homeworkItemId,
-                        'progress': progress,
-                        'issueType': issueType,
-                        'issueNote': issueNote,
-                        'abandon': issueType == 'lost',
-                        'markCompleted': true,
-                      });
-                    }
-                    isClosing = true;
-                    FocusManager.instance.primaryFocus?.unfocus();
-                    await Future<void>.delayed(const Duration(milliseconds: 1));
-                    if (!ctx.mounted) return;
-                    Navigator.of(ctx).pop();
-                    unawaited(applyAssignmentUpdates(updates).then((ok) {
-                      if (!context.mounted) return;
-                      if (!ok) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('숙제 점검 저장에 실패했습니다. 권한/네트워크를 확인해 주세요.'),
+                              ),
+                              const SizedBox(height: 12),
+                              Opacity(
+                                opacity: selected ? 1 : 0.4,
+                                child: IgnorePointer(
+                                  ignoring: !selected,
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Wrap(
+                                        spacing: 8,
+                                        children: [
+                                          YggDialogFilterChip(
+                                            label: '분실',
+                                            selected: issueType == 'lost',
+                                            onSelected: (v) {
+                                              if (isClosing) return;
+                                              setState(() {
+                                                issueTypeById[a.id] =
+                                                    v ? 'lost' : null;
+                                                if (issueTypeById[a.id] !=
+                                                    'other') {
+                                                  noteControllers[a.id]?.text =
+                                                      '';
+                                                }
+                                              });
+                                            },
+                                          ),
+                                          YggDialogFilterChip(
+                                            label: '잊음',
+                                            selected: issueType == 'forgot',
+                                            onSelected: (v) {
+                                              if (isClosing) return;
+                                              setState(() {
+                                                issueTypeById[a.id] =
+                                                    v ? 'forgot' : null;
+                                                if (issueTypeById[a.id] !=
+                                                    'other') {
+                                                  noteControllers[a.id]?.text =
+                                                      '';
+                                                }
+                                              });
+                                            },
+                                          ),
+                                          YggDialogFilterChip(
+                                            label: '기타',
+                                            selected: issueType == 'other',
+                                            onSelected: (v) {
+                                              if (isClosing) return;
+                                              setState(() {
+                                                issueTypeById[a.id] =
+                                                    v ? 'other' : null;
+                                                if (!v) {
+                                                  noteControllers[a.id]?.text =
+                                                      '';
+                                                }
+                                              });
+                                            },
+                                          ),
+                                        ],
+                                      ),
+                                      if (issueType == 'other') ...[
+                                        const SizedBox(height: 8),
+                                        TextField(
+                                          controller: noteControllers[a.id],
+                                          minLines: 1,
+                                          maxLines: 2,
+                                          style:
+                                              const TextStyle(color: kDlgText),
+                                          decoration: InputDecoration(
+                                            hintText: '사유를 입력하세요',
+                                            hintStyle: const TextStyle(
+                                                color: Color(0xFF6E7E7E)),
+                                            filled: true,
+                                            fillColor: kDlgFieldBg,
+                                            enabledBorder: OutlineInputBorder(
+                                              borderRadius:
+                                                  BorderRadius.circular(10),
+                                              borderSide: const BorderSide(
+                                                color: kDlgBorder,
+                                              ),
+                                            ),
+                                            focusedBorder: OutlineInputBorder(
+                                              borderRadius:
+                                                  BorderRadius.circular(10),
+                                              borderSide: const BorderSide(
+                                                color: kDlgAccent,
+                                                width: 1.4,
+                                              ),
+                                            ),
+                                            contentPadding:
+                                                const EdgeInsets.symmetric(
+                                              horizontal: 12,
+                                              vertical: 10,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                         );
-                      }
-                    }));
-                  },
-                  style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
-                  child: const Text('저장'),
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
-    for (final c in noteControllers.values) {
-      c.dispose();
-    }
-    for (final c in progressControllers.values) {
-      c.dispose();
-    }
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
+                child: const Text('닫기'),
+              ),
+              FilledButton(
+                onPressed: () async {
+                  final updates = <Map<String, dynamic>>[];
+                  for (final a in assignments) {
+                    if (!(selectedById[a.id] ?? true)) {
+                      continue;
+                    }
+                    final raw = progressControllers[a.id]?.text.trim() ?? '';
+                    final parsed = int.tryParse(raw);
+                    final progress =
+                        (parsed ?? (progressById[a.id] ?? 0)).clamp(0, 150);
+                    final issueType = issueTypeById[a.id];
+                    final issueNote = (issueType == 'other')
+                        ? noteControllers[a.id]?.text.trim()
+                        : null;
+                    updates.add({
+                      'id': a.id,
+                      'homeworkItemId': a.homeworkItemId,
+                      'progress': progress,
+                      'issueType': issueType,
+                      'issueNote': issueNote,
+                      'abandon': issueType == 'lost',
+                      'markCompleted': true,
+                    });
+                  }
+                  isClosing = true;
+                  FocusManager.instance.primaryFocus?.unfocus();
+                  await Future<void>.delayed(const Duration(milliseconds: 1));
+                  if (!ctx.mounted) return;
+                  Navigator.of(ctx).pop();
+                  unawaited(applyAssignmentUpdates(updates).then((ok) {
+                    if (!context.mounted) return;
+                    if (!ok) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('숙제 점검 저장에 실패했습니다. 권한/네트워크를 확인해 주세요.'),
+                        ),
+                      );
+                    }
+                  }));
+                },
+                style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
+                child: const Text('저장'),
+              ),
+            ],
+          );
+        },
+      );
+    },
+  );
+  for (final c in noteControllers.values) {
+    c.dispose();
   }
+  for (final c in progressControllers.values) {
+    c.dispose();
+  }
+}
 
 String _formatDateTime(DateTime dt) {
   String two(int v) => v.toString().padLeft(2, '0');
@@ -1241,15 +1412,27 @@ String _formatDateTime(DateTime dt) {
 String _formatDateWithWeekdayAndTime(DateTime dt) {
   String two(int v) => v.toString().padLeft(2, '0');
   const week = ['월', '화', '수', '목', '금', '토', '일'];
-  return two(dt.month) + '.' + two(dt.day) + ' (' + week[dt.weekday - 1] + ') ' + two(dt.hour) + '시 ' + two(dt.minute) + '분';
+  return two(dt.month) +
+      '.' +
+      two(dt.day) +
+      ' (' +
+      week[dt.weekday - 1] +
+      ') ' +
+      two(dt.hour) +
+      '시 ' +
+      two(dt.minute) +
+      '분';
 }
 
 final Map<String, Map<String, String>> _flowNameCacheByStudent = {};
 final Set<String> _flowLoadingStudentIds = <String>{};
 final Map<String, int> _assignmentRevisionByStudent = {};
-final Map<String, Future<Map<String, int>>> _assignmentCountsFutureByStudent = {};
-final Map<String, Future<Set<String>>> _activeAssignedItemIdsFutureByStudent = {};
-final Map<String, Future<List<HomeworkAssignmentDetail>>> _activeAssignmentsFutureByStudent = {};
+final Map<String, Future<Map<String, int>>> _assignmentCountsFutureByStudent =
+    {};
+final Map<String, Future<Set<String>>> _activeAssignedItemIdsFutureByStudent =
+    {};
+final Map<String, Future<List<HomeworkAssignmentDetail>>>
+    _activeAssignmentsFutureByStudent = {};
 final Map<String, Future<Map<String, List<HomeworkAssignmentCheck>>>>
     _assignmentChecksFutureByStudent = {};
 
@@ -1263,7 +1446,9 @@ Map<String, String> _getFlowNamesForStudent(String studentId) {
     _flowLoadingStudentIds.add(studentId);
     unawaited(
       StudentFlowStore.instance.loadForStudent(studentId).then((flows) {
-        _flowNameCacheByStudent[studentId] = {for (final f in flows) f.id: f.name};
+        _flowNameCacheByStudent[studentId] = {
+          for (final f in flows) f.id: f.name
+        };
       }).whenComplete(() {
         _flowLoadingStudentIds.remove(studentId);
       }),
@@ -1354,7 +1539,8 @@ Future<void> _showHomeworkChipDetailDialog(
   String flowName,
   int assignmentCount,
 ) async {
-  final bool isRunning = HomeworkStore.instance.runningOf(studentId)?.id == hw.id;
+  final bool isRunning =
+      HomeworkStore.instance.runningOf(studentId)?.id == hw.id;
   final int runningMs = hw.runStart != null
       ? DateTime.now().difference(hw.runStart!).inMilliseconds
       : 0;
@@ -1518,7 +1704,8 @@ Future<void> _openHomeworkEditDialogForHome(
     flowId: item.flowId,
     type: (edited['type'] as String?)?.trim(),
     page: (edited['page'] as String?)?.trim(),
-    count: (countStr == null || countStr.isEmpty) ? null : int.tryParse(countStr),
+    count:
+        (countStr == null || countStr.isEmpty) ? null : int.tryParse(countStr),
     content: (edited['content'] as String?)?.trim(),
     bookId: item.bookId,
     gradeLabel: item.gradeLabel,
@@ -1550,7 +1737,6 @@ const double _homeworkChipHeight = 120.0;
 const double _homeworkChipMaxSlide = _homeworkChipHeight * 0.5;
 const String _homeworkPrintTempPrefix = 'hw_print_';
 
-
 // ------------------------
 // 오른쪽 패널: 슬라이드시트와 동일한 과제 칩 렌더링
 // ------------------------
@@ -1566,21 +1752,33 @@ Widget _buildHomeworkChipsReactiveForStudent(String studentId, double tick) {
           if (lastRev != rev) {
             _assignmentRevisionByStudent[studentId] = rev;
             _assignmentCountsFutureByStudent[studentId] =
-                HomeworkAssignmentStore.instance.loadAssignmentCounts(studentId);
+                HomeworkAssignmentStore.instance
+                    .loadAssignmentCounts(studentId);
             _activeAssignedItemIdsFutureByStudent[studentId] =
-                HomeworkAssignmentStore.instance.loadActiveAssignedItemIds(studentId);
+                HomeworkAssignmentStore.instance
+                    .loadActiveAssignedItemIds(studentId);
+            _activeAssignmentsFutureByStudent[studentId] =
+                HomeworkAssignmentStore.instance
+                    .loadActiveAssignments(studentId);
           }
           final assignmentCountsFuture =
               _assignmentCountsFutureByStudent.putIfAbsent(
-                studentId,
-                () => HomeworkAssignmentStore.instance.loadAssignmentCounts(studentId),
-              );
+            studentId,
+            () => HomeworkAssignmentStore.instance
+                .loadAssignmentCounts(studentId),
+          );
           final activeAssignedFuture =
               _activeAssignedItemIdsFutureByStudent.putIfAbsent(
-                studentId,
-                () => HomeworkAssignmentStore.instance
-                    .loadActiveAssignedItemIds(studentId),
-              );
+            studentId,
+            () => HomeworkAssignmentStore.instance
+                .loadActiveAssignedItemIds(studentId),
+          );
+          final activeAssignmentsFuture =
+              _activeAssignmentsFutureByStudent.putIfAbsent(
+            studentId,
+            () => HomeworkAssignmentStore.instance
+                .loadActiveAssignments(studentId),
+          );
           return FutureBuilder<Map<String, int>>(
             future: assignmentCountsFuture,
             builder: (context, snapshot) {
@@ -1594,28 +1792,53 @@ Widget _buildHomeworkChipsReactiveForStudent(String studentId, double tick) {
                   }
                   final activeAssignedIds =
                       activeSnapshot.data ?? const <String>{};
-                  return ValueListenableBuilder<int>(
-                    valueListenable: HomeworkStore.instance.revision,
-                    builder: (context, _rev, _) {
-                      final chips = _buildHomeworkChipsOnceForStudent(
-                        context,
-                        studentId,
-                        tick,
-                        flowNames,
-                        assignmentCounts,
-                        activeAssignedIds,
-                      );
-                      final rowChildren = <Widget>[];
-                      for (final chip in chips) {
-                        if (rowChildren.isNotEmpty) {
-                          rowChildren.add(const SizedBox(width: 20));
-                        }
-                        rowChildren.add(chip);
-                      }
-                      return SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        physics: const BouncingScrollPhysics(),
-                        child: Row(children: rowChildren),
+                  return FutureBuilder<List<HomeworkAssignmentDetail>>(
+                    future: activeAssignmentsFuture,
+                    builder: (context, assignmentsSnapshot) {
+                      final activeAssignments = assignmentsSnapshot.data ??
+                          const <HomeworkAssignmentDetail>[];
+                      return ValueListenableBuilder<int>(
+                        valueListenable: HomeworkStore.instance.revision,
+                        builder: (context, _rev, _) {
+                          final chips = _buildHomeworkChipsOnceForStudent(
+                            context,
+                            studentId,
+                            tick,
+                            flowNames,
+                            assignmentCounts,
+                            activeAssignedIds,
+                          );
+                          final reservationChips =
+                              _buildReservationHomeworkChipsForStudent(
+                            context,
+                            studentId,
+                            tick,
+                            flowNames,
+                            assignmentCounts,
+                            activeAssignments,
+                          );
+                          final rowChildren = <Widget>[];
+                          for (final chip in chips) {
+                            if (rowChildren.isNotEmpty) {
+                              rowChildren.add(const SizedBox(width: 20));
+                            }
+                            rowChildren.add(chip);
+                          }
+                          if (chips.isNotEmpty && reservationChips.isNotEmpty) {
+                            rowChildren.add(_buildHomeworkChipGroupDivider());
+                          }
+                          for (int i = 0; i < reservationChips.length; i++) {
+                            if (i > 0) {
+                              rowChildren.add(const SizedBox(width: 20));
+                            }
+                            rowChildren.add(reservationChips[i]);
+                          }
+                          return SingleChildScrollView(
+                            scrollDirection: Axis.horizontal,
+                            physics: const BouncingScrollPhysics(),
+                            child: Row(children: rowChildren),
+                          );
+                        },
                       );
                     },
                   );
@@ -1629,6 +1852,134 @@ Widget _buildHomeworkChipsReactiveForStudent(String studentId, double tick) {
   );
 }
 
+bool _isReservationAssignment(HomeworkAssignmentDetail assignment) {
+  final note = (assignment.note ?? '').trim();
+  return note == HomeworkAssignmentStore.reservationNote;
+}
+
+Future<void> _activateReservedHomeworkChip({
+  required BuildContext context,
+  required String studentId,
+  required HomeworkAssignmentDetail assignment,
+}) async {
+  final hwId = assignment.homeworkItemId.trim();
+  if (hwId.isEmpty) return;
+  await HomeworkAssignmentStore.instance.clearActiveAssignmentsForItems(
+    studentId,
+    [hwId],
+  );
+  final latest = HomeworkStore.instance.getById(studentId, hwId);
+  if (latest != null && latest.phase != 1) {
+    await HomeworkStore.instance.waitPhase(studentId, hwId);
+  }
+  if (!context.mounted) return;
+  _showHomeworkChipSnackBar(context, '예약 과제를 대기 상태로 전환했어요.');
+}
+
+Widget _buildHomeworkChipGroupDivider() {
+  return Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 8),
+    child: SizedBox(
+      height: _homeworkChipHeight - 22,
+      child: Container(
+        width: 1.4,
+        decoration: BoxDecoration(
+          color: const Color(0xFF31464C),
+          borderRadius: BorderRadius.circular(999),
+        ),
+      ),
+    ),
+  );
+}
+
+Widget _buildReservationOverflowChip(int hiddenCount) {
+  final label = hiddenCount > 0 ? '...' : '';
+  return Container(
+    width: 68,
+    height: _homeworkChipHeight,
+    alignment: Alignment.center,
+    decoration: BoxDecoration(
+      color: kDlgBg,
+      borderRadius: BorderRadius.circular(12),
+      border: Border.all(color: const Color(0xFF355055), width: 2),
+    ),
+    child: Text(
+      label,
+      style: const TextStyle(
+        color: Color(0xFF7F8C8C),
+        fontSize: 24,
+        fontWeight: FontWeight.w800,
+        height: 1.0,
+      ),
+    ),
+  );
+}
+
+List<Widget> _buildReservationHomeworkChipsForStudent(
+  BuildContext context,
+  String studentId,
+  double tick,
+  Map<String, String> flowNames,
+  Map<String, int> assignmentCounts,
+  List<HomeworkAssignmentDetail> activeAssignments,
+) {
+  final reservations = activeAssignments
+      .where(_isReservationAssignment)
+      .where((a) => a.homeworkItemId.trim().isNotEmpty)
+      .toList()
+    ..sort((a, b) => a.assignedAt.compareTo(b.assignedAt));
+
+  final reservationPairs = <MapEntry<HomeworkAssignmentDetail, HomeworkItem>>[];
+  for (final a in reservations) {
+    final hw = HomeworkStore.instance.getById(studentId, a.homeworkItemId);
+    if (hw == null || hw.status == HomeworkStatus.completed) continue;
+    reservationPairs.add(MapEntry(a, hw));
+  }
+
+  final visible = reservationPairs.take(3).toList();
+  final out = <Widget>[];
+  for (final pair in visible) {
+    final a = pair.key;
+    final hw = pair.value;
+    out.add(
+      _SlideableHomeworkChip(
+        key: ValueKey('hw_reserved_${a.id}_${hw.id}'),
+        maxSlide: _homeworkChipMaxSlide,
+        canSlideDown: false,
+        canSlideUp: false,
+        downLabel: '',
+        upLabel: '',
+        downColor: const Color(0xFF9FB3B3),
+        upColor: const Color(0xFFE57373),
+        onTap: () {
+          unawaited(
+            _activateReservedHomeworkChip(
+              context: context,
+              studentId: studentId,
+              assignment: a,
+            ),
+          );
+        },
+        onSlideDown: () {},
+        onSlideUp: () async {},
+        child: _buildHomeworkChipVisual(
+          context,
+          studentId,
+          hw,
+          flowNames[hw.flowId ?? ''] ?? '',
+          assignmentCounts[hw.id] ?? 0,
+          tick: tick,
+          isReservation: true,
+        ),
+      ),
+    );
+  }
+  if (reservationPairs.length > 3) {
+    out.add(_buildReservationOverflowChip(reservationPairs.length - 3));
+  }
+  return out;
+}
+
 List<Widget> _buildHomeworkChipsOnceForStudent(
   BuildContext context,
   String studentId,
@@ -1638,7 +1989,8 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
   Set<String> activeAssignedItemIds,
 ) {
   final List<Widget> chips = [];
-  final List<HomeworkItem> hwList = HomeworkStore.instance.items(studentId)
+  final List<HomeworkItem> hwList = HomeworkStore.instance
+      .items(studentId)
       .where((e) => e.status != HomeworkStatus.completed)
       .where((e) => !activeAssignedItemIds.contains(e.id))
       .toList();
@@ -1647,12 +1999,17 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
     final running = e.runStart != null;
     if (running) return 0; // 수행
     switch (e.phase) {
-      case 1: return 1; // 대기
-      case 4: return 2; // 확인
-      case 3: return 3; // 제출
-      default: return 4;
+      case 1:
+        return 1; // 대기
+      case 4:
+        return 2; // 확인
+      case 3:
+        return 3; // 제출
+      default:
+        return 4;
     }
   }
+
   DateTime? ts(HomeworkItem e) {
     if (e.runStart != null) return e.runStart;
     if (e.waitingAt != null) return e.waitingAt;
@@ -1660,6 +2017,7 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
     if (e.submittedAt != null) return e.submittedAt;
     return e.firstStartedAt;
   }
+
   hwList.sort((a, b) {
     final ga = group(a);
     final gb = group(b);
@@ -1691,9 +2049,7 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
         upLabel: '취소',
         downColor: slideDownIsEdit
             ? kDlgAccent
-            : (isSubmitted
-                ? const Color(0xFF4CAF50)
-                : const Color(0xFF9FB3B3)),
+            : (isSubmitted ? const Color(0xFF4CAF50) : const Color(0xFF9FB3B3)),
         upColor: const Color(0xFFE57373),
         onTap: () {
           final item = HomeworkStore.instance.getById(studentId, hw.id);
@@ -1752,16 +2108,21 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
             context: context,
             builder: (ctx) => AlertDialog(
               backgroundColor: kDlgBg,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-              title: const Text('과제 취소', style: TextStyle(color: kDlgText, fontWeight: FontWeight.w900)),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16)),
+              title: const Text('과제 취소',
+                  style:
+                      TextStyle(color: kDlgText, fontWeight: FontWeight.w900)),
               content: SizedBox(
                 width: 420,
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: const [
-                    YggDialogSectionHeader(icon: Icons.cancel_outlined, title: '처리 방식'),
-                    Text('완전 취소 또는 포기를 선택하세요.', style: TextStyle(color: kDlgTextSub)),
+                    YggDialogSectionHeader(
+                        icon: Icons.cancel_outlined, title: '처리 방식'),
+                    Text('완전 취소 또는 포기를 선택하세요.',
+                        style: TextStyle(color: kDlgTextSub)),
                   ],
                 ),
               ),
@@ -1799,15 +2160,19 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
                 final controller = ImeAwareTextEditingController();
                 return AlertDialog(
                   backgroundColor: kDlgBg,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                  title: const Text('포기 사유', style: TextStyle(color: kDlgText, fontWeight: FontWeight.w900)),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16)),
+                  title: const Text('포기 사유',
+                      style: TextStyle(
+                          color: kDlgText, fontWeight: FontWeight.w900)),
                   content: SizedBox(
                     width: 420,
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const YggDialogSectionHeader(icon: Icons.edit_note, title: '사유 입력'),
+                        const YggDialogSectionHeader(
+                            icon: Icons.edit_note, title: '사유 입력'),
                         TextField(
                           controller: controller,
                           minLines: 2,
@@ -1815,7 +2180,8 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
                           style: const TextStyle(color: kDlgText),
                           decoration: InputDecoration(
                             hintText: '포기 사유를 입력하세요',
-                            hintStyle: const TextStyle(color: Color(0xFF6E7E7E)),
+                            hintStyle:
+                                const TextStyle(color: Color(0xFF6E7E7E)),
                             filled: true,
                             fillColor: kDlgFieldBg,
                             enabledBorder: OutlineInputBorder(
@@ -1824,9 +2190,11 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
                             ),
                             focusedBorder: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(10),
-                              borderSide: const BorderSide(color: kDlgAccent, width: 1.4),
+                              borderSide: const BorderSide(
+                                  color: kDlgAccent, width: 1.4),
                             ),
-                            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                            contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 12),
                           ),
                         ),
                       ],
@@ -1839,8 +2207,10 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
                       child: const Text('취소'),
                     ),
                     FilledButton(
-                      onPressed: () => Navigator.of(ctx).pop(controller.text.trim()),
-                      style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
+                      onPressed: () =>
+                          Navigator.of(ctx).pop(controller.text.trim()),
+                      style:
+                          FilledButton.styleFrom(backgroundColor: kDlgAccent),
                       child: const Text('저장'),
                     ),
                   ],
@@ -1849,7 +2219,8 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
             );
             if (!context.mounted) return;
             if (reason != null && reason.trim().isNotEmpty) {
-              unawaited(HomeworkStore.instance.abandon(studentId, hw.id, reason));
+              unawaited(
+                  HomeworkStore.instance.abandon(studentId, hw.id, reason));
             }
           }
         },
@@ -2102,7 +2473,8 @@ Future<_ResolvedHomeworkPdfLinks> _resolveHomeworkPdfLinks(
           final rowBookId = '${row['book_id'] ?? ''}'.trim();
           final rowGrade = '${row['grade_label'] ?? ''}'.trim();
           final bool bookMatches = bookId.isNotEmpty && rowBookId == bookId;
-          final bool gradeMatches = gradeLabel.isNotEmpty && rowGrade == gradeLabel;
+          final bool gradeMatches =
+              gradeLabel.isNotEmpty && rowGrade == gradeLabel;
           if (bookMatches || gradeMatches) {
             matched = row;
             break;
@@ -2171,7 +2543,8 @@ Future<String?> _showHomeworkPrintConfirmDialog({
         builder: (ctx, setLocalState) {
           return AlertDialog(
             backgroundColor: kDlgBg,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
             title: const Text(
               '인쇄 설정 확인',
               style: TextStyle(color: kDlgText, fontWeight: FontWeight.w900),
@@ -2217,7 +2590,8 @@ Future<String?> _showHomeworkPrintConfirmDialog({
                       activeColor: kDlgAccent,
                       title: const Text(
                         '전체 인쇄',
-                        style: TextStyle(color: kDlgText, fontWeight: FontWeight.w700),
+                        style: TextStyle(
+                            color: kDlgText, fontWeight: FontWeight.w700),
                       ),
                     ),
                     const SizedBox(height: 8),
@@ -2237,7 +2611,8 @@ Future<String?> _showHomeworkPrintConfirmDialog({
                         ),
                         focusedBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(10),
-                          borderSide: const BorderSide(color: kDlgAccent, width: 1.4),
+                          borderSide:
+                              const BorderSide(color: kDlgAccent, width: 1.4),
                         ),
                         disabledBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(10),
@@ -2361,7 +2736,8 @@ Future<void> _handleSubmittedChipTapWithAnswerViewer({
     return;
   }
   final answerIsUrl = _isWebUrl(answerRaw);
-  final answerPath = answerIsUrl ? answerRaw.trim() : _toLocalFilePath(answerRaw);
+  final answerPath =
+      answerIsUrl ? answerRaw.trim() : _toLocalFilePath(answerRaw);
   if (answerPath.isEmpty ||
       (!answerIsUrl && !answerPath.toLowerCase().endsWith('.pdf'))) {
     _showHomeworkChipSnackBar(context, '답지 PDF 경로를 확인할 수 없어 바로 확인 처리합니다.');
@@ -2414,9 +2790,13 @@ Widget _buildHomeworkChipVisual(
   String flowName,
   int assignmentCount, {
   required double tick,
+  bool isReservation = false,
 }) {
-  final bool isRunning = HomeworkStore.instance.runningOf(studentId)?.id == hw.id;
+  final bool isRunning =
+      HomeworkStore.instance.runningOf(studentId)?.id == hw.id;
   final int phase = hw.phase; // 1:대기,2:수행,3:제출,4:확인
+  final bool visualRunning = isReservation ? false : isRunning;
+  final int visualPhase = isReservation ? 1 : phase;
   final TextStyle titleStyle = const TextStyle(
     color: Color(0xFFEAF2F2),
     fontSize: 19,
@@ -2456,8 +2836,7 @@ Widget _buildHomeworkChipVisual(
 
   String extractBookName() {
     final contentRaw = (hw.content ?? '').trim();
-    final match = RegExp(r'(?:^|\n)\s*교재:\s*([^\n]+)')
-        .firstMatch(contentRaw);
+    final match = RegExp(r'(?:^|\n)\s*교재:\s*([^\n]+)').firstMatch(contentRaw);
     final fromContent = match?.group(1)?.trim() ?? '';
     if (fromContent.isNotEmpty) return fromContent;
     final stripped = stripUnitPrefix((hw.title).trim());
@@ -2490,7 +2869,8 @@ Widget _buildHomeworkChipVisual(
       : 0;
   final int totalMs = hw.accumulatedMs + runningMs;
   final String durationText = _formatDurationMs(totalMs);
-  final String line3 = '검사 ${hw.checkCount}회 · $homeworkText · 진행 $durationText';
+  final String line3 =
+      '검사 ${hw.checkCount}회 · $homeworkText · 진행 $durationText';
   // 폭 고정: 가장 긴 라인 기준으로 계산
   final titlePainter = TextPainter(
     text: TextSpan(text: titleText, style: titleStyle),
@@ -2527,14 +2907,16 @@ Widget _buildHomeworkChipVisual(
   final double maxLineWidth =
       math.max(rowWidth, math.max(line2Width, painter3.width));
   // 여유폭 14px, 최소폭 300px
-  final double fixedWidth = (maxLineWidth + leftPad + rightPad + borderWMax * 2 + 14.0).clamp(300.0, 760.0);
+  final double fixedWidth =
+      (maxLineWidth + leftPad + rightPad + borderWMax * 2 + 14.0)
+          .clamp(300.0, 760.0);
 
   final double phase4Pulse = 0.5 + 0.5 * math.sin(2 * math.pi * tick);
-  final Border border = (phase == 3)
+  final Border border = (visualPhase == 3)
       ? Border.all(color: Colors.transparent, width: borderWMax)
-      : (isRunning
+      : (visualRunning
           ? Border.all(color: hw.color.withOpacity(0.9), width: borderWMax)
-          : (phase == 4
+          : (visualPhase == 4
               ? Border.all(
                   color: Color.lerp(
                         Colors.white24,
@@ -2561,7 +2943,7 @@ Widget _buildHomeworkChipVisual(
           blurRadius: 10,
           offset: const Offset(0, 4),
         ),
-        if (!isRunning && phase == 4)
+        if (!visualRunning && visualPhase == 4)
           BoxShadow(
             color: hw.color.withOpacity(0.08 + 0.14 * phase4Pulse),
             blurRadius: 14,
@@ -2569,75 +2951,106 @@ Widget _buildHomeworkChipVisual(
           ),
       ],
     ),
-    child: Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.start,
+    child: Stack(
+      fit: StackFit.expand,
       children: [
-        Row(
+        Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Expanded(
-              child: Text(
-                titleText,
-                style: titleStyle,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    titleText,
+                    style: titleStyle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 160),
+                  child: Text(
+                    displayFlowName,
+                    style: flowStyle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.right,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            ConstrainedBox(
+              constraints:
+                  BoxConstraints(maxWidth: fixedWidth - leftPad - rightPad - 4),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      line2Left,
+                      style: metaStyle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Text(
+                    line2Right,
+                    style: metaStyle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.right,
+                  ),
+                ],
               ),
             ),
-            const SizedBox(width: 8),
+            const SizedBox(height: 9),
             ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 160),
+              constraints:
+                  BoxConstraints(maxWidth: fixedWidth - leftPad - rightPad - 4),
               child: Text(
-                displayFlowName,
-                style: flowStyle,
+                line3,
+                style: statStyle,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.right,
               ),
             ),
           ],
         ),
-        const SizedBox(height: 10),
-        ConstrainedBox(
-          constraints:
-              BoxConstraints(maxWidth: fixedWidth - leftPad - rightPad - 4),
-          child: Row(
-            children: [
-              Expanded(
-                child: Text(
-                  line2Left,
-                  style: metaStyle,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+        if (isReservation)
+          Align(
+            alignment: Alignment.bottomRight,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: const Color(0x552A353A),
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(color: const Color(0xFF425056)),
+              ),
+              child: const Text(
+                '예약',
+                style: TextStyle(
+                  color: Color(0xFF8EA0A6),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  height: 1.0,
                 ),
               ),
-              const SizedBox(width: 10),
-              Text(
-                line2Right,
-                style: metaStyle,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.right,
-              ),
-            ],
+            ),
           ),
-        ),
-        const SizedBox(height: 9),
-        ConstrainedBox(
-          constraints: BoxConstraints(maxWidth: fixedWidth - leftPad - rightPad - 4),
-          child: Text(
-            line3,
-            style: statStyle,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-        ),
       ],
     ),
   );
 
-  if (!isRunning && phase == 3) {
+  if (!visualRunning && visualPhase == 3) {
     chipInner = CustomPaint(
-      foregroundPainter: _RotatingBorderPainter(baseColor: hw.color, tick: tick, strokeWidth: 3.0, cornerRadius: 12.0),
+      foregroundPainter: _RotatingBorderPainter(
+          baseColor: hw.color,
+          tick: tick,
+          strokeWidth: 3.0,
+          cornerRadius: 12.0),
       child: chipInner,
     );
   }
@@ -2651,11 +3064,16 @@ class _RotatingBorderPainter extends CustomPainter {
   final double tick; // 0..1
   final double strokeWidth;
   final double cornerRadius;
-  _RotatingBorderPainter({required this.baseColor, required this.tick, this.strokeWidth = 2.0, this.cornerRadius = 8.0});
+  _RotatingBorderPainter(
+      {required this.baseColor,
+      required this.tick,
+      this.strokeWidth = 2.0,
+      this.cornerRadius = 8.0});
   @override
   void paint(Canvas canvas, Size size) {
     final rect = Offset.zero & size;
-    final rrect = RRect.fromRectXY(rect.deflate(strokeWidth / 2), cornerRadius, cornerRadius);
+    final rrect = RRect.fromRectXY(
+        rect.deflate(strokeWidth / 2), cornerRadius, cornerRadius);
     final shader = SweepGradient(
       startAngle: 0.0,
       endAngle: 2 * math.pi,
@@ -2674,9 +3092,13 @@ class _RotatingBorderPainter extends CustomPainter {
       ..isAntiAlias = true;
     canvas.drawRRect(rrect, paint);
   }
+
   @override
   bool shouldRepaint(covariant _RotatingBorderPainter oldDelegate) {
-    return oldDelegate.tick != tick || oldDelegate.baseColor != baseColor || oldDelegate.strokeWidth != strokeWidth || oldDelegate.cornerRadius != cornerRadius;
+    return oldDelegate.tick != tick ||
+        oldDelegate.baseColor != baseColor ||
+        oldDelegate.strokeWidth != strokeWidth ||
+        oldDelegate.cornerRadius != cornerRadius;
   }
 }
 
@@ -2769,8 +3191,7 @@ class _SlideableHomeworkChipState extends State<_SlideableHomeworkChip> {
 
   @override
   Widget build(BuildContext context) {
-    final double progress =
-        (_offset.abs() / widget.maxSlide).clamp(0.0, 1.0);
+    final double progress = (_offset.abs() / widget.maxSlide).clamp(0.0, 1.0);
     final bool isDown = _offset > 0;
     final bool isUp = _offset < 0;
     final TextStyle labelStyle = const TextStyle(
@@ -2835,9 +3256,8 @@ class _SlideableHomeworkChipState extends State<_SlideableHomeworkChip> {
           ),
         ),
         AnimatedContainer(
-          duration: _dragging
-              ? Duration.zero
-              : const Duration(milliseconds: 160),
+          duration:
+              _dragging ? Duration.zero : const Duration(milliseconds: 160),
           curve: Curves.easeOut,
           transform: Matrix4.translationValues(0, _offset, 0),
           child: GestureDetector(
@@ -2992,4 +3412,3 @@ class _AttendingButton extends StatelessWidget {
     );
   }
 }
-

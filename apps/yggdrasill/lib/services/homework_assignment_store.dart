@@ -11,6 +11,7 @@ class HomeworkAssignmentDetail {
   final DateTime assignedAt;
   final DateTime? dueDate;
   final String status;
+  final String? note;
   final int progress;
   final String? issueType;
   final String? issueNote;
@@ -27,6 +28,7 @@ class HomeworkAssignmentDetail {
     required this.assignedAt,
     required this.dueDate,
     required this.status,
+    this.note,
     required this.progress,
     required this.issueType,
     required this.issueNote,
@@ -77,6 +79,7 @@ class HomeworkAssignmentStore {
   HomeworkAssignmentStore._internal();
   static final HomeworkAssignmentStore instance =
       HomeworkAssignmentStore._internal();
+  static const String reservationNote = '__reserved_homework__';
   final ValueNotifier<int> revision = ValueNotifier<int>(0);
 
   void _bump() {
@@ -158,7 +161,7 @@ class HomeworkAssignmentStore {
       final rows = await supa
           .from('homework_assignments')
           .select(
-              'id,homework_item_id,assigned_at,due_date,status,progress,issue_type,issue_note,homework_items(id,title,type,page,count,content,flow_id)')
+              'id,homework_item_id,assigned_at,due_date,status,note,progress,issue_type,issue_note,homework_items(id,title,type,page,count,content,flow_id)')
           .eq('academy_id', academyId)
           .eq('student_id', studentId)
           .eq('status', 'assigned')
@@ -170,6 +173,7 @@ class HomeworkAssignmentStore {
         if (s == null || s.isEmpty) return null;
         return DateTime.tryParse(s)?.toLocal();
       }
+
       int parseInt(dynamic v) {
         if (v == null) return 0;
         if (v is int) return v;
@@ -177,6 +181,7 @@ class HomeworkAssignmentStore {
         if (v is String) return int.tryParse(v) ?? 0;
         return 0;
       }
+
       for (final r in (rows as List<dynamic>).cast<Map<String, dynamic>>()) {
         final hw = r['homework_items'] as Map<String, dynamic>?;
         list.add(
@@ -186,13 +191,16 @@ class HomeworkAssignmentStore {
             assignedAt: parseTs(r['assigned_at']) ?? DateTime.now(),
             dueDate: parseTs(r['due_date']),
             status: (r['status'] as String?) ?? 'assigned',
+            note: (r['note'] as String?)?.trim(),
             progress: parseInt(r['progress']),
             issueType: r['issue_type'] as String?,
             issueNote: r['issue_note'] as String?,
             title: (hw?['title'] as String?) ?? '',
             type: (hw?['type'] as String?)?.trim(),
             page: (hw?['page'] as String?)?.trim(),
-            count: hw?['count'] is num ? (hw?['count'] as num).toInt() : int.tryParse('${hw?['count'] ?? ''}'),
+            count: hw?['count'] is num
+                ? (hw?['count'] as num).toInt()
+                : int.tryParse('${hw?['count'] ?? ''}'),
             content: (hw?['content'] as String?)?.trim(),
             flowId: hw?['flow_id'] as String?,
           ),
@@ -221,7 +229,10 @@ class HomeworkAssignmentStore {
       if (status != null) {
         data['status'] = status;
       }
-      await supa.from('homework_assignments').update(data).eq('id', assignmentId);
+      await supa
+          .from('homework_assignments')
+          .update(data)
+          .eq('id', assignmentId);
       _bump();
       return true;
     } catch (e, st) {
@@ -470,6 +481,7 @@ class HomeworkAssignmentStore {
     List<HomeworkItem> items, {
     DateTime? assignedAt,
     DateTime? dueDate,
+    String? note,
   }) async {
     if (items.isEmpty) return;
     try {
@@ -487,8 +499,8 @@ class HomeworkAssignmentStore {
           .order('assigned_at', ascending: false);
 
       final Map<String, Map<String, dynamic>> latestByItem = {};
-      for (final r in (existingRows as List<dynamic>)
-          .cast<Map<String, dynamic>>()) {
+      for (final r
+          in (existingRows as List<dynamic>).cast<Map<String, dynamic>>()) {
         final itemId = (r['homework_item_id'] as String?) ?? '';
         if (itemId.isEmpty || latestByItem.containsKey(itemId)) continue;
         latestByItem[itemId] = r;
@@ -512,17 +524,16 @@ class HomeworkAssignmentStore {
           'assigned_at': now.toUtc().toIso8601String(),
           'due_date': dueDate?.toIso8601String().substring(0, 10),
           'status': 'assigned',
-          'carry_over_from_id': (lastId != null && lastStatus != 'completed')
-              ? lastId
-              : null,
+          'note': note,
+          'carry_over_from_id':
+              (lastId != null && lastStatus != 'completed') ? lastId : null,
         });
       }
 
       if (carriedOverIds.isNotEmpty) {
         await supa
             .from('homework_assignments')
-            .update({'status': 'carried_over'})
-            .inFilter('id', carriedOverIds);
+            .update({'status': 'carried_over'}).inFilter('id', carriedOverIds);
       }
 
       await supa.from('homework_assignments').insert(rows);

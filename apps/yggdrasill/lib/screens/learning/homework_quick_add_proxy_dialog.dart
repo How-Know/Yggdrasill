@@ -23,10 +23,12 @@ class HomeworkQuickAddProxyDialog extends StatefulWidget {
     this.initialFlowId,
   });
   @override
-  State<HomeworkQuickAddProxyDialog> createState() => HomeworkQuickAddProxyDialogState();
+  State<HomeworkQuickAddProxyDialog> createState() =>
+      HomeworkQuickAddProxyDialogState();
 }
 
-class HomeworkQuickAddProxyDialogState extends State<HomeworkQuickAddProxyDialog> {
+class HomeworkQuickAddProxyDialogState
+    extends State<HomeworkQuickAddProxyDialog> {
   static const AnimationStyle _fastTreeExpansionStyle = AnimationStyle(
     duration: Duration(milliseconds: 120),
     reverseDuration: Duration(milliseconds: 90),
@@ -54,7 +56,8 @@ class HomeworkQuickAddProxyDialogState extends State<HomeworkQuickAddProxyDialog
   String _rangeAutoPage = '';
   String _rangeAutoCount = '';
   String _rangeAutoScope = '-';
-  List<Map<String, dynamic>> _rangeAutoUnitMappings = const <Map<String, dynamic>>[];
+  List<Map<String, dynamic>> _rangeAutoUnitMappings =
+      const <Map<String, dynamic>>[];
   bool _rangeAiLoading = false;
   int _rangeAiRequestId = 0;
 
@@ -94,6 +97,7 @@ class HomeworkQuickAddProxyDialogState extends State<HomeworkQuickAddProxyDialog
       unawaited(_loadAllFlowLinkedBooks());
     }
   }
+
   @override
   void dispose() {
     _title.dispose();
@@ -193,7 +197,8 @@ class HomeworkQuickAddProxyDialogState extends State<HomeworkQuickAddProxyDialog
       );
     }
     links.sort((a, b) {
-      if (a.orderIndex != b.orderIndex) return a.orderIndex.compareTo(b.orderIndex);
+      if (a.orderIndex != b.orderIndex)
+        return a.orderIndex.compareTo(b.orderIndex);
       return a.label.compareTo(b.label);
     });
     return links;
@@ -218,7 +223,8 @@ class HomeworkQuickAddProxyDialogState extends State<HomeworkQuickAddProxyDialog
       out.sort((a, b) {
         final byFlow = a.flowName.compareTo(b.flowName);
         if (byFlow != 0) return byFlow;
-        if (a.orderIndex != b.orderIndex) return a.orderIndex.compareTo(b.orderIndex);
+        if (a.orderIndex != b.orderIndex)
+          return a.orderIndex.compareTo(b.orderIndex);
         return a.label.compareTo(b.label);
       });
       setState(() => _allLinkedTextbooks = out);
@@ -268,10 +274,10 @@ class HomeworkQuickAddProxyDialogState extends State<HomeworkQuickAddProxyDialog
         flowName: _flowNameById(_flowId),
       );
       final preserveKey = preferredLinkedBookKey ?? _selectedLinkedBookKey;
-      final hasPreserveKey = preserveKey != null && links.any((e) => e.key == preserveKey);
-      final nextSelectedKey = forceNoBookSelection
-          ? null
-          : (hasPreserveKey ? preserveKey : null);
+      final hasPreserveKey =
+          preserveKey != null && links.any((e) => e.key == preserveKey);
+      final nextSelectedKey =
+          forceNoBookSelection ? null : (hasPreserveKey ? preserveKey : null);
       setState(() {
         _linkedTextbooks = links;
         _selectedLinkedBookKey = nextSelectedKey;
@@ -345,7 +351,8 @@ class HomeworkQuickAddProxyDialogState extends State<HomeworkQuickAddProxyDialog
         .whereType<Map>()
         .map((e) => Map<String, dynamic>.from(e))
         .toList();
-    units.sort((a, b) => _orderIndex(a['order_index']).compareTo(_orderIndex(b['order_index'])));
+    units.sort((a, b) =>
+        _orderIndex(a['order_index']).compareTo(_orderIndex(b['order_index'])));
 
     final List<_BigUnitSelectionNode> out = <_BigUnitSelectionNode>[];
     for (final u in units) {
@@ -362,7 +369,8 @@ class HomeworkQuickAddProxyDialogState extends State<HomeworkQuickAddProxyDialog
             .whereType<Map>()
             .map((e) => Map<String, dynamic>.from(e))
             .toList();
-        mids.sort((a, b) => _orderIndex(a['order_index']).compareTo(_orderIndex(b['order_index'])));
+        mids.sort((a, b) => _orderIndex(a['order_index'])
+            .compareTo(_orderIndex(b['order_index'])));
         for (final m in mids) {
           final midOrder = _orderIndex(m['order_index']);
           final mid = _MidUnitSelectionNode(
@@ -377,7 +385,8 @@ class HomeworkQuickAddProxyDialogState extends State<HomeworkQuickAddProxyDialog
                 .whereType<Map>()
                 .map((e) => Map<String, dynamic>.from(e))
                 .toList();
-            smalls.sort((a, b) => _orderIndex(a['order_index']).compareTo(_orderIndex(b['order_index'])));
+            smalls.sort((a, b) => _orderIndex(a['order_index'])
+                .compareTo(_orderIndex(b['order_index'])));
             for (final s in smalls) {
               final smallOrder = _orderIndex(s['order_index']);
               final start = _toInt(s['start_page']);
@@ -521,7 +530,9 @@ class HomeworkQuickAddProxyDialogState extends State<HomeworkQuickAddProxyDialog
         for (final small in mid.smalls) {
           final pages = <int>{...small.pageCounts.keys};
           _addPageRange(pages, small.startPage, small.endPage);
-          pagesBySmallKey[_smallKey(big.orderIndex, mid.orderIndex, small.orderIndex)] = pages;
+          pagesBySmallKey[
+                  _smallKey(big.orderIndex, mid.orderIndex, small.orderIndex)] =
+              pages;
         }
       }
     }
@@ -549,7 +560,8 @@ class HomeworkQuickAddProxyDialogState extends State<HomeworkQuickAddProxyDialog
           final bigOrder = _toInt(m['bigOrder'] ?? m['big_order']);
           final midOrder = _toInt(m['midOrder'] ?? m['mid_order']);
           final smallOrder = _toInt(m['smallOrder'] ?? m['small_order']);
-          if (bigOrder == null || midOrder == null || smallOrder == null) continue;
+          if (bigOrder == null || midOrder == null || smallOrder == null)
+            continue;
           touched.add(_smallKey(bigOrder, midOrder, smallOrder));
         }
       }
@@ -582,7 +594,8 @@ class HomeworkQuickAddProxyDialogState extends State<HomeworkQuickAddProxyDialog
       for (final mid in big.middles) {
         mid.explicitSelected = false;
         for (final small in mid.smalls) {
-          final key = _smallKey(big.orderIndex, mid.orderIndex, small.orderIndex);
+          final key =
+              _smallKey(big.orderIndex, mid.orderIndex, small.orderIndex);
           final finishedAt = issuedBySmallKey[key];
           final locked = issuedBySmallKey.containsKey(key);
           small.locked = locked;
@@ -629,7 +642,8 @@ class HomeworkQuickAddProxyDialogState extends State<HomeworkQuickAddProxyDialog
     _refreshRangeAutoDraft();
   }
 
-  void _toggleMid(_BigUnitSelectionNode big, _MidUnitSelectionNode mid, bool selected) {
+  void _toggleMid(
+      _BigUnitSelectionNode big, _MidUnitSelectionNode mid, bool selected) {
     setState(() {
       big.explicitSelected = false;
       mid.selected = false;
@@ -719,12 +733,14 @@ class HomeworkQuickAddProxyDialogState extends State<HomeworkQuickAddProxyDialog
     return total.toString();
   }
 
-  List<_SelectedSmallUnit> _sortedSelectedSmallUnits(List<_SelectedSmallUnit> selected) {
+  List<_SelectedSmallUnit> _sortedSelectedSmallUnits(
+      List<_SelectedSmallUnit> selected) {
     final list = List<_SelectedSmallUnit>.from(selected);
     list.sort((a, b) {
       if (a.bigOrder != b.bigOrder) return a.bigOrder.compareTo(b.bigOrder);
       if (a.midOrder != b.midOrder) return a.midOrder.compareTo(b.midOrder);
-      if (a.smallOrder != b.smallOrder) return a.smallOrder.compareTo(b.smallOrder);
+      if (a.smallOrder != b.smallOrder)
+        return a.smallOrder.compareTo(b.smallOrder);
       final byBig = a.bigName.compareTo(b.bigName);
       if (byBig != 0) return byBig;
       final byMid = a.midName.compareTo(b.midName);
@@ -1064,7 +1080,8 @@ class HomeworkQuickAddProxyDialogState extends State<HomeworkQuickAddProxyDialog
           if (states.contains(MaterialState.selected)) return kDlgAccent;
           return null;
         }),
-        side: BorderSide(color: isDisabled ? const Color(0xFF3A4448) : kDlgBorder),
+        side: BorderSide(
+            color: isDisabled ? const Color(0xFF3A4448) : kDlgBorder),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
         visualDensity: const VisualDensity(horizontal: -2, vertical: -2),
       ),
@@ -1169,7 +1186,8 @@ class HomeworkQuickAddProxyDialogState extends State<HomeworkQuickAddProxyDialog
                 inputFormatters: [
                   FilteringTextInputFormatter.allow(RegExp(r'[0-9\-~,/ ]')),
                 ],
-                style: const TextStyle(color: kDlgText, fontWeight: FontWeight.w600),
+                style: const TextStyle(
+                    color: kDlgText, fontWeight: FontWeight.w600),
                 decoration: _inputDecoration('페이지', hint: '예: 10-12'),
               ),
             ),
@@ -1179,7 +1197,8 @@ class HomeworkQuickAddProxyDialogState extends State<HomeworkQuickAddProxyDialog
                 controller: _count,
                 keyboardType: TextInputType.number,
                 inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                style: const TextStyle(color: kDlgText, fontWeight: FontWeight.w600),
+                style: const TextStyle(
+                    color: kDlgText, fontWeight: FontWeight.w600),
                 decoration: _inputDecoration('문항수', hint: '예: 12'),
               ),
             ),
@@ -1199,11 +1218,14 @@ class HomeworkQuickAddProxyDialogState extends State<HomeworkQuickAddProxyDialog
 
   Widget _buildRangeInlineEditors() {
     final hasSelection = _rangeAutoUnitMappings.isNotEmpty;
-    final pageText = _rangeAutoPage.trim().isEmpty ? '-' : 'p.${_rangeAutoPage.trim()}';
+    final pageText =
+        _rangeAutoPage.trim().isEmpty ? '-' : 'p.${_rangeAutoPage.trim()}';
     final countText =
         _rangeAutoCount.trim().isEmpty ? '-' : '${_rangeAutoCount.trim()}문항';
-    final scopeText = _rangeAutoScope.trim().isEmpty ? '-' : _rangeAutoScope.trim();
-    final flowText = _flowNameById(_flowId).trim().isEmpty ? '-' : _flowNameById(_flowId);
+    final scopeText =
+        _rangeAutoScope.trim().isEmpty ? '-' : _rangeAutoScope.trim();
+    final flowText =
+        _flowNameById(_flowId).trim().isEmpty ? '-' : _flowNameById(_flowId);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1354,8 +1376,7 @@ class HomeworkQuickAddProxyDialogState extends State<HomeworkQuickAddProxyDialog
                           horizontal: 8,
                           vertical: 1,
                         ),
-                        childrenPadding:
-                            const EdgeInsets.fromLTRB(8, 0, 8, 8),
+                        childrenPadding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
                         maintainState: true,
                         iconColor: kDlgTextSub,
                         collapsedIconColor: kDlgTextSub,
@@ -1396,8 +1417,8 @@ class HomeworkQuickAddProxyDialogState extends State<HomeworkQuickAddProxyDialog
                                     ? '완료 ${_fmtYmd(small.finishedAt)}'
                                     : countText;
                                 return Padding(
-                                  padding: const EdgeInsets.fromLTRB(
-                                      4, 3, 4, 3),
+                                  padding:
+                                      const EdgeInsets.fromLTRB(4, 3, 4, 3),
                                   child: InkWell(
                                     borderRadius: BorderRadius.circular(8),
                                     mouseCursor: small.locked
@@ -1422,14 +1443,14 @@ class HomeworkQuickAddProxyDialogState extends State<HomeworkQuickAddProxyDialog
                                             : (small.selected
                                                 ? const Color(0x1A33A373)
                                                 : Colors.transparent),
-                                        borderRadius:
-                                            BorderRadius.circular(8),
+                                        borderRadius: BorderRadius.circular(8),
                                         border: Border.all(
                                           color: small.locked
                                               ? const Color(0xFF2E3C3F)
                                               : (small.selected
                                                   ? kDlgAccent.withOpacity(0.9)
-                                                  : kDlgBorder.withOpacity(0.8)),
+                                                  : kDlgBorder
+                                                      .withOpacity(0.8)),
                                         ),
                                       ),
                                       child: Row(
@@ -1469,7 +1490,8 @@ class HomeworkQuickAddProxyDialogState extends State<HomeworkQuickAddProxyDialog
                                                   ? const Color(0xFF6D7777)
                                                   : kDlgTextSub,
                                               fontWeight: FontWeight.w700,
-                                              fontSize: small.locked ? 11.5 : 12,
+                                              fontSize:
+                                                  small.locked ? 11.5 : 12,
                                             ),
                                           ),
                                         ],
@@ -1490,7 +1512,7 @@ class HomeworkQuickAddProxyDialogState extends State<HomeworkQuickAddProxyDialog
     );
   }
 
-  Future<void> _submit() async {
+  Future<void> _submit({String action = 'add'}) async {
     if (_flowId.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('플로우를 선택하세요.')),
@@ -1512,6 +1534,7 @@ class HomeworkQuickAddProxyDialogState extends State<HomeworkQuickAddProxyDialog
       Navigator.pop(context, {
         'studentId': widget.studentId,
         'flowId': _flowId,
+        'action': action,
         'type': _type,
         'title': title,
         'page': _page.text.trim(),
@@ -1536,12 +1559,11 @@ class HomeworkQuickAddProxyDialogState extends State<HomeworkQuickAddProxyDialog
       }
       final title = inputTitle.isEmpty ? '교재 과제' : inputTitle;
       final bookMeta = _bookMetaText(selectedBook);
-      content = content.isEmpty
-          ? bookMeta
-          : '$bookMeta\n$content';
+      content = content.isEmpty ? bookMeta : '$bookMeta\n$content';
       Navigator.pop(context, {
         'studentId': widget.studentId,
         'flowId': _flowId,
+        'action': action,
         'type': '교재',
         'title': title,
         'page': page,
@@ -1576,7 +1598,8 @@ class HomeworkQuickAddProxyDialogState extends State<HomeworkQuickAddProxyDialog
     var title = titleRaw.isEmpty ? mergedTask.title : titleRaw;
     var content = contentRaw;
     if (selectedUnits.length > 1) {
-      final aiSummary = await _createAiSummaryLabel(selectedBook, selectedUnits);
+      final aiSummary =
+          await _createAiSummaryLabel(selectedBook, selectedUnits);
       if (!mounted) return;
       if (aiSummary.isNotEmpty) {
         final rangeText = _rangeScopeTextFromSelected(selectedUnits);
@@ -1584,7 +1607,8 @@ class HomeworkQuickAddProxyDialogState extends State<HomeworkQuickAddProxyDialog
           title = aiSummary;
         }
         if (contentRaw.isEmpty || contentRaw == mergedTask.content) {
-          content = '${_bookMetaText(selectedBook)}\n범위: $rangeText\n요약: $aiSummary';
+          content =
+              '${_bookMetaText(selectedBook)}\n범위: $rangeText\n요약: $aiSummary';
         }
       }
     }
@@ -1598,6 +1622,7 @@ class HomeworkQuickAddProxyDialogState extends State<HomeworkQuickAddProxyDialog
     Navigator.pop(context, {
       'studentId': widget.studentId,
       'flowId': _flowId,
+      'action': action,
       'type': '교재',
       'title': title,
       'page': mergedTask.page,
@@ -1622,12 +1647,14 @@ class HomeworkQuickAddProxyDialogState extends State<HomeworkQuickAddProxyDialog
   @override
   Widget build(BuildContext context) {
     final selectedBook = _selectedLinkedBook;
-    final waitingSelectedBook =
-        _loadingFlowTextbooks && _selectedLinkedBookKey != null && selectedBook == null;
+    final waitingSelectedBook = _loadingFlowTextbooks &&
+        _selectedLinkedBookKey != null &&
+        selectedBook == null;
     return AlertDialog(
       backgroundColor: kDlgBg,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      title: const Text('과제 추가', style: TextStyle(color: kDlgText, fontWeight: FontWeight.w900)),
+      title: const Text('과제 추가',
+          style: TextStyle(color: kDlgText, fontWeight: FontWeight.w900)),
       content: SizedBox(
         width: 520,
         child: Column(
@@ -1653,9 +1680,11 @@ class HomeworkQuickAddProxyDialogState extends State<HomeworkQuickAddProxyDialog
                   for (final flow in widget.flows)
                     _buildPickerChip(
                       label: flow.name,
-                      selected: _flowId == flow.id && _selectedLinkedBookKey == null,
+                      selected:
+                          _flowId == flow.id && _selectedLinkedBookKey == null,
                       onTap: () async {
-                        if (_flowId == flow.id && _selectedLinkedBookKey == null) return;
+                        if (_flowId == flow.id &&
+                            _selectedLinkedBookKey == null) return;
                         setState(() {
                           _flowId = flow.id;
                           _selectedLinkedBookKey = null;
@@ -1720,8 +1749,16 @@ class HomeworkQuickAddProxyDialogState extends State<HomeworkQuickAddProxyDialog
           style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
           child: const Text('취소'),
         ),
+        OutlinedButton(
+          onPressed: () => _submit(action: 'reserve'),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: kDlgText,
+            side: const BorderSide(color: kDlgBorder),
+          ),
+          child: const Text('예약'),
+        ),
         FilledButton(
-          onPressed: _submit,
+          onPressed: () => _submit(action: 'add'),
           style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
           child: const Text('추가'),
         ),
@@ -1848,7 +1885,8 @@ class HomeworkContinueDialog extends StatefulWidget {
   final String studentId;
   final String title;
   final Color color;
-  const HomeworkContinueDialog({required this.studentId, required this.title, required this.color});
+  const HomeworkContinueDialog(
+      {required this.studentId, required this.title, required this.color});
   @override
   State<HomeworkContinueDialog> createState() => _HomeworkContinueDialogState();
 }
@@ -1860,8 +1898,13 @@ class _HomeworkContinueDialogState extends State<HomeworkContinueDialog> {
     super.initState();
     _body = ImeAwareTextEditingController(text: '');
   }
+
   @override
-  void dispose() { _body.dispose(); super.dispose(); }
+  void dispose() {
+    _body.dispose();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
@@ -1875,9 +1918,18 @@ class _HomeworkContinueDialogState extends State<HomeworkContinueDialog> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(children: [
-              Container(width: 12, height: 12, decoration: BoxDecoration(color: widget.color, shape: BoxShape.circle)),
+              Container(
+                  width: 12,
+                  height: 12,
+                  decoration: BoxDecoration(
+                      color: widget.color, shape: BoxShape.circle)),
               const SizedBox(width: 8),
-              Expanded(child: Text(widget.title, style: const TextStyle(color: Colors.white70, fontSize: 15, fontWeight: FontWeight.w600)))
+              Expanded(
+                  child: Text(widget.title,
+                      style: const TextStyle(
+                          color: Colors.white70,
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600)))
             ]),
             const SizedBox(height: 10),
             TextField(
@@ -1885,23 +1937,31 @@ class _HomeworkContinueDialogState extends State<HomeworkContinueDialog> {
               minLines: 2,
               maxLines: 4,
               style: const TextStyle(color: Colors.white),
-              decoration: const InputDecoration(labelText: '내용', labelStyle: TextStyle(color: Colors.white60), enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)), focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2)))),
+              decoration: const InputDecoration(
+                  labelText: '내용',
+                  labelStyle: TextStyle(color: Colors.white60),
+                  enabledBorder: OutlineInputBorder(
+                      borderSide: BorderSide(color: Colors.white24)),
+                  focusedBorder: OutlineInputBorder(
+                      borderSide: BorderSide(color: Color(0xFF1976D2)))),
             ),
           ],
         ),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context, null), child: const Text('취소', style: TextStyle(color: Colors.white70))),
+        TextButton(
+            onPressed: () => Navigator.pop(context, null),
+            child: const Text('취소', style: TextStyle(color: Colors.white70))),
         FilledButton(
           onPressed: () {
-            Navigator.pop(context, {'studentId': widget.studentId, 'body': _body.text.trim()});
+            Navigator.pop(context,
+                {'studentId': widget.studentId, 'body': _body.text.trim()});
           },
-          style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+          style:
+              FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
           child: const Text('추가'),
         ),
       ],
     );
   }
 }
-
-
