@@ -2477,6 +2477,7 @@ class _ChecklistSmallNode {
   final String key;
   final Set<int> pages;
   final bool locked;
+  final DateTime? finishedAt;
   bool selected;
 
   _ChecklistSmallNode({
@@ -2487,6 +2488,7 @@ class _ChecklistSmallNode {
     required this.key,
     required this.pages,
     this.locked = false,
+    this.finishedAt,
     this.selected = false,
   });
 }
@@ -2508,6 +2510,13 @@ class _FlowTextbookSummary extends StatefulWidget {
 }
 
 class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
+  static const AnimationStyle _checklistExpansionStyle = AnimationStyle(
+    duration: Duration(milliseconds: 90),
+    reverseDuration: Duration(milliseconds: 65),
+    curve: Curves.easeOutCubic,
+    reverseCurve: Curves.easeInCubic,
+  );
+
   static final Map<String, Set<int>> _metadataPagesCacheByBookKey =
       <String, Set<int>>{};
   static final Map<String, Map<String, dynamic>?> _metadataPayloadCacheByBookKey =
@@ -2526,6 +2535,11 @@ class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
   Map<String, Set<String>> _acknowledgedSmallKeysByBookKey =
       <String, Set<String>>{};
   Map<String, String> _typeLabelByKey = <String, String>{};
+
+  String _fmtYmd(DateTime? dt) {
+    if (dt == null) return '--.--.--';
+    return DateFormat('yy.MM.dd').format(dt);
+  }
 
   @override
   void initState() {
@@ -3155,7 +3169,7 @@ class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
   List<_ChecklistBigNode> _parseChecklistNodes(
     dynamic payload,
     Set<String> selectedKeys,
-    Set<String> lockedKeys,
+    Map<String, DateTime?> lockedFinishedAtByKey,
   ) {
     if (payload is! Map) return const <_ChecklistBigNode>[];
     final unitsRaw = payload['units'];
@@ -3223,6 +3237,8 @@ class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
             }
           }
           final unitKey = _smallKey(bigOrder, midOrder, smallOrder);
+          final lockedAt = lockedFinishedAtByKey[unitKey];
+          final isLocked = lockedFinishedAtByKey.containsKey(unitKey);
           smalls.add(
             _ChecklistSmallNode(
               name: smallName,
@@ -3231,9 +3247,9 @@ class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
               endPage: endPage,
               key: unitKey,
               pages: pages,
-              selected:
-                  selectedKeys.contains(unitKey) || lockedKeys.contains(unitKey),
-              locked: lockedKeys.contains(unitKey),
+              selected: selectedKeys.contains(unitKey) || isLocked,
+              locked: isLocked,
+              finishedAt: lockedAt,
             ),
           );
         }
@@ -3282,21 +3298,30 @@ class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
     return false;
   }
 
-  Set<String> _issuedSmallKeysForBook(Map<String, dynamic> row) {
+  Map<String, DateTime?> _issuedSmallFinishedAtByBook(
+    Map<String, dynamic> row,
+  ) {
     final bookId = (row['book_id'] as String?)?.trim() ?? '';
     final grade = (row['grade_label'] as String?)?.trim() ?? '';
-    if (bookId.isEmpty || grade.isEmpty) return <String>{};
+    if (bookId.isEmpty || grade.isEmpty) return <String, DateTime?>{};
     final bookKey = '$bookId|$grade';
     final smallPagesByKey =
         _metadataSmallPagesCacheByBookKey[bookKey] ?? const <String, Set<int>>{};
-    if (smallPagesByKey.isEmpty) return <String>{};
+    if (smallPagesByKey.isEmpty) return <String, DateTime?>{};
 
-    final issued = <String>{};
+    final issued = <String, DateTime?>{};
     for (final hw in widget.homeworkItems) {
       final hwBookId = (hw.bookId ?? '').trim();
       final hwGrade = (hw.gradeLabel ?? '').trim();
       if (hwBookId != bookId || hwGrade != grade) continue;
+      if (!_isCompletedForProgress(hw)) continue;
 
+      final finishedAt = hw.completedAt ??
+          hw.confirmedAt ??
+          hw.submittedAt ??
+          hw.updatedAt ??
+          hw.createdAt;
+      final touched = <String>{};
       final mappings = hw.unitMappings;
       if (mappings != null && mappings.isNotEmpty) {
         for (final raw in mappings) {
@@ -3305,15 +3330,26 @@ class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
           final midOrder = _toInt(m['midOrder'] ?? m['mid_order']);
           final smallOrder = _toInt(m['smallOrder'] ?? m['small_order']);
           if (bigOrder == null || midOrder == null || smallOrder == null) continue;
-          issued.add(_smallKey(bigOrder, midOrder, smallOrder));
+          touched.add(_smallKey(bigOrder, midOrder, smallOrder));
         }
       }
 
       final pages = _pagesFromRawPageText(hw.page ?? '');
-      if (pages.isEmpty) continue;
-      for (final entry in smallPagesByKey.entries) {
-        if (_hasPageOverlap(pages, entry.value)) {
-          issued.add(entry.key);
+      if (pages.isNotEmpty) {
+        for (final entry in smallPagesByKey.entries) {
+          if (_hasPageOverlap(pages, entry.value)) {
+            touched.add(entry.key);
+          }
+        }
+      }
+      for (final key in touched) {
+        final prev = issued[key];
+        if (prev == null) {
+          issued[key] = finishedAt;
+          continue;
+        }
+        if (finishedAt != null && finishedAt.isAfter(prev)) {
+          issued[key] = finishedAt;
         }
       }
     }
@@ -3323,16 +3359,25 @@ class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
   Widget _buildChecklistTreeCheckbox({
     required bool value,
     required ValueChanged<bool?>? onChanged,
+    bool disabled = false,
   }) {
+    final isDisabled = disabled || onChanged == null;
     return SizedBox(
       width: 22,
       height: 22,
       child: Checkbox(
         value: value,
         onChanged: onChanged,
-        activeColor: kDlgAccent,
-        checkColor: Colors.white,
-        side: const BorderSide(color: kDlgBorder),
+        activeColor: isDisabled ? const Color(0xFF3A4448) : kDlgAccent,
+        checkColor: isDisabled ? const Color(0xFF9FB3B3) : Colors.white,
+        fillColor: MaterialStateProperty.resolveWith((states) {
+          if (isDisabled) {
+            return value ? const Color(0xFF2F3A3E) : const Color(0xFF1F282C);
+          }
+          if (states.contains(MaterialState.selected)) return kDlgAccent;
+          return null;
+        }),
+        side: BorderSide(color: isDisabled ? const Color(0xFF3A4448) : kDlgBorder),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
         visualDensity: const VisualDensity(horizontal: -2, vertical: -2),
       ),
@@ -3343,11 +3388,15 @@ class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
     final key = _keyOf(row);
     if (key == '|') return;
     await _ensureMetadataCachesForBook(row);
-    final issuedLockedKeys = _issuedSmallKeysForBook(row);
+    final issuedLockedAtByKey = _issuedSmallFinishedAtByBook(row);
     final payload = _metadataPayloadCacheByBookKey[key];
     final selectedBefore =
         Set<String>.from(_acknowledgedSmallKeysByBookKey[key] ?? const <String>{});
-    final nodes = _parseChecklistNodes(payload, selectedBefore, issuedLockedKeys);
+    final nodes = _parseChecklistNodes(
+      payload,
+      selectedBefore,
+      issuedLockedAtByKey,
+    );
     if (!mounted) return;
     if (nodes.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -3365,7 +3414,7 @@ class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
               backgroundColor: kDlgBg,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
               title: const Text(
-                '인행률 체크',
+                '진행률 체크',
                 style: TextStyle(color: kDlgText, fontWeight: FontWeight.w900),
               ),
               content: SizedBox(
@@ -3393,6 +3442,7 @@ class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
                           children: [
                             for (final big in nodes)
                               ExpansionTile(
+                                expansionAnimationStyle: _checklistExpansionStyle,
                                 tilePadding: const EdgeInsets.symmetric(
                                   horizontal: 2,
                                   vertical: 2,
@@ -3432,6 +3482,8 @@ class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
                                     Padding(
                                       padding: const EdgeInsets.only(bottom: 6),
                                       child: ExpansionTile(
+                                        expansionAnimationStyle:
+                                            _checklistExpansionStyle,
                                         tilePadding: const EdgeInsets.symmetric(
                                           horizontal: 8,
                                           vertical: 1,
@@ -3482,17 +3534,21 @@ class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
                                               child: InkWell(
                                                 borderRadius:
                                                     BorderRadius.circular(8),
-                                                onTap: () {
-                                                  if (small.locked) return;
-                                                  setLocal(() {
-                                                    _toggleSmallNode(
-                                                      big,
-                                                      mid,
-                                                      small,
-                                                      !small.selected,
-                                                    );
-                                                  });
-                                                },
+                                                mouseCursor: small.locked
+                                                    ? SystemMouseCursors.basic
+                                                    : SystemMouseCursors.click,
+                                                onTap: small.locked
+                                                    ? null
+                                                    : () {
+                                                        setLocal(() {
+                                                          _toggleSmallNode(
+                                                            big,
+                                                            mid,
+                                                            small,
+                                                            !small.selected,
+                                                          );
+                                                        });
+                                                      },
                                                 child: AnimatedContainer(
                                                   duration: const Duration(
                                                     milliseconds: 140,
@@ -3503,17 +3559,25 @@ class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
                                                     vertical: 7,
                                                   ),
                                                   decoration: BoxDecoration(
-                                                    color: small.selected
-                                                        ? const Color(0x1A33A373)
-                                                        : Colors.transparent,
+                                                    color: small.locked
+                                                        ? const Color(0x1F0F1518)
+                                                        : (small.selected
+                                                            ? const Color(
+                                                                0x1A33A373)
+                                                            : Colors.transparent),
                                                     borderRadius:
                                                         BorderRadius.circular(8),
                                                     border: Border.all(
-                                                      color: small.selected
-                                                          ? kDlgAccent
-                                                              .withOpacity(0.9)
-                                                          : kDlgBorder
-                                                              .withOpacity(0.8),
+                                                      color: small.locked
+                                                          ? const Color(
+                                                              0xFF2E3C3F)
+                                                          : (small.selected
+                                                              ? kDlgAccent
+                                                                  .withOpacity(
+                                                                      0.9)
+                                                              : kDlgBorder
+                                                                  .withOpacity(
+                                                                      0.8)),
                                                     ),
                                                   ),
                                                   child: Row(
@@ -3532,6 +3596,7 @@ class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
                                                                   );
                                                                 });
                                                               },
+                                                        disabled: small.locked,
                                                       ),
                                                       const SizedBox(width: 8),
                                                       Expanded(
@@ -3554,37 +3619,15 @@ class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
                                                       ),
                                                       const SizedBox(width: 8),
                                                       if (small.locked) ...[
-                                                        Container(
-                                                          margin:
-                                                              const EdgeInsets.only(
-                                                                  right: 8),
-                                                          padding:
-                                                              const EdgeInsets.symmetric(
-                                                            horizontal: 6,
-                                                            vertical: 2,
-                                                          ),
-                                                          decoration: BoxDecoration(
-                                                            color: const Color(
-                                                                0xFF1A252A),
-                                                            borderRadius:
-                                                                BorderRadius.circular(
-                                                                    999),
-                                                            border: Border.all(
-                                                              color: const Color(
-                                                                  0xFF2D3D42),
-                                                            ),
-                                                          ),
-                                                          child: const Text(
-                                                            '기출제',
-                                                            style: TextStyle(
-                                                              color:
-                                                                  Color(0xFF7D8C8C),
-                                                              fontSize: 10.5,
-                                                              fontWeight:
-                                                                  FontWeight.w700,
-                                                            ),
+                                                        Text(
+                                                          '완료 ${_fmtYmd(small.finishedAt)}',
+                                                          style: const TextStyle(
+                                                            color: Color(0xFF6D7777),
+                                                            fontSize: 11.2,
+                                                            fontWeight: FontWeight.w700,
                                                           ),
                                                         ),
+                                                        const SizedBox(width: 8),
                                                       ],
                                                       Text(
                                                         _smallPageText(small),

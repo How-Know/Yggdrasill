@@ -156,6 +156,7 @@ const SURVEY_ROUNDS = [
   { no: 2, name: '코어진단', description: '핵심 학습 습관과 신념의 변화를 점검하는 단계예요.' },
   { no: 3, name: '확장진단', description: '확장 전략과 성장 방향을 구체화하는 단계예요.' },
 ] as const;
+const BULK_PRINT_QUEUE_STORAGE_KEY = 'trait_bulk_print_queue_v1';
 
 function supportStrengthSummary(percentile: number | null): { label: string; color: string } {
   if (percentile == null || !Number.isFinite(percentile)) {
@@ -180,9 +181,21 @@ export default function ReportPreviewPage() {
   const [expandedSections, setExpandedSections] = React.useState<Record<string, boolean>>({});
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const autoPrintStartedRef = React.useRef(false);
 
   const urlParams = React.useMemo(() => new URLSearchParams(window.location.search), []);
   const tokenParam = React.useMemo(() => String(urlParams.get('token') ?? '').trim(), [urlParams]);
+  const autoPrintEnabled = React.useMemo(() => {
+    const raw = String(urlParams.get('autoprint') ?? '').trim().toLowerCase();
+    return raw === '1' || raw === 'true';
+  }, [urlParams]);
+  const bulkPrintKey = React.useMemo(() => String(urlParams.get('bulkPrintKey') ?? '').trim(), [urlParams]);
+  const bulkPrintIndex = React.useMemo(() => {
+    const raw = String(urlParams.get('bulkPrintIndex') ?? '').trim();
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n < 0) return 0;
+    return Math.floor(n);
+  }, [urlParams]);
   const [tokenParams, setTokenParams] = React.useState<URLSearchParams | null>(null);
   const [tokenParticipant, setTokenParticipant] = React.useState<ParticipantMeta | null>(null);
   const [tokenLoading, setTokenLoading] = React.useState(!!tokenParam);
@@ -335,6 +348,105 @@ export default function ReportPreviewPage() {
     return () => { cancelled = true; };
   }, [participantId, typeCode, tokenLoading, tokenParticipant]);
 
+  const reportReady = React.useMemo(
+    () => !loading && !tokenLoading && !error && !!participant && !!template,
+    [error, loading, participant, template, tokenLoading],
+  );
+
+  function triggerPrintWithExpanded(restoreAfterPrint: boolean) {
+    const prevExpanded = { ...expandedSections };
+    const prevScaleGuide = scaleGuideExpanded;
+
+    const allOpen: Record<string, boolean> = {};
+    for (const s of nonProfileSections) allOpen[s.key] = true;
+    setExpandedSections(allOpen);
+    setScaleGuideExpanded(true);
+
+    if (restoreAfterPrint) {
+      const restore = () => {
+        setExpandedSections(prevExpanded);
+        setScaleGuideExpanded(prevScaleGuide);
+        window.removeEventListener('afterprint', restore);
+      };
+      window.addEventListener('afterprint', restore);
+    }
+
+    requestAnimationFrame(() => {
+      setTimeout(() => window.print(), 420);
+    });
+  }
+
+  React.useEffect(() => {
+    if (!autoPrintEnabled) return;
+    if (autoPrintStartedRef.current) return;
+    if (!reportReady) return;
+    autoPrintStartedRef.current = true;
+    let advanced = false;
+    let printRequested = false;
+
+    const advanceToNext = () => {
+      if (advanced) return;
+      advanced = true;
+      window.removeEventListener('afterprint', advanceToNext);
+      window.removeEventListener('focus', handleFocusFallback);
+      if (mediaQuery) {
+        if (typeof mediaQuery.removeEventListener === 'function') mediaQuery.removeEventListener('change', handlePrintMediaChange);
+        else if (typeof (mediaQuery as any).removeListener === 'function') (mediaQuery as any).removeListener(handlePrintMediaChange);
+      }
+      if (!bulkPrintKey) return;
+      try {
+        const raw = sessionStorage.getItem(BULK_PRINT_QUEUE_STORAGE_KEY);
+        if (!raw) return;
+        const parsed = JSON.parse(raw) as { key?: string; urls?: string[]; returnPath?: string };
+        if (parsed?.key !== bulkPrintKey || !Array.isArray(parsed.urls)) return;
+        const nextIndex = bulkPrintIndex + 1;
+        if (nextIndex >= parsed.urls.length) {
+          sessionStorage.removeItem(BULK_PRINT_QUEUE_STORAGE_KEY);
+          window.location.href = parsed.returnPath || '/results';
+          return;
+        }
+        const nextUrl = new URL(parsed.urls[nextIndex], window.location.origin);
+        nextUrl.searchParams.set('autoprint', '1');
+        nextUrl.searchParams.set('bulkPrintKey', bulkPrintKey);
+        nextUrl.searchParams.set('bulkPrintIndex', String(nextIndex));
+        window.location.href = `${nextUrl.pathname}${nextUrl.search}`;
+      } catch {}
+    };
+
+    const handleFocusFallback = () => {
+      if (!printRequested) return;
+      window.setTimeout(advanceToNext, 220);
+    };
+
+    const mediaQuery = typeof window.matchMedia === 'function' ? window.matchMedia('print') : null;
+    const handlePrintMediaChange = () => {
+      if (!printRequested) return;
+      if (mediaQuery && mediaQuery.matches) return;
+      window.setTimeout(advanceToNext, 220);
+    };
+
+    window.addEventListener('afterprint', advanceToNext);
+    window.addEventListener('focus', handleFocusFallback);
+    if (mediaQuery) {
+      if (typeof mediaQuery.addEventListener === 'function') mediaQuery.addEventListener('change', handlePrintMediaChange);
+      else if (typeof (mediaQuery as any).addListener === 'function') (mediaQuery as any).addListener(handlePrintMediaChange);
+    }
+    const timer = window.setTimeout(() => {
+      printRequested = true;
+      triggerPrintWithExpanded(false);
+    }, 300);
+
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener('afterprint', advanceToNext);
+      window.removeEventListener('focus', handleFocusFallback);
+      if (mediaQuery) {
+        if (typeof mediaQuery.removeEventListener === 'function') mediaQuery.removeEventListener('change', handlePrintMediaChange);
+        else if (typeof (mediaQuery as any).removeListener === 'function') (mediaQuery as any).removeListener(handlePrintMediaChange);
+      }
+    };
+  }, [autoPrintEnabled, bulkPrintIndex, bulkPrintKey, reportReady]);
+
   const isStudentView = !!tokenParam;
   const title = isStudentView ? '수학 학습 성향 조사 결과' : '학생 화면 미리보기';
   const currentRoundNo = React.useMemo(() => {
@@ -459,26 +571,9 @@ export default function ReportPreviewPage() {
   const keywords = React.useMemo(() => getTypeKeywords(typeCode), [typeCode]);
   const oneLineSummary = React.useMemo(() => buildOneLineSummary(typeCode, vectorStrength), [typeCode, vectorStrength]);
 
-  const handlePrint = React.useCallback(() => {
-    const prevExpanded = { ...expandedSections };
-    const prevScaleGuide = scaleGuideExpanded;
-
-    const allOpen: Record<string, boolean> = {};
-    for (const s of nonProfileSections) allOpen[s.key] = true;
-    setExpandedSections(allOpen);
-    setScaleGuideExpanded(true);
-
-    const restore = () => {
-      setExpandedSections(prevExpanded);
-      setScaleGuideExpanded(prevScaleGuide);
-      window.removeEventListener('afterprint', restore);
-    };
-    window.addEventListener('afterprint', restore);
-
-    requestAnimationFrame(() => {
-      setTimeout(() => window.print(), 350);
-    });
-  }, [expandedSections, nonProfileSections, scaleGuideExpanded]);
+  const handlePrint = () => {
+    triggerPrintWithExpanded(true);
+  };
 
   return (
     <>

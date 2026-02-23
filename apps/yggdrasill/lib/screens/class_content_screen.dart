@@ -2388,7 +2388,7 @@ Future<void> _handleSubmittedChipTapWithAnswerViewer({
     }
   }
 
-  final confirmed = await openHomeworkAnswerViewerPage(
+  final action = await openHomeworkAnswerViewerPage(
     context,
     filePath: answerPath,
     title: hw.title.trim().isEmpty ? '답지 확인' : hw.title.trim(),
@@ -2397,7 +2397,12 @@ Future<void> _handleSubmittedChipTapWithAnswerViewer({
     enableConfirm: true,
   );
   if (!context.mounted) return;
-  if (confirmed == true) {
+  if (action == HomeworkAnswerViewerAction.complete) {
+    HomeworkStore.instance.markAutoCompleteOnNextWaiting(hw.id);
+    await _confirmHomeworkIfSubmitted(studentId, hw.id);
+    return;
+  }
+  if (action == HomeworkAnswerViewerAction.confirm) {
     await _confirmHomeworkIfSubmitted(studentId, hw.id);
   }
 }

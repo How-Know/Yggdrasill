@@ -6,7 +6,9 @@ import 'package:pdfrx/pdfrx.dart';
 
 import '../dialog_tokens.dart';
 
-Future<bool?> openHomeworkAnswerViewerPage(
+enum HomeworkAnswerViewerAction { confirm, complete }
+
+Future<HomeworkAnswerViewerAction?> openHomeworkAnswerViewerPage(
   BuildContext context, {
   required String filePath,
   required String title,
@@ -14,8 +16,8 @@ Future<bool?> openHomeworkAnswerViewerPage(
   String? cacheKey,
   bool enableConfirm = true,
 }) {
-  return Navigator.of(context).push<bool>(
-    MaterialPageRoute<bool>(
+  return Navigator.of(context).push<HomeworkAnswerViewerAction>(
+    MaterialPageRoute<HomeworkAnswerViewerAction>(
       builder: (_) => HomeworkAnswerViewerPage(
         filePath: filePath,
         title: title,
@@ -650,7 +652,7 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
                     tooltip: '뒤로가기',
                     onTap: () {
                       _savePageCache();
-                      Navigator.of(context).pop(false);
+                      Navigator.of(context).pop(null);
                     },
                   ),
                   const SizedBox(width: 10),
@@ -840,12 +842,27 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
                   if (widget.enableConfirm) const SizedBox(width: 12),
                   if (widget.enableConfirm)
                     _pillButton(
+                      label: '완료',
+                      icon: Icons.task_alt_rounded,
+                      enabled: true,
+                      onTap: () {
+                        _savePageCache();
+                        Navigator.of(context).pop(
+                          HomeworkAnswerViewerAction.complete,
+                        );
+                      },
+                    ),
+                  if (widget.enableConfirm) const SizedBox(width: 12),
+                  if (widget.enableConfirm)
+                    _pillButton(
                       label: '확인',
                       icon: Icons.check_rounded,
                       enabled: true,
                       onTap: () {
                         _savePageCache();
-                        Navigator.of(context).pop(true);
+                        Navigator.of(context).pop(
+                          HomeworkAnswerViewerAction.confirm,
+                        );
                       },
                       filled: true,
                     ),

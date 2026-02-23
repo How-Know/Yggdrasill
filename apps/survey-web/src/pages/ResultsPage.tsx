@@ -170,6 +170,7 @@ const SNAPSHOT_VERSION = 'v1.0';
 const PREVIEW_PEER_K = 5;
 const PEER_SHRINKAGE_PRIOR = 3;
 const ADJUSTMENT_AXIS_WEIGHT = 0.35;
+const BULK_PRINT_QUEUE_STORAGE_KEY = 'trait_bulk_print_queue_v1';
 
 function parseRoundNo(value: unknown): number | null {
   const raw = String(value ?? '').trim();
@@ -2294,6 +2295,7 @@ export default function ResultsPage() {
 
   const [batchSendingReport, setBatchSendingReport] = React.useState(false);
   const [batchSendResult, setBatchSendResult] = React.useState<{ sent: number; total: number; errors: string[] } | null>(null);
+  const [batchPrintingReports, setBatchPrintingReports] = React.useState(false);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -2485,6 +2487,67 @@ export default function ResultsPage() {
     }
     params.subscalePeerGrades = subPeerGrades;
     return params;
+  }
+
+  function buildReportPreviewPathFromParams(params: Record<string, unknown>): string {
+    const qs = new URLSearchParams();
+    for (const [k, v] of Object.entries(params)) {
+      if (v == null) continue;
+      if (typeof v === 'object') qs.set(k, JSON.stringify(v));
+      else qs.set(k, String(v));
+    }
+    return `/report-preview?${qs.toString()}`;
+  }
+
+  function printBatchReportsForCurrentPage() {
+    if (batchPrintingReports) return;
+    if (!filteredRows.length) {
+      alert('현재 페이지에 인쇄할 참여자가 없습니다.');
+      return;
+    }
+    const pointById = new Map(snapshotAxisPoints.map((point) => [point.participantId, point]));
+    const urls: string[] = [];
+    let skipped = 0;
+    for (const row of filteredRows) {
+      const point = pointById.get(row.id);
+      if (!point) {
+        skipped += 1;
+        continue;
+      }
+      const reportParams = buildReportParamsForPoint(point);
+      if (!reportParams) {
+        skipped += 1;
+        continue;
+      }
+      urls.push(buildReportPreviewPathFromParams(reportParams));
+    }
+
+    if (!urls.length) {
+      alert('인쇄 가능한 리포트가 없습니다.');
+      return;
+    }
+    const message = skipped > 0
+      ? `현재 페이지 참여자 ${filteredRows.length}명 중 ${urls.length}명만 인쇄 가능합니다.\n(${skipped}명은 유형/척도 데이터 부족으로 제외)\n\n일괄 인쇄를 시작할까요?`
+      : `현재 페이지 참여자 ${urls.length}명의 결과물을 순차 인쇄합니다.\n계속하시겠습니까?`;
+    if (!confirm(message)) return;
+
+    const queueKey = `bulk_print_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    try {
+      sessionStorage.setItem(
+        BULK_PRINT_QUEUE_STORAGE_KEY,
+        JSON.stringify({ key: queueKey, urls, returnPath: '/results' }),
+      );
+    } catch {
+      alert('브라우저 저장소를 사용할 수 없어 일괄 인쇄를 시작할 수 없습니다.');
+      return;
+    }
+
+    setBatchPrintingReports(true);
+    const firstUrl = new URL(urls[0], window.location.origin);
+    firstUrl.searchParams.set('autoprint', '1');
+    firstUrl.searchParams.set('bulkPrintKey', queueKey);
+    firstUrl.searchParams.set('bulkPrintIndex', '0');
+    window.location.href = `${firstUrl.pathname}${firstUrl.search}`;
   }
 
   async function sendBatchReportLinks() {
@@ -2983,6 +3046,24 @@ export default function ResultsPage() {
               2페이지 (추가)
             </button>
           </div>
+          <button
+            onClick={printBatchReportsForCurrentPage}
+            disabled={batchPrintingReports || filteredRows.length === 0}
+            style={{
+              height: 32,
+              padding: '0 12px',
+              borderRadius: 8,
+              border: `1px solid ${tokens.border}`,
+              background: '#1E1E1E',
+              color: tokens.text,
+              cursor: (batchPrintingReports || filteredRows.length === 0) ? 'not-allowed' : 'pointer',
+              opacity: (batchPrintingReports || filteredRows.length === 0) ? 0.6 : 1,
+              fontSize: 12,
+              fontWeight: 800,
+            }}
+          >
+            {batchPrintingReports ? '일괄 인쇄 준비 중...' : '일괄 인쇄'}
+          </button>
           <span style={{ color: tokens.textDim, fontSize: 12, fontWeight: 500 }}>
             표시 {filteredRows.length.toLocaleString('ko-KR')} / {rows.length.toLocaleString('ko-KR')} · {selectedLevelBandLabel}
             {tokenSyncStatus === 'syncing' && ' · 토큰 동기화 중...'}
