@@ -27,6 +27,7 @@ import '../services/homework_store.dart';
 import '../services/homework_assignment_store.dart';
 import '../services/consult_trial_lesson_service.dart';
 import '../services/student_flow_store.dart';
+import '../services/student_behavior_assignment_store.dart';
 import 'learning/homework_quick_add_proxy_dialog.dart';
 import 'learning/homework_edit_dialog.dart';
 import 'class_content_events_dialog.dart';
@@ -40,6 +41,7 @@ import '../widgets/homework_assign_dialog.dart';
 import '../widgets/textbook_flow_link_action.dart';
 import 'student/student_profile_page.dart';
 import '../app_overlays.dart';
+import '../models/behavior_card_drag_payload.dart';
 
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
@@ -425,22 +427,35 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     return pos & box.size;
   }
 
+  bool get _hasActiveStudentDropPayload =>
+      activeTextbookDragPayload.value != null ||
+      activeBehaviorCardDragPayload.value != null;
+
+  void _syncSideSheetHoverState(bool hovering) {
+    final bool hasTextbookPayload = activeTextbookDragPayload.value != null;
+    if (hasTextbookPayload &&
+        isTextbookDraggingOverLeftSideSheet.value != hovering) {
+      isTextbookDraggingOverLeftSideSheet.value = hovering;
+    }
+    final bool hasBehaviorPayload = activeBehaviorCardDragPayload.value != null;
+    if (hasBehaviorPayload &&
+        isBehaviorDraggingOverLeftSideSheet.value != hovering) {
+      isBehaviorDraggingOverLeftSideSheet.value = hovering;
+    }
+    if (!hasTextbookPayload && isTextbookDraggingOverLeftSideSheet.value) {
+      isTextbookDraggingOverLeftSideSheet.value = false;
+    }
+    if (!hasBehaviorPayload && isBehaviorDraggingOverLeftSideSheet.value) {
+      isBehaviorDraggingOverLeftSideSheet.value = false;
+    }
+  }
+
   Widget _wrapSideSheetDragHoverTarget({required Widget child}) {
     return DragTarget<Object>(
-      onWillAccept: (_) => activeTextbookDragPayload.value != null,
-      onMove: (_) {
-        if (!isTextbookDraggingOverLeftSideSheet.value) {
-          isTextbookDraggingOverLeftSideSheet.value = true;
-        }
-      },
-      onLeave: (_) {
-        if (isTextbookDraggingOverLeftSideSheet.value) {
-          isTextbookDraggingOverLeftSideSheet.value = false;
-        }
-      },
-      onAcceptWithDetails: (_) {
-        isTextbookDraggingOverLeftSideSheet.value = false;
-      },
+      onWillAccept: (_) => _hasActiveStudentDropPayload,
+      onMove: (_) => _syncSideSheetHoverState(true),
+      onLeave: (_) => _syncSideSheetHoverState(false),
+      onAcceptWithDetails: (_) => _syncSideSheetHoverState(false),
       builder: (context, candidateData, rejectedData) => child,
     );
   }
@@ -453,7 +468,33 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       studentId: studentId,
       payload: payload,
     );
-    isTextbookDraggingOverLeftSideSheet.value = false;
+    _syncSideSheetHoverState(false);
+  }
+
+  Future<void> _handleBehaviorDropForStudent(
+    String studentId,
+    BehaviorCardDragPayload payload,
+  ) async {
+    try {
+      await StudentBehaviorAssignmentStore.instance.upsertFromDrop(
+        studentId: studentId,
+        payload: payload,
+      );
+      if (!mounted) return;
+      final messenger = ScaffoldMessenger.of(context);
+      messenger.hideCurrentSnackBar();
+      messenger.showSnackBar(
+        SnackBar(content: Text('${payload.name} 행동을 학생에게 부여했어요.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('행동 부여에 실패했어요: $e')),
+      );
+    } finally {
+      activeBehaviorCardDragPayload.value = null;
+      _syncSideSheetHoverState(false);
+    }
   }
 
   Widget _wrapTextbookDropTargetForStudent({
@@ -461,24 +502,31 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     required Widget child,
   }) {
     return DragTarget<Object>(
-      onWillAccept: (_) => activeTextbookDragPayload.value != null,
-      onMove: (_) {
-        if (!isTextbookDraggingOverLeftSideSheet.value) {
-          isTextbookDraggingOverLeftSideSheet.value = true;
-        }
-      },
+      onWillAccept: (_) => _hasActiveStudentDropPayload,
+      onMove: (_) => _syncSideSheetHoverState(true),
+      onLeave: (_) => _syncSideSheetHoverState(false),
       onAcceptWithDetails: (_) {
-        unawaited(_handleTextbookDropForStudent(studentId));
+        final behaviorPayload = activeBehaviorCardDragPayload.value;
+        if (behaviorPayload != null) {
+          unawaited(_handleBehaviorDropForStudent(studentId, behaviorPayload));
+          return;
+        }
+        if (activeTextbookDragPayload.value != null) {
+          unawaited(_handleTextbookDropForStudent(studentId));
+        }
       },
       builder: (context, candidateData, rejectedData) {
         final bool hovering =
-            candidateData.isNotEmpty && activeTextbookDragPayload.value != null;
+            candidateData.isNotEmpty && _hasActiveStudentDropPayload;
         if (!hovering) return child;
+        final Color lineColor = activeBehaviorCardDragPayload.value != null
+            ? const Color(0xFF8D7CFF)
+            : const Color(0xFF33A373);
         return Stack(
           fit: StackFit.passthrough,
           children: [
             child,
-            const Positioned(
+            Positioned(
               left: 0,
               right: 0,
               bottom: 0,
@@ -486,7 +534,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                 child: SizedBox(
                   height: 2,
                   child: DecoratedBox(
-                    decoration: BoxDecoration(color: Color(0xFF33A373)),
+                    decoration: BoxDecoration(color: lineColor),
                   ),
                 ),
               ),
@@ -2157,6 +2205,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                         arrivalTime: arrival2,
                         departureTime: now,
                         selectedHomeworkIds: selection.itemIds,
+                        dueDate: selection.dueDate,
                         className: t.classInfo?.name,
                         classEndTime: classDateTime.add(t.duration),
                         setId: t.setId,

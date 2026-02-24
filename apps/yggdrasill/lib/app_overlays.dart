@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'models/behavior_card_drag_payload.dart';
 import 'models/textbook_drag_payload.dart';
 
 /// MaterialApp.builder에서 만든 최상위 Overlay(=Navigator 밖) 안에
@@ -26,6 +27,16 @@ final ValueNotifier<TextbookDragPayload?> activeTextbookDragPayload =
 /// 교재 카드 드래그 피드백이 왼쪽 사이드시트 영역에 진입했는지 여부.
 /// 리소스 화면의 피드백 UI 전환(축소/모양 변경)에 사용한다.
 final ValueNotifier<bool> isTextbookDraggingOverLeftSideSheet =
+    ValueNotifier<bool>(false);
+
+/// 커리큘럼 행동 카드 드래그 중 payload.
+/// - null: 드래그 비활성
+/// - non-null: 학생 영역 드롭 대상 활성
+final ValueNotifier<BehaviorCardDragPayload?> activeBehaviorCardDragPayload =
+    ValueNotifier<BehaviorCardDragPayload?>(null);
+
+/// 행동 카드 드래그 피드백이 왼쪽 사이드시트 영역에 진입했는지 여부.
+final ValueNotifier<bool> isBehaviorDraggingOverLeftSideSheet =
     ValueNotifier<bool>(false);
 
 

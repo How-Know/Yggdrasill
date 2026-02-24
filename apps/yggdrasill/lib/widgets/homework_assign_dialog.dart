@@ -13,6 +13,7 @@ import '../services/data_manager.dart';
 import '../services/homework_assignment_store.dart';
 import '../services/homework_store.dart';
 import '../services/print_routing_service.dart';
+import '../services/student_behavior_assignment_store.dart';
 import '../services/tag_store.dart';
 import '../widgets/dialog_tokens.dart';
 
@@ -53,6 +54,7 @@ class _TodoSheetPayload {
   final Uint8List? academyLogo;
   final String studentName;
   final DateTime classDateTime;
+  final DateTime? dueDate;
   final DateTime? arrivalTime;
   final DateTime departureTime;
   final String className;
@@ -61,6 +63,7 @@ class _TodoSheetPayload {
   final List<_CheckRateEntry> checkRates;
   final List<_TodoListEntry> completedEntries;
   final List<_TodoListEntry> todoEntries;
+  final List<_TodoListEntry> behaviorEntries;
   final String behaviorFeedback;
 
   const _TodoSheetPayload({
@@ -68,6 +71,7 @@ class _TodoSheetPayload {
     required this.academyLogo,
     required this.studentName,
     required this.classDateTime,
+    required this.dueDate,
     required this.arrivalTime,
     required this.departureTime,
     required this.className,
@@ -76,6 +80,7 @@ class _TodoSheetPayload {
     required this.checkRates,
     required this.completedEntries,
     required this.todoEntries,
+    required this.behaviorEntries,
     required this.behaviorFeedback,
   });
 }
@@ -370,6 +375,7 @@ Future<HomeworkAssignSelection?> showHomeworkAssignDialog(
                                       arrivalTime: arrival,
                                       departureTime: DateTime.now(),
                                       selectedHomeworkIds: ids,
+                                      dueDate: selectedDueDate,
                                       className: className,
                                       classEndTime: classEnd,
                                       setId: setId,
@@ -440,6 +446,7 @@ Future<void> printHomeworkTodoSheet({
   DateTime? arrivalTime,
   required DateTime departureTime,
   required List<String> selectedHomeworkIds,
+  DateTime? dueDate,
   String? className,
   DateTime? classEndTime,
   String? setId,
@@ -451,6 +458,7 @@ Future<void> printHomeworkTodoSheet({
     arrivalTime: arrivalTime,
     departureTime: departureTime,
     selectedHomeworkIds: selectedHomeworkIds,
+    dueDate: dueDate,
     className: className,
     classEndTime: classEndTime,
     setId: setId,
@@ -467,6 +475,7 @@ Future<void> previewHomeworkTodoSheet({
   DateTime? arrivalTime,
   required DateTime departureTime,
   required List<String> selectedHomeworkIds,
+  DateTime? dueDate,
   String? className,
   DateTime? classEndTime,
   String? setId,
@@ -478,6 +487,7 @@ Future<void> previewHomeworkTodoSheet({
     arrivalTime: arrivalTime,
     departureTime: departureTime,
     selectedHomeworkIds: selectedHomeworkIds,
+    dueDate: dueDate,
     className: className,
     classEndTime: classEndTime,
     setId: setId,
@@ -535,6 +545,18 @@ String _formatDate(DateTime dt) {
   return '${dt.year}.${two(dt.month)}.${two(dt.day)}';
 }
 
+String _formatMonthDay(DateTime dt) {
+  String two(int v) => v.toString().padLeft(2, '0');
+  return '${two(dt.month)}.${two(dt.day)}';
+}
+
+String _formatDueDateForTitle(DateTime? dt) {
+  if (dt == null) return '검사일 미정';
+  String two(int v) => v.toString().padLeft(2, '0');
+  final yy = (dt.year % 100).toString().padLeft(2, '0');
+  return '$yy.${two(dt.month)}.${two(dt.day)} (${_formatWeekdayKorean(dt)})까지';
+}
+
 String _formatDateTime(DateTime? dt) {
   if (dt == null) return '--.-- --:--';
   String two(int v) => v.toString().padLeft(2, '0');
@@ -585,7 +607,7 @@ String _buildBehaviorFeedback({
   }
 
   if (events.isEmpty) {
-    return '태도 피드백: 집중하여 공부했습니다.';
+    return '태도: 집중하여 공부했습니다.';
   }
 
   final counts = <String, int>{};
@@ -601,9 +623,9 @@ String _buildBehaviorFeedback({
 
   if (counts.isEmpty) {
     if (noteTexts.isNotEmpty) {
-      return '태도 피드백: ${noteTexts.first}';
+      return '태도: ${noteTexts.first}';
     }
-    return '태도 피드백: 집중하여 공부했습니다.';
+    return '태도: 집중하여 공부했습니다.';
   }
 
   final sorted = counts.entries.toList()
@@ -631,9 +653,9 @@ String _buildBehaviorFeedback({
     parts.add('$tag 행동이 $degree 있었습니다.');
   }
   if (parts.isEmpty) {
-    return '태도 피드백: 집중하여 공부했습니다.';
+    return '태도: 집중하여 공부했습니다.';
   }
-  return '태도 피드백: ${parts.join(' ')}';
+  return '태도: ${parts.join(' ')}';
 }
 
 int _estimateLearningMsForDate({
@@ -677,6 +699,7 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
   DateTime? arrivalTime,
   required DateTime departureTime,
   required List<String> selectedHomeworkIds,
+  DateTime? dueDate,
   String? className,
   DateTime? classEndTime,
   String? setId,
@@ -744,6 +767,11 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
       ),
     );
   }
+  final behaviorTodoEntries = await _buildBehaviorTodoEntries(
+    studentId: studentId,
+    classDateTime: classDateTime,
+    dueDate: dueDate,
+  );
   if (todoEntries.isEmpty) {
     todoEntries.add(const _TodoListEntry(primary: '• 숙제 없음'));
   }
@@ -789,6 +817,7 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
     academyLogo: settings.logo,
     studentName: studentName,
     classDateTime: classDateTime,
+    dueDate: dueDate,
     arrivalTime: resolvedArrival,
     departureTime: departureTime,
     className: resolvedClassName,
@@ -797,12 +826,61 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
     checkRates: checkRates,
     completedEntries: completedEntries,
     todoEntries: todoEntries,
+    behaviorEntries: behaviorTodoEntries,
     behaviorFeedback: _buildBehaviorFeedback(
       studentId: studentId,
       classDateTime: classDateTime,
       setId: resolvedSetId,
     ),
   );
+}
+
+Future<List<_TodoListEntry>> _buildBehaviorTodoEntries({
+  required String studentId,
+  required DateTime classDateTime,
+  DateTime? dueDate,
+}) async {
+  if (dueDate == null) return const <_TodoListEntry>[];
+  final DateTime startDate =
+      DateTime(classDateTime.year, classDateTime.month, classDateTime.day)
+          .add(const Duration(days: 1));
+  final DateTime endDate = DateTime(dueDate.year, dueDate.month, dueDate.day);
+  if (endDate.isBefore(startDate)) return const <_TodoListEntry>[];
+
+  try {
+    final assignments = await StudentBehaviorAssignmentStore.instance
+        .loadForStudent(studentId, force: true);
+    final regularAssignments =
+        assignments.where((e) => !e.isIrregular).toList()
+          ..sort((a, b) => a.orderIndex.compareTo(b.orderIndex));
+    if (regularAssignments.isEmpty) return const <_TodoListEntry>[];
+
+    final out = <_TodoListEntry>[];
+    for (DateTime day = startDate;
+        !day.isAfter(endDate);
+        day = day.add(const Duration(days: 1))) {
+      final int dayOffset = day.difference(startDate).inDays;
+      for (final behavior in regularAssignments) {
+        final int repeat = behavior.repeatDays.clamp(1, 3650).toInt();
+        if (dayOffset % repeat != 0) continue;
+        final int level = behavior.safeSelectedLevelIndex + 1;
+        final String levelText = behavior.selectedLevelText.trim();
+        out.add(
+          _TodoListEntry(
+            primary: '□ ${behavior.name} · lv.$level',
+            secondary: levelText.isEmpty
+                ? '  ${_formatMonthDay(day)}'
+                : '  ${_formatMonthDay(day)} · $levelText',
+          ),
+        );
+      }
+    }
+    return out;
+  } catch (e, st) {
+    // ignore: avoid_print
+    print('[HomeworkTodo][BehaviorTodo] $e\n$st');
+    return const <_TodoListEntry>[];
+  }
 }
 
 Future<sf.PdfFont> _loadTodoPdfFont(
@@ -932,8 +1010,10 @@ Future<String> _buildHomeworkTodoPdf({
   // 타이틀-학생/수업 간격은 늘리고, 학생/수업-등하원 간격은 줄인 배치
   final infoY1 = top + 52;
   final infoY3 = top + 80;
-  final leftInfoW = contentWidth * 0.44;
-  final rightInfoX = left + leftInfoW + 10;
+  final metricGap = contentWidth * 0.01;
+  final metricW = (contentWidth - metricGap * 2) / 3;
+  final leftInfoW = metricW;
+  final rightInfoX = left + metricW + metricGap;
   final rightInfoW = right - rightInfoX;
 
   drawLabelValue(
@@ -974,9 +1054,6 @@ Future<String> _buildHomeworkTodoPdf({
       16,
     ),
   );
-
-  final metricGap = contentWidth * 0.01;
-  final metricW = (contentWidth - metricGap * 2) / 3;
 
   drawLabelValue(
     label: '등원 ',
@@ -1103,6 +1180,13 @@ Future<String> _buildHomeworkTodoPdf({
     bounds: Rect.fromLTWH(leftColX, todoTop, colWidth, 18),
   );
   graphics.drawString(
+    _formatDueDateForTitle(payload.dueDate),
+    labelFont,
+    brush: subBrush,
+    bounds: Rect.fromLTWH(leftColX, todoTop + 2, colWidth, 16),
+    format: sf.PdfStringFormat(alignment: sf.PdfTextAlignment.right),
+  );
+  graphics.drawString(
     '행동 리스트',
     sectionFont,
     brush: textBrush,
@@ -1137,18 +1221,37 @@ Future<String> _buildHomeworkTodoPdf({
     if (leftY > contentBottom - 8) break;
   }
 
-  graphics.drawString(
-    '• 추후 구현 예정',
-    bodyFont,
-    brush: subBrush,
-    bounds: Rect.fromLTWH(rightColX + 2, todoTop + 24, colWidth - 4, 14),
-  );
-  graphics.drawString(
-    '• 행동 피드백, 생활 체크 등을 넣을 영역',
-    subFont,
-    brush: subBrush,
-    bounds: Rect.fromLTWH(rightColX + 2, todoTop + 40, colWidth - 4, 13),
-  );
+  double rightY = todoTop + 24;
+  final behaviorEntries = payload.behaviorEntries;
+  if (behaviorEntries.isEmpty) {
+    graphics.drawString(
+      '• 행동 없음',
+      bodyFont,
+      brush: subBrush,
+      bounds: Rect.fromLTWH(rightColX + 2, rightY, colWidth - 4, 14),
+    );
+  } else {
+    for (final entry in behaviorEntries) {
+      graphics.drawString(
+        entry.primary,
+        bodyFont,
+        brush: textBrush,
+        bounds: Rect.fromLTWH(rightColX + 2, rightY, colWidth - 4, 14),
+      );
+      rightY += 14;
+      if (entry.secondary != null && entry.secondary!.trim().isNotEmpty) {
+        graphics.drawString(
+          entry.secondary!,
+          subFont,
+          brush: subBrush,
+          bounds: Rect.fromLTWH(rightColX + 2, rightY, colWidth - 4, 13),
+        );
+        rightY += 13;
+      }
+      rightY += 8;
+      if (rightY > contentBottom - 8) break;
+    }
+  }
 
   final bytes = await doc.save();
   doc.dispose();

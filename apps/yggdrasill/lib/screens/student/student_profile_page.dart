@@ -13,6 +13,8 @@ import '../../services/homework_store.dart';
 import '../../services/homework_assignment_store.dart';
 import '../../services/tag_store.dart';
 import '../../services/student_flow_store.dart';
+import '../../services/student_behavior_assignment_store.dart';
+import '../../services/learning_behavior_card_service.dart';
 import '../../services/tag_preset_service.dart';
 import '../../screens/learning/tag_preset_dialog.dart';
 import '../../widgets/swipe_action_reveal.dart';
@@ -1067,6 +1069,10 @@ class _StudentTimelineViewState extends State<_StudentTimelineView> {
     _timelineScrollController.addListener(_handleScroll);
     unawaited(TagStore.instance.loadAllFromDb());
     unawaited(HomeworkStore.instance.loadAll());
+    unawaited(
+      StudentBehaviorAssignmentStore.instance
+          .loadForStudent(widget.studentWithInfo.student.id),
+    );
   }
 
   @override
@@ -1097,6 +1103,7 @@ class _StudentTimelineViewState extends State<_StudentTimelineView> {
             const double timelineMaxWidth = 860 * 0.56;
             const double flowCardWidth = timelineMaxWidth;
             const double flowCardSpacing = 16;
+            const double behaviorCardWidth = timelineMaxWidth;
             final int flowCount = enabledFlows.length;
             final double flowSidebarWidth = flowCount == 0
                 ? 0
@@ -1116,16 +1123,42 @@ class _StudentTimelineViewState extends State<_StudentTimelineView> {
                   children: [
                     Row(
                       children: [
-                        _filterChip(label: '등/하원', selected: _showAttendance, onSelected: (v) => setState(() => _showAttendance = v)),
-                        const SizedBox(width: 8),
-                        _filterChip(label: '태그', selected: _showTags, onSelected: (v) => setState(() => _showTags = v)),
-                        const Spacer(),
-                        Text(
-                          DateFormat('yyyy.MM.dd').format(_anchorDate),
-                          style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w600),
+                        _filterChip(
+                          label: '등/하원',
+                          selected: _showAttendance,
+                          onSelected: (v) =>
+                              setState(() => _showAttendance = v),
                         ),
-                        IconButton(
+                        const SizedBox(width: 8),
+                        _filterChip(
+                          label: '태그',
+                          selected: _showTags,
+                          onSelected: (v) => setState(() => _showTags = v),
+                        ),
+                        const Spacer(),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 8,
+                          ),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF151C21),
+                            borderRadius: BorderRadius.circular(999),
+                            border: Border.all(color: const Color(0xFF223131)),
+                          ),
+                          child: Text(
+                            DateFormat('yyyy.MM.dd').format(_anchorDate),
+                            style: const TextStyle(
+                              color: Color(0xFF9FB3B3),
+                              fontWeight: FontWeight.w700,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        _buildTimelineHeaderActionButton(
                           tooltip: '날짜 선택',
+                          icon: Icons.event,
                           onPressed: () async {
                             final picked = await showDatePicker(
                               context: context,
@@ -1152,15 +1185,18 @@ class _StudentTimelineViewState extends State<_StudentTimelineView> {
                               }
                             }
                           },
-                          icon: const Icon(Icons.event, color: Colors.white70, size: 20),
                         ),
-                        IconButton(
+                        const SizedBox(width: 6),
+                        _buildTimelineHeaderActionButton(
                           tooltip: '태그 관리',
+                          icon: Icons.style,
                           onPressed: () async {
-                            await showDialog(context: context, builder: (_) => const TagPresetDialog());
+                            await showDialog(
+                              context: context,
+                              builder: (_) => const TagPresetDialog(),
+                            );
                             if (mounted) setState(() {});
                           },
-                          icon: const Icon(Icons.style, color: Colors.white70, size: 20),
                         ),
                       ],
                     ),
@@ -1201,6 +1237,14 @@ class _StudentTimelineViewState extends State<_StudentTimelineView> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     SizedBox(width: timelineMaxWidth, child: timelineCard),
+                    const SizedBox(width: flowCardSpacing),
+                    SizedBox(
+                      width: behaviorCardWidth,
+                      child: _BehaviorAssignmentSidebar(
+                        studentId: widget.studentWithInfo.student.id,
+                        cardWidth: behaviorCardWidth,
+                      ),
+                    ),
                     if (enabledFlows.isNotEmpty) ...[
                       const SizedBox(width: flowCardSpacing),
                       SizedBox(
@@ -1227,14 +1271,52 @@ class _StudentTimelineViewState extends State<_StudentTimelineView> {
     required bool selected,
     required ValueChanged<bool> onSelected,
   }) {
-    return FilterChip(
-      label: Text(label, style: const TextStyle(color: Colors.white70)),
-      selected: selected,
-      onSelected: onSelected,
-      showCheckmark: false,
-      selectedColor: const Color(0xFF1C2328),
-      backgroundColor: const Color(0xFF151C21),
-      shape: StadiumBorder(side: BorderSide(color: selected ? const Color(0xFF1B6B63) : Colors.white24, width: 1.2)),
+    return InkWell(
+      onTap: () => onSelected(!selected),
+      borderRadius: BorderRadius.circular(999),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOutCubic,
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        decoration: BoxDecoration(
+          color: selected ? const Color(0xFF1C2A2D) : const Color(0xFF151C21),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+            color:
+                selected ? const Color(0xFF2A6D62) : const Color(0xFF223131),
+            width: 1.2,
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color:
+                selected ? const Color(0xFFD6ECEA) : const Color(0xFF9FB3B3),
+            fontWeight: FontWeight.w700,
+            fontSize: 13,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTimelineHeaderActionButton({
+    required String tooltip,
+    required IconData icon,
+    required VoidCallback onPressed,
+  }) {
+    return Tooltip(
+      message: tooltip,
+      child: IconButton(
+        onPressed: onPressed,
+        icon: Icon(icon, color: const Color(0xFF9FB3B3), size: 18),
+        padding: EdgeInsets.zero,
+        constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+        style: IconButton.styleFrom(
+          backgroundColor: const Color(0xFF151C21),
+          side: const BorderSide(color: Color(0xFF223131)),
+        ),
+      ),
     );
   }
 
@@ -1875,6 +1957,476 @@ class _FlowHomeworkSidebarState extends State<_FlowHomeworkSidebar> {
   }
 }
 
+class _BehaviorAssignmentSidebar extends StatefulWidget {
+  final String studentId;
+  final double cardWidth;
+
+  const _BehaviorAssignmentSidebar({
+    required this.studentId,
+    required this.cardWidth,
+  });
+
+  @override
+  State<_BehaviorAssignmentSidebar> createState() =>
+      _BehaviorAssignmentSidebarState();
+}
+
+class _BehaviorAssignmentSidebarState extends State<_BehaviorAssignmentSidebar> {
+  late Future<List<StudentBehaviorAssignment>> _assignmentsFuture;
+  int _lastRevision = -1;
+
+  @override
+  void initState() {
+    super.initState();
+    _reloadAssignments();
+  }
+
+  @override
+  void didUpdateWidget(covariant _BehaviorAssignmentSidebar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.studentId != widget.studentId) {
+      _reloadAssignments();
+    }
+  }
+
+  void _reloadAssignments() {
+    _assignmentsFuture =
+        StudentBehaviorAssignmentStore.instance.loadForStudent(widget.studentId);
+  }
+
+  Future<void> _addBehavior() async {
+    try {
+      final cards = await LearningBehaviorCardService.instance.loadCards();
+      if (!mounted) return;
+      if (cards.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('커리큘럼 탭에서 행동 카드를 먼저 만들어 주세요.')),
+        );
+        return;
+      }
+      final selected = await _showBehaviorCatalogPicker(context, cards);
+      if (!mounted || selected == null) return;
+      await StudentBehaviorAssignmentStore.instance.addFromCard(
+        studentId: widget.studentId,
+        card: selected,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('행동 추가에 실패했어요: $e')),
+      );
+    }
+  }
+
+  Future<void> _deleteBehavior(StudentBehaviorAssignment item) async {
+    try {
+      await StudentBehaviorAssignmentStore.instance.delete(
+        studentId: widget.studentId,
+        assignmentId: item.id,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('행동 삭제에 실패했어요: $e')),
+      );
+    }
+  }
+
+  Future<void> _changeLevel(StudentBehaviorAssignment item, int delta) async {
+    try {
+      await StudentBehaviorAssignmentStore.instance.changeLevel(
+        studentId: widget.studentId,
+        assignmentId: item.id,
+        delta: delta,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('레벨 변경에 실패했어요: $e')),
+      );
+    }
+  }
+
+  Widget _buildBehaviorCard(StudentBehaviorAssignment item) {
+    final int maxLevel = item.safeLevelContents.length;
+    final int levelNumber = item.safeSelectedLevelIndex + 1;
+    final bool canLevelDown = levelNumber > 1;
+    final bool canLevelUp = levelNumber < maxLevel;
+    final String repeatLabel = item.isIrregular ? '비정기' : '${item.repeatDays}일 주기';
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 12, 12, 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF151C21),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFF223131)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  item.name,
+                  style: const TextStyle(
+                    color: Color(0xFFEAF2F2),
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                repeatLabel,
+                style: TextStyle(
+                  color: item.isIrregular
+                      ? const Color(0xFFF2B56B)
+                      : const Color(0xFF9FB3B3),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1F2A34),
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(color: const Color(0xFF3A4C5A)),
+                ),
+                child: Text(
+                  '레벨 $levelNumber',
+                  style: const TextStyle(
+                    color: Color(0xFFD4E6EA),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  item.selectedLevelText.trim().isEmpty
+                      ? '(내용 없음)'
+                      : item.selectedLevelText.trim(),
+                  style: const TextStyle(
+                    color: Color(0xFFD2DCDD),
+                    fontSize: 13,
+                    height: 1.35,
+                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              IconButton(
+                tooltip: '레벨 다운',
+                onPressed: canLevelDown ? () => _changeLevel(item, -1) : null,
+                icon: const Icon(
+                  Icons.keyboard_arrow_down_rounded,
+                  size: 20,
+                ),
+                color: const Color(0xFF9FB3B3),
+                visualDensity: VisualDensity.compact,
+              ),
+              IconButton(
+                tooltip: '레벨 업',
+                onPressed: canLevelUp ? () => _changeLevel(item, 1) : null,
+                icon: const Icon(
+                  Icons.keyboard_arrow_up_rounded,
+                  size: 20,
+                ),
+                color: const Color(0xFF9FB3B3),
+                visualDensity: VisualDensity.compact,
+              ),
+              IconButton(
+                tooltip: '삭제',
+                onPressed: () => _deleteBehavior(item),
+                icon: const Icon(Icons.delete_outline_rounded, size: 19),
+                color: const Color(0xFFB1BABA),
+                visualDensity: VisualDensity.compact,
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<int>(
+      valueListenable: StudentBehaviorAssignmentStore.instance.revision,
+      builder: (_, rev, __) {
+        if (_lastRevision != rev) {
+          _lastRevision = rev;
+          _reloadAssignments();
+        }
+        return FutureBuilder<List<StudentBehaviorAssignment>>(
+          future: _assignmentsFuture,
+          builder: (context, snapshot) {
+            final assignments = snapshot.data ??
+                StudentBehaviorAssignmentStore.instance.cached(widget.studentId);
+            return Container(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
+              decoration: BoxDecoration(
+                color: const Color(0xFF10171A),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: const Color(0xFF223131)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(
+                        Icons.self_improvement_rounded,
+                        size: 20,
+                        color: Color(0xFF9FB3B3),
+                      ),
+                      const SizedBox(width: 8),
+                      const Text(
+                        '행동 리스트',
+                        style: TextStyle(
+                          color: Color(0xFFEAF2F2),
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF151C21),
+                          borderRadius: BorderRadius.circular(999),
+                          border: Border.all(color: const Color(0xFF223131)),
+                        ),
+                        child: Text(
+                          '${assignments.length}개',
+                          style: const TextStyle(
+                            color: Color(0xFF9FB3B3),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                      const Spacer(),
+                      IconButton(
+                        tooltip: '행동 추가',
+                        onPressed: _addBehavior,
+                        icon: const Icon(
+                          Icons.add_circle_outline_rounded,
+                          color: Color(0xFF9FB3B3),
+                          size: 20,
+                        ),
+                        padding: EdgeInsets.zero,
+                        constraints:
+                            const BoxConstraints(minWidth: 48, minHeight: 48),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  const Divider(color: Color(0xFF223131), height: 1),
+                  const SizedBox(height: 12),
+                  if (snapshot.connectionState == ConnectionState.waiting &&
+                      assignments.isEmpty)
+                    const Expanded(
+                      child: Center(
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Color(0xFF8AA5A5),
+                        ),
+                      ),
+                    )
+                  else if (assignments.isEmpty)
+                    const Expanded(
+                      child: Center(
+                        child: Text(
+                          '등록된 행동이 없습니다.',
+                          style: TextStyle(color: Color(0xFF9FB3B3), fontSize: 14),
+                        ),
+                      ),
+                    )
+                  else
+                    Expanded(
+                      child: ListView.separated(
+                        itemCount: assignments.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 10),
+                        itemBuilder: (_, index) =>
+                            _buildBehaviorCard(assignments[index]),
+                      ),
+                    ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
+Future<LearningBehaviorCardRecord?> _showBehaviorCatalogPicker(
+  BuildContext context,
+  List<LearningBehaviorCardRecord> cards,
+) async {
+  final sorted = List<LearningBehaviorCardRecord>.from(cards)
+    ..sort((a, b) => a.orderIndex.compareTo(b.orderIndex));
+  String selectedId = sorted.first.id;
+
+  return showDialog<LearningBehaviorCardRecord>(
+    context: context,
+    builder: (dialogContext) {
+      return StatefulBuilder(
+        builder: (context, setDialogState) {
+          return AlertDialog(
+            backgroundColor: kDlgBg,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+            ),
+            title: const Text(
+              '행동 카드 선택',
+              style: TextStyle(
+                color: kDlgText,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+            content: SizedBox(
+              width: 420,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 420),
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: sorted.length,
+                  separatorBuilder: (_, __) =>
+                      const Divider(color: kDlgBorder, height: 1),
+                  itemBuilder: (_, index) {
+                    final card = sorted[index];
+                    final bool selected = selectedId == card.id;
+                    final String repeatLabel =
+                        card.isIrregular ? '비정기' : '${card.repeatDays}일 주기';
+                    return InkWell(
+                      onTap: () => setDialogState(() => selectedId = card.id),
+                      borderRadius: BorderRadius.circular(10),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 8,
+                        ),
+                        child: Row(
+                          children: [
+                            Radio<String>(
+                              value: card.id,
+                              groupValue: selectedId,
+                              activeColor: kDlgAccent,
+                              onChanged: (value) {
+                                if (value == null) return;
+                                setDialogState(() => selectedId = value);
+                              },
+                            ),
+                            const SizedBox(width: 4),
+                            Container(
+                              width: 34,
+                              height: 34,
+                              decoration: BoxDecoration(
+                                color: card.color.withOpacity(0.25),
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(
+                                  color: card.color.withOpacity(0.6),
+                                ),
+                              ),
+                              alignment: Alignment.center,
+                              child: Icon(card.icon, color: Colors.white, size: 18),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    card.name,
+                                    style: TextStyle(
+                                      color: kDlgText,
+                                      fontWeight: selected
+                                          ? FontWeight.w800
+                                          : FontWeight.w700,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    repeatLabel,
+                                    style: TextStyle(
+                                      color: card.isIrregular
+                                          ? const Color(0xFFF2B56B)
+                                          : kDlgTextSub,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              '레벨 ${card.safeSelectedLevelIndex + 1}',
+                              style: const TextStyle(
+                                color: kDlgTextSub,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(null),
+                style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
+                child: const Text('취소'),
+              ),
+              FilledButton(
+                onPressed: () {
+                  LearningBehaviorCardRecord selected = sorted.first;
+                  for (final card in sorted) {
+                    if (card.id == selectedId) {
+                      selected = card;
+                      break;
+                    }
+                  }
+                  Navigator.of(dialogContext).pop(selected);
+                },
+                style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
+                child: const Text('추가'),
+              ),
+            ],
+          );
+        },
+      );
+    },
+  );
+}
+
 class _FlowHomeworkCard extends StatefulWidget {
   final StudentFlow flow;
   final String studentId;
@@ -2319,110 +2871,126 @@ class _FlowHomeworkCardState extends State<_FlowHomeworkCard> {
   Widget build(BuildContext context) {
     final sorted = _sortedItems();
     final bool isWide = widget.cardWidth >= 460;
-    return Container(
-      padding: const EdgeInsets.fromLTRB(6, 14, 10, 14),
-      decoration: const BoxDecoration(
-        border: Border(
-          right: BorderSide(color: Color(0xFF223131), width: 1),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const Icon(Icons.account_tree_outlined,
-                  size: 20, color: Color(0xFF9FB3B3)),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  widget.flow.name,
-                  style: TextStyle(
-                    color: Color(0xFFEAF2F2),
-                    fontSize: isWide ? 34 : 30,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
-              if (widget.onEditName != null)
-                IconButton(
-                  tooltip: '이름 변경',
-                  onPressed: widget.onEditName,
-                  icon: const Icon(Icons.edit, size: 19, color: Color(0xFF9FB3B3)),
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          _FlowTextbookSummary(
-            flow: widget.flow,
-            studentId: widget.studentId,
-            homeworkItems: widget.items,
-            cardWidth: widget.cardWidth,
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              const Text(
-                '과제 목록',
-                style: TextStyle(
-                  color: Color(0xFF9FB3B3),
-                  fontSize: 15,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const SizedBox(width: 8),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF151C21),
-                  borderRadius: BorderRadius.circular(999),
-                  border: Border.all(color: const Color(0xFF223131)),
-                ),
-                child: Text(
-                  '${sorted.length}개',
-                  style: const TextStyle(
-                    color: Color(0xFF9FB3B3),
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          if (sorted.isEmpty)
-            const Text(
-              '등록된 과제가 없습니다.',
-              style: TextStyle(color: Color(0xFF9FB3B3), fontSize: 14),
-            )
-          else
-            Builder(
-              builder: (_) {
-                final children = <Widget>[];
-                String? previousGroup;
-                for (int i = 0; i < sorted.length; i++) {
-                  final hw = sorted[i];
-                  final group = _completedDateGroupKey(hw);
-                  if (group != previousGroup) {
-                    if (children.isNotEmpty) {
-                      children.add(const SizedBox(height: 8));
-                    }
-                    children.add(_buildCompletedDateDivider(group));
-                    children.add(const SizedBox(height: 8));
-                    previousGroup = group;
-                  }
-                  children.add(_buildHomeworkCard(hw));
-                  if (i != sorted.length - 1) {
-                    children.add(const SizedBox(height: 10));
-                  }
-                }
-                return Column(children: children);
-              },
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return Container(
+          padding: const EdgeInsets.fromLTRB(6, 14, 10, 14),
+          decoration: const BoxDecoration(
+            border: Border(
+              right: BorderSide(color: Color(0xFF223131), width: 1),
             ),
-        ],
-      ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.account_tree_outlined,
+                      size: 20, color: Color(0xFF9FB3B3)),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      widget.flow.name,
+                      style: TextStyle(
+                        color: Color(0xFFEAF2F2),
+                        fontSize: isWide ? 34 : 30,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  if (widget.onEditName != null)
+                    IconButton(
+                      tooltip: '이름 변경',
+                      onPressed: widget.onEditName,
+                      icon:
+                          const Icon(Icons.edit, size: 19, color: Color(0xFF9FB3B3)),
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              _FlowTextbookSummary(
+                flow: widget.flow,
+                studentId: widget.studentId,
+                homeworkItems: widget.items,
+                cardWidth: widget.cardWidth,
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  const Text(
+                    '과제 목록',
+                    style: TextStyle(
+                      color: Color(0xFF9FB3B3),
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF151C21),
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(color: const Color(0xFF223131)),
+                    ),
+                    child: Text(
+                      '${sorted.length}개',
+                      style: const TextStyle(
+                        color: Color(0xFF9FB3B3),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              if (sorted.isEmpty)
+                const Expanded(
+                  child: Align(
+                    alignment: Alignment.topLeft,
+                    child: Text(
+                      '등록된 과제가 없습니다.',
+                      style: TextStyle(color: Color(0xFF9FB3B3), fontSize: 14),
+                    ),
+                  ),
+                )
+              else
+                Expanded(
+                  child: Builder(
+                    builder: (_) {
+                      final children = <Widget>[];
+                      String? previousGroup;
+                      for (int i = 0; i < sorted.length; i++) {
+                        final hw = sorted[i];
+                        final group = _completedDateGroupKey(hw);
+                        if (group != previousGroup) {
+                          if (children.isNotEmpty) {
+                            children.add(const SizedBox(height: 8));
+                          }
+                          children.add(_buildCompletedDateDivider(group));
+                          children.add(const SizedBox(height: 8));
+                          previousGroup = group;
+                        }
+                        children.add(_buildHomeworkCard(hw));
+                        if (i != sorted.length - 1) {
+                          children.add(const SizedBox(height: 10));
+                        }
+                      }
+                      return Scrollbar(
+                        child: SingleChildScrollView(
+                          child: Column(children: children),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

@@ -427,6 +427,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
             arrivalTime: arrival,
             departureTime: now,
             selectedHomeworkIds: selection.itemIds,
+            dueDate: selection.dueDate,
             className: record.className,
             classEndTime: record.classEndTime,
             setId: record.setId,
