@@ -111,7 +111,12 @@ class _TextbookScreenState extends State<TextbookScreen> {
           .order('name');
       final rows = (data as List).cast<Map<String, dynamic>>();
       final books = rows
-          .where((r) => r['category'] == null)
+          .where((r) {
+            final rawCategory = r['category'];
+            final category = rawCategory is String ? rawCategory.trim().toLowerCase() : '';
+            // legacy(null/empty) + current(textbook) 모두 교재로 간주
+            return category.isEmpty || category == 'textbook';
+          })
           .map((r) => _BookEntry(
                 id: r['id'] as String,
                 academyId: r['academy_id'] as String?,

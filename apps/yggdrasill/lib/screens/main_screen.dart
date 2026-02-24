@@ -2157,6 +2157,9 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                         arrivalTime: arrival2,
                         departureTime: now,
                         selectedHomeworkIds: selection.itemIds,
+                        className: t.classInfo?.name,
+                        classEndTime: classDateTime.add(t.duration),
+                        setId: t.setId,
                       );
                     } catch (e) {
                       if (context.mounted) {

@@ -3,7 +3,6 @@ import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:open_filex/open_filex.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart' as sf;
@@ -11,6 +10,7 @@ import '../services/data_manager.dart';
 import '../services/homework_store.dart';
 import '../services/student_flow_store.dart';
 import '../services/homework_assignment_store.dart';
+import '../services/print_routing_service.dart';
 import '../models/attendance_record.dart';
 import 'learning/homework_quick_add_proxy_dialog.dart';
 import '../services/tag_preset_service.dart';
@@ -427,6 +427,9 @@ class _ClassContentScreenState extends State<ClassContentScreen>
             arrivalTime: arrival,
             departureTime: now,
             selectedHomeworkIds: selection.itemIds,
+            className: record.className,
+            classEndTime: record.classEndTime,
+            setId: record.setId,
           );
         } catch (e) {
           if (!context.mounted) return;
@@ -2436,22 +2439,10 @@ void _scheduleTempDelete(String path) {
 }
 
 Future<void> _openPrintDialogForPath(String path) async {
-  final target = path.trim();
-  if (target.isEmpty) return;
-  try {
-    if (Platform.isWindows) {
-      final q = "'${target.replaceAll("'", "''")}'";
-      await Process.start(
-        'powershell',
-        ['-NoProfile', '-Command', 'Start-Process -FilePath $q -Verb Print'],
-        runInShell: true,
-      );
-      return;
-    }
-  } catch (_) {
-    // fallthrough
-  }
-  await OpenFilex.open(target);
+  await PrintRoutingService.instance.printFile(
+    path: path,
+    channel: PrintRoutingChannel.general,
+  );
 }
 
 Future<_ResolvedHomeworkPdfLinks> _resolveHomeworkPdfLinks(
