@@ -2205,6 +2205,9 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                         arrivalTime: arrival2,
                         departureTime: now,
                         selectedHomeworkIds: selection.itemIds,
+                        selectedBehaviorIds: selection.selectedBehaviorIds,
+                        irregularBehaviorCounts:
+                            selection.irregularBehaviorCounts,
                         dueDate: selection.dueDate,
                         className: t.classInfo?.name,
                         classEndTime: classDateTime.add(t.duration),
@@ -2293,7 +2296,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
           ),
           const SizedBox(width: 10),
           Expanded(
-            child: Row(children: _buildHomeworkChipsReactive(t)),
+            child: _buildHomeworkChipsReactive(t),
           ),
         ],
       );
@@ -2447,55 +2450,50 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     );
   }
 
-  List<Widget> _buildHomeworkChipsReactive(_AttendanceTarget t) {
-    return [
-      ValueListenableBuilder<int>(
-        valueListenable: HomeworkAssignmentStore.instance.revision,
-        builder: (context, assignRev, _) {
-          final studentId = t.student.id;
-          final lastRev = _homeworkChipAssignRevisionByStudent[studentId];
-          if (lastRev != assignRev) {
-            _homeworkChipAssignRevisionByStudent[studentId] = assignRev;
-            _activeAssignmentsFutureByStudent[studentId] =
-                HomeworkAssignmentStore.instance
-                    .loadActiveAssignments(studentId);
-          }
-          final assignmentsFuture =
-              _activeAssignmentsFutureByStudent.putIfAbsent(
-            studentId,
-            () => HomeworkAssignmentStore.instance
-                .loadActiveAssignments(studentId),
-          );
-          return FutureBuilder<List<HomeworkAssignmentDetail>>(
-            future: assignmentsFuture,
-            builder: (context, snapshot) {
-              final hiddenReservedIds =
-                  (snapshot.data ?? const <HomeworkAssignmentDetail>[])
-                      .where((a) =>
-                          (a.note ?? '').trim() ==
-                          HomeworkAssignmentStore.reservationNote)
-                      .map((a) => a.homeworkItemId.trim())
-                      .where((id) => id.isNotEmpty)
-                      .toSet();
-              return ValueListenableBuilder<int>(
-                valueListenable: HomeworkStore.instance.revision,
-                builder: (context, _rev, _) {
-                  return AnimatedBuilder(
-                    animation: _uiAnimController,
-                    builder: (context, _) {
-                      return _buildHomeworkChipsScroller(
-                        t,
-                        hiddenItemIds: hiddenReservedIds,
-                      );
-                    },
-                  );
-                },
-              );
-            },
-          );
-        },
-      )
-    ];
+  Widget _buildHomeworkChipsReactive(_AttendanceTarget t) {
+    return ValueListenableBuilder<int>(
+      valueListenable: HomeworkAssignmentStore.instance.revision,
+      builder: (context, assignRev, _) {
+        final studentId = t.student.id;
+        final lastRev = _homeworkChipAssignRevisionByStudent[studentId];
+        if (lastRev != assignRev) {
+          _homeworkChipAssignRevisionByStudent[studentId] = assignRev;
+          _activeAssignmentsFutureByStudent[studentId] =
+              HomeworkAssignmentStore.instance.loadActiveAssignments(studentId);
+        }
+        final assignmentsFuture = _activeAssignmentsFutureByStudent.putIfAbsent(
+          studentId,
+          () => HomeworkAssignmentStore.instance.loadActiveAssignments(studentId),
+        );
+        return FutureBuilder<List<HomeworkAssignmentDetail>>(
+          future: assignmentsFuture,
+          builder: (context, snapshot) {
+            final hiddenReservedIds =
+                (snapshot.data ?? const <HomeworkAssignmentDetail>[])
+                    .where((a) =>
+                        (a.note ?? '').trim() ==
+                        HomeworkAssignmentStore.reservationNote)
+                    .map((a) => a.homeworkItemId.trim())
+                    .where((id) => id.isNotEmpty)
+                    .toSet();
+            return ValueListenableBuilder<int>(
+              valueListenable: HomeworkStore.instance.revision,
+              builder: (context, _rev, _) {
+                return AnimatedBuilder(
+                  animation: _uiAnimController,
+                  builder: (context, _) {
+                    return _buildHomeworkChipsScroller(
+                      t,
+                      hiddenItemIds: hiddenReservedIds,
+                    );
+                  },
+                );
+              },
+            );
+          },
+        );
+      },
+    );
   }
 
   // 가로 스크롤러: 칩이 넘치면 스크롤, 줄바꿈 금지

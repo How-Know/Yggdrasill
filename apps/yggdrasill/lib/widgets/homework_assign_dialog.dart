@@ -21,10 +21,14 @@ class HomeworkAssignSelection {
   final List<String> itemIds;
   final DateTime? dueDate;
   final bool printTodoOnConfirm;
+  final List<String> selectedBehaviorIds;
+  final Map<String, int> irregularBehaviorCounts;
   const HomeworkAssignSelection({
     required this.itemIds,
     required this.dueDate,
     this.printTodoOnConfirm = false,
+    this.selectedBehaviorIds = const <String>[],
+    this.irregularBehaviorCounts = const <String, int>{},
   });
 }
 
@@ -95,6 +99,9 @@ Future<HomeworkAssignSelection?> showHomeworkAssignDialog(
       .where((e) => e.status != HomeworkStatus.completed)
       .toList();
   if (items.isEmpty) return null;
+  final behaviorAssignments = await StudentBehaviorAssignmentStore.instance
+      .loadForStudent(studentId, force: true);
+  behaviorAssignments.sort((a, b) => a.orderIndex.compareTo(b.orderIndex));
   String two(int v) => v.toString().padLeft(2, '0');
   const week = ['월', '화', '수', '목', '금', '토', '일'];
   String formatSessionLabel(DateTime dt, {int? order}) {
@@ -143,22 +150,37 @@ Future<HomeworkAssignSelection?> showHomeworkAssignDialog(
           b.studentId == studentId &&
           b.dayIndex == dayIdx &&
           isActiveOn(b, day))
-      .toList()
-    ..sort((a, b) {
+      .toList();
+  final Map<String, List<StudentTimeBlock>> blocksBySessionKey =
+      <String, List<StudentTimeBlock>>{};
+  for (final b in blocks) {
+    final setId = (b.setId ?? '').trim();
+    final key = setId.isNotEmpty ? 'set:$setId' : 'single:${b.id}';
+    blocksBySessionKey.putIfAbsent(key, () => <StudentTimeBlock>[]).add(b);
+  }
+  final groupedStarts = <DateTime>[];
+  final groupedOrderByMinuteKey = <int, int?>{};
+  for (final group in blocksBySessionKey.values) {
+    group.sort((a, b) {
       if (a.startHour != b.startHour) return a.startHour - b.startHour;
       return a.startMinute - b.startMinute;
     });
-  for (int i = 0; i < blocks.length; i++) {
-    final b = blocks[i];
+    final first = group.first;
     final dt = DateTime(
       day.year,
       day.month,
       day.day,
-      b.startHour,
-      b.startMinute,
+      first.startHour,
+      first.startMinute,
     );
-    final order = b.number ?? b.weeklyOrder ?? (i + 1);
-    addOption(dt, order: order);
+    groupedStarts.add(dt);
+    groupedOrderByMinuteKey[keyOf(dt)] = first.number ?? first.weeklyOrder;
+  }
+  groupedStarts.sort((a, b) => a.compareTo(b));
+  for (int i = 0; i < groupedStarts.length; i++) {
+    final dt = groupedStarts[i];
+    final order = groupedOrderByMinuteKey[keyOf(dt)];
+    addOption(dt, order: order ?? (i + 1));
   }
 
   options.sort((a, b) => a.dateTime.compareTo(b.dateTime));
@@ -167,6 +189,12 @@ Future<HomeworkAssignSelection?> showHomeworkAssignDialog(
       nextSessions.isNotEmpty ? nextSessions.first.dateTime : null;
   final Map<String, bool> selected = {
     for (final e in items) e.id: true,
+  };
+  final Map<String, bool> selectedBehaviors = {
+    for (final b in behaviorAssignments) b.id: !b.isIrregular,
+  };
+  final Map<String, int> irregularBehaviorCounts = {
+    for (final b in behaviorAssignments.where((e) => e.isIrregular)) b.id: 1,
   };
   bool printTodoOnConfirm = false;
   bool previewing = false;
@@ -237,15 +265,15 @@ Future<HomeworkAssignSelection?> showHomeworkAssignDialog(
                       ),
                       iconEnabledColor: kDlgTextSub,
                     ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 16),
                   const YggDialogSectionHeader(
                       icon: Icons.assignment_turned_in, title: '등록된 과제'),
                   ConstrainedBox(
-                    constraints: const BoxConstraints(maxHeight: 320),
+                    constraints: const BoxConstraints(maxHeight: 220),
                     child: ListView.separated(
                       shrinkWrap: true,
                       itemCount: items.length,
-                      separatorBuilder: (_, __) => const SizedBox(height: 6),
+                      separatorBuilder: (_, __) => const SizedBox(height: 10),
                       itemBuilder: (ctx, idx) {
                         final hw = items[idx];
                         final String type = (hw.type ?? '').trim();
@@ -299,9 +327,197 @@ Future<HomeworkAssignSelection?> showHomeworkAssignDialog(
                       },
                     ),
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 16),
+                  const YggDialogSectionHeader(
+                    icon: Icons.self_improvement_rounded,
+                    title: '행동 리스트',
+                  ),
+                  if (behaviorAssignments.isEmpty)
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
+                      decoration: BoxDecoration(
+                        color: kDlgPanelBg,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: kDlgBorder),
+                      ),
+                      child: const Text(
+                        '학생에게 부여된 행동이 없습니다.',
+                        style: TextStyle(color: kDlgTextSub, fontSize: 13),
+                      ),
+                    )
+                  else
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(maxHeight: 220),
+                      child: ListView.separated(
+                        shrinkWrap: true,
+                        itemCount: behaviorAssignments.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 10),
+                        itemBuilder: (ctx, idx) {
+                          final behavior = behaviorAssignments[idx];
+                          final bool selectedNow =
+                              selectedBehaviors[behavior.id] ?? false;
+                          final int level = behavior.safeSelectedLevelIndex + 1;
+                          final String levelText =
+                              behavior.selectedLevelText.trim();
+                          final int count =
+                              irregularBehaviorCounts[behavior.id] ?? 1;
+                          return Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 8,
+                            ),
+                            decoration: BoxDecoration(
+                              color: kDlgPanelBg,
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(color: kDlgBorder),
+                            ),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Checkbox(
+                                  value: selectedNow,
+                                  onChanged: (v) {
+                                    setState(() {
+                                      selectedBehaviors[behavior.id] = v ?? false;
+                                    });
+                                  },
+                                  activeColor: kDlgAccent,
+                                  checkColor: Colors.white,
+                                ),
+                                Expanded(
+                                  child: Padding(
+                                    padding: const EdgeInsets.only(top: 4),
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Row(
+                                          children: [
+                                            Expanded(
+                                              child: Row(
+                                                children: [
+                                                  Flexible(
+                                                    child: Text(
+                                                      behavior.name,
+                                                      style: const TextStyle(
+                                                        color: kDlgText,
+                                                        fontWeight:
+                                                            FontWeight.w700,
+                                                        fontSize: 14,
+                                                      ),
+                                                      maxLines: 1,
+                                                      overflow:
+                                                          TextOverflow.ellipsis,
+                                                    ),
+                                                  ),
+                                                  if (behavior.isIrregular) ...[
+                                                    const SizedBox(width: 8),
+                                                    const Text(
+                                                      '비정기',
+                                                      style: TextStyle(
+                                                        color: Color(0xFFF2B56B),
+                                                        fontSize: 12,
+                                                        fontWeight:
+                                                            FontWeight.w700,
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ],
+                                              ),
+                                            ),
+                                            if (!behavior.isIrregular)
+                                              Text(
+                                                '${behavior.repeatDays}일 주기',
+                                                style: const TextStyle(
+                                                  color: kDlgTextSub,
+                                                  fontSize: 12,
+                                                  fontWeight: FontWeight.w700,
+                                                ),
+                                              ),
+                                          ],
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          'lv.$level${levelText.isEmpty ? '' : ' · $levelText'}',
+                                          style: const TextStyle(
+                                            color: kDlgTextSub,
+                                            fontSize: 12,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                                if (behavior.isIrregular) ...[
+                                  const SizedBox(width: 8),
+                                  Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      IconButton(
+                                        onPressed: selectedNow && count < 20
+                                            ? () {
+                                                setState(() {
+                                                  irregularBehaviorCounts[
+                                                      behavior.id] = count + 1;
+                                                });
+                                              }
+                                            : null,
+                                        icon: const Icon(
+                                          Icons.keyboard_arrow_up_rounded,
+                                          size: 18,
+                                        ),
+                                        color: kDlgTextSub,
+                                        padding: EdgeInsets.zero,
+                                        constraints: const BoxConstraints(
+                                            minWidth: 24, minHeight: 24),
+                                        visualDensity: VisualDensity.compact,
+                                      ),
+                                      Text(
+                                        '${count}회',
+                                        style: TextStyle(
+                                          color: selectedNow
+                                              ? kDlgText
+                                              : kDlgTextSub,
+                                          fontWeight: FontWeight.w700,
+                                          fontSize: 12,
+                                        ),
+                                      ),
+                                      IconButton(
+                                        onPressed: selectedNow && count > 1
+                                            ? () {
+                                                setState(() {
+                                                  irregularBehaviorCounts[
+                                                      behavior.id] = count - 1;
+                                                });
+                                              }
+                                            : null,
+                                        icon: const Icon(
+                                          Icons.keyboard_arrow_down_rounded,
+                                          size: 18,
+                                        ),
+                                        color: kDlgTextSub,
+                                        padding: EdgeInsets.zero,
+                                        constraints: const BoxConstraints(
+                                            minWidth: 24, minHeight: 24),
+                                        visualDensity: VisualDensity.compact,
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ],
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  const SizedBox(height: 16),
                   Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                    crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
                       Expanded(
                         child: CheckboxListTile(
@@ -325,7 +541,7 @@ Future<HomeworkAssignSelection?> showHomeworkAssignDialog(
                             ),
                           ),
                           subtitle: const Text(
-                            '확인 시 학습 리포트 + 숙제 리스트를 바로 인쇄합니다.',
+                            '확인 시 학습 리포트 + 숙제/행동 리스트를 바로 인쇄합니다.',
                             style: TextStyle(
                               color: kDlgTextSub,
                               fontSize: 12,
@@ -334,8 +550,9 @@ Future<HomeworkAssignSelection?> showHomeworkAssignDialog(
                         ),
                       ),
                       const SizedBox(width: 8),
-                      Padding(
-                        padding: const EdgeInsets.only(top: 6),
+                      SizedBox(
+                        width: 128,
+                        height: 45,
                         child: OutlinedButton.icon(
                           onPressed: previewing
                               ? null
@@ -348,6 +565,24 @@ Future<HomeworkAssignSelection?> showHomeworkAssignDialog(
                                         .where((e) => e.value)
                                         .map((e) => e.key)
                                         .toList();
+                                    final selectedBehaviorIds = selectedBehaviors
+                                        .entries
+                                        .where((e) => e.value)
+                                        .map((e) => e.key)
+                                        .toList();
+                                    final irregularCounts = <String, int>{};
+                                    for (final behavior in behaviorAssignments) {
+                                      if (!behavior.isIrregular) continue;
+                                      if (!(selectedBehaviors[behavior.id] ??
+                                          false)) {
+                                        continue;
+                                      }
+                                      irregularCounts[behavior.id] =
+                                          (irregularBehaviorCounts[behavior.id] ??
+                                                  1)
+                                              .clamp(1, 20)
+                                              .toInt();
+                                    }
                                     final baseDate = anchorTime ??
                                         selectedDueDate ??
                                         DateTime.now();
@@ -375,6 +610,8 @@ Future<HomeworkAssignSelection?> showHomeworkAssignDialog(
                                       arrivalTime: arrival,
                                       departureTime: DateTime.now(),
                                       selectedHomeworkIds: ids,
+                                      selectedBehaviorIds: selectedBehaviorIds,
+                                      irregularBehaviorCounts: irregularCounts,
                                       dueDate: selectedDueDate,
                                       className: className,
                                       classEndTime: classEnd,
@@ -422,10 +659,25 @@ Future<HomeworkAssignSelection?> showHomeworkAssignDialog(
                       .where((e) => e.value)
                       .map((e) => e.key)
                       .toList();
+                  final selectedBehaviorIds = selectedBehaviors.entries
+                      .where((e) => e.value)
+                      .map((e) => e.key)
+                      .toList();
+                  final irregularCounts = <String, int>{};
+                  for (final behavior in behaviorAssignments) {
+                    if (!behavior.isIrregular) continue;
+                    if (!(selectedBehaviors[behavior.id] ?? false)) continue;
+                    irregularCounts[behavior.id] =
+                        (irregularBehaviorCounts[behavior.id] ?? 1)
+                            .clamp(1, 20)
+                            .toInt();
+                  }
                   Navigator.of(ctx).pop(HomeworkAssignSelection(
                     itemIds: ids,
                     dueDate: selectedDueDate,
                     printTodoOnConfirm: printTodoOnConfirm,
+                    selectedBehaviorIds: selectedBehaviorIds,
+                    irregularBehaviorCounts: irregularCounts,
                   ));
                 },
                 style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
@@ -446,6 +698,8 @@ Future<void> printHomeworkTodoSheet({
   DateTime? arrivalTime,
   required DateTime departureTime,
   required List<String> selectedHomeworkIds,
+  List<String>? selectedBehaviorIds,
+  Map<String, int>? irregularBehaviorCounts,
   DateTime? dueDate,
   String? className,
   DateTime? classEndTime,
@@ -458,6 +712,8 @@ Future<void> printHomeworkTodoSheet({
     arrivalTime: arrivalTime,
     departureTime: departureTime,
     selectedHomeworkIds: selectedHomeworkIds,
+    selectedBehaviorIds: selectedBehaviorIds,
+    irregularBehaviorCounts: irregularBehaviorCounts,
     dueDate: dueDate,
     className: className,
     classEndTime: classEndTime,
@@ -475,6 +731,8 @@ Future<void> previewHomeworkTodoSheet({
   DateTime? arrivalTime,
   required DateTime departureTime,
   required List<String> selectedHomeworkIds,
+  List<String>? selectedBehaviorIds,
+  Map<String, int>? irregularBehaviorCounts,
   DateTime? dueDate,
   String? className,
   DateTime? classEndTime,
@@ -487,6 +745,8 @@ Future<void> previewHomeworkTodoSheet({
     arrivalTime: arrivalTime,
     departureTime: departureTime,
     selectedHomeworkIds: selectedHomeworkIds,
+    selectedBehaviorIds: selectedBehaviorIds,
+    irregularBehaviorCounts: irregularBehaviorCounts,
     dueDate: dueDate,
     className: className,
     classEndTime: classEndTime,
@@ -699,6 +959,8 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
   DateTime? arrivalTime,
   required DateTime departureTime,
   required List<String> selectedHomeworkIds,
+  List<String>? selectedBehaviorIds,
+  Map<String, int>? irregularBehaviorCounts,
   DateTime? dueDate,
   String? className,
   DateTime? classEndTime,
@@ -770,6 +1032,8 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
   final behaviorTodoEntries = await _buildBehaviorTodoEntries(
     studentId: studentId,
     classDateTime: classDateTime,
+    selectedBehaviorIds: selectedBehaviorIds,
+    irregularBehaviorCounts: irregularBehaviorCounts,
     dueDate: dueDate,
   );
   if (todoEntries.isEmpty) {
@@ -838,29 +1102,56 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
 Future<List<_TodoListEntry>> _buildBehaviorTodoEntries({
   required String studentId,
   required DateTime classDateTime,
+  List<String>? selectedBehaviorIds,
+  Map<String, int>? irregularBehaviorCounts,
   DateTime? dueDate,
 }) async {
-  if (dueDate == null) return const <_TodoListEntry>[];
-  final DateTime startDate =
-      DateTime(classDateTime.year, classDateTime.month, classDateTime.day)
-          .add(const Duration(days: 1));
-  final DateTime endDate = DateTime(dueDate.year, dueDate.month, dueDate.day);
-  if (endDate.isBefore(startDate)) return const <_TodoListEntry>[];
-
   try {
+    final Set<String>? selectedIdSet =
+        selectedBehaviorIds == null ? null : selectedBehaviorIds.toSet();
+    final Map<String, int> irregularCounts =
+        irregularBehaviorCounts ?? const <String, int>{};
     final assignments = await StudentBehaviorAssignmentStore.instance
         .loadForStudent(studentId, force: true);
-    final regularAssignments =
-        assignments.where((e) => !e.isIrregular).toList()
-          ..sort((a, b) => a.orderIndex.compareTo(b.orderIndex));
-    if (regularAssignments.isEmpty) return const <_TodoListEntry>[];
+    final filtered = assignments.where((e) {
+      if (selectedIdSet == null) return true;
+      return selectedIdSet.contains(e.id);
+    }).toList()
+      ..sort((a, b) => a.orderIndex.compareTo(b.orderIndex));
+    if (filtered.isEmpty) return const <_TodoListEntry>[];
+
+    final DateTime startDate =
+        DateTime(classDateTime.year, classDateTime.month, classDateTime.day)
+            .add(const Duration(days: 1));
+    final DateTime? endDate = dueDate == null
+        ? null
+        : DateTime(dueDate.year, dueDate.month, dueDate.day);
 
     final out = <_TodoListEntry>[];
-    for (DateTime day = startDate;
-        !day.isAfter(endDate);
-        day = day.add(const Duration(days: 1))) {
-      final int dayOffset = day.difference(startDate).inDays;
-      for (final behavior in regularAssignments) {
+    for (final behavior in filtered) {
+      if (behavior.isIrregular) {
+        final int count = (irregularCounts[behavior.id] ?? 0).clamp(0, 20).toInt();
+        if (count <= 0) continue;
+        final int level = behavior.safeSelectedLevelIndex + 1;
+        final String levelText = behavior.selectedLevelText.trim();
+        for (int i = 0; i < count; i++) {
+          out.add(
+            _TodoListEntry(
+              primary: '□ ${behavior.name} · lv.$level',
+              secondary: levelText.isEmpty
+                  ? '  비정기 ${i + 1}회'
+                  : '  비정기 ${i + 1}회 · $levelText',
+            ),
+          );
+        }
+        continue;
+      }
+      if (endDate == null) continue;
+      if (endDate.isBefore(startDate)) continue;
+      for (DateTime day = startDate;
+          !day.isAfter(endDate);
+          day = day.add(const Duration(days: 1))) {
+        final int dayOffset = day.difference(startDate).inDays;
         final int repeat = behavior.repeatDays.clamp(1, 3650).toInt();
         if (dayOffset % repeat != 0) continue;
         final int level = behavior.safeSelectedLevelIndex + 1;
