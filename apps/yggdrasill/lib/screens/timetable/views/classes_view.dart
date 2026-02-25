@@ -6,10 +6,10 @@ import '../../../models/student.dart';
 import '../../../models/group_info.dart';
 import '../../../services/data_manager.dart';
 import '../../../models/education_level.dart';
-import '../../../services/data_manager.dart';
 import '../../../widgets/app_snackbar.dart';
 import 'components/timetable_cell.dart';
 import '../components/timetable_drag_selector.dart';
+import '../components/timetable_content_view.dart';
 import '../../../models/self_study_time_block.dart';
 import 'package:collection/collection.dart';
 import 'package:flutter/services.dart';
@@ -84,16 +84,24 @@ class ClassesView extends StatefulWidget {
   final int? selectedDayIndex;
   final int? selectedCellDayIndex;
   final DateTime? selectedCellStartTime;
+  final ValueChanged<int>? onDaySelected;
   final void Function(int dayIdx, DateTime startTime)? onTimeSelected;
+
   /// 드래그 등으로 "시간 범위"를 선택했을 때 사용 (예: 보강 잡기에서 선택된 셀 수만큼 duration 반영)
-  final void Function(int dayIdx, DateTime startTime, int durationMinutes)? onTimeRangeSelected;
-  final void Function(int dayIdx, List<DateTime> startTimes, List<StudentWithInfo> students)? onCellStudentsSelected;
-  final void Function(int dayIdx, DateTime startTime, List<StudentWithInfo> students)? onCellSelfStudyStudentsChanged;
+  final void Function(int dayIdx, DateTime startTime, int durationMinutes)?
+      onTimeRangeSelected;
+  final void Function(int dayIdx, List<DateTime> startTimes,
+      List<StudentWithInfo> students)? onCellStudentsSelected;
+  final void Function(
+          int dayIdx, DateTime startTime, List<StudentWithInfo> students)?
+      onCellSelfStudyStudentsChanged;
+
   /// 문의(희망수업) 오버레이 라벨 클릭 시 호출 (예: 문의 노트로 이동)
   final void Function(String noteId)? onInquiryNoteTap;
   final ScrollController scrollController;
   final Set<String>? filteredStudentIds; // 추가: 필터된 학생 id 리스트
-  final Set<String>? filteredClassIds; // 추가: 필터된 수업 id 리스트(__default_class__ 포함)
+  final Set<String>?
+      filteredClassIds; // 추가: 필터된 수업 id 리스트(__default_class__ 포함)
   final StudentWithInfo? selectedStudentWithInfo; // 변경: 학생+부가정보 통합 객체
   final StudentWithInfo? selectedSelfStudyStudent;
   final void Function(bool)? onSelectModeChanged; // 추가: 선택모드 해제 콜백
@@ -111,6 +119,7 @@ class ClassesView extends StatefulWidget {
     this.selectedDayIndex,
     this.selectedCellDayIndex,
     this.selectedCellStartTime,
+    this.onDaySelected,
     this.onTimeSelected,
     this.onTimeRangeSelected,
     this.onCellStudentsSelected,
@@ -130,7 +139,8 @@ class ClassesView extends StatefulWidget {
   State<ClassesView> createState() => _ClassesViewState();
 }
 
-class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin {
+class _ClassesViewState extends State<ClassesView>
+    with TickerProviderStateMixin {
   String? _expandedCellKey;
   final Map<String, GlobalKey> _cellKeys = {};
   final Map<String, AnimationController> _animationControllers = {};
@@ -144,6 +154,8 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
   late final VoidCallback _trialLessonListener;
   String? _weekRenderCacheKey;
   _ClassesWeekRenderCache? _weekRenderCache;
+  final ScrollController _headerScrollController = ScrollController();
+  bool _headerSyncScheduled = false;
 
   bool _isClassAllowed(String? sessionTypeId) {
     final cids = widget.filteredClassIds;
@@ -192,7 +204,8 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
       endDayC.text = _pad(endDate.day);
     }
 
-    void _applyFromPicker(bool isStart, DateTime d, void Function(void Function()) setState) {
+    void _applyFromPicker(
+        bool isStart, DateTime d, void Function(void Function()) setState) {
       setState(() {
         if (isStart) {
           startDate = DateTime(d.year, d.month, d.day);
@@ -204,7 +217,8 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
       });
     }
 
-    Future<void> _pickDate(bool isStart, void Function(void Function()) setState) async {
+    Future<void> _pickDate(
+        bool isStart, void Function(void Function()) setState) async {
       final initial = isStart ? startDate : endDate;
       final picked = await showDatePicker(
         context: context,
@@ -231,7 +245,8 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
       }
     }
 
-    InputDecoration _decoration(String label, {String? suffix}) => InputDecoration(
+    InputDecoration _decoration(String label, {String? suffix}) =>
+        InputDecoration(
           labelText: label,
           labelStyle: const TextStyle(color: Color(0xFFEAF2F2), fontSize: 12),
           suffixText: suffix,
@@ -244,7 +259,8 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
             borderRadius: const BorderRadius.all(Radius.circular(8)),
             borderSide: BorderSide(color: green),
           ),
-          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         );
 
     Widget _dateFields({
@@ -278,7 +294,10 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                   }
                 }
               },
-              inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(4)],
+              inputFormatters: [
+                FilteringTextInputFormatter.digitsOnly,
+                LengthLimitingTextInputFormatter(4)
+              ],
             ),
           ),
           const SizedBox(width: 8),
@@ -301,7 +320,10 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                   }
                 }
               },
-              inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(2)],
+              inputFormatters: [
+                FilteringTextInputFormatter.digitsOnly,
+                LengthLimitingTextInputFormatter(2)
+              ],
             ),
           ),
           const SizedBox(width: 8),
@@ -324,13 +346,17 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                   }
                 }
               },
-              inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(2)],
+              inputFormatters: [
+                FilteringTextInputFormatter.digitsOnly,
+                LengthLimitingTextInputFormatter(2)
+              ],
             ),
           ),
           const SizedBox(width: 8),
           IconButton(
             onPressed: () => _pickDate(isStart, setState),
-            icon: const Icon(Icons.calendar_today, color: Color(0xFFEAF2F2), size: 18),
+            icon: const Icon(Icons.calendar_today,
+                color: Color(0xFFEAF2F2), size: 18),
             splashRadius: 18,
           ),
         ],
@@ -351,7 +377,11 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
               titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
               contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
               actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
-              title: const Text('효력 기간 설정', style: TextStyle(color: Color(0xFFEAF2F2), fontSize: 18, fontWeight: FontWeight.bold)),
+              title: const Text('효력 기간 설정',
+                  style: TextStyle(
+                      color: Color(0xFFEAF2F2),
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold)),
               content: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -375,7 +405,8 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                             if (!hasEnd) endDate = startDate;
                             _syncControllers();
                           }),
-                          title: const Text('종료기간 없음', style: TextStyle(color: Color(0xFFEAF2F2))),
+                          title: const Text('종료기간 없음',
+                              style: TextStyle(color: Color(0xFFEAF2F2))),
                           activeColor: green,
                           enableFeedback: false,
                         ),
@@ -386,7 +417,8 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                             hasEnd = v ?? true;
                             _syncControllers();
                           }),
-                          title: const Text('종료기간 있음', style: TextStyle(color: Color(0xFFEAF2F2))),
+                          title: const Text('종료기간 있음',
+                              style: TextStyle(color: Color(0xFFEAF2F2))),
                           activeColor: green,
                           enableFeedback: false,
                         ),
@@ -394,12 +426,20 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                     ),
                   ),
                   const SizedBox(height: 12),
-                  const Text('시작일', style: TextStyle(color: Color(0xFFEAF2F2), fontSize: 13, fontWeight: FontWeight.w600)),
+                  const Text('시작일',
+                      style: TextStyle(
+                          color: Color(0xFFEAF2F2),
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600)),
                   const SizedBox(height: 10),
                   _dateFields(isStart: true, setState: setState),
                   if (hasEnd) ...[
                     const SizedBox(height: 16),
-                    const Text('종료일', style: TextStyle(color: Color(0xFFEAF2F2), fontSize: 13, fontWeight: FontWeight.w600)),
+                    const Text('종료일',
+                        style: TextStyle(
+                            color: Color(0xFFEAF2F2),
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600)),
                     const SizedBox(height: 10),
                     _dateFields(isStart: false, setState: setState),
                   ],
@@ -408,21 +448,27 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
               actions: [
                 TextButton(
                   onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('취소', style: TextStyle(color: Color(0xFFEAF2F2))),
+                  child: const Text('취소',
+                      style: TextStyle(color: Color(0xFFEAF2F2))),
                 ),
                 TextButton(
                   onPressed: () {
                     if (!hasEnd) {
-                      Navigator.of(context).pop(_BlockRange(start: startDate, end: null));
+                      Navigator.of(context)
+                          .pop(_BlockRange(start: startDate, end: null));
                       return;
                     }
                     if (endDate.isBefore(startDate)) {
-                      showAppSnackBar(context, '종료일은 시작일 이후여야 합니다.', useRoot: true);
+                      showAppSnackBar(context, '종료일은 시작일 이후여야 합니다.',
+                          useRoot: true);
                       return;
                     }
-                    Navigator.of(context).pop(_BlockRange(start: startDate, end: endDate));
+                    Navigator.of(context)
+                        .pop(_BlockRange(start: startDate, end: endDate));
                   },
-                  child: Text('확인', style: TextStyle(color: green, fontWeight: FontWeight.w600)),
+                  child: Text('확인',
+                      style:
+                          TextStyle(color: green, fontWeight: FontWeight.w600)),
                 ),
               ],
             );
@@ -438,16 +484,54 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
     _inquiryDemandListener = () {
       if (mounted) setState(() {});
     };
-    ConsultInquiryDemandService.instance.slotsNotifier.addListener(_inquiryDemandListener);
+    ConsultInquiryDemandService.instance.slotsNotifier
+        .addListener(_inquiryDemandListener);
 
     _trialLessonListener = () {
       if (mounted) setState(() {});
     };
-    ConsultTrialLessonService.instance.slotsNotifier.addListener(_trialLessonListener);
+    ConsultTrialLessonService.instance.slotsNotifier
+        .addListener(_trialLessonListener);
+    widget.scrollController.addListener(_syncHeaderScrollWithBody);
+    _scheduleHeaderScrollSync();
+  }
+
+  @override
+  void didUpdateWidget(covariant ClassesView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.scrollController != widget.scrollController) {
+      oldWidget.scrollController.removeListener(_syncHeaderScrollWithBody);
+      widget.scrollController.addListener(_syncHeaderScrollWithBody);
+      _scheduleHeaderScrollSync();
+    }
+  }
+
+  void _syncHeaderScrollWithBody() {
+    if (!widget.scrollController.hasClients) return;
+    if (!_headerScrollController.hasClients) return;
+    final min = _headerScrollController.position.minScrollExtent;
+    final max = _headerScrollController.position.maxScrollExtent;
+    final target = widget.scrollController.offset.clamp(min, max).toDouble();
+    final current = _headerScrollController.offset;
+    if ((current - target).abs() < 0.5) return;
+    _headerScrollController.jumpTo(target);
+  }
+
+  void _scheduleHeaderScrollSync() {
+    if (_headerSyncScheduled) return;
+    _headerSyncScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _headerSyncScheduled = false;
+      if (!mounted) return;
+      _syncHeaderScrollWithBody();
+    });
   }
 
   Set<String> get dragHighlightKeys {
-    if (!isDragging || dragDayIdx == null || dragStartIdx == null || dragEndIdx == null) return {};
+    if (!isDragging ||
+        dragDayIdx == null ||
+        dragStartIdx == null ||
+        dragEndIdx == null) return {};
     final start = dragStartIdx!;
     final end = dragEndIdx!;
     final day = dragDayIdx!;
@@ -463,7 +547,8 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
     final blockTime = timeBlocks[blockIdx].startTime;
     if (_kRegistrationPerfDebug) {
       // ignore: avoid_print
-      print('[DEBUG][_onCellPanStart] dayIdx=$dayIdx, blockIdx=$blockIdx, isDragging=$isDragging');
+      print(
+          '[DEBUG][_onCellPanStart] dayIdx=$dayIdx, blockIdx=$blockIdx, isDragging=$isDragging');
     }
     setState(() {
       dragStartIdx = blockIdx;
@@ -473,7 +558,8 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
     });
     if (_kRegistrationPerfDebug) {
       // ignore: avoid_print
-      print('[DEBUG][_onCellPanStart] dragStartIdx=$dragStartIdx, dragEndIdx=$dragEndIdx, dragDayIdx=$dragDayIdx, isDragging=$isDragging');
+      print(
+          '[DEBUG][_onCellPanStart] dragStartIdx=$dragStartIdx, dragEndIdx=$dragEndIdx, dragDayIdx=$dragDayIdx, isDragging=$isDragging');
     }
   }
 
@@ -482,7 +568,8 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
     final blockTime = timeBlocks[blockIdx].startTime;
     if (_kRegistrationPerfDebug) {
       // ignore: avoid_print
-      print('[DEBUG][_onCellPanUpdate] dayIdx=$dayIdx, blockIdx=$blockIdx, isDragging=$isDragging, dragDayIdx=$dragDayIdx');
+      print(
+          '[DEBUG][_onCellPanUpdate] dayIdx=$dayIdx, blockIdx=$blockIdx, isDragging=$isDragging, dragDayIdx=$dragDayIdx');
     }
     if (!isDragging || dragDayIdx != dayIdx) return;
     if (dragEndIdx != blockIdx) {
@@ -499,14 +586,20 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
   void _onCellPanEnd(int dayIdx) async {
     if (_kRegistrationPerfDebug) {
       // ignore: avoid_print
-      print('[DEBUG][_onCellPanEnd] 호출: dayIdx=$dayIdx, isDragging=$isDragging, dragDayIdx=$dragDayIdx, dragStartIdx=$dragStartIdx, dragEndIdx=$dragEndIdx');
+      print(
+          '[DEBUG][_onCellPanEnd] 호출: dayIdx=$dayIdx, isDragging=$isDragging, dragDayIdx=$dragDayIdx, dragStartIdx=$dragStartIdx, dragEndIdx=$dragEndIdx');
     }
-    if (!isDragging || dragDayIdx != dayIdx || dragStartIdx == null || dragEndIdx == null) {
+    if (!isDragging ||
+        dragDayIdx != dayIdx ||
+        dragStartIdx == null ||
+        dragEndIdx == null) {
       if (_kRegistrationPerfDebug) {
         // ignore: avoid_print
         print('[DEBUG][_onCellPanEnd] 드래그 종료 조건 미달, 드래그 상태 해제');
       }
-      setState(() { isDragging = false; });
+      setState(() {
+        isDragging = false;
+      });
       return;
     }
     _BlockRange? range;
@@ -527,21 +620,27 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
     });
     final mode = widget.registrationModeType;
     final timeBlocks = _generateTimeBlocks();
-    List<DateTime> startTimes = selectedIdxs.map((blockIdx) => timeBlocks[blockIdx].startTime).toList();
+    List<DateTime> startTimes =
+        selectedIdxs.map((blockIdx) => timeBlocks[blockIdx].startTime).toList();
     if (_kRegistrationPerfDebug) {
       // ignore: avoid_print
       print('[DEBUG][_onCellPanEnd] startTimes=$startTimes');
       // ignore: avoid_print
-      print('[DEBUG][_onCellPanEnd] mode=$mode, selectedStudentWithInfo=${widget.selectedStudentWithInfo}, startTimes.length=${startTimes.length}');
+      print(
+          '[DEBUG][_onCellPanEnd] mode=$mode, selectedStudentWithInfo=${widget.selectedStudentWithInfo}, startTimes.length=${startTimes.length}');
       // ignore: avoid_print
-      print('[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] 진입: dayIdx=$dayIdx, startTimes=$startTimes, mode=$mode');
+      print(
+          '[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] 진입: dayIdx=$dayIdx, startTimes=$startTimes, mode=$mode');
     }
     // ✅ 보강 시간 선택: 드래그로 선택한 셀 수만큼 durationMinutes를 확장해서 전달
     if (mode == 'makeup') {
       if (startTimes.isNotEmpty) {
         int slotMinutes = 30;
         if (timeBlocks.length >= 2) {
-          final d = timeBlocks[1].startTime.difference(timeBlocks[0].startTime).inMinutes;
+          final d = timeBlocks[1]
+              .startTime
+              .difference(timeBlocks[0].startTime)
+              .inMinutes;
           if (d > 0) slotMinutes = d;
         }
         final durMin = slotMinutes * startTimes.length;
@@ -558,9 +657,11 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
       // 상위 콜백으로 위임한다(등록모드에서는 콜백 쪽에서 pending 누적).
       if (startTimes.length <= 1) {
         if (widget.onCellStudentsSelected != null) {
-          widget.onCellStudentsSelected!(dayIdx, startTimes, [widget.selectedStudentWithInfo!]);
+          widget.onCellStudentsSelected!(
+              dayIdx, startTimes, [widget.selectedStudentWithInfo!]);
         } else {
-          await _handleCellStudentsSelected(dayIdx, startTimes, [widget.selectedStudentWithInfo!]);
+          await _handleCellStudentsSelected(
+              dayIdx, startTimes, [widget.selectedStudentWithInfo!]);
         }
         return;
       }
@@ -586,12 +687,14 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
       );
       if (_kRegistrationPerfDebug) {
         // ignore: avoid_print
-        print('[DEBUG][_onCellPanEnd] 드래그 등록 생성 블록: count=${blocks.length}, startTimes=$startTimes');
+        print(
+            '[DEBUG][_onCellPanEnd] 드래그 등록 생성 블록: count=${blocks.length}, startTimes=$startTimes');
       }
       // 등록모드: 저장은 ESC/우클릭 종료 시 한 번에 upsert
       await DataManager.instance.bulkAddStudentTimeBlocksDeferred(blocks);
       if (widget.onCellStudentsSelected != null) {
-        widget.onCellStudentsSelected!(dayIdx, startTimes, [widget.selectedStudentWithInfo!]);
+        widget.onCellStudentsSelected!(
+            dayIdx, startTimes, [widget.selectedStudentWithInfo!]);
       }
       return;
     }
@@ -613,10 +716,12 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
         return;
       }
       for (final startTime in startTimes) {
-        if (_isStudentTimeOverlap(studentId, dayIdx, startTime, 30, refDate: refDate)) {
+        if (_isStudentTimeOverlap(studentId, dayIdx, startTime, 30,
+            refDate: refDate)) {
           if (_kRegistrationPerfDebug) {
             // ignore: avoid_print
-            print('[DEBUG][_onCellPanEnd] 중복 체크: 이미 등록된 시간 startTime=$startTime');
+            print(
+                '[DEBUG][_onCellPanEnd] 중복 체크: 이미 등록된 시간 startTime=$startTime');
           }
           hasConflict = true;
           break;
@@ -630,7 +735,8 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
           print('[DEBUG][_onCellPanEnd] 중복 체크: 스낵바 호출');
         }
         showAppSnackBar(context, '이미 등록된 시간입니다.', useRoot: true);
-        if (widget.onSelectModeChanged != null) widget.onSelectModeChanged!(false);
+        if (widget.onSelectModeChanged != null)
+          widget.onSelectModeChanged!(false);
       }
       return;
     }
@@ -653,60 +759,77 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
       await DataManager.instance.bulkAddStudentTimeBlocksDeferred(blocks);
       if (_kRegistrationPerfDebug) {
         // ignore: avoid_print
-        print('[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] bulkAddStudentTimeBlocks 완료');
+        print(
+            '[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] bulkAddStudentTimeBlocks 완료');
       }
       setState(() {
         if (_kRegistrationPerfDebug) {
           // ignore: avoid_print
-          print('[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] setState 호출');
+          print(
+              '[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] setState 호출');
         }
       });
     }
     if (_kRegistrationPerfDebug) {
       // ignore: avoid_print
-      print('[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] onCellStudentsSelected 콜백 호출');
+      print(
+          '[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] onCellStudentsSelected 콜백 호출');
     }
     if (mode == 'student' && widget.selectedStudentWithInfo != null) {
       if (widget.onCellStudentsSelected != null) {
         if (_kRegistrationPerfDebug) {
           // ignore: avoid_print
-          print('[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] 외부 콜백 호출');
+          print(
+              '[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] 외부 콜백 호출');
         }
-        widget.onCellStudentsSelected!(dayIdx, startTimes, [widget.selectedStudentWithInfo!]);
+        widget.onCellStudentsSelected!(
+            dayIdx, startTimes, [widget.selectedStudentWithInfo!]);
       } else {
         if (_kRegistrationPerfDebug) {
           // ignore: avoid_print
-          print('[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] 내부 핸들러 호출');
+          print(
+              '[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] 내부 핸들러 호출');
         }
         final refDate = range?.start;
-        await _handleCellStudentsSelected(dayIdx, startTimes, [widget.selectedStudentWithInfo!], refDate: refDate);
+        await _handleCellStudentsSelected(
+            dayIdx, startTimes, [widget.selectedStudentWithInfo!],
+            refDate: refDate);
       }
     } else if (mode == 'selfStudy' && widget.selectedSelfStudyStudent != null) {
       if (widget.onCellStudentsSelected != null) {
         if (_kRegistrationPerfDebug) {
           // ignore: avoid_print
-          print('[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] 외부 콜백 호출(자습)');
+          print(
+              '[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] 외부 콜백 호출(자습)');
         }
-        widget.onCellStudentsSelected!(dayIdx, startTimes, [widget.selectedSelfStudyStudent!]);
+        widget.onCellStudentsSelected!(
+            dayIdx, startTimes, [widget.selectedSelfStudyStudent!]);
       } else {
         if (_kRegistrationPerfDebug) {
           // ignore: avoid_print
-          print('[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] 내부 핸들러 호출(자습)');
+          print(
+              '[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] 내부 핸들러 호출(자습)');
         }
-        await _handleCellStudentsSelected(dayIdx, startTimes, [widget.selectedSelfStudyStudent!]);
+        await _handleCellStudentsSelected(
+            dayIdx, startTimes, [widget.selectedSelfStudyStudent!]);
       }
     } else {
       if (_kRegistrationPerfDebug) {
         // ignore: avoid_print
-        print('[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] 등록 분기 진입 실패: mode=$mode, selectedStudentWithInfo=${widget.selectedStudentWithInfo}, selectedSelfStudyStudent=${widget.selectedSelfStudyStudent}');
+        print(
+            '[DEBUG][_onCellPanEnd][${DateTime.now().toIso8601String()}] 등록 분기 진입 실패: mode=$mode, selectedStudentWithInfo=${widget.selectedStudentWithInfo}, selectedSelfStudyStudent=${widget.selectedSelfStudyStudent}');
       }
     }
   }
 
   @override
   void dispose() {
-    ConsultInquiryDemandService.instance.slotsNotifier.removeListener(_inquiryDemandListener);
-    ConsultTrialLessonService.instance.slotsNotifier.removeListener(_trialLessonListener);
+    widget.scrollController.removeListener(_syncHeaderScrollWithBody);
+    _headerScrollController.dispose();
+    ConsultInquiryDemandService.instance.slotsNotifier
+        .removeListener(_inquiryDemandListener);
+    ConsultTrialLessonService.instance.slotsNotifier
+        .removeListener(_trialLessonListener);
     for (var controller in _animationControllers.values) {
       controller.dispose();
     }
@@ -718,697 +841,1041 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
     // print('[DEBUG][ClassesView] build 호출, filteredStudentIds=${widget.filteredStudentIds}');
     if (!widget.isRegistrationMode && _hoveredCellKey != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) setState(() { _hoveredCellKey = null; });
+        if (mounted)
+          setState(() {
+            _hoveredCellKey = null;
+          });
       });
     }
     // print('[DEBUG][ClassesView.build] isRegistrationMode=${widget.isRegistrationMode}, registrationModeType=${widget.registrationModeType}');
     final timeBlocks = _generateTimeBlocks();
-    final double blockHeight = 90.0;
-    return Stack(
-      children: [
-        SingleChildScrollView(
-          controller: widget.scrollController,
-          child: AnimatedBuilder(
-            animation: Listenable.merge([
-              DataManager.instance.studentTimeBlocksRevision,
-              DataManager.instance.sessionOverridesNotifier,
-            ]),
-            builder: (context, _) {
-              final studentTimeBlocks = DataManager.instance.studentTimeBlocks;
-              final lessonDuration = DataManager.instance.academySettings.lessonDuration;
-              final String? _pendingStudentId = (widget.isRegistrationMode &&
-                      widget.registrationModeType == 'student' &&
-                      widget.selectedStudentWithInfo != null)
-                  ? widget.selectedStudentWithInfo!.student.id
-                  : null;
-              final Set<String> _pendingSlotKeys = <String>{};
-              if (_pendingStudentId != null) {
-                for (final b in DataManager.instance.pendingStudentTimeBlocks) {
-                  if (b.studentId != _pendingStudentId) continue;
-                  _pendingSlotKeys.add(ConsultInquiryDemandService.slotKey(
-                    b.dayIndex,
-                    b.startHour,
-                    b.startMinute,
-                  ));
-                }
-              }
-              final inquiryCountBySlot = ConsultInquiryDemandService.instance.countMapForWeekExpanded(
-                widget.weekStartDate,
-                lessonDurationMinutes: lessonDuration,
-              );
-              final inquirySlotsBySlotKey = ConsultInquiryDemandService.instance.slotsBySlotKeyForWeek(widget.weekStartDate);
-              final trialCountBySlot = ConsultTrialLessonService.instance.countMapForWeekExpanded(
-                widget.weekStartDate,
-                lessonDurationMinutes: lessonDuration,
-              );
-              final trialSlotsBySlotKey = ConsultTrialLessonService.instance.slotsBySlotKeyForWeek(widget.weekStartDate);
-              final selfStudyTimeBlocks = DataManager.instance.selfStudyTimeBlocks;
-              final studentsWithInfo = DataManager.instance.students;
-              final groups = DataManager.instance.groups;
-
-              // --- week/필터/revision 기준 렌더 캐시 ---
-              final DateTime weekStart = DateTime(
-                widget.weekStartDate.year,
-                widget.weekStartDate.month,
-                widget.weekStartDate.day,
-              );
-              final DateTime weekEnd = weekStart.add(const Duration(days: 7)); // exclusive
-
-              int _hashSortedIds(Set<String>? ids) {
-                if (ids == null || ids.isEmpty) return 0;
-                final list = ids.toList()..sort();
-                return Object.hashAll(list);
-              }
-
-              final int stbRev = DataManager.instance.studentTimeBlocksRevision.value;
-              final int studentFilterHash = _hashSortedIds(widget.filteredStudentIds);
-              final int classFilterHash = _hashSortedIds(widget.filteredClassIds);
-              final int ovHash = Object.hashAll(
-                DataManager.instance.sessionOverrides.map((o) => Object.hash(
-                      o.id,
-                      o.version,
-                      o.updatedAt.millisecondsSinceEpoch,
-                    )),
-              );
-              final String cacheKey =
-                  '$stbRev|${weekStart.toIso8601String().split("T").first}|sf=$studentFilterHash|cf=$classFilterHash|ov=$ovHash';
-
-              _ClassesWeekRenderCache cache;
-              if (_weekRenderCacheKey == cacheKey && _weekRenderCache != null) {
-                cache = _weekRenderCache!;
-              } else {
-                final Map<String, StudentWithInfo> studentById = {
-                  for (final s in studentsWithInfo) s.student.id: s,
-                };
-
-                // 학생 리스트 필터(학생/수업)
-                final List<StudentTimeBlock> filteredStudentBlocks =
-                    studentTimeBlocks.where((b) {
-                  if (widget.filteredStudentIds != null &&
-                      !widget.filteredStudentIds!.contains(b.studentId)) {
-                    return false;
-                  }
-                  if (!_isClassAllowed(b.sessionTypeId)) return false;
-                  return true;
-                }).toList();
-
-                // 자습 블록은 학생 필터만 적용(수업 필터가 있으면 제외)
-                final List<SelfStudyTimeBlock> filteredSelfStudyBlocks =
-                    (widget.filteredClassIds != null &&
-                            widget.filteredClassIds!.isNotEmpty)
-                        ? const <SelfStudyTimeBlock>[]
-                        : (widget.filteredStudentIds == null
-                            ? selfStudyTimeBlocks
-                            : selfStudyTimeBlocks
-                                .where((b) => widget.filteredStudentIds!
-                                    .contains(b.studentId))
-                                .toList());
-
-                // slotKey -> active student blocks (week+date range 기준)
-                final Map<String, List<StudentTimeBlock>> activeStudentBlocksBySlotKey =
-                    <String, List<StudentTimeBlock>>{};
-                for (final b in filteredStudentBlocks) {
-                  final int d = b.dayIndex;
-                  if (d < 0 || d > 6) continue;
-                  // 해당 주의 실제 날짜에서 active 여부 확인
-                  final DateTime dayDate = weekStart.add(Duration(days: d));
-                  final DateTime target = DateTime(dayDate.year, dayDate.month, dayDate.day);
-                  final DateTime sd = DateTime(b.startDate.year, b.startDate.month, b.startDate.day);
-                  final DateTime? ed = b.endDate == null
-                      ? null
-                      : DateTime(b.endDate!.year, b.endDate!.month, b.endDate!.day);
-                  if (sd.isAfter(target)) continue;
-                  if (ed != null && ed.isBefore(target)) continue;
-                  // ✅ 휴원 기간에는 시간표 위젯에서 수업 블록 자체를 숨김
-                  if (DataManager.instance.isStudentPausedOn(b.studentId, target)) continue;
-
-                  final int startMin = b.startHour * 60 + b.startMinute;
-                  final int endMin = startMin + b.duration.inMinutes;
-                  if (endMin <= startMin) continue;
-                  int slotMin = ((startMin + 29) ~/ 30) * 30; // ceil to 30-min slot
-                  while (slotMin < endMin) {
-                    final int hh = slotMin ~/ 60;
-                    final int mm = slotMin % 60;
-                    final String sk = ConsultInquiryDemandService.slotKey(d, hh, mm);
-                    (activeStudentBlocksBySlotKey[sk] ??= <StudentTimeBlock>[]).add(b);
-                    slotMin += 30;
-                  }
-                }
-
-                // slotKey -> selfStudy blocks (duration 기준, date-range 없음)
-                final Map<String, List<SelfStudyTimeBlock>> selfStudyBlocksBySlotKey =
-                    <String, List<SelfStudyTimeBlock>>{};
-                // ✅ 셀 클릭(onTap)에서 자습 블록 수정 분기는 "전체 자습 블록"을 대상으로 한다(기존 로직 유지).
-                for (final b in selfStudyTimeBlocks) {
-                  final int d = b.dayIndex;
-                  if (d < 0 || d > 6) continue;
-                  final int startMin = b.startHour * 60 + b.startMinute;
-                  final int endMin = startMin + b.duration.inMinutes;
-                  if (endMin <= startMin) continue;
-                  int slotMin = ((startMin + 29) ~/ 30) * 30;
-                  while (slotMin < endMin) {
-                    final int hh = slotMin ~/ 60;
-                    final int mm = slotMin % 60;
-                    final String sk = ConsultInquiryDemandService.slotKey(d, hh, mm);
-                    (selfStudyBlocksBySlotKey[sk] ??= <SelfStudyTimeBlock>[]).add(b);
-                    slotMin += 30;
-                  }
-                }
-
-                // studentId/dayIndex -> blocks (setId 유추용, active 필터 없음: 기존 로직 유지)
-                final Map<int, Map<String, List<StudentTimeBlock>>> blocksByStudentByDay =
-                    <int, Map<String, List<StudentTimeBlock>>>{};
-                for (final b in filteredStudentBlocks) {
-                  final int d = b.dayIndex;
-                  if (d < 0 || d > 6) continue;
-                  final m = blocksByStudentByDay.putIfAbsent(d, () => <String, List<StudentTimeBlock>>{});
-                  (m[b.studentId] ??= <StudentTimeBlock>[]).add(b);
-                }
-
-                // replace 원본 블라인드 캐시(요일 단위/슬롯 단위)
-                final Map<int, Set<String>> hiddenPairsByDay = <int, Set<String>>{};
-                final Map<String, Set<String>> hiddenOriginalBySlotKey =
-                    <String, Set<String>>{};
-                final DateTime nowL = DateTime.now();
-                final int defaultLessonMinutes =
+    const double minDayRowHeight = 90.0;
+    const double axisHeaderHeight = 54.0;
+    const double timeColumnWidth = 148.0;
+    _scheduleHeaderScrollSync();
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final viewportHeight = constraints.maxHeight.isFinite
+            ? constraints.maxHeight
+            : (axisHeaderHeight + minDayRowHeight * 7);
+        final blockHeight = ((viewportHeight - axisHeaderHeight) / 7.0)
+            .clamp(minDayRowHeight, 180.0);
+        return Stack(
+          children: [
+            AnimatedBuilder(
+              animation: Listenable.merge([
+                DataManager.instance.studentTimeBlocksRevision,
+                DataManager.instance.sessionOverridesNotifier,
+              ]),
+              builder: (context, _) {
+                final studentTimeBlocks =
+                    DataManager.instance.studentTimeBlocks;
+                final lessonDuration =
                     DataManager.instance.academySettings.lessonDuration;
-                for (final ov in DataManager.instance.sessionOverrides) {
-                  if (ov.reason != OverrideReason.makeup) continue;
-                  if (ov.overrideType != OverrideType.replace) continue;
-                  if (ov.status == OverrideStatus.canceled) continue;
-                  final orig = ov.originalClassDateTime;
-                  if (orig == null) continue;
-                  if (orig.isBefore(weekStart) || !orig.isBefore(weekEnd)) continue;
-                  final int d = (orig.weekday - 1).clamp(0, 6);
+                final String? _pendingStudentId = (widget.isRegistrationMode &&
+                        widget.registrationModeType == 'student' &&
+                        widget.selectedStudentWithInfo != null)
+                    ? widget.selectedStudentWithInfo!.student.id
+                    : null;
+                final Set<String> _pendingSlotKeys = <String>{};
+                if (_pendingStudentId != null) {
+                  for (final b
+                      in DataManager.instance.pendingStudentTimeBlocks) {
+                    if (b.studentId != _pendingStudentId) continue;
+                    _pendingSlotKeys.add(ConsultInquiryDemandService.slotKey(
+                      b.dayIndex,
+                      b.startHour,
+                      b.startMinute,
+                    ));
+                  }
+                }
+                final inquiryCountBySlot = ConsultInquiryDemandService.instance
+                    .countMapForWeekExpanded(
+                  widget.weekStartDate,
+                  lessonDurationMinutes: lessonDuration,
+                );
+                final inquirySlotsBySlotKey = ConsultInquiryDemandService
+                    .instance
+                    .slotsBySlotKeyForWeek(widget.weekStartDate);
+                final trialCountBySlot =
+                    ConsultTrialLessonService.instance.countMapForWeekExpanded(
+                  widget.weekStartDate,
+                  lessonDurationMinutes: lessonDuration,
+                );
+                final trialSlotsBySlotKey = ConsultTrialLessonService.instance
+                    .slotsBySlotKeyForWeek(widget.weekStartDate);
+                final selfStudyTimeBlocks =
+                    DataManager.instance.selfStudyTimeBlocks;
+                final studentsWithInfo = DataManager.instance.students;
+                final groups = DataManager.instance.groups;
 
-                  String? setId = ov.setId;
-                  if (setId == null || setId.isEmpty) {
-                    final blocksByStudent =
-                        blocksByStudentByDay[d]?[ov.studentId] ?? const <StudentTimeBlock>[];
-                    if (blocksByStudent.isNotEmpty) {
-                      final int origMin = orig.hour * 60 + orig.minute;
-                      int bestDiff = 1 << 30;
-                      for (final b in blocksByStudent) {
-                        final int bm = b.startHour * 60 + b.startMinute;
-                        final int diff = (bm - origMin).abs();
-                        if (diff < bestDiff && b.setId != null) {
-                          bestDiff = diff;
-                          setId = b.setId;
+                // --- week/필터/revision 기준 렌더 캐시 ---
+                final DateTime weekStart = DateTime(
+                  widget.weekStartDate.year,
+                  widget.weekStartDate.month,
+                  widget.weekStartDate.day,
+                );
+                final DateTime weekEnd =
+                    weekStart.add(const Duration(days: 7)); // exclusive
+
+                int _hashSortedIds(Set<String>? ids) {
+                  if (ids == null || ids.isEmpty) return 0;
+                  final list = ids.toList()..sort();
+                  return Object.hashAll(list);
+                }
+
+                final int stbRev =
+                    DataManager.instance.studentTimeBlocksRevision.value;
+                final int studentFilterHash =
+                    _hashSortedIds(widget.filteredStudentIds);
+                final int classFilterHash =
+                    _hashSortedIds(widget.filteredClassIds);
+                final int ovHash = Object.hashAll(
+                  DataManager.instance.sessionOverrides.map((o) => Object.hash(
+                        o.id,
+                        o.version,
+                        o.updatedAt.millisecondsSinceEpoch,
+                      )),
+                );
+                final String cacheKey =
+                    '$stbRev|${weekStart.toIso8601String().split("T").first}|sf=$studentFilterHash|cf=$classFilterHash|ov=$ovHash';
+
+                _ClassesWeekRenderCache cache;
+                if (_weekRenderCacheKey == cacheKey &&
+                    _weekRenderCache != null) {
+                  cache = _weekRenderCache!;
+                } else {
+                  final Map<String, StudentWithInfo> studentById = {
+                    for (final s in studentsWithInfo) s.student.id: s,
+                  };
+
+                  // 학생 리스트 필터(학생/수업)
+                  final List<StudentTimeBlock> filteredStudentBlocks =
+                      studentTimeBlocks.where((b) {
+                    if (widget.filteredStudentIds != null &&
+                        !widget.filteredStudentIds!.contains(b.studentId)) {
+                      return false;
+                    }
+                    if (!_isClassAllowed(b.sessionTypeId)) return false;
+                    return true;
+                  }).toList();
+
+                  // 자습 블록은 학생 필터만 적용(수업 필터가 있으면 제외)
+                  final List<SelfStudyTimeBlock> filteredSelfStudyBlocks =
+                      (widget.filteredClassIds != null &&
+                              widget.filteredClassIds!.isNotEmpty)
+                          ? const <SelfStudyTimeBlock>[]
+                          : (widget.filteredStudentIds == null
+                              ? selfStudyTimeBlocks
+                              : selfStudyTimeBlocks
+                                  .where((b) => widget.filteredStudentIds!
+                                      .contains(b.studentId))
+                                  .toList());
+
+                  // slotKey -> active student blocks (week+date range 기준)
+                  final Map<String, List<StudentTimeBlock>>
+                      activeStudentBlocksBySlotKey =
+                      <String, List<StudentTimeBlock>>{};
+                  for (final b in filteredStudentBlocks) {
+                    final int d = b.dayIndex;
+                    if (d < 0 || d > 6) continue;
+                    // 해당 주의 실제 날짜에서 active 여부 확인
+                    final DateTime dayDate = weekStart.add(Duration(days: d));
+                    final DateTime target =
+                        DateTime(dayDate.year, dayDate.month, dayDate.day);
+                    final DateTime sd = DateTime(
+                        b.startDate.year, b.startDate.month, b.startDate.day);
+                    final DateTime? ed = b.endDate == null
+                        ? null
+                        : DateTime(
+                            b.endDate!.year, b.endDate!.month, b.endDate!.day);
+                    if (sd.isAfter(target)) continue;
+                    if (ed != null && ed.isBefore(target)) continue;
+                    // ✅ 휴원 기간에는 시간표 위젯에서 수업 블록 자체를 숨김
+                    if (DataManager.instance
+                        .isStudentPausedOn(b.studentId, target)) continue;
+
+                    final int startMin = b.startHour * 60 + b.startMinute;
+                    final int endMin = startMin + b.duration.inMinutes;
+                    if (endMin <= startMin) continue;
+                    int slotMin =
+                        ((startMin + 29) ~/ 30) * 30; // ceil to 30-min slot
+                    while (slotMin < endMin) {
+                      final int hh = slotMin ~/ 60;
+                      final int mm = slotMin % 60;
+                      final String sk =
+                          ConsultInquiryDemandService.slotKey(d, hh, mm);
+                      (activeStudentBlocksBySlotKey[sk] ??=
+                              <StudentTimeBlock>[])
+                          .add(b);
+                      slotMin += 30;
+                    }
+                  }
+
+                  // slotKey -> selfStudy blocks (duration 기준, date-range 없음)
+                  final Map<String, List<SelfStudyTimeBlock>>
+                      selfStudyBlocksBySlotKey =
+                      <String, List<SelfStudyTimeBlock>>{};
+                  // ✅ 셀 클릭(onTap)에서 자습 블록 수정 분기는 "전체 자습 블록"을 대상으로 한다(기존 로직 유지).
+                  for (final b in selfStudyTimeBlocks) {
+                    final int d = b.dayIndex;
+                    if (d < 0 || d > 6) continue;
+                    final int startMin = b.startHour * 60 + b.startMinute;
+                    final int endMin = startMin + b.duration.inMinutes;
+                    if (endMin <= startMin) continue;
+                    int slotMin = ((startMin + 29) ~/ 30) * 30;
+                    while (slotMin < endMin) {
+                      final int hh = slotMin ~/ 60;
+                      final int mm = slotMin % 60;
+                      final String sk =
+                          ConsultInquiryDemandService.slotKey(d, hh, mm);
+                      (selfStudyBlocksBySlotKey[sk] ??= <SelfStudyTimeBlock>[])
+                          .add(b);
+                      slotMin += 30;
+                    }
+                  }
+
+                  // studentId/dayIndex -> blocks (setId 유추용, active 필터 없음: 기존 로직 유지)
+                  final Map<int, Map<String, List<StudentTimeBlock>>>
+                      blocksByStudentByDay =
+                      <int, Map<String, List<StudentTimeBlock>>>{};
+                  for (final b in filteredStudentBlocks) {
+                    final int d = b.dayIndex;
+                    if (d < 0 || d > 6) continue;
+                    final m = blocksByStudentByDay.putIfAbsent(
+                        d, () => <String, List<StudentTimeBlock>>{});
+                    (m[b.studentId] ??= <StudentTimeBlock>[]).add(b);
+                  }
+
+                  // replace 원본 블라인드 캐시(요일 단위/슬롯 단위)
+                  final Map<int, Set<String>> hiddenPairsByDay =
+                      <int, Set<String>>{};
+                  final Map<String, Set<String>> hiddenOriginalBySlotKey =
+                      <String, Set<String>>{};
+                  final DateTime nowL = DateTime.now();
+                  final int defaultLessonMinutes =
+                      DataManager.instance.academySettings.lessonDuration;
+                  for (final ov in DataManager.instance.sessionOverrides) {
+                    if (ov.reason != OverrideReason.makeup) continue;
+                    if (ov.overrideType != OverrideType.replace) continue;
+                    if (ov.status == OverrideStatus.canceled) continue;
+                    final orig = ov.originalClassDateTime;
+                    if (orig == null) continue;
+                    if (orig.isBefore(weekStart) || !orig.isBefore(weekEnd))
+                      continue;
+                    final int d = (orig.weekday - 1).clamp(0, 6);
+
+                    String? setId = ov.setId;
+                    if (setId == null || setId.isEmpty) {
+                      final blocksByStudent = blocksByStudentByDay[d]
+                              ?[ov.studentId] ??
+                          const <StudentTimeBlock>[];
+                      if (blocksByStudent.isNotEmpty) {
+                        final int origMin = orig.hour * 60 + orig.minute;
+                        int bestDiff = 1 << 30;
+                        for (final b in blocksByStudent) {
+                          final int bm = b.startHour * 60 + b.startMinute;
+                          final int diff = (bm - origMin).abs();
+                          if (diff < bestDiff && b.setId != null) {
+                            bestDiff = diff;
+                            setId = b.setId;
+                          }
                         }
+                      }
+                    }
+
+                    if (setId != null && setId.isNotEmpty) {
+                      (hiddenPairsByDay[d] ??= <String>{})
+                          .add('${ov.studentId}|$setId');
+                    } else {
+                      // fallback: 시작 슬롯에서만 숨김(기존 로직 유지)
+                      final int minutes =
+                          (ov.durationMinutes ?? defaultLessonMinutes)
+                              .clamp(0, 24 * 60);
+                      if (minutes <= 0) continue;
+                      final DateTime origEnd = DateTime(
+                        orig.year,
+                        orig.month,
+                        orig.day,
+                        orig.hour,
+                        orig.minute,
+                      ).add(Duration(minutes: minutes));
+                      if (nowL.isBefore(origEnd)) {
+                        final String sk = ConsultInquiryDemandService.slotKey(
+                            d, orig.hour, orig.minute);
+                        (hiddenOriginalBySlotKey[sk] ??= <String>{})
+                            .add(ov.studentId);
                       }
                     }
                   }
 
-                  if (setId != null && setId.isNotEmpty) {
-                    (hiddenPairsByDay[d] ??= <String>{})
-                        .add('${ov.studentId}|$setId');
-                  } else {
-                    // fallback: 시작 슬롯에서만 숨김(기존 로직 유지)
-                    final int minutes =
-                        (ov.durationMinutes ?? defaultLessonMinutes).clamp(0, 24 * 60);
-                    if (minutes <= 0) continue;
-                    final DateTime origEnd = DateTime(
-                      orig.year,
-                      orig.month,
-                      orig.day,
-                      orig.hour,
-                      orig.minute,
-                    ).add(Duration(minutes: minutes));
-                    if (nowL.isBefore(origEnd)) {
-                      final String sk = ConsultInquiryDemandService.slotKey(d, orig.hour, orig.minute);
-                      (hiddenOriginalBySlotKey[sk] ??= <String>{}).add(ov.studentId);
+                  // 보강/추가 오버레이 + 인원 가산(학생 id)
+                  final Map<String, List<OverlayLabel>>
+                      makeupOverlaysBySlotKey = <String, List<OverlayLabel>>{};
+                  final Map<String, Set<String>> makeupStudentIdsBySlotKey =
+                      <String, Set<String>>{};
+                  for (final ov in DataManager.instance.sessionOverrides) {
+                    if (ov.reason != OverrideReason.makeup) continue;
+                    if (!(ov.overrideType == OverrideType.add ||
+                        ov.overrideType == OverrideType.replace)) {
+                      continue;
+                    }
+                    if (ov.status == OverrideStatus.canceled) continue;
+                    final rep = ov.replacementClassDateTime;
+                    if (rep == null) continue;
+                    if (rep.isBefore(weekStart) || !rep.isBefore(weekEnd))
+                      continue;
+                    if (DataManager.instance
+                        .isStudentPausedOn(ov.studentId, rep)) continue;
+                    final int d = (rep.weekday - 1).clamp(0, 6);
+
+                    final String skStart = ConsultInquiryDemandService.slotKey(
+                        d, rep.hour, rep.minute);
+
+                    // 1) 오버레이: completed도 포함, canceled만 제외(기존 로직 유지)
+                    bool isCompleted = false;
+                    try {
+                      final record = DataManager.instance
+                          .getAttendanceRecord(ov.studentId, rep);
+                      if (record != null &&
+                          record.arrivalTime != null &&
+                          record.departureTime != null) {
+                        isCompleted = true;
+                      }
+                    } catch (_) {}
+                    final name =
+                        studentById[ov.studentId]?.student.name ?? '학생';
+                    final label = ov.overrideType == OverrideType.add
+                        ? '$name 추가수업'
+                        : '$name 보강';
+                    (makeupOverlaysBySlotKey[skStart] ??= <OverlayLabel>[]).add(
+                      OverlayLabel(
+                          overrideId: ov.id,
+                          text: label,
+                          type: ov.overrideType,
+                          isCompleted: isCompleted),
+                    );
+
+                    // 2) 인원 가산: planned만(=completed/canceled 제외), duration 범위 슬롯에 학생 id 추가
+                    if (ov.status == OverrideStatus.completed) continue;
+                    if (widget.filteredStudentIds != null &&
+                        !widget.filteredStudentIds!.contains(ov.studentId)) {
+                      continue;
+                    }
+                    final int durationMin =
+                        (ov.durationMinutes ?? defaultLessonMinutes)
+                            .clamp(0, 24 * 60);
+                    if (durationMin <= 0) continue;
+                    final int repStartMin = rep.hour * 60 + rep.minute;
+                    final int repEndMin = repStartMin + durationMin;
+                    int slotMin = ((repStartMin + 29) ~/ 30) * 30;
+                    while (slotMin < repEndMin) {
+                      final int hh = slotMin ~/ 60;
+                      final int mm = slotMin % 60;
+                      final String sk =
+                          ConsultInquiryDemandService.slotKey(d, hh, mm);
+                      (makeupStudentIdsBySlotKey[sk] ??= <String>{})
+                          .add(ov.studentId);
+                      slotMin += 30;
                     }
                   }
+
+                  cache = _ClassesWeekRenderCache(
+                    key: cacheKey,
+                    weekStart: weekStart,
+                    weekEnd: weekEnd,
+                    filteredStudentBlocks: filteredStudentBlocks,
+                    filteredSelfStudyBlocks: filteredSelfStudyBlocks,
+                    studentById: studentById,
+                    activeStudentBlocksBySlotKey: activeStudentBlocksBySlotKey,
+                    selfStudyBlocksBySlotKey: selfStudyBlocksBySlotKey,
+                    hiddenStudentSetPairsByDay: hiddenPairsByDay,
+                    hiddenOriginalStudentIdsBySlotKey: hiddenOriginalBySlotKey,
+                    makeupOverlaysBySlotKey: makeupOverlaysBySlotKey,
+                    makeupStudentIdsBySlotKey: makeupStudentIdsBySlotKey,
+                  );
+                  _weekRenderCacheKey = cacheKey;
+                  _weekRenderCache = cache;
                 }
 
-                // 보강/추가 오버레이 + 인원 가산(학생 id)
-                final Map<String, List<OverlayLabel>> makeupOverlaysBySlotKey =
-                    <String, List<OverlayLabel>>{};
-                final Map<String, Set<String>> makeupStudentIdsBySlotKey =
-                    <String, Set<String>>{};
-                for (final ov in DataManager.instance.sessionOverrides) {
-                  if (ov.reason != OverrideReason.makeup) continue;
-                  if (!(ov.overrideType == OverrideType.add ||
-                      ov.overrideType == OverrideType.replace)) {
-                    continue;
-                  }
-                  if (ov.status == OverrideStatus.canceled) continue;
-                  final rep = ov.replacementClassDateTime;
-                  if (rep == null) continue;
-                  if (rep.isBefore(weekStart) || !rep.isBefore(weekEnd)) continue;
-                  if (DataManager.instance.isStudentPausedOn(ov.studentId, rep)) continue;
-                  final int d = (rep.weekday - 1).clamp(0, 6);
+                final filteredStudentBlocks = cache.filteredStudentBlocks;
+                final filteredSelfStudyBlocks = cache.filteredSelfStudyBlocks;
+                // 인원수 카운트 등 공통 계산에는 student blocks + (수업 필터 없을 때) selfStudy blocks만 사용
+                final List<dynamic> filteredBlocks = <dynamic>[
+                  ...filteredStudentBlocks,
+                  ...filteredSelfStudyBlocks,
+                ];
+                // print('[DEBUG][ValueListenableBuilder] filteredBlocks.length=${filteredBlocks.length}, studentsWithInfo.length=${studentsWithInfo.length}, groups.length=${groups.length}, lessonDuration=$lessonDuration');
+                const double dayLabelWidth = 60.0;
+                final int currentTimeBlockIdx =
+                    _getCurrentTimeBlockIndex(timeBlocks);
+                const List<String> weekLabels = <String>[
+                  '월',
+                  '화',
+                  '수',
+                  '목',
+                  '금',
+                  '토',
+                  '일'
+                ];
 
-                  final String skStart = ConsultInquiryDemandService.slotKey(d, rep.hour, rep.minute);
-
-                  // 1) 오버레이: completed도 포함, canceled만 제외(기존 로직 유지)
-                  bool isCompleted = false;
-                  try {
-                    final record = DataManager.instance.getAttendanceRecord(ov.studentId, rep);
-                    if (record != null &&
-                        record.arrivalTime != null &&
-                        record.departureTime != null) {
-                      isCompleted = true;
-                    }
-                  } catch (_) {}
-                  final name = studentById[ov.studentId]?.student.name ?? '학생';
-                  final label =
-                      ov.overrideType == OverrideType.add ? '$name 추가수업' : '$name 보강';
-                  (makeupOverlaysBySlotKey[skStart] ??= <OverlayLabel>[]).add(
-                    OverlayLabel(overrideId: ov.id, text: label, type: ov.overrideType, isCompleted: isCompleted),
+                Widget buildGridCell(int dayIdx, int blockIdx) {
+                  final cellKey = '$dayIdx-$blockIdx';
+                  _cellKeys.putIfAbsent(cellKey, () => GlobalKey());
+                  final String slotKey = ConsultInquiryDemandService.slotKey(
+                    dayIdx,
+                    timeBlocks[blockIdx].startTime.hour,
+                    timeBlocks[blockIdx].startTime.minute,
                   );
 
-                  // 2) 인원 가산: planned만(=completed/canceled 제외), duration 범위 슬롯에 학생 id 추가
-                  if (ov.status == OverrideStatus.completed) continue;
-                  if (widget.filteredStudentIds != null &&
-                      !widget.filteredStudentIds!.contains(ov.studentId)) {
-                    continue;
+                  final List<StudentTimeBlock> activeBlocks =
+                      cache.activeStudentBlocksBySlotKey[slotKey] ??
+                          const <StudentTimeBlock>[];
+                  final Set<String> hiddenOriginalIds =
+                      cache.hiddenOriginalStudentIdsBySlotKey[slotKey] ??
+                          const <String>{};
+                  final Set<String> hiddenPairs =
+                      cache.hiddenStudentSetPairsByDay[dayIdx] ??
+                          const <String>{};
+
+                  final filteredActiveBlocks = activeBlocks.where((b) {
+                    final sid = b.studentId;
+                    final setId = b.setId ?? '';
+                    if (hiddenOriginalIds.contains(sid)) return false;
+                    if (hiddenPairs.contains('$sid|$setId')) return false;
+                    return true;
+                  }).toList();
+
+                  final cellStudentWithInfos = filteredActiveBlocks
+                      .map((b) => cache.studentById[b.studentId])
+                      .whereType<StudentWithInfo>()
+                      .toList();
+
+                  final List<OverlayLabel> makeupOverlays =
+                      cache.makeupOverlaysBySlotKey[slotKey] ??
+                          const <OverlayLabel>[];
+
+                  final isExpanded = _expandedCellKey == cellKey;
+                  final isDragHighlight = dragHighlightKeys.contains(cellKey);
+                  final String _slotKey = slotKey;
+                  final bool isSelectedCell = (widget.selectedCellDayIndex ==
+                              dayIdx &&
+                          widget.selectedCellStartTime != null &&
+                          widget.selectedCellStartTime!.hour ==
+                              timeBlocks[blockIdx].startTime.hour &&
+                          widget.selectedCellStartTime!.minute ==
+                              timeBlocks[blockIdx].startTime.minute) ||
+                      (widget.selectedSlotKeys?.contains(_slotKey) ?? false);
+                  final bool isPendingHighlight =
+                      _pendingSlotKeys.contains(_slotKey);
+                  bool isBreakTime = false;
+                  final op = widget.operatingHours
+                      .firstWhereOrNull((o) => o.dayOfWeek == dayIdx);
+                  if (op != null) {
+                    for (final breakTime in op.breakTimes) {
+                      final blockHour = timeBlocks[blockIdx].startTime.hour;
+                      final blockMinute = timeBlocks[blockIdx].startTime.minute;
+                      final breakStartHour = breakTime.startHour;
+                      final breakStartMinute = breakTime.startMinute;
+                      final breakEndHour = breakTime.endHour;
+                      final breakEndMinute = breakTime.endMinute;
+                      final blockMinutes = blockHour * 60 + blockMinute;
+                      final breakStartMinutes =
+                          breakStartHour * 60 + breakStartMinute;
+                      final breakEndMinutes =
+                          breakEndHour * 60 + breakEndMinute;
+                      if (blockMinutes >= breakStartMinutes &&
+                          blockMinutes < breakEndMinutes) {
+                        isBreakTime = true;
+                        break;
+                      }
+                    }
                   }
-                  final int durationMin =
-                      (ov.durationMinutes ?? defaultLessonMinutes).clamp(0, 24 * 60);
-                  if (durationMin <= 0) continue;
-                  final int repStartMin = rep.hour * 60 + rep.minute;
-                  final int repEndMin = repStartMin + durationMin;
-                  int slotMin = ((repStartMin + 29) ~/ 30) * 30;
-                  while (slotMin < repEndMin) {
-                    final int hh = slotMin ~/ 60;
-                    final int mm = slotMin % 60;
-                    final String sk = ConsultInquiryDemandService.slotKey(d, hh, mm);
-                    (makeupStudentIdsBySlotKey[sk] ??= <String>{}).add(ov.studentId);
-                    slotMin += 30;
+                  final activeStudentIds =
+                      filteredActiveBlocks.map((b) => b.studentId).toSet();
+                  final Set<String> countedStudentIds =
+                      Set.of(activeStudentIds);
+                  final extraMakeupIds =
+                      cache.makeupStudentIdsBySlotKey[slotKey];
+                  if (extraMakeupIds != null && extraMakeupIds.isNotEmpty) {
+                    countedStudentIds.addAll(extraMakeupIds);
                   }
+                  int activeStudentCount = countedStudentIds.length;
+                  final inquiryCount = inquiryCountBySlot[slotKey] ?? 0;
+                  if (inquiryCount > 0) {
+                    activeStudentCount += inquiryCount;
+                  }
+                  final trialCount = trialCountBySlot[slotKey] ?? 0;
+                  if (trialCount > 0) {
+                    activeStudentCount += trialCount;
+                  }
+                  final inquiryOverlays = (inquirySlotsBySlotKey[slotKey] ??
+                          const <ConsultInquiryDemandSlot>[])
+                      .map((s) => InquiryOverlayLabel(
+                          noteId: s.sourceNoteId, text: s.title))
+                      .toList();
+                  final trialOverlays = (trialSlotsBySlotKey[slotKey] ??
+                          const <ConsultTrialLessonSlot>[])
+                      .map((s) => TrialOverlayLabel(
+                          noteId: s.sourceNoteId, text: s.title))
+                      .toList();
+                  Color? countColor;
+                  if (activeStudentCount > 0) {
+                    if (activeStudentCount <
+                        DataManager.instance.academySettings.defaultCapacity *
+                            0.7) {
+                      countColor = const Color(0xFF1B6B63);
+                    } else if (activeStudentCount >=
+                        DataManager.instance.academySettings.defaultCapacity) {
+                      countColor = const Color(0xFFF2B45B);
+                    } else {
+                      countColor = const Color(0xFF212A31);
+                    }
+                  } else {
+                    countColor = const Color(0xFF223131);
+                  }
+                  if (isDragHighlight && _kRegistrationPerfDebug) {
+                    // ignore: avoid_print
+                    print(
+                        '[DEBUG][Cell] isDragHighlight: cellKey=$cellKey, dragHighlightKeys=$dragHighlightKeys');
+                  }
+
+                  return SizedBox(
+                    width: timeColumnWidth,
+                    child: MouseRegion(
+                      onEnter: (_) {
+                        if (widget.isRegistrationMode) {
+                          setState(() {
+                            _hoveredCellKey = cellKey;
+                          });
+                        }
+                      },
+                      onExit: (_) {
+                        if (widget.isRegistrationMode) {
+                          setState(() {
+                            if (_hoveredCellKey == cellKey)
+                              _hoveredCellKey = null;
+                          });
+                        }
+                      },
+                      child: GestureDetector(
+                        onTap: () async {
+                          final nowMs = DateTime.now().millisecondsSinceEpoch;
+                          if (nowMs - _lastOverlayTapMs < 250) return;
+                          final lessonDuration = DataManager
+                              .instance.academySettings.lessonDuration;
+                          final selectedStudentWithInfo =
+                              widget.selectedStudentWithInfo;
+                          final studentId = selectedStudentWithInfo?.student.id;
+                          final startTime = timeBlocks[blockIdx].startTime;
+                          if (studentId != null &&
+                              _isStudentTimeOverlap(
+                                studentId,
+                                dayIdx,
+                                timeBlocks[blockIdx].startTime,
+                                lessonDuration,
+                              )) {
+                            Future.microtask(() {
+                              showAppSnackBar(context, '이미 등록된 시간입니다.',
+                                  useRoot: true);
+                            });
+                            return;
+                          }
+                          if (widget.isRegistrationMode &&
+                              widget.onCellStudentsSelected != null &&
+                              selectedStudentWithInfo != null) {
+                            widget.onCellStudentsSelected!(
+                              dayIdx,
+                              [timeBlocks[blockIdx].startTime],
+                              [selectedStudentWithInfo],
+                            );
+                          } else if (widget.onTimeSelected != null) {
+                            final selfStudyBlocks =
+                                cache.selfStudyBlocksBySlotKey[slotKey] ??
+                                    const <SelfStudyTimeBlock>[];
+                            if (selfStudyBlocks.isNotEmpty &&
+                                widget.onCellSelfStudyStudentsChanged != null) {
+                              final cellSelfStudyStudentWithInfos =
+                                  selfStudyBlocks
+                                      .map(
+                                          (b) => cache.studentById[b.studentId])
+                                      .whereType<StudentWithInfo>()
+                                      .toList();
+                              if (cellSelfStudyStudentWithInfos.isNotEmpty) {
+                                widget.onCellSelfStudyStudentsChanged!(
+                                  dayIdx,
+                                  timeBlocks[blockIdx].startTime,
+                                  cellSelfStudyStudentWithInfos,
+                                );
+                              }
+                            }
+                            widget.onTimeSelected!(dayIdx, startTime);
+                          }
+                          if (widget.onSelectModeChanged != null) {
+                            widget.onSelectModeChanged!(false);
+                          }
+                        },
+                        child: TimetableCell(
+                          dayIdx: dayIdx,
+                          blockIdx: blockIdx,
+                          cellKey: cellKey,
+                          startTime: timeBlocks[blockIdx].startTime,
+                          endTime: timeBlocks[blockIdx].endTime,
+                          weekStartDate: widget.weekStartDate,
+                          students: filteredActiveBlocks,
+                          isBreakTime: isBreakTime,
+                          isExpanded: isExpanded,
+                          isDragHighlight: isDragHighlight,
+                          isSelected: widget.isRegistrationMode
+                              ? false
+                              : isSelectedCell,
+                          isPendingHighlight: isPendingHighlight,
+                          onTap: null,
+                          countColor: countColor,
+                          activeStudentCount: activeStudentCount,
+                          cellStudentWithInfos: cellStudentWithInfos,
+                          groups: groups,
+                          cellWidth: timeColumnWidth,
+                          registrationModeType: widget.registrationModeType,
+                          operatingHours: widget.operatingHours,
+                          makeupOverlays: makeupOverlays,
+                          inquiryOverlays: inquiryOverlays,
+                          trialOverlays: trialOverlays,
+                          onInquiryOverlayTap: widget.onInquiryNoteTap == null
+                              ? null
+                              : (noteId) {
+                                  _lastOverlayTapMs =
+                                      DateTime.now().millisecondsSinceEpoch;
+                                  widget.onInquiryNoteTap?.call(noteId);
+                                },
+                        ),
+                      ),
+                    ),
+                  );
                 }
 
-                cache = _ClassesWeekRenderCache(
-                  key: cacheKey,
-                  weekStart: weekStart,
-                  weekEnd: weekEnd,
-                  filteredStudentBlocks: filteredStudentBlocks,
-                  filteredSelfStudyBlocks: filteredSelfStudyBlocks,
-                  studentById: studentById,
-                  activeStudentBlocksBySlotKey: activeStudentBlocksBySlotKey,
-                  selfStudyBlocksBySlotKey: selfStudyBlocksBySlotKey,
-                  hiddenStudentSetPairsByDay: hiddenPairsByDay,
-                  hiddenOriginalStudentIdsBySlotKey: hiddenOriginalBySlotKey,
-                  makeupOverlaysBySlotKey: makeupOverlaysBySlotKey,
-                  makeupStudentIdsBySlotKey: makeupStudentIdsBySlotKey,
-                );
-                _weekRenderCacheKey = cacheKey;
-                _weekRenderCache = cache;
-              }
+                final todayDayIdx = DateTime.now().weekday - 1;
+                final TimetableContentViewState? contentViewState = context
+                    .findAncestorStateOfType<TimetableContentViewState>();
+                final int? selectedDayIdx = widget.selectedCellDayIndex;
+                final DateTime? selectedCellStartTime =
+                    widget.selectedCellStartTime;
+                final int timelineDayStartMinutes = timeBlocks.isEmpty
+                    ? 0
+                    : (timeBlocks.first.startTime.hour * 60 +
+                        timeBlocks.first.startTime.minute);
+                int? selectedBlockIdx;
+                if (selectedDayIdx != null && selectedCellStartTime != null) {
+                  final idx = timeBlocks.indexWhere(
+                    (b) =>
+                        b.startTime.hour == selectedCellStartTime.hour &&
+                        b.startTime.minute == selectedCellStartTime.minute,
+                  );
+                  if (idx >= 0) selectedBlockIdx = idx;
+                }
+                bool hasExpandedRow(int dayIdx) =>
+                    !widget.isRegistrationMode &&
+                    selectedCellStartTime != null &&
+                    selectedBlockIdx != null &&
+                    selectedDayIdx == dayIdx;
 
-              final filteredStudentBlocks = cache.filteredStudentBlocks;
-              final filteredSelfStudyBlocks = cache.filteredSelfStudyBlocks;
-              // 인원수 카운트 등 공통 계산에는 student blocks + (수업 필터 없을 때) selfStudy blocks만 사용
-              final List<dynamic> filteredBlocks = <dynamic>[
-                ...filteredStudentBlocks,
-                ...filteredSelfStudyBlocks,
-              ];
-              // print('[DEBUG][ValueListenableBuilder] filteredBlocks.length=${filteredBlocks.length}, studentsWithInfo.length=${studentsWithInfo.length}, groups.length=${groups.length}, lessonDuration=$lessonDuration');
-               return Listener(
-                behavior: HitTestBehavior.translucent,
-                onPointerDown: (event) {
-                  if (!widget.isRegistrationMode) return;
-                  _pointerDownPosition = event.position;
-                  _pointerDownTime = DateTime.now();
-                  setState(() {
-                    isDragging = false;
-                    dragStartIdx = null;
-                    dragEndIdx = null;
-                    dragDayIdx = null;
-                  });
-                },
-                onPointerMove: (event) {
-                  if (!widget.isRegistrationMode) return;
-                  if (_pointerDownPosition == null) return;
-                  final moveDistance = (event.position - _pointerDownPosition!).distance;
-                  if (!isDragging && moveDistance > 10) {
-                    // 드래그 시작! 단 한 번만
-                    final box = context.findRenderObject() as RenderBox;
-                    final local = box.globalToLocal(_pointerDownPosition!);
-                    final blockIdx = (local.dy / blockHeight).floor();
-                    final dayIdx = ((local.dx - 60) / ((box.size.width - 60) / 7)).floor();
-                    setState(() {
-                      isDragging = true;
-                      dragStartIdx = blockIdx;
-                      dragEndIdx = blockIdx;
-                      dragDayIdx = dayIdx;
-                    });
-                    if (_kRegistrationPerfDebug) {
-                      // ignore: avoid_print
-                      print('[DEBUG][onPointerMove] 드래그 시작: dayIdx=$dayIdx, blockIdx=$blockIdx');
-                    }
-                  } else if (isDragging) {
-                    final box = context.findRenderObject() as RenderBox;
-                    final local = box.globalToLocal(event.position);
-                    final blockIdx = (local.dy / blockHeight).floor();
-                    final dayIdx = ((local.dx - 60) / ((box.size.width - 60) / 7)).floor();
-                    _onCellPanUpdate(dayIdx, blockIdx);
-                  }
-                },
-                onPointerUp: (event) {
-                  if (_kRegistrationPerfDebug) {
-                    // ignore: avoid_print
-                    print('[DEBUG][onPointerUp] isDragging=$isDragging, dragDayIdx=$dragDayIdx, dragStartIdx=$dragStartIdx, dragEndIdx=$dragEndIdx');
-                  }
-                  if (!widget.isRegistrationMode) return;
-                  // 드래그 시작 후라면 무조건 _onCellPanEnd 호출
-                  if (isDragging && dragStartIdx != null && dragEndIdx != null) {
-                    if (_kRegistrationPerfDebug) {
-                      // ignore: avoid_print
-                      print('[DEBUG][onPointerUp] _onCellPanEnd 호출');
-                    }
-                    _onCellPanEnd(dragDayIdx ?? 0); // dragDayIdx가 null이어도 0으로 호출
-                  }
-                  setState(() {
-                    isDragging = false;
-                    dragStartIdx = null;
-                    dragEndIdx = null;
-                    dragDayIdx = null;
-                  });
-                  _pointerDownPosition = null;
-                  _pointerDownTime = null;
-                },
-                child: Column(
+                int _estimatedStudentCardCount(int dayIdx, int blockIdx) {
+                  final String slotKey = ConsultInquiryDemandService.slotKey(
+                    dayIdx,
+                    timeBlocks[blockIdx].startTime.hour,
+                    timeBlocks[blockIdx].startTime.minute,
+                  );
+                  final List<StudentTimeBlock> activeBlocks =
+                      cache.activeStudentBlocksBySlotKey[slotKey] ??
+                          const <StudentTimeBlock>[];
+                  final Set<String> hiddenOriginalIds =
+                      cache.hiddenOriginalStudentIdsBySlotKey[slotKey] ??
+                          const <String>{};
+                  final Set<String> hiddenPairs =
+                      cache.hiddenStudentSetPairsByDay[dayIdx] ??
+                          const <String>{};
+                  return activeBlocks
+                      .where((b) {
+                        final sid = b.studentId;
+                        final setId = b.setId ?? '';
+                        if (hiddenOriginalIds.contains(sid)) return false;
+                        if (hiddenPairs.contains('$sid|$setId')) return false;
+                        return true;
+                      })
+                      .map((b) => b.studentId)
+                      .toSet()
+                      .length;
+                }
+
+                int _estimatedSpecialCardCount(int dayIdx, int blockIdx) {
+                  final String slotKey = ConsultInquiryDemandService.slotKey(
+                    dayIdx,
+                    timeBlocks[blockIdx].startTime.hour,
+                    timeBlocks[blockIdx].startTime.minute,
+                  );
+                  final makeup =
+                      cache.makeupOverlaysBySlotKey[slotKey]?.length ?? 0;
+                  final inquiry = inquirySlotsBySlotKey[slotKey]?.length ?? 0;
+                  final trial = trialSlotsBySlotKey[slotKey]?.length ?? 0;
+                  return makeup + inquiry + trial;
+                }
+
+                double selectedRowExpansionHeight = 0;
+                if (selectedDayIdx != null && selectedBlockIdx != null) {
+                  final int estimatedCards = (contentViewState != null &&
+                          selectedCellStartTime != null)
+                      ? contentViewState.estimateInlineTimelineRowCountForSlot(
+                          dayIdx: selectedDayIdx,
+                          startTime: selectedCellStartTime,
+                        )
+                      : (_estimatedStudentCardCount(
+                              selectedDayIdx, selectedBlockIdx) +
+                          _estimatedSpecialCardCount(
+                              selectedDayIdx, selectedBlockIdx));
+                  const double timelineRowHeight = 58;
+                  const double timelineRowGap = 4;
+                  const double timelineVerticalPadding =
+                      24; // panel top(16)+bottom(8)
+                  const double timelineSafetyPadding = 8;
+                  final double rawHeight = estimatedCards <= 0
+                      ? 0
+                      : timelineVerticalPadding +
+                          (estimatedCards * timelineRowHeight) +
+                          ((estimatedCards - 1) * timelineRowGap) +
+                          timelineSafetyPadding;
+                  selectedRowExpansionHeight = rawHeight;
+                }
+
+                return Column(
                   children: [
-                    for (int blockIdx = 0; blockIdx < timeBlocks.length; blockIdx++)
-                      Container(
-                        height: blockHeight,
-                        decoration: BoxDecoration(
-                          color: timeBlocks[blockIdx].isBreakTime ? widget.breakTimeColor : Colors.transparent,
-                          border: Border(
-                            bottom: BorderSide(
-                              color: Colors.white.withOpacity(0.1),
+                    // 상단 시간축(및 요일 헤더)은 고정하고, 본문만 세로 스크롤
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        SizedBox(
+                          width: dayLabelWidth,
+                          child: Container(
+                            height: axisHeaderHeight,
+                            decoration: BoxDecoration(
+                              border: Border(
+                                bottom: BorderSide(
+                                  color: Colors.white.withOpacity(0.16),
+                                ),
+                              ),
+                            ),
+                            child: Center(
+                              child: Text(
+                                '요일',
+                                style: TextStyle(
+                                  color: Colors.white.withOpacity(0.72),
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
                             ),
                           ),
                         ),
-                        child: Row(
-                          children: [
-                            // Time indicator
-                            SizedBox(
-                              width: 60,
-                              child: Row(
-                                children: [
-                                  if (blockIdx == _getCurrentTimeBlockIndex(timeBlocks))
-                                    Container(
-                                      width: 8,
-                                      height: blockHeight - 10,
-                                      margin: const EdgeInsets.symmetric(vertical: 5, horizontal: 0),
-                                      decoration: BoxDecoration(
-                                        color: const Color(0xFF33A373),
-                                        borderRadius: BorderRadius.circular(3),
-                                      ),
-                                    ),
-                                  Expanded(
-                                    child: Center(
-                                      child: Text(
-                                        timeBlocks[blockIdx].timeString,
-                                        style: const TextStyle(
-                                          color: Colors.white70,
-                                          fontSize: 14,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            // Day columns
-                            ...List.generate(7, (dayIdx) {
-                              final cellKey = '$dayIdx-$blockIdx';
-                              _cellKeys.putIfAbsent(cellKey, () => GlobalKey());
-                              // ✅ 활성 블록/블라인드/오버레이는 week 캐시에서 O(1) 조회한다.
-                              final String slotKey = ConsultInquiryDemandService.slotKey(
-                                dayIdx,
-                                timeBlocks[blockIdx].startTime.hour,
-                                timeBlocks[blockIdx].startTime.minute,
-                              );
-
-                              final List<StudentTimeBlock> activeBlocks =
-                                  cache.activeStudentBlocksBySlotKey[slotKey] ??
-                                      const <StudentTimeBlock>[];
-                              final Set<String> hiddenOriginalIds =
-                                  cache.hiddenOriginalStudentIdsBySlotKey[slotKey] ??
-                                      const <String>{};
-                              final Set<String> hiddenPairs =
-                                  cache.hiddenStudentSetPairsByDay[dayIdx] ??
-                                      const <String>{};
-
-                              final filteredActiveBlocks = activeBlocks.where((b) {
-                                final sid = b.studentId;
-                                final setId = b.setId ?? '';
-                                if (hiddenOriginalIds.contains(sid)) return false;
-                                if (hiddenPairs.contains('$sid|$setId')) return false;
-                                return true;
-                              }).toList();
-
-                              final cellStudentWithInfos = filteredActiveBlocks
-                                  .map((b) => cache.studentById[b.studentId])
-                                  .whereType<StudentWithInfo>()
-                                  .toList();
-
-                              final List<OverlayLabel> makeupOverlays =
-                                  cache.makeupOverlaysBySlotKey[slotKey] ??
-                                      const <OverlayLabel>[];
-
-                              final isExpanded = _expandedCellKey == cellKey;
-                              final isDragHighlight = dragHighlightKeys.contains(cellKey);
-                              final String _slotKey = slotKey;
-                              final bool isSelectedCell =
-                                  (widget.selectedCellDayIndex == dayIdx &&
-                                      widget.selectedCellStartTime != null &&
-                                      widget.selectedCellStartTime!.hour == timeBlocks[blockIdx].startTime.hour &&
-                                      widget.selectedCellStartTime!.minute == timeBlocks[blockIdx].startTime.minute) ||
-                                  (widget.selectedSlotKeys?.contains(
-                                        _slotKey,
-                                      ) ??
-                                      false);
-                              final bool isPendingHighlight = _pendingSlotKeys.contains(_slotKey);
-                              bool isBreakTime = false;
-                              // 휴식시간 표시 로직 (dayIdx == dayOfWeek로 정확히 매핑)
-                              final op = widget.operatingHours.firstWhereOrNull((o) => o.dayOfWeek == dayIdx);
-                              if (op != null) {
-                                for (final breakTime in op.breakTimes) {
-                                  final blockHour = timeBlocks[blockIdx].startTime.hour;
-                                  final blockMinute = timeBlocks[blockIdx].startTime.minute;
-                                  final breakStartHour = breakTime.startHour;
-                                  final breakStartMinute = breakTime.startMinute;
-                                  final breakEndHour = breakTime.endHour;
-                                  final breakEndMinute = breakTime.endMinute;
-                                  final blockMinutes = blockHour * 60 + blockMinute;
-                                  final breakStartMinutes = breakStartHour * 60 + breakStartMinute;
-                                  final breakEndMinutes = breakEndHour * 60 + breakEndMinute;
-                                  if (blockMinutes >= breakStartMinutes && blockMinutes < breakEndMinutes) {
-                                    isBreakTime = true;
-                                    break;
-                                  }
-                                }
-                              }
-                              // 시:분만 비교하는 함수
-                              bool isSameTime(dynamic block, DateTime gridTime) {
-                                // block: StudentTimeBlock 또는 SelfStudyTimeBlock
-                                if (block is StudentTimeBlock || block is SelfStudyTimeBlock) {
-                                  return block.startHour == gridTime.hour && block.startMinute == gridTime.minute;
-                                }
-                                return false;
-                              }
-                              // 학생별 중복 없이, 요일+시:분이 같은 학생만 카운트
-                              // - base: 정규 수업(블라인드/필터 적용 후)
-                              // - + 보강/추가(planned): week 캐시에서 slotKey 기준으로 학생 id 추가(중복 제거)
-                              final activeStudentIds =
-                                  filteredActiveBlocks.map((b) => b.studentId).toSet();
-                              final Set<String> countedStudentIds = Set.of(activeStudentIds);
-                              final extraMakeupIds = cache.makeupStudentIdsBySlotKey[slotKey];
-                              if (extraMakeupIds != null && extraMakeupIds.isNotEmpty) {
-                                countedStudentIds.addAll(extraMakeupIds);
-                              }
-                              int activeStudentCount = countedStudentIds.length;
-
-                              // 문의(희망시간) 예약 인원 가산: startWeek(해당 주 월요일) 이후의 모든 주차에 반영
-                              final inquiryCount = inquiryCountBySlot[slotKey] ?? 0;
-                              if (inquiryCount > 0) {
-                                activeStudentCount += inquiryCount;
-                              }
-                              // 시범수업(일회성) 인원 가산: 선택한 주에서만 반영 + lessonDuration 범위로 확장된 map 사용
-                              final trialCount = trialCountBySlot[slotKey] ?? 0;
-                              if (trialCount > 0) {
-                                activeStudentCount += trialCount;
-                              }
-                              final inquiryOverlays = (inquirySlotsBySlotKey[slotKey] ?? const <ConsultInquiryDemandSlot>[])
-                                  .map((s) => InquiryOverlayLabel(noteId: s.sourceNoteId, text: s.title))
-                                  .toList();
-                              final trialOverlays = (trialSlotsBySlotKey[slotKey] ?? const <ConsultTrialLessonSlot>[])
-                                  .map((s) => TrialOverlayLabel(noteId: s.sourceNoteId, text: s.title))
-                                  .toList();
-                              // // BLIND 진단 로그(요약) - 필요 시만 활성화
-                              // if (_hiddenOriginalStudentIds.isNotEmpty || _hiddenStudentSetPairs.isNotEmpty || activeStudentIds.length < beforeIds.length) {
-                              //   // ignore: avoid_print
-                              //   print('[BLIND][cls] cell=$_cellDate hideIds=${_hiddenOriginalStudentIds} hidePairs=${_hiddenStudentSetPairs.length} before=${beforeIds.length} after=$activeStudentCount');
-                              // }
-                              Color? countColor;
-                              if (activeStudentCount > 0) {
-                                if (activeStudentCount < DataManager.instance.academySettings.defaultCapacity * 0.7) {
-                                  // 쾌적
-                                  countColor = const Color(0xFF1B6B63);
-                                } else if (activeStudentCount >= DataManager.instance.academySettings.defaultCapacity) {
-                                  // 혼잡
-                                  countColor = const Color(0xFFF2B45B);
-                                } else {
-                                  // 보통
-                                  countColor = const Color(0xFF212A31);
-                                }
-                              } else {
-                                // 인원 0일 때도 쾌적 색상 사용
-                                countColor = const Color(0xFF223131);
-                              }
-                              if (isDragHighlight) {
-                                if (_kRegistrationPerfDebug) {
-                                  // ignore: avoid_print
-                                  print('[DEBUG][Cell] isDragHighlight: cellKey=$cellKey, dragHighlightKeys=$dragHighlightKeys');
-                                }
-                              }
-                              return Expanded(
-                                child: MouseRegion(
-                                  onEnter: (_) {
-                                    if (widget.isRegistrationMode) {
-                                      setState(() {
-                                        _hoveredCellKey = cellKey;
-                                        if (_kRegistrationPerfDebug) {
-                                          // ignore: avoid_print
-                                          print('[DEBUG][MouseRegion] onEnter: cellKey=$cellKey, isRegistrationMode=${widget.isRegistrationMode}');
-                                        }
-                                      });
-                                    }
-                                  },
-                                  onExit: (_) {
-                                    if (widget.isRegistrationMode) {
-                                      setState(() {
-                                        if (_hoveredCellKey == cellKey) _hoveredCellKey = null;
-                                        if (_kRegistrationPerfDebug) {
-                                          // ignore: avoid_print
-                                          print('[DEBUG][MouseRegion] onExit: cellKey=$cellKey, isRegistrationMode=${widget.isRegistrationMode}');
-                                        }
-                                      });
-                                    }
-                                  },
-                                  child: GestureDetector(
-                                    onTap: () async {
-                                      // 오버레이(희망/시범) 라벨 탭과 셀 탭이 중복으로 처리되는 것을 방지
-                                      final nowMs = DateTime.now().millisecondsSinceEpoch;
-                                      if (nowMs - _lastOverlayTapMs < 250) return;
-                                      // 기존 클릭 등록 로직
-                                      final lessonDuration = DataManager.instance.academySettings.lessonDuration;
-                                      final selectedStudentWithInfo = widget.selectedStudentWithInfo;
-                                      final studentId = selectedStudentWithInfo?.student.id;
-                                      if (_kRegistrationPerfDebug) {
-                                        // ignore: avoid_print
-                                        print('[DEBUG][Cell onTap] cellKey=$cellKey, isRegistrationMode=${widget.isRegistrationMode}, selectedStudentWithInfo=$selectedStudentWithInfo');
-                                      }
-                                      // 클릭한 셀의 시작 시간
-                                      final startTime = timeBlocks[blockIdx].startTime;
-                                      // lessonDuration만큼 생성될 모든 블록의 startTime 리스트 생성
-                                      final blockCount = (lessonDuration / 30).ceil();
-                                      final allStartTimes = List.generate(blockCount, (i) => startTime.add(Duration(minutes: 30 * i)));
-                                      if (studentId != null && _isStudentTimeOverlap(studentId, dayIdx, timeBlocks[blockIdx].startTime, lessonDuration)) {
-                                        if (_kRegistrationPerfDebug) {
-                                          // ignore: avoid_print
-                                          print('[DEBUG][셀 클릭 중복] showAppSnackBar 호출');
-                                        }
-                                        Future.microtask(() {
-                                          try {
-                                            showAppSnackBar(context, '이미 등록된 시간입니다.', useRoot: true);
-                                          } catch (e, st) {
-                                            if (_kRegistrationPerfDebug) {
-                                              // ignore: avoid_print
-                                              print('[DEBUG][showAppSnackBar 예외] $e\n$st');
-                                            }
-                                          }
-                                        });
-                                        return;
-                                      }
-                                      if (widget.isRegistrationMode && widget.onCellStudentsSelected != null && selectedStudentWithInfo != null) {
-                                        if (_kRegistrationPerfDebug) {
-                                          // ignore: avoid_print
-                                          print('[DEBUG][등록시도] studentId=${selectedStudentWithInfo.student.id}, dayIdx=$dayIdx, startTime=${timeBlocks[blockIdx].startTime}');
-                                        }
-                                        widget.onCellStudentsSelected!(
-                                          dayIdx,
-                                          [timeBlocks[blockIdx].startTime],
-                                          [selectedStudentWithInfo],
-                                        );
-                                      } else if (widget.onTimeSelected != null) {
-                                        // 자습 블록이 있는 경우 자습 블록 수정 콜백 호출
-                                        final selfStudyBlocks =
-                                            cache.selfStudyBlocksBySlotKey[slotKey] ??
-                                                const <SelfStudyTimeBlock>[];
-                                        
-                                        if (selfStudyBlocks.isNotEmpty && widget.onCellSelfStudyStudentsChanged != null) {
-                                          final cellSelfStudyStudentWithInfos = selfStudyBlocks
-                                              .map((b) => cache.studentById[b.studentId])
-                                              .whereType<StudentWithInfo>()
-                                              .toList();
-                                          if (cellSelfStudyStudentWithInfos.isNotEmpty) {
-                                            widget.onCellSelfStudyStudentsChanged!(
-                                              dayIdx,
-                                              timeBlocks[blockIdx].startTime,
-                                              cellSelfStudyStudentWithInfos,
-                                            );
-                                          }
-                                        }
-                                        
-                                        widget.onTimeSelected!(dayIdx, timeBlocks[blockIdx].startTime);
-                                      }
-                                      // 선택모드 해제: 셀 클릭 시 onSelectModeChanged(false) 호출
-                                      if (widget.onSelectModeChanged != null) {
-                                        widget.onSelectModeChanged!(false);
-                                      }
-                                    },
-                                    child: TimetableCell(
-                                      dayIdx: dayIdx,
-                                      blockIdx: blockIdx,
-                                      cellKey: cellKey,
-                                      startTime: timeBlocks[blockIdx].startTime,
-                                      endTime: timeBlocks[blockIdx].endTime,
-                                      weekStartDate: widget.weekStartDate,
-                                      students: filteredActiveBlocks,
-                                      isBreakTime: isBreakTime,
-                                      isExpanded: isExpanded,
-                                      isDragHighlight: isDragHighlight,
-                                      // 등록모드에서는 pending 하이라이트만 사용(셀 선택 하이라이트 제거)
-                                      isSelected: widget.isRegistrationMode ? false : isSelectedCell,
-                                      isPendingHighlight: isPendingHighlight,
-                                      onTap: null,
-                                      countColor: countColor,
-                                      activeStudentCount: activeStudentCount,
-                                      cellStudentWithInfos: cellStudentWithInfos,
-                                      groups: groups,
-                                      cellWidth: 0, // 필요시 전달
-                                      registrationModeType: widget.registrationModeType,
-                                      operatingHours: widget.operatingHours,
-                                       makeupOverlays: makeupOverlays,
-                                      inquiryOverlays: inquiryOverlays,
-                                      trialOverlays: trialOverlays,
-                                      onInquiryOverlayTap: widget.onInquiryNoteTap == null
-                                          ? null
-                                          : (noteId) {
-                                              _lastOverlayTapMs = DateTime.now().millisecondsSinceEpoch;
-                                              widget.onInquiryNoteTap?.call(noteId);
-                                            },
+                        Expanded(
+                          child: SingleChildScrollView(
+                            controller: _headerScrollController,
+                            scrollDirection: Axis.horizontal,
+                            physics: const NeverScrollableScrollPhysics(),
+                            child: SizedBox(
+                              width: timeBlocks.length * timeColumnWidth,
+                              child: Container(
+                                height: axisHeaderHeight,
+                                decoration: BoxDecoration(
+                                  border: Border(
+                                    bottom: BorderSide(
+                                      color: Colors.white.withOpacity(0.16),
                                     ),
                                   ),
                                 ),
-                              );
-                            }),
+                                child: Row(
+                                  children: List.generate(
+                                    timeBlocks.length,
+                                    (blockIdx) {
+                                      final isNow =
+                                          blockIdx == currentTimeBlockIdx;
+                                      return SizedBox(
+                                        width: timeColumnWidth,
+                                        child: Center(
+                                          child: Text(
+                                            timeBlocks[blockIdx].timeString,
+                                            style: TextStyle(
+                                              color: isNow
+                                                  ? const Color(0xFF33A373)
+                                                  : Colors.white70,
+                                              fontSize: 13,
+                                              fontWeight: isNow
+                                                  ? FontWeight.w700
+                                                  : FontWeight.w500,
+                                            ),
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    Expanded(
+                      child: SingleChildScrollView(
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            SizedBox(
+                              width: dayLabelWidth,
+                              child: Column(
+                                children: [
+                                  ...List.generate(7, (dayIdx) {
+                                    final isSelected =
+                                        widget.selectedDayIndex == dayIdx;
+                                    final isToday = dayIdx == todayDayIdx;
+                                    final expanded = hasExpandedRow(dayIdx);
+                                    return Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        InkWell(
+                                          onTap: widget.onDaySelected == null
+                                              ? null
+                                              : () =>
+                                                  widget.onDaySelected!(dayIdx),
+                                          child: Container(
+                                            height: blockHeight,
+                                            decoration: BoxDecoration(
+                                              color: isSelected
+                                                  ? const Color(0x1A33A373)
+                                                  : Colors.transparent,
+                                              border: Border(
+                                                bottom: BorderSide(
+                                                  color: Colors.white
+                                                      .withOpacity(0.1),
+                                                ),
+                                              ),
+                                            ),
+                                            child: Row(
+                                              children: [
+                                                AnimatedContainer(
+                                                  duration: const Duration(
+                                                      milliseconds: 180),
+                                                  width: isToday ? 5 : 0,
+                                                  color:
+                                                      const Color(0xFF33A373),
+                                                ),
+                                                Expanded(
+                                                  child: Center(
+                                                    child: Text(
+                                                      weekLabels[dayIdx],
+                                                      style: TextStyle(
+                                                        color: isSelected
+                                                            ? const Color(
+                                                                0xFFEAF2F2)
+                                                            : (isToday
+                                                                ? const Color(
+                                                                    0xFF33A373)
+                                                                : Colors.white
+                                                                    .withOpacity(
+                                                                        0.76)),
+                                                        fontSize: 15,
+                                                        fontWeight:
+                                                            FontWeight.w700,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                        AnimatedSize(
+                                          duration:
+                                              const Duration(milliseconds: 220),
+                                          curve: Curves.easeInOutCubic,
+                                          alignment: Alignment.topCenter,
+                                          child: expanded
+                                              ? SizedBox(
+                                                  height:
+                                                      selectedRowExpansionHeight)
+                                              : const SizedBox.shrink(),
+                                        ),
+                                      ],
+                                    );
+                                  }),
+                                ],
+                              ),
+                            ),
+                            Expanded(
+                              child: SingleChildScrollView(
+                                controller: widget.scrollController,
+                                scrollDirection: Axis.horizontal,
+                                child: SizedBox(
+                                  width: timeBlocks.length * timeColumnWidth,
+                                  child: Listener(
+                                    behavior: HitTestBehavior.translucent,
+                                    onPointerDown: (event) {
+                                      if (!widget.isRegistrationMode) return;
+                                      _pointerDownPosition = event.position;
+                                      _pointerDownTime = DateTime.now();
+                                      setState(() {
+                                        isDragging = false;
+                                        dragStartIdx = null;
+                                        dragEndIdx = null;
+                                        dragDayIdx = null;
+                                      });
+                                    },
+                                    onPointerMove: (event) {
+                                      if (!widget.isRegistrationMode) return;
+                                      if (_pointerDownPosition == null) return;
+                                      final moveDistance = (event.position -
+                                              _pointerDownPosition!)
+                                          .distance;
+                                      if (!isDragging && moveDistance > 10) {
+                                        final box = context.findRenderObject()
+                                            as RenderBox;
+                                        final local = box.globalToLocal(
+                                            _pointerDownPosition!);
+                                        final gridDy =
+                                            local.dy - axisHeaderHeight;
+                                        if (gridDy < 0) return;
+                                        final dayIdx =
+                                            (gridDy / blockHeight).floor();
+                                        final blockIdx =
+                                            (local.dx / timeColumnWidth)
+                                                .floor();
+                                        if (dayIdx < 0 ||
+                                            dayIdx > 6 ||
+                                            blockIdx < 0 ||
+                                            blockIdx >= timeBlocks.length) {
+                                          return;
+                                        }
+                                        setState(() {
+                                          isDragging = true;
+                                          dragStartIdx = blockIdx;
+                                          dragEndIdx = blockIdx;
+                                          dragDayIdx = dayIdx;
+                                        });
+                                      } else if (isDragging) {
+                                        final box = context.findRenderObject()
+                                            as RenderBox;
+                                        final local =
+                                            box.globalToLocal(event.position);
+                                        final gridDy =
+                                            local.dy - axisHeaderHeight;
+                                        if (gridDy < 0) return;
+                                        final dayIdx =
+                                            (gridDy / blockHeight).floor();
+                                        final blockIdx =
+                                            (local.dx / timeColumnWidth)
+                                                .floor();
+                                        if (dayIdx < 0 ||
+                                            dayIdx > 6 ||
+                                            blockIdx < 0 ||
+                                            blockIdx >= timeBlocks.length) {
+                                          return;
+                                        }
+                                        _onCellPanUpdate(dayIdx, blockIdx);
+                                      }
+                                    },
+                                    onPointerUp: (event) {
+                                      if (!widget.isRegistrationMode) return;
+                                      if (isDragging &&
+                                          dragStartIdx != null &&
+                                          dragEndIdx != null) {
+                                        _onCellPanEnd(dragDayIdx ?? 0);
+                                      }
+                                      setState(() {
+                                        isDragging = false;
+                                        dragStartIdx = null;
+                                        dragEndIdx = null;
+                                        dragDayIdx = null;
+                                      });
+                                      _pointerDownPosition = null;
+                                      _pointerDownTime = null;
+                                    },
+                                    child: Column(
+                                      children: [
+                                        ...List.generate(7, (dayIdx) {
+                                          final expanded =
+                                              hasExpandedRow(dayIdx);
+                                          return Column(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Container(
+                                                height: blockHeight,
+                                                decoration: BoxDecoration(
+                                                  border: Border(
+                                                    bottom: BorderSide(
+                                                      color: Colors.white
+                                                          .withOpacity(0.1),
+                                                    ),
+                                                  ),
+                                                ),
+                                                child: Row(
+                                                  children: List.generate(
+                                                    timeBlocks.length,
+                                                    (blockIdx) => buildGridCell(
+                                                        dayIdx, blockIdx),
+                                                  ),
+                                                ),
+                                              ),
+                                              AnimatedSize(
+                                                duration: const Duration(
+                                                    milliseconds: 220),
+                                                curve: Curves.easeInOutCubic,
+                                                alignment: Alignment.topCenter,
+                                                child: expanded
+                                                    ? SizedBox(
+                                                        height:
+                                                            selectedRowExpansionHeight,
+                                                        width: double.infinity,
+                                                        child: contentViewState ==
+                                                                null
+                                                            ? const SizedBox
+                                                                .shrink()
+                                                            : contentViewState
+                                                                .buildInlineCellPanelForSlot(
+                                                                dayIdx: dayIdx,
+                                                                startTime:
+                                                                    selectedCellStartTime!,
+                                                                maxHeight:
+                                                                    selectedRowExpansionHeight,
+                                                                useExpandedTimelineLayout:
+                                                                    true,
+                                                                timelineDayStartMinutes:
+                                                                    timelineDayStartMinutes,
+                                                                timelineSlotMinutes:
+                                                                    30,
+                                                                timelineSlotWidth:
+                                                                    timeColumnWidth,
+                                                              ),
+                                                      )
+                                                    : const SizedBox.shrink(),
+                                              ),
+                                            ],
+                                          );
+                                        }),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
                           ],
                         ),
                       ),
+                    ),
                   ],
-                ),
-              );
-            },
-          ),
-        ),
-      ],
+                );
+              },
+            ),
+          ],
+        );
+      },
     );
   }
 
@@ -1419,17 +1886,21 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
       // 모든 요일의 운영시간에서 가장 이른 startTime, 가장 늦은 endTime 찾기
       int minHour = 23, minMinute = 59, maxHour = 0, maxMinute = 0;
       for (final hours in widget.operatingHours) {
-        if (hours.startHour < minHour || (hours.startHour == minHour && hours.startMinute < minMinute)) {
+        if (hours.startHour < minHour ||
+            (hours.startHour == minHour && hours.startMinute < minMinute)) {
           minHour = hours.startHour;
           minMinute = hours.startMinute;
         }
-        if (hours.endHour > maxHour || (hours.endHour == maxHour && hours.endMinute > maxMinute)) {
+        if (hours.endHour > maxHour ||
+            (hours.endHour == maxHour && hours.endMinute > maxMinute)) {
           maxHour = hours.endHour;
           maxMinute = hours.endMinute;
         }
       }
-      var currentTime = DateTime(now.year, now.month, now.day, minHour, minMinute);
-      final endTime = DateTime(now.year, now.month, now.day, maxHour, maxMinute);
+      var currentTime =
+          DateTime(now.year, now.month, now.day, minHour, minMinute);
+      final endTime =
+          DateTime(now.year, now.month, now.day, maxHour, maxMinute);
       while (currentTime.isBefore(endTime)) {
         final blockEndTime = currentTime.add(const Duration(minutes: 30));
         // 각 요일별로 breakTime 체크
@@ -1465,13 +1936,16 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
   }
 
   bool _isBlockActiveOnDate(dynamic block, DateTime date) {
-    if (block is! StudentTimeBlock && block is! SelfStudyTimeBlock) return false;
+    if (block is! StudentTimeBlock && block is! SelfStudyTimeBlock)
+      return false;
     final target = DateTime(date.year, date.month, date.day);
     final startDate = block.startDate;
     final endDate = block.endDate;
     if (startDate == null) return false;
     final start = DateTime(startDate.year, startDate.month, startDate.day);
-    final end = endDate != null ? DateTime(endDate.year, endDate.month, endDate.day) : null;
+    final end = endDate != null
+        ? DateTime(endDate.year, endDate.month, endDate.day)
+        : null;
     return !start.isAfter(target) && (end == null || !end.isBefore(target));
   }
 
@@ -1487,10 +1961,12 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
     final ref = refDate ?? startTime;
     final dateOnly = DateTime(ref.year, ref.month, ref.day);
     final studentBlocks = DataManager.instance.studentTimeBlocks
-        .where((b) => b.studentId == studentId && _isBlockActiveOnDate(b, dateOnly))
+        .where((b) =>
+            b.studentId == studentId && _isBlockActiveOnDate(b, dateOnly))
         .toList();
     final selfStudyBlocks = DataManager.instance.selfStudyTimeBlocks
-        .where((b) => b.studentId == studentId && _isBlockActiveOnDate(b, dateOnly))
+        .where((b) =>
+            b.studentId == studentId && _isBlockActiveOnDate(b, dateOnly))
         .toList();
     String _fmtStudentBlock(StudentTimeBlock b) =>
         '${b.id}|start=${b.startDate.toIso8601String().split("T").first}|end=${b.endDate?.toIso8601String().split("T").first}|day=${b.dayIndex}|t=${b.startHour}:${b.startMinute}';
@@ -1498,41 +1974,49 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
         '${b.id}|created=${b.createdAt.toIso8601String().split("T").first}|day=${b.dayIndex}|t=${b.startHour}:${b.startMinute}';
     if (_kRegistrationPerfDebug) {
       // ignore: avoid_print
-      print('[DEBUG][_isStudentTimeOverlap] refDate=$dateOnly studentBlocks=${studentBlocks.map(_fmtStudentBlock).toList()} selfStudyBlocks=${selfStudyBlocks.map(_fmtSelfStudyBlock).toList()}');
+      print(
+          '[DEBUG][_isStudentTimeOverlap] refDate=$dateOnly studentBlocks=${studentBlocks.map(_fmtStudentBlock).toList()} selfStudyBlocks=${selfStudyBlocks.map(_fmtSelfStudyBlock).toList()}');
     }
-    
+
     final newStart = startTime.hour * 60 + startTime.minute;
     final newEnd = newStart + lessonDurationMinutes;
-    
+
     // 수업 블록 체크
     for (final block in studentBlocks) {
       final blockStart = block.startHour * 60 + block.startMinute;
       final blockEnd = blockStart + block.duration.inMinutes;
-      if (block.dayIndex == dayIndex && newStart < blockEnd && newEnd > blockStart) {
+      if (block.dayIndex == dayIndex &&
+          newStart < blockEnd &&
+          newEnd > blockStart) {
         if (_kRegistrationPerfDebug) {
           // ignore: avoid_print
-          print('[DEBUG][_isStudentTimeOverlap] 수업 블록 중복 감지: studentId=$studentId, dayIndex=$dayIndex, startTime=$startTime, block=${block.id}');
+          print(
+              '[DEBUG][_isStudentTimeOverlap] 수업 블록 중복 감지: studentId=$studentId, dayIndex=$dayIndex, startTime=$startTime, block=${block.id}');
         }
         return true;
       }
     }
-    
+
     // 자습 블록 체크
     for (final block in selfStudyBlocks) {
       final blockStart = block.startHour * 60 + block.startMinute;
       final blockEnd = blockStart + block.duration.inMinutes;
-      if (block.dayIndex == dayIndex && newStart < blockEnd && newEnd > blockStart) {
+      if (block.dayIndex == dayIndex &&
+          newStart < blockEnd &&
+          newEnd > blockStart) {
         if (_kRegistrationPerfDebug) {
           // ignore: avoid_print
-          print('[DEBUG][_isStudentTimeOverlap] 자습 블록 중복 감지: studentId=$studentId, dayIndex=$dayIndex, startTime=$startTime, block=${block.id}');
+          print(
+              '[DEBUG][_isStudentTimeOverlap] 자습 블록 중복 감지: studentId=$studentId, dayIndex=$dayIndex, startTime=$startTime, block=${block.id}');
         }
         return true;
       }
     }
-    
+
     if (_kRegistrationPerfDebug) {
       // ignore: avoid_print
-      print('[DEBUG][_isStudentTimeOverlap] 중복 없음: studentId=$studentId, dayIndex=$dayIndex, startTime=$startTime, refDate=$dateOnly');
+      print(
+          '[DEBUG][_isStudentTimeOverlap] 중복 없음: studentId=$studentId, dayIndex=$dayIndex, startTime=$startTime, refDate=$dateOnly');
     }
     return false;
   }
@@ -1540,7 +2024,8 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
   // [추가] 운영시간/휴식시간 체크 함수
   // dayIdx: 0(월)~6(일), op.dayOfWeek: 0(월)~6(일)로 가정
   bool _areAllTimesWithinOperatingAndBreak(int dayIdx, List<DateTime> times) {
-    final op = widget.operatingHours.firstWhereOrNull((o) => o.dayOfWeek == dayIdx);
+    final op =
+        widget.operatingHours.firstWhereOrNull((o) => o.dayOfWeek == dayIdx);
     if (op == null) return false;
     for (final t in times) {
       final tMinutes = t.hour * 60 + t.minute;
@@ -1574,27 +2059,31 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
     int currentIdx = 0;
     for (int i = 0; i < timeBlocks.length; i++) {
       final block = timeBlocks[i];
-      if (block.startTime.hour < now.hour || (block.startTime.hour == now.hour && block.startTime.minute <= now.minute)) {
+      if (block.startTime.hour < now.hour ||
+          (block.startTime.hour == now.hour &&
+              block.startTime.minute <= now.minute)) {
         currentIdx = i;
       }
     }
-    final blockHeight = 90.0;
-    final visibleRows = 5;
+    const timeColumnWidth = 148.0;
+    final visibleColumns = 6;
     // 현재 시간이 운영시간 범위 내에 있는지 체크
     final firstBlock = timeBlocks.isNotEmpty ? timeBlocks.first : null;
     final lastBlock = timeBlocks.isNotEmpty ? timeBlocks.last : null;
     int scrollIdx = currentIdx;
     if (firstBlock != null && lastBlock != null) {
       final nowMinutes = now.hour * 60 + now.minute;
-      final firstMinutes = firstBlock.startTime.hour * 60 + firstBlock.startTime.minute;
-      final lastMinutes = lastBlock.startTime.hour * 60 + lastBlock.startTime.minute;
+      final firstMinutes =
+          firstBlock.startTime.hour * 60 + firstBlock.startTime.minute;
+      final lastMinutes =
+          lastBlock.startTime.hour * 60 + lastBlock.startTime.minute;
       if (nowMinutes < firstMinutes) {
         scrollIdx = 0;
       } else if (nowMinutes > lastMinutes) {
         scrollIdx = timeBlocks.length - 1;
       }
     }
-    final targetOffset = (scrollIdx - (visibleRows ~/ 2)) * blockHeight;
+    final targetOffset = (scrollIdx - (visibleColumns ~/ 2)) * timeColumnWidth;
     if (widget.scrollController.hasClients) {
       final maxOffset = widget.scrollController.position.maxScrollExtent;
       final minOffset = widget.scrollController.position.minScrollExtent;
@@ -1607,7 +2096,12 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
     }
   }
 
-  Widget _buildExpandedStudentCards(List<StudentTimeBlock> cellBlocks, List<StudentWithInfo> studentsWithInfo, List<GroupInfo> groups, double cellWidth, bool isExpanded) {
+  Widget _buildExpandedStudentCards(
+      List<StudentTimeBlock> cellBlocks,
+      List<StudentWithInfo> studentsWithInfo,
+      List<GroupInfo> groups,
+      double cellWidth,
+      bool isExpanded) {
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
       onTap: () {
@@ -1629,15 +2123,33 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
               runSpacing: 10,
               children: List.generate(cellBlocks.length, (i) {
                 final block = cellBlocks[i];
-                final studentWithInfo = studentsWithInfo.firstWhere((s) => s.student.id == block.studentId, orElse: () => StudentWithInfo(student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary, ), basicInfo: StudentBasicInfo(studentId: '')));
+                final studentWithInfo = studentsWithInfo.firstWhere(
+                    (s) => s.student.id == block.studentId,
+                    orElse: () => StudentWithInfo(
+                        student: Student(
+                          id: '',
+                          name: '',
+                          school: '',
+                          grade: 0,
+                          educationLevel: EducationLevel.elementary,
+                        ),
+                        basicInfo: StudentBasicInfo(studentId: '')));
                 // groupId는 StudentTimeBlock에서 제거됨. 학생의 현재 groupInfo를 사용.
                 final studentWI = studentsWithInfo.firstWhere(
                   (s) => s.student.id == block.studentId,
-                  orElse: () => StudentWithInfo(student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary), basicInfo: StudentBasicInfo(studentId: '')),
+                  orElse: () => StudentWithInfo(
+                      student: Student(
+                          id: '',
+                          name: '',
+                          school: '',
+                          grade: 0,
+                          educationLevel: EducationLevel.elementary),
+                      basicInfo: StudentBasicInfo(studentId: '')),
                 );
                 final groupInfo = studentWI.student.groupInfo;
                 // 삭제된 학생이면 카드 자체를 렌더링하지 않음
-                if (studentWithInfo.student.id.isEmpty) return const SizedBox.shrink();
+                if (studentWithInfo.student.id.isEmpty)
+                  return const SizedBox.shrink();
                 return GestureDetector(
                   onTapDown: (details) async {
                     final selected = await showMenu<String>(
@@ -1652,41 +2164,54 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                       items: [
                         const PopupMenuItem<String>(
                           value: 'edit',
-                          child: Text('수정', style: TextStyle(color: Colors.white)),
+                          child:
+                              Text('수정', style: TextStyle(color: Colors.white)),
                         ),
                         const PopupMenuItem<String>(
                           value: 'delete',
-                          child: Text('삭제', style: TextStyle(color: Colors.white)),
+                          child:
+                              Text('삭제', style: TextStyle(color: Colors.white)),
                         ),
                       ],
                     );
                     if (selected == 'delete') {
                       try {
                         if (block.setId != null) {
-                          final allBlocks = DataManager.instance.studentTimeBlocks;
+                          final allBlocks =
+                              DataManager.instance.studentTimeBlocks;
                           // 같은 학생 id와 set_id를 모두 만족하는 블록만 삭제
-                          final toDelete = allBlocks.where((b) => b.setId == block.setId && b.studentId == block.studentId).toList();
+                          final toDelete = allBlocks
+                              .where((b) =>
+                                  b.setId == block.setId &&
+                                  b.studentId == block.studentId)
+                              .toList();
                           if (_kRegistrationPerfDebug) {
                             // ignore: avoid_print
-                            print('[삭제드롭존] setId=${block.setId}, studentId=${block.studentId}, 삭제 대상 블록 개수: ${toDelete.length}');
+                            print(
+                                '[삭제드롭존] setId=${block.setId}, studentId=${block.studentId}, 삭제 대상 블록 개수: ${toDelete.length}');
                           }
                           for (final b in toDelete) {
                             if (_kRegistrationPerfDebug) {
                               // ignore: avoid_print
-                              print('[삭제드롭존] 삭제 시도: block.id=${b.id}, block.setId=${b.setId}, block.studentId=${b.studentId}, block.dayIndex=${b.dayIndex}, block.startHour=${b.startHour}, block.startMinute=${b.startMinute}');
+                              print(
+                                  '[삭제드롭존] 삭제 시도: block.id=${b.id}, block.setId=${b.setId}, block.studentId=${b.studentId}, block.dayIndex=${b.dayIndex}, block.startHour=${b.startHour}, block.startMinute=${b.startMinute}');
                             }
-                            await DataManager.instance.removeStudentTimeBlock(b.id);
+                            await DataManager.instance
+                                .removeStudentTimeBlock(b.id);
                           }
                         } else {
                           if (_kRegistrationPerfDebug) {
                             // ignore: avoid_print
-                            print('[삭제드롭존] setId=null, 단일 삭제: block.id=${block.id}');
+                            print(
+                                '[삭제드롭존] setId=null, 단일 삭제: block.id=${block.id}');
                           }
-                          await DataManager.instance.removeStudentTimeBlock(block.id);
+                          await DataManager.instance
+                              .removeStudentTimeBlock(block.id);
                         }
                       } on ScheduleLockedByMakeupException catch (e) {
                         if (!context.mounted) return;
-                        await showScheduleLockedByMakeupDialog(context, e, useRoot: true);
+                        await showScheduleLockedByMakeupDialog(context, e,
+                            useRoot: true);
                       } catch (e) {
                         if (!context.mounted) return;
                         showAppSnackBar(context, '삭제 실패: $e', useRoot: true);
@@ -1696,7 +2221,8 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
                   child: SizedBox(
                     width: 109,
                     height: 39,
-                    child: _StudentTimeBlockCard(student: studentWithInfo.student, groupInfo: groupInfo),
+                    child: _StudentTimeBlockCard(
+                        student: studentWithInfo.student, groupInfo: groupInfo),
                   ),
                 );
               }),
@@ -1708,7 +2234,9 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
   }
 
   // 기존 timetable_screen.dart의 onCellStudentsSelected와 동일하게 구현
-  Future<void> _handleCellStudentsSelected(int dayIdx, List<DateTime> startTimes, List<StudentWithInfo> students, {DateTime? refDate}) async {
+  Future<void> _handleCellStudentsSelected(
+      int dayIdx, List<DateTime> startTimes, List<StudentWithInfo> students,
+      {DateTime? refDate}) async {
     if (students.isEmpty) return;
     final student = students.first.student;
     final range = await _pickBlockRange(context);
@@ -1720,9 +2248,11 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
     List<DateTime> actualStartTimes = startTimes;
     // 클릭(단일 셀) 시에는 lessonDuration만큼 블록 생성
     if (startTimes.length == 1) {
-      final lessonDuration = DataManager.instance.academySettings.lessonDuration;
+      final lessonDuration =
+          DataManager.instance.academySettings.lessonDuration;
       final blockCount = (lessonDuration / blockMinutes).ceil();
-      actualStartTimes = List.generate(blockCount, (i) => startTimes.first.add(Duration(minutes: i * blockMinutes)));
+      actualStartTimes = List.generate(blockCount,
+          (i) => startTimes.first.add(Duration(minutes: i * blockMinutes)));
     }
     // 중복 방어: 하나라도 겹치면 전체 등록 불가
     final allBlocks = DataManager.instance.studentTimeBlocks;
@@ -1756,7 +2286,6 @@ class _ClassesViewState extends State<ClassesView> with TickerProviderStateMixin
       await DataManager.instance.bulkAddStudentTimeBlocks(blocks);
     }
   }
-
 }
 
 class _StudentTimeBlockCard extends StatelessWidget {
@@ -1828,14 +2357,16 @@ class TimeBlock {
     final minute = time.minute.toString().padLeft(2, '0');
     return '$hour:$minute';
   }
-} 
+}
 
 int _getCurrentTimeBlockIndex(List<TimeBlock> timeBlocks) {
   final now = DateTime.now();
   int currentIdx = 0;
   for (int i = 0; i < timeBlocks.length; i++) {
     final block = timeBlocks[i];
-    if (block.startTime.hour < now.hour || (block.startTime.hour == now.hour && block.startTime.minute <= now.minute)) {
+    if (block.startTime.hour < now.hour ||
+        (block.startTime.hour == now.hour &&
+            block.startTime.minute <= now.minute)) {
       currentIdx = i;
     }
   }
@@ -1843,10 +2374,11 @@ int _getCurrentTimeBlockIndex(List<TimeBlock> timeBlocks) {
   final lastBlock = timeBlocks.isNotEmpty ? timeBlocks.last : null;
   if (lastBlock != null) {
     final nowMinutes = now.hour * 60 + now.minute;
-    final lastMinutes = lastBlock.startTime.hour * 60 + lastBlock.startTime.minute;
+    final lastMinutes =
+        lastBlock.startTime.hour * 60 + lastBlock.startTime.minute;
     if (nowMinutes > lastMinutes) {
       return timeBlocks.length - 1;
     }
   }
   return currentIdx;
-} 
+}

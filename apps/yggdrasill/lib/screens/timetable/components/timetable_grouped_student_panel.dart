@@ -7,19 +7,45 @@ import '../../../services/data_manager.dart';
 import '../../../widgets/swipe_action_reveal.dart';
 import 'student_time_info_dialog.dart';
 
+class TimelineExtraCardEntry {
+  final Widget card;
+  final int startMinute;
+  final int durationMinutes;
+
+  const TimelineExtraCardEntry({
+    required this.card,
+    required this.startMinute,
+    required this.durationMinutes,
+  });
+}
+
 class TimetableGroupedStudentPanel extends StatelessWidget {
   final List<StudentWithInfo> students;
+
   /// 셀/요일 선택 시 라벨(보강/추가수업/희망수업/시범수업) 등을 학생카드 형태로 추가 표시하기 위한 슬롯
   // hot reload 중에는 기존 인스턴스에 새 필드가 null로 남는 경우가 있어 nullable로 둔다.
   final List<Widget>? extraCards;
+
   /// 스와이프(수정/삭제) 액션에서 "선택한 셀 날짜" 기준으로 동작하기 위한 refDate(=date-only).
   /// null이면 스와이프 액션은 비활성화된다.
   final DateTime? refDateForActions;
+
   /// 학생 카드 스와이프 액션: 기간 수정
-  final Future<void> Function(BuildContext context, StudentWithInfo student, StudentTimeBlock block, DateTime refDate)? onEditTimeBlock;
+  final Future<void> Function(BuildContext context, StudentWithInfo student,
+      StudentTimeBlock block, DateTime refDate)? onEditTimeBlock;
+
   /// 학생 카드 스와이프 액션: 삭제(해당 refDate부터 제거)
-  final Future<void> Function(BuildContext context, StudentWithInfo student, StudentTimeBlock block, DateTime refDate)? onDeleteTimeBlock;
+  final Future<void> Function(BuildContext context, StudentWithInfo student,
+      StudentTimeBlock block, DateTime refDate)? onDeleteTimeBlock;
   final String dayTimeLabel;
+  final bool showDayTimeHeader;
+  final bool showPanelFrame;
+  final bool showEducationGroupingHeaders;
+  final bool enableInnerScroll;
+  final bool useTimelineLayout;
+  final int timelineDayStartMinutes;
+  final int timelineSlotMinutes;
+  final double timelineSlotWidth;
   final double? maxHeight;
   final bool isSelectMode;
   final Set<String> selectedStudentIds;
@@ -33,8 +59,11 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
   final VoidCallback? onDragEnd;
   // 셀 선택 시 미리 계산된 블록 정보를 우선 사용하기 위한 override 맵
   final Map<String, StudentTimeBlock>? blockOverrides;
+  final List<TimelineExtraCardEntry> timelineExtraCards;
+
   /// 우측 학생 리스트에서 "선택(필터)"된 학생 id (카드 테두리 하이라이트 용)
   final String? highlightedStudentId;
+
   /// 우측 학생 카드 탭(토글) 콜백: 탭된 학생 id 전달
   final ValueChanged<String>? onStudentCardTap;
 
@@ -51,6 +80,14 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
     this.onEditTimeBlock,
     this.onDeleteTimeBlock,
     required this.dayTimeLabel,
+    this.showDayTimeHeader = true,
+    this.showPanelFrame = true,
+    this.showEducationGroupingHeaders = true,
+    this.enableInnerScroll = true,
+    this.useTimelineLayout = false,
+    this.timelineDayStartMinutes = 0,
+    this.timelineSlotMinutes = 30,
+    this.timelineSlotWidth = 148.0,
     this.maxHeight,
     this.isSelectMode = false,
     this.selectedStudentIds = const {},
@@ -63,6 +100,7 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
     this.onDragStart,
     this.onDragEnd,
     this.blockOverrides,
+    this.timelineExtraCards = const <TimelineExtraCardEntry>[],
     this.highlightedStudentId,
     this.onStudentCardTap,
   });
@@ -84,7 +122,8 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
     final stbRev = DataManager.instance.studentTimeBlocksRevision.value;
     final assignRev = DataManager.instance.classAssignmentsRevision.value;
 
-    if (_lastStudentTimeBlocksRev != stbRev || _lastClassAssignRev != assignRev) {
+    if (_lastStudentTimeBlocksRev != stbRev ||
+        _lastClassAssignRev != assignRev) {
       _groupCache.clear();
       _lastStudentTimeBlocksRev = stbRev;
       _lastClassAssignRev = assignRev;
@@ -93,7 +132,8 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
     final key = students.map((s) => s.student.id).toList()..sort();
     final cacheKey = key.join('|');
     final grouped = _groupCache.putIfAbsent(cacheKey, () {
-      final Map<EducationLevel, Map<int, List<StudentWithInfo>>> groupedMap = {};
+      final Map<EducationLevel, Map<int, List<StudentWithInfo>>> groupedMap =
+          {};
       for (final s in students) {
         final level = s.student.educationLevel;
         final grade = s.student.grade;
@@ -131,15 +171,20 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(15, 10, 12, 12),
             alignment: Alignment.center,
             constraints: BoxConstraints(minHeight: maxHeight ?? 160),
-            decoration: BoxDecoration(
-              color: const Color(0xFF0B1112),
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: levelBarColor, width: 1),
-            ),
+            decoration: showPanelFrame
+                ? BoxDecoration(
+                    color: const Color(0xFF0B1112),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: levelBarColor, width: 1),
+                  )
+                : null,
             width: double.infinity,
             child: const Text(
               '시간을 선택하면 상세 정보가 여기에 표시됩니다.',
-              style: TextStyle(color: Colors.white38, fontSize: 15, fontWeight: FontWeight.w500),
+              style: TextStyle(
+                  color: Colors.white38,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w500),
               textAlign: TextAlign.center,
             ),
           );
@@ -147,7 +192,7 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
       Widget content = Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (dayTimeLabel.isNotEmpty)
+          if (showDayTimeHeader && dayTimeLabel.isNotEmpty)
             Container(
               height: 48,
               width: double.infinity,
@@ -160,14 +205,14 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
               alignment: Alignment.center,
               child: Text(
                 dayTimeLabel,
-                style: const TextStyle(color: Color(0xFFEAF2F2), fontSize: 21, fontWeight: FontWeight.w700),
+                style: const TextStyle(
+                    color: Color(0xFFEAF2F2),
+                    fontSize: 21,
+                    fontWeight: FontWeight.w700),
                 textAlign: TextAlign.center,
               ),
             ),
-          if (useExpanded)
-            Expanded(child: emptyBody())
-          else
-            emptyBody(),
+          if (useExpanded) Expanded(child: emptyBody()) else emptyBody(),
         ],
       );
 
@@ -179,22 +224,19 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
 
     Widget body() {
       final List<Widget> contentChildren = <Widget>[];
-      if (students.isNotEmpty) {
-        contentChildren.add(_buildLevels(sortedLevels, byLevel, levelBarColor, levelTextColor));
+      if (useTimelineLayout) {
+        if (students.isNotEmpty || timelineExtraCards.isNotEmpty) {
+          contentChildren.add(_buildTimelineRows());
+        }
+      } else if (students.isNotEmpty) {
+          contentChildren
+              .add(_buildLevels(sortedLevels, byLevel, levelBarColor, levelTextColor));
       }
       // ✅ 셀 선택 리스트에서는 보강/추가/희망/시범 카드가 하단에 정렬되어야 한다.
-      if (extras.isNotEmpty) {
+      if (extras.isNotEmpty && !useTimelineLayout) {
         if (students.isNotEmpty) {
           contentChildren.add(const SizedBox(height: 1));
         }
-        // 원래 "학년 라벨"이 있던 자리 스타일로 '기타' 라벨을 추가해 시각적 간격을 맞춤
-        contentChildren.add(const Padding(
-          padding: EdgeInsets.only(bottom: 6, left: 14),
-          child: Text(
-            '기타',
-            style: TextStyle(color: Color(0xFFEAF2F2), fontSize: 16, fontWeight: FontWeight.w500),
-          ),
-        ));
         contentChildren.add(Padding(
           padding: const EdgeInsets.only(left: 14),
           child: Wrap(
@@ -204,14 +246,19 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
           ),
         ));
       }
+      final EdgeInsetsGeometry bodyPadding = useTimelineLayout
+          ? const EdgeInsets.only(top: 16, bottom: 8)
+          : const EdgeInsets.fromLTRB(15, 10, 12, 12);
       return Container(
-        padding: const EdgeInsets.fromLTRB(15, 10, 12, 12),
-        decoration: BoxDecoration(
-          color: const Color(0xFF0B1112),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: levelBarColor, width: 1),
-        ),
-        child: useExpanded
+        padding: bodyPadding,
+        decoration: showPanelFrame
+            ? BoxDecoration(
+                color: const Color(0xFF0B1112),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: levelBarColor, width: 1),
+              )
+            : null,
+        child: useExpanded && enableInnerScroll
             ? Scrollbar(
                 child: SingleChildScrollView(
                   child: Column(
@@ -230,7 +277,7 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
     Widget content = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (dayTimeLabel.isNotEmpty)
+        if (showDayTimeHeader && dayTimeLabel.isNotEmpty)
           Container(
             height: 48,
             width: double.infinity,
@@ -243,14 +290,14 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
             alignment: Alignment.center,
             child: Text(
               dayTimeLabel,
-              style: const TextStyle(color: Color(0xFFEAF2F2), fontSize: 21, fontWeight: FontWeight.w700),
+              style: const TextStyle(
+                  color: Color(0xFFEAF2F2),
+                  fontSize: 21,
+                  fontWeight: FontWeight.w700),
               textAlign: TextAlign.center,
             ),
           ),
-        if (useExpanded)
-          Expanded(child: body())
-        else
-          body(),
+        if (useExpanded) Expanded(child: body()) else body(),
       ],
     );
 
@@ -261,6 +308,156 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
       );
     }
     return content;
+  }
+
+  Widget _buildTimelineRows() {
+    final classColorById = <String, Color?>{
+      for (final c in DataManager.instance.classes) c.id: c.color,
+    };
+    final DateTime? ref = refDateForActions ?? startTime;
+    final int slotMinutes = timelineSlotMinutes <= 0 ? 30 : timelineSlotMinutes;
+
+    final visibleStudents = students.where((s) {
+      if (ref == null) return true;
+      final day = DateTime(ref.year, ref.month, ref.day);
+      return !DataManager.instance.isStudentPausedOn(s.student.id, day);
+    }).toList();
+
+    final entries = <_TimelineStudentEntry>[];
+    for (final s in visibleStudents) {
+      final block = blockOverrides?[s.student.id];
+      if (block == null) continue;
+      final startMinute = block.startHour * 60 + block.startMinute;
+      final durationMinutes = block.duration.inMinutes > 0
+          ? block.duration.inMinutes
+          : DataManager.instance.academySettings.lessonDuration;
+      entries.add(_TimelineStudentEntry(
+        student: s,
+        block: block,
+        startMinute: startMinute,
+        durationMinutes: durationMinutes,
+      ));
+    }
+    final rowEntries = <_TimelineRowEntry>[];
+
+    for (final entry in entries) {
+      final isSelected = selectedStudentIds.contains(entry.student.student.id);
+      final isHighlighted = !isSelectMode &&
+          (highlightedStudentId ?? '').isNotEmpty &&
+          highlightedStudentId == entry.student.student.id;
+      final sessionId = entry.block.sessionTypeId;
+      final Color? indicatorOverride = (sessionId != null &&
+              sessionId.isNotEmpty &&
+              sessionId != '__default_class__')
+          ? (classColorById[sessionId] ?? Colors.transparent)
+          : Colors.transparent;
+
+      final studentCard = _PanelStudentCard(
+        student: entry.student,
+        selected: isSelected,
+        highlighted: isHighlighted,
+        isSelectMode: isSelectMode,
+        onToggleSelect: onStudentSelectChanged == null
+            ? null
+            : (next) => onStudentSelectChanged!(entry.student.student.id, next),
+        onOpenStudentPage: onOpenStudentPage,
+        onTapCard: (!isSelectMode && onStudentCardTap != null)
+            ? () => onStudentCardTap!(entry.student.student.id)
+            : null,
+        indicatorColorOverride: indicatorOverride,
+        blockNumber: entry.block.number,
+      );
+
+      final interactiveCard = (!enableDrag || dayIndex == null || startTime == null)
+          ? studentCard
+          : _DraggablePanelCard(
+              card: studentCard,
+              student: entry.student,
+              allStudents: students,
+              selectedStudentIds: selectedStudentIds,
+              dayIndex: dayIndex!,
+              startTime: startTime!,
+              isClassRegisterMode: isClassRegisterMode,
+              onDragStart: onDragStart,
+              onDragEnd: onDragEnd,
+              blockOverride: entry.block,
+              enableSwipeActions: !isSelectMode &&
+                  refDateForActions != null &&
+                  (onEditTimeBlock != null || onDeleteTimeBlock != null),
+              refDateForActions: refDateForActions,
+              onEditTimeBlock: onEditTimeBlock,
+              onDeleteTimeBlock: onDeleteTimeBlock,
+            );
+
+      rowEntries.add(_TimelineRowEntry(
+        startMinute: entry.startMinute,
+        durationMinutes: entry.durationMinutes,
+        sortOrder: 0,
+        sortKey: entry.student.student.name,
+        child: interactiveCard,
+      ));
+    }
+
+    for (final extra in timelineExtraCards) {
+      rowEntries.add(_TimelineRowEntry(
+        startMinute: extra.startMinute,
+        durationMinutes: extra.durationMinutes,
+        sortOrder: 1,
+        sortKey: '',
+        child: extra.card,
+      ));
+    }
+
+    rowEntries.sort((a, b) {
+      final byStart = a.startMinute.compareTo(b.startMinute);
+      if (byStart != 0) return byStart;
+      final byOrder = a.sortOrder.compareTo(b.sortOrder);
+      if (byOrder != 0) return byOrder;
+      return a.sortKey.compareTo(b.sortKey);
+    });
+
+    if (rowEntries.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    const double rowHeight = 58;
+    const double rowGap = 4;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: List.generate(rowEntries.length, (index) {
+        final row = rowEntries[index];
+        final rawOffsetPx = ((row.startMinute - timelineDayStartMinutes) /
+                slotMinutes) *
+            timelineSlotWidth;
+        final offsetPx = rawOffsetPx.isFinite
+            ? rawOffsetPx.clamp(0.0, 100000.0).toDouble()
+            : 0.0;
+        final rawWidthPx = (row.durationMinutes / slotMinutes) * timelineSlotWidth;
+        final widthPx = rawWidthPx.isFinite
+            ? rawWidthPx.clamp(96.0, 100000.0).toDouble()
+            : timelineSlotWidth;
+        return Padding(
+          padding: EdgeInsets.only(bottom: index == rowEntries.length - 1 ? 0 : rowGap),
+          child: SizedBox(
+            width: double.infinity,
+            height: rowHeight,
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Positioned(
+                  left: offsetPx,
+                  top: 0,
+                  child: SizedBox(
+                    width: widthPx,
+                    child: row.child,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      }),
+    );
   }
 
   Widget _buildLevels(
@@ -279,54 +476,67 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
       children: [
         ...sortedLevels.map<Widget>((level) {
           final grades = byLevel[level]!;
-          final levelCount = grades.values.fold<int>(0, (p, c) => p + c.length);
           final sortedGrades = grades.keys.toList()..sort();
 
           return Padding(
-            padding: const EdgeInsets.only(bottom: 16),
+            padding: EdgeInsets.only(
+              bottom: showEducationGroupingHeaders ? 16 : 8,
+            ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  children: [
-                    Text(
-                      _levelLabel(level),
-                      style: TextStyle(color: levelTextColor, fontSize: 21, fontWeight: FontWeight.bold),
-                    ),
-                    const Spacer(),
-                  ],
-                ),
-                const SizedBox(height: 12),
+                if (showEducationGroupingHeaders)
+                  Row(
+                    children: [
+                      Text(
+                        _levelLabel(level),
+                        style: TextStyle(
+                            color: levelTextColor,
+                            fontSize: 21,
+                            fontWeight: FontWeight.bold),
+                      ),
+                      const Spacer(),
+                    ],
+                  ),
+                if (showEducationGroupingHeaders) const SizedBox(height: 12),
                 ...sortedGrades.map<Widget>((g) {
-                  final gradeStudents = grades[g]!..sort((a, b) => a.student.name.compareTo(b.student.name));
+                  final gradeStudents = grades[g]!
+                    ..sort((a, b) => a.student.name.compareTo(b.student.name));
                   return Padding(
-                    padding: const EdgeInsets.only(bottom: 12),
+                    padding: EdgeInsets.only(
+                      bottom: showEducationGroupingHeaders ? 12 : 8,
+                    ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 6, left: 14),
-                          child: Text(
-                            '$g학년',
-                            style: const TextStyle(color: Color(0xFFEAF2F2), fontSize: 16, fontWeight: FontWeight.w500),
+                        if (showEducationGroupingHeaders)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 6, left: 14),
+                            child: Text(
+                              '$g학년',
+                              style: const TextStyle(
+                                  color: Color(0xFFEAF2F2),
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w500),
+                            ),
                           ),
-                        ),
                         Wrap(
                           spacing: 8,
                           runSpacing: 10,
                           children: gradeStudents
                               // ✅ 휴원 기간에는 시간표 위젯(셀/요일 선택 패널)에서 학생카드를 아예 숨김
                               .where((s) {
-                                final DateTime? ref = refDateForActions ?? startTime;
-                                if (ref == null) return true;
-                                final day = DateTime(ref.year, ref.month, ref.day);
-                                return !DataManager.instance.isStudentPausedOn(
-                                  s.student.id,
-                                  day,
-                                );
-                              })
-                              .map<Widget>((s) {
-                            final isSelected = selectedStudentIds.contains(s.student.id);
+                            final DateTime? ref =
+                                refDateForActions ?? startTime;
+                            if (ref == null) return true;
+                            final day = DateTime(ref.year, ref.month, ref.day);
+                            return !DataManager.instance.isStudentPausedOn(
+                              s.student.id,
+                              day,
+                            );
+                          }).map<Widget>((s) {
+                            final isSelected =
+                                selectedStudentIds.contains(s.student.id);
                             final isHighlighted = !isSelectMode &&
                                 (highlightedStudentId ?? '').isNotEmpty &&
                                 highlightedStudentId == s.student.id;
@@ -339,60 +549,74 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
                             int? blockNumber;
                             final int? dIdx = dayIndex;
                             final DateTime? st = startTime;
-                          final StudentTimeBlock? overrideBlock = blockOverrides?[s.student.id];
-                          if (dIdx != null && st != null) {
-                            if (overrideBlock != null) {
-                              blockNumber = overrideBlock.number;
-                              final sessionId = overrideBlock.sessionTypeId;
-                              if (sessionId != null &&
-                                  sessionId.isNotEmpty &&
-                                  sessionId != '__default_class__') {
-                                indicatorOverride =
-                                    classColorById[sessionId] ?? Colors.transparent;
-                              } else {
-                                indicatorOverride = Colors.transparent;
+                            final StudentTimeBlock? overrideBlock =
+                                blockOverrides?[s.student.id];
+                            if (dIdx != null && st != null) {
+                              if (overrideBlock != null) {
+                                blockNumber = overrideBlock.number;
+                                final sessionId = overrideBlock.sessionTypeId;
+                                if (sessionId != null &&
+                                    sessionId.isNotEmpty &&
+                                    sessionId != '__default_class__') {
+                                  indicatorOverride =
+                                      classColorById[sessionId] ??
+                                          Colors.transparent;
+                                } else {
+                                  indicatorOverride = Colors.transparent;
+                                }
+                              }
+                              if (indicatorOverride == null) {
+                                final ref = DateTime(st.year, st.month, st.day);
+                                bool isActiveOn(StudentTimeBlock b) {
+                                  final sd = DateTime(b.startDate.year,
+                                      b.startDate.month, b.startDate.day);
+                                  final ed = b.endDate == null
+                                      ? null
+                                      : DateTime(b.endDate!.year,
+                                          b.endDate!.month, b.endDate!.day);
+                                  return !sd.isAfter(ref) &&
+                                      (ed == null || !ed.isBefore(ref));
+                                }
+
+                                final weekBlocks = DataManager.instance
+                                    .getStudentTimeBlocksForWeek(ref);
+                                final candidates = weekBlocks
+                                    .where((b) =>
+                                        b.studentId == s.student.id &&
+                                        b.dayIndex == dIdx &&
+                                        b.startHour == st.hour &&
+                                        b.startMinute == st.minute &&
+                                        isActiveOn(b))
+                                    .toList()
+                                  ..sort((a, b) =>
+                                      b.createdAt.compareTo(a.createdAt));
+                                final block = candidates.isNotEmpty
+                                    ? candidates.first
+                                    : StudentTimeBlock(
+                                        id: '',
+                                        studentId: '',
+                                        dayIndex: 0,
+                                        startHour: 0,
+                                        startMinute: 0,
+                                        duration: Duration.zero,
+                                        createdAt: DateTime(0),
+                                        startDate: DateTime(0),
+                                        sessionTypeId: null,
+                                        setId: null,
+                                      );
+                                blockNumber ??= block.number;
+                                final sessionId = block.sessionTypeId;
+                                if (sessionId != null &&
+                                    sessionId != '__default_class__') {
+                                  indicatorOverride =
+                                      classColorById[sessionId] ??
+                                          Colors.transparent;
+                                } else {
+                                  // sessionTypeId 없거나 기본수업이면 색상 표시하지 않음 (fallback 방지)
+                                  indicatorOverride = Colors.transparent;
+                                }
                               }
                             }
-                            if (indicatorOverride == null) {
-                              final ref = DateTime(st.year, st.month, st.day);
-                              bool isActiveOn(StudentTimeBlock b) {
-                                final sd = DateTime(b.startDate.year, b.startDate.month, b.startDate.day);
-                                final ed = b.endDate == null ? null : DateTime(b.endDate!.year, b.endDate!.month, b.endDate!.day);
-                                return !sd.isAfter(ref) && (ed == null || !ed.isBefore(ref));
-                              }
-                              final weekBlocks = DataManager.instance.getStudentTimeBlocksForWeek(ref);
-                              final candidates = weekBlocks.where((b) =>
-                                  b.studentId == s.student.id &&
-                                  b.dayIndex == dIdx &&
-                                  b.startHour == st.hour &&
-                                  b.startMinute == st.minute &&
-                                  isActiveOn(b)
-                              ).toList()..sort((a, b) => b.createdAt.compareTo(a.createdAt));
-                              final block = candidates.isNotEmpty
-                                  ? candidates.first
-                                  : StudentTimeBlock(
-                                      id: '',
-                                      studentId: '',
-                                      dayIndex: 0,
-                                      startHour: 0,
-                                      startMinute: 0,
-                                      duration: Duration.zero,
-                                      createdAt: DateTime(0),
-                                      startDate: DateTime(0),
-                                      sessionTypeId: null,
-                                      setId: null,
-                                    );
-                              blockNumber ??= block.number;
-                              final sessionId = block.sessionTypeId;
-                              if (sessionId != null && sessionId != '__default_class__') {
-                                indicatorOverride =
-                                    classColorById[sessionId] ?? Colors.transparent;
-                              } else {
-                                // sessionTypeId 없거나 기본수업이면 색상 표시하지 않음 (fallback 방지)
-                                indicatorOverride = Colors.transparent;
-                              }
-                            }
-                          }
                             final card = Padding(
                               padding: const EdgeInsets.only(left: 14),
                               child: _PanelStudentCard(
@@ -402,16 +626,20 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
                                 isSelectMode: isSelectMode,
                                 onToggleSelect: onStudentSelectChanged == null
                                     ? null
-                                    : (next) => onStudentSelectChanged!(s.student.id, next),
+                                    : (next) => onStudentSelectChanged!(
+                                        s.student.id, next),
                                 onOpenStudentPage: onOpenStudentPage,
-                                onTapCard: (!isSelectMode && onStudentCardTap != null)
-                                    ? () => onStudentCardTap!(s.student.id)
-                                    : null,
+                                onTapCard:
+                                    (!isSelectMode && onStudentCardTap != null)
+                                        ? () => onStudentCardTap!(s.student.id)
+                                        : null,
                                 indicatorColorOverride: indicatorOverride,
-                              blockNumber: blockNumber,
+                                blockNumber: blockNumber,
                               ),
                             );
-                            if (!enableDrag || dayIndex == null || startTime == null) return card;
+                            if (!enableDrag ||
+                                dayIndex == null ||
+                                startTime == null) return card;
                             return _DraggablePanelCard(
                               card: card,
                               student: s,
@@ -425,7 +653,8 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
                               blockOverride: blockOverrides?[s.student.id],
                               enableSwipeActions: !isSelectMode &&
                                   refDateForActions != null &&
-                                  (onEditTimeBlock != null || onDeleteTimeBlock != null),
+                                  (onEditTimeBlock != null ||
+                                      onDeleteTimeBlock != null),
                               refDateForActions: refDateForActions,
                               onEditTimeBlock: onEditTimeBlock,
                               onDeleteTimeBlock: onDeleteTimeBlock,
@@ -449,6 +678,36 @@ class _GroupedCache {
   final List<EducationLevel> sortedLevels;
   final Map<EducationLevel, Map<int, List<StudentWithInfo>>> byLevel;
   _GroupedCache(this.sortedLevels, this.byLevel);
+}
+
+class _TimelineStudentEntry {
+  final StudentWithInfo student;
+  final StudentTimeBlock block;
+  final int startMinute;
+  final int durationMinutes;
+
+  const _TimelineStudentEntry({
+    required this.student,
+    required this.block,
+    required this.startMinute,
+    required this.durationMinutes,
+  });
+}
+
+class _TimelineRowEntry {
+  final int startMinute;
+  final int durationMinutes;
+  final int sortOrder;
+  final String sortKey;
+  final Widget child;
+
+  const _TimelineRowEntry({
+    required this.startMinute,
+    required this.durationMinutes,
+    required this.sortOrder,
+    required this.sortKey,
+    required this.child,
+  });
 }
 
 class _PanelStudentCard extends StatelessWidget {
@@ -476,9 +735,28 @@ class _PanelStudentCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final nameStyle = const TextStyle(color: Color(0xFFEAF2F2), fontSize: 16, fontWeight: FontWeight.w600);
-    final schoolStyle = const TextStyle(color: Colors.white60, fontSize: 13, fontWeight: FontWeight.w500);
-    final schoolLabel = student.student.school.isNotEmpty ? student.student.school : '';
+    final nameStyle = const TextStyle(
+        color: Color(0xFFEAF2F2), fontSize: 16, fontWeight: FontWeight.w600);
+    final schoolStyle = const TextStyle(
+        color: Colors.white60, fontSize: 13, fontWeight: FontWeight.w500);
+    String gradeLabel(EducationLevel level, int grade) {
+      if (grade <= 0) return '';
+      switch (level) {
+        case EducationLevel.elementary:
+          return '초$grade';
+        case EducationLevel.middle:
+          return '중$grade';
+        case EducationLevel.high:
+          return '고$grade';
+      }
+    }
+
+    final school = student.student.school.trim();
+    final grade = gradeLabel(student.student.educationLevel, student.student.grade);
+    final schoolLabel = [
+      if (school.isNotEmpty) school,
+      if (grade.isNotEmpty) grade,
+    ].join(' · ');
     // 요일/셀 선택 리스트에서는 setId/시간 기준으로 받은 색상만 사용하고,
     // override가 없으면 투명 처리하여 다른 set의 색상이 퍼지지 않게 한다.
     final Color? classColor = indicatorColorOverride;
@@ -504,7 +782,10 @@ class _PanelStudentCard extends StatelessWidget {
           borderRadius: BorderRadius.circular(12),
           onTap: isSelectMode && onToggleSelect != null
               ? () => onToggleSelect!(!selected)
-              : (onTapCard ?? (onOpenStudentPage == null ? null : () => onOpenStudentPage!(student))),
+              : (onTapCard ??
+                  (onOpenStudentPage == null
+                      ? null
+                      : () => onOpenStudentPage!(student))),
           onDoubleTap: isSelectMode
               ? null
               : () => StudentTimeInfoDialog.show(context, student),
@@ -532,15 +813,6 @@ class _PanelStudentCard extends StatelessWidget {
                           maxLines: 1,
                         ),
                       ),
-                      if (blockNumber != null) ...[
-                        const SizedBox(width: 10),
-                        Text(
-                          '${blockNumber}',
-                          style: schoolStyle,
-                          overflow: TextOverflow.ellipsis,
-                          maxLines: 1,
-                        ),
-                      ],
                     ],
                   ),
                 ),
@@ -575,8 +847,10 @@ class _DraggablePanelCard extends StatelessWidget {
   final StudentTimeBlock? blockOverride;
   final bool enableSwipeActions;
   final DateTime? refDateForActions;
-  final Future<void> Function(BuildContext context, StudentWithInfo student, StudentTimeBlock block, DateTime refDate)? onEditTimeBlock;
-  final Future<void> Function(BuildContext context, StudentWithInfo student, StudentTimeBlock block, DateTime refDate)? onDeleteTimeBlock;
+  final Future<void> Function(BuildContext context, StudentWithInfo student,
+      StudentTimeBlock block, DateTime refDate)? onEditTimeBlock;
+  final Future<void> Function(BuildContext context, StudentWithInfo student,
+      StudentTimeBlock block, DateTime refDate)? onDeleteTimeBlock;
 
   const _DraggablePanelCard({
     required this.card,
@@ -599,36 +873,46 @@ class _DraggablePanelCard extends StatelessWidget {
     if (blockOverride != null && blockOverride!.studentId == s.student.id) {
       return blockOverride!.setId;
     }
-    final ref = refDateForActions ?? DateTime(startTime.year, startTime.month, startTime.day);
+    final ref = refDateForActions ??
+        DateTime(startTime.year, startTime.month, startTime.day);
     bool isActiveOn(StudentTimeBlock b) {
       final sd = DateTime(b.startDate.year, b.startDate.month, b.startDate.day);
-      final ed = b.endDate == null ? null : DateTime(b.endDate!.year, b.endDate!.month, b.endDate!.day);
+      final ed = b.endDate == null
+          ? null
+          : DateTime(b.endDate!.year, b.endDate!.month, b.endDate!.day);
       return !sd.isAfter(ref) && (ed == null || !ed.isBefore(ref));
     }
+
     final weekBlocks = DataManager.instance.getStudentTimeBlocksForWeek(ref);
-    final candidates = weekBlocks.where((b) =>
-        b.studentId == s.student.id &&
-        b.dayIndex == dayIndex &&
-        b.startHour == startTime.hour &&
-        b.startMinute == startTime.minute &&
-        isActiveOn(b)
-    ).toList()..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    final candidates = weekBlocks
+        .where((b) =>
+            b.studentId == s.student.id &&
+            b.dayIndex == dayIndex &&
+            b.startHour == startTime.hour &&
+            b.startMinute == startTime.minute &&
+            isActiveOn(b))
+        .toList()
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
     return candidates.isEmpty ? null : candidates.first.setId;
   }
 
   @override
   Widget build(BuildContext context) {
     // ✅ 휴원 기간에는 학생 카드 비활성화 + 드래그 금지
-    final refForPause =
-        refDateForActions ?? DateTime(startTime.year, startTime.month, startTime.day);
+    final refForPause = refDateForActions ??
+        DateTime(startTime.year, startTime.month, startTime.day);
     final bool isPausedHere =
         DataManager.instance.isStudentPausedOn(student.student.id, refForPause);
     final Widget disabledCard = Opacity(opacity: 0.45, child: card);
 
     final isSelected = selectedStudentIds.contains(student.student.id);
-    final selectedStudents = allStudents.where((s) => selectedStudentIds.contains(s.student.id)).toList();
+    final selectedStudents = allStudents
+        .where((s) => selectedStudentIds.contains(s.student.id))
+        .toList();
     final dragStudents = (isSelected && selectedStudents.length > 1)
-        ? selectedStudents.map((s) => {'student': s, 'setId': _findSetId(s)}).toList()
+        ? selectedStudents
+            .map((s) => {'student': s, 'setId': _findSetId(s)})
+            .toList()
         : [
             {'student': student, 'setId': _findSetId(student)}
           ];
@@ -645,7 +929,8 @@ class _DraggablePanelCard extends StatelessWidget {
       'startTime': startTime,
       'isSelfStudy': false,
     };
-    final feedbackStudents = dragStudents.map((e) => e['student'] as StudentWithInfo).toList();
+    final feedbackStudents =
+        dragStudents.map((e) => e['student'] as StudentWithInfo).toList();
     // 다중 이동 시에도 "드래그한 카드"가 맨 위로 오도록 재정렬
     feedbackStudents.removeWhere((s) => s.student.id == student.student.id);
     feedbackStudents.insert(0, student);
@@ -694,14 +979,18 @@ class _DraggablePanelCard extends StatelessWidget {
               color: const Color(0xFF223131),
               borderRadius: BorderRadius.circular(10),
               child: InkWell(
-                onTap: onEditTimeBlock == null ? null : () async => onEditTimeBlock!(context, student, target, ref),
+                onTap: onEditTimeBlock == null
+                    ? null
+                    : () async =>
+                        onEditTimeBlock!(context, student, target, ref),
                 borderRadius: BorderRadius.circular(10),
                 splashFactory: NoSplash.splashFactory,
                 highlightColor: Colors.white.withOpacity(0.06),
                 hoverColor: Colors.white.withOpacity(0.03),
                 child: const SizedBox.expand(
                   child: Center(
-                    child: Icon(Icons.edit_outlined, color: Color(0xFFEAF2F2), size: 18),
+                    child: Icon(Icons.edit_outlined,
+                        color: Color(0xFFEAF2F2), size: 18),
                   ),
                 ),
               ),
@@ -713,14 +1002,18 @@ class _DraggablePanelCard extends StatelessWidget {
               color: const Color(0xFFB74C4C),
               borderRadius: BorderRadius.circular(10),
               child: InkWell(
-                onTap: onDeleteTimeBlock == null ? null : () async => onDeleteTimeBlock!(context, student, target, ref),
+                onTap: onDeleteTimeBlock == null
+                    ? null
+                    : () async =>
+                        onDeleteTimeBlock!(context, student, target, ref),
                 borderRadius: BorderRadius.circular(10),
                 splashFactory: NoSplash.splashFactory,
                 highlightColor: Colors.white.withOpacity(0.08),
                 hoverColor: Colors.white.withOpacity(0.04),
                 child: const SizedBox.expand(
                   child: Center(
-                    child: Icon(Icons.delete_outline_rounded, color: Colors.white, size: 18),
+                    child: Icon(Icons.delete_outline_rounded,
+                        color: Colors.white, size: 18),
                   ),
                 ),
               ),
@@ -776,7 +1069,24 @@ class _PanelDragFeedback extends StatelessWidget {
         fontSize: 13,
         fontWeight: FontWeight.w500,
       );
-      final schoolLabel = s.student.school.isNotEmpty ? s.student.school : '';
+      String gradeLabel(EducationLevel level, int grade) {
+        if (grade <= 0) return '';
+        switch (level) {
+          case EducationLevel.elementary:
+            return '초$grade';
+          case EducationLevel.middle:
+            return '중$grade';
+          case EducationLevel.high:
+            return '고$grade';
+        }
+      }
+
+      final school = s.student.school.trim();
+      final grade = gradeLabel(s.student.educationLevel, s.student.grade);
+      final schoolLabel = [
+        if (school.isNotEmpty) school,
+        if (grade.isNotEmpty) grade,
+      ].join(' · ');
       return SizedBox(
         height: cardH,
         child: Container(
@@ -872,4 +1182,3 @@ class _PanelDragFeedback extends StatelessWidget {
     );
   }
 }
-

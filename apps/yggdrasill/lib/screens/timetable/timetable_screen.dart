@@ -48,8 +48,8 @@ const bool _kCellRenderPerfTrace =
     bool.fromEnvironment('TT_CELL_PERF', defaultValue: false);
 
 enum TimetableViewType {
-  classes,    // 수업
-  schedule;   // 일정
+  classes, // 수업
+  schedule; // 일정
 
   String get name {
     switch (this) {
@@ -65,12 +65,14 @@ class MemoItem {
   final String id;
   final String original;
   final String summary;
-  const MemoItem({required this.id, required this.original, required this.summary});
-  MemoItem copyWith({String? id, String? original, String? summary}) => MemoItem(
-    id: id ?? this.id,
-    original: original ?? this.original,
-    summary: summary ?? this.summary,
-  );
+  const MemoItem(
+      {required this.id, required this.original, required this.summary});
+  MemoItem copyWith({String? id, String? original, String? summary}) =>
+      MemoItem(
+        id: id ?? this.id,
+        original: original ?? this.original,
+        summary: summary ?? this.summary,
+      );
 }
 
 class TimetableScreen extends StatefulWidget {
@@ -118,7 +120,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
   // PERF: 셀 선택 → 우측 패널 렌더까지 측정용 토큰/타임스탬프
   int _cellRenderPerfToken = 0;
   int _cellRenderPerfStartUs = 0;
-  final Map<int, dev.TimelineTask> _cellRenderPerfTasks = <int, dev.TimelineTask>{};
+  final Map<int, dev.TimelineTask> _cellRenderPerfTasks =
+      <int, dev.TimelineTask>{};
   final Map<int, int> _cellRenderPerfStartByToken = <int, int>{};
   final FocusNode _focusNode = FocusNode();
   // 필터 chips 상태
@@ -130,7 +133,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
   // 실제 적용된 필터 상태
   Map<String, Set<String>>? _activeFilter;
   // TimetableContentView의 검색 리셋 메서드에 접근하기 위한 key
-  final GlobalKey<TimetableContentViewState> _contentViewKey = GlobalKey<TimetableContentViewState>();
+  final GlobalKey<TimetableContentViewState> _contentViewKey =
+      GlobalKey<TimetableContentViewState>();
   // 선택 모드 및 선택 학생 상태 추가
   bool _isSelectMode = false;
   Set<String> _selectedStudentIds = {};
@@ -139,6 +143,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
   // 자습 등록 모드 상태
   bool _isSelfStudyRegistrationMode = false;
   StudentWithInfo? _selectedSelfStudyStudent;
+  bool _isClassListSheetOpen = false;
   // 자동종료 제거: 종료는 ESC/우클릭으로만 처리(커밋)
   final GlobalKey _registerDropdownKey = GlobalKey();
   OverlayEntry? _registerDropdownOverlay;
@@ -233,7 +238,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
       endDayC.text = _pad(endDate.day);
     }
 
-    void _applyFromPicker(bool isStart, DateTime d, void Function(void Function()) setState) {
+    void _applyFromPicker(
+        bool isStart, DateTime d, void Function(void Function()) setState) {
       setState(() {
         if (isStart) {
           startDate = DateTime(d.year, d.month, d.day);
@@ -245,7 +251,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
       });
     }
 
-    Future<void> _pickDate(bool isStart, void Function(void Function()) setState) async {
+    Future<void> _pickDate(
+        bool isStart, void Function(void Function()) setState) async {
       final initial = isStart ? startDate : endDate;
       final picked = await showDatePicker(
         context: context,
@@ -272,7 +279,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
       }
     }
 
-    InputDecoration _decoration(String label, {String? suffix}) => InputDecoration(
+    InputDecoration _decoration(String label, {String? suffix}) =>
+        InputDecoration(
           labelText: label,
           labelStyle: const TextStyle(color: Color(0xFFEAF2F2), fontSize: 12),
           suffixText: suffix,
@@ -285,7 +293,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
             borderRadius: const BorderRadius.all(Radius.circular(8)),
             borderSide: BorderSide(color: green),
           ),
-          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         );
 
     Widget _dateFields({
@@ -371,7 +380,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
           const SizedBox(width: 8),
           IconButton(
             onPressed: () => _pickDate(isStart, setState),
-            icon: const Icon(Icons.calendar_today, color: Color(0xFFEAF2F2), size: 18),
+            icon: const Icon(Icons.calendar_today,
+                color: Color(0xFFEAF2F2), size: 18),
             splashRadius: 18,
           ),
         ],
@@ -392,7 +402,11 @@ class _TimetableScreenState extends State<TimetableScreen> {
               titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
               contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
               actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
-              title: const Text('효력 기간 설정', style: TextStyle(color: Color(0xFFEAF2F2), fontSize: 18, fontWeight: FontWeight.bold)),
+              title: const Text('효력 기간 설정',
+                  style: TextStyle(
+                      color: Color(0xFFEAF2F2),
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold)),
               content: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -416,7 +430,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
                             if (!hasEnd) endDate = startDate;
                             _syncControllers();
                           }),
-                          title: const Text('종료기간 없음', style: TextStyle(color: Color(0xFFEAF2F2))),
+                          title: const Text('종료기간 없음',
+                              style: TextStyle(color: Color(0xFFEAF2F2))),
                           activeColor: green,
                           enableFeedback: false,
                         ),
@@ -427,7 +442,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
                             hasEnd = v ?? true;
                             _syncControllers();
                           }),
-                          title: const Text('종료기간 있음', style: TextStyle(color: Color(0xFFEAF2F2))),
+                          title: const Text('종료기간 있음',
+                              style: TextStyle(color: Color(0xFFEAF2F2))),
                           activeColor: green,
                           enableFeedback: false,
                         ),
@@ -435,12 +451,20 @@ class _TimetableScreenState extends State<TimetableScreen> {
                     ),
                   ),
                   const SizedBox(height: 12),
-                  const Text('시작일', style: TextStyle(color: Color(0xFFEAF2F2), fontSize: 13, fontWeight: FontWeight.w600)),
+                  const Text('시작일',
+                      style: TextStyle(
+                          color: Color(0xFFEAF2F2),
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600)),
                   const SizedBox(height: 10),
                   _dateFields(isStart: true, setState: setState),
                   if (hasEnd) ...[
                     const SizedBox(height: 16),
-                    const Text('종료일', style: TextStyle(color: Color(0xFFEAF2F2), fontSize: 13, fontWeight: FontWeight.w600)),
+                    const Text('종료일',
+                        style: TextStyle(
+                            color: Color(0xFFEAF2F2),
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600)),
                     const SizedBox(height: 10),
                     _dateFields(isStart: false, setState: setState),
                   ],
@@ -449,21 +473,27 @@ class _TimetableScreenState extends State<TimetableScreen> {
               actions: [
                 TextButton(
                   onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('취소', style: TextStyle(color: Color(0xFFEAF2F2))),
+                  child: const Text('취소',
+                      style: TextStyle(color: Color(0xFFEAF2F2))),
                 ),
                 TextButton(
                   onPressed: () {
                     if (!hasEnd) {
-                      Navigator.of(context).pop(_BlockRange(start: startDate, end: null));
+                      Navigator.of(context)
+                          .pop(_BlockRange(start: startDate, end: null));
                       return;
                     }
                     if (endDate.isBefore(startDate)) {
-                      showAppSnackBar(context, '종료일은 시작일 이후여야 합니다.', useRoot: true);
+                      showAppSnackBar(context, '종료일은 시작일 이후여야 합니다.',
+                          useRoot: true);
                       return;
                     }
-                    Navigator.of(context).pop(_BlockRange(start: startDate, end: endDate));
+                    Navigator.of(context)
+                        .pop(_BlockRange(start: startDate, end: endDate));
                   },
-                  child: Text('확인', style: TextStyle(color: green, fontWeight: FontWeight.w600)),
+                  child: Text('확인',
+                      style:
+                          TextStyle(color: green, fontWeight: FontWeight.w600)),
                 ),
               ],
             );
@@ -475,12 +505,15 @@ class _TimetableScreenState extends State<TimetableScreen> {
 
   bool _isBlockActiveOnDate(StudentTimeBlock block, DateTime date) {
     final target = DateTime(date.year, date.month, date.day);
-    final start = DateTime(block.startDate.year, block.startDate.month, block.startDate.day);
+    final start = DateTime(
+        block.startDate.year, block.startDate.month, block.startDate.day);
     final end = block.endDate != null
-        ? DateTime(block.endDate!.year, block.endDate!.month, block.endDate!.day)
+        ? DateTime(
+            block.endDate!.year, block.endDate!.month, block.endDate!.day)
         : null;
     return !start.isAfter(target) && (end == null || !end.isBefore(target));
   }
+
   String? _selectedClassId; // 학생 검색 다이얼로그에서 선택된 수업(session_type_id)
   String _headerSearchQuery = '';
 
@@ -488,21 +521,25 @@ class _TimetableScreenState extends State<TimetableScreen> {
     if (_selectedClassId == null || _selectedClassId!.isEmpty) {
       if (_kRegistrationPerfDebug) {
         // ignore: avoid_print
-        print('[DEBUG][_applySelectedClassId] skip (selectedClassId is null/empty), blocks=${blocks.length}');
+        print(
+            '[DEBUG][_applySelectedClassId] skip (selectedClassId is null/empty), blocks=${blocks.length}');
       }
       return blocks;
     }
-    final mapped = blocks.map((b) => b.copyWith(sessionTypeId: _selectedClassId)).toList();
+    final mapped =
+        blocks.map((b) => b.copyWith(sessionTypeId: _selectedClassId)).toList();
     if (_kRegistrationPerfDebug) {
       // ignore: avoid_print
-      print('[DEBUG][_applySelectedClassId] selectedClassId=$_selectedClassId, before=${blocks.take(5).map((b)=>'${b.id}:${b.sessionTypeId}:${b.setId}').toList()}, after=${mapped.take(5).map((b)=>'${b.id}:${b.sessionTypeId}:${b.setId}').toList()}');
+      print(
+          '[DEBUG][_applySelectedClassId] selectedClassId=$_selectedClassId, before=${blocks.take(5).map((b) => '${b.id}:${b.sessionTypeId}:${b.setId}').toList()}, after=${mapped.take(5).map((b) => '${b.id}:${b.sessionTypeId}:${b.setId}').toList()}');
     }
     return mapped;
   }
 
   // 메모 슬라이드 상태
   final ValueNotifier<bool> _isMemoOpen = ValueNotifier(false);
-  final ValueNotifier<List<MemoItem>> _memos = ValueNotifier<List<MemoItem>>([]);
+  final ValueNotifier<List<MemoItem>> _memos =
+      ValueNotifier<List<MemoItem>>([]);
 
   @override
   void initState() {
@@ -511,7 +548,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
     _loadOperatingHours();
     // ✅ 주 이동(과거/미래)에서도 정확히 렌더링되도록, 현재 주의 time blocks를 미리 로드
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      unawaited(DataManager.instance.ensureStudentTimeBlocksForWeek(_selectedDate));
+      unawaited(
+          DataManager.instance.ensureStudentTimeBlocksForWeek(_selectedDate));
     });
     // 일정 스토어 초기화
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -537,29 +575,34 @@ class _TimetableScreenState extends State<TimetableScreen> {
     int currentIdx = 0;
     for (int i = 0; i < timeBlocks.length; i++) {
       final block = timeBlocks[i];
-      if (block.startTime.hour < now.hour || (block.startTime.hour == now.hour && block.startTime.minute <= now.minute)) {
+      if (block.startTime.hour < now.hour ||
+          (block.startTime.hour == now.hour &&
+              block.startTime.minute <= now.minute)) {
         currentIdx = i;
       }
     }
-    final blockHeight = 90.0;
-    final visibleRows = 5;
+    const timeColumnWidth = 148.0;
+    final visibleColumns = 6;
     final firstBlock = timeBlocks.isNotEmpty ? timeBlocks.first : null;
     final lastBlock = timeBlocks.isNotEmpty ? timeBlocks.last : null;
     int scrollIdx = currentIdx;
     if (firstBlock != null && lastBlock != null) {
       final nowMinutes = now.hour * 60 + now.minute;
-      final firstMinutes = firstBlock.startTime.hour * 60 + firstBlock.startTime.minute;
-      final lastMinutes = lastBlock.startTime.hour * 60 + lastBlock.startTime.minute;
+      final firstMinutes =
+          firstBlock.startTime.hour * 60 + firstBlock.startTime.minute;
+      final lastMinutes =
+          lastBlock.startTime.hour * 60 + lastBlock.startTime.minute;
       if (nowMinutes < firstMinutes) {
         scrollIdx = 0;
       } else if (nowMinutes > lastMinutes) {
         scrollIdx = timeBlocks.length - 1;
       }
     }
-    final targetOffset = (scrollIdx - (visibleRows ~/ 2)) * blockHeight;
+    final targetOffset = (scrollIdx - (visibleColumns ~/ 2)) * timeColumnWidth;
     if (_kRegistrationPerfDebug) {
       // ignore: avoid_print
-      print('[DEBUG][Timetable] scrollToCurrentTime: blocks=${timeBlocks.length}, currentIdx=$currentIdx, targetOffset=$targetOffset');
+      print(
+          '[DEBUG][Timetable] scrollToCurrentTime: blocks=${timeBlocks.length}, currentIdx=$currentIdx, targetOffset=$targetOffset');
     }
     if (_timetableScrollController.hasClients) {
       final maxOffset = _timetableScrollController.position.maxScrollExtent;
@@ -573,7 +616,9 @@ class _TimetableScreenState extends State<TimetableScreen> {
         // ✅ 첫 진입 UX: "순간이동" 대신 부드럽게 이동
         // ✅ 성능: 거리 기반으로 duration을 짧게(최대 420ms) 제한
         // 너무 짧으면 시각적으로 "점프"처럼 느껴질 수 있어 최소 시간을 조금 올린다.
-        final ms = (240 + (delta / (blockHeight * 20) * 220)).clamp(240, 520).round();
+        final ms = (240 + (delta / (timeColumnWidth * 20) * 220))
+            .clamp(240, 520)
+            .round();
         _timetableScrollController.animateTo(
           scrollTo,
           duration: Duration(milliseconds: ms),
@@ -597,17 +642,21 @@ class _TimetableScreenState extends State<TimetableScreen> {
       final now = DateTime.now();
       int minHour = 23, minMinute = 59, maxHour = 0, maxMinute = 0;
       for (final hours in _operatingHours) {
-        if (hours.startHour < minHour || (hours.startHour == minHour && hours.startMinute < minMinute)) {
+        if (hours.startHour < minHour ||
+            (hours.startHour == minHour && hours.startMinute < minMinute)) {
           minHour = hours.startHour;
           minMinute = hours.startMinute;
         }
-        if (hours.endHour > maxHour || (hours.endHour == maxHour && hours.endMinute > maxMinute)) {
+        if (hours.endHour > maxHour ||
+            (hours.endHour == maxHour && hours.endMinute > maxMinute)) {
           maxHour = hours.endHour;
           maxMinute = hours.endMinute;
         }
       }
-      var currentTime = DateTime(now.year, now.month, now.day, minHour, minMinute);
-      final endTime = DateTime(now.year, now.month, now.day, maxHour, maxMinute);
+      var currentTime =
+          DateTime(now.year, now.month, now.day, minHour, minMinute);
+      final endTime =
+          DateTime(now.year, now.month, now.day, maxHour, maxMinute);
       while (currentTime.isBefore(endTime)) {
         final blockEndTime = currentTime.add(const Duration(minutes: 30));
         blocks.add(TimeBlock(
@@ -627,8 +676,10 @@ class _TimetableScreenState extends State<TimetableScreen> {
     final dayIdx = (now.weekday - DateTime.monday).clamp(0, 6);
     if (_operatingHours.length > dayIdx) {
       final op = _operatingHours[dayIdx];
-      final start = DateTime(now.year, now.month, now.day, op.startHour, op.startMinute);
-      final end = DateTime(now.year, now.month, now.day, op.endHour, op.endMinute);
+      final start =
+          DateTime(now.year, now.month, now.day, op.startHour, op.startMinute);
+      final end =
+          DateTime(now.year, now.month, now.day, op.endHour, op.endMinute);
       final within = now.isAfter(start) && now.isBefore(end);
       if (!within) return '운영시간이 아닙니다.';
     }
@@ -651,21 +702,27 @@ class _TimetableScreenState extends State<TimetableScreen> {
     });
     // 운영시간 로드 후 스크롤 및 자동 선택 로그
     if (!_hasScrolledToCurrentTime) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToCurrentTime(preferAnimate: true));
+      WidgetsBinding.instance.addPostFrameCallback(
+          (_) => _scrollToCurrentTime(preferAnimate: true));
       _hasScrolledToCurrentTime = true;
     }
     // 운영시간 내라면 현재 시간 셀 자동 선택 (그리드 타임블록에 스냅)
-    if (_selectedCellDayIndex == null || _selectedStartTimeHour == null || _selectedStartTimeMinute == null) {
+    if (_selectedCellDayIndex == null ||
+        _selectedStartTimeHour == null ||
+        _selectedStartTimeMinute == null) {
       final now = DateTime.now();
       final dayIdx = (now.weekday - DateTime.monday).clamp(0, 6);
       if (_operatingHours.length > dayIdx) {
         final op = _operatingHours[dayIdx];
-        final start = DateTime(now.year, now.month, now.day, op.startHour, op.startMinute);
-        final end = DateTime(now.year, now.month, now.day, op.endHour, op.endMinute);
+        final start = DateTime(
+            now.year, now.month, now.day, op.startHour, op.startMinute);
+        final end =
+            DateTime(now.year, now.month, now.day, op.endHour, op.endMinute);
         final within = now.isAfter(start) && now.isBefore(end);
         if (_kRegistrationPerfDebug) {
           // ignore: avoid_print
-          print('[DEBUG][Timetable] auto-select check: now=$now start=$start end=$end within=$within');
+          print(
+              '[DEBUG][Timetable] auto-select check: now=$now start=$start end=$end within=$within');
         }
         if (within) {
           // 1) 해당 날짜의 타임블록 생성
@@ -696,7 +753,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
             });
             if (_kRegistrationPerfDebug) {
               // ignore: avoid_print
-              print('[DEBUG][Timetable] auto-selected(snapped): dayIdx=$_selectedCellDayIndex time=${_selectedStartTimeHour}:${_selectedStartTimeMinute}');
+              print(
+                  '[DEBUG][Timetable] auto-selected(snapped): dayIdx=$_selectedCellDayIndex time=${_selectedStartTimeHour}:${_selectedStartTimeMinute}');
             }
           }
         }
@@ -709,8 +767,10 @@ class _TimetableScreenState extends State<TimetableScreen> {
       _selectedDate = date;
       // 주차 이동 시, 요일이 선택되어 있으면 새 주 기준으로 선택 날짜를 재계산
       if (_selectedDayIndex != null) {
-        final monday = _selectedDate.subtract(Duration(days: _selectedDate.weekday - DateTime.monday));
-        _selectedDayDate = DateTime(monday.year, monday.month, monday.day).add(Duration(days: _selectedDayIndex!));
+        final monday = _selectedDate
+            .subtract(Duration(days: _selectedDate.weekday - DateTime.monday));
+        _selectedDayDate = DateTime(monday.year, monday.month, monday.day)
+            .add(Duration(days: _selectedDayIndex!));
       } else {
         _selectedDayDate = null;
       }
@@ -728,7 +788,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
   void _handleRegistrationButton() async {
     if (_kRegistrationPerfDebug) {
       // ignore: avoid_print
-      print('[DEBUG] _handleRegistrationButton 진입: _isStudentRegistrationMode=$_isStudentRegistrationMode');
+      print(
+          '[DEBUG] _handleRegistrationButton 진입: _isStudentRegistrationMode=$_isStudentRegistrationMode');
     }
     // 학생 수업시간 등록 모드 진입 시 다이얼로그 띄우기
     // ✅ 상단 '+ 추가' 버튼은 "학생 수업시간 등록"만 지원한다. (드롭다운 제거)
@@ -748,7 +809,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
       if (DataManager.instance.studentTimeBlocks.isEmpty) {
         unawaited(DataManager.instance.loadStudentTimeBlocks());
       } else {
-        unawaited(DataManager.instance.ensureStudentTimeBlocksForWeek(_selectedDate));
+        unawaited(
+            DataManager.instance.ensureStudentTimeBlocksForWeek(_selectedDate));
       }
       unawaited(DataManager.instance.loadStudents());
     });
@@ -767,14 +829,18 @@ class _TimetableScreenState extends State<TimetableScreen> {
         // 항상 students에서 StudentWithInfo를 찾아서 사용
         studentWithInfo = DataManager.instance.students.firstWhere(
           (s) => s.student.id == selected!.id,
-          orElse: () => StudentWithInfo(student: selected!, basicInfo: StudentBasicInfo(studentId: selected!.id)),
+          orElse: () => StudentWithInfo(
+              student: selected!,
+              basicInfo: StudentBasicInfo(studentId: selected!.id)),
         );
         // 만약 students에 없다면 loadStudents를 강제로 다시 불러오고 재시도
         if (studentWithInfo.student.id != selected!.id) {
           await DataManager.instance.loadStudents();
           studentWithInfo = DataManager.instance.students.firstWhere(
             (s) => s.student.id == selected!.id,
-            orElse: () => StudentWithInfo(student: selected!, basicInfo: StudentBasicInfo(studentId: selected!.id)),
+            orElse: () => StudentWithInfo(
+                student: selected!,
+                basicInfo: StudentBasicInfo(studentId: selected!.id)),
           );
         }
       }
@@ -782,7 +848,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
       setState(() {
         _isStudentRegistrationMode = true;
         _isClassRegistrationMode = false;
-        _selectedStudentWithInfo = studentWithInfo != null ? studentWithInfo : null;
+        _selectedStudentWithInfo =
+            studentWithInfo != null ? studentWithInfo : null;
         // 사전 선택된 수업이 있으면 기록 (이후 블록 생성 시 사용)
         if (preselectedClassId != null && preselectedClassId!.isNotEmpty) {
           _selectedClassId = preselectedClassId;
@@ -793,35 +860,40 @@ class _TimetableScreenState extends State<TimetableScreen> {
         }
         if (_kRegistrationPerfDebug) {
           // ignore: avoid_print
-          print('[DEBUG][setState:학생선택] _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo, _selectedClassId=$_selectedClassId');
+          print(
+              '[DEBUG][setState:학생선택] _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo, _selectedClassId=$_selectedClassId');
         }
       });
       // ESC 등 키 입력 포커스를 다시 메인 타임테이블로 돌려 등록 취소/종료가 동작하도록 한다.
       _focusNode.requestFocus();
       if (_kRegistrationPerfDebug) {
         // ignore: avoid_print
-        print('[DEBUG] 학생 선택 후 등록모드 진입: _isStudentRegistrationMode=$_isStudentRegistrationMode');
+        print(
+            '[DEBUG] 학생 선택 후 등록모드 진입: _isStudentRegistrationMode=$_isStudentRegistrationMode');
       }
     } else {
       setState(() {
         _isStudentRegistrationMode = false;
         _isClassRegistrationMode = false;
         _selectedStudentWithInfo = null;
-        
+
         if (_kRegistrationPerfDebug) {
           // ignore: avoid_print
-          print('[DEBUG][setState:학생선택취소] _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo');
+          print(
+              '[DEBUG][setState:학생선택취소] _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo');
         }
       });
       if (_kRegistrationPerfDebug) {
         // ignore: avoid_print
-        print('[DEBUG] 학생 선택 취소: _isStudentRegistrationMode=$_isStudentRegistrationMode');
+        print(
+            '[DEBUG] 학생 선택 취소: _isStudentRegistrationMode=$_isStudentRegistrationMode');
       }
     }
   }
 
   void _showRegisterDropdownMenu() {
-    final renderBox = _registerDropdownKey.currentContext?.findRenderObject() as RenderBox?;
+    final renderBox =
+        _registerDropdownKey.currentContext?.findRenderObject() as RenderBox?;
     if (renderBox == null) return;
     final offset = renderBox.localToGlobal(Offset.zero);
     final size = renderBox.size;
@@ -860,16 +932,20 @@ class _TimetableScreenState extends State<TimetableScreen> {
                   },
                   child: Container(
                     width: double.infinity,
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 12),
                     decoration: BoxDecoration(
-                      color: selected ? const Color(0xFF383838) : Colors.transparent,
+                      color: selected
+                          ? const Color(0xFF383838)
+                          : Colors.transparent,
                       borderRadius: BorderRadius.circular(6),
                     ),
                     child: Text(
                       label,
                       style: TextStyle(
                         color: selected ? Colors.white : Colors.white70,
-                        fontWeight: selected ? FontWeight.bold : FontWeight.normal,
+                        fontWeight:
+                            selected ? FontWeight.bold : FontWeight.normal,
                       ),
                     ),
                   ),
@@ -919,7 +995,10 @@ class _TimetableScreenState extends State<TimetableScreen> {
                     SizedBox(width: 8),
                     Text(
                       '추가',
-                      style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold),
                     ),
                   ],
                 ),
@@ -936,7 +1015,21 @@ class _TimetableScreenState extends State<TimetableScreen> {
       controller: _headerSearchController,
       hasText: _headerSearchQuery.isNotEmpty,
       onChanged: (value) {
-        setState(() => _headerSearchQuery = value);
+        final shouldOpenClassSheet =
+            value.trim().isNotEmpty && !_isClassListSheetOpen;
+        final hadText = _headerSearchQuery.isNotEmpty;
+        final hasText = value.isNotEmpty;
+        if (shouldOpenClassSheet || hadText != hasText) {
+          setState(() {
+            _headerSearchQuery = value;
+            if (shouldOpenClassSheet) {
+              _isClassListSheetOpen = true;
+            }
+          });
+        } else {
+          // 입력 중에는 전체 시간표 rebuild를 줄이기 위해 state 전파를 최소화
+          _headerSearchQuery = value;
+        }
         _contentViewKey.currentState?.updateSearchQuery(value);
       },
       onClear: () {
@@ -1024,8 +1117,11 @@ class _TimetableScreenState extends State<TimetableScreen> {
   }
 
   void _handleSelectAllStudents() {
-    if (_selectedCellDayIndex != null && _selectedStartTimeHour != null && _selectedStartTimeMinute != null) {
-      final cellStudents = _getCellStudents(_selectedCellDayIndex!, _selectedStartTimeHour!, _selectedStartTimeMinute!);
+    if (_selectedCellDayIndex != null &&
+        _selectedStartTimeHour != null &&
+        _selectedStartTimeMinute != null) {
+      final cellStudents = _getCellStudents(_selectedCellDayIndex!,
+          _selectedStartTimeHour!, _selectedStartTimeMinute!);
       setState(() {
         _selectedStudentIds = cellStudents.map((s) => s.student.id).toSet();
       });
@@ -1060,10 +1156,23 @@ class _TimetableScreenState extends State<TimetableScreen> {
   // TimetableHeader 요일 클릭 콜백
   void _onDayHeaderSelected(int dayIndex) {
     // 선택한 주의 월요일 기준 실제 날짜 계산 후 상태 반영
-    final monday = _selectedDate.subtract(Duration(days: _selectedDate.weekday - DateTime.monday));
-    final dayDate = DateTime(monday.year, monday.month, monday.day).add(Duration(days: dayIndex));
+    final monday = _selectedDate
+        .subtract(Duration(days: _selectedDate.weekday - DateTime.monday));
+    final dayDate = DateTime(monday.year, monday.month, monday.day)
+        .add(Duration(days: dayIndex));
     // 검색창 리셋
     _resetSearch();
+    if (!_isClassListSheetOpen) {
+      setState(() {
+        _isClassListSheetOpen = true;
+        _selectedDayIndex = dayIndex;
+        _selectedCellDayIndex = dayIndex;
+        _selectedStartTimeHour = null;
+        _selectedStartTimeMinute = null;
+        _selectedDayDate = dayDate;
+      });
+      return;
+    }
     setState(() {
       _selectedDayIndex = dayIndex;
       _selectedCellDayIndex = dayIndex; // 내용 패널이 요일 기준으로 보이도록
@@ -1080,9 +1189,19 @@ class _TimetableScreenState extends State<TimetableScreen> {
     // 학년 chips
     final educationLevels = ['초등', '중등', '고등'];
     final grades = [
-      '초1', '초2', '초3', '초4', '초5', '초6',
-      '중1', '중2', '중3',
-      '고1', '고2', '고3', 'N수',
+      '초1',
+      '초2',
+      '초3',
+      '초4',
+      '초5',
+      '초6',
+      '중1',
+      '중2',
+      '중3',
+      '고1',
+      '고2',
+      '고3',
+      'N수',
     ];
     // 학교 chips (학생 정보 기준, 중복 제거)
     final schools = students
@@ -1092,13 +1211,20 @@ class _TimetableScreenState extends State<TimetableScreen> {
         .toList()
       ..sort();
     // 그룹 chips (등록된 그룹명)
-    final groupNames = groups.map((g) => g.name.trim()).where((n) => n.isNotEmpty).toList()
+    final groupNames = groups
+        .map((g) => g.name.trim())
+        .where((n) => n.isNotEmpty)
+        .toList()
       ..sort();
     // 수업 chips (등록된 수업명)
-    final classNames = classes.map((c) => c.name.trim()).where((n) => n.isNotEmpty).toList()
+    final classNames = classes
+        .map((c) => c.name.trim())
+        .where((n) => n.isNotEmpty)
+        .toList()
       ..sort();
     // chips 임시 상태 변수
-    Set<String> tempSelectedEducationLevels = Set.from(_selectedEducationLevels);
+    Set<String> tempSelectedEducationLevels =
+        Set.from(_selectedEducationLevels);
     Set<String> tempSelectedGrades = Set.from(_selectedGrades);
     Set<String> tempSelectedSchools = Set.from(_selectedSchools);
     Set<String> tempSelectedGroups = Set.from(_selectedGroups);
@@ -1119,7 +1245,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
               actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
               title: const Text(
                 '필터',
-                style: TextStyle(color: kDlgText, fontSize: 20, fontWeight: FontWeight.w900),
+                style: TextStyle(
+                    color: kDlgText, fontSize: 20, fontWeight: FontWeight.w900),
               ),
               content: SizedBox(
                 width: 640,
@@ -1130,15 +1257,16 @@ class _TimetableScreenState extends State<TimetableScreen> {
                     children: [
                       const Divider(color: kDlgBorder, height: 1),
                       const SizedBox(height: 18),
-
-                      const YggDialogSectionHeader(icon: Icons.school_outlined, title: '학년'),
+                      const YggDialogSectionHeader(
+                          icon: Icons.school_outlined, title: '학년'),
                       Wrap(
                         spacing: 8,
                         runSpacing: 8,
                         children: [
                           ...educationLevels.map((level) => YggDialogFilterChip(
                                 label: level,
-                                selected: tempSelectedEducationLevels.contains(level),
+                                selected:
+                                    tempSelectedEducationLevels.contains(level),
                                 onSelected: (selected) {
                                   setState(() {
                                     if (selected) {
@@ -1172,12 +1300,13 @@ class _TimetableScreenState extends State<TimetableScreen> {
                         ],
                       ),
                       const SizedBox(height: 20),
-
-                      const YggDialogSectionHeader(icon: Icons.location_city_outlined, title: '학교'),
+                      const YggDialogSectionHeader(
+                          icon: Icons.location_city_outlined, title: '학교'),
                       if (schools.isEmpty)
                         const Text(
                           '등록된 학교 정보가 없습니다.',
-                          style: TextStyle(color: kDlgTextSub, fontWeight: FontWeight.w700),
+                          style: TextStyle(
+                              color: kDlgTextSub, fontWeight: FontWeight.w700),
                         )
                       else
                         Wrap(
@@ -1186,7 +1315,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
                           children: [
                             ...schools.map((school) => YggDialogFilterChip(
                                   label: school,
-                                  selected: tempSelectedSchools.contains(school),
+                                  selected:
+                                      tempSelectedSchools.contains(school),
                                   onSelected: (selected) {
                                     setState(() {
                                       if (selected) {
@@ -1200,12 +1330,13 @@ class _TimetableScreenState extends State<TimetableScreen> {
                           ],
                         ),
                       const SizedBox(height: 20),
-
-                      const YggDialogSectionHeader(icon: Icons.groups_2_outlined, title: '그룹'),
+                      const YggDialogSectionHeader(
+                          icon: Icons.groups_2_outlined, title: '그룹'),
                       if (groupNames.isEmpty)
                         const Text(
                           '등록된 그룹이 없습니다.',
-                          style: TextStyle(color: kDlgTextSub, fontWeight: FontWeight.w700),
+                          style: TextStyle(
+                              color: kDlgTextSub, fontWeight: FontWeight.w700),
                         )
                       else
                         Wrap(
@@ -1228,21 +1359,24 @@ class _TimetableScreenState extends State<TimetableScreen> {
                           ],
                         ),
                       const SizedBox(height: 20),
-
-                      const YggDialogSectionHeader(icon: Icons.class_outlined, title: '수업'),
+                      const YggDialogSectionHeader(
+                          icon: Icons.class_outlined, title: '수업'),
                       if (classNames.isEmpty)
                         const Text(
                           '등록된 수업이 없습니다.',
-                          style: TextStyle(color: kDlgTextSub, fontWeight: FontWeight.w700),
+                          style: TextStyle(
+                              color: kDlgTextSub, fontWeight: FontWeight.w700),
                         )
                       else
                         Wrap(
                           spacing: 8,
                           runSpacing: 8,
                           children: [
-                            ...classNames.map((className) => YggDialogFilterChip(
+                            ...classNames.map((className) =>
+                                YggDialogFilterChip(
                                   label: className,
-                                  selected: tempSelectedClasses.contains(className),
+                                  selected:
+                                      tempSelectedClasses.contains(className),
                                   onSelected: (selected) {
                                     setState(() {
                                       if (selected) {
@@ -1272,7 +1406,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
                   },
                   style: TextButton.styleFrom(
                     foregroundColor: kDlgTextSub,
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 16),
                   ),
                   child: const Text('초기화'),
                 ),
@@ -1280,14 +1415,16 @@ class _TimetableScreenState extends State<TimetableScreen> {
                   onPressed: () => Navigator.of(context).pop(false),
                   style: TextButton.styleFrom(
                     foregroundColor: kDlgTextSub,
-                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 24, vertical: 16),
                   ),
                   child: const Text('취소'),
                 ),
                 FilledButton(
                   onPressed: () {
                     // chips 상태를 부모에 반영
-                    _selectedEducationLevels = Set.from(tempSelectedEducationLevels);
+                    _selectedEducationLevels =
+                        Set.from(tempSelectedEducationLevels);
                     _selectedGrades = Set.from(tempSelectedGrades);
                     _selectedSchools = Set.from(tempSelectedSchools);
                     _selectedGroups = Set.from(tempSelectedGroups);
@@ -1303,11 +1440,14 @@ class _TimetableScreenState extends State<TimetableScreen> {
                   },
                   style: FilledButton.styleFrom(
                     backgroundColor: kDlgAccent,
-                    padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 16),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 28, vertical: 16),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10)),
                   ),
                   child: const Text('적용',
-                      style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900)),
+                      style: TextStyle(
+                          color: Colors.white, fontWeight: FontWeight.w900)),
                 ),
               ],
             );
@@ -1384,7 +1524,9 @@ class _TimetableScreenState extends State<TimetableScreen> {
   @override
   Widget build(BuildContext context) {
     // 테스트 전용 플래그로 autofocus를 제어 (기본 동작은 유지)
-    const bool kDisableTimetableKbAutofocus = bool.fromEnvironment('DISABLE_TIMETABLE_KB_AUTOFOCUS', defaultValue: false);
+    const bool kDisableTimetableKbAutofocus = bool.fromEnvironment(
+        'DISABLE_TIMETABLE_KB_AUTOFOCUS',
+        defaultValue: false);
     return RawKeyboardListener(
       focusNode: _focusNode,
       autofocus: !kDisableTimetableKbAutofocus,
@@ -1394,19 +1536,23 @@ class _TimetableScreenState extends State<TimetableScreen> {
         // - ESC: 취소(저장 안 함)
         // - Enter/우클릭: 완료 및 저장
         if (_isStudentRegistrationMode || _isClassRegistrationMode) {
-          final currentStudentName = _selectedStudentWithInfo?.student.name ?? '학생';
+          final currentStudentName =
+              _selectedStudentWithInfo?.student.name ?? '학생';
           final key = event.logicalKey;
           if (key == LogicalKeyboardKey.escape) {
             await _cancelRegistrationMode();
             if (mounted) {
-              showAppSnackBar(context, '$currentStudentName 학생의 등록을 취소했습니다.', useRoot: true);
+              showAppSnackBar(context, '$currentStudentName 학생의 등록을 취소했습니다.',
+                  useRoot: true);
             }
             return;
           }
-          if (key == LogicalKeyboardKey.enter || key == LogicalKeyboardKey.numpadEnter) {
+          if (key == LogicalKeyboardKey.enter ||
+              key == LogicalKeyboardKey.numpadEnter) {
             await _endRegistrationMode(flushPlanned: true);
             if (mounted) {
-              showAppSnackBar(context, '$currentStudentName 학생의 등록을 저장했습니다.', useRoot: true);
+              showAppSnackBar(context, '$currentStudentName 학생의 등록을 저장했습니다.',
+                  useRoot: true);
             }
             return;
           }
@@ -1422,17 +1568,20 @@ class _TimetableScreenState extends State<TimetableScreen> {
               _isSelectMode = false;
               if (_kRegistrationPerfDebug) {
                 // ignore: avoid_print
-                print('[DEBUG][TimetableScreen] 선택모드 해제(셀 클릭): _isSelectMode=$_isSelectMode, _selectedCellDayIndex=$_selectedCellDayIndex, _selectedStartTimeHour=$_selectedStartTimeHour, _selectedStartTimeMinute=$_selectedStartTimeMinute');
+                print(
+                    '[DEBUG][TimetableScreen] 선택모드 해제(셀 클릭): _isSelectMode=$_isSelectMode, _selectedCellDayIndex=$_selectedCellDayIndex, _selectedStartTimeHour=$_selectedStartTimeHour, _selectedStartTimeMinute=$_selectedStartTimeMinute');
               }
             });
           }
         },
         onSecondaryTap: () async {
           if (_isStudentRegistrationMode || _isClassRegistrationMode) {
-            final currentStudentName = _selectedStudentWithInfo?.student.name ?? '학생';
+            final currentStudentName =
+                _selectedStudentWithInfo?.student.name ?? '학생';
             await _endRegistrationMode(flushPlanned: true);
             if (mounted) {
-              showAppSnackBar(context, '$currentStudentName 학생의 등록을 저장했습니다.', useRoot: true);
+              showAppSnackBar(context, '$currentStudentName 학생의 등록을 저장했습니다.',
+                  useRoot: true);
             }
           }
         },
@@ -1450,14 +1599,18 @@ class _TimetableScreenState extends State<TimetableScreen> {
                       padding: const EdgeInsets.symmetric(horizontal: 24),
                       child: TimetableTopBar(
                         registerControls: _buildHeaderRegisterControls(),
-                        selectedIndex: (_viewType == TimetableViewType.classes) ? 0 : 1,
+                        selectedIndex:
+                            (_viewType == TimetableViewType.classes) ? 0 : 1,
                         onTabSelected: (i) {
                           setState(() {
-                            _viewType = (i == 0) ? TimetableViewType.classes : TimetableViewType.schedule;
+                            _viewType = (i == 0)
+                                ? TimetableViewType.classes
+                                : TimetableViewType.schedule;
                           });
 
                           if ((i == 0) && !_hasScrolledOnTabClick) {
-                            WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToCurrentTime(preferAnimate: true));
+                            WidgetsBinding.instance.addPostFrameCallback((_) =>
+                                _scrollToCurrentTime(preferAnimate: true));
                             _hasScrolledOnTabClick = true;
                           }
                         },
@@ -1488,17 +1641,20 @@ class _TimetableScreenState extends State<TimetableScreen> {
     if (text == null || text.trim().isEmpty) return;
     // 1) 즉시 로컬에 임시 추가(요약 대기 표시)
     final pending = MemoItem(
-      id: UniqueKey().toString(),
-      original: text.trim(),
-      summary: '요약 중...'
-    );
+        id: UniqueKey().toString(), original: text.trim(), summary: '요약 중...');
     _memos.value = [pending, ..._memos.value];
     // 2) 요약 호출
     try {
       final summary = await _summarize(text.trim());
-      _memos.value = _memos.value.map((m) => m.id == pending.id ? m.copyWith(summary: summary) : m).toList();
+      _memos.value = _memos.value
+          .map((m) => m.id == pending.id ? m.copyWith(summary: summary) : m)
+          .toList();
     } catch (e) {
-      _memos.value = _memos.value.map((m) => m.id == pending.id ? m.copyWith(summary: '(요약 실패) ${m.original}') : m).toList();
+      _memos.value = _memos.value
+          .map((m) => m.id == pending.id
+              ? m.copyWith(summary: '(요약 실패) ${m.original}')
+              : m)
+          .toList();
     }
   }
 
@@ -1516,12 +1672,21 @@ class _TimetableScreenState extends State<TimetableScreen> {
     if (edited.text.trim().isEmpty) return;
     final newOriginal = edited.text.trim();
     // 일단 즉시 반영(요약은 비동기)
-    _memos.value = _memos.value.map((m) => m.id == item.id ? m.copyWith(original: newOriginal, summary: '요약 중...') : m).toList();
+    _memos.value = _memos.value
+        .map((m) => m.id == item.id
+            ? m.copyWith(original: newOriginal, summary: '요약 중...')
+            : m)
+        .toList();
     try {
       final summary = await _summarize(newOriginal);
-      _memos.value = _memos.value.map((m) => m.id == item.id ? m.copyWith(summary: summary) : m).toList();
+      _memos.value = _memos.value
+          .map((m) => m.id == item.id ? m.copyWith(summary: summary) : m)
+          .toList();
     } catch (_) {
-      _memos.value = _memos.value.map((m) => m.id == item.id ? m.copyWith(summary: '(요약 실패) $newOriginal') : m).toList();
+      _memos.value = _memos.value
+          .map((m) =>
+              m.id == item.id ? m.copyWith(summary: '(요약 실패) $newOriginal') : m)
+          .toList();
     }
   }
 
@@ -1530,7 +1695,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
     final prefs = await SharedPreferences.getInstance();
     final persisted = prefs.getString('openai_api_key') ?? '';
     // 2) 빌드타임 define 보조
-    final defined = const String.fromEnvironment('OPENAI_API_KEY', defaultValue: '');
+    final defined =
+        const String.fromEnvironment('OPENAI_API_KEY', defaultValue: '');
     final apiKey = persisted.isNotEmpty ? persisted : defined;
     if (apiKey.isEmpty) {
       // 오프라인/키 미설정 시, 간단 요약 대체
@@ -1542,11 +1708,13 @@ class _TimetableScreenState extends State<TimetableScreen> {
       'messages': [
         {
           'role': 'system',
-          'content': '너는 텍스트를 한 문장으로 간결하게 요약하는 비서다. 한국어로 한 문장만 출력하고, 줄바꿈 없이 60자 이내로 핵심만 담아라.'
+          'content':
+              '너는 텍스트를 한 문장으로 간결하게 요약하는 비서다. 한국어로 한 문장만 출력하고, 줄바꿈 없이 60자 이내로 핵심만 담아라.'
         },
         {
           'role': 'user',
-          'content': '다음 텍스트를 한 문장(최대 60자)으로 간결하게 요약해줘. 불필요한 수식어/군더더기 금지:\n$text'
+          'content':
+              '다음 텍스트를 한 문장(최대 60자)으로 간결하게 요약해줘. 불필요한 수식어/군더더기 금지:\n$text'
         }
       ],
       'temperature': 0.2,
@@ -1618,11 +1786,12 @@ class _TimetableScreenState extends State<TimetableScreen> {
     switch (_viewType) {
       case TimetableViewType.classes:
         final Set<String>? filteredStudentIds = _activeFilter == null
-          ? null
-          : _filteredStudents.map((s) => s.student.id).toSet();
-        final Set<String>? timetableFilteredStudentIds = _weekStudentFilterId == null
-            ? filteredStudentIds
-            : <String>{_weekStudentFilterId!};
+            ? null
+            : _filteredStudents.map((s) => s.student.id).toSet();
+        final Set<String>? timetableFilteredStudentIds =
+            _weekStudentFilterId == null
+                ? filteredStudentIds
+                : <String>{_weekStudentFilterId!};
         final Set<String> filteredClassIds = _classIdsFromFilter(_activeFilter);
         return TimetableContentView(
           key: _contentViewKey, // 추가: 검색 리셋을 위해 key 부여
@@ -1638,8 +1807,10 @@ class _TimetableScreenState extends State<TimetableScreen> {
           cellRenderPerfToken: _cellRenderPerfToken,
           cellRenderPerfStartUs: _cellRenderPerfStartUs,
           onCellRenderPerfFrame: _finishCellRenderPerfTrace,
+          isClassListSheetOpen: _isClassListSheetOpen,
           header: Padding(
-            padding: const EdgeInsets.only(left: 0, right: 0, top: 20, bottom: 0),
+            padding:
+                const EdgeInsets.only(left: 0, right: 0, top: 20, bottom: 0),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -1647,9 +1818,24 @@ class _TimetableScreenState extends State<TimetableScreen> {
                   child: TimetableHeader(
                     selectedDate: _selectedDate,
                     onDateChanged: _handleDateChanged,
-                    selectedDayIndex: _isStudentRegistrationMode ? null : _selectedDayIndex,
+                    selectedDayIndex:
+                        _isStudentRegistrationMode ? null : _selectedDayIndex,
                     onDaySelected: _onDayHeaderSelected,
-                    isRegistrationMode: _isStudentRegistrationMode || _isClassRegistrationMode,
+                    isRegistrationMode:
+                        _isStudentRegistrationMode || _isClassRegistrationMode,
+                    isClassListSheetOpen: _isClassListSheetOpen,
+                    onClassListSheetToggle: () {
+                      setState(() {
+                        final bool willOpen = !_isClassListSheetOpen;
+                        if (!willOpen &&
+                            _selectedStartTimeHour == null &&
+                            _selectedStartTimeMinute == null) {
+                          _selectedCellDayIndex = null;
+                          _selectedDayDate = null;
+                        }
+                        _isClassListSheetOpen = willOpen;
+                      });
+                    },
                   ),
                 ),
               ],
@@ -1663,181 +1849,233 @@ class _TimetableScreenState extends State<TimetableScreen> {
             ),
             child: Column(
               children: [
-                if (_isStudentRegistrationMode && _selectedStudentWithInfo != null)
+                if (_isStudentRegistrationMode &&
+                    _selectedStudentWithInfo != null)
                   Padding(
                     padding: const EdgeInsets.only(top: 16.0, bottom: 8.0),
                     child: Builder(
                       builder: (context) {
                         final studentWithInfo = _selectedStudentWithInfo!;
                         final studentId = studentWithInfo.student.id;
-                final dm = DataManager.instance;
-                final now = DateTime.now();
-                final today = DateTime(now.year, now.month, now.day);
-                final pendingSetIds = dm.pendingStudentTimeBlocks
-                    .where((b) => b.studentId == studentId)
-                    .map((b) => (b.setId ?? '').trim())
-                    .where((s) => s.isNotEmpty)
-                    .toSet();
-                final allOpenOrFutureSetIds = dm.studentTimeBlocks
-                    .where((b) {
-                      if (b.studentId != studentId) return false;
-                      final setId = (b.setId ?? '').trim();
-                      if (setId.isEmpty) return false;
-                      final end = b.endDate != null
-                          ? DateTime(b.endDate!.year, b.endDate!.month, b.endDate!.day)
-                          : null;
-                      // 오늘 이전에 완전히 종료된 이력은 제외
-                      if (end != null && end.isBefore(today)) return false;
-                      return true;
-                    })
-                    .map((b) => (b.setId ?? '').trim())
-                    .where((s) => s.isNotEmpty)
-                    .toSet();
-                final existingSetIds = allOpenOrFutureSetIds.difference(pendingSetIds);
+                        final dm = DataManager.instance;
+                        final now = DateTime.now();
+                        final today = DateTime(now.year, now.month, now.day);
+                        final pendingSetIds = dm.pendingStudentTimeBlocks
+                            .where((b) => b.studentId == studentId)
+                            .map((b) => (b.setId ?? '').trim())
+                            .where((s) => s.isNotEmpty)
+                            .toSet();
+                        final allOpenOrFutureSetIds = dm.studentTimeBlocks
+                            .where((b) {
+                              if (b.studentId != studentId) return false;
+                              final setId = (b.setId ?? '').trim();
+                              if (setId.isEmpty) return false;
+                              final end = b.endDate != null
+                                  ? DateTime(b.endDate!.year, b.endDate!.month,
+                                      b.endDate!.day)
+                                  : null;
+                              // 오늘 이전에 완전히 종료된 이력은 제외
+                              if (end != null && end.isBefore(today))
+                                return false;
+                              return true;
+                            })
+                            .map((b) => (b.setId ?? '').trim())
+                            .where((s) => s.isNotEmpty)
+                            .toSet();
+                        final existingSetIds =
+                            allOpenOrFutureSetIds.difference(pendingSetIds);
 
-                final existingCount = existingSetIds.length;
-                final pendingCount = pendingSetIds.length;
+                        final existingCount = existingSetIds.length;
+                        final pendingCount = pendingSetIds.length;
 
-                final actionButtons = Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Tooltip(
-                      message: '취소 (ESC)',
-                      child: OutlinedButton.icon(
-                        onPressed: () async {
-                          final currentStudentName = _selectedStudentWithInfo?.student.name ?? '학생';
-                          await _cancelRegistrationMode();
-                          if (mounted) {
-                            showAppSnackBar(context, '$currentStudentName 학생의 등록을 취소했습니다.', useRoot: true);
-                          }
-                        },
-                        icon: const Icon(Icons.close_rounded, size: 20),
-                        label: const Text('취소'),
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: Colors.white.withOpacity(0.85),
-                          side: const BorderSide(color: Color(0xFF223131)),
-                          // 태블릿/터치 환경: 최소 터치 타겟 크게(기존 대비 약 1.5배)
-                          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-                          minimumSize: const Size(0, 50),
-                          shape: const StadiumBorder(),
-                          tapTargetSize: MaterialTapTargetSize.padded,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Tooltip(
-                      message: '저장 (Enter / 우클릭)',
-                      child: FilledButton.icon(
-                        onPressed: () async {
-                          final currentStudentName = _selectedStudentWithInfo?.student.name ?? '학생';
-                          await _endRegistrationMode(flushPlanned: true);
-                          if (mounted) {
-                            showAppSnackBar(context, '$currentStudentName 학생의 등록을 저장했습니다.', useRoot: true);
-                          }
-                        },
-                        icon: const Icon(Icons.check_rounded, size: 20),
-                        label: const Text('저장'),
-                        style: FilledButton.styleFrom(
-                          backgroundColor: const Color(0xFF33A373),
-                          foregroundColor: Colors.white,
-                          // 태블릿/터치 환경: 최소 터치 타겟 크게(기존 대비 약 1.5배)
-                          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-                          minimumSize: const Size(0, 50),
-                          shape: const StadiumBorder(),
-                          tapTargetSize: MaterialTapTargetSize.padded,
-                        ),
-                      ),
-                    ),
-                  ],
-                );
-
-                final countCapsule = Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF111418),
-                    borderRadius: BorderRadius.circular(999),
-                    border: Border.all(color: const Color(0xFF223131)),
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        '${studentWithInfo.student.name} · 수업시간 등록',
-                        style: const TextStyle(
-                          color: Color(0xFFEAF2F2),
-                          fontSize: 15,
-                          fontWeight: FontWeight.w700,
-                          height: 1.05,
-                        ),
-                        textAlign: TextAlign.center,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      const SizedBox(height: 6),
-                      Wrap(
-                        alignment: WrapAlignment.center,
-                        crossAxisAlignment: WrapCrossAlignment.center,
-                        spacing: 8,
-                        runSpacing: 6,
-                        children: [
-                          Text(
-                            '기존 $existingCount',
-                            style: const TextStyle(color: Colors.white70, fontSize: 12.5, fontWeight: FontWeight.w600, height: 1.0),
-                          ),
-                          Text('•', style: TextStyle(color: Colors.white.withOpacity(0.25), fontSize: 12, height: 1.0)),
-                          Text(
-                            '추가 $pendingCount',
-                            style: const TextStyle(color: Color(0xFF33A373), fontSize: 12.5, fontWeight: FontWeight.w800, height: 1.0),
-                          ),
-                          Text('•', style: TextStyle(color: Colors.white.withOpacity(0.25), fontSize: 12, height: 1.0)),
-                          Text(
-                            'ESC 취소',
-                            style: TextStyle(color: Colors.white.withOpacity(0.7), fontSize: 12.2, fontWeight: FontWeight.w600, height: 1.0),
-                          ),
-                          Text('•', style: TextStyle(color: Colors.white.withOpacity(0.25), fontSize: 12, height: 1.0)),
-                          const Text(
-                            'Enter/우클릭 저장',
-                            style: TextStyle(color: Color(0xFF33A373), fontSize: 12.2, fontWeight: FontWeight.w700, height: 1.0),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                );
-
-                // ✅ 가운데(카운트 캡슐) / 오른쪽(취소·저장 버튼) 분리 정렬
-                // - 카운트 캡슐은 화면 기준 정중앙
-                // - 버튼은 오른쪽 끝 정렬
-                return Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  child: LayoutBuilder(
-                    builder: (context, constraints) {
-                      // 화면이 좁으면 겹침을 피하기 위해 버튼을 다음 줄로 내려준다.
-                      final bool narrow = constraints.maxWidth < 620;
-                      if (narrow) {
-                        return Column(
+                        final actionButtons = Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Center(child: countCapsule),
-                            const SizedBox(height: 10),
-                            Align(alignment: Alignment.centerRight, child: actionButtons),
+                            Tooltip(
+                              message: '취소 (ESC)',
+                              child: OutlinedButton.icon(
+                                onPressed: () async {
+                                  final currentStudentName =
+                                      _selectedStudentWithInfo?.student.name ??
+                                          '학생';
+                                  await _cancelRegistrationMode();
+                                  if (mounted) {
+                                    showAppSnackBar(context,
+                                        '$currentStudentName 학생의 등록을 취소했습니다.',
+                                        useRoot: true);
+                                  }
+                                },
+                                icon: const Icon(Icons.close_rounded, size: 20),
+                                label: const Text('취소'),
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor:
+                                      Colors.white.withOpacity(0.85),
+                                  side: const BorderSide(
+                                      color: Color(0xFF223131)),
+                                  // 태블릿/터치 환경: 최소 터치 타겟 크게(기존 대비 약 1.5배)
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 18, vertical: 12),
+                                  minimumSize: const Size(0, 50),
+                                  shape: const StadiumBorder(),
+                                  tapTargetSize: MaterialTapTargetSize.padded,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Tooltip(
+                              message: '저장 (Enter / 우클릭)',
+                              child: FilledButton.icon(
+                                onPressed: () async {
+                                  final currentStudentName =
+                                      _selectedStudentWithInfo?.student.name ??
+                                          '학생';
+                                  await _endRegistrationMode(
+                                      flushPlanned: true);
+                                  if (mounted) {
+                                    showAppSnackBar(context,
+                                        '$currentStudentName 학생의 등록을 저장했습니다.',
+                                        useRoot: true);
+                                  }
+                                },
+                                icon: const Icon(Icons.check_rounded, size: 20),
+                                label: const Text('저장'),
+                                style: FilledButton.styleFrom(
+                                  backgroundColor: const Color(0xFF33A373),
+                                  foregroundColor: Colors.white,
+                                  // 태블릿/터치 환경: 최소 터치 타겟 크게(기존 대비 약 1.5배)
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 18, vertical: 12),
+                                  minimumSize: const Size(0, 50),
+                                  shape: const StadiumBorder(),
+                                  tapTargetSize: MaterialTapTargetSize.padded,
+                                ),
+                              ),
+                            ),
                           ],
                         );
-                      }
 
-                      return SizedBox(
-                        width: double.infinity,
-                        child: Stack(
-                          alignment: Alignment.center,
-                          children: [
-                            Align(alignment: Alignment.center, child: countCapsule),
-                            Align(alignment: Alignment.centerRight, child: actionButtons),
-                          ],
-                        ),
-                      );
-                    },
-                  ),
-                );
+                        final countCapsule = Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 14, vertical: 10),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF111418),
+                            borderRadius: BorderRadius.circular(999),
+                            border: Border.all(color: const Color(0xFF223131)),
+                          ),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                '${studentWithInfo.student.name} · 수업시간 등록',
+                                style: const TextStyle(
+                                  color: Color(0xFFEAF2F2),
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w700,
+                                  height: 1.05,
+                                ),
+                                textAlign: TextAlign.center,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              const SizedBox(height: 6),
+                              Wrap(
+                                alignment: WrapAlignment.center,
+                                crossAxisAlignment: WrapCrossAlignment.center,
+                                spacing: 8,
+                                runSpacing: 6,
+                                children: [
+                                  Text(
+                                    '기존 $existingCount',
+                                    style: const TextStyle(
+                                        color: Colors.white70,
+                                        fontSize: 12.5,
+                                        fontWeight: FontWeight.w600,
+                                        height: 1.0),
+                                  ),
+                                  Text('•',
+                                      style: TextStyle(
+                                          color: Colors.white.withOpacity(0.25),
+                                          fontSize: 12,
+                                          height: 1.0)),
+                                  Text(
+                                    '추가 $pendingCount',
+                                    style: const TextStyle(
+                                        color: Color(0xFF33A373),
+                                        fontSize: 12.5,
+                                        fontWeight: FontWeight.w800,
+                                        height: 1.0),
+                                  ),
+                                  Text('•',
+                                      style: TextStyle(
+                                          color: Colors.white.withOpacity(0.25),
+                                          fontSize: 12,
+                                          height: 1.0)),
+                                  Text(
+                                    'ESC 취소',
+                                    style: TextStyle(
+                                        color: Colors.white.withOpacity(0.7),
+                                        fontSize: 12.2,
+                                        fontWeight: FontWeight.w600,
+                                        height: 1.0),
+                                  ),
+                                  Text('•',
+                                      style: TextStyle(
+                                          color: Colors.white.withOpacity(0.25),
+                                          fontSize: 12,
+                                          height: 1.0)),
+                                  const Text(
+                                    'Enter/우클릭 저장',
+                                    style: TextStyle(
+                                        color: Color(0xFF33A373),
+                                        fontSize: 12.2,
+                                        fontWeight: FontWeight.w700,
+                                        height: 1.0),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        );
+
+                        // ✅ 가운데(카운트 캡슐) / 오른쪽(취소·저장 버튼) 분리 정렬
+                        // - 카운트 캡슐은 화면 기준 정중앙
+                        // - 버튼은 오른쪽 끝 정렬
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          child: LayoutBuilder(
+                            builder: (context, constraints) {
+                              // 화면이 좁으면 겹침을 피하기 위해 버튼을 다음 줄로 내려준다.
+                              final bool narrow = constraints.maxWidth < 620;
+                              if (narrow) {
+                                return Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Center(child: countCapsule),
+                                    const SizedBox(height: 10),
+                                    Align(
+                                        alignment: Alignment.centerRight,
+                                        child: actionButtons),
+                                  ],
+                                );
+                              }
+
+                              return SizedBox(
+                                width: double.infinity,
+                                child: Stack(
+                                  alignment: Alignment.center,
+                                  children: [
+                                    Align(
+                                        alignment: Alignment.center,
+                                        child: countCapsule),
+                                    Align(
+                                        alignment: Alignment.centerRight,
+                                        child: actionButtons),
+                                  ],
+                                ),
+                              );
+                            },
+                          ),
+                        );
                       },
                     ),
                   ),
@@ -1846,27 +2084,53 @@ class _TimetableScreenState extends State<TimetableScreen> {
                   child: ClassesView(
                     operatingHours: _operatingHours,
                     breakTimeColor: const Color(0xFF424242),
-                    isRegistrationMode: _isStudentRegistrationMode || _isClassRegistrationMode || _isSelfStudyRegistrationMode,
-                    registrationModeType: _isSelfStudyRegistrationMode ? 'selfStudy' : (_isStudentRegistrationMode ? 'student' : null),
+                    isRegistrationMode: _isStudentRegistrationMode ||
+                        _isClassRegistrationMode ||
+                        _isSelfStudyRegistrationMode,
+                    registrationModeType: _isSelfStudyRegistrationMode
+                        ? 'selfStudy'
+                        : (_isStudentRegistrationMode ? 'student' : null),
                     selectedDayIndex: _selectedDayIndex,
+                    onDaySelected: _onDayHeaderSelected,
                     selectedCellDayIndex: _selectedCellDayIndex,
-                    selectedCellStartTime: (_selectedStartTimeHour != null && _selectedStartTimeMinute != null)
-                        ? DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day, _selectedStartTimeHour!, _selectedStartTimeMinute!)
+                    selectedCellStartTime: (_selectedStartTimeHour != null &&
+                            _selectedStartTimeMinute != null)
+                        ? DateTime(
+                            _selectedDate.year,
+                            _selectedDate.month,
+                            _selectedDate.day,
+                            _selectedStartTimeHour!,
+                            _selectedStartTimeMinute!)
                         : null,
-                    filteredClassIds: filteredClassIds.isEmpty ? null : filteredClassIds,
-                    onInquiryNoteTap: (noteId) => unawaited(_openInquiryNote(noteId)),
+                    filteredClassIds:
+                        filteredClassIds.isEmpty ? null : filteredClassIds,
+                    onInquiryNoteTap: (noteId) =>
+                        unawaited(_openInquiryNote(noteId)),
                     onTimeSelected: (dayIdx, startTime) {
-                      _beginCellRenderPerfTrace(dayIdx: dayIdx, startTime: startTime);
+                      _beginCellRenderPerfTrace(
+                          dayIdx: dayIdx, startTime: startTime);
                       setState(() {
-                        _selectedCellDayIndex = dayIdx;
-                        _selectedStartTimeHour = startTime.hour;
-                        _selectedStartTimeMinute = startTime.minute;
+                        final bool isSameCell =
+                            _selectedCellDayIndex == dayIdx &&
+                                _selectedStartTimeHour == startTime.hour &&
+                                _selectedStartTimeMinute == startTime.minute;
+                        if (isSameCell) {
+                          _selectedCellDayIndex = null;
+                          _selectedStartTimeHour = null;
+                          _selectedStartTimeMinute = null;
+                        } else {
+                          _selectedCellDayIndex = dayIdx;
+                          _selectedStartTimeHour = startTime.hour;
+                          _selectedStartTimeMinute = startTime.minute;
+                        }
                       });
                     },
-                    onCellStudentsSelected: (dayIdx, startTimes, students) async {
+                    onCellStudentsSelected:
+                        (dayIdx, startTimes, students) async {
                       if (_kRegistrationPerfDebug) {
                         // ignore: avoid_print
-                        print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 호출: dayIdx=$dayIdx, startTimes=$startTimes, startTimes.length=${startTimes.length}, students=$students, _isSelfStudyRegistrationMode=$_isSelfStudyRegistrationMode, _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedSelfStudyStudent=${_selectedSelfStudyStudent?.student.name}, _selectedStudentWithInfo=${_selectedStudentWithInfo?.student.name}');
+                        print(
+                            '[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 호출: dayIdx=$dayIdx, startTimes=$startTimes, startTimes.length=${startTimes.length}, students=$students, _isSelfStudyRegistrationMode=$_isSelfStudyRegistrationMode, _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedSelfStudyStudent=${_selectedSelfStudyStudent?.student.name}, _selectedStudentWithInfo=${_selectedStudentWithInfo?.student.name}');
                       }
                       // 셀 클릭 시 검색 리셋
                       _resetSearch();
@@ -1878,11 +2142,16 @@ class _TimetableScreenState extends State<TimetableScreen> {
                       }
                       setState(() {
                         _selectedCellDayIndex = dayIdx;
-                        _selectedStartTimeHour = startTimes.isNotEmpty ? startTimes.first.hour : null;
-                        _selectedStartTimeMinute = startTimes.isNotEmpty ? startTimes.first.minute : null;
+                        _selectedStartTimeHour = startTimes.isNotEmpty
+                            ? startTimes.first.hour
+                            : null;
+                        _selectedStartTimeMinute = startTimes.isNotEmpty
+                            ? startTimes.first.minute
+                            : null;
                       });
                       // 자습 등록 모드 처리
-                      if (_isSelfStudyRegistrationMode && _selectedSelfStudyStudent != null) {
+                      if (_isSelfStudyRegistrationMode &&
+                          _selectedSelfStudyStudent != null) {
                         if (_kRegistrationPerfDebug) {
                           // ignore: avoid_print
                           print('[DEBUG][onCellStudentsSelected] 자습 등록 분기 진입');
@@ -1894,37 +2163,50 @@ class _TimetableScreenState extends State<TimetableScreen> {
                         if (startTimes.length == 1) {
                           actualStartTimes = [startTimes.first];
                         }
-                        
+
                         // 수업 블록과의 중복 체크
                         bool hasConflict = false;
                         for (final startTime in actualStartTimes) {
-                          final dateOnly = DateTime(startTime.year, startTime.month, startTime.day);
-                          final conflictingBlocks = DataManager.instance.studentTimeBlocks.where((b) {
-                            if (b.studentId != studentId || b.dayIndex != dayIdx) return false;
-                            if (!_isBlockActiveOnDate(b, dateOnly)) return false;
-                            final blockStartMinutes = b.startHour * 60 + b.startMinute;
-                            final blockEndMinutes = blockStartMinutes + b.duration.inMinutes;
-                            final checkStartMinutes = startTime.hour * 60 + startTime.minute;
-                            final checkEndMinutes = checkStartMinutes + blockMinutes;
-                            return checkStartMinutes < blockEndMinutes && checkEndMinutes > blockStartMinutes;
+                          final dateOnly = DateTime(
+                              startTime.year, startTime.month, startTime.day);
+                          final conflictingBlocks =
+                              DataManager.instance.studentTimeBlocks.where((b) {
+                            if (b.studentId != studentId ||
+                                b.dayIndex != dayIdx) return false;
+                            if (!_isBlockActiveOnDate(b, dateOnly))
+                              return false;
+                            final blockStartMinutes =
+                                b.startHour * 60 + b.startMinute;
+                            final blockEndMinutes =
+                                blockStartMinutes + b.duration.inMinutes;
+                            final checkStartMinutes =
+                                startTime.hour * 60 + startTime.minute;
+                            final checkEndMinutes =
+                                checkStartMinutes + blockMinutes;
+                            return checkStartMinutes < blockEndMinutes &&
+                                checkEndMinutes > blockStartMinutes;
                           }).toList();
-                          
+
                           if (conflictingBlocks.isNotEmpty) {
                             hasConflict = true;
                             break;
                           }
                         }
-                        
+
                         if (hasConflict) {
-                          showAppSnackBar(context, '이미 등록된 수업시간과 겹칩니다. 자습시간을 등록할 수 없습니다.', useRoot: true);
+                          showAppSnackBar(
+                              context, '이미 등록된 수업시간과 겹칩니다. 자습시간을 등록할 수 없습니다.',
+                              useRoot: true);
                           return;
                         }
-                        
+
                         if (_kRegistrationPerfDebug) {
                           // ignore: avoid_print
-                          print('[DEBUG][onCellStudentsSelected] 생성할 자습 블록 actualStartTimes: $actualStartTimes');
+                          print(
+                              '[DEBUG][onCellStudentsSelected] 생성할 자습 블록 actualStartTimes: $actualStartTimes');
                         }
-                        final blocks = SelfStudyTimeBlockFactory.createBlocksWithSetIdAndNumber(
+                        final blocks = SelfStudyTimeBlockFactory
+                            .createBlocksWithSetIdAndNumber(
                           studentId: studentId,
                           dayIndex: dayIdx,
                           startTimes: actualStartTimes,
@@ -1932,72 +2214,90 @@ class _TimetableScreenState extends State<TimetableScreen> {
                         );
                         if (_kRegistrationPerfDebug) {
                           // ignore: avoid_print
-                          print('[DEBUG][onCellStudentsSelected] SelfStudyTimeBlock 생성: count=${blocks.length}');
+                          print(
+                              '[DEBUG][onCellStudentsSelected] SelfStudyTimeBlock 생성: count=${blocks.length}');
                         }
                         for (final block in blocks) {
                           if (_kRegistrationPerfDebug) {
                             // ignore: avoid_print
-                            print('[DEBUG][onCellStudentsSelected] addSelfStudyTimeBlock 호출: setId=${block.setId} number=${block.number} day=${block.dayIndex} start=${block.startHour}:${block.startMinute}');
+                            print(
+                                '[DEBUG][onCellStudentsSelected] addSelfStudyTimeBlock 호출: setId=${block.setId} number=${block.number} day=${block.dayIndex} start=${block.startHour}:${block.startMinute}');
                           }
-                          await DataManager.instance.addSelfStudyTimeBlock(block);
+                          await DataManager.instance
+                              .addSelfStudyTimeBlock(block);
                         }
                         setState(() {
                           _isSelfStudyRegistrationMode = false;
                           _selectedSelfStudyStudent = null;
                         });
-                        showAppSnackBar(context, '자습 시간이 등록되었습니다.', useRoot: true);
+                        showAppSnackBar(context, '자습 시간이 등록되었습니다.',
+                            useRoot: true);
                         return;
                       }
                       // 학생 등록 모드에서만 동작
-                      if (_isStudentRegistrationMode && _selectedStudentWithInfo != null) {
+                      if (_isStudentRegistrationMode &&
+                          _selectedStudentWithInfo != null) {
                         final studentWithInfo = _selectedStudentWithInfo!;
                         final student = studentWithInfo.student;
-                        
+
                         if (startTimes.length > 1) {
                           // 드래그 등록 분기:
                           // - 블록 생성/등록(=pending 누적)은 ClassesView에서 처리
                           // - 등록모드에서는 서버 리로드(loadStudentTimeBlocks)를 호출하면 pending이 사라질 수 있으므로 금지
                           if (_kRegistrationPerfDebug) {
                             // ignore: avoid_print
-                            print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 드래그 등록 분기 진입: startTimes.length=${startTimes.length} student=${student.id}/${student.name}');
+                            print(
+                                '[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 드래그 등록 분기 진입: startTimes.length=${startTimes.length} student=${student.id}/${student.name}');
                             // ignore: avoid_print
-                            print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 드래그 등록 분기 return');
+                            print(
+                                '[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 드래그 등록 분기 return');
                           }
                           return;
                         } else if (startTimes.length == 1) {
                           // 클릭 등록 분기: 블록 생성/등록부터 수행
                           if (_kRegistrationPerfDebug) {
                             // ignore: avoid_print
-                            print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 분기 진입: startTimes.length=${startTimes.length} student=${student.id}/${student.name}');
+                            print(
+                                '[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 분기 진입: startTimes.length=${startTimes.length} student=${student.id}/${student.name}');
                           }
                           final blockMinutes = 30; // 한 블록 30분 기준
-                          final lessonDuration = DataManager.instance.academySettings.lessonDuration;
-                          final blockCount = (lessonDuration / blockMinutes).ceil();
-                          List<DateTime> actualStartTimes = List.generate(blockCount, (i) => startTimes.first.add(Duration(minutes: i * blockMinutes)));
-                          
+                          final lessonDuration = DataManager
+                              .instance.academySettings.lessonDuration;
+                          final blockCount =
+                              (lessonDuration / blockMinutes).ceil();
+                          List<DateTime> actualStartTimes = List.generate(
+                              blockCount,
+                              (i) => startTimes.first
+                                  .add(Duration(minutes: i * blockMinutes)));
+
                           if (_kRegistrationPerfDebug) {
                             // ignore: avoid_print
-                            print('[DEBUG][onCellStudentsSelected] 생성할 블록 actualStartTimes: $actualStartTimes');
+                            print(
+                                '[DEBUG][onCellStudentsSelected] 생성할 블록 actualStartTimes: $actualStartTimes');
                           }
                           // 효력 기간 입력
                           final range = await _pickBlockEffectiveRange(context);
                           if (range == null) {
-                            showAppSnackBar(context, '등록이 취소되었습니다.', useRoot: true);
+                            showAppSnackBar(context, '등록이 취소되었습니다.',
+                                useRoot: true);
                             return;
                           }
                           // --- 중복 방어 강화: 하나라도 겹치면 전체 등록 불가 ---
-                          final allBlocks = DataManager.instance.studentTimeBlocks;
+                          final allBlocks =
+                              DataManager.instance.studentTimeBlocks;
                           // ⚠️ startTimes는 "시간표 그리드"에서 생성된 DateTime(오늘 날짜 기반)일 수 있어,
                           // 중복 체크는 반드시 "등록 효력 시작일(range.start)" 기준으로 수행해야 한다.
-                          final effectiveDate = DateTime(range.start.year, range.start.month, range.start.day);
+                          final effectiveDate = DateTime(range.start.year,
+                              range.start.month, range.start.day);
                           bool hasConflict = false;
                           for (final startTime in actualStartTimes) {
-                            final conflictBlock = allBlocks.firstWhereOrNull((b) =>
-                              b.studentId == student.id &&
-                              b.dayIndex == dayIdx &&
-                              b.startHour == startTime.hour &&
-                              b.startMinute == startTime.minute &&
-                              _isBlockActiveOnDate(b, effectiveDate));
+                            final conflictBlock = allBlocks.firstWhereOrNull(
+                                (b) =>
+                                    b.studentId == student.id &&
+                                    b.dayIndex == dayIdx &&
+                                    b.startHour == startTime.hour &&
+                                    b.startMinute == startTime.minute &&
+                                    _isBlockActiveOnDate(b, effectiveDate));
                             if (conflictBlock != null) {
                               hasConflict = true;
                               break;
@@ -2005,14 +2305,17 @@ class _TimetableScreenState extends State<TimetableScreen> {
                           }
                           if (_kRegistrationPerfDebug) {
                             // ignore: avoid_print
-                            print('[DEBUG][onCellStudentsSelected] 클릭 등록 중복체크 결과: hasConflict=$hasConflict');
+                            print(
+                                '[DEBUG][onCellStudentsSelected] 클릭 등록 중복체크 결과: hasConflict=$hasConflict');
                           }
                           if (hasConflict) {
-                            showAppSnackBar(context, '이미 등록된 시간입니다.', useRoot: true);
+                            showAppSnackBar(context, '이미 등록된 시간입니다.',
+                                useRoot: true);
                             return;
                           }
                           // --- 기존 로직 ---
-                          var blocks = StudentTimeBlockFactory.createBlocksWithSetIdAndNumber(
+                          var blocks = StudentTimeBlockFactory
+                              .createBlocksWithSetIdAndNumber(
                             studentIds: [student.id],
                             dayIndex: dayIdx,
                             startTimes: actualStartTimes,
@@ -2023,44 +2326,60 @@ class _TimetableScreenState extends State<TimetableScreen> {
                           blocks = _applySelectedClassId(blocks);
                           if (_kRegistrationPerfDebug) {
                             // ignore: avoid_print
-                            print('[DEBUG][onCellStudentsSelected] StudentTimeBlock 생성: count=${blocks.length}');
+                            print(
+                                '[DEBUG][onCellStudentsSelected] StudentTimeBlock 생성: count=${blocks.length}');
                           }
                           if (_isStudentRegistrationMode) {
                             // 등록모드: 로컬에만 추가, 서버 업서트/regen은 모드 종료 시 일괄 처리
-                            await DataManager.instance.bulkAddStudentTimeBlocksDeferred(blocks);
+                            await DataManager.instance
+                                .bulkAddStudentTimeBlocksDeferred(blocks);
                             if (_kRegistrationPerfDebug) {
-                              final allBlocksAfter = DataManager.instance.studentTimeBlocks.where((b) => b.studentId == student.id).toList();
+                              final allBlocksAfter = DataManager
+                                  .instance.studentTimeBlocks
+                                  .where((b) => b.studentId == student.id)
+                                  .toList();
                               // ignore: avoid_print
-                              print('[DEBUG][onCellStudentsSelected] (defer) 로컬 저장 후 blocksCount=${allBlocksAfter.length}');
+                              print(
+                                  '[DEBUG][onCellStudentsSelected] (defer) 로컬 저장 후 blocksCount=${allBlocksAfter.length}');
                             }
                           } else {
                             // 일반 모드: 즉시 업서트
-                            await DataManager.instance.bulkAddStudentTimeBlocks(blocks, immediate: true);
+                            await DataManager.instance.bulkAddStudentTimeBlocks(
+                                blocks,
+                                immediate: true);
                             if (_kRegistrationPerfDebug) {
                               // ignore: avoid_print
-                              print('[DEBUG][onCellStudentsSelected] loadStudentTimeBlocks 호출');
+                              print(
+                                  '[DEBUG][onCellStudentsSelected] loadStudentTimeBlocks 호출');
                             }
                             await DataManager.instance.loadStudentTimeBlocks();
                             if (_kRegistrationPerfDebug) {
-                              final allBlocksAfter = DataManager.instance.studentTimeBlocks.where((b) => b.studentId == student.id).toList();
+                              final allBlocksAfter = DataManager
+                                  .instance.studentTimeBlocks
+                                  .where((b) => b.studentId == student.id)
+                                  .toList();
                               // ignore: avoid_print
-                              print('[DEBUG][onCellStudentsSelected] 저장 후 blocksCount=${allBlocksAfter.length}');
+                              print(
+                                  '[DEBUG][onCellStudentsSelected] 저장 후 blocksCount=${allBlocksAfter.length}');
                             }
                           }
-                          final usedCount = DataManager.instance.getStudentSetCount(student.id);
+                          final usedCount = DataManager.instance
+                              .getStudentSetCount(student.id);
                           if (_kRegistrationPerfDebug) {
                             // ignore: avoid_print
-                            print('[DEBUG][onCellStudentsSelected] set_id 개수(수업차감) -> getStudentSetCount: $usedCount');
+                            print(
+                                '[DEBUG][onCellStudentsSelected] set_id 개수(수업차감) -> getStudentSetCount: $usedCount');
                             // ignore: avoid_print
-                            print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 setState 전: _isStudentRegistrationMode=$_isStudentRegistrationMode');
+                            print(
+                                '[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 setState 전: _isStudentRegistrationMode=$_isStudentRegistrationMode');
                           }
                           setState(() {
-                    
-                            
-                            if (false) { // 자동 종료 로직 비활성화
+                            if (false) {
+                              // 자동 종료 로직 비활성화
                               if (_kRegistrationPerfDebug) {
                                 // ignore: avoid_print
-                                print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록모드 종료');
+                                print(
+                                    '[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록모드 종료');
                               }
                               _isStudentRegistrationMode = false;
                               _selectedStudentWithInfo = null;
@@ -2071,15 +2390,20 @@ class _TimetableScreenState extends State<TimetableScreen> {
                           });
                           if (_kRegistrationPerfDebug) {
                             // ignore: avoid_print
-                            print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 setState 후: _isStudentRegistrationMode=$_isStudentRegistrationMode');
+                            print(
+                                '[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 setState 후: _isStudentRegistrationMode=$_isStudentRegistrationMode');
                           }
-                          
-                          if (false && mounted) { // 자동 종료 로직 비활성화
-                            showAppSnackBar(context, '${student.name} 학생의 수업시간 등록이 완료되었습니다.', useRoot: true);
+
+                          if (false && mounted) {
+                            // 자동 종료 로직 비활성화
+                            showAppSnackBar(context,
+                                '${student.name} 학생의 수업시간 등록이 완료되었습니다.',
+                                useRoot: true);
                           }
                           if (_kRegistrationPerfDebug) {
                             // ignore: avoid_print
-                            print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 분기 완료');
+                            print(
+                                '[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 분기 완료');
                           }
                         }
                       }
@@ -2095,11 +2419,13 @@ class _TimetableScreenState extends State<TimetableScreen> {
                         if (!selecting) _selectedStudentIds.clear();
                         if (_kRegistrationPerfDebug) {
                           // ignore: avoid_print
-                          print('[DEBUG][TimetableScreen][ClassesView] onSelectModeChanged: $selecting, _isSelectMode=$_isSelectMode');
+                          print(
+                              '[DEBUG][TimetableScreen][ClassesView] onSelectModeChanged: $selecting, _isSelectMode=$_isSelectMode');
                         }
                       });
                     },
-                    weekStartDate: _selectedDate.subtract(Duration(days: _selectedDate.weekday - 1)),
+                    weekStartDate: _selectedDate
+                        .subtract(Duration(days: _selectedDate.weekday - 1)),
                   ),
                 ),
                 SizedBox(height: 24), // 시간표 위젯 하단 내부 여백 추가
@@ -2129,7 +2455,15 @@ class _TimetableScreenState extends State<TimetableScreen> {
             });
           },
           selectedCellDayIndex: _selectedCellDayIndex,
-          selectedCellStartTime: _selectedStartTimeHour != null && _selectedStartTimeMinute != null ? DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day, _selectedStartTimeHour!, _selectedStartTimeMinute!) : null,
+          selectedCellStartTime:
+              _selectedStartTimeHour != null && _selectedStartTimeMinute != null
+                  ? DateTime(
+                      _selectedDate.year,
+                      _selectedDate.month,
+                      _selectedDate.day,
+                      _selectedStartTimeHour!,
+                      _selectedStartTimeMinute!)
+                  : null,
           placeholderText: _initialPlaceholderText(),
           onCellStudentsChanged: (dayIdx, startTime, students) {
             setState(() {
@@ -2159,7 +2493,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
               }
               if (_kRegistrationPerfDebug) {
                 // ignore: avoid_print
-                print('[DEBUG][TimetableScreen] onStudentSelectChanged: $id, $selected, _selectedStudentIds=$_selectedStudentIds');
+                print(
+                    '[DEBUG][TimetableScreen] onStudentSelectChanged: $id, $selected, _selectedStudentIds=$_selectedStudentIds');
               }
             });
           },
@@ -2176,22 +2511,26 @@ class _TimetableScreenState extends State<TimetableScreen> {
   }
 
   Widget _buildClassView() {
-    print('[DEBUG][_buildClassView] _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo');
+    print(
+        '[DEBUG][_buildClassView] _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo');
     final Set<String>? filteredStudentIds = _activeFilter == null
         ? null
         : _filteredStudents.map((s) => s.student.id).toSet();
-    final Set<String>? timetableFilteredStudentIds = _weekStudentFilterId == null
-        ? filteredStudentIds
-        : <String>{_weekStudentFilterId!};
+    final Set<String>? timetableFilteredStudentIds =
+        _weekStudentFilterId == null
+            ? filteredStudentIds
+            : <String>{_weekStudentFilterId!};
     return Column(
       children: [
         // 상단 UI (월정보, 세그먼트, 선택, 필터 버튼 등)
         TimetableHeader(
           selectedDate: _selectedDate,
           onDateChanged: _handleDateChanged,
-          selectedDayIndex: _isStudentRegistrationMode ? null : _selectedDayIndex,
+          selectedDayIndex:
+              _isStudentRegistrationMode ? null : _selectedDayIndex,
           onDaySelected: _onDayHeaderSelected,
-          isRegistrationMode: _isStudentRegistrationMode || _isClassRegistrationMode,
+          isRegistrationMode:
+              _isStudentRegistrationMode || _isClassRegistrationMode,
         ),
         // 등록 안내문구/카운트
         if (_isStudentRegistrationMode && _selectedStudentWithInfo != null)
@@ -2201,13 +2540,18 @@ class _TimetableScreenState extends State<TimetableScreen> {
               builder: (context) {
                 final studentWithInfo = _selectedStudentWithInfo!;
                 final studentId = studentWithInfo.student.id;
-                final blocks = DataManager.instance.studentTimeBlocks.where((b) => b.studentId == studentId).toList();
+                final blocks = DataManager.instance.studentTimeBlocks
+                    .where((b) => b.studentId == studentId)
+                    .toList();
                 final setIds = blocks.map((b) => b.setId).toSet();
                 final registeredCount = setIds.length;
                 final nextLessonNumber = registeredCount + 1;
                 return Text(
                   '${studentWithInfo.student.name} 학생: ${nextLessonNumber}번째 수업시간 등록',
-                  style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w500),
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w500),
                 );
               },
             ),
@@ -2218,51 +2562,84 @@ class _TimetableScreenState extends State<TimetableScreen> {
             scrollController: _timetableScrollController,
             operatingHours: _operatingHours,
             breakTimeColor: const Color(0xFF424242),
-            isRegistrationMode: _isStudentRegistrationMode || _isClassRegistrationMode,
-            weekStartDate: _selectedDate.subtract(Duration(days: _selectedDate.weekday - 1)),
-            selectedDayIndex: _isStudentRegistrationMode ? null : _selectedDayIndex,
+            isRegistrationMode:
+                _isStudentRegistrationMode || _isClassRegistrationMode,
+            weekStartDate: _selectedDate
+                .subtract(Duration(days: _selectedDate.weekday - 1)),
+            selectedDayIndex:
+                _isStudentRegistrationMode ? null : _selectedDayIndex,
+            onDaySelected: _onDayHeaderSelected,
             selectedCellDayIndex: _selectedCellDayIndex,
-            selectedCellStartTime: (_selectedStartTimeHour != null && _selectedStartTimeMinute != null)
-                ? DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day, _selectedStartTimeHour!, _selectedStartTimeMinute!)
+            selectedCellStartTime: (_selectedStartTimeHour != null &&
+                    _selectedStartTimeMinute != null)
+                ? DateTime(
+                    _selectedDate.year,
+                    _selectedDate.month,
+                    _selectedDate.day,
+                    _selectedStartTimeHour!,
+                    _selectedStartTimeMinute!)
                 : null,
             onInquiryNoteTap: (noteId) => unawaited(_openInquiryNote(noteId)),
             onTimeSelected: (int dayIdx, DateTime startTime) {
-              print('[DEBUG][onTimeSelected] 셀 클릭: dayIdx=$dayIdx, startTime=$startTime');
+              print(
+                  '[DEBUG][onTimeSelected] 셀 클릭: dayIdx=$dayIdx, startTime=$startTime');
               setState(() {
-                _selectedCellDayIndex = dayIdx;
-                _selectedStartTimeHour = startTime.hour;
-                _selectedStartTimeMinute = startTime.minute;
-                print('[DEBUG][onTimeSelected][setState후] _selectedCellDayIndex=$_selectedCellDayIndex, _selectedStartTimeHour=$_selectedStartTimeHour, _selectedStartTimeMinute=$_selectedStartTimeMinute');
+                final bool isSameCell = _selectedCellDayIndex == dayIdx &&
+                    _selectedStartTimeHour == startTime.hour &&
+                    _selectedStartTimeMinute == startTime.minute;
+                if (isSameCell) {
+                  _selectedCellDayIndex = null;
+                  _selectedStartTimeHour = null;
+                  _selectedStartTimeMinute = null;
+                } else {
+                  _selectedCellDayIndex = dayIdx;
+                  _selectedStartTimeHour = startTime.hour;
+                  _selectedStartTimeMinute = startTime.minute;
+                }
+                print(
+                    '[DEBUG][onTimeSelected][setState후] _selectedCellDayIndex=$_selectedCellDayIndex, _selectedStartTimeHour=$_selectedStartTimeHour, _selectedStartTimeMinute=$_selectedStartTimeMinute');
               });
             },
-            onCellStudentsSelected: (int dayIdx, List<DateTime> startTimes, List<StudentWithInfo> students) async {
-              print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 호출: dayIdx=$dayIdx, startTimes=$startTimes, startTimes.length=${startTimes.length}, students=$students, _isSelfStudyRegistrationMode=$_isSelfStudyRegistrationMode, _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedSelfStudyStudent=${_selectedSelfStudyStudent?.student.name}, _selectedStudentWithInfo=${_selectedStudentWithInfo?.student.name}');
+            onCellStudentsSelected: (int dayIdx, List<DateTime> startTimes,
+                List<StudentWithInfo> students) async {
+              print(
+                  '[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 호출: dayIdx=$dayIdx, startTimes=$startTimes, startTimes.length=${startTimes.length}, students=$students, _isSelfStudyRegistrationMode=$_isSelfStudyRegistrationMode, _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedSelfStudyStudent=${_selectedSelfStudyStudent?.student.name}, _selectedStudentWithInfo=${_selectedStudentWithInfo?.student.name}');
               // 셀 클릭 시 검색 리셋
               _resetSearch();
               setState(() {
                 _selectedCellDayIndex = dayIdx;
-                _selectedStartTimeHour = startTimes.isNotEmpty ? startTimes.first.hour : null;
-                _selectedStartTimeMinute = startTimes.isNotEmpty ? startTimes.first.minute : null;
+                _selectedStartTimeHour =
+                    startTimes.isNotEmpty ? startTimes.first.hour : null;
+                _selectedStartTimeMinute =
+                    startTimes.isNotEmpty ? startTimes.first.minute : null;
               });
               // 학생 등록 모드에서만 동작
-              if (_isStudentRegistrationMode && _selectedStudentWithInfo != null) {
+              if (_isStudentRegistrationMode &&
+                  _selectedStudentWithInfo != null) {
                 final studentWithInfo = _selectedStudentWithInfo!;
                 final student = studentWithInfo.student;
                 final blockMinutes = 30;
                 List<DateTime> actualStartTimes = startTimes;
                 if (startTimes.length > 1) {
                   // 드래그 등록 분기: 블록 생성/등록/중복체크/스낵바 모두 건너뛰고 상태만 갱신
-                  print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 드래그 등록 분기 진입: startTimes=$startTimes, startTimes.length=${startTimes.length}');
-                  final allBlocksAfter = DataManager.instance.studentTimeBlocks.where((b) => b.studentId == student.id).toList();
+                  print(
+                      '[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 드래그 등록 분기 진입: startTimes=$startTimes, startTimes.length=${startTimes.length}');
+                  final allBlocksAfter = DataManager.instance.studentTimeBlocks
+                      .where((b) => b.studentId == student.id)
+                      .toList();
                   final setIds = allBlocksAfter.map((b) => b.setId).toSet();
                   final usedCount = setIds.length;
-                  print('[DEBUG][onCellStudentsSelected] 드래그 등록 상태: usedCount=$usedCount');
-                  print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 드래그 등록 setState 전: , _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo');
+                  print(
+                      '[DEBUG][onCellStudentsSelected] 드래그 등록 상태: usedCount=$usedCount');
+                  print(
+                      '[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 드래그 등록 setState 전: , _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo');
                   setState(() {
-            
-                    print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 드래그 등록 setState 후: , _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo');
-                    if (false) { // 자동 종료 로직 비활성화
-                      print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 드래그 등록 등록모드 종료');
+                    print(
+                        '[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 드래그 등록 setState 후: , _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo');
+                    if (false) {
+                      // 자동 종료 로직 비활성화
+                      print(
+                          '[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 드래그 등록 등록모드 종료');
                       _isStudentRegistrationMode = false;
                       _selectedStudentWithInfo = null;
                       _selectedDayIndex = null;
@@ -2270,65 +2647,85 @@ class _TimetableScreenState extends State<TimetableScreen> {
                       _selectedStartTimeMinute = null;
                     }
                   });
-                  print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 드래그 등록 return');
+                  print(
+                      '[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 드래그 등록 return');
                   return;
                 }
                 if (startTimes.length == 1) {
                   // 클릭 등록 분기: 기존대로 블록 생성/중복체크/등록
-                  print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 분기 진입: startTimes=$startTimes, startTimes.length=${startTimes.length}');
+                  print(
+                      '[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 분기 진입: startTimes=$startTimes, startTimes.length=${startTimes.length}');
                   final studentWithInfo = _selectedStudentWithInfo!;
                   final student = studentWithInfo.student;
                   final blockMinutes = 30; // 한 블록 30분 기준
                   List<DateTime> actualStartTimes = startTimes;
-                  final lessonDuration = DataManager.instance.academySettings.lessonDuration;
+                  final lessonDuration =
+                      DataManager.instance.academySettings.lessonDuration;
                   final blockCount = (lessonDuration / blockMinutes).ceil();
-                  actualStartTimes = List.generate(blockCount, (i) => startTimes.first.add(Duration(minutes: i * blockMinutes)));
-                  print('[DEBUG][onCellStudentsSelected] 클릭 등록 생성할 블록 actualStartTimes: $actualStartTimes');
+                  actualStartTimes = List.generate(
+                      blockCount,
+                      (i) => startTimes.first
+                          .add(Duration(minutes: i * blockMinutes)));
+                  print(
+                      '[DEBUG][onCellStudentsSelected] 클릭 등록 생성할 블록 actualStartTimes: $actualStartTimes');
                   final allBlocks = DataManager.instance.studentTimeBlocks;
                   bool hasConflict = false;
                   for (final startTime in actualStartTimes) {
                     // startTimes는 내부 그리드(DateTime.now 기반)라 날짜가 의미 없을 수 있어,
                     // 현재 화면의 선택 날짜(_selectedDate) 기준으로만 활성 중복을 판단한다.
-                    final dateOnly = DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day);
+                    final dateOnly = DateTime(_selectedDate.year,
+                        _selectedDate.month, _selectedDate.day);
                     final conflictBlock = allBlocks.firstWhereOrNull((b) =>
-                      b.studentId == student.id &&
-                      b.dayIndex == dayIdx &&
-                      b.startHour == startTime.hour &&
-                      b.startMinute == startTime.minute &&
-                      _isBlockActiveOnDate(b, dateOnly));
+                        b.studentId == student.id &&
+                        b.dayIndex == dayIdx &&
+                        b.startHour == startTime.hour &&
+                        b.startMinute == startTime.minute &&
+                        _isBlockActiveOnDate(b, dateOnly));
                     if (conflictBlock != null) {
                       hasConflict = true;
-                      print('[DEBUG][onCellStudentsSelected] 클릭 등록 중복 블록 발견: $conflictBlock');
+                      print(
+                          '[DEBUG][onCellStudentsSelected] 클릭 등록 중복 블록 발견: $conflictBlock');
                       break;
                     }
                   }
                   if (hasConflict) {
-                    print('[DEBUG][onCellStudentsSelected] 클릭 등록 중복 SnackBar 발생');
+                    print(
+                        '[DEBUG][onCellStudentsSelected] 클릭 등록 중복 SnackBar 발생');
                     showAppSnackBar(context, '이미 등록된 시간입니다.', useRoot: true);
                     return;
                   }
-                  var blocks = StudentTimeBlockFactory.createBlocksWithSetIdAndNumber(
+                  var blocks =
+                      StudentTimeBlockFactory.createBlocksWithSetIdAndNumber(
                     studentIds: [student.id],
                     dayIndex: dayIdx,
                     startTimes: actualStartTimes,
                     duration: Duration(minutes: blockMinutes),
                   );
                   blocks = _applySelectedClassId(blocks);
-                  print('[DEBUG][onCellStudentsSelected] 클릭 등록 생성된 블록: ${blocks.map((b) => b.toJson()).toList()}');
+                  print(
+                      '[DEBUG][onCellStudentsSelected] 클릭 등록 생성된 블록: ${blocks.map((b) => b.toJson()).toList()}');
                   // 한번에 추가하여 UI가 동시에 갱신되도록 처리
-                  await DataManager.instance.bulkAddStudentTimeBlocks(blocks, immediate: true);
-                  print('[DEBUG][onCellStudentsSelected] 클릭 등록 loadStudentTimeBlocks 호출');
+                  await DataManager.instance
+                      .bulkAddStudentTimeBlocks(blocks, immediate: true);
+                  print(
+                      '[DEBUG][onCellStudentsSelected] 클릭 등록 loadStudentTimeBlocks 호출');
                   await DataManager.instance.loadStudentTimeBlocks();
-                  final allBlocksAfter = DataManager.instance.studentTimeBlocks.where((b) => b.studentId == student.id).toList();
+                  final allBlocksAfter = DataManager.instance.studentTimeBlocks
+                      .where((b) => b.studentId == student.id)
+                      .toList();
                   final setIds = allBlocksAfter.map((b) => b.setId).toSet();
                   final usedCount = setIds.length;
-                  print('[DEBUG][onCellStudentsSelected] 클릭 등록 상태: usedCount=$usedCount');
-                  print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 setState 전: , _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo');
+                  print(
+                      '[DEBUG][onCellStudentsSelected] 클릭 등록 상태: usedCount=$usedCount');
+                  print(
+                      '[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 setState 전: , _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo');
                   setState(() {
-            
-                    print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 setState 후: , _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo');
-                    if (false) { // 자동 종료 로직 비활성화
-                      print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 등록모드 종료');
+                    print(
+                        '[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 setState 후: , _isStudentRegistrationMode=$_isStudentRegistrationMode, _selectedStudentWithInfo=$_selectedStudentWithInfo');
+                    if (false) {
+                      // 자동 종료 로직 비활성화
+                      print(
+                          '[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 등록모드 종료');
                       _isStudentRegistrationMode = false;
                       _selectedStudentWithInfo = null;
                       _selectedDayIndex = null;
@@ -2336,11 +2733,16 @@ class _TimetableScreenState extends State<TimetableScreen> {
                       _selectedStartTimeMinute = null;
                     }
                   });
-                  if (false && mounted) { // 자동 종료 로직 비활성화
-                    print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 완료 스낵바');
-                    showAppSnackBar(context, '\x1b[33m${student.name}\x1b[0m 학생의 수업시간 등록이 완료되었습니다.', useRoot: true);
+                  if (false && mounted) {
+                    // 자동 종료 로직 비활성화
+                    print(
+                        '[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 완료 스낵바');
+                    showAppSnackBar(context,
+                        '\x1b[33m${student.name}\x1b[0m 학생의 수업시간 등록이 완료되었습니다.',
+                        useRoot: true);
                   }
-                  print('[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 return');
+                  print(
+                      '[DEBUG][onCellStudentsSelected][${DateTime.now().toIso8601String()}] 클릭 등록 return');
                 }
               }
             },
@@ -2356,7 +2758,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
   }
 
   Future<void> _handleTimeSelection(int dayIdx, DateTime startTime) async {
-    print('[DEBUG] _handleTimeSelection called: dayIdx= [33m$dayIdx [0m, startTime= [33m$startTime [0m, _isStudentRegistrationMode=$_isStudentRegistrationMode, ');
+    print(
+        '[DEBUG] _handleTimeSelection called: dayIdx= [33m$dayIdx [0m, startTime= [33m$startTime [0m, _isStudentRegistrationMode=$_isStudentRegistrationMode, ');
     if (_isStudentRegistrationMode) {
       // 학생 등록: 이미 선택된 학생(_selectedStudentWithInfo)로 바로 등록
       final studentWithInfo = _selectedStudentWithInfo;
@@ -2372,7 +2775,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
           studentIds: [studentWithInfo.student.id],
           dayIndex: dayIdx,
           startTimes: [startTime],
-          duration: Duration(minutes: DataManager.instance.academySettings.lessonDuration),
+          duration: Duration(
+              minutes: DataManager.instance.academySettings.lessonDuration),
           startDate: range.start,
           endDate: range.end,
         );
@@ -2382,7 +2786,9 @@ class _TimetableScreenState extends State<TimetableScreen> {
         // 스낵바 출력
         if (mounted) {
           print('[DEBUG] 스낵바 출력');
-          showAppSnackBar(context, '${studentWithInfo.student.name} 학생의 시간이 등록되었습니다.', useRoot: true);
+          showAppSnackBar(
+              context, '${studentWithInfo.student.name} 학생의 시간이 등록되었습니다.',
+              useRoot: true);
         } else {
           print('[DEBUG] context not mounted, 스낵바 출력 불가');
         }
@@ -2394,9 +2800,12 @@ class _TimetableScreenState extends State<TimetableScreen> {
         // 등록 완료되어도 계속 등록 모드 유지
       });
       // 마지막 등록 후 안내
-      if (false) { // 마지막 등록 후 안내 로직 비활성화
+      if (false) {
+        // 마지막 등록 후 안내 로직 비활성화
         if (mounted && _selectedStudentWithInfo != null) {
-          showAppSnackBar(context, '${_selectedStudentWithInfo!.student.name} 학생의 수업시간 등록이 완료되었습니다.', useRoot: true);
+          showAppSnackBar(context,
+              '${_selectedStudentWithInfo!.student.name} 학생의 수업시간 등록이 완료되었습니다.',
+              useRoot: true);
         }
       }
       return;
@@ -2408,7 +2817,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
         startTime: startTime,
         dayIndex: dayIdx,
       );
-      if (_currentGroupSchedule!.createdAt == _currentGroupSchedule!.updatedAt) {
+      if (_currentGroupSchedule!.createdAt ==
+          _currentGroupSchedule!.updatedAt) {
         await DataManager.instance.addGroupSchedule(updatedSchedule);
         print('[DEBUG] 새 클래스 스케줄 등록');
       } else {
@@ -2456,26 +2866,39 @@ class _TimetableScreenState extends State<TimetableScreen> {
         final gradeStr = _gradeToKor(student.educationLevel, student.grade);
         if (!f['grades']!.contains(gradeStr)) return false;
       }
-      if (f['schools']!.isNotEmpty && !f['schools']!.contains(student.school)) return false;
-      if (f['groups']!.isNotEmpty && (student.groupInfo == null || !f['groups']!.contains(student.groupInfo!.name))) return false;
-      
+      if (f['schools']!.isNotEmpty && !f['schools']!.contains(student.school))
+        return false;
+      if (f['groups']!.isNotEmpty &&
+          (student.groupInfo == null ||
+              !f['groups']!.contains(student.groupInfo!.name))) return false;
+
       // 수업별 필터링 추가
       if (f['classes']!.isNotEmpty) {
         final classes = DataManager.instance.classesNotifier.value;
-        final selectedClassIds = f['classes']!.map((className) {
-          final classInfo = classes.firstWhereOrNull((c) => c.name == className);
-          return classInfo?.id ?? (className == '수업' ? '__default_class__' : null);
-        }).where((id) => id != null).cast<String>().toSet();
+        final selectedClassIds = f['classes']!
+            .map((className) {
+              final classInfo =
+                  classes.firstWhereOrNull((c) => c.name == className);
+              return classInfo?.id ??
+                  (className == '수업' ? '__default_class__' : null);
+            })
+            .where((id) => id != null)
+            .cast<String>()
+            .toSet();
 
         if (selectedClassIds.isNotEmpty) {
-          final studentBlocks = DataManager.instance.studentTimeBlocks.where((b) => b.studentId == student.id).toList();
+          final studentBlocks = DataManager.instance.studentTimeBlocks
+              .where((b) => b.studentId == student.id)
+              .toList();
           final hasMatchingClass = studentBlocks.any((block) =>
-            (block.sessionTypeId == null && selectedClassIds.contains('__default_class__')) ||
-            (block.sessionTypeId != null && selectedClassIds.contains(block.sessionTypeId)));
+              (block.sessionTypeId == null &&
+                  selectedClassIds.contains('__default_class__')) ||
+              (block.sessionTypeId != null &&
+                  selectedClassIds.contains(block.sessionTypeId)));
           if (!hasMatchingClass) return false;
         }
       }
-      
+
       return true;
     }).toList();
     print('[DEBUG] 필터 적용 결과: ${filtered.map((s) => s.student.name).toList()}');
@@ -2490,7 +2913,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
         .whereType<String>()
         .toSet();
     // 기본 수업(세션 null) 필터 지원: 이름이 '수업'이거나 id가 '__default_class__'인 경우 포함
-    if (f['classes']!.contains('수업') || f['classes']!.contains('__default_class__')) {
+    if (f['classes']!.contains('수업') ||
+        f['classes']!.contains('__default_class__')) {
       ids.add('__default_class__');
     }
     return ids;
@@ -2535,9 +2959,12 @@ class _TimetableScreenState extends State<TimetableScreen> {
 
   String _educationLevelToKor(EducationLevel level) {
     switch (level) {
-      case EducationLevel.elementary: return '초등';
-      case EducationLevel.middle: return '중등';
-      case EducationLevel.high: return '고등';
+      case EducationLevel.elementary:
+        return '초등';
+      case EducationLevel.middle:
+        return '중등';
+      case EducationLevel.high:
+        return '고등';
     }
   }
 
@@ -2552,21 +2979,29 @@ class _TimetableScreenState extends State<TimetableScreen> {
   }
 
   // dayIdx, startTime에 해당하는 학생 리스트 반환
-  List<StudentWithInfo> _getCellStudents(int dayIdx, int startHour, int startMinute) {
+  List<StudentWithInfo> _getCellStudents(
+      int dayIdx, int startHour, int startMinute) {
     final blocks = DataManager.instance.studentTimeBlocks.where((b) {
       //print('[DEBUG][_getCellStudents] 비교: b.dayIndex=${b.dayIndex} == $dayIdx, b.startHour=${b.startHour} == $startHour, b.startMinute=${b.startMinute} == $startMinute, b.studentId=${b.studentId}');
-      return b.dayIndex == dayIdx && b.startHour == startHour && b.startMinute == startMinute;
+      return b.dayIndex == dayIdx &&
+          b.startHour == startHour &&
+          b.startMinute == startMinute;
     }).toList();
     final students = DataManager.instance.students;
-    final result = blocks.map((b) =>
-      students.firstWhere(
-        (s) => s.student.id == b.studentId,
-        orElse: () => StudentWithInfo(
-          student: Student(id: '', name: '', school: '', grade: 0, educationLevel: EducationLevel.elementary),
-          basicInfo: StudentBasicInfo(studentId: ''),
-        ),
-      )
-    ).toList();
+    final result = blocks
+        .map((b) => students.firstWhere(
+              (s) => s.student.id == b.studentId,
+              orElse: () => StudentWithInfo(
+                student: Student(
+                    id: '',
+                    name: '',
+                    school: '',
+                    grade: 0,
+                    educationLevel: EducationLevel.elementary),
+                basicInfo: StudentBasicInfo(studentId: ''),
+              ),
+            ))
+        .toList();
     //print('[DEBUG][_getCellStudents] dayIdx=$dayIdx, startHour=$startHour, startMinute=$startMinute, blockCount=${blocks.length}, studentIds=${result.map((s) => s.student.id).toList()}');
     return result;
   }
@@ -2579,7 +3014,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
           setState(() {
             _isSelfStudyRegistrationMode = true;
             _selectedSelfStudyStudent = student;
-            print('[DEBUG][setState] _selectedSelfStudyStudent:  [33m$_selectedSelfStudyStudent [0m');
+            print(
+                '[DEBUG][setState] _selectedSelfStudyStudent:  [33m$_selectedSelfStudyStudent [0m');
           });
         },
       ),
@@ -2621,7 +3057,8 @@ class _HeaderSelectButtonState extends State<_HeaderSelectButton> {
   Widget build(BuildContext context) {
     return AnimatedSwitcher(
       duration: const Duration(milliseconds: 200),
-      layoutBuilder: (currentChild, previousChildren) => currentChild ?? const SizedBox.shrink(),
+      layoutBuilder: (currentChild, previousChildren) =>
+          currentChild ?? const SizedBox.shrink(),
       transitionBuilder: (child, animation) =>
           FadeTransition(opacity: animation, child: child),
       child: widget.isSelectMode ? _buildExpanded() : _buildSelectButton(),
@@ -2634,7 +3071,8 @@ class _HeaderSelectButtonState extends State<_HeaderSelectButton> {
       width: 78,
       child: const Text(
         '선택',
-        style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700, fontSize: 16),
+        style: TextStyle(
+            color: Colors.white70, fontWeight: FontWeight.w700, fontSize: 16),
       ),
       onTap: () => widget.onModeChanged?.call(true),
     );
@@ -2649,7 +3087,10 @@ class _HeaderSelectButtonState extends State<_HeaderSelectButton> {
           width: 64.4,
           child: const Text(
             '모두',
-            style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700, fontSize: 16),
+            style: TextStyle(
+                color: Colors.white70,
+                fontWeight: FontWeight.w700,
+                fontSize: 16),
           ),
           onTap: widget.onSelectAll ?? () {},
         ),
@@ -2794,7 +3235,10 @@ class _MemoPanel extends StatelessWidget {
   final ValueListenable<List<MemoItem>> memosListenable;
   final VoidCallback onAddMemo;
   final void Function(MemoItem item) onEditMemo;
-  const _MemoPanel({required this.memosListenable, required this.onAddMemo, required this.onEditMemo});
+  const _MemoPanel(
+      {required this.memosListenable,
+      required this.onAddMemo,
+      required this.onEditMemo});
 
   @override
   Widget build(BuildContext context) {
@@ -2823,7 +3267,8 @@ class _MemoPanel extends StatelessWidget {
               builder: (context, memos, _) {
                 if (memos.isEmpty) {
                   return const Center(
-                    child: Text('메모 없음', style: TextStyle(color: Colors.white24, fontSize: 12)),
+                    child: Text('메모 없음',
+                        style: TextStyle(color: Colors.white24, fontSize: 12)),
                   );
                 }
                 return ListView.builder(
@@ -2832,7 +3277,8 @@ class _MemoPanel extends StatelessWidget {
                   itemBuilder: (context, index) {
                     final m = memos[index];
                     return Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 6),
+                      padding: const EdgeInsets.symmetric(
+                          vertical: 6, horizontal: 6),
                       child: Tooltip(
                         message: m.summary, // 호버: 요약본 표시
                         waitDuration: const Duration(milliseconds: 200),
@@ -2849,7 +3295,10 @@ class _MemoPanel extends StatelessWidget {
                               m.original,
                               maxLines: 6,
                               overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(color: Colors.white70, fontSize: 12, height: 1.2),
+                              style: const TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 12,
+                                  height: 1.2),
                             ),
                           ),
                         ),
@@ -2897,8 +3346,10 @@ class _MemoInputDialogState extends State<_MemoInputDialog> {
           decoration: const InputDecoration(
             hintText: '메모를 입력하세요',
             hintStyle: TextStyle(color: Colors.white38),
-            enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
-            focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))),
+            enabledBorder: OutlineInputBorder(
+                borderSide: BorderSide(color: Colors.white24)),
+            focusedBorder: OutlineInputBorder(
+                borderSide: BorderSide(color: Color(0xFF1976D2))),
           ),
         ),
       ),
@@ -2917,7 +3368,8 @@ class _MemoInputDialogState extends State<_MemoInputDialog> {
                   // 다이얼로그는 텍스트 반환만, 실제 저장은 상위에서 처리
                   Navigator.of(context).pop(text);
                 },
-          style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+          style:
+              FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
           child: const Text('저장'),
         ),
       ],
@@ -2926,6 +3378,7 @@ class _MemoInputDialogState extends State<_MemoInputDialog> {
 }
 
 enum _MemoEditAction { save, delete }
+
 class _MemoEditResult {
   final _MemoEditAction action;
   final String text;
@@ -2968,8 +3421,10 @@ class _MemoEditDialogState extends State<_MemoEditDialog> {
           maxLines: 12,
           style: const TextStyle(color: Colors.white),
           decoration: const InputDecoration(
-            enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
-            focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))),
+            enabledBorder: OutlineInputBorder(
+                borderSide: BorderSide(color: Colors.white24)),
+            focusedBorder: OutlineInputBorder(
+                borderSide: BorderSide(color: Color(0xFF1976D2))),
           ),
         ),
       ),
@@ -2979,8 +3434,12 @@ class _MemoEditDialogState extends State<_MemoEditDialog> {
           child: const Text('취소', style: TextStyle(color: Colors.white70)),
         ),
         TextButton(
-          onPressed: _saving ? null : () => Navigator.of(context).pop(const _MemoEditResult(_MemoEditAction.delete, '')),
-          style: TextButton.styleFrom(foregroundColor: Colors.white, backgroundColor: Colors.red),
+          onPressed: _saving
+              ? null
+              : () => Navigator.of(context)
+                  .pop(const _MemoEditResult(_MemoEditAction.delete, '')),
+          style: TextButton.styleFrom(
+              foregroundColor: Colors.white, backgroundColor: Colors.red),
           child: const Text('삭제'),
         ),
         FilledButton(
@@ -2989,9 +3448,11 @@ class _MemoEditDialogState extends State<_MemoEditDialog> {
               : () async {
                   setState(() => _saving = true);
                   final text = _controller.text;
-                  Navigator.of(context).pop(_MemoEditResult(_MemoEditAction.save, text));
+                  Navigator.of(context)
+                      .pop(_MemoEditResult(_MemoEditAction.save, text));
                 },
-          style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+          style:
+              FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
           child: const Text('저장'),
         ),
       ],
@@ -2999,28 +3460,38 @@ class _MemoEditDialogState extends State<_MemoEditDialog> {
   }
 }
 
-
 class SelfStudyRegistrationDialog extends StatefulWidget {
   final ValueChanged<StudentWithInfo> onStudentSelected;
-  const SelfStudyRegistrationDialog({Key? key, required this.onStudentSelected}) : super(key: key);
+  const SelfStudyRegistrationDialog({Key? key, required this.onStudentSelected})
+      : super(key: key);
 
   @override
-  State<SelfStudyRegistrationDialog> createState() => _SelfStudyRegistrationDialogState();
+  State<SelfStudyRegistrationDialog> createState() =>
+      _SelfStudyRegistrationDialogState();
 }
 
-class _SelfStudyRegistrationDialogState extends State<SelfStudyRegistrationDialog> {
+class _SelfStudyRegistrationDialogState
+    extends State<SelfStudyRegistrationDialog> {
   String _searchQuery = '';
-  final TextEditingController _searchController = ImeAwareTextEditingController();
-  List<StudentWithInfo> get _eligibleStudents => DataManager.instance.getSelfStudyEligibleStudents();
+  final TextEditingController _searchController =
+      ImeAwareTextEditingController();
+  List<StudentWithInfo> get _eligibleStudents =>
+      DataManager.instance.getSelfStudyEligibleStudents();
   List<StudentWithInfo> get _searchResults {
     if (_searchQuery.isEmpty) return [];
     final results = _eligibleStudents.where((student) {
-      final nameMatch = student.student.name.toLowerCase().contains(_searchQuery.toLowerCase());
-      final schoolMatch = student.student.school.toLowerCase().contains(_searchQuery.toLowerCase());
-      final gradeMatch = student.student.grade.toString().contains(_searchQuery);
+      final nameMatch = student.student.name
+          .toLowerCase()
+          .contains(_searchQuery.toLowerCase());
+      final schoolMatch = student.student.school
+          .toLowerCase()
+          .contains(_searchQuery.toLowerCase());
+      final gradeMatch =
+          student.student.grade.toString().contains(_searchQuery);
       return nameMatch || schoolMatch || gradeMatch;
     }).toList();
-    print('[DEBUG][SelfStudyRegistrationDialog] 자습 등록 가능 학생 검색 결과: ' + results.map((s) => s.student.name).toList().toString());
+    print('[DEBUG][SelfStudyRegistrationDialog] 자습 등록 가능 학생 검색 결과: ' +
+        results.map((s) => s.student.name).toList().toString());
     return results;
   }
 
@@ -3028,7 +3499,9 @@ class _SelfStudyRegistrationDialogState extends State<SelfStudyRegistrationDialo
   Widget build(BuildContext context) {
     return AlertDialog(
       backgroundColor: const Color(0xFF1F1F1F),
-      title: const Text('자습 등록', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
+      title: const Text('자습 등록',
+          style: TextStyle(
+              color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
       content: SizedBox(
         width: 420,
         child: Column(
@@ -3055,22 +3528,36 @@ class _SelfStudyRegistrationDialogState extends State<SelfStudyRegistrationDialo
             SizedBox(
               height: 120,
               child: _searchQuery.isEmpty
-                  ? const Center(child: Text('학생을 검색하세요.', style: TextStyle(color: Colors.white38, fontSize: 15)))
+                  ? const Center(
+                      child: Text('학생을 검색하세요.',
+                          style:
+                              TextStyle(color: Colors.white38, fontSize: 15)))
                   : _searchResults.isEmpty
-                      ? const Center(child: Text('검색 결과가 없습니다.', style: TextStyle(color: Colors.white38, fontSize: 15)))
+                      ? const Center(
+                          child: Text('검색 결과가 없습니다.',
+                              style: TextStyle(
+                                  color: Colors.white38, fontSize: 15)))
                       : Scrollbar(
                           thumbVisibility: true,
                           child: ListView.separated(
                             itemCount: _searchResults.length,
-                            separatorBuilder: (_, __) => const Divider(color: Colors.white12, height: 1),
+                            separatorBuilder: (_, __) =>
+                                const Divider(color: Colors.white12, height: 1),
                             itemBuilder: (context, idx) {
                               final info = _searchResults[idx];
                               return ListTile(
-                                title: Text(info.student.name, style: const TextStyle(color: Colors.white)),
-                                subtitle: Text('${info.student.school} / ${info.student.grade}학년', style: const TextStyle(color: Colors.white70, fontSize: 14)),
+                                title: Text(info.student.name,
+                                    style:
+                                        const TextStyle(color: Colors.white)),
+                                subtitle: Text(
+                                    '${info.student.school} / ${info.student.grade}학년',
+                                    style: const TextStyle(
+                                        color: Colors.white70, fontSize: 14)),
                                 onTap: () {
-                                  print('[DEBUG][SelfStudyRegistrationDialog] 학생 선택:  [33m${info.student.name} [0m');
-                                  Navigator.of(context).pop(info); // 반드시 StudentWithInfo 반환
+                                  print(
+                                      '[DEBUG][SelfStudyRegistrationDialog] 학생 선택:  [33m${info.student.name} [0m');
+                                  Navigator.of(context)
+                                      .pop(info); // 반드시 StudentWithInfo 반환
                                 },
                               );
                             },
@@ -3094,13 +3581,17 @@ class _DropdownMenuButton extends StatefulWidget {
   final bool isOpen;
   final ValueChanged<bool> onOpenChanged;
   final ValueChanged<String> onSelected;
-  const _DropdownMenuButton({required this.isOpen, required this.onOpenChanged, required this.onSelected});
+  const _DropdownMenuButton(
+      {required this.isOpen,
+      required this.onOpenChanged,
+      required this.onSelected});
 
   @override
   State<_DropdownMenuButton> createState() => _DropdownMenuButtonState();
 }
 
-class _DropdownMenuButtonState extends State<_DropdownMenuButton> with SingleTickerProviderStateMixin {
+class _DropdownMenuButtonState extends State<_DropdownMenuButton>
+    with SingleTickerProviderStateMixin {
   final GlobalKey _buttonKey = GlobalKey();
   OverlayEntry? _overlayEntry;
   late AnimationController _controller;
@@ -3108,7 +3599,8 @@ class _DropdownMenuButtonState extends State<_DropdownMenuButton> with SingleTic
   @override
   void initState() {
     super.initState();
-    _controller = AnimationController(vsync: this, duration: const Duration(milliseconds: 200));
+    _controller = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 200));
   }
 
   @override
@@ -3137,7 +3629,8 @@ class _DropdownMenuButtonState extends State<_DropdownMenuButton> with SingleTic
   }
 
   OverlayEntry _createOverlayEntry() {
-    RenderBox renderBox = _buttonKey.currentContext!.findRenderObject() as RenderBox;
+    RenderBox renderBox =
+        _buttonKey.currentContext!.findRenderObject() as RenderBox;
     final size = renderBox.size;
     final offset = renderBox.localToGlobal(Offset.zero);
     return OverlayEntry(
@@ -3163,8 +3656,8 @@ class _DropdownMenuButtonState extends State<_DropdownMenuButton> with SingleTic
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                ...['학생', '그룹', '보강', '일정'].map((label) =>
-                  FadeTransition(
+                ...['학생', '그룹', '보강', '일정'].map(
+                  (label) => FadeTransition(
                     opacity: _controller,
                     child: ScaleTransition(
                       scale: _controller,
@@ -3200,13 +3693,14 @@ class _DropdownMenuButtonState extends State<_DropdownMenuButton> with SingleTic
           color: const Color(0xFF1976D2),
           shape: RectangleShapeBorder(
             borderRadius: widget.isOpen
-              ? DynamicBorderRadius.all(DynamicRadius.circular(50.toPercentLength))
-              : DynamicBorderRadius.only(
-                  topLeft: DynamicRadius.circular(6.toPXLength),
-                  bottomLeft: DynamicRadius.circular(6.toPXLength),
-                  topRight: DynamicRadius.circular(32.toPXLength),
-                  bottomRight: DynamicRadius.circular(32.toPXLength),
-                ),
+                ? DynamicBorderRadius.all(
+                    DynamicRadius.circular(50.toPercentLength))
+                : DynamicBorderRadius.only(
+                    topLeft: DynamicRadius.circular(6.toPXLength),
+                    bottomLeft: DynamicRadius.circular(6.toPXLength),
+                    topRight: DynamicRadius.circular(32.toPXLength),
+                    bottomRight: DynamicRadius.circular(32.toPXLength),
+                  ),
           ),
         ),
         child: Center(
@@ -3232,7 +3726,8 @@ class _DropdownMenuItem extends StatefulWidget {
   final String label;
   final VoidCallback onTap;
   final double width;
-  const _DropdownMenuItem({required this.label, required this.onTap, this.width = 84});
+  const _DropdownMenuItem(
+      {required this.label, required this.onTap, this.width = 84});
 
   @override
   State<_DropdownMenuItem> createState() => _DropdownMenuItemState();
@@ -3251,7 +3746,8 @@ class _DropdownMenuItemState extends State<_DropdownMenuItem> {
         child: Container(
           width: widget.width,
           height: 38, // 기존 48에서 20% 감소
-          padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 14), // 높이 줄임
+          padding:
+              const EdgeInsets.symmetric(vertical: 6, horizontal: 14), // 높이 줄임
           margin: const EdgeInsets.symmetric(vertical: 2),
           decoration: BoxDecoration(
             color: _hovered ? const Color(0xFF353545) : Colors.transparent,
@@ -3260,7 +3756,8 @@ class _DropdownMenuItemState extends State<_DropdownMenuItem> {
           alignment: Alignment.centerLeft,
           child: Text(
             widget.label,
-            style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w500),
+            style: const TextStyle(
+                color: Colors.white, fontSize: 15, fontWeight: FontWeight.w500),
           ),
         ),
       ),
@@ -3278,7 +3775,8 @@ class _BouncyDropdownButton extends StatefulWidget {
   State<_BouncyDropdownButton> createState() => _BouncyDropdownButtonState();
 }
 
-class _BouncyDropdownButtonState extends State<_BouncyDropdownButton> with SingleTickerProviderStateMixin {
+class _BouncyDropdownButtonState extends State<_BouncyDropdownButton>
+    with SingleTickerProviderStateMixin {
   late AnimationController _controller;
   late Animation<double> _scaleAnim;
   bool _prevIsOpen = false;
@@ -3322,4 +3820,3 @@ class _BouncyDropdownButtonState extends State<_BouncyDropdownButton> with Singl
     );
   }
 }
-

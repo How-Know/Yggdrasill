@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
 import 'package:material_symbols_icons/symbols.dart';
 
 class TimetableHeader extends StatefulWidget {
@@ -8,6 +7,8 @@ class TimetableHeader extends StatefulWidget {
   final int? selectedDayIndex;
   final Function(int) onDaySelected;
   final bool isRegistrationMode;
+  final bool isClassListSheetOpen;
+  final VoidCallback? onClassListSheetToggle;
 
   const TimetableHeader({
     Key? key,
@@ -16,6 +17,8 @@ class TimetableHeader extends StatefulWidget {
     this.selectedDayIndex,
     required this.onDaySelected,
     this.isRegistrationMode = false,
+    this.isClassListSheetOpen = false,
+    this.onClassListSheetToggle,
   }) : super(key: key);
 
   @override
@@ -72,7 +75,6 @@ class _TimetableHeaderState extends State<TimetableHeader> {
 
   @override
   Widget build(BuildContext context) {
-    final weekDays = _getWeekDays();
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -103,6 +105,49 @@ class _TimetableHeaderState extends State<TimetableHeader> {
                   splashRadius: 22,
                   padding: EdgeInsets.zero,
                   constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                ),
+              ),
+              const SizedBox(width: 6),
+              Material(
+                color: widget.isClassListSheetOpen
+                    ? const Color(0xFF223131)
+                    : const Color(0xFF2A2A2A),
+                borderRadius: BorderRadius.circular(24),
+                clipBehavior: Clip.antiAlias,
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(24),
+                  hoverColor: Colors.white.withOpacity(0.06),
+                  highlightColor: Colors.white.withOpacity(0.04),
+                  splashColor: Colors.white.withOpacity(0.10),
+                  onTap: widget.onClassListSheetToggle,
+                  child: SizedBox(
+                    height: 48,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 8),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            widget.isClassListSheetOpen
+                                ? Icons.view_sidebar_rounded
+                                : Icons.view_sidebar_outlined,
+                            color: const Color(0xFFEAF2F2),
+                            size: 20,
+                          ),
+                          const SizedBox(width: 6),
+                          const Text(
+                            '수업',
+                            style: TextStyle(
+                              color: Color(0xFFEAF2F2),
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
                 ),
               ),
               const SizedBox(width: 6),
@@ -190,95 +235,7 @@ class _TimetableHeaderState extends State<TimetableHeader> {
             ],
           ),
         ),
-        const SizedBox(height: 24),
-        // 요일 row는 Row 바깥에 별도 배치
-        Container(
-          padding: EdgeInsets.symmetric(horizontal: 0), // 좌우 여백을 0으로 변경
-          decoration: BoxDecoration(
-            border: Border(
-              bottom: BorderSide(
-                color: Colors.grey.shade800,
-                width: 1,
-              ),
-            ),
-          ),
-          child: Row(
-            children: [
-              // 시간 열 헤더
-              SizedBox(
-                width: 60,
-                child: Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        '시간',
-                        style: TextStyle(
-                          color: Colors.grey.shade400,
-                          fontSize: 18, // 기존 14에서 18로 증가
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                      SizedBox(height: 15), // 요일과 줄 맞춤
-                    ],
-                  ),
-                ),
-              ),
-              // 요일 헤더들
-              ...List.generate(7, (index) {
-                final date = weekDays[index];
-                final isToday = _isSameYmd(date, DateTime.now());
-                return Expanded(
-                  child: Tooltip(
-                    message: _formatDate(date),
-                    child: InkWell(
-                      onTap: () {
-                        // 요일 클릭: 상위에서 전달된 콜백 호출 (0=월)
-                        widget.onDaySelected(index);
-                      },
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 200),
-                        decoration: const BoxDecoration(), // 하이라이트 없음
-                        child: Center(
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(
-                                _getWeekdayName(date.weekday),
-                                style: TextStyle(
-                                  color: Colors.grey.shade400,
-                                  fontSize: 18, // 기존 16에서 2 증가
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                              SizedBox(
-                                height: 15, // 시간 헤더와 줄 맞춤
-                                child: Align(
-                                  alignment: Alignment.topCenter,
-                                  child: isToday
-                                      ? Container(
-                                          width: double.infinity, // 시간표 그리드 셀 너비와 동일(요일 컬럼 전체)
-                                          height: 8, // 시간 인디케이터 두께(8)와 통일
-                                          margin: const EdgeInsets.only(top: 8),
-                                          decoration: BoxDecoration(
-                                            color: _kNowIndicator,
-                                            borderRadius: BorderRadius.circular(3),
-                                          ),
-                                        )
-                                      : const SizedBox.shrink(),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                );
-              }),
-            ],
-          ),
-        ),
+        const SizedBox(height: 8),
       ],
     );
   }

@@ -54,8 +54,11 @@ class TimetableContentView extends StatefulWidget {
   final String? placeholderText; // 빈 셀 안내 문구 대체용
   final bool showRegisterControls;
   final Widget? header;
+  final bool isClassListSheetOpen;
+
   /// 우측 학생 리스트에서 "선택(필터)"된 학생 id (카드 테두리 하이라이트 용)
   final String? highlightedStudentId;
+
   /// 우측 학생 카드 탭(토글) 콜백: 탭된 학생 id 전달
   final ValueChanged<String>? onStudentCardTap;
   // PERF: 셀 클릭 → 우측 리스트 첫 프레임까지 측정용 (기본 비활성)
@@ -90,6 +93,7 @@ class TimetableContentView extends StatefulWidget {
     this.placeholderText,
     this.showRegisterControls = true,
     this.header,
+    this.isClassListSheetOpen = true,
     this.highlightedStudentId,
     this.onStudentCardTap,
     this.enableCellRenderPerfTrace = false,
@@ -153,6 +157,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
   final TextEditingController _searchController =
       ImeAwareTextEditingController();
   final FocusNode _searchFocusNode = FocusNode();
+  Timer? _searchDebounce;
   bool _isSearchExpanded = false;
   String? _cachedSearchGroupedKey;
   Widget? _cachedSearchGroupedWidget;
@@ -170,7 +175,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
   Map<String, List<SessionOverride>> _cachedMakeupOverridesBySlotKey = const {};
   int _lastPerfReportedToken = 0;
   bool isClassRegisterMode = false;
-  final ScrollController _daySelectedOverlayScrollController = ScrollController();
+  final ScrollController _daySelectedOverlayScrollController =
+      ScrollController();
   int _lastClassesRevForIndicator = -1;
   Map<String, Color?> _classColorByIdCache = const <String, Color?>{};
   // 변경 감지 리스너: 드래그로 수업 등록/삭제 시 바로 UI를 새로 그리기 위함
@@ -209,7 +215,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
       if (!(b.number == null || b.number == 1)) continue;
       final occDate = weekStart.add(Duration(days: b.dayIndex));
       if (!isActiveOn(occDate, b)) continue;
-      if (DataManager.instance.isStudentPausedOn(b.studentId, occDate)) continue;
+      if (DataManager.instance.isStudentPausedOn(b.studentId, occDate))
+        continue;
       ids.add(b.studentId);
     }
     return ids.length;
@@ -240,7 +247,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
       }
       final occDate = weekStart.add(Duration(days: b.dayIndex));
       if (!isActiveOn(occDate, b)) continue;
-      if (DataManager.instance.isStudentPausedOn(b.studentId, occDate)) continue;
+      if (DataManager.instance.isStudentPausedOn(b.studentId, occDate))
+        continue;
       ids.add(b.studentId);
     }
     return ids.length;
@@ -251,7 +259,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
     return labels[dayIdx.clamp(0, 6)];
   }
 
-  Map<String, List<SessionOverride>> _getWeekMakeupOverridesBySlotKey(DateTime weekStart) {
+  Map<String, List<SessionOverride>> _getWeekMakeupOverridesBySlotKey(
+      DateTime weekStart) {
     final wk = DateTime(weekStart.year, weekStart.month, weekStart.day);
     final all = DataManager.instance.sessionOverrides;
 
@@ -261,8 +270,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
       if (latest == null || u.isAfter(latest!)) latest = u;
     }
 
-    final bool cacheHit =
-        _cachedWeekStartForMakeupIndex == wk &&
+    final bool cacheHit = _cachedWeekStartForMakeupIndex == wk &&
         _cachedMakeupIndexSourceLen == all.length &&
         ((_cachedMakeupIndexLatestUpdatedAt == null && latest == null) ||
             (_cachedMakeupIndexLatestUpdatedAt != null &&
@@ -286,7 +294,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
 
     // 정렬: 시간 → 학생명(가능하면)
     final nameById = <String, String>{
-      for (final s in DataManager.instance.students) s.student.id: s.student.name,
+      for (final s in DataManager.instance.students)
+        s.student.id: s.student.name,
     };
     for (final e in out.entries) {
       e.value.sort((a, b) {
@@ -330,7 +339,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
     DataManager.instance.classesRevision.addListener(_revListener);
     // 보강/추가수업/희망수업/시범수업 카드도 우측 리스트에 즉시 반영되도록 리빌드 트리거 추가
     DataManager.instance.sessionOverridesNotifier.addListener(_revListener);
-    ConsultInquiryDemandService.instance.slotsNotifier.addListener(_revListener);
+    ConsultInquiryDemandService.instance.slotsNotifier
+        .addListener(_revListener);
     ConsultTrialLessonService.instance.slotsNotifier.addListener(_revListener);
     // 🧹 앱 시작 시 삭제된 수업의 sessionTypeId를 가진 블록들 정리
     WidgetsBinding.instance.addPostFrameCallback((_) async {
@@ -366,11 +376,15 @@ class TimetableContentViewState extends State<TimetableContentView> {
     DataManager.instance.classAssignmentsRevision.removeListener(_revListener);
     DataManager.instance.classesRevision.removeListener(_revListener);
     DataManager.instance.sessionOverridesNotifier.removeListener(_revListener);
-    ConsultInquiryDemandService.instance.slotsNotifier.removeListener(_revListener);
-    ConsultTrialLessonService.instance.slotsNotifier.removeListener(_revListener);
+    ConsultInquiryDemandService.instance.slotsNotifier
+        .removeListener(_revListener);
+    ConsultTrialLessonService.instance.slotsNotifier
+        .removeListener(_revListener);
     // dispose 중에는 부모 setState를 유발하지 않도록 notify=false
     _removeDropdownMenu(false);
+    _searchDebounce?.cancel();
     _daySelectedOverlayScrollController.dispose();
+    _searchController.dispose();
     _searchFocusNode.dispose();
     super.dispose();
   }
@@ -446,7 +460,10 @@ class TimetableContentViewState extends State<TimetableContentView> {
 
   // 외부에서 검색 상태를 리셋할 수 있도록 public 메서드 제공
   void clearSearch() {
-    if (_searchQuery.isNotEmpty || _searchResults.isNotEmpty) {
+    _searchDebounce?.cancel();
+    if (_searchQuery.isNotEmpty ||
+        _searchResults.isNotEmpty ||
+        _searchController.text.isNotEmpty) {
       setState(() {
         _searchQuery = '';
         _searchResults = [];
@@ -532,7 +549,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
       builder: (context, _, __) {
         // 해당 요일의 활성 블록 중 number가 없거나 1인 학생만 수집
         final weekStart = _weekMonday(refDate);
-        final weekBlocks = DataManager.instance.getStudentTimeBlocksForWeek(weekStart);
+        final weekBlocks =
+            DataManager.instance.getStudentTimeBlocksForWeek(weekStart);
         final blocksOfDay = weekBlocks.where((b) {
           if (b.dayIndex != dayIdx) return false;
           final start =
@@ -562,7 +580,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
         final Map<String, List<StudentWithInfo>> groups = {};
         final Map<String, Set<String>> seenIdsByTime = {};
         // slot별 최신 블록 override (학생 카드에서 전체 블록 재탐색/색상 계산 비용 제거)
-        final Map<String, Map<String, StudentTimeBlock>> blockOverrideByTime = {};
+        final Map<String, Map<String, StudentTimeBlock>> blockOverrideByTime =
+            {};
         for (final b in blocksOfDay) {
           final student = studentById[b.studentId];
           if (student == null) continue;
@@ -572,7 +591,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
           groups.putIfAbsent(key, () => []);
           final seen = seenIdsByTime.putIfAbsent(key, () => <String>{});
           if (seen.add(student.student.id)) groups[key]!.add(student);
-          final m = blockOverrideByTime.putIfAbsent(key, () => <String, StudentTimeBlock>{});
+          final m = blockOverrideByTime.putIfAbsent(
+              key, () => <String, StudentTimeBlock>{});
           final prev = m[student.student.id];
           if (prev == null || b.createdAt.isAfter(prev.createdAt)) {
             m[student.student.id] = b;
@@ -593,7 +613,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
         }
 
         // 보강/추가/희망/시범 카드도 요일 선택 리스트에 함께 노출
-        final specialByTime = _specialCardsByTimeForDay(dayDate: dayDate, dayIdx: dayIdx);
+        final specialByTime =
+            _specialCardsByTimeForDay(dayDate: dayDate, dayIdx: dayIdx);
         final sortedKeys = <String>{
           ...groups.keys,
           ...specialByTime.keys,
@@ -667,23 +688,31 @@ class TimetableContentViewState extends State<TimetableContentView> {
                             ? Padding(
                                 padding: const EdgeInsets.all(4.0),
                                 child: Text(
-                                  widget.placeholderText ?? '해당 요일에 등록된 항목이 없습니다.',
-                                  style: const TextStyle(color: Colors.white38, fontSize: 16),
+                                  widget.placeholderText ??
+                                      '해당 요일에 등록된 항목이 없습니다.',
+                                  style: const TextStyle(
+                                      color: Colors.white38, fontSize: 16),
                                 ),
                               )
                             : Scrollbar(
                                 controller: _daySelectedOverlayScrollController,
                                 child: ListView.builder(
-                                  controller: _daySelectedOverlayScrollController,
-                                  padding: const EdgeInsets.only(bottom: extraScrollSpace),
+                                  controller:
+                                      _daySelectedOverlayScrollController,
+                                  padding: const EdgeInsets.only(
+                                      bottom: extraScrollSpace),
                                   itemCount: sortedKeys.length,
                                   itemBuilder: (context, idx) {
                                     final k = sortedKeys[idx];
-                                    final list = groups[k] ?? const <StudentWithInfo>[];
-                                    final extras = specialByTime[k] ?? const <Widget>[];
+                                    final list =
+                                        groups[k] ?? const <StudentWithInfo>[];
+                                    final extras =
+                                        specialByTime[k] ?? const <Widget>[];
                                     final parts = k.split(':');
-                                    final int hour = int.tryParse(parts[0]) ?? 0;
-                                    final int minute = int.tryParse(parts[1]) ?? 0;
+                                    final int hour =
+                                        int.tryParse(parts[0]) ?? 0;
+                                    final int minute =
+                                        int.tryParse(parts[1]) ?? 0;
                                     final DateTime slotStart = DateTime(
                                       dayDate.year,
                                       dayDate.month,
@@ -691,11 +720,14 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                       hour,
                                       minute,
                                     );
-                                    final overridesForTime = blockOverrideByTime[k];
+                                    final overridesForTime =
+                                        blockOverrideByTime[k];
                                     return Padding(
-                                      padding: const EdgeInsets.only(bottom: 16.0),
+                                      padding:
+                                          const EdgeInsets.only(bottom: 16.0),
                                       child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
                                         children: [
                                           Row(
                                             children: [
@@ -711,24 +743,30 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                           ),
                                           const SizedBox(height: 10),
                                           Padding(
-                                            padding: const EdgeInsets.only(left: 14),
+                                            padding:
+                                                const EdgeInsets.only(left: 14),
                                             child: Wrap(
                                               spacing: 6.4,
                                               runSpacing: 6.4,
                                               children: [
                                                 ...extras,
                                                 ...list.map(
-                                                  (info) => _buildDraggableStudentCard(
+                                                  (info) =>
+                                                      _buildDraggableStudentCard(
                                                     info,
                                                     dayIndex: dayIdx,
                                                     startTime: slotStart,
                                                     cellStudents: list,
-                                                    blockOverride: overridesForTime == null
-                                                        ? null
-                                                        : overridesForTime[info.student.id],
+                                                    blockOverride:
+                                                        overridesForTime == null
+                                                            ? null
+                                                            : overridesForTime[
+                                                                info.student
+                                                                    .id],
                                                     // ✅ 요일 선택 리스트에서도 스와이프(수정/삭제) 허용
                                                     // - 선택모드에서도 관리가 가능해야 한다는 요구 반영
-                                                    allowSwipeInSelectMode: true,
+                                                    allowSwipeInSelectMode:
+                                                        true,
                                                   ),
                                                 ),
                                               ],
@@ -918,7 +956,15 @@ class TimetableContentViewState extends State<TimetableContentView> {
   Widget build(BuildContext context) {
     // 요일 오버레이 시작 위치를 맞추기 위해, 컨트롤 Row 높이를 매 프레임 실측
     _scheduleStudentControlsMeasure();
+    final bool isClassListSheetOpen = widget.isClassListSheetOpen;
+    final bool hasActiveSearch = _searchQuery.isNotEmpty;
+    const double classListSheetWidth = 420.0;
+    const double classSheetOuterLeftInset = 4.0;
+    const double classSheetContentRightInset = 8.0;
+    const double classSheetInnerLeftInset = 10.0;
+    const double dayOverlayLeftInset = 10.0;
     return Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         const SizedBox(width: 30),
         Expanded(
@@ -937,1572 +983,1425 @@ class TimetableContentViewState extends State<TimetableContentView> {
             },
           ),
         ),
-        const SizedBox(width: 32),
-        Expanded(
-          flex: 1,
-          child: Stack(
-            children: [
-              Column(
-                children: [
-                  // 학생 영역
-                  Expanded(
-                    flex: 1, // 1:1 비율로 수정
-                    child: Padding(
-                      padding: const EdgeInsets.only(
-                          left: 4,
-                          right: 8,
-                          top: _kStudentPanelPaddingTop,
-                          bottom: 8),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+        AnimatedContainer(
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeInOutCubic,
+          width: isClassListSheetOpen ? 32 : 0,
+        ),
+        AnimatedContainer(
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeInOutCubic,
+          width: isClassListSheetOpen ? classListSheetWidth : 0,
+          child: ClipRect(
+            child: IgnorePointer(
+              ignoring: !isClassListSheetOpen,
+              child: AnimatedSlide(
+                duration: const Duration(milliseconds: 220),
+                curve: Curves.easeInOutCubic,
+                offset: isClassListSheetOpen ? Offset.zero : const Offset(1, 0),
+                child: Container(
+                  decoration: const BoxDecoration(
+                    color: Color(0xFF0B1112),
+                    border: Border(
+                      left: BorderSide(color: Color(0xFF223131), width: 1),
+                    ),
+                  ),
+                  child: Stack(
+                    children: [
+                      Column(
                         children: [
-                          SizedBox(
-                              key: _studentControlsMeasureKey,
-                              child: Builder(builder: (context) {
-                                final screenW =
-                                    MediaQuery.of(context).size.width;
-                                final isNarrow = screenW <= 1600;
-                                if (isNarrow) {
-                                  // 좁은 화면: 좌우 1:1 영역으로 분할 + 화면 너비에 비례한 크기 조정
-                                  final double t =
-                                      ((screenW - 1200) / 400).clamp(0.0, 1.0);
-                                  final double h = 30 +
-                                      (38 - 30) *
-                                          t; // 1200px에서 30 → 1600px에서 38
-                                  final double regW =
-                                      80 + (96 - 80) * t; // 등록 버튼 너비 80~96
-                                  final double dropW =
-                                      30 + (38 - 30) * t; // 드롭다운 30~38
-                                  final double dividerLineH =
-                                      16 + (22 - 16) * t; // 구분선 내부 라인 16~22
-                                  final double searchW =
-                                      120 + (160 - 120) * t; // 검색바 너비 120~160
-                                  return Row(
-                                    children: [
-                                      Expanded(
-                                        child: Row(
-                                          mainAxisAlignment:
-                                              MainAxisAlignment.start,
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.center,
-                                          mainAxisSize: MainAxisSize.max,
+                          // 학생 컨트롤 영역 (셀 클릭 학생 리스트 제거)
+                          Padding(
+                            padding: const EdgeInsets.only(
+                                left: classSheetOuterLeftInset,
+                                right: classSheetContentRightInset,
+                                top: _kStudentPanelPaddingTop,
+                                bottom: 8),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                SizedBox(
+                                    key: _studentControlsMeasureKey,
+                                    child: Builder(builder: (context) {
+                                      final screenW =
+                                          MediaQuery.of(context).size.width;
+                                      final isNarrow = screenW <= 1600;
+                                      if (isNarrow) {
+                                        // 좁은 화면: 좌우 1:1 영역으로 분할 + 화면 너비에 비례한 크기 조정
+                                        final double t =
+                                            ((screenW - 1200) / 400)
+                                                .clamp(0.0, 1.0);
+                                        final double h = 30 +
+                                            (38 - 30) *
+                                                t; // 1200px에서 30 → 1600px에서 38
+                                        final double regW = 80 +
+                                            (96 - 80) * t; // 등록 버튼 너비 80~96
+                                        final double dropW =
+                                            30 + (38 - 30) * t; // 드롭다운 30~38
+                                        final double dividerLineH = 16 +
+                                            (22 - 16) * t; // 구분선 내부 라인 16~22
+                                        final double searchW = 120 +
+                                            (160 - 120) * t; // 검색바 너비 120~160
+                                        return Row(
                                           children: [
-                                            if (widget
-                                                .showRegisterControls) ...[
-                                              SizedBox(
-                                                width: regW,
-                                                height: h,
-                                                child: Material(
-                                                  color:
-                                                      const Color(0xFF1976D2),
-                                                  borderRadius:
-                                                      const BorderRadius.only(
-                                                    topLeft:
-                                                        Radius.circular(32),
-                                                    bottomLeft:
-                                                        Radius.circular(32),
-                                                    topRight:
-                                                        Radius.circular(6),
-                                                    bottomRight:
-                                                        Radius.circular(6),
-                                                  ),
-                                                  child: InkWell(
-                                                    borderRadius:
-                                                        const BorderRadius.only(
-                                                      topLeft:
-                                                          Radius.circular(32),
-                                                      bottomLeft:
-                                                          Radius.circular(32),
-                                                      topRight:
-                                                          Radius.circular(6),
-                                                      bottomRight:
-                                                          Radius.circular(6),
-                                                    ),
-                                                    onTap: widget
-                                                        .onRegisterPressed,
-                                                    child: Row(
-                                                      mainAxisAlignment:
-                                                          MainAxisAlignment
-                                                              .center,
-                                                      mainAxisSize:
-                                                          MainAxisSize.max,
-                                                      children: const [
-                                                        Icon(Icons.add,
-                                                            color: Colors.white,
-                                                            size: 16),
-                                                        SizedBox(width: 6),
-                                                        Text('등록',
-                                                            style: TextStyle(
-                                                                color: Colors
-                                                                    .white,
-                                                                fontSize: 14,
-                                                                fontWeight:
-                                                                    FontWeight
-                                                                        .bold)),
-                                                      ],
-                                                    ),
-                                                  ),
-                                                ),
-                                              ),
-                                              Container(
-                                                height: h,
-                                                width: 3.0,
-                                                color: Colors.transparent,
-                                                child: Center(
-                                                  child: Container(
-                                                    width: 2,
-                                                    height: dividerLineH,
-                                                    color: Colors.white
-                                                        .withOpacity(0.1),
-                                                  ),
-                                                ),
-                                              ),
-                                              Padding(
-                                                padding:
-                                                    const EdgeInsets.symmetric(
-                                                        horizontal: 2.5),
-                                                child: GestureDetector(
-                                                  key: _dropdownButtonKey,
-                                                  onTap: () {
-                                                    if (_dropdownOverlay ==
-                                                        null) {
-                                                      widget
-                                                          .onDropdownOpenChanged(
-                                                              true);
-                                                      _showDropdownMenu();
-                                                    } else {
-                                                      _removeDropdownMenu();
-                                                    }
-                                                  },
-                                                  child: AnimatedContainer(
-                                                    duration: const Duration(
-                                                        milliseconds: 350),
-                                                    width: dropW,
-                                                    height: h,
-                                                    decoration: ShapeDecoration(
-                                                      color: const Color(
-                                                          0xFF1976D2),
-                                                      shape:
-                                                          RoundedRectangleBorder(
-                                                        borderRadius: widget
-                                                                .isDropdownOpen
-                                                            ? BorderRadius
-                                                                .circular(50)
-                                                            : const BorderRadius
+                                            Expanded(
+                                              child: Row(
+                                                mainAxisAlignment:
+                                                    MainAxisAlignment.start,
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.center,
+                                                mainAxisSize: MainAxisSize.max,
+                                                children: [
+                                                  if (widget
+                                                      .showRegisterControls) ...[
+                                                    SizedBox(
+                                                      width: regW,
+                                                      height: h,
+                                                      child: Material(
+                                                        color: const Color(
+                                                            0xFF1976D2),
+                                                        borderRadius:
+                                                            const BorderRadius
                                                                 .only(
-                                                                topLeft: Radius
-                                                                    .circular(
-                                                                        6),
-                                                                bottomLeft: Radius
-                                                                    .circular(
-                                                                        6),
-                                                                topRight: Radius
-                                                                    .circular(
-                                                                        32),
-                                                                bottomRight:
-                                                                    Radius
-                                                                        .circular(
-                                                                            32),
-                                                              ),
+                                                          topLeft:
+                                                              Radius.circular(
+                                                                  32),
+                                                          bottomLeft:
+                                                              Radius.circular(
+                                                                  32),
+                                                          topRight:
+                                                              Radius.circular(
+                                                                  6),
+                                                          bottomRight:
+                                                              Radius.circular(
+                                                                  6),
+                                                        ),
+                                                        child: InkWell(
+                                                          borderRadius:
+                                                              const BorderRadius
+                                                                  .only(
+                                                            topLeft:
+                                                                Radius.circular(
+                                                                    32),
+                                                            bottomLeft:
+                                                                Radius.circular(
+                                                                    32),
+                                                            topRight:
+                                                                Radius.circular(
+                                                                    6),
+                                                            bottomRight:
+                                                                Radius.circular(
+                                                                    6),
+                                                          ),
+                                                          onTap: widget
+                                                              .onRegisterPressed,
+                                                          child: Row(
+                                                            mainAxisAlignment:
+                                                                MainAxisAlignment
+                                                                    .center,
+                                                            mainAxisSize:
+                                                                MainAxisSize
+                                                                    .max,
+                                                            children: const [
+                                                              Icon(Icons.add,
+                                                                  color: Colors
+                                                                      .white,
+                                                                  size: 16),
+                                                              SizedBox(
+                                                                  width: 6),
+                                                              Text('등록',
+                                                                  style: TextStyle(
+                                                                      color: Colors
+                                                                          .white,
+                                                                      fontSize:
+                                                                          14,
+                                                                      fontWeight:
+                                                                          FontWeight
+                                                                              .bold)),
+                                                            ],
+                                                          ),
+                                                        ),
                                                       ),
                                                     ),
-                                                    child: Center(
-                                                      child: AnimatedRotation(
-                                                        turns: widget
-                                                                .isDropdownOpen
-                                                            ? 0.5
-                                                            : 0.0,
-                                                        duration:
-                                                            const Duration(
-                                                                milliseconds:
-                                                                    350),
-                                                        curve: Curves.easeInOut,
-                                                        child: const Icon(
-                                                          Icons
-                                                              .keyboard_arrow_down,
-                                                          color: Colors.white,
-                                                          size: 20,
-                                                          key:
-                                                              ValueKey('arrow'),
+                                                    Container(
+                                                      height: h,
+                                                      width: 3.0,
+                                                      color: Colors.transparent,
+                                                      child: Center(
+                                                        child: Container(
+                                                          width: 2,
+                                                          height: dividerLineH,
+                                                          color: Colors.white
+                                                              .withOpacity(0.1),
+                                                        ),
+                                                      ),
+                                                    ),
+                                                    Padding(
+                                                      padding: const EdgeInsets
+                                                          .symmetric(
+                                                          horizontal: 2.5),
+                                                      child: GestureDetector(
+                                                        key: _dropdownButtonKey,
+                                                        onTap: () {
+                                                          if (_dropdownOverlay ==
+                                                              null) {
+                                                            widget
+                                                                .onDropdownOpenChanged(
+                                                                    true);
+                                                            _showDropdownMenu();
+                                                          } else {
+                                                            _removeDropdownMenu();
+                                                          }
+                                                        },
+                                                        child:
+                                                            AnimatedContainer(
+                                                          duration:
+                                                              const Duration(
+                                                                  milliseconds:
+                                                                      350),
+                                                          width: dropW,
+                                                          height: h,
+                                                          decoration:
+                                                              ShapeDecoration(
+                                                            color: const Color(
+                                                                0xFF1976D2),
+                                                            shape:
+                                                                RoundedRectangleBorder(
+                                                              borderRadius: widget
+                                                                      .isDropdownOpen
+                                                                  ? BorderRadius
+                                                                      .circular(
+                                                                          50)
+                                                                  : const BorderRadius
+                                                                      .only(
+                                                                      topLeft: Radius
+                                                                          .circular(
+                                                                              6),
+                                                                      bottomLeft:
+                                                                          Radius.circular(
+                                                                              6),
+                                                                      topRight:
+                                                                          Radius.circular(
+                                                                              32),
+                                                                      bottomRight:
+                                                                          Radius.circular(
+                                                                              32),
+                                                                    ),
+                                                            ),
+                                                          ),
+                                                          child: Center(
+                                                            child:
+                                                                AnimatedRotation(
+                                                              turns: widget
+                                                                      .isDropdownOpen
+                                                                  ? 0.5
+                                                                  : 0.0,
+                                                              duration:
+                                                                  const Duration(
+                                                                      milliseconds:
+                                                                          350),
+                                                              curve: Curves
+                                                                  .easeInOut,
+                                                              child: const Icon(
+                                                                Icons
+                                                                    .keyboard_arrow_down,
+                                                                color: Colors
+                                                                    .white,
+                                                                size: 20,
+                                                                key: ValueKey(
+                                                                    'arrow'),
+                                                              ),
+                                                            ),
+                                                          ),
+                                                        ),
+                                                      ),
+                                                    ),
+                                                    const SizedBox(width: 8),
+                                                  ],
+                                                  if (widget
+                                                      .showRegisterControls) ...[
+                                                    // 수업 등록 버튼 (협소 화면 추가 축소)
+                                                    SizedBox(
+                                                      width: regW,
+                                                      height: h,
+                                                      child: Material(
+                                                        color: const Color(
+                                                            0xFF1976D2),
+                                                        borderRadius:
+                                                            const BorderRadius
+                                                                .only(
+                                                          topLeft:
+                                                              Radius.circular(
+                                                                  32),
+                                                          bottomLeft:
+                                                              Radius.circular(
+                                                                  32),
+                                                          topRight:
+                                                              Radius.circular(
+                                                                  6),
+                                                          bottomRight:
+                                                              Radius.circular(
+                                                                  6),
+                                                        ),
+                                                        child: InkWell(
+                                                          borderRadius:
+                                                              const BorderRadius
+                                                                  .only(
+                                                            topLeft:
+                                                                Radius.circular(
+                                                                    32),
+                                                            bottomLeft:
+                                                                Radius.circular(
+                                                                    32),
+                                                            topRight:
+                                                                Radius.circular(
+                                                                    6),
+                                                            bottomRight:
+                                                                Radius.circular(
+                                                                    6),
+                                                          ),
+                                                          onTap: widget
+                                                              .onRegisterPressed,
+                                                          child: Row(
+                                                            mainAxisAlignment:
+                                                                MainAxisAlignment
+                                                                    .center,
+                                                            mainAxisSize:
+                                                                MainAxisSize
+                                                                    .max,
+                                                            children: const [
+                                                              Icon(Icons.add,
+                                                                  color: Colors
+                                                                      .white,
+                                                                  size: 16),
+                                                              SizedBox(
+                                                                  width: 6),
+                                                              Text('등록',
+                                                                  style: TextStyle(
+                                                                      color: Colors
+                                                                          .white,
+                                                                      fontSize:
+                                                                          14,
+                                                                      fontWeight:
+                                                                          FontWeight
+                                                                              .bold)),
+                                                            ],
+                                                          ),
+                                                        ),
+                                                      ),
+                                                    ),
+                                                    // 구분선
+                                                    Container(
+                                                      height: h,
+                                                      width: 3.0,
+                                                      color: Colors.transparent,
+                                                      child: Center(
+                                                        child: Container(
+                                                          width: 2,
+                                                          height: dividerLineH,
+                                                          color: Colors.white
+                                                              .withOpacity(0.1),
+                                                        ),
+                                                      ),
+                                                    ),
+                                                    // 드롭다운 버튼
+                                                    Padding(
+                                                      padding: const EdgeInsets
+                                                          .symmetric(
+                                                          horizontal: 2.5),
+                                                      child: GestureDetector(
+                                                        key: _dropdownButtonKey,
+                                                        onTap: () {
+                                                          if (_dropdownOverlay ==
+                                                              null) {
+                                                            widget
+                                                                .onDropdownOpenChanged(
+                                                                    true);
+                                                            _showDropdownMenu();
+                                                          } else {
+                                                            _removeDropdownMenu();
+                                                          }
+                                                        },
+                                                        child:
+                                                            AnimatedContainer(
+                                                          duration:
+                                                              const Duration(
+                                                                  milliseconds:
+                                                                      350),
+                                                          width: dropW,
+                                                          height: h,
+                                                          decoration:
+                                                              ShapeDecoration(
+                                                            color: const Color(
+                                                                0xFF1976D2),
+                                                            shape:
+                                                                RoundedRectangleBorder(
+                                                              borderRadius: widget
+                                                                      .isDropdownOpen
+                                                                  ? BorderRadius
+                                                                      .circular(
+                                                                          50)
+                                                                  : const BorderRadius
+                                                                      .only(
+                                                                      topLeft: Radius
+                                                                          .circular(
+                                                                              6),
+                                                                      bottomLeft:
+                                                                          Radius.circular(
+                                                                              6),
+                                                                      topRight:
+                                                                          Radius.circular(
+                                                                              32),
+                                                                      bottomRight:
+                                                                          Radius.circular(
+                                                                              32),
+                                                                    ),
+                                                            ),
+                                                          ),
+                                                          child: Center(
+                                                            child:
+                                                                AnimatedRotation(
+                                                              turns: widget
+                                                                      .isDropdownOpen
+                                                                  ? 0.5
+                                                                  : 0.0,
+                                                              duration:
+                                                                  const Duration(
+                                                                      milliseconds:
+                                                                          350),
+                                                              curve: Curves
+                                                                  .easeInOut,
+                                                              child: const Icon(
+                                                                Icons
+                                                                    .keyboard_arrow_down,
+                                                                color: Colors
+                                                                    .white,
+                                                                size: 20,
+                                                                key: ValueKey(
+                                                                    'arrow'),
+                                                              ),
+                                                            ),
+                                                          ),
+                                                        ),
+                                                      ),
+                                                    ),
+                                                    const SizedBox(width: 8),
+                                                  ],
+                                                  // 보강 버튼 (아이콘만, 등록 버튼 색상과 동일)
+                                                  SizedBox(
+                                                    height: h,
+                                                    child: Material(
+                                                      color: const Color(
+                                                          0xFF1976D2),
+                                                      borderRadius:
+                                                          BorderRadius.circular(
+                                                              8),
+                                                      child: InkWell(
+                                                        borderRadius:
+                                                            BorderRadius
+                                                                .circular(8),
+                                                        onTap: () {},
+                                                        child: const Padding(
+                                                          padding: EdgeInsets
+                                                              .symmetric(
+                                                                  horizontal:
+                                                                      12.0),
+                                                          child: Icon(
+                                                              Icons
+                                                                  .event_repeat_rounded,
+                                                              color:
+                                                                  Colors.white,
+                                                              size: 20),
                                                         ),
                                                       ),
                                                     ),
                                                   ),
-                                                ),
-                                              ),
-                                              const SizedBox(width: 8),
-                                            ],
-                                            if (widget
-                                                .showRegisterControls) ...[
-                                              // 수업 등록 버튼 (협소 화면 추가 축소)
-                                              SizedBox(
-                                                width: regW,
-                                                height: h,
-                                                child: Material(
-                                                  color:
-                                                      const Color(0xFF1976D2),
-                                                  borderRadius:
-                                                      const BorderRadius.only(
-                                                    topLeft:
-                                                        Radius.circular(32),
-                                                    bottomLeft:
-                                                        Radius.circular(32),
-                                                    topRight:
-                                                        Radius.circular(6),
-                                                    bottomRight:
-                                                        Radius.circular(6),
-                                                  ),
-                                                  child: InkWell(
-                                                    borderRadius:
-                                                        const BorderRadius.only(
-                                                      topLeft:
-                                                          Radius.circular(32),
-                                                      bottomLeft:
-                                                          Radius.circular(32),
-                                                      topRight:
-                                                          Radius.circular(6),
-                                                      bottomRight:
-                                                          Radius.circular(6),
-                                                    ),
-                                                    onTap: widget
-                                                        .onRegisterPressed,
-                                                    child: Row(
-                                                      mainAxisAlignment:
-                                                          MainAxisAlignment
-                                                              .center,
-                                                      mainAxisSize:
-                                                          MainAxisSize.max,
-                                                      children: const [
-                                                        Icon(Icons.add,
-                                                            color: Colors.white,
-                                                            size: 16),
-                                                        SizedBox(width: 6),
-                                                        Text('등록',
-                                                            style: TextStyle(
-                                                                color: Colors
-                                                                    .white,
-                                                                fontSize: 14,
-                                                                fontWeight:
-                                                                    FontWeight
-                                                                        .bold)),
-                                                      ],
-                                                    ),
-                                                  ),
-                                                ),
-                                              ),
-                                              // 구분선
-                                              Container(
-                                                height: h,
-                                                width: 3.0,
-                                                color: Colors.transparent,
-                                                child: Center(
-                                                  child: Container(
-                                                    width: 2,
-                                                    height: dividerLineH,
-                                                    color: Colors.white
-                                                        .withOpacity(0.1),
-                                                  ),
-                                                ),
-                                              ),
-                                              // 드롭다운 버튼
-                                              Padding(
-                                                padding:
-                                                    const EdgeInsets.symmetric(
-                                                        horizontal: 2.5),
-                                                child: GestureDetector(
-                                                  key: _dropdownButtonKey,
-                                                  onTap: () {
-                                                    if (_dropdownOverlay ==
-                                                        null) {
-                                                      widget
-                                                          .onDropdownOpenChanged(
-                                                              true);
-                                                      _showDropdownMenu();
-                                                    } else {
-                                                      _removeDropdownMenu();
-                                                    }
-                                                  },
-                                                  child: AnimatedContainer(
-                                                    duration: const Duration(
-                                                        milliseconds: 350),
-                                                    width: dropW,
-                                                    height: h,
-                                                    decoration: ShapeDecoration(
-                                                      color: const Color(
-                                                          0xFF1976D2),
-                                                      shape:
-                                                          RoundedRectangleBorder(
-                                                        borderRadius: widget
-                                                                .isDropdownOpen
-                                                            ? BorderRadius
-                                                                .circular(50)
-                                                            : const BorderRadius
-                                                                .only(
-                                                                topLeft: Radius
-                                                                    .circular(
-                                                                        6),
-                                                                bottomLeft: Radius
-                                                                    .circular(
-                                                                        6),
-                                                                topRight: Radius
-                                                                    .circular(
+                                                  const SizedBox(width: 8),
+                                                  if (widget
+                                                      .showRegisterControls) ...[
+                                                    const SizedBox(width: 8),
+                                                    AnimatedContainer(
+                                                      duration: const Duration(
+                                                          milliseconds: 250),
+                                                      height: h,
+                                                      width: _isSearchExpanded
+                                                          ? searchW
+                                                          : h,
+                                                      decoration: BoxDecoration(
+                                                        color: const Color(
+                                                            0xFF2A2A2A),
+                                                        borderRadius:
+                                                            BorderRadius
+                                                                .circular(
+                                                                    h / 2),
+                                                        border: Border.all(
+                                                            color: Colors.white
+                                                                .withOpacity(
+                                                                    0.2)),
+                                                      ),
+                                                      child: Row(
+                                                        mainAxisAlignment:
+                                                            _isSearchExpanded
+                                                                ? MainAxisAlignment
+                                                                    .start
+                                                                : MainAxisAlignment
+                                                                    .center,
+                                                        crossAxisAlignment:
+                                                            CrossAxisAlignment
+                                                                .center,
+                                                        children: [
+                                                          IconButton(
+                                                            visualDensity:
+                                                                const VisualDensity(
+                                                                    horizontal:
+                                                                        -4,
+                                                                    vertical:
+                                                                        -4),
+                                                            padding:
+                                                                _isSearchExpanded
+                                                                    ? const EdgeInsets
+                                                                        .only(
+                                                                        left: 8)
+                                                                    : EdgeInsets
+                                                                        .zero,
+                                                            constraints:
+                                                                const BoxConstraints(
+                                                                    minWidth:
+                                                                        32,
+                                                                    minHeight:
                                                                         32),
-                                                                bottomRight:
-                                                                    Radius
-                                                                        .circular(
-                                                                            32),
+                                                            icon: const Icon(
+                                                                Icons.search,
+                                                                color: Colors
+                                                                    .white70,
+                                                                size: 20),
+                                                            onPressed: () {
+                                                              setState(() {
+                                                                _isSearchExpanded =
+                                                                    !_isSearchExpanded;
+                                                              });
+                                                              if (_isSearchExpanded) {
+                                                                Future.delayed(
+                                                                    const Duration(
+                                                                        milliseconds:
+                                                                            50),
+                                                                    () {
+                                                                  _searchFocusNode
+                                                                      .requestFocus();
+                                                                });
+                                                              } else {
+                                                                _searchController
+                                                                    .clear();
+                                                                _onSearchChanged(
+                                                                    '');
+                                                                FocusScope.of(
+                                                                        context)
+                                                                    .unfocus();
+                                                              }
+                                                            },
+                                                          ),
+                                                          if (_isSearchExpanded)
+                                                            const SizedBox(
+                                                                width: 10),
+                                                          if (_isSearchExpanded)
+                                                            SizedBox(
+                                                              width:
+                                                                  searchW - 50,
+                                                              child: TextField(
+                                                                controller:
+                                                                    _searchController,
+                                                                focusNode:
+                                                                    _searchFocusNode,
+                                                                style: const TextStyle(
+                                                                    color: Colors
+                                                                        .white,
+                                                                    fontSize:
+                                                                        16.5),
+                                                                decoration:
+                                                                    const InputDecoration(
+                                                                  hintText:
+                                                                      '검색',
+                                                                  hintStyle: TextStyle(
+                                                                      color: Colors
+                                                                          .white54,
+                                                                      fontSize:
+                                                                          16.5),
+                                                                  border:
+                                                                      InputBorder
+                                                                          .none,
+                                                                  isDense: true,
+                                                                  contentPadding:
+                                                                      EdgeInsets
+                                                                          .zero,
+                                                                ),
+                                                                onChanged:
+                                                                    _onSearchChanged,
                                                               ),
+                                                            ),
+                                                          if (_isSearchExpanded &&
+                                                              _searchQuery
+                                                                  .isNotEmpty)
+                                                            IconButton(
+                                                              visualDensity:
+                                                                  const VisualDensity(
+                                                                      horizontal:
+                                                                          -4,
+                                                                      vertical:
+                                                                          -4),
+                                                              padding:
+                                                                  const EdgeInsets
+                                                                      .only(
+                                                                      right:
+                                                                          10),
+                                                              constraints:
+                                                                  const BoxConstraints(
+                                                                      minWidth:
+                                                                          32,
+                                                                      minHeight:
+                                                                          32),
+                                                              tooltip: '지우기',
+                                                              icon: const Icon(
+                                                                  Icons.clear,
+                                                                  color: Colors
+                                                                      .white70,
+                                                                  size: 16),
+                                                              onPressed: () {
+                                                                _searchController
+                                                                    .clear();
+                                                                _onSearchChanged(
+                                                                    '');
+                                                                FocusScope.of(
+                                                                        context)
+                                                                    .requestFocus(
+                                                                        _searchFocusNode);
+                                                              },
+                                                            ),
+                                                        ],
                                                       ),
                                                     ),
-                                                    child: Center(
-                                                      child: AnimatedRotation(
-                                                        turns: widget
-                                                                .isDropdownOpen
-                                                            ? 0.5
-                                                            : 0.0,
-                                                        duration:
-                                                            const Duration(
-                                                                milliseconds:
-                                                                    350),
-                                                        curve: Curves.easeInOut,
-                                                        child: const Icon(
-                                                          Icons
-                                                              .keyboard_arrow_down,
-                                                          color: Colors.white,
-                                                          size: 20,
-                                                          key:
-                                                              ValueKey('arrow'),
-                                                        ),
-                                                      ),
-                                                    ),
-                                                  ),
-                                                ),
+                                                  ],
+                                                ],
                                               ),
-                                              const SizedBox(width: 8),
-                                            ],
-                                            // 보강 버튼 (아이콘만, 등록 버튼 색상과 동일)
+                                            ),
+                                            // 우측 영역 제거: 모든 버튼을 왼쪽 정렬
+                                          ],
+                                        );
+                                      }
+                                      // 넓은 화면: 기존 레이아웃 유지
+                                      return Row(
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.start,
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        mainAxisSize: MainAxisSize.max,
+                                        children: [
+                                          if (widget.showRegisterControls) ...[
                                             SizedBox(
-                                              height: h,
+                                              width: 113,
+                                              height: 44,
                                               child: Material(
                                                 color: const Color(0xFF1976D2),
                                                 borderRadius:
-                                                    BorderRadius.circular(8),
+                                                    const BorderRadius.only(
+                                                  topLeft: Radius.circular(32),
+                                                  bottomLeft:
+                                                      Radius.circular(32),
+                                                  topRight: Radius.circular(6),
+                                                  bottomRight:
+                                                      Radius.circular(6),
+                                                ),
                                                 child: InkWell(
                                                   borderRadius:
-                                                      BorderRadius.circular(8),
-                                                  onTap: () {},
-                                                  child: const Padding(
-                                                    padding:
-                                                        EdgeInsets.symmetric(
-                                                            horizontal: 12.0),
-                                                    child: Icon(
-                                                        Icons
-                                                            .event_repeat_rounded,
-                                                        color: Colors.white,
-                                                        size: 20),
+                                                      const BorderRadius.only(
+                                                    topLeft:
+                                                        Radius.circular(32),
+                                                    bottomLeft:
+                                                        Radius.circular(32),
+                                                    topRight:
+                                                        Radius.circular(6),
+                                                    bottomRight:
+                                                        Radius.circular(6),
+                                                  ),
+                                                  onTap:
+                                                      widget.onRegisterPressed,
+                                                  child: Row(
+                                                    mainAxisAlignment:
+                                                        MainAxisAlignment
+                                                            .center,
+                                                    mainAxisSize:
+                                                        MainAxisSize.max,
+                                                    children: const [
+                                                      Icon(Icons.add,
+                                                          color: Colors.white,
+                                                          size: 20),
+                                                      SizedBox(width: 8),
+                                                      Text('등록',
+                                                          style: TextStyle(
+                                                              color:
+                                                                  Colors.white,
+                                                              fontSize: 16,
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .bold)),
+                                                    ],
                                                   ),
                                                 ),
                                               ),
                                             ),
-                                            const SizedBox(width: 8),
-                                            if (widget
-                                                .showRegisterControls) ...[
-                                              const SizedBox(width: 8),
-                                              AnimatedContainer(
-                                                duration: const Duration(
-                                                    milliseconds: 250),
-                                                height: h,
-                                                width: _isSearchExpanded
-                                                    ? searchW
-                                                    : h,
-                                                decoration: BoxDecoration(
-                                                  color:
-                                                      const Color(0xFF2A2A2A),
-                                                  borderRadius:
-                                                      BorderRadius.circular(
-                                                          h / 2),
-                                                  border: Border.all(
-                                                      color: Colors.white
-                                                          .withOpacity(0.2)),
+                                            Container(
+                                              height: 44,
+                                              width: 3.0,
+                                              color: Colors.transparent,
+                                              child: Center(
+                                                child: Container(
+                                                  width: 2,
+                                                  height: 28,
+                                                  color: Colors.white
+                                                      .withOpacity(0.1),
                                                 ),
-                                                child: Row(
-                                                  mainAxisAlignment:
-                                                      _isSearchExpanded
-                                                          ? MainAxisAlignment
-                                                              .start
-                                                          : MainAxisAlignment
-                                                              .center,
-                                                  crossAxisAlignment:
-                                                      CrossAxisAlignment.center,
-                                                  children: [
+                                              ),
+                                            ),
+                                            Padding(
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                      horizontal: 2.5),
+                                              child: GestureDetector(
+                                                key: _dropdownButtonKey,
+                                                onTap: () {
+                                                  if (_dropdownOverlay ==
+                                                      null) {
+                                                    widget
+                                                        .onDropdownOpenChanged(
+                                                            true);
+                                                    _showDropdownMenu();
+                                                  } else {
+                                                    _removeDropdownMenu();
+                                                  }
+                                                },
+                                                child: AnimatedContainer(
+                                                  duration: const Duration(
+                                                      milliseconds: 350),
+                                                  width: 44,
+                                                  height: 44,
+                                                  decoration: ShapeDecoration(
+                                                    color:
+                                                        const Color(0xFF1976D2),
+                                                    shape:
+                                                        RoundedRectangleBorder(
+                                                      borderRadius: widget
+                                                              .isDropdownOpen
+                                                          ? BorderRadius
+                                                              .circular(50)
+                                                          : const BorderRadius
+                                                              .only(
+                                                              topLeft: Radius
+                                                                  .circular(6),
+                                                              bottomLeft: Radius
+                                                                  .circular(6),
+                                                              topRight: Radius
+                                                                  .circular(32),
+                                                              bottomRight:
+                                                                  Radius
+                                                                      .circular(
+                                                                          32),
+                                                            ),
+                                                    ),
+                                                  ),
+                                                  child: Center(
+                                                    child: AnimatedRotation(
+                                                      turns:
+                                                          widget.isDropdownOpen
+                                                              ? 0.5
+                                                              : 0.0,
+                                                      duration: const Duration(
+                                                          milliseconds: 350),
+                                                      curve: Curves.easeInOut,
+                                                      child: const Icon(
+                                                        Icons
+                                                            .keyboard_arrow_down,
+                                                        color: Colors.white,
+                                                        size: 28,
+                                                        key: ValueKey('arrow'),
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                            const SizedBox(width: 6),
+                                          ],
+                                          if (widget.showRegisterControls) ...[
+                                            const SizedBox(width: 8),
+                                            AnimatedContainer(
+                                              duration: const Duration(
+                                                  milliseconds: 250),
+                                              height: 44,
+                                              width:
+                                                  _isSearchExpanded ? 160 : 44,
+                                              decoration: BoxDecoration(
+                                                color: const Color(0xFF2A2A2A),
+                                                borderRadius:
+                                                    BorderRadius.circular(22),
+                                                border: Border.all(
+                                                    color: Colors.white
+                                                        .withOpacity(0.2)),
+                                              ),
+                                              child: Row(
+                                                mainAxisAlignment:
+                                                    _isSearchExpanded
+                                                        ? MainAxisAlignment
+                                                            .start
+                                                        : MainAxisAlignment
+                                                            .center,
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.center,
+                                                children: [
+                                                  IconButton(
+                                                    visualDensity:
+                                                        const VisualDensity(
+                                                            horizontal: -4,
+                                                            vertical: -4),
+                                                    padding: _isSearchExpanded
+                                                        ? const EdgeInsets.only(
+                                                            left: 8)
+                                                        : EdgeInsets.zero,
+                                                    constraints:
+                                                        const BoxConstraints(
+                                                            minWidth: 32,
+                                                            minHeight: 32),
+                                                    icon: const Icon(
+                                                        Icons.search,
+                                                        color: Colors.white70,
+                                                        size: 20),
+                                                    onPressed: () {
+                                                      setState(() {
+                                                        _isSearchExpanded =
+                                                            !_isSearchExpanded;
+                                                      });
+                                                      if (_isSearchExpanded) {
+                                                        Future.delayed(
+                                                            const Duration(
+                                                                milliseconds:
+                                                                    50), () {
+                                                          _searchFocusNode
+                                                              .requestFocus();
+                                                        });
+                                                      } else {
+                                                        _searchController
+                                                            .clear();
+                                                        _onSearchChanged('');
+                                                        FocusScope.of(context)
+                                                            .unfocus();
+                                                      }
+                                                    },
+                                                  ),
+                                                  if (_isSearchExpanded)
+                                                    const SizedBox(width: 10),
+                                                  if (_isSearchExpanded)
+                                                    Expanded(
+                                                      child: TextField(
+                                                        controller:
+                                                            _searchController,
+                                                        focusNode:
+                                                            _searchFocusNode,
+                                                        style: const TextStyle(
+                                                            color: Colors.white,
+                                                            fontSize: 16.5),
+                                                        decoration:
+                                                            const InputDecoration(
+                                                          hintText: '검색',
+                                                          hintStyle: TextStyle(
+                                                              color: Colors
+                                                                  .white54,
+                                                              fontSize: 16.5),
+                                                          border:
+                                                              InputBorder.none,
+                                                          isDense: true,
+                                                          contentPadding:
+                                                              EdgeInsets.zero,
+                                                        ),
+                                                        onChanged:
+                                                            _onSearchChanged,
+                                                      ),
+                                                    ),
+                                                  if (_isSearchExpanded &&
+                                                      _searchQuery.isNotEmpty)
                                                     IconButton(
                                                       visualDensity:
                                                           const VisualDensity(
                                                               horizontal: -4,
                                                               vertical: -4),
-                                                      padding: _isSearchExpanded
-                                                          ? const EdgeInsets
-                                                              .only(left: 8)
-                                                          : EdgeInsets.zero,
+                                                      padding:
+                                                          const EdgeInsets.only(
+                                                              right: 10),
                                                       constraints:
                                                           const BoxConstraints(
                                                               minWidth: 32,
                                                               minHeight: 32),
+                                                      tooltip: '지우기',
                                                       icon: const Icon(
-                                                          Icons.search,
+                                                          Icons.clear,
                                                           color: Colors.white70,
-                                                          size: 20),
+                                                          size: 16),
                                                       onPressed: () {
-                                                        setState(() {
-                                                          _isSearchExpanded =
-                                                              !_isSearchExpanded;
-                                                        });
-                                                        if (_isSearchExpanded) {
-                                                          Future.delayed(
-                                                              const Duration(
-                                                                  milliseconds:
-                                                                      50), () {
-                                                            _searchFocusNode
-                                                                .requestFocus();
-                                                          });
-                                                        } else {
-                                                          setState(() {
-                                                            _searchController
-                                                                .clear();
-                                                            _searchQuery = '';
-                                                          });
-                                                          FocusScope.of(context)
-                                                              .unfocus();
-                                                        }
+                                                        _searchController
+                                                            .clear();
+                                                        _onSearchChanged('');
+                                                        FocusScope.of(context)
+                                                            .requestFocus(
+                                                                _searchFocusNode);
                                                       },
                                                     ),
-                                                    if (_isSearchExpanded)
-                                                      const SizedBox(width: 10),
-                                                    if (_isSearchExpanded)
-                                                      SizedBox(
-                                                        width: searchW - 50,
-                                                        child: TextField(
-                                                          controller:
-                                                              _searchController,
-                                                          focusNode:
-                                                              _searchFocusNode,
-                                                          style:
-                                                              const TextStyle(
-                                                                  color: Colors
-                                                                      .white,
-                                                                  fontSize:
-                                                                      16.5),
-                                                          decoration:
-                                                              const InputDecoration(
-                                                            hintText: '검색',
-                                                            hintStyle: TextStyle(
-                                                                color: Colors
-                                                                    .white54,
-                                                                fontSize: 16.5),
-                                                            border: InputBorder
-                                                                .none,
-                                                            isDense: true,
-                                                            contentPadding:
-                                                                EdgeInsets.zero,
-                                                          ),
-                                                          onChanged:
-                                                              _onSearchChanged,
-                                                        ),
-                                                      ),
-                                                    if (_isSearchExpanded &&
-                                                        _searchQuery.isNotEmpty)
-                                                      IconButton(
-                                                        visualDensity:
-                                                            const VisualDensity(
-                                                                horizontal: -4,
-                                                                vertical: -4),
-                                                        padding:
-                                                            const EdgeInsets
-                                                                .only(
-                                                                right: 10),
-                                                        constraints:
-                                                            const BoxConstraints(
-                                                                minWidth: 32,
-                                                                minHeight: 32),
-                                                        tooltip: '지우기',
-                                                        icon: const Icon(
-                                                            Icons.clear,
-                                                            color:
-                                                                Colors.white70,
-                                                            size: 16),
-                                                        onPressed: () {
-                                                          setState(() {
-                                                            _searchController
-                                                                .clear();
-                                                            _searchQuery = '';
-                                                          });
-                                                          FocusScope.of(context)
-                                                              .requestFocus(
-                                                                  _searchFocusNode);
-                                                        },
-                                                      ),
-                                                  ],
-                                                ),
+                                                ],
                                               ),
-                                            ],
-                                          ],
-                                        ),
-                                      ),
-                                      // 우측 영역 제거: 모든 버튼을 왼쪽 정렬
-                                    ],
-                                  );
-                                }
-                                // 넓은 화면: 기존 레이아웃 유지
-                                return Row(
-                                  mainAxisAlignment: MainAxisAlignment.start,
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  mainAxisSize: MainAxisSize.max,
-                                  children: [
-                                    if (widget.showRegisterControls) ...[
-                                      SizedBox(
-                                        width: 113,
-                                        height: 44,
-                                        child: Material(
-                                          color: const Color(0xFF1976D2),
-                                          borderRadius: const BorderRadius.only(
-                                            topLeft: Radius.circular(32),
-                                            bottomLeft: Radius.circular(32),
-                                            topRight: Radius.circular(6),
-                                            bottomRight: Radius.circular(6),
-                                          ),
-                                          child: InkWell(
-                                            borderRadius:
-                                                const BorderRadius.only(
-                                              topLeft: Radius.circular(32),
-                                              bottomLeft: Radius.circular(32),
-                                              topRight: Radius.circular(6),
-                                              bottomRight: Radius.circular(6),
                                             ),
-                                            onTap: widget.onRegisterPressed,
+                                          ],
+                                        ],
+                                      );
+                                    })),
+                                // 삭제 드롭존
+                                if (_showDeleteZone)
+                                  Padding(
+                                    padding: const EdgeInsets.only(top: 16.0),
+                                    child: DragTarget<Map<String, dynamic>>(
+                                      onWillAccept: (data) {
+                                        if (data == null) return false;
+                                        if (data['type'] != 'move')
+                                          return false;
+                                        if (data['students'] is! List)
+                                          return false;
+                                        if (!data.containsKey('oldDayIndex') ||
+                                            !data.containsKey('oldStartTime')) {
+                                          return false;
+                                        }
+                                        return true;
+                                      },
+                                      onAccept: (data) async {
+                                        if (data['type'] != 'move') return;
+                                        final students =
+                                            (data['students'] as List)
+                                                .map((e) => e is StudentWithInfo
+                                                    ? e
+                                                    : e['student']
+                                                        as StudentWithInfo)
+                                                .toList();
+                                        final oldDayIndex =
+                                            data['oldDayIndex'] as int?;
+                                        final oldStartTime =
+                                            data['oldStartTime'] as DateTime?;
+                                        // print('[삭제드롭존] onAccept 호출: students=${students.map((s) => s.student.id).toList()}, oldDayIndex=$oldDayIndex, oldStartTime=$oldStartTime');
+                                        List<Future> futures = [];
+
+                                        // 기존 수업 블록 삭제 로직
+                                        for (final student in students) {
+                                          // 1. 해당 학생+요일+시간 블록 1개 찾기 (setId 추출용)
+                                          final targetBlock = DataManager
+                                              .instance.studentTimeBlocks
+                                              .firstWhere(
+                                            (b) =>
+                                                b.studentId ==
+                                                    student.student.id &&
+                                                b.dayIndex == oldDayIndex &&
+                                                b.startHour ==
+                                                    oldStartTime?.hour &&
+                                                b.startMinute ==
+                                                    oldStartTime?.minute,
+                                            orElse: () => StudentTimeBlock(
+                                              id: '',
+                                              studentId: '',
+                                              dayIndex: -1,
+                                              startHour: 0,
+                                              startMinute: 0,
+                                              duration: Duration.zero,
+                                              createdAt: DateTime(0),
+                                              startDate: DateTime(0),
+                                              setId: null,
+                                              number: null,
+                                            ),
+                                          );
+                                          if (targetBlock != null &&
+                                              targetBlock.setId != null) {
+                                            // setId+studentId로 모든 블록 삭제 (일괄 삭제)
+                                            final allBlocks = DataManager
+                                                .instance.studentTimeBlocks;
+                                            final toDelete = allBlocks
+                                                .where((b) =>
+                                                    b.setId ==
+                                                        targetBlock.setId &&
+                                                    b.studentId ==
+                                                        student.student.id)
+                                                .toList();
+                                            for (final b in toDelete) {
+                                              futures.add(DataManager.instance
+                                                  .removeStudentTimeBlock(
+                                                      b.id));
+                                            }
+                                          }
+                                          // setId가 없는 경우 단일 블록 삭제
+                                          final blocks = DataManager
+                                              .instance.studentTimeBlocks
+                                              .where((b) =>
+                                                  b.studentId ==
+                                                      student.student.id &&
+                                                  b.dayIndex == oldDayIndex &&
+                                                  b.startHour ==
+                                                      oldStartTime?.hour &&
+                                                  b.startMinute ==
+                                                      oldStartTime?.minute)
+                                              .toList();
+                                          for (final block in blocks) {
+                                            futures.add(DataManager.instance
+                                                .removeStudentTimeBlock(
+                                                    block.id));
+                                          }
+                                        }
+
+                                        try {
+                                          await Future.wait(futures);
+                                        } on ScheduleLockedByMakeupException catch (e) {
+                                          if (mounted) {
+                                            setState(() {
+                                              _showDeleteZone = false;
+                                            });
+                                            await showScheduleLockedByMakeupDialog(
+                                              context,
+                                              e,
+                                              useRoot: true,
+                                            );
+                                          }
+                                          if (widget.onExitSelectMode != null) {
+                                            widget.onExitSelectMode!();
+                                          }
+                                          return;
+                                        } catch (e) {
+                                          if (mounted) {
+                                            setState(() {
+                                              _showDeleteZone = false;
+                                            });
+                                            showAppSnackBar(
+                                                context, '삭제 실패: $e',
+                                                useRoot: true);
+                                          }
+                                          if (widget.onExitSelectMode != null) {
+                                            widget.onExitSelectMode!();
+                                          }
+                                          return;
+                                        }
+                                        await DataManager.instance
+                                            .loadStudents();
+                                        await DataManager.instance
+                                            .loadStudentTimeBlocks();
+                                        setState(() {
+                                          _showDeleteZone = false;
+                                        });
+                                        // 스낵바 즉시 표시 (지연 제거)
+                                        if (mounted) {
+                                          showAppSnackBar(context,
+                                              '${students.length}명 학생의 수업시간이 삭제되었습니다.',
+                                              useRoot: true);
+                                        }
+                                        // 삭제 후 선택모드 종료 콜백 직접 호출
+                                        if (widget.onExitSelectMode != null) {
+                                          widget.onExitSelectMode!();
+                                        }
+                                      },
+                                      builder: (context, candidateData,
+                                          rejectedData) {
+                                        final isHover =
+                                            candidateData.isNotEmpty;
+                                        return AnimatedContainer(
+                                          duration:
+                                              const Duration(milliseconds: 150),
+                                          width: double.infinity,
+                                          height: 72,
+                                          decoration: BoxDecoration(
+                                            color: Colors.grey[900],
+                                            border: Border.all(
+                                              color: isHover
+                                                  ? Colors.red
+                                                  : Colors.grey[700]!,
+                                              width: isHover ? 3 : 2,
+                                            ),
+                                            borderRadius:
+                                                BorderRadius.circular(12),
+                                          ),
+                                          child: Center(
+                                            child: Icon(
+                                              Icons.delete_outline,
+                                              color: isHover
+                                                  ? Colors.red
+                                                  : Colors.white70,
+                                              size: 36,
+                                            ),
+                                          ),
+                                        );
+                                      },
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                          // 수업 영역
+                          Expanded(
+                            flex: 1,
+                            child: Stack(
+                              children: [
+                                // 수업 리스트 (기존 내용)
+                                Padding(
+                                  padding: const EdgeInsets.only(
+                                      left: classSheetInnerLeftInset),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Row(
+                                        children: [
+                                          Padding(
+                                            padding: const EdgeInsets.only(
+                                                top: 12, right: 8),
                                             child: Row(
-                                              mainAxisAlignment:
-                                                  MainAxisAlignment.center,
-                                              mainAxisSize: MainAxisSize.max,
-                                              children: const [
-                                                Icon(Icons.add,
-                                                    color: Colors.white,
-                                                    size: 20),
-                                                SizedBox(width: 8),
-                                                Text('등록',
+                                              children: [
+                                                if (MediaQuery.of(context)
+                                                        .size
+                                                        .width >
+                                                    1600) ...[
+                                                  const SizedBox(width: 6),
+                                                  // ✅ 수업 리스트 타이틀 아이콘: Material Design 3(비행기/Travel)
+                                                  const Icon(Symbols.flight,
+                                                      color: Color(0xFFEAF2F2),
+                                                      size: 28),
+                                                  const SizedBox(width: 10),
+                                                  const Text(
+                                                    '수업',
                                                     style: TextStyle(
-                                                        color: Colors.white,
-                                                        fontSize: 16,
-                                                        fontWeight:
-                                                            FontWeight.bold)),
+                                                      color: Color(0xFFEAF2F2),
+                                                      fontSize: 25,
+                                                      fontWeight:
+                                                          FontWeight.w600,
+                                                    ),
+                                                  ),
+                                                ],
                                               ],
                                             ),
                                           ),
-                                        ),
-                                      ),
-                                      Container(
-                                        height: 44,
-                                        width: 3.0,
-                                        color: Colors.transparent,
-                                        child: Center(
-                                          child: Container(
-                                            width: 2,
-                                            height: 28,
-                                            color:
-                                                Colors.white.withOpacity(0.1),
-                                          ),
-                                        ),
-                                      ),
-                                      Padding(
-                                        padding: const EdgeInsets.symmetric(
-                                            horizontal: 2.5),
-                                        child: GestureDetector(
-                                          key: _dropdownButtonKey,
-                                          onTap: () {
-                                            if (_dropdownOverlay == null) {
-                                              widget
-                                                  .onDropdownOpenChanged(true);
-                                              _showDropdownMenu();
-                                            } else {
-                                              _removeDropdownMenu();
-                                            }
-                                          },
-                                          child: AnimatedContainer(
-                                            duration: const Duration(
-                                                milliseconds: 350),
-                                            width: 44,
-                                            height: 44,
-                                            decoration: ShapeDecoration(
-                                              color: const Color(0xFF1976D2),
-                                              shape: RoundedRectangleBorder(
-                                                borderRadius: widget
-                                                        .isDropdownOpen
-                                                    ? BorderRadius.circular(50)
-                                                    : const BorderRadius.only(
-                                                        topLeft:
-                                                            Radius.circular(6),
-                                                        bottomLeft:
-                                                            Radius.circular(6),
-                                                        topRight:
-                                                            Radius.circular(32),
-                                                        bottomRight:
-                                                            Radius.circular(32),
-                                                      ),
-                                              ),
-                                            ),
-                                            child: Center(
-                                              child: AnimatedRotation(
-                                                turns: widget.isDropdownOpen
-                                                    ? 0.5
-                                                    : 0.0,
-                                                duration: const Duration(
-                                                    milliseconds: 350),
-                                                curve: Curves.easeInOut,
-                                                child: const Icon(
-                                                  Icons.keyboard_arrow_down,
-                                                  color: Colors.white,
-                                                  size: 28,
-                                                  key: ValueKey('arrow'),
-                                                ),
+                                          const Spacer(),
+                                          // ✅ 수업 추가 버튼: 타이틀 줄 오른쪽 정렬 + 기존 수업 등록 다이얼로그 연결
+                                          Padding(
+                                            padding: const EdgeInsets.only(
+                                                top: 8, right: 4),
+                                            child: SizedBox(
+                                              width: 48,
+                                              height: 48,
+                                              child: IconButton(
+                                                tooltip: '수업 추가',
+                                                onPressed: () =>
+                                                    _showClassRegistrationDialog(),
+                                                icon: const Icon(
+                                                    Icons.add_rounded),
+                                                iconSize: 30,
+                                                color: const Color(0xFFEAF2F2),
+                                                padding: EdgeInsets.zero,
+                                                splashRadius: 26,
                                               ),
                                             ),
                                           ),
-                                        ),
+                                        ],
                                       ),
-                                      const SizedBox(width: 6),
-                                    ],
-                                    if (widget.showRegisterControls) ...[
-                                      const SizedBox(width: 8),
-                                      AnimatedContainer(
-                                        duration:
-                                            const Duration(milliseconds: 250),
-                                        height: 44,
-                                        width: _isSearchExpanded ? 160 : 44,
-                                        decoration: BoxDecoration(
-                                          color: const Color(0xFF2A2A2A),
-                                          borderRadius:
-                                              BorderRadius.circular(22),
-                                          border: Border.all(
-                                              color: Colors.white
-                                                  .withOpacity(0.2)),
-                                        ),
-                                        child: Row(
-                                          mainAxisAlignment: _isSearchExpanded
-                                              ? MainAxisAlignment.start
-                                              : MainAxisAlignment.center,
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.center,
-                                          children: [
-                                            IconButton(
-                                              visualDensity:
-                                                  const VisualDensity(
-                                                      horizontal: -4,
-                                                      vertical: -4),
-                                              padding: _isSearchExpanded
-                                                  ? const EdgeInsets.only(
-                                                      left: 8)
-                                                  : EdgeInsets.zero,
-                                              constraints: const BoxConstraints(
-                                                  minWidth: 32, minHeight: 32),
-                                              icon: const Icon(Icons.search,
-                                                  color: Colors.white70,
-                                                  size: 20),
-                                              onPressed: () {
-                                                setState(() {
-                                                  _isSearchExpanded =
-                                                      !_isSearchExpanded;
-                                                });
-                                                if (_isSearchExpanded) {
-                                                  Future.delayed(
-                                                      const Duration(
-                                                          milliseconds: 50),
-                                                      () {
-                                                    _searchFocusNode
-                                                        .requestFocus();
-                                                  });
-                                                } else {
-                                                  setState(() {
-                                                    _searchController.clear();
-                                                    _searchQuery = '';
-                                                  });
-                                                  FocusScope.of(context)
-                                                      .unfocus();
-                                                }
-                                              },
-                                            ),
-                                            if (_isSearchExpanded)
-                                              const SizedBox(width: 10),
-                                            if (_isSearchExpanded)
-                                              Expanded(
-                                                child: TextField(
-                                                  controller: _searchController,
-                                                  focusNode: _searchFocusNode,
-                                                  style: const TextStyle(
-                                                      color: Colors.white,
-                                                      fontSize: 16.5),
-                                                  decoration:
-                                                      const InputDecoration(
-                                                    hintText: '검색',
-                                                    hintStyle: TextStyle(
-                                                        color: Colors.white54,
-                                                        fontSize: 16.5),
-                                                    border: InputBorder.none,
-                                                    isDense: true,
-                                                    contentPadding:
-                                                        EdgeInsets.zero,
-                                                  ),
-                                                  onChanged: _onSearchChanged,
-                                                ),
-                                              ),
-                                            if (_isSearchExpanded &&
-                                                _searchQuery.isNotEmpty)
-                                              IconButton(
-                                                visualDensity:
-                                                    const VisualDensity(
-                                                        horizontal: -4,
-                                                        vertical: -4),
-                                                padding: const EdgeInsets.only(
-                                                    right: 10),
-                                                constraints:
-                                                    const BoxConstraints(
-                                                        minWidth: 32,
-                                                        minHeight: 32),
-                                                tooltip: '지우기',
-                                                icon: const Icon(Icons.clear,
-                                                    color: Colors.white70,
-                                                    size: 16),
-                                                onPressed: () {
-                                                  setState(() {
-                                                    _searchController.clear();
-                                                    _searchQuery = '';
-                                                  });
-                                                  FocusScope.of(context)
-                                                      .requestFocus(
-                                                          _searchFocusNode);
-                                                },
-                                              ),
-                                          ],
-                                        ),
-                                      ),
-                                    ],
-                                  ],
-                                );
-                              })),
-                          // 학생카드 리스트 위에 요일+시간 출력
-                          Expanded(
-                            child: _searchQuery.isNotEmpty &&
-                                    _searchResults.isNotEmpty
-                                ? _buildSearchResultPanel()
-                                : (
-                                    // 1) 셀 선택 시: 해당 시간 학생카드
-                                    (widget.selectedCellDayIndex != null &&
-                                            widget.selectedCellStartTime !=
-                                                null)
-                                        ? ValueListenableBuilder<int>(
-                                            valueListenable: DataManager
-                                                .instance
-                                                .studentTimeBlocksRevision,
-                                            builder: (context, _, __) {
-                                              final int selDayIdx =
-                                                  widget.selectedCellDayIndex ??
-                                                      0; // 0=월
-                                              // 셀 날짜 기준 refDate 산출
-                                              // 주의: selectedCellStartTime의 "날짜"는 _selectedDate 기반으로 만들어져
-                                              // 실제 요일 컬럼의 날짜와 다를 수 있다. (예: week=3주차인데 _selectedDate가 목요일이면,
-                                              // 수요일 셀 refDate가 목요일로 잡혀 잘못된 블록이 활성로 판단됨)
-                                              final selectedDate =
-                                                  widget.selectedCellStartTime!;
-                                              final DateTime weekStart =
-                                                  DateTime(
-                                                          widget.viewDate.year,
-                                                          widget.viewDate.month,
-                                                          widget.viewDate.day)
-                                                      .subtract(Duration(
-                                                          days: widget.viewDate
-                                                                  .weekday -
-                                                              DateTime.monday));
-                                              final DateTime weekEnd = weekStart
-                                                  .add(const Duration(days: 7));
-                                              final DateTime cellYmd =
-                                                  weekStart.add(Duration(
-                                                      days: selDayIdx));
-                                              final DateTime refDate = DateTime(
-                                                  cellYmd.year,
-                                                  cellYmd.month,
-                                                  cellYmd.day);
-                                              if (_kCellDebug) {
-                                                final sd = widget.selectedDayDate;
-                                                final sst = widget.selectedCellStartTime;
-                                                print(
-                                                    '[TT][cell] viewDate=${widget.viewDate.toIso8601String().split("T").first} weekStart=${weekStart.toIso8601String().split("T").first} selDayIdx=$selDayIdx cellYmd=${refDate.toIso8601String().split("T").first} selectedDayDate=${sd == null ? 'null' : sd.toIso8601String().split("T").first} selectedCellStartTime=${sst == null ? 'null' : sst.toIso8601String()}');
-                                              }
-                                              // ✅ 셀 클릭 시에는 "현재 보고 있는 주"에 겹치는 블록만 사용(week-cache)
-                                              // 전체 히스토리(비활성 포함)를 매번 스캔하면 클릭마다 1s+ 지연이 생길 수 있다.
-                                              final allBlocks = DataManager
-                                                  .instance
-                                                  .getStudentTimeBlocksForWeek(
-                                                      refDate);
-                                              final blocks = allBlocks
-                                                  .where((b) =>
-                                                      b.dayIndex == selDayIdx &&
-                                                      b.startHour ==
-                                                          selectedDate.hour &&
-                                                      b.startMinute ==
-                                                          selectedDate.minute)
-                                                  .toList();
-                                              bool _isActive(
-                                                  StudentTimeBlock b) {
-                                                final start = DateTime(
-                                                    b.startDate.year,
-                                                    b.startDate.month,
-                                                    b.startDate.day);
-                                                final end = b.endDate != null
-                                                    ? DateTime(
-                                                        b.endDate!.year,
-                                                        b.endDate!.month,
-                                                        b.endDate!.day)
-                                                    : null;
-                                                return !start
-                                                        .isAfter(refDate) &&
-                                                    (end == null ||
-                                                        !end.isBefore(refDate));
-                                              }
+                                      const SizedBox(height: 8),
+                                      Expanded(
+                                        child: ValueListenableBuilder<int>(
+                                          valueListenable: DataManager.instance
+                                              .studentTimeBlocksRevision,
+                                          builder: (context, __, ___) {
+                                            final int unassignedCount =
+                                                _unfilteredDefaultClassCount();
+                                            final filteredClassIds =
+                                                widget.filteredClassIds ??
+                                                    const <String>{};
 
-                                              final activeBlocks = blocks
-                                                  .where(_isActive)
-                                                  .toList();
-                                              if (_kCellDebug) {
-                                                // 셀 슬롯에 걸린 "전체 blocks"를 active 여부와 함께 출력
-                                                // - 이 로그 하나로 "미래 블록이 왜 active로 들어왔는지"가 바로 드러남
-                                                final allDetails = blocks
-                                                    .take(30)
-                                                    .map((b) {
-                                                      final sd = DateTime(b.startDate.year, b.startDate.month, b.startDate.day);
-                                                      final ed = b.endDate == null ? null : DateTime(b.endDate!.year, b.endDate!.month, b.endDate!.day);
-                                                      final isActive = !sd.isAfter(refDate) && (ed == null || !ed.isBefore(refDate));
-                                                      return '${b.id} sid=${b.studentId} set=${b.setId ?? ''} sd=${sd.toIso8601String().split("T").first} ed=${ed == null ? 'null' : ed.toIso8601String().split("T").first} active=$isActive created=${b.createdAt.toIso8601String()}';
-                                                    })
-                                                    .toList();
-
-                                                // "활성"으로 잡힌 블록들의 start/end를 출력 (미래 startDate가 섞이는지 확인용)
-                                                final details = activeBlocks
-                                                    .take(20)
-                                                    .map((b) =>
-                                                        '${b.id} sid=${b.studentId} set=${b.setId ?? ''} sd=${b.startDate.toIso8601String().split("T").first} ed=${b.endDate == null ? 'null' : b.endDate!.toIso8601String().split("T").first} created=${b.createdAt.toIso8601String()}')
-                                                    .toList();
-                                                final futureLike = activeBlocks
-                                                    .where((b) => DateTime(
-                                                            b.startDate.year,
-                                                            b.startDate.month,
-                                                            b.startDate.day)
-                                                        .isAfter(refDate))
-                                                    .take(5)
-                                                    .map((b) =>
-                                                        '${b.id} sid=${b.studentId} sd=${b.startDate.toIso8601String().split("T").first}')
-                                                    .toList();
-                                                print(
-                                                    '[TT][cell] blocks=${blocks.length} active=${activeBlocks.length} all=$allDetails activeSample=$details futureStartInActive=$futureLike');
-                                              }
-                                              // 학생별(선택 dayIdx) 블록 인덱스: sessionOverride의 setId 추정용
-                                              final Map<String,
-                                                      List<StudentTimeBlock>>
-                                                  blocksByStudentOnDay = {};
-                                              for (final b in allBlocks) {
-                                                if (b.dayIndex != selDayIdx)
-                                                  continue;
-                                                blocksByStudentOnDay
-                                                    .putIfAbsent(
-                                                        b.studentId,
-                                                        () => <StudentTimeBlock>[])
-                                                    .add(b);
-                                              }
-                                              // 보강 원본 블라인드(set_id 우선): 같은 날짜(YMD)의 replace 원본이 있으면 해당 (studentId,setId) 전체를 제외
-                                              final DateTime cellDate =
-                                                  DateTime(
-                                                cellYmd.year,
-                                                cellYmd.month,
-                                                cellYmd.day,
-                                                selectedDate.hour,
-                                                selectedDate.minute,
-                                              );
-                                              final Set<String> hiddenPairs =
-                                                  {};
-                                              for (final ov in DataManager
-                                                  .instance.sessionOverrides) {
-                                                if (ov.reason !=
-                                                    OverrideReason.makeup)
-                                                  continue;
-                                                if (ov.overrideType !=
-                                                    OverrideType.replace)
-                                                  continue;
-                                                if (ov.status ==
-                                                    OverrideStatus.canceled)
-                                                  continue;
-                                                final orig =
-                                                    ov.originalClassDateTime;
-                                                if (orig == null) continue;
-                                                if (orig.isBefore(weekStart) ||
-                                                    !orig.isBefore(weekEnd))
-                                                  continue;
-                                                final bool sameYmd = orig
-                                                            .year ==
-                                                        cellDate.year &&
-                                                    orig.month ==
-                                                        cellDate.month &&
-                                                    orig.day == cellDate.day;
-                                                if (!sameYmd) continue;
-                                                String? setId = ov.setId;
-                                                if (setId == null ||
-                                                    setId.isEmpty) {
-                                                  // 학생의 같은 요일 블록에서 원본 시간과 가장 가까운 블록의 setId 추정
-                                                  final blocksByStudent =
-                                                      blocksByStudentOnDay[
-                                                              ov.studentId] ??
-                                                          const <StudentTimeBlock>[];
-                                                  if (blocksByStudent
-                                                      .isNotEmpty) {
-                                                    int origMin =
-                                                        orig.hour * 60 +
-                                                            orig.minute;
-                                                    int bestDiff = 1 << 30;
-                                                    for (final b
-                                                        in blocksByStudent) {
-                                                      final int bm =
-                                                          b.startHour * 60 +
-                                                              b.startMinute;
-                                                      final int diff =
-                                                          (bm - origMin).abs();
-                                                      if (diff < bestDiff &&
-                                                          b.setId != null &&
-                                                          b.setId!.isNotEmpty) {
-                                                        bestDiff = diff;
-                                                        setId = b.setId;
-                                                      }
-                                                    }
-                                                  }
-                                                }
-                                                if (setId != null &&
-                                                    setId.isNotEmpty) {
-                                                  hiddenPairs.add(
-                                                      '${ov.studentId}|$setId');
-                                                }
-                                              }
-                                              final studentIdSet =
-                                                  (widget.filteredStudentIds ??
-                                                          DataManager
-                                                              .instance.students
-                                                              .map((s) =>
-                                                                  s.student.id)
-                                                              .toList())
-                                                      .toSet();
-                                              final Map<String, DateTime?>
-                                                  registrationDateByStudentId = {
-                                                for (final s in DataManager
-                                                    .instance.students)
-                                                  s.student.id: s.basicInfo
-                                                      .registrationDate,
-                                              };
-                                              List<StudentTimeBlock>
-                                                  filteredBlocks = [];
-                                              for (final b in activeBlocks) {
-                                                if (!studentIdSet.contains(
-                                                    b.studentId)) continue;
-                                                if (!_isBlockAllowed(b))
-                                                  continue;
-                                                final pairKey =
-                                                    '${b.studentId}|${b.setId ?? ''}';
-                                                if (hiddenPairs
-                                                    .contains(pairKey)) {
-                                                  continue; // set_id 블라인드 적용
-                                                }
-                                                // 주차 계산 (등록일 기반)
-                                                final reg =
-                                                    registrationDateByStudentId[
-                                                        b.studentId];
-                                                if (reg == null) {
-                                                  filteredBlocks.add(b);
-                                                  continue;
-                                                }
-                                                DateTime toMonday(DateTime x) {
-                                                  final off = x.weekday -
-                                                      DateTime.monday;
-                                                  return DateTime(x.year,
-                                                          x.month, x.day)
-                                                      .subtract(
-                                                          Duration(days: off));
+                                            return ValueListenableBuilder<
+                                                List<ClassInfo>>(
+                                              valueListenable: DataManager
+                                                  .instance.classesNotifier,
+                                              builder:
+                                                  (context, classes, ____) {
+                                                if (classes.isEmpty &&
+                                                    unassignedCount == 0) {
+                                                  return const Center(
+                                                    child: Text('등록된 수업이 없습니다.',
+                                                        style: TextStyle(
+                                                            color:
+                                                                Colors.white38,
+                                                            fontSize: 16)),
+                                                  );
                                                 }
 
-                                                final week = (() {
-                                                  final rm = toMonday(reg!);
-                                                  final sm =
-                                                      toMonday(selectedDate);
-                                                  final diff =
-                                                      sm.difference(rm).inDays;
-                                                  return (diff >= 0
-                                                          ? (diff ~/ 7)
-                                                          : 0) +
-                                                      1;
-                                                })();
-                                                final startMin =
-                                                    b.startHour * 60 +
-                                                        b.startMinute;
-                                                final blind = _shouldBlindBlock(
-                                                  studentId: b.studentId,
-                                                  weekNumber: week,
-                                                  weeklyOrder: b.weeklyOrder,
-                                                  sessionTypeId:
-                                                      b.sessionTypeId,
-                                                  dayIdx: b.dayIndex,
-                                                  startMin: startMin,
-                                                );
-                                                if (!blind)
-                                                  filteredBlocks.add(b);
-                                              }
-                                              final blocksToUse =
-                                                  filteredBlocks;
-                                              final allStudents =
-                                                  DataManager.instance.students;
-                                              final students = widget
-                                                          .filteredStudentIds ==
-                                                      null
-                                                  ? allStudents
-                                                  : allStudents
-                                                      .where((s) => widget
-                                                          .filteredStudentIds!
-                                                          .contains(
-                                                              s.student.id))
-                                                      .toList();
-                                              final Map<String,
-                                                      StudentWithInfo>
-                                                  studentById = {
-                                                for (final s in students)
-                                                  s.student.id: s,
-                                              };
-                                              // 학생별 최신 블록(생성시각 기준) 매핑: 번호/SET/색상 계산 시 재탐색 없이 사용
-                                              final Map<String,
-                                                      StudentTimeBlock>
-                                                  blockOverrides = {};
-                                              for (final b in blocksToUse) {
-                                                final prev =
-                                                    blockOverrides[b.studentId];
-                                                if (prev == null ||
-                                                    b.createdAt.isAfter(
-                                                        prev.createdAt)) {
-                                                  blockOverrides[b.studentId] =
-                                                      b;
+                                                // 정원(수업 카드) 카운트는 "보고 있는 날짜(refDate)" 기준으로 계산한다.
+                                                // 주의: selectedCellStartTime의 날짜는 _selectedDate 기반으로 만들어져
+                                                // 실제 셀(요일 컬럼)의 날짜와 다를 수 있으므로, selectedCellDayIndex를 이용해
+                                                // 주의 월요일 + dayIndex로 실제 날짜를 계산한다.
+                                                DateTime?
+                                                    _selectedCellDateOnly() {
+                                                  final idx = widget
+                                                      .selectedCellDayIndex;
+                                                  if (idx == null) return null;
+                                                  final monday =
+                                                      widget.viewDate.subtract(
+                                                    Duration(
+                                                        days: widget.viewDate
+                                                                .weekday -
+                                                            DateTime.monday),
+                                                  );
+                                                  return DateTime(
+                                                          monday.year,
+                                                          monday.month,
+                                                          monday.day)
+                                                      .add(Duration(days: idx));
                                                 }
-                                              }
-                                              // ✅ 중복 카드 방지:
-                                              // 수업 재배정/실시간 동기화 중간 상태에서 같은 학생이 중복 블록으로 잡히는 경우가 있어도
-                                              // 우측 학생 리스트에는 "학생 1명 = 카드 1개"만 보이게 한다.
-                                              final cellStudents = blockOverrides.keys
-                                                  .map((id) => studentById[id])
-                                                  .whereType<StudentWithInfo>()
-                                                  .toList();
 
-                                              return LayoutBuilder(
-                                                builder:
-                                                    (context, constraints) {
-                                                  const double panelTopMargin =
-                                                      _kStudentPanelHeaderTopMargin;
-                                                  final double containerHeight =
-                                                      (constraints.maxHeight -
-                                                              panelTopMargin)
-                                                          .clamp(120.0,
-                                                              double.infinity);
-                                                  return Column(
-                                                    crossAxisAlignment:
-                                                        CrossAxisAlignment
-                                                            .start,
-                                                    children: [
-                                                      Container(
-                                                        margin: const EdgeInsets
-                                                            .only(
-                                                            top:
-                                                                panelTopMargin),
-                                                        height: containerHeight,
-                                                        padding:
-                                                            const EdgeInsets
-                                                                .symmetric(
-                                                                horizontal: 0,
-                                                                vertical: 0),
-                                                        color:
-                                                            Colors.transparent,
-                                                        child: KeyedSubtree(
-                                                          key: ValueKey(
-                                                            'cell-${widget.selectedCellDayIndex}-${widget.selectedCellStartTime}-${DataManager.instance.studentTimeBlocksRevision.value}',
-                                                          ),
-                                                          child:
-                                                              _buildCellPanelCached(
-                                                            students:
-                                                                cellStudents,
-                                                            dayIdx: widget
-                                                                .selectedCellDayIndex,
-                                                            startTime: widget
-                                                                .selectedCellStartTime,
-                                                            maxHeight:
-                                                                containerHeight,
-                                                            isSelectMode: widget
-                                                                .isSelectMode,
-                                                            selectedIds: widget
-                                                                .selectedStudentIds,
-                                                            onSelectChanged: widget
-                                                                .onStudentSelectChanged,
-                                                            blockOverrides:
-                                                                blockOverrides,
-                                                          ),
+                                                final DateTime _baseRef = widget
+                                                        .selectedDayDate ??
+                                                    _selectedCellDateOnly() ??
+                                                    widget.viewDate;
+                                                final DateTime _classCountRef =
+                                                    DateTime(
+                                                        _baseRef.year,
+                                                        _baseRef.month,
+                                                        _baseRef.day);
+
+                                                return Column(
+                                                  children: [
+                                                    if (unassignedCount >
+                                                        0) ...[
+                                                      _ClassCard(
+                                                        key: const ValueKey(
+                                                            '__default_class__'),
+                                                        classInfo: ClassInfo(
+                                                          id: '__default_class__',
+                                                          name: '수업',
+                                                          description: '기본 수업',
+                                                          capacity: null,
+                                                          color: const Color(
+                                                              0xFF223131),
                                                         ),
+                                                        onEdit: () {},
+                                                        onDelete: () {},
+                                                        reorderIndex: -1,
+                                                        registrationModeType: widget
+                                                            .registrationModeType,
+                                                        studentCountOverride:
+                                                            unassignedCount,
+                                                        refDate: _classCountRef,
+                                                        enableActions: false,
+                                                        showDragHandle: false,
+                                                        onFilterToggle: widget
+                                                                    .onToggleClassFilter !=
+                                                                null
+                                                            ? () =>
+                                                                widget.onToggleClassFilter!(
+                                                                    ClassInfo(
+                                                                  id: '__default_class__',
+                                                                  name: '수업',
+                                                                  description:
+                                                                      '기본 수업',
+                                                                  capacity:
+                                                                      null,
+                                                                  color: const Color(
+                                                                      0xFF223131),
+                                                                ))
+                                                            : null,
+                                                        isFiltered: filteredClassIds
+                                                            .contains(
+                                                                '__default_class__'),
                                                       ),
+                                                      const SizedBox(
+                                                          height: 12),
                                                     ],
-                                                  );
-                                                },
-                                              );
-                                            },
-                                          )
-                                        // 2) 요일만 선택 시: 해당 요일 등원 시간 그룹 순서대로
-                                        : (widget.selectedCellDayIndex != null &&
-                                                widget.selectedDayDate !=
-                                                    null &&
-                                                widget.selectedCellStartTime ==
-                                                    null)
-                                            // 요일 선택 시 실제 렌더링은 우측 Stack 오버레이에서 수행. 여기서는 레이아웃만 유지.
-                                            ? LayoutBuilder(
-                                                builder:
-                                                    (context, constraints) {
-                                                  return Container(
-                                                    width: double.infinity,
-                                                    height:
-                                                        constraints.maxHeight,
-                                                    color: Colors.transparent,
-                                                  );
-                                                },
-                                              )
-                                            : _buildTimeIdleSkeleton()),
-                          ),
-                          // 삭제 드롭존
-                          if (_showDeleteZone)
-                            Padding(
-                              padding: const EdgeInsets.only(top: 16.0),
-                              child: DragTarget<Map<String, dynamic>>(
-                                onWillAccept: (data) {
-                                  if (data == null) return false;
-                                  if (data['type'] != 'move') return false;
-                                  if (data['students'] is! List) return false;
-                                  if (!data.containsKey('oldDayIndex') ||
-                                      !data.containsKey('oldStartTime')) {
-                                    return false;
-                                  }
-                                  return true;
-                                },
-                                onAccept: (data) async {
-                                  if (data['type'] != 'move') return;
-                                  final students = (data['students'] as List)
-                                      .map((e) => e is StudentWithInfo
-                                          ? e
-                                          : e['student'] as StudentWithInfo)
-                                      .toList();
-                                  final oldDayIndex =
-                                      data['oldDayIndex'] as int?;
-                                  final oldStartTime =
-                                      data['oldStartTime'] as DateTime?;
-                                  // print('[삭제드롭존] onAccept 호출: students=${students.map((s) => s.student.id).toList()}, oldDayIndex=$oldDayIndex, oldStartTime=$oldStartTime');
-                                  List<Future> futures = [];
-
-                                  // 기존 수업 블록 삭제 로직
-                                  for (final student in students) {
-                                    // 1. 해당 학생+요일+시간 블록 1개 찾기 (setId 추출용)
-                                    final targetBlock = DataManager
-                                        .instance.studentTimeBlocks
-                                        .firstWhere(
-                                      (b) =>
-                                          b.studentId == student.student.id &&
-                                          b.dayIndex == oldDayIndex &&
-                                          b.startHour == oldStartTime?.hour &&
-                                          b.startMinute == oldStartTime?.minute,
-                                      orElse: () => StudentTimeBlock(
-                                        id: '',
-                                        studentId: '',
-                                        dayIndex: -1,
-                                        startHour: 0,
-                                        startMinute: 0,
-                                        duration: Duration.zero,
-                                        createdAt: DateTime(0),
-                                        startDate: DateTime(0),
-                                        setId: null,
-                                        number: null,
-                                      ),
-                                    );
-                                    if (targetBlock != null &&
-                                        targetBlock.setId != null) {
-                                      // setId+studentId로 모든 블록 삭제 (일괄 삭제)
-                                      final allBlocks = DataManager
-                                          .instance.studentTimeBlocks;
-                                      final toDelete = allBlocks
-                                          .where((b) =>
-                                              b.setId == targetBlock.setId &&
-                                              b.studentId == student.student.id)
-                                          .toList();
-                                      for (final b in toDelete) {
-                                        futures.add(DataManager.instance
-                                            .removeStudentTimeBlock(b.id));
-                                      }
-                                    }
-                                    // setId가 없는 경우 단일 블록 삭제
-                                    final blocks = DataManager
-                                        .instance.studentTimeBlocks
-                                        .where((b) =>
-                                            b.studentId == student.student.id &&
-                                            b.dayIndex == oldDayIndex &&
-                                            b.startHour == oldStartTime?.hour &&
-                                            b.startMinute ==
-                                                oldStartTime?.minute)
-                                        .toList();
-                                    for (final block in blocks) {
-                                      futures.add(DataManager.instance
-                                          .removeStudentTimeBlock(block.id));
-                                    }
-                                  }
-
-                                  try {
-                                    await Future.wait(futures);
-                                  } on ScheduleLockedByMakeupException catch (e) {
-                                    if (mounted) {
-                                      setState(() {
-                                        _showDeleteZone = false;
-                                      });
-                                      await showScheduleLockedByMakeupDialog(
-                                        context,
-                                        e,
-                                        useRoot: true,
-                                      );
-                                    }
-                                    if (widget.onExitSelectMode != null) {
-                                      widget.onExitSelectMode!();
-                                    }
-                                    return;
-                                  } catch (e) {
-                                    if (mounted) {
-                                      setState(() {
-                                        _showDeleteZone = false;
-                                      });
-                                      showAppSnackBar(context, '삭제 실패: $e', useRoot: true);
-                                    }
-                                    if (widget.onExitSelectMode != null) {
-                                      widget.onExitSelectMode!();
-                                    }
-                                    return;
-                                  }
-                                  await DataManager.instance.loadStudents();
-                                  await DataManager.instance
-                                      .loadStudentTimeBlocks();
-                                  setState(() {
-                                    _showDeleteZone = false;
-                                  });
-                                  // 스낵바 즉시 표시 (지연 제거)
-                                  if (mounted) {
-                                    showAppSnackBar(context,
-                                        '${students.length}명 학생의 수업시간이 삭제되었습니다.',
-                                        useRoot: true);
-                                  }
-                                  // 삭제 후 선택모드 종료 콜백 직접 호출
-                                  if (widget.onExitSelectMode != null) {
-                                    widget.onExitSelectMode!();
-                                  }
-                                },
-                                builder:
-                                    (context, candidateData, rejectedData) {
-                                  final isHover = candidateData.isNotEmpty;
-                                  return AnimatedContainer(
-                                    duration: const Duration(milliseconds: 150),
-                                    width: double.infinity,
-                                    height: 72,
-                                    decoration: BoxDecoration(
-                                      color: Colors.grey[900],
-                                      border: Border.all(
-                                        color: isHover
-                                            ? Colors.red
-                                            : Colors.grey[700]!,
-                                        width: isHover ? 3 : 2,
-                                      ),
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                    child: Center(
-                                      child: Icon(
-                                        Icons.delete_outline,
-                                        color: isHover
-                                            ? Colors.red
-                                            : Colors.white70,
-                                        size: 36,
-                                      ),
-                                    ),
-                                  );
-                                },
-                              ),
-                            ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  // 수업 영역
-                  Expanded(
-                    flex: 1,
-                    child: Stack(
-                      children: [
-                        // 수업 리스트 (기존 내용)
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              children: [
-                                Padding(
-                                  padding:
-                                      const EdgeInsets.only(top: 12, right: 8),
-                                  child: Row(
-                                    children: [
-                                      if (MediaQuery.of(context).size.width >
-                                          1600) ...[
-                                        const SizedBox(width: 6),
-                                        // ✅ 수업 리스트 타이틀 아이콘: Material Design 3(비행기/Travel)
-                                        const Icon(Symbols.flight,
-                                            color: Color(0xFFEAF2F2), size: 28),
-                                        const SizedBox(width: 10),
-                                        const Text(
-                                          '수업',
-                                          style: TextStyle(
-                                            color: Color(0xFFEAF2F2),
-                                            fontSize: 25,
-                                            fontWeight: FontWeight.w600,
-                                          ),
+                                                    Expanded(
+                                                      child: classes.isEmpty
+                                                          ? SizedBox.shrink()
+                                                          : ReorderableListView
+                                                              .builder(
+                                                              padding:
+                                                                  EdgeInsets
+                                                                      .zero,
+                                                              itemCount: classes
+                                                                  .length,
+                                                              buildDefaultDragHandles:
+                                                                  false,
+                                                              dragStartBehavior:
+                                                                  DragStartBehavior
+                                                                      .down,
+                                                              onReorder:
+                                                                  _onReorder,
+                                                              proxyDecorator:
+                                                                  (child, index,
+                                                                      animation) {
+                                                                // ✅ 드래그 피드백: 그룹리스트와 동일하게 "마우스에 붙는 느낌"
+                                                                // - 살짝 확대 + 떠오르는 그림자
+                                                                return AnimatedBuilder(
+                                                                  animation:
+                                                                      animation,
+                                                                  builder:
+                                                                      (context,
+                                                                          _) {
+                                                                    final t = Curves
+                                                                        .easeOutCubic
+                                                                        .transform(
+                                                                            animation.value);
+                                                                    final scale = 1.0 +
+                                                                        (0.03 *
+                                                                            t);
+                                                                    final elev =
+                                                                        2.0 +
+                                                                            (8.0 *
+                                                                                t);
+                                                                    return Transform
+                                                                        .scale(
+                                                                      scale:
+                                                                          scale,
+                                                                      alignment:
+                                                                          Alignment
+                                                                              .centerLeft,
+                                                                      child:
+                                                                          Material(
+                                                                        color: Colors
+                                                                            .transparent,
+                                                                        elevation:
+                                                                            elev,
+                                                                        shadowColor: Colors
+                                                                            .black
+                                                                            .withOpacity(0.45),
+                                                                        child:
+                                                                            child,
+                                                                      ),
+                                                                    );
+                                                                  },
+                                                                );
+                                                              },
+                                                              itemBuilder:
+                                                                  (context,
+                                                                      idx) {
+                                                                final c =
+                                                                    classes[
+                                                                        idx];
+                                                                final bool
+                                                                    isFiltered =
+                                                                    filteredClassIds
+                                                                        .contains(
+                                                                            c.id);
+                                                                final card =
+                                                                    _ClassCard(
+                                                                  classInfo: c,
+                                                                  onEdit: () =>
+                                                                      _showClassRegistrationDialog(
+                                                                    editTarget:
+                                                                        c,
+                                                                    editIndex:
+                                                                        idx,
+                                                                  ),
+                                                                  onDelete: () =>
+                                                                      _deleteClass(
+                                                                          idx),
+                                                                  reorderIndex:
+                                                                      idx,
+                                                                  registrationModeType:
+                                                                      widget
+                                                                          .registrationModeType,
+                                                                  studentCountOverride:
+                                                                      null,
+                                                                  refDate:
+                                                                      _classCountRef,
+                                                                  onFilterToggle: widget
+                                                                              .onToggleClassFilter !=
+                                                                          null
+                                                                      ? () => widget
+                                                                          .onToggleClassFilter!(c)
+                                                                      : null,
+                                                                  isFiltered:
+                                                                      isFiltered,
+                                                                  showDragHandle:
+                                                                      false,
+                                                                );
+                                                                return Padding(
+                                                                  key: ValueKey(
+                                                                      c.id),
+                                                                  padding: const EdgeInsets
+                                                                      .only(
+                                                                      bottom:
+                                                                          12.0),
+                                                                  // ✅ 기본: 오래 눌러 수업 순서 이동(reorder)
+                                                                  // ✅ 단, 수업이 "선택(필터)"된 상태에서는 드래그=수업단위 이동(class-move)로 분기
+                                                                  child: isFiltered
+                                                                      ? card
+                                                                      : ReorderableDelayedDragStartListener(
+                                                                          index:
+                                                                              idx,
+                                                                          child:
+                                                                              card,
+                                                                        ),
+                                                                );
+                                                              },
+                                                            ),
+                                                    ),
+                                                  ],
+                                                );
+                                              },
+                                            );
+                                          },
                                         ),
-                                      ],
+                                      ),
                                     ],
-                                  ),
-                                ),
-                                const Spacer(),
-                                // ✅ 수업 추가 버튼: 타이틀 줄 오른쪽 정렬 + 기존 수업 등록 다이얼로그 연결
-                                Padding(
-                                  padding: const EdgeInsets.only(top: 8, right: 4),
-                                  child: SizedBox(
-                                    width: 48,
-                                    height: 48,
-                                    child: IconButton(
-                                      tooltip: '수업 추가',
-                                      onPressed: () => _showClassRegistrationDialog(),
-                                      icon: const Icon(Icons.add_rounded),
-                                      iconSize: 30,
-                                      color: const Color(0xFFEAF2F2),
-                                      padding: EdgeInsets.zero,
-                                      splashRadius: 26,
-                                    ),
                                   ),
                                 ),
                               ],
                             ),
-                            const SizedBox(height: 8),
-                            Expanded(
-                              child: ValueListenableBuilder<int>(
-                                valueListenable: DataManager
-                                    .instance.studentTimeBlocksRevision,
-                                builder: (context, __, ___) {
-                                  final int unassignedCount =
-                                      _unfilteredDefaultClassCount();
-                                  final filteredClassIds =
-                                      widget.filteredClassIds ??
-                                          const <String>{};
-
-                                  return ValueListenableBuilder<
-                                      List<ClassInfo>>(
-                                    valueListenable:
-                                        DataManager.instance.classesNotifier,
-                                    builder: (context, classes, ____) {
-                                      if (classes.isEmpty &&
-                                          unassignedCount == 0) {
-                                        return const Center(
-                                          child: Text('등록된 수업이 없습니다.',
-                                              style: TextStyle(
-                                                  color: Colors.white38,
-                                                  fontSize: 16)),
-                                        );
-                                      }
-
-                                      // 정원(수업 카드) 카운트는 "보고 있는 날짜(refDate)" 기준으로 계산한다.
-                                      // 주의: selectedCellStartTime의 날짜는 _selectedDate 기반으로 만들어져
-                                      // 실제 셀(요일 컬럼)의 날짜와 다를 수 있으므로, selectedCellDayIndex를 이용해
-                                      // 주의 월요일 + dayIndex로 실제 날짜를 계산한다.
-                                      DateTime? _selectedCellDateOnly() {
-                                        final idx = widget.selectedCellDayIndex;
-                                        if (idx == null) return null;
-                                        final monday = widget.viewDate.subtract(
-                                          Duration(days: widget.viewDate.weekday - DateTime.monday),
-                                        );
-                                        return DateTime(monday.year, monday.month, monday.day)
-                                            .add(Duration(days: idx));
-                                      }
-
-                                      final DateTime _baseRef =
-                                          widget.selectedDayDate ??
-                                              _selectedCellDateOnly() ??
-                                              widget.viewDate;
-                                      final DateTime _classCountRef =
-                                          DateTime(_baseRef.year, _baseRef.month, _baseRef.day);
-
-                                      return Column(
-                                        children: [
-                                          if (unassignedCount > 0) ...[
-                                            _ClassCard(
-                                              key: const ValueKey(
-                                                  '__default_class__'),
-                                              classInfo: ClassInfo(
-                                                id: '__default_class__',
-                                                name: '수업',
-                                                description: '기본 수업',
-                                                capacity: null,
-                                                color: const Color(0xFF223131),
-                                              ),
-                                              onEdit: () {},
-                                              onDelete: () {},
-                                              reorderIndex: -1,
-                                              registrationModeType:
-                                                  widget.registrationModeType,
-                                              studentCountOverride:
-                                                  unassignedCount,
-                                              refDate: _classCountRef,
-                                              enableActions: false,
-                                              showDragHandle: false,
-                                              onFilterToggle: widget
-                                                          .onToggleClassFilter !=
-                                                      null
-                                                  ? () =>
-                                                      widget.onToggleClassFilter!(
-                                                          ClassInfo(
-                                                        id: '__default_class__',
-                                                        name: '수업',
-                                                        description: '기본 수업',
-                                                        capacity: null,
-                                                        color: const Color(
-                                                            0xFF223131),
-                                                      ))
-                                                  : null,
-                                              isFiltered:
-                                                  filteredClassIds.contains(
-                                                      '__default_class__'),
-                                            ),
-                                            const SizedBox(height: 12),
-                                          ],
-                                          Expanded(
-                                            child: classes.isEmpty
-                                                ? SizedBox.shrink()
-                                                : ReorderableListView.builder(
-                                                    padding: EdgeInsets.zero,
-                                                    itemCount: classes.length,
-                                                    buildDefaultDragHandles:
-                                                        false,
-                                                    dragStartBehavior:
-                                                        DragStartBehavior.down,
-                                                    onReorder: _onReorder,
-                                                    proxyDecorator: (child,
-                                                        index, animation) {
-                                                      // ✅ 드래그 피드백: 그룹리스트와 동일하게 "마우스에 붙는 느낌"
-                                                      // - 살짝 확대 + 떠오르는 그림자
-                                                      return AnimatedBuilder(
-                                                        animation: animation,
-                                                        builder: (context, _) {
-                                                          final t =
-                                                              Curves.easeOutCubic
-                                                                  .transform(
-                                                                      animation
-                                                                          .value);
-                                                          final scale =
-                                                              1.0 + (0.03 * t);
-                                                          final elev =
-                                                              2.0 + (8.0 * t);
-                                                          return Transform.scale(
-                                                            scale: scale,
-                                                            alignment: Alignment
-                                                                .centerLeft,
-                                                            child: Material(
-                                                              color: Colors
-                                                                  .transparent,
-                                                              elevation: elev,
-                                                              shadowColor: Colors
-                                                                  .black
-                                                                  .withOpacity(
-                                                                      0.45),
-                                                              child: child,
-                                                            ),
-                                                          );
-                                                        },
-                                                      );
-                                                    },
-                                                    itemBuilder:
-                                                        (context, idx) {
-                                                      final c = classes[idx];
-                                                      final bool isFiltered = filteredClassIds.contains(c.id);
-                                                      final card = _ClassCard(
-                                                        classInfo: c,
-                                                        onEdit: () => _showClassRegistrationDialog(
-                                                          editTarget: c,
-                                                          editIndex: idx,
-                                                        ),
-                                                        onDelete: () => _deleteClass(idx),
-                                                        reorderIndex: idx,
-                                                        registrationModeType: widget.registrationModeType,
-                                                        studentCountOverride: null,
-                                                        refDate: _classCountRef,
-                                                        onFilterToggle: widget.onToggleClassFilter != null
-                                                            ? () => widget.onToggleClassFilter!(c)
-                                                            : null,
-                                                        isFiltered: isFiltered,
-                                                        showDragHandle: false,
-                                                      );
-                                                      return Padding(
-                                                        key: ValueKey(c.id),
-                                                        padding: const EdgeInsets.only(bottom: 12.0),
-                                                        // ✅ 기본: 오래 눌러 수업 순서 이동(reorder)
-                                                        // ✅ 단, 수업이 "선택(필터)"된 상태에서는 드래그=수업단위 이동(class-move)로 분기
-                                                        child: isFiltered
-                                                            ? card
-                                                            : ReorderableDelayedDragStartListener(
-                                                                index: idx,
-                                                                child: card,
-                                                              ),
-                                                      );
-                                                    },
-                                                  ),
-                                          ),
-                                        ],
-                                      );
-                                    },
-                                  );
-                                },
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-              if (widget.selectedCellDayIndex != null &&
-                  widget.selectedCellStartTime == null &&
-                  widget.selectedDayDate != null)
-                Positioned.fill(
-                  child: IgnorePointer(
-                    ignoring: false,
-                    child: Container(
-                      color: Colors.transparent,
-                      // 학생 패널과 동일한 좌우/하단 패딩을 적용해 폭/하단 정렬을 맞춤
-                      padding: EdgeInsets.only(
-                        left: 4,
-                        right: 8,
-                        bottom: 13, // 요일 선택 오버레이(초록 박스) 하단 외부 여백 +5
-                        top: _daySelectedOverlayTopPadding(context),
+                          ),
+                        ],
                       ),
-                      child: _buildDaySelectedOverlayPanel(),
-                    ),
+                      if (isClassListSheetOpen && hasActiveSearch)
+                        Positioned.fill(
+                          child: IgnorePointer(
+                            ignoring: false,
+                            child: Container(
+                              color: Colors.transparent,
+                              padding: EdgeInsets.only(
+                                left: dayOverlayLeftInset,
+                                right: classSheetContentRightInset,
+                                bottom: 13,
+                                top: _daySelectedOverlayTopPadding(context),
+                              ),
+                              child: _buildSearchResultPanel(overlayMode: true),
+                            ),
+                          ),
+                        ),
+                      if (isClassListSheetOpen &&
+                          !hasActiveSearch &&
+                          widget.selectedCellDayIndex != null &&
+                          widget.selectedCellStartTime == null &&
+                          widget.selectedDayDate != null)
+                        Positioned.fill(
+                          child: IgnorePointer(
+                            ignoring: false,
+                            child: Container(
+                              color: Colors.transparent,
+                              // 학생 패널과 동일한 좌우/하단 패딩을 적용해 폭/하단 정렬을 맞춤
+                              padding: EdgeInsets.only(
+                                left: dayOverlayLeftInset,
+                                right: classSheetContentRightInset,
+                                bottom: 13, // 요일 선택 오버레이(초록 박스) 하단 외부 여백 +5
+                                top: _daySelectedOverlayTopPadding(context),
+                              ),
+                              child: _buildDaySelectedOverlayPanel(),
+                            ),
+                          ),
+                        ),
+                    ],
                   ),
                 ),
-            ],
+              ),
+            ),
           ),
         ),
         const SizedBox(width: 24),
@@ -2535,7 +2434,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
 
     DateTime repDate = DateTime(rep.year, rep.month, rep.day);
     TimeOfDay repTime = TimeOfDay.fromDateTime(rep);
-    int durationMin = ov.durationMinutes ?? DataManager.instance.academySettings.lessonDuration;
+    int durationMin = ov.durationMinutes ??
+        DataManager.instance.academySettings.lessonDuration;
 
     Future<DateTime?> pickDate(DateTime initial) async {
       final picked = await showDatePicker(
@@ -2584,7 +2484,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
     String fmtDate(DateTime d) => '${d.year}.${two(d.month)}.${two(d.day)}';
     String fmtTime(TimeOfDay t) => '${two(t.hour)}:${two(t.minute)}';
 
-    final String kindLabel = ov.overrideType == OverrideType.replace ? '보강' : '추가수업';
+    final String kindLabel =
+        ov.overrideType == OverrideType.replace ? '보강' : '추가수업';
 
     final updated = await showDialog<SessionOverride>(
       context: context,
@@ -2598,7 +2499,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
           ),
           title: Text(
             '$kindLabel 수정',
-            style: const TextStyle(color: Color(0xFFEAF2F2), fontWeight: FontWeight.w900),
+            style: const TextStyle(
+                color: Color(0xFFEAF2F2), fontWeight: FontWeight.w900),
           ),
           content: SizedBox(
             width: 520,
@@ -2606,14 +2508,18 @@ class TimetableContentViewState extends State<TimetableContentView> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                if (ov.overrideType == OverrideType.replace && ov.originalClassDateTime != null) ...[
+                if (ov.overrideType == OverrideType.replace &&
+                    ov.originalClassDateTime != null) ...[
                   Text(
                     '원본: ${fmtDate(ov.originalClassDateTime!)} ${two(ov.originalClassDateTime!.hour)}:${two(ov.originalClassDateTime!.minute)}',
-                    style: const TextStyle(color: Colors.white54, fontWeight: FontWeight.w600),
+                    style: const TextStyle(
+                        color: Colors.white54, fontWeight: FontWeight.w600),
                   ),
                   const SizedBox(height: 12),
                 ],
-                const Text('보강 시간', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
+                const Text('보강 시간',
+                    style: TextStyle(
+                        color: Colors.white70, fontWeight: FontWeight.w700)),
                 const SizedBox(height: 10),
                 Row(
                   children: [
@@ -2622,7 +2528,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
                         onPressed: () async {
                           final picked = await pickDate(repDate);
                           if (picked == null) return;
-                          setState(() => repDate = DateTime(picked.year, picked.month, picked.day));
+                          setState(() => repDate =
+                              DateTime(picked.year, picked.month, picked.day));
                         },
                         child: Text('날짜: ${fmtDate(repDate)}'),
                       ),
@@ -2643,26 +2550,34 @@ class TimetableContentViewState extends State<TimetableContentView> {
                 const SizedBox(height: 14),
                 Row(
                   children: [
-                    const Text('기간(분)', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
+                    const Text('기간(분)',
+                        style: TextStyle(
+                            color: Colors.white70,
+                            fontWeight: FontWeight.w700)),
                     const SizedBox(width: 12),
                     SizedBox(
                       width: 120,
                       child: TextFormField(
                         initialValue: durationMin.toString(),
                         keyboardType: TextInputType.number,
-                        style: const TextStyle(color: Color(0xFFEAF2F2), fontWeight: FontWeight.w700),
+                        style: const TextStyle(
+                            color: Color(0xFFEAF2F2),
+                            fontWeight: FontWeight.w700),
                         decoration: InputDecoration(
                           filled: true,
                           fillColor: const Color(0xFF15171C),
                           isDense: true,
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 10),
                           enabledBorder: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(10),
-                            borderSide: const BorderSide(color: Color(0xFF223131)),
+                            borderSide:
+                                const BorderSide(color: Color(0xFF223131)),
                           ),
                           focusedBorder: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(10),
-                            borderSide: const BorderSide(color: Color(0xFF1B6B63), width: 2),
+                            borderSide: const BorderSide(
+                                color: Color(0xFF1B6B63), width: 2),
                           ),
                         ),
                         onChanged: (v) {
@@ -2674,7 +2589,10 @@ class TimetableContentViewState extends State<TimetableContentView> {
                       ),
                     ),
                     const SizedBox(width: 8),
-                    const Text('분', style: TextStyle(color: Colors.white54, fontWeight: FontWeight.w700)),
+                    const Text('분',
+                        style: TextStyle(
+                            color: Colors.white54,
+                            fontWeight: FontWeight.w700)),
                   ],
                 ),
               ],
@@ -2683,11 +2601,14 @@ class TimetableContentViewState extends State<TimetableContentView> {
           actions: [
             TextButton(
               onPressed: () => Navigator.of(ctx).pop(null),
-              child: const Text('취소', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
+              child: const Text('취소',
+                  style: TextStyle(
+                      color: Colors.white70, fontWeight: FontWeight.w700)),
             ),
             TextButton(
               onPressed: () {
-                final repDt = DateTime(repDate.year, repDate.month, repDate.day, repTime.hour, repTime.minute);
+                final repDt = DateTime(repDate.year, repDate.month, repDate.day,
+                    repTime.hour, repTime.minute);
                 final next = ov.copyWith(
                   replacementClassDateTime: repDt,
                   durationMinutes: durationMin,
@@ -2698,9 +2619,11 @@ class TimetableContentViewState extends State<TimetableContentView> {
               style: TextButton.styleFrom(
                 backgroundColor: const Color(0xFF1B6B63),
                 foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
               ),
-              child: const Text('저장', style: TextStyle(fontWeight: FontWeight.w900)),
+              child: const Text('저장',
+                  style: TextStyle(fontWeight: FontWeight.w900)),
             ),
           ],
         ),
@@ -2721,7 +2644,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
   }
 
   Future<void> _confirmAndCancelMakeupOverride(SessionOverride ov) async {
-    final String kindLabel = ov.overrideType == OverrideType.replace ? '보강' : '추가수업';
+    final String kindLabel =
+        ov.overrideType == OverrideType.replace ? '보강' : '추가수업';
     final ok = await showDialog<bool>(
       context: context,
       barrierDismissible: true,
@@ -2731,15 +2655,20 @@ class TimetableContentViewState extends State<TimetableContentView> {
           borderRadius: BorderRadius.circular(16),
           side: const BorderSide(color: Color(0xFF223131)),
         ),
-        title: Text('$kindLabel 삭제', style: const TextStyle(color: Color(0xFFEAF2F2), fontWeight: FontWeight.w900)),
+        title: Text('$kindLabel 삭제',
+            style: const TextStyle(
+                color: Color(0xFFEAF2F2), fontWeight: FontWeight.w900)),
         content: Text(
           '정말로 이 $kindLabel을 삭제할까요?\n(삭제된 항목은 보강 관리에서 확인할 수 있습니다)',
-          style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w600, height: 1.35),
+          style: const TextStyle(
+              color: Colors.white70, fontWeight: FontWeight.w600, height: 1.35),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('취소', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
+            child: const Text('취소',
+                style: TextStyle(
+                    color: Colors.white70, fontWeight: FontWeight.w700)),
           ),
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(true),
@@ -2748,7 +2677,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
               foregroundColor: Colors.white,
               padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
             ),
-            child: const Text('삭제', style: TextStyle(fontWeight: FontWeight.w900)),
+            child:
+                const Text('삭제', style: TextStyle(fontWeight: FontWeight.w900)),
           ),
         ],
       ),
@@ -2783,7 +2713,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
     }
   }
 
-  Future<void> _confirmAndRemoveInquirySlot(ConsultInquiryDemandSlot slot) async {
+  Future<void> _confirmAndRemoveInquirySlot(
+      ConsultInquiryDemandSlot slot) async {
     final noteId = slot.sourceNoteId.trim();
     if (noteId.isEmpty) return;
     final ok = await showDialog<bool>(
@@ -2795,15 +2726,20 @@ class TimetableContentViewState extends State<TimetableContentView> {
           borderRadius: BorderRadius.circular(16),
           side: const BorderSide(color: Color(0xFF223131)),
         ),
-        title: const Text('희망수업 삭제', style: TextStyle(color: Color(0xFFEAF2F2), fontWeight: FontWeight.w900)),
+        title: const Text('희망수업 삭제',
+            style: TextStyle(
+                color: Color(0xFFEAF2F2), fontWeight: FontWeight.w900)),
         content: const Text(
           '이 희망수업 시간을 삭제할까요?',
-          style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w600, height: 1.35),
+          style: TextStyle(
+              color: Colors.white70, fontWeight: FontWeight.w600, height: 1.35),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('취소', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
+            child: const Text('취소',
+                style: TextStyle(
+                    color: Colors.white70, fontWeight: FontWeight.w700)),
           ),
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(true),
@@ -2812,7 +2748,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
               foregroundColor: Colors.white,
               padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
             ),
-            child: const Text('삭제', style: TextStyle(fontWeight: FontWeight.w900)),
+            child:
+                const Text('삭제', style: TextStyle(fontWeight: FontWeight.w900)),
           ),
         ],
       ),
@@ -2821,9 +2758,15 @@ class TimetableContentViewState extends State<TimetableContentView> {
 
     try {
       await ConsultInquiryDemandService.instance.load();
-      final all = ConsultInquiryDemandService.instance.slots.where((s) => s.sourceNoteId == noteId).toList();
-      final removeKey = ConsultInquiryDemandService.slotKey(slot.dayIndex, slot.hour, slot.minute);
-      final remain = all.map((s) => ConsultInquiryDemandService.slotKey(s.dayIndex, s.hour, s.minute)).toSet();
+      final all = ConsultInquiryDemandService.instance.slots
+          .where((s) => s.sourceNoteId == noteId)
+          .toList();
+      final removeKey = ConsultInquiryDemandService.slotKey(
+          slot.dayIndex, slot.hour, slot.minute);
+      final remain = all
+          .map((s) =>
+              ConsultInquiryDemandService.slotKey(s.dayIndex, s.hour, s.minute))
+          .toSet();
       remain.remove(removeKey);
       if (remain.isEmpty) {
         await ConsultInquiryDemandService.instance.removeForNote(noteId);
@@ -2872,7 +2815,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
                 hoverColor: Colors.white.withOpacity(0.03),
                 child: const SizedBox.expand(
                   child: Center(
-                    child: Icon(Icons.edit_outlined, color: Color(0xFFEAF2F2), size: 18),
+                    child: Icon(Icons.edit_outlined,
+                        color: Color(0xFFEAF2F2), size: 18),
                   ),
                 ),
               ),
@@ -2891,7 +2835,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
                 hoverColor: Colors.white.withOpacity(0.04),
                 child: const SizedBox.expand(
                   child: Center(
-                    child: Icon(Icons.delete_outline_rounded, color: Colors.white, size: 18),
+                    child: Icon(Icons.delete_outline_rounded,
+                        color: Colors.white, size: 18),
                   ),
                 ),
               ),
@@ -2946,14 +2891,17 @@ class TimetableContentViewState extends State<TimetableContentView> {
     required int blockNumber,
   }) {
     // ✅ 학생카드와 동일한 레이아웃/패딩/라운드 + 배경색만 tint
-    // - number(1..N)는 기존 blockNumber 위치에 표시
     // - 학교명 위치에는 kind(보강/추가/희망/시범)를 표시
-    final nameStyle = const TextStyle(color: Color(0xFFEAF2F2), fontSize: 16, fontWeight: FontWeight.w600);
-    final metaStyle = const TextStyle(color: Colors.white60, fontSize: 13, fontWeight: FontWeight.w500);
-    final kindStyle = TextStyle(color: Colors.white.withOpacity(0.62), fontSize: 13, fontWeight: FontWeight.w700);
+    final nameStyle = const TextStyle(
+        color: Color(0xFFEAF2F2), fontSize: 16, fontWeight: FontWeight.w600);
+    final kindStyle = TextStyle(
+        color: Colors.white.withOpacity(0.62),
+        fontSize: 13,
+        fontWeight: FontWeight.w700);
     // ✅ SwipeActionReveal 뒤 패널이 "비치지" 않도록 카드 배경은 항상 불투명(opaque) 컬러로 만든다.
     // - base 색은 alphaBlend로 섞어 "톤"만 주되 최종 alpha=1 유지
-    final Color bg = Color.alphaBlend(base.withOpacity(0.18), const Color(0xFF15171C));
+    final Color bg =
+        Color.alphaBlend(base.withOpacity(0.18), const Color(0xFF15171C));
     final Color borderC = base.withOpacity(0.35);
     return AnimatedContainer(
       duration: const Duration(milliseconds: 140),
@@ -2993,8 +2941,6 @@ class TimetableContentViewState extends State<TimetableContentView> {
                           maxLines: 1,
                         ),
                       ),
-                      const SizedBox(width: 10),
-                      Text('$blockNumber', style: metaStyle, maxLines: 1, overflow: TextOverflow.ellipsis),
                     ],
                   ),
                 ),
@@ -3013,13 +2959,161 @@ class TimetableContentViewState extends State<TimetableContentView> {
     );
   }
 
+  List<TimelineExtraCardEntry> _specialTimelineCardsForCell({
+    required int dayIdx,
+    required DateTime startTime,
+  }) {
+    final List<TimelineExtraCardEntry> out = <TimelineExtraCardEntry>[];
+    final cellYmd = _cellDateOnlyForDayIndex(dayIdx);
+    final cell = DateTime(cellYmd.year, cellYmd.month, cellYmd.day,
+        startTime.hour, startTime.minute);
+    final weekStart = _weekMonday(cellYmd);
+    final int lessonMin = DataManager.instance.academySettings.lessonDuration;
+    const int blockMinutes = 30;
+    final int cellMin = cell.hour * 60 + cell.minute;
+
+    void addTimelineEntry({
+      required Widget card,
+      required int startMinute,
+      required int durationMinutes,
+    }) {
+      final safeDuration = durationMinutes <= 0 ? lessonMin : durationMinutes;
+      out.add(TimelineExtraCardEntry(
+        card: card,
+        startMinute: startMinute,
+        durationMinutes: safeDuration,
+      ));
+    }
+
+    for (final ov in DataManager.instance.sessionOverrides) {
+      if (ov.reason != OverrideReason.makeup) continue;
+      if (!(ov.overrideType == OverrideType.add ||
+          ov.overrideType == OverrideType.replace)) continue;
+      if (ov.status == OverrideStatus.canceled) continue;
+      final rep = ov.replacementClassDateTime;
+      if (rep == null) continue;
+      final bool sameYmd = rep.year == cell.year &&
+          rep.month == cell.month &&
+          rep.day == cell.day;
+      if (!sameYmd) continue;
+      final int durationMin =
+          (ov.durationMinutes ?? lessonMin).clamp(0, 24 * 60);
+      if (durationMin <= 0) continue;
+      final int repStartMin = rep.hour * 60 + rep.minute;
+      final int repEndMin = repStartMin + durationMin;
+      if (!(cellMin >= repStartMin && cellMin < repEndMin)) continue;
+      final int number = ((cellMin - repStartMin) ~/ blockMinutes) + 1;
+      StudentWithInfo? s;
+      try {
+        s = DataManager.instance.students
+            .firstWhere((x) => x.student.id == ov.studentId);
+      } catch (_) {
+        s = null;
+      }
+      final name = s?.student.name ?? '학생';
+
+      final isReplace = ov.overrideType == OverrideType.replace;
+      final core = _buildSpecialSlotCard(
+        kind: isReplace ? '보강' : '추가',
+        title: name,
+        base: isReplace ? _kMakeupBlue : _kAddGreen,
+        blockNumber: number,
+      );
+      final draggable = _wrapDraggableSpecialCard(
+        dragData: <String, dynamic>{
+          'type': 'override-move',
+          'overrideId': ov.id,
+          'oldDayIndex': dayIdx,
+          'oldStartTime': rep,
+        },
+        child: core,
+        feedback: core,
+      );
+
+      final card = widget.isSelectMode
+          ? core
+          : _wrapSwipeActions(
+              child: draggable,
+              onEdit: () => _editMakeupOverride(ov),
+              onDelete: () => _confirmAndCancelMakeupOverride(ov),
+            );
+      addTimelineEntry(
+        card: card,
+        startMinute: repStartMin,
+        durationMinutes: durationMin,
+      );
+    }
+
+    final inquiry =
+        ConsultInquiryDemandService.instance.slotsBySlotKeyForWeek(weekStart);
+    for (final list in inquiry.values) {
+      for (final s in list) {
+        if (s.dayIndex != dayIdx) continue;
+        final int base = s.hour * 60 + s.minute;
+        final int end = base + lessonMin;
+        if (!(cellMin >= base && cellMin < end)) continue;
+        final int number = ((cellMin - base) ~/ blockMinutes) + 1;
+        final core = _buildSpecialSlotCard(
+            kind: '희망',
+            title: s.title,
+            base: _kInquiryOrange,
+            blockNumber: number);
+        final card = widget.isSelectMode
+            ? core
+            : _wrapSwipeActions(
+                child: _wrapDraggableSpecialCard(
+                  dragData: <String, dynamic>{
+                    'type': 'inquiry-move',
+                    'noteId': s.sourceNoteId,
+                    'oldKey': ConsultInquiryDemandService.slotKey(
+                        s.dayIndex, s.hour, s.minute),
+                  },
+                  child: core,
+                  feedback: core,
+                ),
+                onEdit: () => _openConsultNote(s.sourceNoteId),
+                onDelete: () => _confirmAndRemoveInquirySlot(s),
+              );
+        addTimelineEntry(
+          card: card,
+          startMinute: base,
+          durationMinutes: lessonMin,
+        );
+      }
+    }
+
+    final trial =
+        ConsultTrialLessonService.instance.slotsBySlotKeyForWeek(weekStart);
+    for (final list in trial.values) {
+      for (final s in list) {
+        if (s.dayIndex != dayIdx) continue;
+        final int base = s.hour * 60 + s.minute;
+        final int end = base + lessonMin;
+        if (!(cellMin >= base && cellMin < end)) continue;
+        final int number = ((cellMin - base) ~/ blockMinutes) + 1;
+        addTimelineEntry(
+          card: _buildSpecialSlotCard(
+              kind: '시범',
+              title: s.title,
+              base: _kAddGreen,
+              blockNumber: number),
+          startMinute: base,
+          durationMinutes: lessonMin,
+        );
+      }
+    }
+
+    return out;
+  }
+
   List<Widget> _specialCardsForCell({
     required int dayIdx,
     required DateTime startTime,
   }) {
     final List<Widget> out = <Widget>[];
     final cellYmd = _cellDateOnlyForDayIndex(dayIdx);
-    final cell = DateTime(cellYmd.year, cellYmd.month, cellYmd.day, startTime.hour, startTime.minute);
+    final cell = DateTime(cellYmd.year, cellYmd.month, cellYmd.day,
+        startTime.hour, startTime.minute);
     final weekStart = _weekMonday(cellYmd);
     final int lessonMin = DataManager.instance.academySettings.lessonDuration;
     const int blockMinutes = 30;
@@ -3028,13 +3122,17 @@ class TimetableContentViewState extends State<TimetableContentView> {
     // 1) 보강/추가수업(일회성): replacementClassDateTime이 셀 시간과 정확히 일치할 때만 표시
     for (final ov in DataManager.instance.sessionOverrides) {
       if (ov.reason != OverrideReason.makeup) continue;
-      if (!(ov.overrideType == OverrideType.add || ov.overrideType == OverrideType.replace)) continue;
+      if (!(ov.overrideType == OverrideType.add ||
+          ov.overrideType == OverrideType.replace)) continue;
       if (ov.status == OverrideStatus.canceled) continue;
       final rep = ov.replacementClassDateTime;
       if (rep == null) continue;
-      final bool sameYmd = rep.year == cell.year && rep.month == cell.month && rep.day == cell.day;
+      final bool sameYmd = rep.year == cell.year &&
+          rep.month == cell.month &&
+          rep.day == cell.day;
       if (!sameYmd) continue;
-      final int durationMin = (ov.durationMinutes ?? lessonMin).clamp(0, 24 * 60);
+      final int durationMin =
+          (ov.durationMinutes ?? lessonMin).clamp(0, 24 * 60);
       if (durationMin <= 0) continue;
       final int repStartMin = rep.hour * 60 + rep.minute;
       final int repEndMin = repStartMin + durationMin;
@@ -3042,13 +3140,15 @@ class TimetableContentViewState extends State<TimetableContentView> {
       final int number = ((cellMin - repStartMin) ~/ blockMinutes) + 1;
       StudentWithInfo? s;
       try {
-        s = DataManager.instance.students.firstWhere((x) => x.student.id == ov.studentId);
+        s = DataManager.instance.students
+            .firstWhere((x) => x.student.id == ov.studentId);
       } catch (_) {
         s = null;
       }
       final name = s?.student.name ?? '학생';
       if (ov.overrideType == OverrideType.replace) {
-        final core = _buildSpecialSlotCard(kind: '보강', title: name, base: _kMakeupBlue, blockNumber: number);
+        final core = _buildSpecialSlotCard(
+            kind: '보강', title: name, base: _kMakeupBlue, blockNumber: number);
         final draggable = _wrapDraggableSpecialCard(
           dragData: <String, dynamic>{
             'type': 'override-move',
@@ -3080,7 +3180,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
                       hoverColor: Colors.white.withOpacity(0.03),
                       child: const SizedBox.expand(
                         child: Center(
-                          child: Icon(Icons.edit_outlined, color: Color(0xFFEAF2F2), size: 18),
+                          child: Icon(Icons.edit_outlined,
+                              color: Color(0xFFEAF2F2), size: 18),
                         ),
                       ),
                     ),
@@ -3099,7 +3200,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
                       hoverColor: Colors.white.withOpacity(0.04),
                       child: const SizedBox.expand(
                         child: Center(
-                          child: Icon(Icons.delete_outline_rounded, color: Colors.white, size: 18),
+                          child: Icon(Icons.delete_outline_rounded,
+                              color: Colors.white, size: 18),
                         ),
                       ),
                     ),
@@ -3117,7 +3219,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
           ));
         }
       } else {
-        final core = _buildSpecialSlotCard(kind: '추가', title: name, base: _kAddGreen, blockNumber: number);
+        final core = _buildSpecialSlotCard(
+            kind: '추가', title: name, base: _kAddGreen, blockNumber: number);
         final draggable = _wrapDraggableSpecialCard(
           dragData: <String, dynamic>{
             'type': 'override-move',
@@ -3149,7 +3252,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
                       hoverColor: Colors.white.withOpacity(0.03),
                       child: const SizedBox.expand(
                         child: Center(
-                          child: Icon(Icons.edit_outlined, color: Color(0xFFEAF2F2), size: 18),
+                          child: Icon(Icons.edit_outlined,
+                              color: Color(0xFFEAF2F2), size: 18),
                         ),
                       ),
                     ),
@@ -3168,7 +3272,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
                       hoverColor: Colors.white.withOpacity(0.04),
                       child: const SizedBox.expand(
                         child: Center(
-                          child: Icon(Icons.delete_outline_rounded, color: Colors.white, size: 18),
+                          child: Icon(Icons.delete_outline_rounded,
+                              color: Colors.white, size: 18),
                         ),
                       ),
                     ),
@@ -3189,7 +3294,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
     }
 
     // 2) 희망수업(문의): startWeek <= 현재 주의 Monday인 슬롯만 표시
-    final inquiry = ConsultInquiryDemandService.instance.slotsBySlotKeyForWeek(weekStart);
+    final inquiry =
+        ConsultInquiryDemandService.instance.slotsBySlotKeyForWeek(weekStart);
     for (final list in inquiry.values) {
       for (final s in list) {
         if (s.dayIndex != dayIdx) continue;
@@ -3197,7 +3303,11 @@ class TimetableContentViewState extends State<TimetableContentView> {
         final int end = base + lessonMin;
         if (!(cellMin >= base && cellMin < end)) continue;
         final int number = ((cellMin - base) ~/ blockMinutes) + 1;
-        final core = _buildSpecialSlotCard(kind: '희망', title: s.title, base: _kInquiryOrange, blockNumber: number);
+        final core = _buildSpecialSlotCard(
+            kind: '희망',
+            title: s.title,
+            base: _kInquiryOrange,
+            blockNumber: number);
         if (widget.isSelectMode) {
           out.add(core);
         } else {
@@ -3205,7 +3315,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
             dragData: <String, dynamic>{
               'type': 'inquiry-move',
               'noteId': s.sourceNoteId,
-              'oldKey': ConsultInquiryDemandService.slotKey(s.dayIndex, s.hour, s.minute),
+              'oldKey': ConsultInquiryDemandService.slotKey(
+                  s.dayIndex, s.hour, s.minute),
             },
             child: core,
             feedback: core,
@@ -3215,7 +3326,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
     }
 
     // 3) 시범수업(일회성): 해당 주에만 표시
-    final trial = ConsultTrialLessonService.instance.slotsBySlotKeyForWeek(weekStart);
+    final trial =
+        ConsultTrialLessonService.instance.slotsBySlotKeyForWeek(weekStart);
     for (final list in trial.values) {
       for (final s in list) {
         if (s.dayIndex != dayIdx) continue;
@@ -3223,7 +3335,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
         final int end = base + lessonMin;
         if (!(cellMin >= base && cellMin < end)) continue;
         final int number = ((cellMin - base) ~/ blockMinutes) + 1;
-        out.add(_buildSpecialSlotCard(kind: '시범', title: s.title, base: _kAddGreen, blockNumber: number));
+        out.add(_buildSpecialSlotCard(
+            kind: '시범', title: s.title, base: _kAddGreen, blockNumber: number));
       }
     }
 
@@ -3235,7 +3348,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
     required int dayIdx,
   }) {
     final out = <String, List<Widget>>{};
-    String hhmm(int h, int m) => '${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}';
+    String hhmm(int h, int m) =>
+        '${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}';
     void add(int h, int m, Widget w) {
       final k = hhmm(h, m);
       (out[k] ??= <Widget>[]).add(w);
@@ -3248,22 +3362,27 @@ class TimetableContentViewState extends State<TimetableContentView> {
     // 보강/추가수업
     for (final ov in DataManager.instance.sessionOverrides) {
       if (ov.reason != OverrideReason.makeup) continue;
-      if (!(ov.overrideType == OverrideType.add || ov.overrideType == OverrideType.replace)) continue;
+      if (!(ov.overrideType == OverrideType.add ||
+          ov.overrideType == OverrideType.replace)) continue;
       if (ov.status == OverrideStatus.canceled) continue;
       final rep = ov.replacementClassDateTime;
       if (rep == null) continue;
       final repYmd = _dateOnly(rep);
-      if (repYmd.year != ymd.year || repYmd.month != ymd.month || repYmd.day != ymd.day) continue;
+      if (repYmd.year != ymd.year ||
+          repYmd.month != ymd.month ||
+          repYmd.day != ymd.day) continue;
       StudentWithInfo? s;
       try {
-        s = DataManager.instance.students.firstWhere((x) => x.student.id == ov.studentId);
+        s = DataManager.instance.students
+            .firstWhere((x) => x.student.id == ov.studentId);
       } catch (_) {
         s = null;
       }
       final name = s?.student.name ?? '학생';
       // ✅ 요일 선택 리스트에서는 시작 슬롯(1번)만 표시
       if (ov.overrideType == OverrideType.replace) {
-        final core = _buildSpecialSlotCard(kind: '보강', title: name, base: _kMakeupBlue, blockNumber: 1);
+        final core = _buildSpecialSlotCard(
+            kind: '보강', title: name, base: _kMakeupBlue, blockNumber: 1);
         final draggable = _wrapDraggableSpecialCard(
           dragData: <String, dynamic>{
             'type': 'override-move',
@@ -3284,7 +3403,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
           ),
         );
       } else {
-        final core = _buildSpecialSlotCard(kind: '추가', title: name, base: _kAddGreen, blockNumber: 1);
+        final core = _buildSpecialSlotCard(
+            kind: '추가', title: name, base: _kAddGreen, blockNumber: 1);
         final draggable = _wrapDraggableSpecialCard(
           dragData: <String, dynamic>{
             'type': 'override-move',
@@ -3308,17 +3428,20 @@ class TimetableContentViewState extends State<TimetableContentView> {
     }
 
     // 희망수업(문의)
-    final inquiry = ConsultInquiryDemandService.instance.slotsBySlotKeyForWeek(weekStart);
+    final inquiry =
+        ConsultInquiryDemandService.instance.slotsBySlotKeyForWeek(weekStart);
     for (final list in inquiry.values) {
       for (final s in list) {
         if (s.dayIndex != dayIdx) continue;
         // ✅ 요일 선택 리스트에서는 시작 슬롯(1번)만 표시
-        final core = _buildSpecialSlotCard(kind: '희망', title: s.title, base: _kInquiryOrange, blockNumber: 1);
+        final core = _buildSpecialSlotCard(
+            kind: '희망', title: s.title, base: _kInquiryOrange, blockNumber: 1);
         final draggable = _wrapDraggableSpecialCard(
           dragData: <String, dynamic>{
             'type': 'inquiry-move',
             'noteId': s.sourceNoteId,
-            'oldKey': ConsultInquiryDemandService.slotKey(s.dayIndex, s.hour, s.minute),
+            'oldKey': ConsultInquiryDemandService.slotKey(
+                s.dayIndex, s.hour, s.minute),
           },
           child: core,
           feedback: core,
@@ -3336,12 +3459,17 @@ class TimetableContentViewState extends State<TimetableContentView> {
     }
 
     // 시범수업
-    final trial = ConsultTrialLessonService.instance.slotsBySlotKeyForWeek(weekStart);
+    final trial =
+        ConsultTrialLessonService.instance.slotsBySlotKeyForWeek(weekStart);
     for (final list in trial.values) {
       for (final s in list) {
         if (s.dayIndex != dayIdx) continue;
         // ✅ 요일 선택 리스트에서는 시작 슬롯(1번)만 표시
-        add(s.hour, s.minute, _buildSpecialSlotCard(kind: '시범', title: s.title, base: _kAddGreen, blockNumber: 1));
+        add(
+            s.hour,
+            s.minute,
+            _buildSpecialSlotCard(
+                kind: '시범', title: s.title, base: _kAddGreen, blockNumber: 1));
       }
     }
 
@@ -3363,7 +3491,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
   }) {
     final ref = _dateOnly(refDate);
     final weekStart = _weekMonday(ref);
-    final weekBlocks = DataManager.instance.getStudentTimeBlocksForWeek(weekStart);
+    final weekBlocks =
+        DataManager.instance.getStudentTimeBlocksForWeek(weekStart);
     final candidates = weekBlocks.where((b) {
       if (b.studentId != studentId) return false;
       if (b.dayIndex != dayIdx) return false;
@@ -3378,11 +3507,13 @@ class TimetableContentViewState extends State<TimetableContentView> {
     return candidates.isEmpty ? null : candidates.first;
   }
 
-  Future<void> _showEditBlockDateRangeDialog(BuildContext context, StudentTimeBlock block) async {
+  Future<void> _showEditBlockDateRangeDialog(
+      BuildContext context, StudentTimeBlock block) async {
     DateTime start = _dateOnly(block.startDate);
     DateTime? end = block.endDate == null ? null : _dateOnly(block.endDate!);
 
-    String fmt(DateTime d) => '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+    String fmt(DateTime d) =>
+        '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
     final ok = await showDialog<bool>(
       context: context,
@@ -3391,7 +3522,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
           backgroundColor: const Color(0xFF0B1112),
           title: const Text(
             '수업기간 수정',
-            style: TextStyle(color: Color(0xFFEAF2F2), fontWeight: FontWeight.w800),
+            style: TextStyle(
+                color: Color(0xFFEAF2F2), fontWeight: FontWeight.w800),
           ),
           content: StatefulBuilder(
             builder: (ctx, setLocal) {
@@ -3425,13 +3557,17 @@ class TimetableContentViewState extends State<TimetableContentView> {
                     children: [
                       const SizedBox(
                         width: 76,
-                        child: Text('시작', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
+                        child: Text('시작',
+                            style: TextStyle(
+                                color: Colors.white70,
+                                fontWeight: FontWeight.w700)),
                       ),
                       Expanded(
                         child: OutlinedButton(
                           onPressed: pickStart,
                           style: OutlinedButton.styleFrom(
-                            side: BorderSide(color: Colors.white.withOpacity(0.18)),
+                            side: BorderSide(
+                                color: Colors.white.withOpacity(0.18)),
                             foregroundColor: const Color(0xFFEAF2F2),
                           ),
                           child: Text(fmt(start)),
@@ -3444,13 +3580,17 @@ class TimetableContentViewState extends State<TimetableContentView> {
                     children: [
                       const SizedBox(
                         width: 76,
-                        child: Text('종료', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
+                        child: Text('종료',
+                            style: TextStyle(
+                                color: Colors.white70,
+                                fontWeight: FontWeight.w700)),
                       ),
                       Expanded(
                         child: OutlinedButton(
                           onPressed: end == null ? null : pickEnd,
                           style: OutlinedButton.styleFrom(
-                            side: BorderSide(color: Colors.white.withOpacity(0.18)),
+                            side: BorderSide(
+                                color: Colors.white.withOpacity(0.18)),
                             foregroundColor: const Color(0xFFEAF2F2),
                           ),
                           child: Text(end == null ? '없음(무기한)' : fmt(end!)),
@@ -3461,16 +3601,23 @@ class TimetableContentViewState extends State<TimetableContentView> {
                   const SizedBox(height: 10),
                   CheckboxListTile(
                     value: end == null,
-                    onChanged: (v) => setLocal(() => end = (v == true) ? null : start),
+                    onChanged: (v) =>
+                        setLocal(() => end = (v == true) ? null : start),
                     dense: true,
                     contentPadding: EdgeInsets.zero,
                     activeColor: const Color(0xFF33A373),
-                    title: const Text('종료일 없음(무기한)', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
+                    title: const Text('종료일 없음(무기한)',
+                        style: TextStyle(
+                            color: Colors.white70,
+                            fontWeight: FontWeight.w700)),
                   ),
                   const SizedBox(height: 6),
                   Text(
                     '(${block.dayIndex} ${block.startHour.toString().padLeft(2, '0')}:${block.startMinute.toString().padLeft(2, '0')})',
-                    style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 12, fontWeight: FontWeight.w600),
+                    style: TextStyle(
+                        color: Colors.white.withOpacity(0.45),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600),
                   ),
                 ],
               );
@@ -3479,11 +3626,15 @@ class TimetableContentViewState extends State<TimetableContentView> {
           actions: [
             TextButton(
               onPressed: () => Navigator.of(ctx).pop(false),
-              child: const Text('취소', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
+              child: const Text('취소',
+                  style: TextStyle(
+                      color: Colors.white70, fontWeight: FontWeight.w700)),
             ),
             TextButton(
               onPressed: () => Navigator.of(ctx).pop(true),
-              child: const Text('저장', style: TextStyle(color: Color(0xFF33A373), fontWeight: FontWeight.w800)),
+              child: const Text('저장',
+                  style: TextStyle(
+                      color: Color(0xFF33A373), fontWeight: FontWeight.w800)),
             ),
           ],
         );
@@ -3514,7 +3665,9 @@ class TimetableContentViewState extends State<TimetableContentView> {
   }) async {
     final date = _dateOnly(refDate);
     final today = _dateOnly(DateTime.now());
-    final bool isToday = date.year == today.year && date.month == today.month && date.day == today.day;
+    final bool isToday = date.year == today.year &&
+        date.month == today.month &&
+        date.day == today.day;
     final String dateLabel = '${date.month}/${date.day}';
     final String deleteStartLabel = isToday ? '내일부터' : '선택한 날짜($dateLabel)부터';
     final setId = (block.setId ?? '').trim();
@@ -3533,26 +3686,37 @@ class TimetableContentViewState extends State<TimetableContentView> {
           context: context,
           builder: (ctx) => AlertDialog(
             backgroundColor: const Color(0xFF0B1112),
-            title: const Text('수업시간 삭제', style: TextStyle(color: Color(0xFFEAF2F2), fontWeight: FontWeight.w800)),
+            title: const Text('수업시간 삭제',
+                style: TextStyle(
+                    color: Color(0xFFEAF2F2), fontWeight: FontWeight.w800)),
             content: Text(
               '$deleteStartLabel 수업시간을 삭제할까요?\n'
               '또한, 같은 수업(set_id)에 미래 시작 일정이 있습니다.\n\n'
               '- 이번 일정만: 선택 날짜까지 유지 후 종료(미래 일정 유지)\n'
               '- 미래도 삭제: 선택 날짜까지 유지 후 종료 + 미래 일정 삭제',
-              style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w600, height: 1.35),
+              style: const TextStyle(
+                  color: Colors.white70,
+                  fontWeight: FontWeight.w600,
+                  height: 1.35),
             ),
             actions: [
               TextButton(
                 onPressed: () => Navigator.of(ctx).pop(null),
-                child: const Text('취소', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
+                child: const Text('취소',
+                    style: TextStyle(
+                        color: Colors.white70, fontWeight: FontWeight.w700)),
               ),
               TextButton(
                 onPressed: () => Navigator.of(ctx).pop(false),
-                child: const Text('이번 일정만', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w800)),
+                child: const Text('이번 일정만',
+                    style: TextStyle(
+                        color: Colors.white70, fontWeight: FontWeight.w800)),
               ),
               TextButton(
                 onPressed: () => Navigator.of(ctx).pop(true),
-                child: const Text('미래도 삭제', style: TextStyle(color: Color(0xFFB74C4C), fontWeight: FontWeight.w900)),
+                child: const Text('미래도 삭제',
+                    style: TextStyle(
+                        color: Color(0xFFB74C4C), fontWeight: FontWeight.w900)),
               ),
             ],
           ),
@@ -3564,20 +3728,27 @@ class TimetableContentViewState extends State<TimetableContentView> {
           context: context,
           builder: (ctx) => AlertDialog(
             backgroundColor: const Color(0xFF0B1112),
-            title: const Text('수업시간 삭제', style: TextStyle(color: Color(0xFFEAF2F2), fontWeight: FontWeight.w800)),
+            title: const Text('수업시간 삭제',
+                style: TextStyle(
+                    color: Color(0xFFEAF2F2), fontWeight: FontWeight.w800)),
             content: Text(
               '$deleteStartLabel 해당 수업시간을 삭제할까요?\n'
               '(과거 수업기록/출석기록은 삭제하지 않고, 기간만 종료 처리됩니다)',
-              style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w600),
+              style: const TextStyle(
+                  color: Colors.white70, fontWeight: FontWeight.w600),
             ),
             actions: [
               TextButton(
                 onPressed: () => Navigator.of(ctx).pop(false),
-                child: const Text('취소', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
+                child: const Text('취소',
+                    style: TextStyle(
+                        color: Colors.white70, fontWeight: FontWeight.w700)),
               ),
               TextButton(
                 onPressed: () => Navigator.of(ctx).pop(true),
-                child: const Text('삭제', style: TextStyle(color: Color(0xFFB74C4C), fontWeight: FontWeight.w900)),
+                child: const Text('삭제',
+                    style: TextStyle(
+                        color: Color(0xFFB74C4C), fontWeight: FontWeight.w900)),
               ),
             ],
           ),
@@ -3590,20 +3761,27 @@ class TimetableContentViewState extends State<TimetableContentView> {
         context: context,
         builder: (ctx) => AlertDialog(
           backgroundColor: const Color(0xFF0B1112),
-          title: const Text('수업시간 삭제', style: TextStyle(color: Color(0xFFEAF2F2), fontWeight: FontWeight.w800)),
+          title: const Text('수업시간 삭제',
+              style: TextStyle(
+                  color: Color(0xFFEAF2F2), fontWeight: FontWeight.w800)),
           content: Text(
             '$deleteStartLabel 해당 수업시간을 삭제할까요?\n'
             '(과거 수업기록/출석기록은 삭제하지 않고, 기간만 종료 처리됩니다)',
-            style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w600),
+            style: const TextStyle(
+                color: Colors.white70, fontWeight: FontWeight.w600),
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(ctx).pop(false),
-              child: const Text('취소', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
+              child: const Text('취소',
+                  style: TextStyle(
+                      color: Colors.white70, fontWeight: FontWeight.w700)),
             ),
             TextButton(
               onPressed: () => Navigator.of(ctx).pop(true),
-              child: const Text('삭제', style: TextStyle(color: Color(0xFFB74C4C), fontWeight: FontWeight.w900)),
+              child: const Text('삭제',
+                  style: TextStyle(
+                      color: Color(0xFFB74C4C), fontWeight: FontWeight.w900)),
             ),
           ],
         ),
@@ -3622,7 +3800,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
         await DataManager.instance.bulkDeleteStudentTimeBlocks(
           [block.id],
           immediate: true,
-          endDateOverride: isToday ? date : date.subtract(const Duration(days: 1)),
+          endDateOverride:
+              isToday ? date : date.subtract(const Duration(days: 1)),
         );
       }
       if (mounted) {
@@ -3648,6 +3827,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
     StudentTimeBlock? blockOverride,
     bool highlightBorder = false,
     VoidCallback? onTapCard,
+
     /// 선택모드에서도 스와이프 액션(수정/삭제)을 허용할지 여부
     /// - 요일 선택 리스트처럼 "선택 UI"와 무관하게 빠르게 편집/삭제하고 싶을 때 사용
     bool allowSwipeInSelectMode = false,
@@ -3692,7 +3872,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
       final ref = _refDateFor(startTime);
       // fallback: week-cache 기반으로만 탐색(전역 studentTimeBlocks 전체 스캔 금지)
       if (picked == null) {
-        final weekBlocks = DataManager.instance.getStudentTimeBlocksForWeek(ref);
+        final weekBlocks =
+            DataManager.instance.getStudentTimeBlocksForWeek(ref);
         final candidates = weekBlocks.where((b) {
           if (b.studentId != info.student.id) return false;
           if (b.dayIndex != dayIndex) return false;
@@ -3703,7 +3884,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
         }).toList();
         if (candidates.isNotEmpty) {
           final withSession = candidates
-              .where((b) => b.sessionTypeId != null && b.sessionTypeId!.isNotEmpty)
+              .where(
+                  (b) => b.sessionTypeId != null && b.sessionTypeId!.isNotEmpty)
               .toList()
             ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
           if (withSession.isNotEmpty) {
@@ -3732,7 +3914,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
             int? sNumber;
             if (dayIndex != null && startTime != null) {
               final ref = _refDateFor(startTime);
-              final weekBlocks = DataManager.instance.getStudentTimeBlocksForWeek(ref);
+              final weekBlocks =
+                  DataManager.instance.getStudentTimeBlocksForWeek(ref);
               final blocks = weekBlocks
                   .where(
                     (b) =>
@@ -3763,8 +3946,11 @@ class TimetableContentViewState extends State<TimetableContentView> {
               ? DateTime(startTime.year, startTime.month, startTime.day)
               : null;
           final bool isPausedHere = refForPause != null
-              ? DataManager.instance.isStudentPausedOn(info.student.id, refForPause)
-              : (DataManager.instance.getActivePauseForStudent(info.student.id) != null);
+              ? DataManager.instance
+                  .isStudentPausedOn(info.student.id, refForPause)
+              : (DataManager.instance
+                      .getActivePauseForStudent(info.student.id) !=
+                  null);
 
           final dragData = {
             'type': isClassRegisterMode ? 'register' : 'move',
@@ -3864,14 +4050,16 @@ class TimetableContentViewState extends State<TimetableContentView> {
                     color: const Color(0xFF223131),
                     borderRadius: BorderRadius.circular(10),
                     child: InkWell(
-                      onTap: () async => _showEditBlockDateRangeDialog(context, targetBlock),
+                      onTap: () async =>
+                          _showEditBlockDateRangeDialog(context, targetBlock),
                       borderRadius: BorderRadius.circular(10),
                       splashFactory: NoSplash.splashFactory,
                       highlightColor: Colors.white.withOpacity(0.06),
                       hoverColor: Colors.white.withOpacity(0.03),
                       child: const SizedBox.expand(
                         child: Center(
-                          child: Icon(Icons.edit_outlined, color: Color(0xFFEAF2F2), size: 18),
+                          child: Icon(Icons.edit_outlined,
+                              color: Color(0xFFEAF2F2), size: 18),
                         ),
                       ),
                     ),
@@ -3883,14 +4071,17 @@ class TimetableContentViewState extends State<TimetableContentView> {
                     color: const Color(0xFFB74C4C),
                     borderRadius: BorderRadius.circular(10),
                     child: InkWell(
-                      onTap: () async => _confirmAndDeleteBlock(context, targetBlock, refDate: refDate),
+                      onTap: () async => _confirmAndDeleteBlock(
+                          context, targetBlock,
+                          refDate: refDate),
                       borderRadius: BorderRadius.circular(10),
                       splashFactory: NoSplash.splashFactory,
                       highlightColor: Colors.white.withOpacity(0.08),
                       hoverColor: Colors.white.withOpacity(0.04),
                       child: const SizedBox.expand(
                         child: Center(
-                          child: Icon(Icons.delete_outline_rounded, color: Colors.white, size: 18),
+                          child: Icon(Icons.delete_outline_rounded,
+                              color: Colors.white, size: 18),
                         ),
                       ),
                     ),
@@ -3928,7 +4119,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
         ? <StudentWithInfo>[mainInfo]
         : <StudentWithInfo>[
             mainInfo,
-            ...selectedStudents.where((s) => s.student.id != mainInfo.student.id),
+            ...selectedStudents
+                .where((s) => s.student.id != mainInfo.student.id),
           ];
     final dedup = <String, StudentWithInfo>{};
     for (final s in raw) {
@@ -4163,9 +4355,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
                         dayIndex: widget.selectedCellDayIndex,
                         startTime: widget.selectedCellStartTime,
                         cellStudents: students,
-                        highlightBorder:
-                            (widget.highlightedStudentId ?? '') ==
-                                info.student.id,
+                        highlightBorder: (widget.highlightedStudentId ?? '') ==
+                            info.student.id,
                         onTapCard: widget.onStudentCardTap == null
                             ? null
                             : () => widget.onStudentCardTap!(
@@ -4377,6 +4568,7 @@ class TimetableContentViewState extends State<TimetableContentView> {
           : DateTime(b.endDate!.year, b.endDate!.month, b.endDate!.day);
       return !sd.isAfter(ref) && (ed == null || !ed.isBefore(ref));
     }
+
     // Map<(dayIdx, startTime), List<StudentWithInfo>>
     final Map<String, List<StudentWithInfo>> grouped = {};
     // ✅ 성능: 기존은 "학생마다 blocks 전체 스캔"이라 검색 결과가 많으면 O(학생수*블록수)로 느려진다.
@@ -4390,8 +4582,11 @@ class TimetableContentViewState extends State<TimetableContentView> {
       final occDate = weekStart.add(Duration(days: b.dayIndex));
       if (!isActiveOn(occDate, b)) continue;
       // ✅ 휴원 기간에는 시간표 위젯에 수업시간(블록)을 그리지 않는다.
-      if (DataManager.instance.isStudentPausedOn(b.studentId, occDate)) continue;
-      blocksByStudent.putIfAbsent(b.studentId, () => <StudentTimeBlock>[]).add(b);
+      if (DataManager.instance.isStudentPausedOn(b.studentId, occDate))
+        continue;
+      blocksByStudent
+          .putIfAbsent(b.studentId, () => <StudentTimeBlock>[])
+          .add(b);
     }
     for (final student in students) {
       final studentBlocks = blocksByStudent[student.student.id];
@@ -4427,7 +4622,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
           if (!targetStudentIds.contains(ov.studentId)) continue;
           final rep = ov.replacementClassDateTime;
           if (rep == null) continue;
-          if (DataManager.instance.isStudentPausedOn(ov.studentId, rep)) continue;
+          if (DataManager.instance.isStudentPausedOn(ov.studentId, rep))
+            continue;
           final dayIdx = (rep.weekday - 1).clamp(0, 6);
           final name = infoById[ov.studentId]?.student.name ?? '학생';
           final core = _buildSpecialSlotCard(
@@ -4515,7 +4711,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
               ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
             if (slotCandidates.isNotEmpty) {
               final picked = slotCandidates.first;
-              if (picked.sessionTypeId != null && picked.sessionTypeId!.isNotEmpty) {
+              if (picked.sessionTypeId != null &&
+                  picked.sessionTypeId!.isNotEmpty) {
                 final classInfo = DataManager.instance.classes.firstWhere(
                   (c) => c.id == picked.sessionTypeId,
                   orElse: () => ClassInfo(
@@ -4595,6 +4792,293 @@ class TimetableContentViewState extends State<TimetableContentView> {
     );
   }
 
+  _ResolvedCellPanelData _resolveCellPanelDataForSlot({
+    required int dayIdx,
+    required DateTime selectedDate,
+    bool includeOverlappingBlocks = false,
+  }) {
+    final DateTime weekStart = DateTime(
+      widget.viewDate.year,
+      widget.viewDate.month,
+      widget.viewDate.day,
+    ).subtract(Duration(days: widget.viewDate.weekday - DateTime.monday));
+    final DateTime weekEnd = weekStart.add(const Duration(days: 7));
+    final DateTime cellYmd = weekStart.add(Duration(days: dayIdx));
+    final DateTime refDate = DateTime(cellYmd.year, cellYmd.month, cellYmd.day);
+    final int selectedMinute = selectedDate.hour * 60 + selectedDate.minute;
+
+    final allBlocks = DataManager.instance.getStudentTimeBlocksForWeek(refDate);
+
+    bool _isActive(StudentTimeBlock b) {
+      final start =
+          DateTime(b.startDate.year, b.startDate.month, b.startDate.day);
+      final end = b.endDate != null
+          ? DateTime(b.endDate!.year, b.endDate!.month, b.endDate!.day)
+          : null;
+      return !start.isAfter(refDate) && (end == null || !end.isBefore(refDate));
+    }
+
+    final Map<String, List<StudentTimeBlock>> blocksByStudentOnDay = {};
+    for (final b in allBlocks) {
+      if (b.dayIndex != dayIdx) continue;
+      blocksByStudentOnDay
+          .putIfAbsent(b.studentId, () => <StudentTimeBlock>[])
+          .add(b);
+    }
+
+    final DateTime cellDate = DateTime(
+      cellYmd.year,
+      cellYmd.month,
+      cellYmd.day,
+      selectedDate.hour,
+      selectedDate.minute,
+    );
+    final Set<String> hiddenPairs = {};
+    for (final ov in DataManager.instance.sessionOverrides) {
+      if (ov.reason != OverrideReason.makeup) continue;
+      if (ov.overrideType != OverrideType.replace) continue;
+      if (ov.status == OverrideStatus.canceled) continue;
+      final orig = ov.originalClassDateTime;
+      if (orig == null) continue;
+      if (orig.isBefore(weekStart) || !orig.isBefore(weekEnd)) continue;
+      final bool sameYmd = orig.year == cellDate.year &&
+          orig.month == cellDate.month &&
+          orig.day == cellDate.day;
+      if (!sameYmd) continue;
+      String? setId = ov.setId;
+      if (setId == null || setId.isEmpty) {
+        final blocksByStudent =
+            blocksByStudentOnDay[ov.studentId] ?? const <StudentTimeBlock>[];
+        if (blocksByStudent.isNotEmpty) {
+          final int origMin = orig.hour * 60 + orig.minute;
+          int bestDiff = 1 << 30;
+          for (final b in blocksByStudent) {
+            final int bm = b.startHour * 60 + b.startMinute;
+            final int diff = (bm - origMin).abs();
+            if (diff < bestDiff && b.setId != null && b.setId!.isNotEmpty) {
+              bestDiff = diff;
+              setId = b.setId;
+            }
+          }
+        }
+      }
+      if (setId != null && setId.isNotEmpty) {
+        hiddenPairs.add('${ov.studentId}|$setId');
+      }
+    }
+
+    final studentIdSet = (widget.filteredStudentIds ??
+            DataManager.instance.students.map((s) => s.student.id).toList())
+        .toSet();
+    final Map<String, DateTime?> registrationDateByStudentId = {
+      for (final s in DataManager.instance.students)
+        s.student.id: s.basicInfo.registrationDate,
+    };
+
+    bool _isInSelectedSlot(StudentTimeBlock b) {
+      if (b.dayIndex != dayIdx) return false;
+      if (!includeOverlappingBlocks) {
+        return b.startHour == selectedDate.hour &&
+            b.startMinute == selectedDate.minute;
+      }
+      final int blockStartMinute = b.startHour * 60 + b.startMinute;
+      final int durationMinutes = b.duration.inMinutes > 0
+          ? b.duration.inMinutes
+          : DataManager.instance.academySettings.lessonDuration;
+      final int blockEndMinute = blockStartMinute + durationMinutes;
+      return selectedMinute >= blockStartMinute &&
+          selectedMinute < blockEndMinute;
+    }
+
+    bool _passesCommonFilters(StudentTimeBlock b) {
+      if (!studentIdSet.contains(b.studentId)) return false;
+      if (!_isBlockAllowed(b)) return false;
+      final pairKey = '${b.studentId}|${b.setId ?? ''}';
+      if (hiddenPairs.contains(pairKey)) return false;
+      final reg = registrationDateByStudentId[b.studentId];
+      if (reg == null) {
+        return true;
+      }
+      DateTime toMonday(DateTime x) {
+        final off = x.weekday - DateTime.monday;
+        return DateTime(x.year, x.month, x.day).subtract(Duration(days: off));
+      }
+
+      final week = (() {
+        final rm = toMonday(reg);
+        final sm = toMonday(refDate);
+        final diff = sm.difference(rm).inDays;
+        return (diff >= 0 ? (diff ~/ 7) : 0) + 1;
+      })();
+      final startMin = b.startHour * 60 + b.startMinute;
+      final blind = _shouldBlindBlock(
+        studentId: b.studentId,
+        weekNumber: week,
+        weeklyOrder: b.weeklyOrder,
+        sessionTypeId: b.sessionTypeId,
+        dayIdx: b.dayIndex,
+        startMin: startMin,
+      );
+      return !blind;
+    }
+
+    final List<StudentTimeBlock> slotBlocks =
+        allBlocks.where((b) => _isInSelectedSlot(b) && _isActive(b)).toList();
+    final List<StudentTimeBlock> filteredSlotBlocks =
+        slotBlocks.where(_passesCommonFilters).toList();
+
+    final List<StudentTimeBlock> filteredBlocks;
+    if (includeOverlappingBlocks) {
+      final List<StudentTimeBlock> filteredDayBlocks = allBlocks
+          .where((b) => b.dayIndex == dayIdx && _isActive(b))
+          .where(_passesCommonFilters)
+          .toList();
+      final Map<String, List<StudentTimeBlock>> dayBlocksByStudent = {};
+      for (final b in filteredDayBlocks) {
+        dayBlocksByStudent
+            .putIfAbsent(b.studentId, () => <StudentTimeBlock>[])
+            .add(b);
+      }
+
+      final Map<String, StudentTimeBlock> mergedByStudent = {};
+      for (final slot in filteredSlotBlocks) {
+        final String setId = (slot.setId ?? '').trim();
+        List<StudentTimeBlock> sameSessionBlocks;
+        if (setId.isEmpty) {
+          sameSessionBlocks = <StudentTimeBlock>[slot];
+        } else {
+          final studentDayBlocks =
+              dayBlocksByStudent[slot.studentId] ?? const <StudentTimeBlock>[];
+          sameSessionBlocks = studentDayBlocks
+              .where((b) => (b.setId ?? '').trim() == setId)
+              .toList();
+          if (sameSessionBlocks.isEmpty) {
+            sameSessionBlocks = <StudentTimeBlock>[slot];
+          }
+        }
+
+        int startMin = 24 * 60;
+        int endMin = 0;
+        StudentTimeBlock anchor = sameSessionBlocks.first;
+        for (final b in sameSessionBlocks) {
+          if (b.createdAt.isAfter(anchor.createdAt)) {
+            anchor = b;
+          }
+          final bStart = b.startHour * 60 + b.startMinute;
+          final bDuration = b.duration.inMinutes > 0
+              ? b.duration.inMinutes
+              : DataManager.instance.academySettings.lessonDuration;
+          final bEnd = bStart + bDuration;
+          if (bStart < startMin) startMin = bStart;
+          if (bEnd > endMin) endMin = bEnd;
+        }
+        if (endMin <= startMin) {
+          final fallbackDur = anchor.duration.inMinutes > 0
+              ? anchor.duration.inMinutes
+              : DataManager.instance.academySettings.lessonDuration;
+          endMin = startMin + fallbackDur;
+        }
+
+        final merged = anchor.copyWith(
+          startHour: startMin ~/ 60,
+          startMinute: startMin % 60,
+          duration: Duration(minutes: endMin - startMin),
+        );
+        final prev = mergedByStudent[slot.studentId];
+        if (prev == null || merged.createdAt.isAfter(prev.createdAt)) {
+          mergedByStudent[slot.studentId] = merged;
+        }
+      }
+      filteredBlocks = mergedByStudent.values.toList();
+    } else {
+      filteredBlocks = filteredSlotBlocks;
+    }
+
+    final allStudents = DataManager.instance.students;
+    final students = widget.filteredStudentIds == null
+        ? allStudents
+        : allStudents
+            .where((s) => widget.filteredStudentIds!.contains(s.student.id))
+            .toList();
+    final Map<String, StudentWithInfo> studentById = {
+      for (final s in students) s.student.id: s,
+    };
+    final Map<String, StudentTimeBlock> blockOverrides = {};
+    for (final b in filteredBlocks) {
+      final prev = blockOverrides[b.studentId];
+      if (prev == null || b.createdAt.isAfter(prev.createdAt)) {
+        blockOverrides[b.studentId] = b;
+      }
+    }
+    final cellStudents = blockOverrides.keys
+        .map((id) => studentById[id])
+        .whereType<StudentWithInfo>()
+        .toList();
+    return _ResolvedCellPanelData(
+      cellStudents: cellStudents,
+      blockOverrides: blockOverrides,
+    );
+  }
+
+  Widget buildInlineCellPanelForSlot({
+    required int dayIdx,
+    required DateTime startTime,
+    required double maxHeight,
+    bool useExpandedTimelineLayout = false,
+    int timelineDayStartMinutes = 0,
+    int timelineSlotMinutes = 30,
+    double timelineSlotWidth = 148.0,
+  }) {
+    final resolved = _resolveCellPanelDataForSlot(
+      dayIdx: dayIdx,
+      selectedDate: startTime,
+      includeOverlappingBlocks: useExpandedTimelineLayout,
+    );
+    return _buildCellPanelCached(
+      students: resolved.cellStudents,
+      dayIdx: dayIdx,
+      startTime: startTime,
+      maxHeight: maxHeight,
+      isSelectMode: widget.isSelectMode,
+      selectedIds: widget.selectedStudentIds,
+      onSelectChanged: widget.onStudentSelectChanged,
+      blockOverrides: resolved.blockOverrides,
+      dayTimeLabelOverride: '',
+      showDayTimeHeader: false,
+      showPanelFrame: false,
+      showEducationGroupingHeaders: false,
+      enableInnerScroll: !useExpandedTimelineLayout,
+      useTimelineLayout: useExpandedTimelineLayout,
+      timelineDayStartMinutes: timelineDayStartMinutes,
+      timelineSlotMinutes: timelineSlotMinutes,
+      timelineSlotWidth: timelineSlotWidth,
+    );
+  }
+
+  int estimateInlineTimelineRowCountForSlot({
+    required int dayIdx,
+    required DateTime startTime,
+  }) {
+    final resolved = _resolveCellPanelDataForSlot(
+      dayIdx: dayIdx,
+      selectedDate: startTime,
+      includeOverlappingBlocks: true,
+    );
+    final DateTime day =
+        DateTime(startTime.year, startTime.month, startTime.day);
+    final Set<String> visibleStudentIds = <String>{};
+    for (final s in resolved.cellStudents) {
+      final id = s.student.id;
+      if (!resolved.blockOverrides.containsKey(id)) continue;
+      if (DataManager.instance.isStudentPausedOn(id, day)) continue;
+      visibleStudentIds.add(id);
+    }
+    final int specialCardsCount =
+        _specialTimelineCardsForCell(dayIdx: dayIdx, startTime: startTime)
+            .length;
+    return visibleStudentIds.length + specialCardsCount;
+  }
+
   Widget _buildCellPanelCached({
     required List<StudentWithInfo> students,
     required int? dayIdx,
@@ -4604,26 +5088,52 @@ class TimetableContentViewState extends State<TimetableContentView> {
     required Set<String> selectedIds,
     required void Function(String, bool)? onSelectChanged,
     required Map<String, StudentTimeBlock> blockOverrides,
+    String? dayTimeLabelOverride,
+    bool showDayTimeHeader = true,
+    bool showPanelFrame = true,
+    bool showEducationGroupingHeaders = true,
+    bool enableInnerScroll = true,
+    bool useTimelineLayout = false,
+    int timelineDayStartMinutes = 0,
+    int timelineSlotMinutes = 30,
+    double timelineSlotWidth = 148.0,
   }) {
     final rev = DataManager.instance.studentTimeBlocksRevision.value;
     final classRev = DataManager.instance.classesRevision.value;
     final classAssignRev = DataManager.instance.classAssignmentsRevision.value;
     final ids = students.map((s) => s.student.id).toList()..sort();
     final highlightId = (widget.highlightedStudentId ?? '').trim();
+    final resolvedDayTimeLabel =
+        dayTimeLabelOverride ?? _getDayTimeString(dayIdx, startTime);
     final key =
-        '$rev|$classRev|$classAssignRev|$dayIdx|${startTime?.hour}:${startTime?.minute}|$isSelectMode|highlight=$highlightId|${ids.join(",")}|${selectedIds.join(",")}';
+        '$rev|$classRev|$classAssignRev|$dayIdx|${startTime?.hour}:${startTime?.minute}|$isSelectMode|highlight=$highlightId|showHeader=$showDayTimeHeader|showFrame=$showPanelFrame|showGroupHeaders=$showEducationGroupingHeaders|enableInnerScroll=$enableInnerScroll|useTimelineLayout=$useTimelineLayout|timelineStart=$timelineDayStartMinutes|timelineSlotMin=$timelineSlotMinutes|timelineSlotWidth=$timelineSlotWidth|dayTime=$resolvedDayTimeLabel|${ids.join(",")}|${selectedIds.join(",")}';
     if (_cachedCellPanelKey == key && _cachedCellPanelWidget != null) {
       return _cachedCellPanelWidget!;
     }
     final canDrag = dayIdx != null && startTime != null;
-    final DateTime? refDateForActions = dayIdx == null ? null : _cellDateOnlyForDayIndex(dayIdx);
-    final List<Widget> extras = (canDrag && dayIdx != null && startTime != null)
-        ? _specialCardsForCell(dayIdx: dayIdx, startTime: startTime)
-        : const <Widget>[];
+    final DateTime? refDateForActions =
+        dayIdx == null ? null : _cellDateOnlyForDayIndex(dayIdx);
+    final List<Widget> extras =
+        (canDrag && !useTimelineLayout && dayIdx != null && startTime != null)
+            ? _specialCardsForCell(dayIdx: dayIdx, startTime: startTime)
+            : const <Widget>[];
+    final List<TimelineExtraCardEntry> timelineExtras =
+        (canDrag && useTimelineLayout && dayIdx != null && startTime != null)
+            ? _specialTimelineCardsForCell(dayIdx: dayIdx, startTime: startTime)
+            : const <TimelineExtraCardEntry>[];
     final built = TimetableGroupedStudentPanel(
       students: students,
       extraCards: extras.isEmpty ? null : extras,
-      dayTimeLabel: _getDayTimeString(dayIdx, startTime),
+      timelineExtraCards: timelineExtras,
+      dayTimeLabel: resolvedDayTimeLabel,
+      showDayTimeHeader: showDayTimeHeader,
+      showPanelFrame: showPanelFrame,
+      showEducationGroupingHeaders: showEducationGroupingHeaders,
+      enableInnerScroll: enableInnerScroll,
+      useTimelineLayout: useTimelineLayout,
+      timelineDayStartMinutes: timelineDayStartMinutes,
+      timelineSlotMinutes: timelineSlotMinutes,
+      timelineSlotWidth: timelineSlotWidth,
       maxHeight: maxHeight,
       isSelectMode: isSelectMode,
       selectedStudentIds: selectedIds,
@@ -4651,32 +5161,46 @@ class TimetableContentViewState extends State<TimetableContentView> {
   }
 
   void _onSearchChanged(String value) {
-    setState(() {
-      _searchQuery = value;
-      _searchResults = DataManager.instance.students.where((student) {
-        final nameMatch = student.student.name
-            .toLowerCase()
-            .contains(_searchQuery.toLowerCase());
-        final schoolMatch = student.student.school
-            .toLowerCase()
-            .contains(_searchQuery.toLowerCase());
-        final gradeMatch =
-            student.student.grade.toString().contains(_searchQuery);
+    final query = value.trim();
+    if (_searchQuery != query) {
+      setState(() => _searchQuery = query);
+    }
+
+    _searchDebounce?.cancel();
+
+    if (query.isEmpty) {
+      if (_searchResults.isNotEmpty) {
+        setState(() => _searchResults = []);
+      }
+      return;
+    }
+
+    _searchDebounce = Timer(const Duration(milliseconds: 120), () {
+      if (!mounted || _searchQuery != query) return;
+      final lowerQuery = query.toLowerCase();
+      final results = DataManager.instance.students.where((student) {
+        final info = student.student;
+        final nameMatch = info.name.toLowerCase().contains(lowerQuery);
+        final schoolMatch = info.school.toLowerCase().contains(lowerQuery);
+        final gradeMatch = info.grade.toString().contains(query);
         return nameMatch || schoolMatch || gradeMatch;
       }).toList();
+      if (!mounted || _searchQuery != query) return;
+      setState(() => _searchResults = results);
     });
   }
 
   void updateSearchQuery(String value) {
-    if (_searchQuery == value) return;
-    _searchController.value = TextEditingValue(
-      text: value,
-      selection: TextSelection.collapsed(offset: value.length),
-    );
+    if (_searchController.text != value) {
+      _searchController.value = TextEditingValue(
+        text: value,
+        selection: TextSelection.collapsed(offset: value.length),
+      );
+    }
     _onSearchChanged(value);
   }
 
-  Widget _buildSearchResultPanel() {
+  Widget _buildSearchResultPanel({bool overlayMode = false}) {
     final titleName =
         _searchResults.isNotEmpty ? _searchResults.first.student.name : '검색 결과';
     // 학교/과정/학년 요약
@@ -4692,8 +5216,8 @@ class TimetableContentViewState extends State<TimetableContentView> {
         Container(
           height: 48,
           width: double.infinity,
-          margin: const EdgeInsets.only(
-            top: _kStudentPanelHeaderTopMargin,
+          margin: EdgeInsets.only(
+            top: overlayMode ? 0 : _kStudentPanelHeaderTopMargin,
             bottom: _kStudentPanelHeaderBottomMargin,
           ),
           padding: const EdgeInsets.symmetric(horizontal: 15),
@@ -4774,18 +5298,20 @@ class TimetableContentViewState extends State<TimetableContentView> {
         widget.cellRenderPerfToken != oldWidget.cellRenderPerfToken &&
         widget.cellRenderPerfStartUs > 0) {
       final token = widget.cellRenderPerfToken;
-      dev.Timeline.instantSync('TT cell selection updated', arguments: <String, Object?>{
-        'token': token,
-        'dayIdx': widget.selectedCellDayIndex ?? -1,
-        'hour': widget.selectedCellStartTime?.hour ?? -1,
-        'minute': widget.selectedCellStartTime?.minute ?? -1,
-      });
+      dev.Timeline.instantSync('TT cell selection updated',
+          arguments: <String, Object?>{
+            'token': token,
+            'dayIdx': widget.selectedCellDayIndex ?? -1,
+            'hour': widget.selectedCellStartTime?.hour ?? -1,
+            'minute': widget.selectedCellStartTime?.minute ?? -1,
+          });
       SchedulerBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         if (!widget.enableCellRenderPerfTrace) return;
         if (_lastPerfReportedToken == token) return;
         _lastPerfReportedToken = token;
-        widget.onCellRenderPerfFrame!(token, DateTime.now().microsecondsSinceEpoch);
+        widget.onCellRenderPerfFrame!(
+            token, DateTime.now().microsecondsSinceEpoch);
       });
     }
   }
@@ -4993,6 +5519,15 @@ class TimetableContentViewState extends State<TimetableContentView> {
     // print('[BLIND][check] week=$weekNumber order=$weeklyOrder stId=$sessionTypeId day=$dayIdx start=$startMin -> rounded=$rounded hit=$hit');
     return hit;
   }
+}
+
+class _ResolvedCellPanelData {
+  final List<StudentWithInfo> cellStudents;
+  final Map<String, StudentTimeBlock> blockOverrides;
+  const _ResolvedCellPanelData({
+    required this.cellStudents,
+    required this.blockOverrides,
+  });
 }
 
 // 드롭다운 메뉴 항목 위젯
@@ -5535,7 +6070,8 @@ class _ClassCardState extends State<_ClassCard> {
       //
       // bulkDeleteStudentTimeBlocks가 로컬 메모리의 endDate를 이미 갱신해두므로,
       // old 블록은 유지한 채(=id 기준으로 week-cache를 덮어씀) 새 블록만 추가한다.
-      final base = List<StudentTimeBlock>.from(DataManager.instance.studentTimeBlocks);
+      final base =
+          List<StudentTimeBlock>.from(DataManager.instance.studentTimeBlocks);
       final optimistic = <StudentTimeBlock>[...base, ...newBlocks];
       print(
           '[TT][class-assign-bulk][optimistic] set=$setId student=${studentWithInfo.student.id} add=${newBlocks.length} close=${idsToClose.length}');
@@ -5566,34 +6102,76 @@ class _ClassCardState extends State<_ClassCard> {
     final c = widget.classInfo;
     final bool isDefaultClass = c.id == '__default_class__';
     final int studentCount = widget.studentCountOverride ??
-        DataManager.instance.getStudentCountForClass(widget.classInfo.id, refDate: widget.refDate);
+        DataManager.instance.getStudentCountForClass(widget.classInfo.id,
+            refDate: widget.refDate);
     // print('[DEBUG][_ClassCard.build] 전체 studentTimeBlocks=' + DataManager.instance.studentTimeBlocks.map((b) => '${b.studentId}:${b.sessionTypeId}').toList().toString());
 
     Widget buildCardBody() {
       return DragTarget<Map<String, dynamic>>(
-      onWillAccept: (data) {
-        // print('[DEBUG][DragTarget] onWillAccept: data= [33m$data [0m');
-        if (data == null) return false;
-        final now = DateTime.now();
-        final today = DateTime(now.year, now.month, now.day);
-        bool isOngoingOrFuture(StudentTimeBlock b) {
-          final end = b.endDate != null
-              ? DateTime(b.endDate!.year, b.endDate!.month, b.endDate!.day)
-              : null;
-          return end == null || !end.isBefore(today);
-        }
+        onWillAccept: (data) {
+          // print('[DEBUG][DragTarget] onWillAccept: data= [33m$data [0m');
+          if (data == null) return false;
+          final now = DateTime.now();
+          final today = DateTime(now.year, now.month, now.day);
+          bool isOngoingOrFuture(StudentTimeBlock b) {
+            final end = b.endDate != null
+                ? DateTime(b.endDate!.year, b.endDate!.month, b.endDate!.day)
+                : null;
+            return end == null || !end.isBefore(today);
+          }
 
-        debugPrint(
-            '[TT][class-drop][will] class=${widget.classInfo.id} keys=${data.keys.toList()} type=${data['type']}'
-            ' setId=${data['setId']} oldDay=${data['oldDayIndex']} oldTime=${data['oldStartTime']} studentsLen=${(data['students'] as List?)?.length}');
-        final isMulti = data['students'] is List;
-        if (isMulti) {
-          final entries =
-              (data['students'] as List).cast<Map<String, dynamic>>();
-          // print('[DEBUG][onWillAccept] entries=$entries');
-          for (final entry in entries) {
-            final student = entry['student'] as StudentWithInfo?;
-            String? setId = entry['setId'] as String?;
+          debugPrint(
+              '[TT][class-drop][will] class=${widget.classInfo.id} keys=${data.keys.toList()} type=${data['type']}'
+              ' setId=${data['setId']} oldDay=${data['oldDayIndex']} oldTime=${data['oldStartTime']} studentsLen=${(data['students'] as List?)?.length}');
+          final isMulti = data['students'] is List;
+          if (isMulti) {
+            final entries =
+                (data['students'] as List).cast<Map<String, dynamic>>();
+            // print('[DEBUG][onWillAccept] entries=$entries');
+            for (final entry in entries) {
+              final student = entry['student'] as StudentWithInfo?;
+              String? setId = entry['setId'] as String?;
+              if (student != null && setId == null) {
+                final oldDayIndex = data['oldDayIndex'] as int?;
+                final oldStartTime = data['oldStartTime'] as DateTime?;
+                final fallback =
+                    DataManager.instance.studentTimeBlocks.firstWhere(
+                  (b) =>
+                      b.studentId == student.student.id &&
+                      b.dayIndex == oldDayIndex &&
+                      b.startHour == oldStartTime?.hour &&
+                      b.startMinute == oldStartTime?.minute,
+                  orElse: () => StudentTimeBlock(
+                      id: '',
+                      studentId: '',
+                      dayIndex: -1,
+                      startHour: 0,
+                      startMinute: 0,
+                      duration: Duration.zero,
+                      createdAt: DateTime(0),
+                      startDate: DateTime(0),
+                      setId: null),
+                );
+                setId = fallback.setId;
+              }
+              if (student == null || setId == null) return false;
+              final blocks = (isDefaultClass
+                      ? DataManager.instance.studentTimeBlocks
+                          .where((b) => b.sessionTypeId == null)
+                      : DataManager.instance.studentTimeBlocks
+                          .where((b) => b.sessionTypeId == widget.classInfo.id))
+                  .where(isOngoingOrFuture)
+                  .toList();
+              final alreadyRegistered = blocks.any(
+                  (b) => b.studentId == student.student.id && b.setId == setId);
+              // print('[DEBUG][onWillAccept] alreadyRegistered=$alreadyRegistered for studentId=${student?.student.id}, setId=$setId');
+              if (alreadyRegistered) return false;
+            }
+            return true;
+          } else {
+            final student = data['student'] as StudentWithInfo?;
+            String? setId = data['setId'] as String?;
+            // setId 누락 시 기존 블록에서 찾기(드롭 거부 방지)
             if (student != null && setId == null) {
               final oldDayIndex = data['oldDayIndex'] as int?;
               final oldStartTime = data['oldStartTime'] as DateTime?;
@@ -5627,248 +6205,214 @@ class _ClassCardState extends State<_ClassCard> {
                 .toList();
             final alreadyRegistered = blocks.any(
                 (b) => b.studentId == student.student.id && b.setId == setId);
-            // print('[DEBUG][onWillAccept] alreadyRegistered=$alreadyRegistered for studentId=${student?.student.id}, setId=$setId');
+            // print('[DEBUG][onWillAccept] (단일) studentId=${student.student.id}, setId=$setId, alreadyRegistered=$alreadyRegistered');
             if (alreadyRegistered) return false;
+            return true;
           }
-          return true;
-        } else {
-          final student = data['student'] as StudentWithInfo?;
-          String? setId = data['setId'] as String?;
-          // setId 누락 시 기존 블록에서 찾기(드롭 거부 방지)
-          if (student != null && setId == null) {
-            final oldDayIndex = data['oldDayIndex'] as int?;
-            final oldStartTime = data['oldStartTime'] as DateTime?;
-            final fallback = DataManager.instance.studentTimeBlocks.firstWhere(
-              (b) =>
-                  b.studentId == student.student.id &&
-                  b.dayIndex == oldDayIndex &&
-                  b.startHour == oldStartTime?.hour &&
-                  b.startMinute == oldStartTime?.minute,
-              orElse: () => StudentTimeBlock(
-                  id: '',
-                  studentId: '',
-                  dayIndex: -1,
-                  startHour: 0,
-                  startMinute: 0,
-                  duration: Duration.zero,
-                  createdAt: DateTime(0),
-                  startDate: DateTime(0),
-                  setId: null),
-            );
-            setId = fallback.setId;
-          }
-          if (student == null || setId == null) return false;
-          final blocks = (isDefaultClass
-                  ? DataManager.instance.studentTimeBlocks
-                      .where((b) => b.sessionTypeId == null)
-                  : DataManager.instance.studentTimeBlocks
-                      .where((b) => b.sessionTypeId == widget.classInfo.id))
-              .where(isOngoingOrFuture)
-              .toList();
-          final alreadyRegistered = blocks.any(
-              (b) => b.studentId == student.student.id && b.setId == setId);
-          // print('[DEBUG][onWillAccept] (단일) studentId=${student.student.id}, setId=$setId, alreadyRegistered=$alreadyRegistered');
-          if (alreadyRegistered) return false;
-          return true;
-        }
-      },
-      onAccept: (data) async {
-        // print('[DEBUG][DragTarget] onAccept: data= [32m$data [0m');
-        debugPrint(
-            '[TT][class-drop][accept] class=${widget.classInfo.id} type=${data['type']}'
-            ' setId=${data['setId']} oldDay=${data['oldDayIndex']} oldTime=${data['oldStartTime']} hasStudentsList=${data['students'] is List}');
-        setState(() => _isHovering = false);
-        await _handleStudentDrop(data);
-      },
-      onMove: (_) {
-        // print('[DEBUG][DragTarget] onMove');
-        setState(() => _isHovering = true);
-      },
-      onLeave: (_) {
-        // print('[DEBUG][DragTarget] onLeave');
-        setState(() => _isHovering = false);
-      },
-      builder: (context, candidateData, rejectedData) {
-        // print('[DEBUG][DragTarget] builder: candidateData=$candidateData, rejectedData=$rejectedData, _isHovering=$_isHovering');
-        final bool highlight = _isHovering || widget.isFiltered;
-        final Color borderColor = highlight
-            ? (c.color ?? const Color(0xFF223131))
-            : Colors.transparent;
-        final Color indicatorColor = c.color ?? const Color(0xFF223131);
-        // class-move 드래그는 별도 UX로 다룰 예정(현재: 리스트 편집 UX 우선)
-        final cardBody = Container(
-          key: widget.key,
-          decoration: BoxDecoration(
-            color: const Color(0xFF15171C),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: borderColor, width: 2),
-          ),
-          child: Material(
-            color: Colors.transparent,
-            borderRadius: BorderRadius.circular(12),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  // ✅ 카드 높이 통일:
-                  // - "제목 1줄 + 설명 1줄" 영역 높이를 계산해(텍스트 스케일 반영) 항상 동일한 카드 높이를 유지한다.
-                  // - 설명이 없으면 제목을 해당 2줄 영역의 세로 중앙에 정렬한다.
-                  final String desc = c.description.trim();
-                  final bool hasDesc = desc.isNotEmpty;
+        },
+        onAccept: (data) async {
+          // print('[DEBUG][DragTarget] onAccept: data= [32m$data [0m');
+          debugPrint(
+              '[TT][class-drop][accept] class=${widget.classInfo.id} type=${data['type']}'
+              ' setId=${data['setId']} oldDay=${data['oldDayIndex']} oldTime=${data['oldStartTime']} hasStudentsList=${data['students'] is List}');
+          setState(() => _isHovering = false);
+          await _handleStudentDrop(data);
+        },
+        onMove: (_) {
+          // print('[DEBUG][DragTarget] onMove');
+          setState(() => _isHovering = true);
+        },
+        onLeave: (_) {
+          // print('[DEBUG][DragTarget] onLeave');
+          setState(() => _isHovering = false);
+        },
+        builder: (context, candidateData, rejectedData) {
+          // print('[DEBUG][DragTarget] builder: candidateData=$candidateData, rejectedData=$rejectedData, _isHovering=$_isHovering');
+          final bool highlight = _isHovering || widget.isFiltered;
+          final Color borderColor = highlight
+              ? (c.color ?? const Color(0xFF223131))
+              : Colors.transparent;
+          final Color indicatorColor = c.color ?? const Color(0xFF223131);
+          // class-move 드래그는 별도 UX로 다룰 예정(현재: 리스트 편집 UX 우선)
+          final cardBody = Container(
+            key: widget.key,
+            decoration: BoxDecoration(
+              color: const Color(0xFF15171C),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: borderColor, width: 2),
+            ),
+            child: Material(
+              color: Colors.transparent,
+              borderRadius: BorderRadius.circular(12),
+              child: Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    // ✅ 카드 높이 통일:
+                    // - "제목 1줄 + 설명 1줄" 영역 높이를 계산해(텍스트 스케일 반영) 항상 동일한 카드 높이를 유지한다.
+                    // - 설명이 없으면 제목을 해당 2줄 영역의 세로 중앙에 정렬한다.
+                    final String desc = c.description.trim();
+                    final bool hasDesc = desc.isNotEmpty;
 
-                  const titleStyle = TextStyle(
-                    color: Color(0xFFEAF2F2),
-                    fontSize: 18,
-                    fontWeight: FontWeight.w600,
-                    height: 1.15,
-                  );
-                  const descStyle = TextStyle(
-                    color: Colors.white70,
-                    fontSize: 14,
-                    height: 1.15,
-                  );
-                  const gap = 4.0;
-                  const extra = 2.0; // 렌더링 반올림 오차(0.x px) 방지용 여유치
-                  final ts = MediaQuery.textScalerOf(context);
-                  final titlePx = ts.scale(titleStyle.fontSize!);
-                  final descPx = ts.scale(descStyle.fontSize!);
-                  final textBlockH =
-                      (titlePx * titleStyle.height!) + gap + (descPx * descStyle.height!) + extra;
+                    const titleStyle = TextStyle(
+                      color: Color(0xFFEAF2F2),
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                      height: 1.15,
+                    );
+                    const descStyle = TextStyle(
+                      color: Colors.white70,
+                      fontSize: 14,
+                      height: 1.15,
+                    );
+                    const gap = 4.0;
+                    const extra = 2.0; // 렌더링 반올림 오차(0.x px) 방지용 여유치
+                    final ts = MediaQuery.textScalerOf(context);
+                    final titlePx = ts.scale(titleStyle.fontSize!);
+                    final descPx = ts.scale(descStyle.fontSize!);
+                    final textBlockH = (titlePx * titleStyle.height!) +
+                        gap +
+                        (descPx * descStyle.height!) +
+                        extra;
 
-                  return Row(
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      Container(
-                        width: 10,
-                        // ✅ 인디케이터 높이 = 제목+설명(2줄) 영역 높이
-                        height: textBlockH,
-                        decoration: BoxDecoration(
-                          color: indicatorColor,
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                      ),
-                      const SizedBox(width: 14),
-                      Expanded(
-                        child: SizedBox(
+                    return Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        Container(
+                          width: 10,
+                          // ✅ 인디케이터 높이 = 제목+설명(2줄) 영역 높이
                           height: textBlockH,
-                          child: hasDesc
-                              ? Column(
-                                  mainAxisSize: MainAxisSize.max,
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  mainAxisAlignment: MainAxisAlignment.start,
-                                  children: [
-                                    Text(
+                          decoration: BoxDecoration(
+                            color: indicatorColor,
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                        ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: SizedBox(
+                            height: textBlockH,
+                            child: hasDesc
+                                ? Column(
+                                    mainAxisSize: MainAxisSize.max,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    mainAxisAlignment: MainAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        c.name,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: titleStyle,
+                                      ),
+                                      const SizedBox(height: gap),
+                                      Text(
+                                        desc,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: descStyle,
+                                      ),
+                                    ],
+                                  )
+                                : Align(
+                                    alignment: Alignment.centerLeft,
+                                    child: Text(
                                       c.name,
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
                                       style: titleStyle,
                                     ),
-                                    const SizedBox(height: gap),
-                                    Text(
-                                      desc,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: descStyle,
-                                    ),
-                                  ],
-                                )
-                              : Align(
-                                  alignment: Alignment.centerLeft,
-                                  child: Text(
-                                    c.name,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: titleStyle,
                                   ),
-                                ),
+                          ),
                         ),
-                      ),
-                      const SizedBox(width: 10),
-                      Text(
-                        c.capacity == null
-                            ? '$studentCount명'
-                            : '$studentCount/${c.capacity}명',
-                        style: const TextStyle(
-                          color: Colors.white70,
-                          fontSize: 14,
-                          fontWeight: FontWeight.w500,
+                        const SizedBox(width: 10),
+                        Text(
+                          c.capacity == null
+                              ? '$studentCount명'
+                              : '$studentCount/${c.capacity}명',
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w500,
+                          ),
                         ),
-                      ),
-                    ],
-                  );
-                },
+                      ],
+                    );
+                  },
+                ),
               ),
             ),
-          ),
-        );
-        final baseBody = widget.onFilterToggle != null
-            ? GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: widget.onFilterToggle,
-                child: cardBody,
-              )
-            : cardBody;
+          );
+          final baseBody = widget.onFilterToggle != null
+              ? GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: widget.onFilterToggle,
+                  child: cardBody,
+                )
+              : cardBody;
 
-        if (!widget.enableActions) {
-          return baseBody;
-        }
+          if (!widget.enableActions) {
+            return baseBody;
+          }
 
-        const double paneW = 140;
-        final radius = BorderRadius.circular(12);
-        final actionPane = Padding(
-          padding: const EdgeInsets.fromLTRB(6, 6, 6, 6),
-          child: Row(
-            children: [
-              Expanded(
-                child: Material(
-                  color: const Color(0xFF223131),
-                  borderRadius: BorderRadius.circular(10),
-                  child: InkWell(
-                    onTap: widget.onEdit,
+          const double paneW = 140;
+          final radius = BorderRadius.circular(12);
+          final actionPane = Padding(
+            padding: const EdgeInsets.fromLTRB(6, 6, 6, 6),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Material(
+                    color: const Color(0xFF223131),
                     borderRadius: BorderRadius.circular(10),
-                    splashFactory: NoSplash.splashFactory,
-                    highlightColor: Colors.white.withOpacity(0.06),
-                    hoverColor: Colors.white.withOpacity(0.03),
-                    child: const SizedBox.expand(
-                      child: Center(
-                        child: Icon(Icons.edit_outlined, color: Color(0xFFEAF2F2), size: 18),
+                    child: InkWell(
+                      onTap: widget.onEdit,
+                      borderRadius: BorderRadius.circular(10),
+                      splashFactory: NoSplash.splashFactory,
+                      highlightColor: Colors.white.withOpacity(0.06),
+                      hoverColor: Colors.white.withOpacity(0.03),
+                      child: const SizedBox.expand(
+                        child: Center(
+                          child: Icon(Icons.edit_outlined,
+                              color: Color(0xFFEAF2F2), size: 18),
+                        ),
                       ),
                     ),
                   ),
                 ),
-              ),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Material(
-                  color: const Color(0xFFB74C4C),
-                  borderRadius: BorderRadius.circular(10),
-                  child: InkWell(
-                    onTap: widget.onDelete,
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Material(
+                    color: const Color(0xFFB74C4C),
                     borderRadius: BorderRadius.circular(10),
-                    splashFactory: NoSplash.splashFactory,
-                    highlightColor: Colors.white.withOpacity(0.08),
-                    hoverColor: Colors.white.withOpacity(0.04),
-                    child: const SizedBox.expand(
-                      child: Center(
-                        child: Icon(Icons.delete_outline_rounded, color: Colors.white, size: 18),
+                    child: InkWell(
+                      onTap: widget.onDelete,
+                      borderRadius: BorderRadius.circular(10),
+                      splashFactory: NoSplash.splashFactory,
+                      highlightColor: Colors.white.withOpacity(0.08),
+                      hoverColor: Colors.white.withOpacity(0.04),
+                      child: const SizedBox.expand(
+                        child: Center(
+                          child: Icon(Icons.delete_outline_rounded,
+                              color: Colors.white, size: 18),
+                        ),
                       ),
                     ),
                   ),
                 ),
-              ),
-            ],
-          ),
-        );
+              ],
+            ),
+          );
 
-        return SwipeActionReveal(
-          enabled: true,
-          actionPaneWidth: paneW,
-          borderRadius: radius,
-          actionPane: actionPane,
-          child: baseBody,
-        );
-      },
-    );
+          return SwipeActionReveal(
+            enabled: true,
+            actionPaneWidth: paneW,
+            borderRadius: radius,
+            actionPane: actionPane,
+            child: baseBody,
+          );
+        },
+      );
     }
 
     final card = buildCardBody();
@@ -5910,7 +6454,10 @@ class _ClassCardState extends State<_ClassCard> {
               decoration: BoxDecoration(
                 color: const Color(0xFF15171C),
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: (c.color ?? const Color(0xFF223131)).withOpacity(0.55), width: 2),
+                border: Border.all(
+                    color:
+                        (c.color ?? const Color(0xFF223131)).withOpacity(0.55),
+                    width: 2),
               ),
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
               child: Row(
@@ -5942,10 +6489,13 @@ class _ClassCardState extends State<_ClassCard> {
                         ),
                         const SizedBox(height: 3),
                         Text(
-                          c.capacity == null ? '학생 ${studentCount}명' : '학생 ${studentCount}/${c.capacity}명',
+                          c.capacity == null
+                              ? '학생 ${studentCount}명'
+                              : '학생 ${studentCount}/${c.capacity}명',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(color: Colors.white70, fontSize: 13),
+                          style: const TextStyle(
+                              color: Colors.white70, fontSize: 13),
                         ),
                       ],
                     ),
