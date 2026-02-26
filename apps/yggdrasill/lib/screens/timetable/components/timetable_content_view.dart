@@ -3,7 +3,6 @@ import 'dart:developer' as dev;
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/scheduler.dart';
-import 'package:material_symbols_icons/symbols.dart';
 import '../../../services/data_manager.dart';
 import '../../../widgets/student_card.dart';
 import 'timetable_grouped_student_panel.dart';
@@ -2067,11 +2066,6 @@ class TimetableContentViewState extends State<TimetableContentView> {
                                                         .width >
                                                     1600) ...[
                                                   const SizedBox(width: 6),
-                                                  // ✅ 수업 리스트 타이틀 아이콘: Material Design 3(비행기/Travel)
-                                                  const Icon(Symbols.flight,
-                                                      color: Color(0xFFEAF2F2),
-                                                      size: 28),
-                                                  const SizedBox(width: 10),
                                                   const Text(
                                                     '수업',
                                                     style: TextStyle(

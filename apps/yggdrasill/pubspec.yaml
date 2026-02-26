@@ -1,4 +1,4 @@
-﻿name: mneme_flutter
+name: mneme_flutter
 description: "A new Flutter project."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
@@ -75,6 +75,7 @@ dependencies:
       url: https://github.com/google/flutter-desktop-embedding.git
       path: plugins/window_size
       ref: 6c66ad23ee79749f30a8eece542cf54eaf157ed8
+  excel: ^4.0.6
 
 dev_dependencies:
   flutter_test:

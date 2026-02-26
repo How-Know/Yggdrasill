@@ -29,6 +29,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../services/schedule_store.dart';
+import '../../services/timetable_excel_export_service.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 import 'components/timetable_top_bar.dart';
 import 'components/timetable_search_field.dart';
@@ -88,6 +89,16 @@ class _BlockRange {
   _BlockRange({required this.start, this.end});
 }
 
+class _TimetableExcelExportSelection {
+  final bool includeAll;
+  final Set<int> dayIndices;
+
+  const _TimetableExcelExportSelection({
+    required this.includeAll,
+    required this.dayIndices,
+  });
+}
+
 class _TimetableScreenState extends State<TimetableScreen> {
   DateTime _selectedDate = DateTime.now();
   List<GroupInfo> _groups = [];
@@ -113,7 +124,6 @@ class _TimetableScreenState extends State<TimetableScreen> {
 
   final ScrollController _timetableScrollController = ScrollController();
   bool _hasScrolledToCurrentTime = false;
-  bool _hasScrolledOnTabClick = false; // 탭 클릭 시 스크롤 플래그 추가
   // 셀 선택 시 학생 리스트 상태 추가
   // 학생 리스트는 timetable_content_view.dart에서 계산
   int? _selectedCellDayIndex; // 셀 선택시 요일 인덱스
@@ -205,6 +215,185 @@ class _TimetableScreenState extends State<TimetableScreen> {
       if (mounted) {
         showAppSnackBar(context, '문의 노트를 열 수 없습니다.', useRoot: true);
       }
+    }
+  }
+
+  static const List<String> _excelWeekdayLabels = <String>[
+    '월',
+    '화',
+    '수',
+    '목',
+    '금',
+    '토',
+    '일',
+  ];
+
+  Future<_TimetableExcelExportSelection?> _showExcelExportOptionDialog() {
+    bool includeAll = true;
+    final Set<int> selectedDays = <int>{};
+
+    return showDialog<_TimetableExcelExportSelection>(
+      context: context,
+      barrierDismissible: true,
+      builder: (BuildContext dialogContext) {
+        return StatefulBuilder(
+          builder: (BuildContext dialogContext, StateSetter setModalState) {
+            final bool hasSelection = includeAll || selectedDays.isNotEmpty;
+            return AlertDialog(
+              backgroundColor: const Color(0xFF101819),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+                side: const BorderSide(color: Color(0xFF223131)),
+              ),
+              title: const Text(
+                '엑셀 내보내기',
+                style: TextStyle(
+                  color: Color(0xFFEAF2F2),
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              content: SizedBox(
+                width: 320,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        '생성할 시트를 선택해 주세요.',
+                        style: TextStyle(color: Colors.white70, fontSize: 13),
+                      ),
+                      const SizedBox(height: 10),
+                      CheckboxListTile(
+                        contentPadding: EdgeInsets.zero,
+                        dense: true,
+                        visualDensity: VisualDensity.compact,
+                        activeColor: const Color(0xFF33A373),
+                        checkColor: Colors.white,
+                        controlAffinity: ListTileControlAffinity.leading,
+                        value: includeAll,
+                        onChanged: (bool? value) {
+                          setModalState(() {
+                            includeAll = value ?? false;
+                          });
+                        },
+                        title: const Text(
+                          '전체 (정원만)',
+                          style: TextStyle(color: Colors.white),
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      const Divider(color: Color(0xFF223131), height: 1),
+                      const SizedBox(height: 8),
+                      ...List<Widget>.generate(_excelWeekdayLabels.length,
+                          (int day) {
+                        return CheckboxListTile(
+                          contentPadding: EdgeInsets.zero,
+                          dense: true,
+                          visualDensity: VisualDensity.compact,
+                          activeColor: const Color(0xFF33A373),
+                          checkColor: Colors.white,
+                          controlAffinity: ListTileControlAffinity.leading,
+                          value: selectedDays.contains(day),
+                          onChanged: (bool? value) {
+                            setModalState(() {
+                              if (value ?? false) {
+                                selectedDays.add(day);
+                              } else {
+                                selectedDays.remove(day);
+                              }
+                            });
+                          },
+                          title: Text(
+                            _excelWeekdayLabels[day],
+                            style: const TextStyle(color: Colors.white),
+                          ),
+                        );
+                      }),
+                      if (!hasSelection)
+                        const Padding(
+                          padding: EdgeInsets.only(top: 8),
+                          child: Text(
+                            '최소 1개 이상 선택해 주세요.',
+                            style: TextStyle(
+                              color: Color(0xFFF16C6C),
+                              fontSize: 12,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: const Text(
+                    '취소',
+                    style: TextStyle(color: Colors.white70),
+                  ),
+                ),
+                FilledButton(
+                  onPressed: hasSelection
+                      ? () {
+                          Navigator.of(dialogContext).pop(
+                            _TimetableExcelExportSelection(
+                              includeAll: includeAll,
+                              dayIndices: Set<int>.from(selectedDays),
+                            ),
+                          );
+                        }
+                      : null,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFF33A373),
+                    foregroundColor: Colors.white,
+                  ),
+                  child: const Text('내보내기'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<void> _onExportPressed() async {
+    final _TimetableExcelExportSelection? selection =
+        await _showExcelExportOptionDialog();
+    if (selection == null) return;
+
+    final TimetableExcelExportResult result =
+        await TimetableExcelExportService.exportWeekTimetable(
+      selectedDate: _selectedDate,
+      operatingHours: _operatingHours,
+      includeAllSheet: selection.includeAll,
+      selectedDayIndices: selection.dayIndices,
+    );
+
+    if (!mounted) return;
+    switch (result.status) {
+      case TimetableExcelExportStatus.saved:
+        showAppSnackBar(
+          context,
+          '엑셀 파일을 저장했습니다.',
+          useRoot: true,
+        );
+        break;
+      case TimetableExcelExportStatus.cancelled:
+        showAppSnackBar(
+          context,
+          '엑셀 저장을 취소했습니다.',
+          useRoot: true,
+        );
+        break;
+      case TimetableExcelExportStatus.failed:
+        showAppSnackBar(
+          context,
+          result.message ?? '엑셀 내보내기에 실패했습니다.',
+          useRoot: true,
+        );
+        break;
     }
   }
 
@@ -567,7 +756,10 @@ class _TimetableScreenState extends State<TimetableScreen> {
     // }
   }
 
-  void _scrollToCurrentTime({bool preferAnimate = false}) {
+  void _scrollToCurrentTime({
+    bool preferAnimate = false,
+    int retryAttempt = 0,
+  }) {
     final timeBlocks = _generateTimeBlocks();
     if (timeBlocks.isEmpty) return;
     // 현재 시간
@@ -632,6 +824,120 @@ class _TimetableScreenState extends State<TimetableScreen> {
         // ignore: avoid_print
         print('[DEBUG][Timetable] scroll controller has no clients yet');
       }
+      if (retryAttempt >= 12) return;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _scrollToCurrentTime(
+          preferAnimate: preferAnimate,
+          retryAttempt: retryAttempt + 1,
+        );
+      });
+    }
+  }
+
+  void _scrollToTimeColumnCenter(
+    DateTime startTime, {
+    bool preferAnimate = true,
+  }) {
+    final timeBlocks = _generateTimeBlocks();
+    if (timeBlocks.isEmpty) return;
+    final targetIdx = timeBlocks.indexWhere(
+      (b) =>
+          b.startTime.hour == startTime.hour &&
+          b.startTime.minute == startTime.minute,
+    );
+    if (targetIdx < 0) return;
+
+    if (!_timetableScrollController.hasClients) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _scrollToTimeColumnCenter(startTime, preferAnimate: preferAnimate);
+      });
+      return;
+    }
+
+    const double timeColumnWidth = 148.0;
+    final position = _timetableScrollController.position;
+    final viewportWidth = position.viewportDimension;
+    final centerX = (targetIdx * timeColumnWidth) + (timeColumnWidth / 2);
+    final desiredOffset = centerX - (viewportWidth / 2);
+    final scrollTo =
+        desiredOffset.clamp(position.minScrollExtent, position.maxScrollExtent);
+    final current = _timetableScrollController.offset;
+    final delta = (scrollTo - current).abs();
+    if (delta <= 1) return;
+
+    if (preferAnimate) {
+      final ms = (220 + (delta / (timeColumnWidth * 20) * 200))
+          .clamp(220, 480)
+          .round();
+      _timetableScrollController.animateTo(
+        scrollTo,
+        duration: Duration(milliseconds: ms),
+        curve: Curves.easeOutCubic,
+      );
+    } else {
+      _timetableScrollController.jumpTo(scrollTo);
+    }
+  }
+
+  void _selectCurrentTimeCell({
+    bool centerHorizontally = true,
+    bool preferAnimate = true,
+  }) {
+    final now = DateTime.now();
+    final dayIdx = (now.weekday - DateTime.monday).clamp(0, 6);
+    if (_operatingHours.length <= dayIdx) return;
+
+    final op = _operatingHours[dayIdx];
+    final opStart =
+        DateTime(now.year, now.month, now.day, op.startHour, op.startMinute);
+    final opEnd =
+        DateTime(now.year, now.month, now.day, op.endHour, op.endMinute);
+    final withinOperatingHours = now.isAfter(opStart) && now.isBefore(opEnd);
+    if (!withinOperatingHours) return;
+
+    final blocks = _generateTimeBlocks();
+    if (blocks.isEmpty) return;
+
+    final nowTod = TimeOfDay(hour: now.hour, minute: now.minute);
+    int currentIdx = 0;
+    for (int i = 0; i < blocks.length; i++) {
+      final b = blocks[i];
+      final h = b.startTime.hour;
+      final m = b.startTime.minute;
+      if (h < nowTod.hour || (h == nowTod.hour && m <= nowTod.minute)) {
+        currentIdx = i;
+      }
+    }
+    final first = blocks.first.startTime;
+    final last = blocks.last.startTime;
+    if (now.isBefore(first)) currentIdx = 0;
+    if (now.isAfter(last)) currentIdx = blocks.length - 1;
+
+    final chosen = blocks[currentIdx].startTime;
+    setState(() {
+      _selectedCellDayIndex = dayIdx;
+      _selectedStartTimeHour = chosen.hour;
+      _selectedStartTimeMinute = chosen.minute;
+    });
+
+    if (centerHorizontally) {
+      final selectedDate = _selectedDate;
+      final selectedStartTime = DateTime(
+        selectedDate.year,
+        selectedDate.month,
+        selectedDate.day,
+        chosen.hour,
+        chosen.minute,
+      );
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _scrollToTimeColumnCenter(
+          selectedStartTime,
+          preferAnimate: preferAnimate,
+        );
+      });
     }
   }
 
@@ -700,65 +1006,13 @@ class _TimetableScreenState extends State<TimetableScreen> {
     setState(() {
       _operatingHours = hours;
     });
-    // 운영시간 로드 후 스크롤 및 자동 선택 로그
+    // 운영시간 로드 후 초기 1회 현재 시간 셀 자동 선택
     if (!_hasScrolledToCurrentTime) {
-      WidgetsBinding.instance.addPostFrameCallback(
-          (_) => _scrollToCurrentTime(preferAnimate: true));
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _selectCurrentTimeCell(centerHorizontally: true, preferAnimate: true);
+      });
       _hasScrolledToCurrentTime = true;
-    }
-    // 운영시간 내라면 현재 시간 셀 자동 선택 (그리드 타임블록에 스냅)
-    if (_selectedCellDayIndex == null ||
-        _selectedStartTimeHour == null ||
-        _selectedStartTimeMinute == null) {
-      final now = DateTime.now();
-      final dayIdx = (now.weekday - DateTime.monday).clamp(0, 6);
-      if (_operatingHours.length > dayIdx) {
-        final op = _operatingHours[dayIdx];
-        final start = DateTime(
-            now.year, now.month, now.day, op.startHour, op.startMinute);
-        final end =
-            DateTime(now.year, now.month, now.day, op.endHour, op.endMinute);
-        final within = now.isAfter(start) && now.isBefore(end);
-        if (_kRegistrationPerfDebug) {
-          // ignore: avoid_print
-          print(
-              '[DEBUG][Timetable] auto-select check: now=$now start=$start end=$end within=$within');
-        }
-        if (within) {
-          // 1) 해당 날짜의 타임블록 생성
-          final blocks = _generateTimeBlocks();
-          if (blocks.isNotEmpty) {
-            // 2) now 이하 중 가장 가까운 블록 인덱스 선택(없으면 0, 크면 마지막)
-            final nowTod = TimeOfDay(hour: now.hour, minute: now.minute);
-            int currentIdx = 0;
-            for (int i = 0; i < blocks.length; i++) {
-              final b = blocks[i];
-              final h = b.startTime.hour;
-              final m = b.startTime.minute;
-              if (h < nowTod.hour || (h == nowTod.hour && m <= nowTod.minute)) {
-                currentIdx = i;
-              }
-            }
-            // 경계 보정
-            final first = blocks.first.startTime;
-            final last = blocks.last.startTime;
-            if (now.isBefore(first)) currentIdx = 0;
-            if (now.isAfter(last)) currentIdx = blocks.length - 1;
-
-            final chosen = blocks[currentIdx].startTime;
-            setState(() {
-              _selectedCellDayIndex = dayIdx;
-              _selectedStartTimeHour = chosen.hour;
-              _selectedStartTimeMinute = chosen.minute;
-            });
-            if (_kRegistrationPerfDebug) {
-              // ignore: avoid_print
-              print(
-                  '[DEBUG][Timetable] auto-selected(snapped): dayIdx=$_selectedCellDayIndex time=${_selectedStartTimeHour}:${_selectedStartTimeMinute}');
-            }
-          }
-        }
-      }
     }
   }
 
@@ -1602,16 +1856,21 @@ class _TimetableScreenState extends State<TimetableScreen> {
                         selectedIndex:
                             (_viewType == TimetableViewType.classes) ? 0 : 1,
                         onTabSelected: (i) {
+                          final previousViewType = _viewType;
                           setState(() {
                             _viewType = (i == 0)
                                 ? TimetableViewType.classes
                                 : TimetableViewType.schedule;
                           });
 
-                          if ((i == 0) && !_hasScrolledOnTabClick) {
-                            WidgetsBinding.instance.addPostFrameCallback((_) =>
-                                _scrollToCurrentTime(preferAnimate: true));
-                            _hasScrolledOnTabClick = true;
+                          if (i == 0 &&
+                              previousViewType != TimetableViewType.classes) {
+                            WidgetsBinding.instance.addPostFrameCallback((_) {
+                              if (!mounted) return;
+                              _selectCurrentTimeCell(
+                                  centerHorizontally: true,
+                                  preferAnimate: true);
+                            });
                           }
                         },
                         actionRow: _buildHeaderActionRow(),
@@ -1823,6 +2082,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
                     onDaySelected: _onDayHeaderSelected,
                     isRegistrationMode:
                         _isStudentRegistrationMode || _isClassRegistrationMode,
+                    onExportPressed: _onExportPressed,
                     isClassListSheetOpen: _isClassListSheetOpen,
                     onClassListSheetToggle: () {
                       setState(() {
@@ -2109,6 +2369,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
                     onTimeSelected: (dayIdx, startTime) {
                       _beginCellRenderPerfTrace(
                           dayIdx: dayIdx, startTime: startTime);
+                      bool shouldCenter = false;
                       setState(() {
                         final bool isSameCell =
                             _selectedCellDayIndex == dayIdx &&
@@ -2122,8 +2383,15 @@ class _TimetableScreenState extends State<TimetableScreen> {
                           _selectedCellDayIndex = dayIdx;
                           _selectedStartTimeHour = startTime.hour;
                           _selectedStartTimeMinute = startTime.minute;
+                          shouldCenter = true;
                         }
                       });
+                      if (shouldCenter) {
+                        WidgetsBinding.instance.addPostFrameCallback((_) {
+                          if (!mounted) return;
+                          _scrollToTimeColumnCenter(startTime);
+                        });
+                      }
                     },
                     onCellStudentsSelected:
                         (dayIdx, startTimes, students) async {
@@ -2531,6 +2799,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
           onDaySelected: _onDayHeaderSelected,
           isRegistrationMode:
               _isStudentRegistrationMode || _isClassRegistrationMode,
+          onExportPressed: _onExportPressed,
         ),
         // 등록 안내문구/카운트
         if (_isStudentRegistrationMode && _selectedStudentWithInfo != null)
@@ -2583,6 +2852,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
             onTimeSelected: (int dayIdx, DateTime startTime) {
               print(
                   '[DEBUG][onTimeSelected] 셀 클릭: dayIdx=$dayIdx, startTime=$startTime');
+              bool shouldCenter = false;
               setState(() {
                 final bool isSameCell = _selectedCellDayIndex == dayIdx &&
                     _selectedStartTimeHour == startTime.hour &&
@@ -2595,10 +2865,17 @@ class _TimetableScreenState extends State<TimetableScreen> {
                   _selectedCellDayIndex = dayIdx;
                   _selectedStartTimeHour = startTime.hour;
                   _selectedStartTimeMinute = startTime.minute;
+                  shouldCenter = true;
                 }
                 print(
                     '[DEBUG][onTimeSelected][setState후] _selectedCellDayIndex=$_selectedCellDayIndex, _selectedStartTimeHour=$_selectedStartTimeHour, _selectedStartTimeMinute=$_selectedStartTimeMinute');
               });
+              if (shouldCenter) {
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (!mounted) return;
+                  _scrollToTimeColumnCenter(startTime);
+                });
+              }
             },
             onCellStudentsSelected: (int dayIdx, List<DateTime> startTimes,
                 List<StudentWithInfo> students) async {

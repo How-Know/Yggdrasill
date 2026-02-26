@@ -9,6 +9,7 @@ class TimetableHeader extends StatefulWidget {
   final bool isRegistrationMode;
   final bool isClassListSheetOpen;
   final VoidCallback? onClassListSheetToggle;
+  final VoidCallback? onExportPressed;
 
   const TimetableHeader({
     Key? key,
@@ -19,6 +20,7 @@ class TimetableHeader extends StatefulWidget {
     this.isRegistrationMode = false,
     this.isClassListSheetOpen = false,
     this.onClassListSheetToggle,
+    this.onExportPressed,
   }) : super(key: key);
 
   @override
@@ -32,7 +34,8 @@ class _TimetableHeaderState extends State<TimetableHeader> {
       a.year == b.year && a.month == b.month && a.day == b.day;
 
   List<DateTime> _getWeekDays() {
-    final monday = widget.selectedDate.subtract(Duration(days: widget.selectedDate.weekday - 1));
+    final monday = widget.selectedDate
+        .subtract(Duration(days: widget.selectedDate.weekday - 1));
     return List.generate(7, (index) => monday.add(Duration(days: index)));
   }
 
@@ -96,64 +99,50 @@ class _TimetableHeaderState extends State<TimetableHeader> {
                 width: 48,
                 height: 48,
                 child: IconButton(
-                  tooltip: '엑셀 내보내기(준비중)',
-                  onPressed: () {
-                    // TODO: 엑셀 내보내기 기능 연결
-                  },
+                  tooltip: '엑셀 내보내기',
+                  onPressed: widget.onExportPressed,
                   // ✅ 20% 확대
-                  icon: const Icon(Symbols.output, color: Colors.white70, size: 26),
+                  icon: const Icon(Symbols.output,
+                      color: Colors.white70, size: 26),
                   splashRadius: 22,
                   padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                  constraints:
+                      const BoxConstraints(minWidth: 32, minHeight: 32),
                 ),
               ),
               const SizedBox(width: 6),
-              Material(
-                color: widget.isClassListSheetOpen
-                    ? const Color(0xFF223131)
-                    : const Color(0xFF2A2A2A),
-                borderRadius: BorderRadius.circular(24),
-                clipBehavior: Clip.antiAlias,
-                child: InkWell(
+              Tooltip(
+                message: '수업',
+                waitDuration: const Duration(milliseconds: 200),
+                child: Material(
+                  color: Colors.transparent,
                   borderRadius: BorderRadius.circular(24),
-                  hoverColor: Colors.white.withOpacity(0.06),
-                  highlightColor: Colors.white.withOpacity(0.04),
-                  splashColor: Colors.white.withOpacity(0.10),
-                  onTap: widget.onClassListSheetToggle,
-                  child: SizedBox(
-                    height: 48,
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 14, vertical: 8),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            widget.isClassListSheetOpen
-                                ? Icons.view_sidebar_rounded
-                                : Icons.view_sidebar_outlined,
-                            color: const Color(0xFFEAF2F2),
-                            size: 20,
-                          ),
-                          const SizedBox(width: 6),
-                          const Text(
-                            '수업',
-                            style: TextStyle(
-                              color: Color(0xFFEAF2F2),
-                              fontSize: 14,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ],
+                  clipBehavior: Clip.antiAlias,
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(24),
+                    hoverColor: Colors.white.withOpacity(0.06),
+                    highlightColor: Colors.white.withOpacity(0.04),
+                    splashColor: Colors.white.withOpacity(0.10),
+                    onTap: widget.onClassListSheetToggle,
+                    child: SizedBox(
+                      width: 48,
+                      height: 48,
+                      child: Icon(
+                        Symbols.flight,
+                        color: widget.isClassListSheetOpen
+                            ? const Color(0xFFEAF2F2)
+                            : Colors.white70,
+                        size: 26,
                       ),
                     ),
                   ),
                 ),
               ),
-              const SizedBox(width: 6),
+              const SizedBox(width: 10),
               Container(
                 height: 48,
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                 decoration: BoxDecoration(
                   color: const Color(0xFF2A2A2A),
                   borderRadius: BorderRadius.circular(24),
@@ -167,13 +156,16 @@ class _TimetableHeaderState extends State<TimetableHeader> {
                       IconButton(
                         tooltip: '이전 주',
                         onPressed: () {
-                          final newDate = widget.selectedDate.subtract(const Duration(days: 7));
+                          final newDate = widget.selectedDate
+                              .subtract(const Duration(days: 7));
                           widget.onDateChanged(newDate);
                         },
-                        icon: const Icon(Icons.chevron_left, color: Colors.white70, size: 22),
+                        icon: const Icon(Icons.chevron_left,
+                            color: Colors.white70, size: 22),
                         splashRadius: 18,
                         padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                        constraints:
+                            const BoxConstraints(minWidth: 32, minHeight: 32),
                       ),
                       const SizedBox(width: 4),
                       InkWell(
@@ -182,10 +174,14 @@ class _TimetableHeaderState extends State<TimetableHeader> {
                         },
                         borderRadius: BorderRadius.circular(8),
                         child: Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 6.0, vertical: 2.0),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 6.0, vertical: 2.0),
                           child: Text(
                             '${_getWeekOfMonth(widget.selectedDate)}주차',
-                            style: const TextStyle(color: Colors.white70, fontSize: 18, fontWeight: FontWeight.w700),
+                            style: const TextStyle(
+                                color: Colors.white70,
+                                fontSize: 18,
+                                fontWeight: FontWeight.w700),
                           ),
                         ),
                       ),
@@ -193,13 +189,16 @@ class _TimetableHeaderState extends State<TimetableHeader> {
                       IconButton(
                         tooltip: '다음 주',
                         onPressed: () {
-                          final newDate = widget.selectedDate.add(const Duration(days: 7));
+                          final newDate =
+                              widget.selectedDate.add(const Duration(days: 7));
                           widget.onDateChanged(newDate);
                         },
-                        icon: const Icon(Icons.chevron_right, color: Colors.white70, size: 22),
+                        icon: const Icon(Icons.chevron_right,
+                            color: Colors.white70, size: 22),
                         splashRadius: 18,
                         padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                        constraints:
+                            const BoxConstraints(minWidth: 32, minHeight: 32),
                       ),
                       const SizedBox(width: 4),
                       IconButton(
@@ -209,11 +208,13 @@ class _TimetableHeaderState extends State<TimetableHeader> {
                             context: context,
                             initialDate: widget.selectedDate,
                             firstDate: DateTime(2020, 1, 1),
-                            lastDate: DateTime.now().add(const Duration(days: 365 * 3)),
+                            lastDate: DateTime.now()
+                                .add(const Duration(days: 365 * 3)),
                             builder: (context, child) {
                               return Theme(
                                 data: Theme.of(context).copyWith(
-                                  colorScheme: const ColorScheme.dark(primary: Color(0xFF1976D2)),
+                                  colorScheme: const ColorScheme.dark(
+                                      primary: Color(0xFF1976D2)),
                                 ),
                                 child: child!,
                               );
@@ -223,10 +224,12 @@ class _TimetableHeaderState extends State<TimetableHeader> {
                             widget.onDateChanged(picked);
                           }
                         },
-                        icon: const Icon(Icons.calendar_today, color: Colors.white70, size: 22),
+                        icon: const Icon(Icons.calendar_today,
+                            color: Colors.white70, size: 22),
                         splashRadius: 18,
                         padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                        constraints:
+                            const BoxConstraints(minWidth: 32, minHeight: 32),
                       ),
                     ],
                   ),

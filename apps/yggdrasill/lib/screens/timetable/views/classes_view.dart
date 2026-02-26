@@ -155,7 +155,9 @@ class _ClassesViewState extends State<ClassesView>
   String? _weekRenderCacheKey;
   _ClassesWeekRenderCache? _weekRenderCache;
   final ScrollController _headerScrollController = ScrollController();
+  final ScrollController _verticalBodyScrollController = ScrollController();
   bool _headerSyncScheduled = false;
+  String? _lastAutoCenteredSelectionKey;
 
   bool _isClassAllowed(String? sessionTypeId) {
     final cids = widget.filteredClassIds;
@@ -527,6 +529,55 @@ class _ClassesViewState extends State<ClassesView>
     });
   }
 
+  String _selectionAutoCenterKey(int dayIdx, DateTime startTime) {
+    return '$dayIdx|${startTime.year}-${startTime.month}-${startTime.day}|${startTime.hour}:${startTime.minute}';
+  }
+
+  void _scrollToSelectedRowCenter({
+    required int dayIdx,
+    required double blockHeight,
+    required double expansionHeight,
+    bool preferAnimate = true,
+  }) {
+    if (!_verticalBodyScrollController.hasClients) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _scrollToSelectedRowCenter(
+          dayIdx: dayIdx,
+          blockHeight: blockHeight,
+          expansionHeight: expansionHeight,
+          preferAnimate: preferAnimate,
+        );
+      });
+      return;
+    }
+
+    final position = _verticalBodyScrollController.position;
+    final viewport = position.viewportDimension;
+    final rowTop = dayIdx * blockHeight;
+    final anchorY = expansionHeight > 0
+        ? (rowTop + blockHeight + (expansionHeight / 2))
+        : (rowTop + (blockHeight / 2));
+    final target = (anchorY - (viewport / 2))
+        .clamp(position.minScrollExtent, position.maxScrollExtent)
+        .toDouble();
+    final current = _verticalBodyScrollController.offset;
+    final delta = (target - current).abs();
+    if (delta <= 1) return;
+
+    if (preferAnimate) {
+      final ms =
+          (180 + (delta / (blockHeight * 5.5) * 220)).clamp(180, 460).round();
+      _verticalBodyScrollController.animateTo(
+        target,
+        duration: Duration(milliseconds: ms),
+        curve: Curves.easeOutCubic,
+      );
+    } else {
+      _verticalBodyScrollController.jumpTo(target);
+    }
+  }
+
   Set<String> get dragHighlightKeys {
     if (!isDragging ||
         dragDayIdx == null ||
@@ -826,6 +877,7 @@ class _ClassesViewState extends State<ClassesView>
   void dispose() {
     widget.scrollController.removeListener(_syncHeaderScrollWithBody);
     _headerScrollController.dispose();
+    _verticalBodyScrollController.dispose();
     ConsultInquiryDemandService.instance.slotsNotifier
         .removeListener(_inquiryDemandListener);
     ConsultTrialLessonService.instance.slotsNotifier
@@ -1546,6 +1598,37 @@ class _ClassesViewState extends State<ClassesView>
                   selectedRowExpansionHeight = rawHeight;
                 }
 
+                final String? selectedAutoCenterKey =
+                    (selectedDayIdx != null && selectedCellStartTime != null)
+                        ? _selectionAutoCenterKey(
+                            selectedDayIdx, selectedCellStartTime)
+                        : null;
+                if (selectedAutoCenterKey == null) {
+                  _lastAutoCenteredSelectionKey = null;
+                } else if (_lastAutoCenteredSelectionKey !=
+                    selectedAutoCenterKey) {
+                  _lastAutoCenteredSelectionKey = selectedAutoCenterKey;
+                  final int dayToCenter = selectedDayIdx!;
+                  final double expansionToCenter = selectedRowExpansionHeight;
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (!mounted) return;
+                    _scrollToSelectedRowCenter(
+                      dayIdx: dayToCenter,
+                      blockHeight: blockHeight.toDouble(),
+                      expansionHeight: expansionToCenter,
+                    );
+                    // AnimatedSize 확장 후 maxScrollExtent가 반영된 프레임에서 2차 보정
+                    Future.delayed(const Duration(milliseconds: 260), () {
+                      if (!mounted) return;
+                      _scrollToSelectedRowCenter(
+                        dayIdx: dayToCenter,
+                        blockHeight: blockHeight.toDouble(),
+                        expansionHeight: expansionToCenter,
+                      );
+                    });
+                  });
+                }
+
                 return Column(
                   children: [
                     // 상단 시간축(및 요일 헤더)은 고정하고, 본문만 세로 스크롤
@@ -1625,6 +1708,7 @@ class _ClassesViewState extends State<ClassesView>
                     ),
                     Expanded(
                       child: SingleChildScrollView(
+                        controller: _verticalBodyScrollController,
                         child: Row(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
