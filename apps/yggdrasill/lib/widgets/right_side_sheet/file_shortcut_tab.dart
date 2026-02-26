@@ -195,6 +195,7 @@ class _FileShortcutTabState extends State<FileShortcutTab> {
     await PrintRoutingService.instance.printFile(
       path: path,
       channel: PrintRoutingChannel.general,
+      debugSource: 'right_sheet.file_shortcut',
     );
   }
 
@@ -1574,6 +1575,87 @@ class _FileCardState extends State<_FileCard> {
     }
   }
 
+  Future<void> _runWithPrintProgressDialog({
+    required Future<void> Function(ValueNotifier<String> progressText) run,
+  }) async {
+    if (!mounted) return;
+    final progressText = ValueNotifier<String>('인쇄 파일을 준비하는 중입니다...');
+    final dialogContextCompleter = Completer<BuildContext>();
+
+    unawaited(
+      showDialog<void>(
+        context: widget.dialogContext,
+        useRootNavigator: true,
+        barrierDismissible: false,
+        builder: (dialogContext) {
+          if (!dialogContextCompleter.isCompleted) {
+            dialogContextCompleter.complete(dialogContext);
+          }
+          return PopScope(
+            canPop: false,
+            child: AlertDialog(
+              backgroundColor: _rsBg,
+              contentPadding: const EdgeInsets.fromLTRB(24, 22, 24, 22),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+                side: const BorderSide(color: _rsBorder),
+              ),
+              content: SizedBox(
+                width: 360,
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    const SizedBox(
+                      width: 22,
+                      height: 22,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2.6,
+                        color: _rsAccent,
+                      ),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: ValueListenableBuilder<String>(
+                        valueListenable: progressText,
+                        builder: (context, text, _) {
+                          return SizedBox(
+                            height: 24,
+                            child: Align(
+                              alignment: Alignment.centerLeft,
+                              child: Text(
+                                text,
+                                style: const TextStyle(
+                                  color: _rsText,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+
+    BuildContext? dialogContext;
+    try {
+      dialogContext = await dialogContextCompleter.future;
+      await run(progressText);
+    } finally {
+      progressText.dispose();
+      if (dialogContext != null && dialogContext.mounted) {
+        Navigator.of(dialogContext, rootNavigator: true).pop();
+      }
+    }
+  }
+
   Future<void> _printNow() async {
     if (_printing) return;
     final srcPath = _activePath.trim();
@@ -1585,43 +1667,56 @@ class _FileCardState extends State<_FileCard> {
       return;
     }
     setState(() => _printing = true);
+    String? printError;
     try {
-      unawaited(_cleanupOldPrintTemps());
-      // HWP는 환경별로 자동화(숨김/키보드) 방식이 쉽게 깨질 수 있어,
-      // 가장 안정적인 방식(Windows Shell Verb "Print")으로 위임한다.
-      // -> "파일은 안 열리고, 인쇄 진행/대화창만 뜬 뒤 자동 인쇄"가 이 경로에서 동작하는 경우가 많다.
-      if (_activeKind == _FsFileKind.hwp) {
-        await _printHwpShellVerbBestEffort(path: srcPath, paper: _paperSize);
-        return;
-      }
-      String pathToPrint = srcPath;
-      String? tempToDelete;
-      // 용지 크기 지정은 PDF에서만 적용(새 PDF 생성)
-      if (_activeKind == _FsFileKind.pdf) {
-        final rangeText = _pageRangeCtrl.text.trim();
-        if (_paperSize != _FsPaperSize.followFile || rangeText.isNotEmpty) {
-          final out = await _buildPdfForPrint(
-            inputPath: srcPath,
-            paper: _paperSize,
-            pageRange: rangeText,
-          );
-          if (out != null && out.trim().isNotEmpty) {
-            pathToPrint = out.trim();
-            tempToDelete = pathToPrint;
-          } else if (rangeText.isNotEmpty && mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('페이지 범위를 확인하세요. (예: 10-15, 20)')),
-            );
+      await _runWithPrintProgressDialog(
+        run: (progressText) async {
+          unawaited(_cleanupOldPrintTemps());
+          // HWP는 환경별로 자동화(숨김/키보드) 방식이 쉽게 깨질 수 있어,
+          // 가장 안정적인 방식(Windows Shell Verb "Print")으로 위임한다.
+          // -> "파일은 안 열리고, 인쇄 진행/대화창만 뜬 뒤 자동 인쇄"가 이 경로에서 동작하는 경우가 많다.
+          if (_activeKind == _FsFileKind.hwp) {
+            progressText.value = '프린터로 전송 중입니다...';
+            await _printHwpShellVerbBestEffort(
+                path: srcPath, paper: _paperSize);
             return;
           }
-        }
-      }
-      await widget.onPrint(pathToPrint);
-      if (tempToDelete != null) {
-        _scheduleTempDelete(tempToDelete);
-      }
+
+          String pathToPrint = srcPath;
+          String? tempToDelete;
+          // 용지 크기 지정은 PDF에서만 적용(새 PDF 생성)
+          if (_activeKind == _FsFileKind.pdf) {
+            final rangeText = _pageRangeCtrl.text.trim();
+            if (_paperSize != _FsPaperSize.followFile || rangeText.isNotEmpty) {
+              progressText.value = '선택한 페이지를 인쇄 파일로 만드는 중입니다...';
+              final out = await _buildPdfForPrint(
+                inputPath: srcPath,
+                paper: _paperSize,
+                pageRange: rangeText,
+              );
+              if (out != null && out.trim().isNotEmpty) {
+                pathToPrint = out.trim();
+                tempToDelete = pathToPrint;
+              } else if (rangeText.isNotEmpty) {
+                printError = '페이지 범위를 확인하세요. (예: 10-15, 20)';
+                return;
+              }
+            }
+          }
+          progressText.value = '프린터로 전송 중입니다...';
+          await widget.onPrint(pathToPrint);
+          if (tempToDelete != null) {
+            _scheduleTempDelete(tempToDelete);
+          }
+        },
+      );
     } finally {
       if (mounted) setState(() => _printing = false);
+    }
+    if (printError != null && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(printError!)),
+      );
     }
   }
 
@@ -1668,14 +1763,19 @@ class _FileCardState extends State<_FileCard> {
           ),
         ),
       );
-      if (!_hasMultipleKinds || _printing) return chip;
+      final Widget picker = (_hasMultipleKinds && !_printing)
+          ? InkWell(
+              key: _kindAnchorKey,
+              onTap: _openKindMenu,
+              borderRadius: BorderRadius.circular(10),
+              child: chip,
+            )
+          : chip;
       return SizedBox(
         height: _controlHeight,
-        child: InkWell(
-          key: _kindAnchorKey,
-          onTap: _openKindMenu,
-          borderRadius: BorderRadius.circular(10),
-          child: chip,
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: picker,
         ),
       );
     }
@@ -1798,6 +1898,10 @@ class _FileCardState extends State<_FileCard> {
                         contentPadding: const EdgeInsets.symmetric(
                             horizontal: 10, vertical: 10),
                         enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                          borderSide: const BorderSide(color: _rsBorder),
+                        ),
+                        disabledBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(10),
                           borderSide: const BorderSide(color: _rsBorder),
                         ),

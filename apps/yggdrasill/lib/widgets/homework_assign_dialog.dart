@@ -382,7 +382,8 @@ Future<HomeworkAssignSelection?> showHomeworkAssignDialog(
                                   value: selectedNow,
                                   onChanged: (v) {
                                     setState(() {
-                                      selectedBehaviors[behavior.id] = v ?? false;
+                                      selectedBehaviors[behavior.id] =
+                                          v ?? false;
                                     });
                                   },
                                   activeColor: kDlgAccent,
@@ -419,7 +420,8 @@ Future<HomeworkAssignSelection?> showHomeworkAssignDialog(
                                                     const Text(
                                                       '비정기',
                                                       style: TextStyle(
-                                                        color: Color(0xFFF2B56B),
+                                                        color:
+                                                            Color(0xFFF2B56B),
                                                         fontSize: 12,
                                                         fontWeight:
                                                             FontWeight.w700,
@@ -565,20 +567,22 @@ Future<HomeworkAssignSelection?> showHomeworkAssignDialog(
                                         .where((e) => e.value)
                                         .map((e) => e.key)
                                         .toList();
-                                    final selectedBehaviorIds = selectedBehaviors
-                                        .entries
-                                        .where((e) => e.value)
-                                        .map((e) => e.key)
-                                        .toList();
+                                    final selectedBehaviorIds =
+                                        selectedBehaviors.entries
+                                            .where((e) => e.value)
+                                            .map((e) => e.key)
+                                            .toList();
                                     final irregularCounts = <String, int>{};
-                                    for (final behavior in behaviorAssignments) {
+                                    for (final behavior
+                                        in behaviorAssignments) {
                                       if (!behavior.isIrregular) continue;
                                       if (!(selectedBehaviors[behavior.id] ??
                                           false)) {
                                         continue;
                                       }
                                       irregularCounts[behavior.id] =
-                                          (irregularBehaviorCounts[behavior.id] ??
+                                          (irregularBehaviorCounts[
+                                                      behavior.id] ??
                                                   1)
                                               .clamp(1, 20)
                                               .toInt();
@@ -1130,7 +1134,8 @@ Future<List<_TodoListEntry>> _buildBehaviorTodoEntries({
     final out = <_TodoListEntry>[];
     for (final behavior in filtered) {
       if (behavior.isIrregular) {
-        final int count = (irregularCounts[behavior.id] ?? 0).clamp(0, 20).toInt();
+        final int count =
+            (irregularCounts[behavior.id] ?? 0).clamp(0, 20).toInt();
         if (count <= 0) continue;
         final int level = behavior.safeSelectedLevelIndex + 1;
         final String levelText = behavior.selectedLevelText.trim();
@@ -1570,5 +1575,6 @@ Future<void> _openPrintDialogForPath(String path) async {
   await PrintRoutingService.instance.printFile(
     path: path,
     channel: PrintRoutingChannel.todoSheet,
+    debugSource: 'homework.todo_sheet',
   );
 }

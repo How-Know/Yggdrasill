@@ -599,6 +599,17 @@ class HomeworkStore {
     if (list == null) return;
     final idx = list.indexWhere((e) => e.id == id);
     if (idx == -1) return;
+    final item = list[idx];
+    // UI 반응성을 위해 즉시 로컬 phase를 제출(3)로 반영한다.
+    final now = DateTime.now();
+    if (item.runStart != null) {
+      item.accumulatedMs += now.difference(item.runStart!).inMilliseconds;
+      item.runStart = null;
+    }
+    item.phase = 3;
+    item.submittedAt = now;
+    item.updatedAt = now;
+    _bump();
     try {
       final String academyId = (await TenantService.instance.getActiveAcademyId()) ?? await TenantService.instance.ensureActiveAcademy();
       final String? updatedBy = Supabase.instance.client.auth.currentUser?.id;
@@ -612,6 +623,8 @@ class HomeworkStore {
     } catch (e) {
       // ignore: avoid_print
       print('[HW][submit][ERROR] ' + e.toString());
+      // 서버 반영 실패 시 로컬 낙관적 업데이트를 정합 상태로 복구한다.
+      unawaited(_reloadStudent(studentId));
     }
   }
 
@@ -620,6 +633,13 @@ class HomeworkStore {
     if (list == null) return;
     final idx = list.indexWhere((e) => e.id == id);
     if (idx == -1) return;
+    final item = list[idx];
+    // 제출 카운트가 즉시 내려가도록 로컬 phase를 먼저 확인(4)으로 반영한다.
+    item.phase = 4;
+    item.confirmedAt = DateTime.now();
+    item.runStart = null;
+    item.updatedAt = item.confirmedAt;
+    _bump();
     try {
       final String academyId = (await TenantService.instance.getActiveAcademyId()) ?? await TenantService.instance.ensureActiveAcademy();
       final String? updatedBy = Supabase.instance.client.auth.currentUser?.id;
@@ -636,6 +656,8 @@ class HomeworkStore {
     } catch (e) {
       // ignore: avoid_print
       print('[HW][confirm][ERROR] ' + e.toString());
+      // 서버 반영 실패 시 로컬 낙관적 업데이트를 정합 상태로 복구한다.
+      unawaited(_reloadStudent(studentId));
     }
   }
 

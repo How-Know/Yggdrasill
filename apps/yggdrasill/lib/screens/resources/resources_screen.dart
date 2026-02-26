@@ -709,6 +709,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     await PrintRoutingService.instance.printFile(
       path: path,
       channel: PrintRoutingChannel.general,
+      debugSource: 'resources.book_print',
     );
   }
 

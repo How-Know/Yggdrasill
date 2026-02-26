@@ -912,69 +912,69 @@ class _ClassesViewState extends State<ClassesView>
             : (axisHeaderHeight + minDayRowHeight * 7);
         final blockHeight = ((viewportHeight - axisHeaderHeight) / 7.0)
             .clamp(minDayRowHeight, 180.0);
-        return Stack(
-          children: [
+    return Stack(
+      children: [
             AnimatedBuilder(
-              animation: Listenable.merge([
-                DataManager.instance.studentTimeBlocksRevision,
-                DataManager.instance.sessionOverridesNotifier,
-              ]),
-              builder: (context, _) {
+            animation: Listenable.merge([
+              DataManager.instance.studentTimeBlocksRevision,
+              DataManager.instance.sessionOverridesNotifier,
+            ]),
+            builder: (context, _) {
                 final studentTimeBlocks =
                     DataManager.instance.studentTimeBlocks;
                 final lessonDuration =
                     DataManager.instance.academySettings.lessonDuration;
-                final String? _pendingStudentId = (widget.isRegistrationMode &&
-                        widget.registrationModeType == 'student' &&
-                        widget.selectedStudentWithInfo != null)
-                    ? widget.selectedStudentWithInfo!.student.id
-                    : null;
-                final Set<String> _pendingSlotKeys = <String>{};
-                if (_pendingStudentId != null) {
+              final String? _pendingStudentId = (widget.isRegistrationMode &&
+                      widget.registrationModeType == 'student' &&
+                      widget.selectedStudentWithInfo != null)
+                  ? widget.selectedStudentWithInfo!.student.id
+                  : null;
+              final Set<String> _pendingSlotKeys = <String>{};
+              if (_pendingStudentId != null) {
                   for (final b
                       in DataManager.instance.pendingStudentTimeBlocks) {
-                    if (b.studentId != _pendingStudentId) continue;
-                    _pendingSlotKeys.add(ConsultInquiryDemandService.slotKey(
-                      b.dayIndex,
-                      b.startHour,
-                      b.startMinute,
-                    ));
-                  }
+                  if (b.studentId != _pendingStudentId) continue;
+                  _pendingSlotKeys.add(ConsultInquiryDemandService.slotKey(
+                    b.dayIndex,
+                    b.startHour,
+                    b.startMinute,
+                  ));
                 }
+              }
                 final inquiryCountBySlot = ConsultInquiryDemandService.instance
                     .countMapForWeekExpanded(
-                  widget.weekStartDate,
-                  lessonDurationMinutes: lessonDuration,
-                );
+                widget.weekStartDate,
+                lessonDurationMinutes: lessonDuration,
+              );
                 final inquirySlotsBySlotKey = ConsultInquiryDemandService
                     .instance
                     .slotsBySlotKeyForWeek(widget.weekStartDate);
                 final trialCountBySlot =
                     ConsultTrialLessonService.instance.countMapForWeekExpanded(
-                  widget.weekStartDate,
-                  lessonDurationMinutes: lessonDuration,
-                );
+                widget.weekStartDate,
+                lessonDurationMinutes: lessonDuration,
+              );
                 final trialSlotsBySlotKey = ConsultTrialLessonService.instance
                     .slotsBySlotKeyForWeek(widget.weekStartDate);
                 final selfStudyTimeBlocks =
                     DataManager.instance.selfStudyTimeBlocks;
-                final studentsWithInfo = DataManager.instance.students;
-                final groups = DataManager.instance.groups;
+              final studentsWithInfo = DataManager.instance.students;
+              final groups = DataManager.instance.groups;
 
-                // --- week/필터/revision 기준 렌더 캐시 ---
-                final DateTime weekStart = DateTime(
-                  widget.weekStartDate.year,
-                  widget.weekStartDate.month,
-                  widget.weekStartDate.day,
-                );
+              // --- week/필터/revision 기준 렌더 캐시 ---
+              final DateTime weekStart = DateTime(
+                widget.weekStartDate.year,
+                widget.weekStartDate.month,
+                widget.weekStartDate.day,
+              );
                 final DateTime weekEnd =
                     weekStart.add(const Duration(days: 7)); // exclusive
 
-                int _hashSortedIds(Set<String>? ids) {
-                  if (ids == null || ids.isEmpty) return 0;
-                  final list = ids.toList()..sort();
-                  return Object.hashAll(list);
-                }
+              int _hashSortedIds(Set<String>? ids) {
+                if (ids == null || ids.isEmpty) return 0;
+                final list = ids.toList()..sort();
+                return Object.hashAll(list);
+              }
 
                 final int stbRev =
                     DataManager.instance.studentTimeBlocksRevision.value;
@@ -982,282 +982,282 @@ class _ClassesViewState extends State<ClassesView>
                     _hashSortedIds(widget.filteredStudentIds);
                 final int classFilterHash =
                     _hashSortedIds(widget.filteredClassIds);
-                final int ovHash = Object.hashAll(
-                  DataManager.instance.sessionOverrides.map((o) => Object.hash(
-                        o.id,
-                        o.version,
-                        o.updatedAt.millisecondsSinceEpoch,
-                      )),
-                );
-                final String cacheKey =
-                    '$stbRev|${weekStart.toIso8601String().split("T").first}|sf=$studentFilterHash|cf=$classFilterHash|ov=$ovHash';
+              final int ovHash = Object.hashAll(
+                DataManager.instance.sessionOverrides.map((o) => Object.hash(
+                      o.id,
+                      o.version,
+                      o.updatedAt.millisecondsSinceEpoch,
+                    )),
+              );
+              final String cacheKey =
+                  '$stbRev|${weekStart.toIso8601String().split("T").first}|sf=$studentFilterHash|cf=$classFilterHash|ov=$ovHash';
 
-                _ClassesWeekRenderCache cache;
+              _ClassesWeekRenderCache cache;
                 if (_weekRenderCacheKey == cacheKey &&
                     _weekRenderCache != null) {
-                  cache = _weekRenderCache!;
-                } else {
-                  final Map<String, StudentWithInfo> studentById = {
-                    for (final s in studentsWithInfo) s.student.id: s,
-                  };
+                cache = _weekRenderCache!;
+              } else {
+                final Map<String, StudentWithInfo> studentById = {
+                  for (final s in studentsWithInfo) s.student.id: s,
+                };
 
-                  // 학생 리스트 필터(학생/수업)
-                  final List<StudentTimeBlock> filteredStudentBlocks =
-                      studentTimeBlocks.where((b) {
-                    if (widget.filteredStudentIds != null &&
-                        !widget.filteredStudentIds!.contains(b.studentId)) {
-                      return false;
-                    }
-                    if (!_isClassAllowed(b.sessionTypeId)) return false;
-                    return true;
-                  }).toList();
+                // 학생 리스트 필터(학생/수업)
+                final List<StudentTimeBlock> filteredStudentBlocks =
+                    studentTimeBlocks.where((b) {
+                  if (widget.filteredStudentIds != null &&
+                      !widget.filteredStudentIds!.contains(b.studentId)) {
+                    return false;
+                  }
+                  if (!_isClassAllowed(b.sessionTypeId)) return false;
+                  return true;
+                }).toList();
 
-                  // 자습 블록은 학생 필터만 적용(수업 필터가 있으면 제외)
-                  final List<SelfStudyTimeBlock> filteredSelfStudyBlocks =
-                      (widget.filteredClassIds != null &&
-                              widget.filteredClassIds!.isNotEmpty)
-                          ? const <SelfStudyTimeBlock>[]
-                          : (widget.filteredStudentIds == null
-                              ? selfStudyTimeBlocks
-                              : selfStudyTimeBlocks
-                                  .where((b) => widget.filteredStudentIds!
-                                      .contains(b.studentId))
-                                  .toList());
+                // 자습 블록은 학생 필터만 적용(수업 필터가 있으면 제외)
+                final List<SelfStudyTimeBlock> filteredSelfStudyBlocks =
+                    (widget.filteredClassIds != null &&
+                            widget.filteredClassIds!.isNotEmpty)
+                        ? const <SelfStudyTimeBlock>[]
+                        : (widget.filteredStudentIds == null
+                            ? selfStudyTimeBlocks
+                            : selfStudyTimeBlocks
+                                .where((b) => widget.filteredStudentIds!
+                                    .contains(b.studentId))
+                                .toList());
 
-                  // slotKey -> active student blocks (week+date range 기준)
+                // slotKey -> active student blocks (week+date range 기준)
                   final Map<String, List<StudentTimeBlock>>
                       activeStudentBlocksBySlotKey =
-                      <String, List<StudentTimeBlock>>{};
-                  for (final b in filteredStudentBlocks) {
-                    final int d = b.dayIndex;
-                    if (d < 0 || d > 6) continue;
-                    // 해당 주의 실제 날짜에서 active 여부 확인
-                    final DateTime dayDate = weekStart.add(Duration(days: d));
+                    <String, List<StudentTimeBlock>>{};
+                for (final b in filteredStudentBlocks) {
+                  final int d = b.dayIndex;
+                  if (d < 0 || d > 6) continue;
+                  // 해당 주의 실제 날짜에서 active 여부 확인
+                  final DateTime dayDate = weekStart.add(Duration(days: d));
                     final DateTime target =
                         DateTime(dayDate.year, dayDate.month, dayDate.day);
                     final DateTime sd = DateTime(
                         b.startDate.year, b.startDate.month, b.startDate.day);
-                    final DateTime? ed = b.endDate == null
-                        ? null
+                  final DateTime? ed = b.endDate == null
+                      ? null
                         : DateTime(
                             b.endDate!.year, b.endDate!.month, b.endDate!.day);
-                    if (sd.isAfter(target)) continue;
-                    if (ed != null && ed.isBefore(target)) continue;
-                    // ✅ 휴원 기간에는 시간표 위젯에서 수업 블록 자체를 숨김
+                  if (sd.isAfter(target)) continue;
+                  if (ed != null && ed.isBefore(target)) continue;
+                  // ✅ 휴원 기간에는 시간표 위젯에서 수업 블록 자체를 숨김
                     if (DataManager.instance
                         .isStudentPausedOn(b.studentId, target)) continue;
 
-                    final int startMin = b.startHour * 60 + b.startMinute;
-                    final int endMin = startMin + b.duration.inMinutes;
-                    if (endMin <= startMin) continue;
+                  final int startMin = b.startHour * 60 + b.startMinute;
+                  final int endMin = startMin + b.duration.inMinutes;
+                  if (endMin <= startMin) continue;
                     int slotMin =
                         ((startMin + 29) ~/ 30) * 30; // ceil to 30-min slot
-                    while (slotMin < endMin) {
-                      final int hh = slotMin ~/ 60;
-                      final int mm = slotMin % 60;
+                  while (slotMin < endMin) {
+                    final int hh = slotMin ~/ 60;
+                    final int mm = slotMin % 60;
                       final String sk =
                           ConsultInquiryDemandService.slotKey(d, hh, mm);
                       (activeStudentBlocksBySlotKey[sk] ??=
                               <StudentTimeBlock>[])
                           .add(b);
-                      slotMin += 30;
-                    }
+                    slotMin += 30;
                   }
+                }
 
-                  // slotKey -> selfStudy blocks (duration 기준, date-range 없음)
+                // slotKey -> selfStudy blocks (duration 기준, date-range 없음)
                   final Map<String, List<SelfStudyTimeBlock>>
                       selfStudyBlocksBySlotKey =
-                      <String, List<SelfStudyTimeBlock>>{};
-                  // ✅ 셀 클릭(onTap)에서 자습 블록 수정 분기는 "전체 자습 블록"을 대상으로 한다(기존 로직 유지).
-                  for (final b in selfStudyTimeBlocks) {
-                    final int d = b.dayIndex;
-                    if (d < 0 || d > 6) continue;
-                    final int startMin = b.startHour * 60 + b.startMinute;
-                    final int endMin = startMin + b.duration.inMinutes;
-                    if (endMin <= startMin) continue;
-                    int slotMin = ((startMin + 29) ~/ 30) * 30;
-                    while (slotMin < endMin) {
-                      final int hh = slotMin ~/ 60;
-                      final int mm = slotMin % 60;
+                    <String, List<SelfStudyTimeBlock>>{};
+                // ✅ 셀 클릭(onTap)에서 자습 블록 수정 분기는 "전체 자습 블록"을 대상으로 한다(기존 로직 유지).
+                for (final b in selfStudyTimeBlocks) {
+                  final int d = b.dayIndex;
+                  if (d < 0 || d > 6) continue;
+                  final int startMin = b.startHour * 60 + b.startMinute;
+                  final int endMin = startMin + b.duration.inMinutes;
+                  if (endMin <= startMin) continue;
+                  int slotMin = ((startMin + 29) ~/ 30) * 30;
+                  while (slotMin < endMin) {
+                    final int hh = slotMin ~/ 60;
+                    final int mm = slotMin % 60;
                       final String sk =
                           ConsultInquiryDemandService.slotKey(d, hh, mm);
                       (selfStudyBlocksBySlotKey[sk] ??= <SelfStudyTimeBlock>[])
                           .add(b);
-                      slotMin += 30;
-                    }
+                    slotMin += 30;
                   }
+                }
 
-                  // studentId/dayIndex -> blocks (setId 유추용, active 필터 없음: 기존 로직 유지)
+                // studentId/dayIndex -> blocks (setId 유추용, active 필터 없음: 기존 로직 유지)
                   final Map<int, Map<String, List<StudentTimeBlock>>>
                       blocksByStudentByDay =
-                      <int, Map<String, List<StudentTimeBlock>>>{};
-                  for (final b in filteredStudentBlocks) {
-                    final int d = b.dayIndex;
-                    if (d < 0 || d > 6) continue;
+                    <int, Map<String, List<StudentTimeBlock>>>{};
+                for (final b in filteredStudentBlocks) {
+                  final int d = b.dayIndex;
+                  if (d < 0 || d > 6) continue;
                     final m = blocksByStudentByDay.putIfAbsent(
                         d, () => <String, List<StudentTimeBlock>>{});
-                    (m[b.studentId] ??= <StudentTimeBlock>[]).add(b);
-                  }
+                  (m[b.studentId] ??= <StudentTimeBlock>[]).add(b);
+                }
 
-                  // replace 원본 블라인드 캐시(요일 단위/슬롯 단위)
+                // replace 원본 블라인드 캐시(요일 단위/슬롯 단위)
                   final Map<int, Set<String>> hiddenPairsByDay =
                       <int, Set<String>>{};
-                  final Map<String, Set<String>> hiddenOriginalBySlotKey =
-                      <String, Set<String>>{};
-                  final DateTime nowL = DateTime.now();
-                  final int defaultLessonMinutes =
-                      DataManager.instance.academySettings.lessonDuration;
-                  for (final ov in DataManager.instance.sessionOverrides) {
-                    if (ov.reason != OverrideReason.makeup) continue;
-                    if (ov.overrideType != OverrideType.replace) continue;
-                    if (ov.status == OverrideStatus.canceled) continue;
-                    final orig = ov.originalClassDateTime;
-                    if (orig == null) continue;
+                final Map<String, Set<String>> hiddenOriginalBySlotKey =
+                    <String, Set<String>>{};
+                final DateTime nowL = DateTime.now();
+                final int defaultLessonMinutes =
+                    DataManager.instance.academySettings.lessonDuration;
+                for (final ov in DataManager.instance.sessionOverrides) {
+                  if (ov.reason != OverrideReason.makeup) continue;
+                  if (ov.overrideType != OverrideType.replace) continue;
+                  if (ov.status == OverrideStatus.canceled) continue;
+                  final orig = ov.originalClassDateTime;
+                  if (orig == null) continue;
                     if (orig.isBefore(weekStart) || !orig.isBefore(weekEnd))
                       continue;
-                    final int d = (orig.weekday - 1).clamp(0, 6);
+                  final int d = (orig.weekday - 1).clamp(0, 6);
 
-                    String? setId = ov.setId;
-                    if (setId == null || setId.isEmpty) {
+                  String? setId = ov.setId;
+                  if (setId == null || setId.isEmpty) {
                       final blocksByStudent = blocksByStudentByDay[d]
                               ?[ov.studentId] ??
                           const <StudentTimeBlock>[];
-                      if (blocksByStudent.isNotEmpty) {
-                        final int origMin = orig.hour * 60 + orig.minute;
-                        int bestDiff = 1 << 30;
-                        for (final b in blocksByStudent) {
-                          final int bm = b.startHour * 60 + b.startMinute;
-                          final int diff = (bm - origMin).abs();
-                          if (diff < bestDiff && b.setId != null) {
-                            bestDiff = diff;
-                            setId = b.setId;
-                          }
+                    if (blocksByStudent.isNotEmpty) {
+                      final int origMin = orig.hour * 60 + orig.minute;
+                      int bestDiff = 1 << 30;
+                      for (final b in blocksByStudent) {
+                        final int bm = b.startHour * 60 + b.startMinute;
+                        final int diff = (bm - origMin).abs();
+                        if (diff < bestDiff && b.setId != null) {
+                          bestDiff = diff;
+                          setId = b.setId;
                         }
                       }
                     }
+                  }
 
-                    if (setId != null && setId.isNotEmpty) {
-                      (hiddenPairsByDay[d] ??= <String>{})
-                          .add('${ov.studentId}|$setId');
-                    } else {
-                      // fallback: 시작 슬롯에서만 숨김(기존 로직 유지)
-                      final int minutes =
+                  if (setId != null && setId.isNotEmpty) {
+                    (hiddenPairsByDay[d] ??= <String>{})
+                        .add('${ov.studentId}|$setId');
+                  } else {
+                    // fallback: 시작 슬롯에서만 숨김(기존 로직 유지)
+                    final int minutes =
                           (ov.durationMinutes ?? defaultLessonMinutes)
                               .clamp(0, 24 * 60);
-                      if (minutes <= 0) continue;
-                      final DateTime origEnd = DateTime(
-                        orig.year,
-                        orig.month,
-                        orig.day,
-                        orig.hour,
-                        orig.minute,
-                      ).add(Duration(minutes: minutes));
-                      if (nowL.isBefore(origEnd)) {
+                    if (minutes <= 0) continue;
+                    final DateTime origEnd = DateTime(
+                      orig.year,
+                      orig.month,
+                      orig.day,
+                      orig.hour,
+                      orig.minute,
+                    ).add(Duration(minutes: minutes));
+                    if (nowL.isBefore(origEnd)) {
                         final String sk = ConsultInquiryDemandService.slotKey(
                             d, orig.hour, orig.minute);
                         (hiddenOriginalBySlotKey[sk] ??= <String>{})
                             .add(ov.studentId);
-                      }
                     }
                   }
+                }
 
-                  // 보강/추가 오버레이 + 인원 가산(학생 id)
+                // 보강/추가 오버레이 + 인원 가산(학생 id)
                   final Map<String, List<OverlayLabel>>
                       makeupOverlaysBySlotKey = <String, List<OverlayLabel>>{};
-                  final Map<String, Set<String>> makeupStudentIdsBySlotKey =
-                      <String, Set<String>>{};
-                  for (final ov in DataManager.instance.sessionOverrides) {
-                    if (ov.reason != OverrideReason.makeup) continue;
-                    if (!(ov.overrideType == OverrideType.add ||
-                        ov.overrideType == OverrideType.replace)) {
-                      continue;
-                    }
-                    if (ov.status == OverrideStatus.canceled) continue;
-                    final rep = ov.replacementClassDateTime;
-                    if (rep == null) continue;
+                final Map<String, Set<String>> makeupStudentIdsBySlotKey =
+                    <String, Set<String>>{};
+                for (final ov in DataManager.instance.sessionOverrides) {
+                  if (ov.reason != OverrideReason.makeup) continue;
+                  if (!(ov.overrideType == OverrideType.add ||
+                      ov.overrideType == OverrideType.replace)) {
+                    continue;
+                  }
+                  if (ov.status == OverrideStatus.canceled) continue;
+                  final rep = ov.replacementClassDateTime;
+                  if (rep == null) continue;
                     if (rep.isBefore(weekStart) || !rep.isBefore(weekEnd))
                       continue;
                     if (DataManager.instance
                         .isStudentPausedOn(ov.studentId, rep)) continue;
-                    final int d = (rep.weekday - 1).clamp(0, 6);
+                  final int d = (rep.weekday - 1).clamp(0, 6);
 
                     final String skStart = ConsultInquiryDemandService.slotKey(
                         d, rep.hour, rep.minute);
 
-                    // 1) 오버레이: completed도 포함, canceled만 제외(기존 로직 유지)
-                    bool isCompleted = false;
-                    try {
+                  // 1) 오버레이: completed도 포함, canceled만 제외(기존 로직 유지)
+                  bool isCompleted = false;
+                  try {
                       final record = DataManager.instance
                           .getAttendanceRecord(ov.studentId, rep);
-                      if (record != null &&
-                          record.arrivalTime != null &&
-                          record.departureTime != null) {
-                        isCompleted = true;
-                      }
-                    } catch (_) {}
+                    if (record != null &&
+                        record.arrivalTime != null &&
+                        record.departureTime != null) {
+                      isCompleted = true;
+                    }
+                  } catch (_) {}
                     final name =
                         studentById[ov.studentId]?.student.name ?? '학생';
                     final label = ov.overrideType == OverrideType.add
                         ? '$name 추가수업'
                         : '$name 보강';
-                    (makeupOverlaysBySlotKey[skStart] ??= <OverlayLabel>[]).add(
+                  (makeupOverlaysBySlotKey[skStart] ??= <OverlayLabel>[]).add(
                       OverlayLabel(
                           overrideId: ov.id,
                           text: label,
                           type: ov.overrideType,
                           isCompleted: isCompleted),
-                    );
+                  );
 
-                    // 2) 인원 가산: planned만(=completed/canceled 제외), duration 범위 슬롯에 학생 id 추가
-                    if (ov.status == OverrideStatus.completed) continue;
-                    if (widget.filteredStudentIds != null &&
-                        !widget.filteredStudentIds!.contains(ov.studentId)) {
-                      continue;
-                    }
-                    final int durationMin =
+                  // 2) 인원 가산: planned만(=completed/canceled 제외), duration 범위 슬롯에 학생 id 추가
+                  if (ov.status == OverrideStatus.completed) continue;
+                  if (widget.filteredStudentIds != null &&
+                      !widget.filteredStudentIds!.contains(ov.studentId)) {
+                    continue;
+                  }
+                  final int durationMin =
                         (ov.durationMinutes ?? defaultLessonMinutes)
                             .clamp(0, 24 * 60);
-                    if (durationMin <= 0) continue;
-                    final int repStartMin = rep.hour * 60 + rep.minute;
-                    final int repEndMin = repStartMin + durationMin;
-                    int slotMin = ((repStartMin + 29) ~/ 30) * 30;
-                    while (slotMin < repEndMin) {
-                      final int hh = slotMin ~/ 60;
-                      final int mm = slotMin % 60;
+                  if (durationMin <= 0) continue;
+                  final int repStartMin = rep.hour * 60 + rep.minute;
+                  final int repEndMin = repStartMin + durationMin;
+                  int slotMin = ((repStartMin + 29) ~/ 30) * 30;
+                  while (slotMin < repEndMin) {
+                    final int hh = slotMin ~/ 60;
+                    final int mm = slotMin % 60;
                       final String sk =
                           ConsultInquiryDemandService.slotKey(d, hh, mm);
                       (makeupStudentIdsBySlotKey[sk] ??= <String>{})
                           .add(ov.studentId);
-                      slotMin += 30;
-                    }
+                    slotMin += 30;
                   }
-
-                  cache = _ClassesWeekRenderCache(
-                    key: cacheKey,
-                    weekStart: weekStart,
-                    weekEnd: weekEnd,
-                    filteredStudentBlocks: filteredStudentBlocks,
-                    filteredSelfStudyBlocks: filteredSelfStudyBlocks,
-                    studentById: studentById,
-                    activeStudentBlocksBySlotKey: activeStudentBlocksBySlotKey,
-                    selfStudyBlocksBySlotKey: selfStudyBlocksBySlotKey,
-                    hiddenStudentSetPairsByDay: hiddenPairsByDay,
-                    hiddenOriginalStudentIdsBySlotKey: hiddenOriginalBySlotKey,
-                    makeupOverlaysBySlotKey: makeupOverlaysBySlotKey,
-                    makeupStudentIdsBySlotKey: makeupStudentIdsBySlotKey,
-                  );
-                  _weekRenderCacheKey = cacheKey;
-                  _weekRenderCache = cache;
                 }
 
-                final filteredStudentBlocks = cache.filteredStudentBlocks;
-                final filteredSelfStudyBlocks = cache.filteredSelfStudyBlocks;
-                // 인원수 카운트 등 공통 계산에는 student blocks + (수업 필터 없을 때) selfStudy blocks만 사용
-                final List<dynamic> filteredBlocks = <dynamic>[
-                  ...filteredStudentBlocks,
-                  ...filteredSelfStudyBlocks,
-                ];
-                // print('[DEBUG][ValueListenableBuilder] filteredBlocks.length=${filteredBlocks.length}, studentsWithInfo.length=${studentsWithInfo.length}, groups.length=${groups.length}, lessonDuration=$lessonDuration');
+                cache = _ClassesWeekRenderCache(
+                  key: cacheKey,
+                  weekStart: weekStart,
+                  weekEnd: weekEnd,
+                  filteredStudentBlocks: filteredStudentBlocks,
+                  filteredSelfStudyBlocks: filteredSelfStudyBlocks,
+                  studentById: studentById,
+                  activeStudentBlocksBySlotKey: activeStudentBlocksBySlotKey,
+                  selfStudyBlocksBySlotKey: selfStudyBlocksBySlotKey,
+                  hiddenStudentSetPairsByDay: hiddenPairsByDay,
+                  hiddenOriginalStudentIdsBySlotKey: hiddenOriginalBySlotKey,
+                  makeupOverlaysBySlotKey: makeupOverlaysBySlotKey,
+                  makeupStudentIdsBySlotKey: makeupStudentIdsBySlotKey,
+                );
+                _weekRenderCacheKey = cacheKey;
+                _weekRenderCache = cache;
+              }
+
+              final filteredStudentBlocks = cache.filteredStudentBlocks;
+              final filteredSelfStudyBlocks = cache.filteredSelfStudyBlocks;
+              // 인원수 카운트 등 공통 계산에는 student blocks + (수업 필터 없을 때) selfStudy blocks만 사용
+              final List<dynamic> filteredBlocks = <dynamic>[
+                ...filteredStudentBlocks,
+                ...filteredSelfStudyBlocks,
+              ];
+              // print('[DEBUG][ValueListenableBuilder] filteredBlocks.length=${filteredBlocks.length}, studentsWithInfo.length=${studentsWithInfo.length}, groups.length=${groups.length}, lessonDuration=$lessonDuration');
                 const double dayLabelWidth = 60.0;
                 final int currentTimeBlockIdx =
                     _getCurrentTimeBlockIndex(timeBlocks);
@@ -1272,47 +1272,47 @@ class _ClassesViewState extends State<ClassesView>
                 ];
 
                 Widget buildGridCell(int dayIdx, int blockIdx) {
-                  final cellKey = '$dayIdx-$blockIdx';
-                  _cellKeys.putIfAbsent(cellKey, () => GlobalKey());
-                  final String slotKey = ConsultInquiryDemandService.slotKey(
-                    dayIdx,
-                    timeBlocks[blockIdx].startTime.hour,
-                    timeBlocks[blockIdx].startTime.minute,
-                  );
+                              final cellKey = '$dayIdx-$blockIdx';
+                              _cellKeys.putIfAbsent(cellKey, () => GlobalKey());
+                              final String slotKey = ConsultInquiryDemandService.slotKey(
+                                dayIdx,
+                                timeBlocks[blockIdx].startTime.hour,
+                                timeBlocks[blockIdx].startTime.minute,
+                              );
 
-                  final List<StudentTimeBlock> activeBlocks =
-                      cache.activeStudentBlocksBySlotKey[slotKey] ??
-                          const <StudentTimeBlock>[];
-                  final Set<String> hiddenOriginalIds =
-                      cache.hiddenOriginalStudentIdsBySlotKey[slotKey] ??
-                          const <String>{};
-                  final Set<String> hiddenPairs =
-                      cache.hiddenStudentSetPairsByDay[dayIdx] ??
-                          const <String>{};
+                              final List<StudentTimeBlock> activeBlocks =
+                                  cache.activeStudentBlocksBySlotKey[slotKey] ??
+                                      const <StudentTimeBlock>[];
+                              final Set<String> hiddenOriginalIds =
+                                  cache.hiddenOriginalStudentIdsBySlotKey[slotKey] ??
+                                      const <String>{};
+                              final Set<String> hiddenPairs =
+                                  cache.hiddenStudentSetPairsByDay[dayIdx] ??
+                                      const <String>{};
 
-                  final filteredActiveBlocks = activeBlocks.where((b) {
-                    final sid = b.studentId;
-                    final setId = b.setId ?? '';
-                    if (hiddenOriginalIds.contains(sid)) return false;
-                    if (hiddenPairs.contains('$sid|$setId')) return false;
-                    return true;
-                  }).toList();
+                              final filteredActiveBlocks = activeBlocks.where((b) {
+                                final sid = b.studentId;
+                                final setId = b.setId ?? '';
+                                if (hiddenOriginalIds.contains(sid)) return false;
+                                if (hiddenPairs.contains('$sid|$setId')) return false;
+                                return true;
+                              }).toList();
 
-                  final cellStudentWithInfos = filteredActiveBlocks
-                      .map((b) => cache.studentById[b.studentId])
-                      .whereType<StudentWithInfo>()
-                      .toList();
+                              final cellStudentWithInfos = filteredActiveBlocks
+                                  .map((b) => cache.studentById[b.studentId])
+                                  .whereType<StudentWithInfo>()
+                                  .toList();
 
-                  final List<OverlayLabel> makeupOverlays =
-                      cache.makeupOverlaysBySlotKey[slotKey] ??
-                          const <OverlayLabel>[];
+                              final List<OverlayLabel> makeupOverlays =
+                                  cache.makeupOverlaysBySlotKey[slotKey] ??
+                                      const <OverlayLabel>[];
 
-                  final isExpanded = _expandedCellKey == cellKey;
-                  final isDragHighlight = dragHighlightKeys.contains(cellKey);
-                  final String _slotKey = slotKey;
+                              final isExpanded = _expandedCellKey == cellKey;
+                              final isDragHighlight = dragHighlightKeys.contains(cellKey);
+                              final String _slotKey = slotKey;
                   final bool isSelectedCell = (widget.selectedCellDayIndex ==
                               dayIdx &&
-                          widget.selectedCellStartTime != null &&
+                                      widget.selectedCellStartTime != null &&
                           widget.selectedCellStartTime!.hour ==
                               timeBlocks[blockIdx].startTime.hour &&
                           widget.selectedCellStartTime!.minute ==
@@ -1320,106 +1320,106 @@ class _ClassesViewState extends State<ClassesView>
                       (widget.selectedSlotKeys?.contains(_slotKey) ?? false);
                   final bool isPendingHighlight =
                       _pendingSlotKeys.contains(_slotKey);
-                  bool isBreakTime = false;
+                              bool isBreakTime = false;
                   final op = widget.operatingHours
                       .firstWhereOrNull((o) => o.dayOfWeek == dayIdx);
-                  if (op != null) {
-                    for (final breakTime in op.breakTimes) {
-                      final blockHour = timeBlocks[blockIdx].startTime.hour;
-                      final blockMinute = timeBlocks[blockIdx].startTime.minute;
-                      final breakStartHour = breakTime.startHour;
-                      final breakStartMinute = breakTime.startMinute;
-                      final breakEndHour = breakTime.endHour;
-                      final breakEndMinute = breakTime.endMinute;
-                      final blockMinutes = blockHour * 60 + blockMinute;
+                              if (op != null) {
+                                for (final breakTime in op.breakTimes) {
+                                  final blockHour = timeBlocks[blockIdx].startTime.hour;
+                                  final blockMinute = timeBlocks[blockIdx].startTime.minute;
+                                  final breakStartHour = breakTime.startHour;
+                                  final breakStartMinute = breakTime.startMinute;
+                                  final breakEndHour = breakTime.endHour;
+                                  final breakEndMinute = breakTime.endMinute;
+                                  final blockMinutes = blockHour * 60 + blockMinute;
                       final breakStartMinutes =
                           breakStartHour * 60 + breakStartMinute;
                       final breakEndMinutes =
                           breakEndHour * 60 + breakEndMinute;
                       if (blockMinutes >= breakStartMinutes &&
                           blockMinutes < breakEndMinutes) {
-                        isBreakTime = true;
-                        break;
-                      }
-                    }
-                  }
-                  final activeStudentIds =
-                      filteredActiveBlocks.map((b) => b.studentId).toSet();
+                                    isBreakTime = true;
+                                    break;
+                                  }
+                                }
+                              }
+                              final activeStudentIds =
+                                  filteredActiveBlocks.map((b) => b.studentId).toSet();
                   final Set<String> countedStudentIds =
                       Set.of(activeStudentIds);
                   final extraMakeupIds =
                       cache.makeupStudentIdsBySlotKey[slotKey];
-                  if (extraMakeupIds != null && extraMakeupIds.isNotEmpty) {
-                    countedStudentIds.addAll(extraMakeupIds);
-                  }
-                  int activeStudentCount = countedStudentIds.length;
-                  final inquiryCount = inquiryCountBySlot[slotKey] ?? 0;
-                  if (inquiryCount > 0) {
-                    activeStudentCount += inquiryCount;
-                  }
-                  final trialCount = trialCountBySlot[slotKey] ?? 0;
-                  if (trialCount > 0) {
-                    activeStudentCount += trialCount;
-                  }
+                              if (extraMakeupIds != null && extraMakeupIds.isNotEmpty) {
+                                countedStudentIds.addAll(extraMakeupIds);
+                              }
+                              int activeStudentCount = countedStudentIds.length;
+                              final inquiryCount = inquiryCountBySlot[slotKey] ?? 0;
+                              if (inquiryCount > 0) {
+                                activeStudentCount += inquiryCount;
+                              }
+                              final trialCount = trialCountBySlot[slotKey] ?? 0;
+                              if (trialCount > 0) {
+                                activeStudentCount += trialCount;
+                              }
                   final inquiryOverlays = (inquirySlotsBySlotKey[slotKey] ??
                           const <ConsultInquiryDemandSlot>[])
                       .map((s) => InquiryOverlayLabel(
                           noteId: s.sourceNoteId, text: s.title))
-                      .toList();
+                                  .toList();
                   final trialOverlays = (trialSlotsBySlotKey[slotKey] ??
                           const <ConsultTrialLessonSlot>[])
                       .map((s) => TrialOverlayLabel(
                           noteId: s.sourceNoteId, text: s.title))
-                      .toList();
-                  Color? countColor;
-                  if (activeStudentCount > 0) {
+                                  .toList();
+                              Color? countColor;
+                              if (activeStudentCount > 0) {
                     if (activeStudentCount <
                         DataManager.instance.academySettings.defaultCapacity *
                             0.7) {
-                      countColor = const Color(0xFF1B6B63);
+                                  countColor = const Color(0xFF1B6B63);
                     } else if (activeStudentCount >=
                         DataManager.instance.academySettings.defaultCapacity) {
-                      countColor = const Color(0xFFF2B45B);
-                    } else {
-                      countColor = const Color(0xFF212A31);
-                    }
-                  } else {
-                    countColor = const Color(0xFF223131);
-                  }
+                                  countColor = const Color(0xFFF2B45B);
+                                } else {
+                                  countColor = const Color(0xFF212A31);
+                                }
+                              } else {
+                                countColor = const Color(0xFF223131);
+                              }
                   if (isDragHighlight && _kRegistrationPerfDebug) {
-                    // ignore: avoid_print
+                                  // ignore: avoid_print
                     print(
                         '[DEBUG][Cell] isDragHighlight: cellKey=$cellKey, dragHighlightKeys=$dragHighlightKeys');
-                  }
+                                }
 
                   return SizedBox(
                     width: timeColumnWidth,
-                    child: MouseRegion(
-                      onEnter: (_) {
-                        if (widget.isRegistrationMode) {
-                          setState(() {
-                            _hoveredCellKey = cellKey;
-                          });
-                        }
-                      },
-                      onExit: (_) {
-                        if (widget.isRegistrationMode) {
-                          setState(() {
+                                child: MouseRegion(
+                                  onEnter: (_) {
+                                    if (widget.isRegistrationMode) {
+                                      setState(() {
+                                        _hoveredCellKey = cellKey;
+                                      });
+                                    }
+                                  },
+                                  onExit: (_) {
+                                    if (widget.isRegistrationMode) {
+                                      setState(() {
                             if (_hoveredCellKey == cellKey)
                               _hoveredCellKey = null;
-                          });
-                        }
-                      },
-                      child: GestureDetector(
-                        onTap: () async {
-                          final nowMs = DateTime.now().millisecondsSinceEpoch;
-                          if (nowMs - _lastOverlayTapMs < 250) return;
+                                      });
+                                    }
+                                  },
+                                  child: GestureDetector(
+                                    onTap: () async {
+                                      final nowMs = DateTime.now().millisecondsSinceEpoch;
+                                      if (nowMs - _lastOverlayTapMs < 250) return;
                           final lessonDuration = DataManager
                               .instance.academySettings.lessonDuration;
                           final selectedStudentWithInfo =
                               widget.selectedStudentWithInfo;
-                          final studentId = selectedStudentWithInfo?.student.id;
-                          final startTime = timeBlocks[blockIdx].startTime;
+                                      final studentId = selectedStudentWithInfo?.student.id;
+                                      final startTime = timeBlocks[blockIdx].startTime;
                           if (studentId != null &&
                               _isStudentTimeOverlap(
                                 studentId,
@@ -1427,83 +1427,83 @@ class _ClassesViewState extends State<ClassesView>
                                 timeBlocks[blockIdx].startTime,
                                 lessonDuration,
                               )) {
-                            Future.microtask(() {
+                                        Future.microtask(() {
                               showAppSnackBar(context, '이미 등록된 시간입니다.',
                                   useRoot: true);
-                            });
-                            return;
-                          }
+                                        });
+                                        return;
+                                      }
                           if (widget.isRegistrationMode &&
                               widget.onCellStudentsSelected != null &&
                               selectedStudentWithInfo != null) {
-                            widget.onCellStudentsSelected!(
-                              dayIdx,
-                              [timeBlocks[blockIdx].startTime],
-                              [selectedStudentWithInfo],
-                            );
-                          } else if (widget.onTimeSelected != null) {
-                            final selfStudyBlocks =
-                                cache.selfStudyBlocksBySlotKey[slotKey] ??
-                                    const <SelfStudyTimeBlock>[];
+                                        widget.onCellStudentsSelected!(
+                                          dayIdx,
+                                          [timeBlocks[blockIdx].startTime],
+                                          [selectedStudentWithInfo],
+                                        );
+                                      } else if (widget.onTimeSelected != null) {
+                                        final selfStudyBlocks =
+                                            cache.selfStudyBlocksBySlotKey[slotKey] ??
+                                                const <SelfStudyTimeBlock>[];
                             if (selfStudyBlocks.isNotEmpty &&
                                 widget.onCellSelfStudyStudentsChanged != null) {
                               final cellSelfStudyStudentWithInfos =
                                   selfStudyBlocks
                                       .map(
                                           (b) => cache.studentById[b.studentId])
-                                      .whereType<StudentWithInfo>()
-                                      .toList();
-                              if (cellSelfStudyStudentWithInfos.isNotEmpty) {
-                                widget.onCellSelfStudyStudentsChanged!(
-                                  dayIdx,
-                                  timeBlocks[blockIdx].startTime,
-                                  cellSelfStudyStudentWithInfos,
-                                );
-                              }
-                            }
+                                              .whereType<StudentWithInfo>()
+                                              .toList();
+                                          if (cellSelfStudyStudentWithInfos.isNotEmpty) {
+                                            widget.onCellSelfStudyStudentsChanged!(
+                                              dayIdx,
+                                              timeBlocks[blockIdx].startTime,
+                                              cellSelfStudyStudentWithInfos,
+                                            );
+                                          }
+                                        }
                             widget.onTimeSelected!(dayIdx, startTime);
-                          }
-                          if (widget.onSelectModeChanged != null) {
-                            widget.onSelectModeChanged!(false);
-                          }
-                        },
-                        child: TimetableCell(
-                          dayIdx: dayIdx,
-                          blockIdx: blockIdx,
-                          cellKey: cellKey,
-                          startTime: timeBlocks[blockIdx].startTime,
-                          endTime: timeBlocks[blockIdx].endTime,
-                          weekStartDate: widget.weekStartDate,
-                          students: filteredActiveBlocks,
-                          isBreakTime: isBreakTime,
-                          isExpanded: isExpanded,
-                          isDragHighlight: isDragHighlight,
+                                      }
+                                      if (widget.onSelectModeChanged != null) {
+                                        widget.onSelectModeChanged!(false);
+                                      }
+                                    },
+                                    child: TimetableCell(
+                                      dayIdx: dayIdx,
+                                      blockIdx: blockIdx,
+                                      cellKey: cellKey,
+                                      startTime: timeBlocks[blockIdx].startTime,
+                                      endTime: timeBlocks[blockIdx].endTime,
+                                      weekStartDate: widget.weekStartDate,
+                                      students: filteredActiveBlocks,
+                                      isBreakTime: isBreakTime,
+                                      isExpanded: isExpanded,
+                                      isDragHighlight: isDragHighlight,
                           isSelected: widget.isRegistrationMode
                               ? false
                               : isSelectedCell,
-                          isPendingHighlight: isPendingHighlight,
-                          onTap: null,
-                          countColor: countColor,
-                          activeStudentCount: activeStudentCount,
-                          cellStudentWithInfos: cellStudentWithInfos,
-                          groups: groups,
+                                      isPendingHighlight: isPendingHighlight,
+                                      onTap: null,
+                                      countColor: countColor,
+                                      activeStudentCount: activeStudentCount,
+                                      cellStudentWithInfos: cellStudentWithInfos,
+                                      groups: groups,
                           cellWidth: timeColumnWidth,
-                          registrationModeType: widget.registrationModeType,
-                          operatingHours: widget.operatingHours,
-                          makeupOverlays: makeupOverlays,
-                          inquiryOverlays: inquiryOverlays,
-                          trialOverlays: trialOverlays,
-                          onInquiryOverlayTap: widget.onInquiryNoteTap == null
-                              ? null
-                              : (noteId) {
+                                      registrationModeType: widget.registrationModeType,
+                                      operatingHours: widget.operatingHours,
+                                       makeupOverlays: makeupOverlays,
+                                      inquiryOverlays: inquiryOverlays,
+                                      trialOverlays: trialOverlays,
+                                      onInquiryOverlayTap: widget.onInquiryNoteTap == null
+                                          ? null
+                                          : (noteId) {
                                   _lastOverlayTapMs =
                                       DateTime.now().millisecondsSinceEpoch;
-                                  widget.onInquiryNoteTap?.call(noteId);
-                                },
-                        ),
-                      ),
-                    ),
-                  );
+                                              widget.onInquiryNoteTap?.call(noteId);
+                                            },
+                                    ),
+                                  ),
+                                ),
+                              );
                 }
 
                 final todayDayIdx = DateTime.now().weekday - 1;
@@ -1770,10 +1770,10 @@ class _ClassesViewState extends State<ClassesView>
                                                             FontWeight.w700,
                                                       ),
                                                     ),
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
+                        ),
+                      ),
+                  ],
+                ),
                                           ),
                                         ),
                                         AnimatedSize(
@@ -2061,10 +2061,10 @@ class _ClassesViewState extends State<ClassesView>
       print(
           '[DEBUG][_isStudentTimeOverlap] refDate=$dateOnly studentBlocks=${studentBlocks.map(_fmtStudentBlock).toList()} selfStudyBlocks=${selfStudyBlocks.map(_fmtSelfStudyBlock).toList()}');
     }
-
+    
     final newStart = startTime.hour * 60 + startTime.minute;
     final newEnd = newStart + lessonDurationMinutes;
-
+    
     // 수업 블록 체크
     for (final block in studentBlocks) {
       final blockStart = block.startHour * 60 + block.startMinute;
@@ -2080,7 +2080,7 @@ class _ClassesViewState extends State<ClassesView>
         return true;
       }
     }
-
+    
     // 자습 블록 체크
     for (final block in selfStudyBlocks) {
       final blockStart = block.startHour * 60 + block.startMinute;
@@ -2096,7 +2096,7 @@ class _ClassesViewState extends State<ClassesView>
         return true;
       }
     }
-
+    
     if (_kRegistrationPerfDebug) {
       // ignore: avoid_print
       print(
@@ -2441,7 +2441,7 @@ class TimeBlock {
     final minute = time.minute.toString().padLeft(2, '0');
     return '$hour:$minute';
   }
-}
+} 
 
 int _getCurrentTimeBlockIndex(List<TimeBlock> timeBlocks) {
   final now = DateTime.now();
@@ -2465,4 +2465,4 @@ int _getCurrentTimeBlockIndex(List<TimeBlock> timeBlocks) {
     }
   }
   return currentIdx;
-}
+} 

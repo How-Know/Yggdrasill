@@ -78,37 +78,52 @@ class _ClassContentScreenState extends State<ClassContentScreen>
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: RichText(
-                            text: TextSpan(
-                              children: [
-                                TextSpan(
-                                  text: _formatDateWithWeekdayAndTime(_now),
-                                  style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 50,
-                                      fontWeight: FontWeight.bold),
+                  ValueListenableBuilder<int>(
+                    valueListenable: HomeworkStore.instance.revision,
+                    builder: (context, homeworkRevision, _) {
+                      final submittedCount = _countSubmittedHomeworkItems(list);
+                      return Padding(
+                        padding: const EdgeInsets.fromLTRB(40, 16, 16, 0),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: RichText(
+                                text: TextSpan(
+                                  children: [
+                                    TextSpan(
+                                      text: _formatDateWithWeekdayAndTime(_now),
+                                      style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 50,
+                                          fontWeight: FontWeight.bold),
+                                    ),
+                                    const WidgetSpan(child: SizedBox(width: 30)),
+                                    TextSpan(
+                                      text: '등원중: ${list.length}명',
+                                      style: const TextStyle(
+                                          color: Colors.white60,
+                                          fontSize: 40,
+                                          fontWeight: FontWeight.bold),
+                                    ),
+                                    const WidgetSpan(child: SizedBox(width: 24)),
+                                    TextSpan(
+                                      text: '제출: $submittedCount개',
+                                      style: const TextStyle(
+                                        color: Color(0xFF8FB3FF),
+                                        fontSize: 40,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ],
                                 ),
-                                const WidgetSpan(child: SizedBox(width: 30)),
-                                TextSpan(
-                                  text: '등원중: ' + list.length.toString() + '명',
-                                  style: const TextStyle(
-                                      color: Colors.white60,
-                                      fontSize: 40,
-                                      fontWeight: FontWeight.bold),
-                                ),
-                              ],
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
                             ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
+                          ],
                         ),
-                      ],
-                    ),
+                      );
+                    },
                   ),
                   const SizedBox(height: 16),
                   const Divider(color: Color(0xFF223131), height: 24),
@@ -217,6 +232,19 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     final _ = DataManager.instance.attendanceRecordsNotifier.value;
     final __ = DataManager.instance.sessionOverridesNotifier.value;
     return _computeAttendingStudentsStatic();
+  }
+
+  int _countSubmittedHomeworkItems(List<_AttendingStudent> attendingStudents) {
+    int submittedItemCount = 0;
+    for (final student in attendingStudents) {
+      submittedItemCount += HomeworkStore.instance
+          .items(student.id)
+          .where(
+            (hw) => hw.status != HomeworkStatus.completed && hw.phase == 3,
+          )
+          .length;
+    }
+    return submittedItemCount;
   }
 
   List<_AttendingStudent> _computeAttendingStudentsStatic() {
@@ -2445,6 +2473,7 @@ Future<void> _openPrintDialogForPath(String path) async {
   await PrintRoutingService.instance.printFile(
     path: path,
     channel: PrintRoutingChannel.general,
+    debugSource: 'class_content.waiting_chip',
   );
 }
 
@@ -2645,6 +2674,88 @@ Future<String?> _showHomeworkPrintConfirmDialog({
   return result;
 }
 
+Future<void> _runWithPrintProgressDialog(
+  BuildContext context, {
+  required Future<void> Function(ValueNotifier<String> progressText) run,
+}) async {
+  if (!context.mounted) return;
+  final progressText = ValueNotifier<String>('인쇄 파일을 준비하는 중입니다...');
+  final dialogContextCompleter = Completer<BuildContext>();
+
+  unawaited(
+    showDialog<void>(
+      context: context,
+      useRootNavigator: true,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        if (!dialogContextCompleter.isCompleted) {
+          dialogContextCompleter.complete(dialogContext);
+        }
+        return PopScope(
+          canPop: false,
+          child: AlertDialog(
+            backgroundColor: kDlgBg,
+            contentPadding: const EdgeInsets.fromLTRB(24, 22, 24, 22),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+              side: const BorderSide(color: kDlgBorder),
+            ),
+            content: SizedBox(
+              width: 360,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  const SizedBox(
+                    width: 22,
+                    height: 22,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2.6,
+                      color: kDlgAccent,
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: ValueListenableBuilder<String>(
+                      valueListenable: progressText,
+                      builder: (context, text, _) {
+                        return SizedBox(
+                          height: 24,
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: Text(
+                              text,
+                              style: const TextStyle(
+                                color: kDlgText,
+                                fontSize: 14,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    ),
+  );
+
+  BuildContext? dialogContext;
+  try {
+    dialogContext = await dialogContextCompleter.future;
+    await run(progressText);
+  } finally {
+    progressText.dispose();
+    if (dialogContext != null && dialogContext.mounted) {
+      Navigator.of(dialogContext, rootNavigator: true).pop();
+    }
+  }
+}
+
 Future<void> _handleWaitingChipLongPressPrint({
   required BuildContext context,
   required HomeworkItem hw,
@@ -2691,25 +2802,41 @@ Future<void> _handleWaitingChipLongPressPrint({
 
   String pathToPrint = bodyPath;
   final rangeRaw = _normalizePageRangeForPrint(selectedRange);
-  if (rangeRaw.isNotEmpty) {
-    if (!bodyPath.toLowerCase().endsWith('.pdf')) {
-      _showHomeworkChipSnackBar(context, '페이지 범위 인쇄는 PDF에서만 지원합니다.');
-      return;
-    }
-    final out = await _buildPdfForPrintRange(
-      inputPath: bodyPath,
-      pageRange: rangeRaw,
+  String? printError;
+  try {
+    await _runWithPrintProgressDialog(
+      context,
+      run: (progressText) async {
+        if (rangeRaw.isNotEmpty) {
+          if (!bodyPath.toLowerCase().endsWith('.pdf')) {
+            printError = '페이지 범위 인쇄는 PDF에서만 지원합니다.';
+            return;
+          }
+          progressText.value = '선택한 페이지를 인쇄 파일로 만드는 중입니다...';
+          final out = await _buildPdfForPrintRange(
+            inputPath: bodyPath,
+            pageRange: rangeRaw,
+          );
+          if (out == null || out.isEmpty) {
+            printError = '페이지 범위를 확인하세요. (예: 10-15, 20)';
+            return;
+          }
+          pathToPrint = out;
+          _scheduleTempDelete(pathToPrint);
+        }
+        progressText.value = '프린터로 전송 중입니다...';
+        await _openPrintDialogForPath(pathToPrint);
+      },
     );
+  } catch (_) {
     if (!context.mounted) return;
-    if (out == null || out.isEmpty) {
-      _showHomeworkChipSnackBar(context, '페이지 범위를 확인하세요. (예: 10-15, 20)');
-      return;
-    }
-    pathToPrint = out;
-    _scheduleTempDelete(pathToPrint);
+    _showHomeworkChipSnackBar(context, '인쇄 요청 중 오류가 발생했습니다.');
+    return;
   }
-
-  await _openPrintDialogForPath(pathToPrint);
+  if (!context.mounted) return;
+  if (printError != null) {
+    _showHomeworkChipSnackBar(context, printError!);
+  }
 }
 
 Future<void> _handleSubmittedChipTapWithAnswerViewer({
@@ -2801,7 +2928,7 @@ Widget _buildHomeworkChipVisual(
     color: Color(0xFF9FB3B3),
     fontSize: 14,
     fontWeight: FontWeight.w600,
-    height: 1.1,
+    height: 1.0,
   );
   final TextStyle metaStyle = const TextStyle(
     color: Color(0xFF9FB3B3),
@@ -2819,6 +2946,11 @@ Widget _buildHomeworkChipVisual(
   const double rightPad = 24;
   const double chipHeight = _homeworkChipHeight;
   const double borderWMax = 3.0; // 상태와 무관하게 최대 테두리 두께 기준으로 폭 고정
+  const double flowPillHPad = 10.0;
+  const double flowPillBorderW = 1.2;
+  const double row1ShiftY = -3.0;
+  const double lowerRowsShiftY = 2.0;
+  const double row1ToRow2Gap = 14.0;
 
   final String displayFlowName = flowName.isNotEmpty ? flowName : '플로우 미지정';
   final String page = (hw.page ?? '').trim();
@@ -2896,7 +3028,9 @@ Widget _buildHomeworkChipVisual(
     textDirection: TextDirection.ltr,
     textScaleFactor: MediaQuery.of(context).textScaleFactor,
   )..layout(minWidth: 0, maxWidth: double.infinity);
-  final double rowWidth = titlePainter.width + 8 + flowPainter.width;
+  final double flowPillWidth =
+      flowPainter.width + (flowPillHPad * 2) + (flowPillBorderW * 2);
+  final double rowWidth = titlePainter.width + 8 + flowPillWidth;
   final double line2Width = painter2Left.width + 10 + painter2Right.width;
   final double maxLineWidth =
       math.max(rowWidth, math.max(line2Width, painter3.width));
@@ -2948,70 +3082,96 @@ Widget _buildHomeworkChipVisual(
     child: Stack(
       fit: StackFit.expand,
       children: [
-        Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    titleText,
-                    style: titleStyle,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 160),
-                  child: Text(
-                    displayFlowName,
-                    style: flowStyle,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.right,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            ConstrainedBox(
-              constraints:
-                  BoxConstraints(maxWidth: fixedWidth - leftPad - rightPad - 4),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      line2Left,
-                      style: metaStyle,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+        Align(
+          alignment: Alignment.centerLeft,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Transform.translate(
+                offset: const Offset(0, row1ShiftY),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        titleText,
+                        style: titleStyle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
+                    const SizedBox(width: 8),
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 190),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: flowPillHPad,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.transparent,
+                          borderRadius: BorderRadius.circular(999),
+                          border: Border.all(
+                            color: const Color(0xFF3E5960),
+                            width: flowPillBorderW,
+                          ),
+                        ),
+                        child: Text(
+                          displayFlowName,
+                          style: flowStyle,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          textAlign: TextAlign.right,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: row1ToRow2Gap),
+              Transform.translate(
+                offset: const Offset(0, lowerRowsShiftY),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                      maxWidth: fixedWidth - leftPad - rightPad - 4),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          line2Left,
+                          style: metaStyle,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Text(
+                        line2Right,
+                        style: metaStyle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        textAlign: TextAlign.right,
+                      ),
+                    ],
                   ),
-                  const SizedBox(width: 10),
-                  Text(
-                    line2Right,
-                    style: metaStyle,
+                ),
+              ),
+              const SizedBox(height: 9),
+              Transform.translate(
+                offset: const Offset(0, lowerRowsShiftY),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                      maxWidth: fixedWidth - leftPad - rightPad - 4),
+                  child: Text(
+                    line3,
+                    style: statStyle,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.right,
                   ),
-                ],
+                ),
               ),
-            ),
-            const SizedBox(height: 9),
-            ConstrainedBox(
-              constraints:
-                  BoxConstraints(maxWidth: fixedWidth - leftPad - rightPad - 4),
-              child: Text(
-                line3,
-                style: statStyle,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-          ],
+            ],
+          ),
         ),
         if (isReservation)
           Align(
