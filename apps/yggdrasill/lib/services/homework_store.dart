@@ -24,6 +24,7 @@ class HomeworkItem {
   String? sourceUnitPath;
   List<Map<String, dynamic>>? unitMappings;
   int checkCount;
+  int orderIndex;
   DateTime? createdAt;
   DateTime? updatedAt;
   HomeworkStatus status;
@@ -52,6 +53,7 @@ class HomeworkItem {
     this.sourceUnitPath,
     this.unitMappings,
     this.checkCount = 0,
+    this.orderIndex = 0,
     this.createdAt,
     this.updatedAt,
     this.status = HomeworkStatus.inProgress,
@@ -79,9 +81,37 @@ class HomeworkStore {
   bool _loaded = false;
   RealtimeChannel? _rt;
 
+  int _compareByOrder(HomeworkItem a, HomeworkItem b) {
+    final orderCmp = a.orderIndex.compareTo(b.orderIndex);
+    if (orderCmp != 0) return orderCmp;
+    final aUpdated = a.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+    final bUpdated = b.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+    final updatedCmp = bUpdated.compareTo(aUpdated);
+    if (updatedCmp != 0) return updatedCmp;
+    return a.id.compareTo(b.id);
+  }
+
+  void _sortStudentList(List<HomeworkItem> list) {
+    list.sort(_compareByOrder);
+  }
+
+  int _nextActiveOrderIndex(String studentId) {
+    final list = _byStudentId[studentId] ?? const <HomeworkItem>[];
+    var maxOrder = -1;
+    for (final item in list) {
+      if (item.status == HomeworkStatus.completed) continue;
+      if (item.orderIndex > maxOrder) {
+        maxOrder = item.orderIndex;
+      }
+    }
+    return maxOrder + 1;
+  }
+
   List<HomeworkItem> items(String studentId) {
     final list = _byStudentId[studentId] ?? const <HomeworkItem>[];
-    return List<HomeworkItem>.from(list);
+    final copied = List<HomeworkItem>.from(list);
+    copied.sort(_compareByOrder);
+    return copied;
   }
 
   Future<List<HomeworkItem>> itemsForStats(
@@ -103,8 +133,9 @@ class HomeworkStore {
       final supa = Supabase.instance.client;
       final data = await supa
           .from('homework_items')
-          .select('id,student_id,title,body,color,flow_id,type,page,count,content,book_id,grade_label,source_unit_level,source_unit_path,check_count,status,phase,accumulated_ms,run_start,completed_at,first_started_at,submitted_at,confirmed_at,waiting_at,created_at,updated_at,version')
+          .select('id,student_id,title,body,color,flow_id,type,page,count,content,book_id,grade_label,source_unit_level,source_unit_path,order_index,check_count,status,phase,accumulated_ms,run_start,completed_at,first_started_at,submitted_at,confirmed_at,waiting_at,created_at,updated_at,version')
           .eq('academy_id', academyId)
+          .order('order_index', ascending: true)
           .order('updated_at', ascending: false);
       _byStudentId.clear();
       for (final r in (data as List<dynamic>).cast<Map<String, dynamic>>()) {
@@ -137,6 +168,7 @@ class HomeworkStore {
           gradeLabel: (r['grade_label'] as String?)?.trim(),
           sourceUnitLevel: (r['source_unit_level'] as String?)?.trim(),
           sourceUnitPath: (r['source_unit_path'] as String?)?.trim(),
+          orderIndex: parseInt(r['order_index']) ?? 0,
           checkCount: parseInt(r['check_count']) ?? 0,
           createdAt: parseTsOpt(r['created_at']),
           updatedAt: parseTsOpt(r['updated_at']),
@@ -152,6 +184,9 @@ class HomeworkStore {
           version: parseInt(r['version']) ?? 1,
         );
         _byStudentId.putIfAbsent(sid, () => <HomeworkItem>[]).add(item);
+      }
+      for (final entry in _byStudentId.values) {
+        _sortStudentList(entry);
       }
       _loaded = true;
       _bump();
@@ -198,6 +233,7 @@ class HomeworkStore {
                 gradeLabel: (r['grade_label'] as String?)?.trim(),
                 sourceUnitLevel: (r['source_unit_level'] as String?)?.trim(),
                 sourceUnitPath: (r['source_unit_path'] as String?)?.trim(),
+                orderIndex: _asIntOpt(r['order_index']) ?? 0,
                 checkCount: _asIntOpt(r['check_count']) ?? 0,
                 createdAt: _parse(r['created_at']),
                 updatedAt: _parse(r['updated_at']),
@@ -217,10 +253,11 @@ class HomeworkStore {
             final list = _byStudentId.putIfAbsent(sid, () => <HomeworkItem>[]);
             final idx = list.indexWhere((e) => e.id == it.id);
             if (idx == -1) {
-              list.insert(0, it);
+              list.add(it);
             } else {
               list[idx] = it;
             }
+            _sortStudentList(list);
             // '확인→대기' 진입 시 자동 완료 플래그가 있으면 즉시 완료 처리
             _maybeAutoCompleteOnWaiting(sid, it);
             _bump();
@@ -252,6 +289,9 @@ class HomeworkStore {
               gradeLabel: (m['grade_label'] as String?)?.trim(),
               sourceUnitLevel: (m['source_unit_level'] as String?)?.trim(),
               sourceUnitPath: (m['source_unit_path'] as String?)?.trim(),
+              orderIndex: m['order_index'] is num
+                  ? (m['order_index'] as num).toInt()
+                  : int.tryParse('${m['order_index']}') ?? 0,
               checkCount: m['check_count'] is num
                   ? (m['check_count'] as num).toInt()
                   : int.tryParse('${m['check_count']}') ?? 0,
@@ -270,8 +310,14 @@ class HomeworkStore {
             );
             final list = _byStudentId.putIfAbsent(sid, () => <HomeworkItem>[]);
             final idx = list.indexWhere((e) => e.id == updated.id);
-            if (idx != -1) {
+            if (idx == -1) {
+              list.add(updated);
+              _sortStudentList(list);
+              _maybeAutoCompleteOnWaiting(sid, updated);
+              _bump();
+            } else {
               list[idx] = updated;
+              _sortStudentList(list);
               // '확인→대기' 진입 시 자동 완료 플래그가 있으면 즉시 완료 처리
               _maybeAutoCompleteOnWaiting(sid, updated);
               _bump();
@@ -321,6 +367,7 @@ class HomeworkStore {
         'grade_label': it.gradeLabel,
         'source_unit_level': it.sourceUnitLevel,
         'source_unit_path': it.sourceUnitPath,
+        'order_index': it.orderIndex,
         'check_count': it.checkCount,
         'status': it.status.index,
         'phase': it.phase,
@@ -476,6 +523,7 @@ class HomeworkStore {
     List<Map<String, dynamic>>? unitMappings,
   }) {
     final id = const Uuid().v4();
+    final orderIndex = _nextActiveOrderIndex(studentId);
     final item = HomeworkItem(
       id: id,
       title: title,
@@ -496,12 +544,14 @@ class HomeworkStore {
               unitMappings.map((e) => Map<String, dynamic>.from(e)),
             ),
       checkCount: 0,
+      orderIndex: orderIndex,
       createdAt: DateTime.now(),
       updatedAt: DateTime.now(),
       version: 1,
     );
     final list = _byStudentId.putIfAbsent(studentId, () => <HomeworkItem>[]);
-    list.insert(0, item);
+    list.add(item);
+    _sortStudentList(list);
     _bump();
     unawaited(_upsertItem(studentId, item));
     return item;
@@ -522,13 +572,85 @@ class HomeworkStore {
     final list = _byStudentId[studentId];
     if (list == null) return;
     list.removeWhere((e) => e.id == id);
+    _sortStudentList(list);
     _bump();
     unawaited(() async {
       try {
         final supa = Supabase.instance.client;
         await supa.from('homework_items').delete().eq('id', id);
       } catch (e) {}
+      await _normalizeActiveOrderIndices(studentId);
     }());
+  }
+
+  Future<void> reorderActiveItems(
+    String studentId,
+    List<String> orderedIds,
+  ) async {
+    final list = _byStudentId[studentId];
+    if (list == null || list.isEmpty) return;
+    final active = list.where((e) => e.status != HomeworkStatus.completed).toList();
+    if (active.isEmpty) return;
+    final activeById = <String, HomeworkItem>{for (final item in active) item.id: item};
+    final used = <String>{};
+    final reordered = <HomeworkItem>[];
+    for (final id in orderedIds) {
+      final item = activeById[id];
+      if (item == null || !used.add(id)) continue;
+      reordered.add(item);
+    }
+    final remaining = active.where((e) => !used.contains(e.id)).toList()
+      ..sort(_compareByOrder);
+    reordered.addAll(remaining);
+
+    final changed = <HomeworkItem>[];
+    for (int i = 0; i < reordered.length; i++) {
+      final item = reordered[i];
+      if (item.orderIndex != i) {
+        item.orderIndex = i;
+        changed.add(item);
+      }
+    }
+    if (changed.isEmpty) return;
+    _sortStudentList(list);
+    _bump();
+    for (final item in changed) {
+      await _upsertItem(studentId, item);
+    }
+  }
+
+  Future<void> moveToBottom(String studentId, String id) async {
+    final list = _byStudentId[studentId];
+    if (list == null || list.isEmpty) return;
+    final active = list.where((e) => e.status != HomeworkStatus.completed).toList()
+      ..sort(_compareByOrder);
+    if (!active.any((e) => e.id == id)) return;
+    final orderedIds = <String>[
+      ...active.where((e) => e.id != id).map((e) => e.id),
+      id,
+    ];
+    await reorderActiveItems(studentId, orderedIds);
+  }
+
+  Future<void> _normalizeActiveOrderIndices(String studentId) async {
+    final list = _byStudentId[studentId];
+    if (list == null || list.isEmpty) return;
+    final active = list.where((e) => e.status != HomeworkStatus.completed).toList()
+      ..sort(_compareByOrder);
+    final changed = <HomeworkItem>[];
+    for (int i = 0; i < active.length; i++) {
+      final item = active[i];
+      if (item.orderIndex != i) {
+        item.orderIndex = i;
+        changed.add(item);
+      }
+    }
+    if (changed.isEmpty) return;
+    _sortStudentList(list);
+    _bump();
+    for (final item in changed) {
+      await _upsertItem(studentId, item);
+    }
   }
 
   HomeworkItem? getById(String studentId, String id) {
@@ -591,6 +713,9 @@ class HomeworkStore {
         'p_item_id': id,
         'p_academy_id': academyId,
       });
+      unawaited(
+        _reloadStudent(studentId).then((_) => _normalizeActiveOrderIndices(studentId)),
+      );
     } catch (_) {}
   }
 
@@ -628,7 +753,11 @@ class HomeworkStore {
     }
   }
 
-  Future<void> confirm(String studentId, String id) async {
+  Future<void> confirm(
+    String studentId,
+    String id, {
+    bool recordAssignmentCheck = true,
+  }) async {
     final list = _byStudentId[studentId];
     if (list == null) return;
     final idx = list.indexWhere((e) => e.id == id);
@@ -649,10 +778,12 @@ class HomeworkStore {
         'p_updated_by': updatedBy,
       });
       unawaited(_reloadStudent(studentId));
-      unawaited(HomeworkAssignmentStore.instance.recordAssignmentCheckForConfirm(
-        studentId: studentId,
-        homeworkItemId: id,
-      ));
+      if (recordAssignmentCheck) {
+        unawaited(HomeworkAssignmentStore.instance.recordAssignmentCheckForConfirm(
+          studentId: studentId,
+          homeworkItemId: id,
+        ));
+      }
     } catch (e) {
       // ignore: avoid_print
       print('[HW][confirm][ERROR] ' + e.toString());
@@ -952,9 +1083,10 @@ class HomeworkStore {
       final supa = Supabase.instance.client;
       final data = await supa
           .from('homework_items')
-          .select('id,student_id,title,body,color,flow_id,type,page,count,content,book_id,grade_label,source_unit_level,source_unit_path,check_count,status,phase,accumulated_ms,run_start,completed_at,first_started_at,submitted_at,confirmed_at,waiting_at,created_at,updated_at,version')
+          .select('id,student_id,title,body,color,flow_id,type,page,count,content,book_id,grade_label,source_unit_level,source_unit_path,order_index,check_count,status,phase,accumulated_ms,run_start,completed_at,first_started_at,submitted_at,confirmed_at,waiting_at,created_at,updated_at,version')
           .eq('academy_id', academyId)
           .eq('student_id', studentId)
+          .order('order_index', ascending: true)
           .order('updated_at', ascending: false);
       final List<HomeworkItem> list = [];
       for (final r in (data as List<dynamic>).cast<Map<String, dynamic>>()) {
@@ -974,6 +1106,7 @@ class HomeworkStore {
           gradeLabel: (r['grade_label'] as String?)?.trim(),
           sourceUnitLevel: (r['source_unit_level'] as String?)?.trim(),
           sourceUnitPath: (r['source_unit_path'] as String?)?.trim(),
+          orderIndex: _asInt(r['order_index']),
           checkCount: _asInt(r['check_count']),
           createdAt: _parse(r['created_at']),
           updatedAt: _parse(r['updated_at']),
@@ -989,6 +1122,7 @@ class HomeworkStore {
           version: _asInt(r['version']),
         ));
       }
+      _sortStudentList(list);
       _byStudentId[studentId] = list;
       _bump();
     } catch (_) {}

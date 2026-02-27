@@ -33,7 +33,7 @@ class AcademyDbService {
     final String path = mem ? inMemoryDatabasePath : await _resolveLocalDbPath();
     return await openDatabaseWithLog(
       path,
-      version: 48,
+      version: 49,
       onConfigure: (db) async {
         // 잠금 최소화를 위한 설정은 유지
         await db.execute('PRAGMA journal_mode=WAL');
@@ -523,6 +523,7 @@ class AcademyDbService {
             page TEXT,
             count INTEGER,
             content TEXT,
+            order_index INTEGER,
             check_count INTEGER,
             status INTEGER,
             accumulated_ms INTEGER,
@@ -540,6 +541,7 @@ class AcademyDbService {
             homework_item_id TEXT,
             assigned_at TEXT,
             due_date TEXT,
+            order_index INTEGER,
             status TEXT,
             carry_over_from_id TEXT,
             note TEXT,
@@ -549,6 +551,14 @@ class AcademyDbService {
             created_at TEXT,
             updated_at TEXT
           )
+        ''');
+        await db.execute('''
+          CREATE INDEX IF NOT EXISTS idx_homework_items_student_order
+          ON homework_items(student_id, order_index)
+        ''');
+        await db.execute('''
+          CREATE INDEX IF NOT EXISTS idx_homework_assignments_group_order
+          ON homework_assignments(student_id, due_date, status, order_index)
         ''');
         await db.execute('''
           CREATE TABLE IF NOT EXISTS homework_assignment_checks (
@@ -1533,6 +1543,91 @@ class AcademyDbService {
               updated_at TEXT
             )
           ''');
+        }
+        if (oldVersion < 49) {
+          try {
+            final itemCols = await db.rawQuery("PRAGMA table_info(homework_items)");
+            final hasItemOrder = itemCols.any((c) => c['name'] == 'order_index');
+            if (!hasItemOrder) {
+              await db.execute(
+                'ALTER TABLE homework_items ADD COLUMN order_index INTEGER',
+              );
+            }
+            await db.execute('''
+              CREATE INDEX IF NOT EXISTS idx_homework_items_student_order
+              ON homework_items(student_id, order_index)
+            ''');
+
+            final itemRows = await db.rawQuery('''
+              SELECT id, student_id
+              FROM homework_items
+              ORDER BY student_id ASC,
+                       datetime(updated_at) DESC,
+                       datetime(created_at) DESC,
+                       id ASC
+            ''');
+            final Map<String, int> nextByStudent = <String, int>{};
+            for (final row in itemRows) {
+              final id = (row['id'] ?? '').toString();
+              final studentId = (row['student_id'] ?? '').toString();
+              if (id.isEmpty || studentId.isEmpty) continue;
+              final next = nextByStudent[studentId] ?? 0;
+              await db.update(
+                'homework_items',
+                <String, Object?>{'order_index': next},
+                where: 'id = ?',
+                whereArgs: <Object?>[id],
+              );
+              nextByStudent[studentId] = next + 1;
+            }
+          } catch (e) {
+            print('[DB][마이그레이션] v49 homework_items.order_index 추가/백필 실패: $e');
+          }
+
+          try {
+            final assignCols =
+                await db.rawQuery("PRAGMA table_info(homework_assignments)");
+            final hasAssignOrder =
+                assignCols.any((c) => c['name'] == 'order_index');
+            if (!hasAssignOrder) {
+              await db.execute(
+                'ALTER TABLE homework_assignments ADD COLUMN order_index INTEGER',
+              );
+            }
+            await db.execute('''
+              CREATE INDEX IF NOT EXISTS idx_homework_assignments_group_order
+              ON homework_assignments(student_id, due_date, status, order_index)
+            ''');
+
+            final assignmentRows = await db.rawQuery('''
+              SELECT id, student_id, due_date
+              FROM homework_assignments
+              ORDER BY student_id ASC,
+                       due_date ASC,
+                       datetime(assigned_at) DESC,
+                       datetime(created_at) DESC,
+                       id ASC
+            ''');
+            final Map<String, int> nextByGroup = <String, int>{};
+            for (final row in assignmentRows) {
+              final id = (row['id'] ?? '').toString();
+              final studentId = (row['student_id'] ?? '').toString();
+              final dueDateRaw = row['due_date'];
+              final dueDate = dueDateRaw == null ? '' : dueDateRaw.toString();
+              if (id.isEmpty || studentId.isEmpty) continue;
+              final groupKey = '$studentId|$dueDate';
+              final next = nextByGroup[groupKey] ?? 0;
+              await db.update(
+                'homework_assignments',
+                <String, Object?>{'order_index': next},
+                where: 'id = ?',
+                whereArgs: <Object?>[id],
+              );
+              nextByGroup[groupKey] = next + 1;
+            }
+          } catch (e) {
+            print('[DB][마이그레이션] v49 homework_assignments.order_index 추가/백필 실패: $e');
+          }
         }
       },
     );

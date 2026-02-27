@@ -2468,11 +2468,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         return FutureBuilder<List<HomeworkAssignmentDetail>>(
           future: assignmentsFuture,
           builder: (context, snapshot) {
-            final hiddenReservedIds =
+            final hiddenAssignedItemIds =
                 (snapshot.data ?? const <HomeworkAssignmentDetail>[])
-                    .where((a) =>
-                        (a.note ?? '').trim() ==
-                        HomeworkAssignmentStore.reservationNote)
                     .map((a) => a.homeworkItemId.trim())
                     .where((id) => id.isNotEmpty)
                     .toSet();
@@ -2484,7 +2481,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                   builder: (context, _) {
                     return _buildHomeworkChipsScroller(
                       t,
-                      hiddenItemIds: hiddenReservedIds,
+                      hiddenItemIds: hiddenAssignedItemIds,
                     );
                   },
                 );
@@ -2528,47 +2525,12 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     Set<String> hiddenItemIds = const <String>{},
   }) {
     final List<Widget> chips = [];
-    // 정렬: 수행(2/running) → 대기(1) → 확인(4) → 제출(3).
-    // 동일 단계는 최초 생성 시각 빠른 순. 생성 시각 대용으로 firstStartedAt/confirmedAt/submittedAt/runStart/기타 nulls last 기준 사용
     List<HomeworkItem> hwList = List<HomeworkItem>.from(
       HomeworkStore.instance
           .items(t.student.id)
           .where((e) => e.status != HomeworkStatus.completed)
           .where((e) => !hiddenItemIds.contains(e.id)),
     );
-    DateTime? _ts(HomeworkItem e) =>
-        e.firstStartedAt ??
-        e.waitingAt ??
-        e.confirmedAt ??
-        e.submittedAt ??
-        e.runStart;
-    int _phaseOrder(HomeworkItem e) {
-      final running =
-          HomeworkStore.instance.runningOf(t.student.id)?.id == e.id;
-      if (running) return 0; // 수행 최우선
-      switch (e.phase) {
-        case 1:
-          return 1; // 대기
-        case 4:
-          return 2; // 확인
-        case 3:
-          return 3; // 제출
-        default:
-          return 4;
-      }
-    }
-
-    hwList.sort((a, b) {
-      final oa = _phaseOrder(a);
-      final ob = _phaseOrder(b);
-      if (oa != ob) return oa - ob;
-      final ta = _ts(a);
-      final tb = _ts(b);
-      if (ta == null && tb == null) return 0;
-      if (ta == null) return 1;
-      if (tb == null) return -1;
-      return ta.compareTo(tb);
-    });
     for (final hw in hwList) {
       final chipTitle = _chipDisplayTitle(hw.title);
       if (chips.isNotEmpty) chips.add(const SizedBox(width: 8));
@@ -3018,15 +2980,6 @@ extension on _MainScreenState {
       _applyWorkingTags();
     }
 
-    Future<void> _handleHomeworkStatusPressed() async {
-      _removeClassTagOverlay();
-      await Future<void>.delayed(Duration.zero);
-      await showHomeworkAssignmentsDialog(
-        context,
-        target.student.id,
-      );
-    }
-
     Future<void> _handleHomeworkPressed() async {
       _removeClassTagOverlay();
       await Future<void>.delayed(Duration.zero);
@@ -3194,31 +3147,6 @@ extension on _MainScreenState {
                                     minWidth: 28, minHeight: 28),
                               ),
                             ],
-                          ),
-                          const SizedBox(height: 8),
-                          SizedBox(
-                            width: double.infinity,
-                            height: 45.2,
-                            child: OutlinedButton.icon(
-                              onPressed: _handleHomeworkStatusPressed,
-                              icon: const Icon(Icons.assignment_outlined,
-                                  size: 16, color: Color(0xFF9FB3B3)),
-                              label: const Text('숙제',
-                                  style: TextStyle(
-                                      color: Color(0xFF9FB3B3),
-                                      fontWeight: FontWeight.w700)),
-                              style: OutlinedButton.styleFrom(
-                                foregroundColor: const Color(0xFF9FB3B3),
-                                side: const BorderSide(
-                                    color: Color(0xFF4D5A5A), width: 1.2),
-                                backgroundColor: Colors.transparent,
-                                padding:
-                                    const EdgeInsets.symmetric(horizontal: 12),
-                                minimumSize: const Size.fromHeight(45.2),
-                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                                shape: const StadiumBorder(),
-                              ),
-                            ),
                           ),
                           const SizedBox(height: 8),
                           SizedBox(

@@ -10,6 +10,7 @@ class HomeworkAssignmentDetail {
   final String homeworkItemId;
   final DateTime assignedAt;
   final DateTime? dueDate;
+  final int orderIndex;
   final String status;
   final String? note;
   final int progress;
@@ -27,6 +28,7 @@ class HomeworkAssignmentDetail {
     required this.homeworkItemId,
     required this.assignedAt,
     required this.dueDate,
+    required this.orderIndex,
     required this.status,
     this.note,
     required this.progress,
@@ -46,6 +48,7 @@ class HomeworkAssignmentBrief {
   final String homeworkItemId;
   final DateTime assignedAt;
   final DateTime? dueDate;
+  final int orderIndex;
   final String status;
   final int progress;
 
@@ -54,6 +57,7 @@ class HomeworkAssignmentBrief {
     required this.homeworkItemId,
     required this.assignedAt,
     required this.dueDate,
+    required this.orderIndex,
     required this.status,
     required this.progress,
   });
@@ -84,6 +88,76 @@ class HomeworkAssignmentStore {
 
   void _bump() {
     revision.value++;
+  }
+
+  String? _dueDateIso(DateTime? dueDate) {
+    if (dueDate == null) return null;
+    final y = dueDate.year.toString().padLeft(4, '0');
+    final m = dueDate.month.toString().padLeft(2, '0');
+    final d = dueDate.day.toString().padLeft(2, '0');
+    return '$y-$m-$d';
+  }
+
+  int _asInt(dynamic value, [int fallback = 0]) {
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    if (value is String) return int.tryParse(value) ?? fallback;
+    return fallback;
+  }
+
+  Future<List<Map<String, dynamic>>> _loadActiveRowsForDueGroup({
+    required String academyId,
+    required String studentId,
+    required String? dueDateIso,
+  }) async {
+    final supa = Supabase.instance.client;
+    dynamic query = supa
+        .from('homework_assignments')
+        .select('id,order_index,assigned_at,created_at')
+        .eq('academy_id', academyId)
+        .eq('student_id', studentId)
+        .eq('status', 'assigned');
+    if (dueDateIso == null) {
+      query = query.isFilter('due_date', null);
+    } else {
+      query = query.eq('due_date', dueDateIso);
+    }
+    final rows = await query
+        .order('order_index', ascending: true)
+        .order('assigned_at', ascending: false)
+        .order('created_at', ascending: false);
+    return (rows as List<dynamic>).cast<Map<String, dynamic>>();
+  }
+
+  Future<void> _normalizeAssignedOrderForDueDateIso({
+    required String academyId,
+    required String studentId,
+    required String? dueDateIso,
+  }) async {
+    final rows = await _loadActiveRowsForDueGroup(
+      academyId: academyId,
+      studentId: studentId,
+      dueDateIso: dueDateIso,
+    );
+    if (rows.isEmpty) return;
+    final supa = Supabase.instance.client;
+    bool changed = false;
+    for (int i = 0; i < rows.length; i++) {
+      final row = rows[i];
+      final id = (row['id'] as String?) ?? '';
+      if (id.isEmpty) continue;
+      if (_asInt(row['order_index']) == i) continue;
+      await supa
+          .from('homework_assignments')
+          .update({'order_index': i})
+          .eq('academy_id', academyId)
+          .eq('student_id', studentId)
+          .eq('id', id);
+      changed = true;
+    }
+    if (changed) {
+      _bump();
+    }
   }
 
   Future<Set<String>> loadAssignedItemIds(String studentId) async {
@@ -161,10 +235,12 @@ class HomeworkAssignmentStore {
       final rows = await supa
           .from('homework_assignments')
           .select(
-              'id,homework_item_id,assigned_at,due_date,status,note,progress,issue_type,issue_note,homework_items(id,title,type,page,count,content,flow_id)')
+              'id,homework_item_id,assigned_at,due_date,order_index,status,note,progress,issue_type,issue_note,homework_items(id,title,type,page,count,content,flow_id)')
           .eq('academy_id', academyId)
           .eq('student_id', studentId)
           .eq('status', 'assigned')
+          .order('due_date', ascending: true)
+          .order('order_index', ascending: true)
           .order('assigned_at', ascending: false);
       final List<HomeworkAssignmentDetail> list = [];
       DateTime? parseTs(dynamic v) {
@@ -190,6 +266,7 @@ class HomeworkAssignmentStore {
             homeworkItemId: (r['homework_item_id'] as String?) ?? '',
             assignedAt: parseTs(r['assigned_at']) ?? DateTime.now(),
             dueDate: parseTs(r['due_date']),
+            orderIndex: parseInt(r['order_index']),
             status: (r['status'] as String?) ?? 'assigned',
             note: (r['note'] as String?)?.trim(),
             progress: parseInt(r['progress']),
@@ -250,10 +327,19 @@ class HomeworkAssignmentStore {
     String? issueNote,
     bool markCompleted = false,
   }) async {
+    final academyId = await TenantService.instance.getActiveAcademyId() ??
+        await TenantService.instance.ensureActiveAcademy();
+    final supa = Supabase.instance.client;
+    String? dueDateIso;
     try {
-      final academyId = await TenantService.instance.getActiveAcademyId() ??
-          await TenantService.instance.ensureActiveAcademy();
-      final supa = Supabase.instance.client;
+      final assignmentMeta = await supa
+          .from('homework_assignments')
+          .select('due_date')
+          .eq('academy_id', academyId)
+          .eq('student_id', studentId)
+          .eq('id', assignmentId)
+          .maybeSingle();
+      dueDateIso = (assignmentMeta?['due_date'] as String?)?.trim();
       final String? updatedBy = supa.auth.currentUser?.id;
       await supa.rpc('homework_assignment_check', params: {
         'p_assignment_id': assignmentId,
@@ -264,6 +350,13 @@ class HomeworkAssignmentStore {
         'p_status': markCompleted ? 'completed' : null,
         'p_updated_by': updatedBy,
       });
+      if (markCompleted) {
+        await _normalizeAssignedOrderForDueDateIso(
+          academyId: academyId,
+          studentId: studentId,
+          dueDateIso: dueDateIso,
+        );
+      }
       _bump();
       return true;
     } catch (e, st) {
@@ -284,6 +377,13 @@ class HomeworkAssignmentStore {
       assignmentId: assignmentId,
       progress: progress,
     );
+    if (markCompleted && updateOk) {
+      await _normalizeAssignedOrderForDueDateIso(
+        academyId: academyId,
+        studentId: studentId,
+        dueDateIso: dueDateIso,
+      );
+    }
     return updateOk && checkOk;
   }
 
@@ -370,9 +470,11 @@ class HomeworkAssignmentStore {
       final supa = Supabase.instance.client;
       final rows = await supa
           .from('homework_assignments')
-          .select('id,homework_item_id,assigned_at,due_date,status,progress')
+          .select('id,homework_item_id,assigned_at,due_date,order_index,status,progress')
           .eq('academy_id', academyId)
           .eq('student_id', studentId)
+          .order('due_date', ascending: true)
+          .order('order_index', ascending: true)
           .order('assigned_at', ascending: true);
       DateTime parseTs(dynamic v) {
         final s = v as String?;
@@ -403,6 +505,7 @@ class HomeworkAssignmentStore {
                 homeworkItemId: itemId,
                 assignedAt: parseTs(r['assigned_at']),
                 dueDate: parseDate(r['due_date']),
+                orderIndex: parseInt(r['order_index']),
                 status: (r['status'] as String?) ?? 'assigned',
                 progress: parseInt(r['progress']),
               ),
@@ -489,10 +592,11 @@ class HomeworkAssignmentStore {
           await TenantService.instance.ensureActiveAcademy();
       final supa = Supabase.instance.client;
       final itemIds = items.map((e) => e.id).toSet().toList();
+      final dueDateIso = _dueDateIso(dueDate);
 
       final existingRows = await supa
           .from('homework_assignments')
-          .select('id,homework_item_id,status,assigned_at')
+          .select('id,homework_item_id,status,assigned_at,due_date')
           .eq('academy_id', academyId)
           .eq('student_id', studentId)
           .inFilter('homework_item_id', itemIds)
@@ -509,12 +613,33 @@ class HomeworkAssignmentStore {
       final List<String> carriedOverIds = [];
       final List<Map<String, dynamic>> rows = [];
       final now = assignedAt ?? DateTime.now();
+      dynamic orderBaseQuery = supa
+          .from('homework_assignments')
+          .select('order_index')
+          .eq('academy_id', academyId)
+          .eq('student_id', studentId)
+          .eq('status', 'assigned');
+      if (dueDateIso == null) {
+        orderBaseQuery = orderBaseQuery.isFilter('due_date', null);
+      } else {
+        orderBaseQuery = orderBaseQuery.eq('due_date', dueDateIso);
+      }
+      final existingOrderRows = await orderBaseQuery
+          .order('order_index', ascending: false)
+          .limit(1);
+      int nextOrder = 0;
+      if (existingOrderRows is List && existingOrderRows.isNotEmpty) {
+        final row = existingOrderRows.first as Map<String, dynamic>;
+        nextOrder = _asInt(row['order_index']) + 1;
+      }
+      final affectedDueDates = <String?>{dueDateIso};
       for (final item in items) {
         final last = latestByItem[item.id];
         final String? lastId = last?['id'] as String?;
         final String? lastStatus = last?['status'] as String?;
         if (lastId != null && lastStatus != 'completed') {
           carriedOverIds.add(lastId);
+          affectedDueDates.add((last?['due_date'] as String?)?.trim());
         }
         rows.add({
           'id': const Uuid().v4(),
@@ -522,7 +647,8 @@ class HomeworkAssignmentStore {
           'student_id': studentId,
           'homework_item_id': item.id,
           'assigned_at': now.toUtc().toIso8601String(),
-          'due_date': dueDate?.toIso8601String().substring(0, 10),
+          'due_date': dueDateIso,
+          'order_index': nextOrder++,
           'status': 'assigned',
           'note': note,
           'carry_over_from_id':
@@ -537,10 +663,92 @@ class HomeworkAssignmentStore {
       }
 
       await supa.from('homework_assignments').insert(rows);
+      for (final due in affectedDueDates) {
+        await _normalizeAssignedOrderForDueDateIso(
+          academyId: academyId,
+          studentId: studentId,
+          dueDateIso: due,
+        );
+      }
       _bump();
     } catch (e, st) {
       // ignore: avoid_print
       print('[HW_ASSIGN][record][ERROR] $e\n$st');
+    }
+  }
+
+  Future<void> reorderAssignedInDueGroup({
+    required String studentId,
+    required DateTime? dueDate,
+    required List<String> orderedAssignmentIds,
+  }) async {
+    if (orderedAssignmentIds.isEmpty) return;
+    try {
+      final academyId = await TenantService.instance.getActiveAcademyId() ??
+          await TenantService.instance.ensureActiveAcademy();
+      final dueDateIso = _dueDateIso(dueDate);
+      final rows = await _loadActiveRowsForDueGroup(
+        academyId: academyId,
+        studentId: studentId,
+        dueDateIso: dueDateIso,
+      );
+      if (rows.isEmpty) return;
+      final rowsById = <String, Map<String, dynamic>>{};
+      for (final row in rows) {
+        final id = (row['id'] as String?) ?? '';
+        if (id.isEmpty) continue;
+        rowsById[id] = row;
+      }
+
+      final used = <String>{};
+      final reorderedIds = <String>[];
+      for (final id in orderedAssignmentIds) {
+        if (!rowsById.containsKey(id)) continue;
+        if (!used.add(id)) continue;
+        reorderedIds.add(id);
+      }
+      for (final row in rows) {
+        final id = (row['id'] as String?) ?? '';
+        if (id.isEmpty || used.contains(id)) continue;
+        reorderedIds.add(id);
+      }
+
+      final supa = Supabase.instance.client;
+      bool changed = false;
+      for (int i = 0; i < reorderedIds.length; i++) {
+        final id = reorderedIds[i];
+        final currentOrder = _asInt(rowsById[id]?['order_index']);
+        if (currentOrder == i) continue;
+        await supa
+            .from('homework_assignments')
+            .update({'order_index': i})
+            .eq('academy_id', academyId)
+            .eq('student_id', studentId)
+            .eq('id', id);
+        changed = true;
+      }
+      if (changed) {
+        _bump();
+      }
+    } catch (e, st) {
+      debugPrint('[HW_ASSIGN][reorder][ERROR] $e\n$st');
+    }
+  }
+
+  Future<void> normalizeAssignedOrderForDueGroup({
+    required String studentId,
+    required DateTime? dueDate,
+  }) async {
+    try {
+      final academyId = await TenantService.instance.getActiveAcademyId() ??
+          await TenantService.instance.ensureActiveAcademy();
+      await _normalizeAssignedOrderForDueDateIso(
+        academyId: academyId,
+        studentId: studentId,
+        dueDateIso: _dueDateIso(dueDate),
+      );
+    } catch (e, st) {
+      debugPrint('[HW_ASSIGN][normalize][ERROR] $e\n$st');
     }
   }
 
@@ -554,6 +762,17 @@ class HomeworkAssignmentStore {
       final academyId = await TenantService.instance.getActiveAcademyId() ??
           await TenantService.instance.ensureActiveAcademy();
       final supa = Supabase.instance.client;
+      final rowsToClear = await supa
+          .from('homework_assignments')
+          .select('id,due_date')
+          .eq('academy_id', academyId)
+          .eq('student_id', studentId)
+          .eq('status', 'assigned')
+          .inFilter('homework_item_id', itemIds);
+      final affectedDueDates = <String?>{};
+      for (final row in (rowsToClear as List<dynamic>).cast<Map<String, dynamic>>()) {
+        affectedDueDates.add((row['due_date'] as String?)?.trim());
+      }
       await supa
           .from('homework_assignments')
           .update({'status': nextStatus})
@@ -561,6 +780,13 @@ class HomeworkAssignmentStore {
           .eq('student_id', studentId)
           .eq('status', 'assigned')
           .inFilter('homework_item_id', itemIds);
+      for (final due in affectedDueDates) {
+        await _normalizeAssignedOrderForDueDateIso(
+          academyId: academyId,
+          studentId: studentId,
+          dueDateIso: due,
+        );
+      }
       _bump();
     } catch (e, st) {
       debugPrint('[HW_ASSIGN][clear_active][ERROR] $e\n$st');
