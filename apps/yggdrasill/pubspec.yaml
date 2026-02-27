@@ -1,4 +1,4 @@
-﻿name: mneme_flutter
+name: mneme_flutter
 description: "A new Flutter project."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.1.0+15
+version: 1.1.0+16
 
 environment:
   sdk: '>=3.2.6 <4.0.0'
@@ -137,26 +137,26 @@ flutter:
   fonts:
     - family: KakaoSmallSans
       fonts:
-        - asset: assets/fonts/kakao/移댁뭅?ㅼ옉?湲??TTF/KakaoSmallSans-Light.ttf
+        - asset: assets/fonts/kakao/카카오작은글씨/TTF/KakaoSmallSans-Light.ttf
           weight: 300
-        - asset: assets/fonts/kakao/移댁뭅?ㅼ옉?湲??TTF/KakaoSmallSans-Regular.ttf
+        - asset: assets/fonts/kakao/카카오작은글씨/TTF/KakaoSmallSans-Regular.ttf
           weight: 400
-        - asset: assets/fonts/kakao/移댁뭅?ㅼ옉?湲??TTF/KakaoSmallSans-Bold.ttf
+        - asset: assets/fonts/kakao/카카오작은글씨/TTF/KakaoSmallSans-Bold.ttf
           weight: 700
     - family: KakaoBigSans
       fonts:
-        - asset: assets/fonts/kakao/移댁뭅?ㅽ겙湲??TTF/KakaoBigSans-Regular.ttf
+        - asset: assets/fonts/kakao/카카오큰글씨/TTF/KakaoBigSans-Regular.ttf
           weight: 400
-        - asset: assets/fonts/kakao/移댁뭅?ㅽ겙湲??TTF/KakaoBigSans-Bold.ttf
+        - asset: assets/fonts/kakao/카카오큰글씨/TTF/KakaoBigSans-Bold.ttf
           weight: 700
-        - asset: assets/fonts/kakao/移댁뭅?ㅽ겙湲??TTF/KakaoBigSans-ExtraBold.ttf
+        - asset: assets/fonts/kakao/카카오큰글씨/TTF/KakaoBigSans-ExtraBold.ttf
           weight: 800
 msix_config:
   display_name: Yggdrasill
   publisher_display_name: How-Know
   identity_name: com.yggdrasill.mneme
   publisher: CN=How-Know
-  msix_version: 1.1.0.15
+  msix_version: 1.1.0.16
   logo_path: windows/runner/resources/app_icon.ico
   certificate_subject: CN=How-Know
   certificate_path: C:\\Users\\harry\\Yggdrasill\\apps\\yggdrasill\\dist\\howknow_codesign_new.pfx

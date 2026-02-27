@@ -14,13 +14,25 @@ $ErrorActionPreference = 'Stop'
 function Info($m){ Write-Host "[INFO] $m" -ForegroundColor Cyan }
 function Ok($m){ Write-Host "[OK] $m" -ForegroundColor Green }
 function Fail($m){ Write-Host "[FAIL] $m" -ForegroundColor Red; exit 1 }
+$Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+function Resolve-FullPath([string]$path){
+  return [System.IO.Path]::GetFullPath((Join-Path (Get-Location) $path))
+}
+function Read-Utf8Text([string]$path){
+  $full = Resolve-FullPath $path
+  return [System.IO.File]::ReadAllText($full, $Utf8NoBom)
+}
+function Write-Utf8Text([string]$path, [string]$content){
+  $full = Resolve-FullPath $path
+  [System.IO.File]::WriteAllText($full, $content, $Utf8NoBom)
+}
 
 Push-Location (Split-Path $MyInvocation.MyCommand.Path -Parent) | Out-Null
 Set-Location ..
 
 if(!(Test-Path 'pubspec.yaml')){ Fail 'pubspec.yaml not found (run from apps/yggdrasill/tools)' }
 
-$pubRaw = Get-Content 'pubspec.yaml' -Raw
+$pubRaw = Read-Utf8Text 'pubspec.yaml'
 $m = [regex]::Match($pubRaw, 'version:\s*([0-9]+\.[0-9]+\.[0-9]+)\+([0-9]+)')
 if(-not $m.Success){ Fail 'version parse failed in pubspec.yaml' }
 $oldVer = $m.Groups[1].Value
@@ -41,7 +53,7 @@ Info "current=$oldVer+$oldBuild -> new=$ver+$new"
 # pubspec replacements
 $pubRaw = [regex]::Replace($pubRaw, 'version:\s*[0-9]+\.[0-9]+\.[0-9]+\+[0-9]+', "version: $ver+$new")
 $pubRaw = [regex]::Replace($pubRaw, 'msix_version:\s*[0-9]+(?:\.[0-9]+){2,3}', "msix_version: $ver.$new")
-Set-Content 'pubspec.yaml' $pubRaw -Encoding UTF8
+Write-Utf8Text 'pubspec.yaml' $pubRaw
 Ok 'pubspec.yaml updated'
 
 if($SkipAppInstallerUpdate){
@@ -51,10 +63,10 @@ if($SkipAppInstallerUpdate){
     if(!(Test-Path $aiPath)){ continue }
     $oldMsix = ($oldVer + '.' + $oldBuild)
     $newMsix = ($ver + '.' + $new)
-    $ai = Get-Content $aiPath -Raw
+    $ai = Read-Utf8Text $aiPath
     $ai = [regex]::Replace($ai, 'Version="' + [regex]::Escape($oldMsix) + '"', 'Version="' + $newMsix + '"')
     $ai = [regex]::Replace($ai, 'releases/download/v' + [regex]::Escape($oldMsix) + '/mneme_flutter.msix', 'releases/download/v' + $newMsix + '/mneme_flutter.msix')
-    Set-Content $aiPath $ai -Encoding UTF8
+    Write-Utf8Text $aiPath $ai
     Ok "$aiPath updated"
   }
 }
