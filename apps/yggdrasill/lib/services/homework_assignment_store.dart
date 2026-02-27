@@ -429,6 +429,71 @@ class HomeworkAssignmentStore {
     }
   }
 
+  Future<int?> rollbackLatestCheckForItem({
+    required String studentId,
+    required String homeworkItemId,
+    bool decrementCheckCount = true,
+    bool includeConfirmIncrement = true,
+  }) async {
+    final itemId = homeworkItemId.trim();
+    if (itemId.isEmpty) return null;
+    try {
+      final academyId = await TenantService.instance.getActiveAcademyId() ??
+          await TenantService.instance.ensureActiveAcademy();
+      final supa = Supabase.instance.client;
+      final latest = await supa
+          .from('homework_assignment_checks')
+          .select('id')
+          .eq('academy_id', academyId)
+          .eq('student_id', studentId)
+          .eq('homework_item_id', itemId)
+          .order('checked_at', ascending: false)
+          .limit(1)
+          .maybeSingle();
+      final checkId = (latest?['id'] as String?)?.trim() ?? '';
+      final hasLatestCheck = checkId.isNotEmpty;
+
+      if (hasLatestCheck) {
+        await supa
+            .from('homework_assignment_checks')
+            .delete()
+            .eq('academy_id', academyId)
+            .eq('student_id', studentId)
+            .eq('homework_item_id', itemId)
+            .eq('id', checkId);
+      }
+
+      int decrementedCount = 0;
+      if (decrementCheckCount) {
+        // 확인 전환에서 올라간 +1을 기본 롤백하고,
+        // assignment_check가 남아있다면 해당 +1도 함께 롤백한다.
+        final expectedDecrement =
+            (includeConfirmIncrement ? 1 : 0) + (hasLatestCheck ? 1 : 0);
+        final row = await supa
+            .from('homework_items')
+            .select('check_count')
+            .eq('academy_id', academyId)
+            .eq('id', itemId)
+            .maybeSingle();
+        final current = (row?['check_count'] as num?)?.toInt() ?? 0;
+        final next = (current - expectedDecrement).clamp(0, 1 << 30);
+        decrementedCount = current - next;
+        if (next != current) {
+          await supa
+              .from('homework_items')
+              .update({'check_count': next})
+              .eq('academy_id', academyId)
+              .eq('id', itemId);
+        }
+      }
+      _bump();
+      return decrementedCount;
+    } catch (e, st) {
+      debugPrint('[HW_ASSIGN][rollback_check][ERROR] $e\n$st');
+      return null;
+    }
+  }
+
   Future<void> recordAssignmentCheckForConfirm({
     required String studentId,
     required String homeworkItemId,
