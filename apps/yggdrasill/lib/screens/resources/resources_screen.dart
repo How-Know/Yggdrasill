@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'dart:io';
 import 'package:uuid/uuid.dart';
@@ -835,7 +836,92 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     });
   }
 
-  Future<void> _printBookRange(_ResourceFile file, String range) async {
+  Future<void> _runWithPrintProgressDialog({
+    required Future<void> Function(ValueNotifier<String> progressText) run,
+  }) async {
+    if (!mounted) return;
+    final progressText = ValueNotifier<String>('인쇄 파일을 준비하는 중입니다...');
+    final dialogContextCompleter = Completer<BuildContext>();
+
+    unawaited(
+      showDialog<void>(
+        context: context,
+        useRootNavigator: true,
+        barrierDismissible: false,
+        builder: (dialogContext) {
+          if (!dialogContextCompleter.isCompleted) {
+            dialogContextCompleter.complete(dialogContext);
+          }
+          return PopScope(
+            canPop: false,
+            child: AlertDialog(
+              backgroundColor: _rsBg,
+              contentPadding: const EdgeInsets.fromLTRB(24, 22, 24, 22),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+                side: const BorderSide(color: _rsBorder),
+              ),
+              content: SizedBox(
+                width: 360,
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    const SizedBox(
+                      width: 22,
+                      height: 22,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2.6,
+                        color: _rsAccent,
+                      ),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: ValueListenableBuilder<String>(
+                        valueListenable: progressText,
+                        builder: (context, text, _) {
+                          return SizedBox(
+                            height: 24,
+                            child: Align(
+                              alignment: Alignment.centerLeft,
+                              child: Text(
+                                text,
+                                style: const TextStyle(
+                                  color: _rsText,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+
+    BuildContext? dialogContext;
+    try {
+      dialogContext = await dialogContextCompleter.future;
+      await run(progressText);
+    } finally {
+      progressText.dispose();
+      if (dialogContext != null && dialogContext.mounted) {
+        Navigator.of(dialogContext, rootNavigator: true).pop();
+      }
+    }
+  }
+
+  Future<void> _printBookRange(
+    _ResourceFile file,
+    String range, {
+    ValueNotifier<String>? progressText,
+  }) async {
     final grade = _effectiveGradeLabelForFile(file);
     if (grade == null || grade.isEmpty) {
       if (!mounted) return;
@@ -870,6 +956,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     }
     String pathToPrint = raw;
     if (isPdf && trimmedRange.isNotEmpty) {
+      progressText?.value = '선택한 페이지를 인쇄 파일로 만드는 중입니다...';
       final out = await _buildPdfForPrintRange(
         inputPath: raw,
         pageRange: trimmedRange,
@@ -884,6 +971,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
       pathToPrint = out;
       _scheduleTempDelete(pathToPrint);
     }
+    progressText?.value = '프린터로 전송 중입니다...';
     await _openPrintDialogForPath(pathToPrint);
   }
 
@@ -956,7 +1044,22 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
       builder: (ctx) => _PrintRangeDialog(file: file, gradeLabel: grade),
     );
     if (range == null) return;
-    await _printBookRange(file, range);
+    try {
+      await _runWithPrintProgressDialog(
+        run: (progressText) async {
+          await _printBookRange(
+            file,
+            range,
+            progressText: progressText,
+          );
+        },
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('인쇄 요청 중 오류가 발생했습니다.')),
+      );
+    }
   }
 
   List<String> _linkedGradeLabelsForFile(_ResourceFile file) {
@@ -2255,7 +2358,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
           Column(
             children: [
               const SizedBox(height: 0),
-              SizedBox(height: 5),
+              const SizedBox(height: 8),
               Center(
                 child: PillTabSelector(
                   selectedIndex: _customTabIndex,
@@ -6755,11 +6858,19 @@ class _PrintRangeDialog extends StatefulWidget {
 
 class _PrintRangeDialogState extends State<_PrintRangeDialog> {
   late final ImeAwareTextEditingController _rangeCtrl;
+  bool _unitLoading = false;
+  String? _unitErrorText;
+  List<_PrintBigUnitNode> _units = const <_PrintBigUnitNode>[];
+  int _pageOffset = 0;
+  bool _unitMode = false;
+  String? _expandedBigKey;
+  String? _expandedMidKey;
 
   @override
   void initState() {
     super.initState();
     _rangeCtrl = ImeAwareTextEditingController(text: '');
+    _loadUnitMetadata();
   }
 
   @override
@@ -6768,9 +6879,576 @@ class _PrintRangeDialogState extends State<_PrintRangeDialog> {
     super.dispose();
   }
 
+  int? _toInt(dynamic v) {
+    if (v == null) return null;
+    if (v is int) return v;
+    if (v is num) return v.toInt();
+    if (v is String) return int.tryParse(v.trim());
+    return null;
+  }
+
+  int _orderIndex(dynamic v) => _toInt(v) ?? (1 << 30);
+
+  String _orderText(int order) => order >= (1 << 29) ? '-' : '${order + 1}';
+
+  Future<void> _loadUnitMetadata() async {
+    final gradeLabel = (widget.gradeLabel ?? '').trim();
+    final bookId = widget.file.id.trim();
+    if (gradeLabel.isEmpty || bookId.isEmpty) return;
+    setState(() {
+      _unitLoading = true;
+      _unitErrorText = null;
+    });
+    try {
+      final row = await DataManager.instance.loadTextbookMetadataPayload(
+        bookId: bookId,
+        gradeLabel: gradeLabel,
+      );
+      final pageOffset = _toInt(row?['page_offset']) ?? 0;
+      final units = _parseUnits(row?['payload'], pageOffset: pageOffset);
+      if (!mounted) return;
+      setState(() {
+        _units = units;
+        _pageOffset = pageOffset;
+        _unitMode = units.isNotEmpty;
+        _unitLoading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _unitLoading = false;
+        _unitErrorText = '단원 메타데이터를 불러오지 못했어요.';
+      });
+    }
+  }
+
+  int _toDisplayPage(int raw, int pageOffset) {
+    final adjusted = raw - pageOffset;
+    return adjusted > 0 ? adjusted : raw;
+  }
+
+  int? _toDisplayPageNullable(int? raw, int pageOffset) {
+    if (raw == null) return null;
+    return _toDisplayPage(raw, pageOffset);
+  }
+
+  List<_PrintBigUnitNode> _parseUnits(
+    dynamic payload, {
+    int pageOffset = 0,
+  }) {
+    if (payload is! Map) return const <_PrintBigUnitNode>[];
+    final unitsRaw = payload['units'];
+    if (unitsRaw is! List) return const <_PrintBigUnitNode>[];
+    final units = unitsRaw
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList()
+      ..sort((a, b) =>
+          _orderIndex(a['order_index']).compareTo(_orderIndex(b['order_index'])));
+
+    final out = <_PrintBigUnitNode>[];
+    for (final u in units) {
+      final big = _PrintBigUnitNode(
+        name: (u['name'] as String?)?.trim().isNotEmpty == true
+            ? (u['name'] as String).trim()
+            : '대단원',
+        orderIndex: _orderIndex(u['order_index']),
+      );
+      final midsRaw = u['middles'];
+      if (midsRaw is List) {
+        final mids = midsRaw
+            .whereType<Map>()
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList()
+          ..sort((a, b) => _orderIndex(a['order_index'])
+              .compareTo(_orderIndex(b['order_index'])));
+        for (final m in mids) {
+          final mid = _PrintMidUnitNode(
+            name: (m['name'] as String?)?.trim().isNotEmpty == true
+                ? (m['name'] as String).trim()
+                : '중단원',
+            orderIndex: _orderIndex(m['order_index']),
+          );
+          final smallsRaw = m['smalls'];
+          if (smallsRaw is List) {
+            final smalls = smallsRaw
+                .whereType<Map>()
+                .map((e) => Map<String, dynamic>.from(e))
+                .toList()
+              ..sort((a, b) => _orderIndex(a['order_index'])
+                  .compareTo(_orderIndex(b['order_index'])));
+            for (final s in smalls) {
+              mid.smalls.add(
+                _PrintSmallUnitNode(
+                  name: (s['name'] as String?)?.trim().isNotEmpty == true
+                      ? (s['name'] as String).trim()
+                      : '소단원',
+                  orderIndex: _orderIndex(s['order_index']),
+                  startPage:
+                      _toDisplayPageNullable(_toInt(s['start_page']), pageOffset),
+                  endPage:
+                      _toDisplayPageNullable(_toInt(s['end_page']), pageOffset),
+                ),
+              );
+            }
+          }
+          big.middles.add(mid);
+        }
+      }
+      out.add(big);
+    }
+    return out;
+  }
+
+  Widget _buildModeChip({
+    required String label,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(999),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 120),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: selected ? const Color(0x1A33A373) : _rsFieldBg,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+            color: selected ? _rsAccent : _rsBorder,
+            width: selected ? 1.2 : 1,
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: selected ? _rsText : _rsTextSub,
+            fontSize: 12.5,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTreeCheckbox({
+    required bool value,
+    required ValueChanged<bool?>? onChanged,
+  }) {
+    return SizedBox(
+      width: 18,
+      height: 18,
+      child: Checkbox(
+        value: value,
+        onChanged: onChanged,
+        visualDensity: const VisualDensity(horizontal: -4, vertical: -4),
+        side: const BorderSide(color: _rsBorder),
+        activeColor: _rsAccent,
+      ),
+    );
+  }
+
+  bool _hasEditableSmallInBig(_PrintBigUnitNode big) {
+    for (final mid in big.middles) {
+      if (_hasEditableSmallInMid(mid)) return true;
+    }
+    return false;
+  }
+
+  bool _hasEditableSmallInMid(_PrintMidUnitNode mid) => mid.smalls.isNotEmpty;
+
+  void _toggleBig(_PrintBigUnitNode big, bool selected) {
+    for (final mid in big.middles) {
+      mid.selected = selected;
+      for (final small in mid.smalls) {
+        small.selected = selected;
+      }
+    }
+    big.selected = selected;
+    setState(() {});
+  }
+
+  void _toggleMid(_PrintBigUnitNode big, _PrintMidUnitNode mid, bool selected) {
+    for (final small in mid.smalls) {
+      small.selected = selected;
+    }
+    mid.selected = selected;
+    big.selected = big.middles.every((m) => m.selected);
+    setState(() {});
+  }
+
+  void _toggleSmall(
+    _PrintBigUnitNode big,
+    _PrintMidUnitNode mid,
+    _PrintSmallUnitNode small,
+    bool selected,
+  ) {
+    small.selected = selected;
+    mid.selected = mid.smalls.isNotEmpty && mid.smalls.every((s) => s.selected);
+    big.selected = big.middles.isNotEmpty && big.middles.every((m) => m.selected);
+    setState(() {});
+  }
+
+  String _smallPageText(_PrintSmallUnitNode small) {
+    final start = small.startPage;
+    final end = small.endPage;
+    if (start == null && end == null) return '';
+    if (start != null && end != null) {
+      if (start == end) return 'p.$start';
+      return 'p.$start-$end';
+    }
+    return start != null ? 'p.$start' : 'p.$end';
+  }
+
+  Set<int> _pagesForSmall(_PrintSmallUnitNode small) {
+    final out = <int>{};
+    int? start = small.startPage;
+    int? end = small.endPage;
+    if (start == null && end == null) return out;
+    start ??= end;
+    end ??= start;
+    if (start == null || end == null) return out;
+    if (start > end) {
+      final t = start;
+      start = end;
+      end = t;
+    }
+    for (int p = start; p <= end; p++) {
+      final adjusted = p + _pageOffset;
+      if (adjusted > 0) out.add(adjusted);
+    }
+    return out;
+  }
+
+  Set<int> _collectSelectedPages() {
+    final out = <int>{};
+    for (final big in _units) {
+      for (final mid in big.middles) {
+        for (final small in mid.smalls) {
+          if (!small.selected) continue;
+          out.addAll(_pagesForSmall(small));
+        }
+      }
+    }
+    return out;
+  }
+
+  String _pagesToRangeText(Set<int> pages) {
+    if (pages.isEmpty) return '';
+    final sorted = pages.toList()..sort();
+    final chunks = <String>[];
+    int start = sorted.first;
+    int prev = sorted.first;
+    for (int i = 1; i < sorted.length; i++) {
+      final cur = sorted[i];
+      if (cur == prev + 1) {
+        prev = cur;
+        continue;
+      }
+      chunks.add(start == prev ? '$start' : '$start-$prev');
+      start = cur;
+      prev = cur;
+    }
+    chunks.add(start == prev ? '$start' : '$start-$prev');
+    return chunks.join(',');
+  }
+
+  Widget _buildUnitTree() {
+    if (_unitLoading) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(vertical: 22),
+        decoration: BoxDecoration(
+          color: _rsPanelBg,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: _rsBorder),
+        ),
+        child: const Center(
+          child: SizedBox(
+            width: 18,
+            height: 18,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              valueColor: AlwaysStoppedAnimation<Color>(_rsTextSub),
+            ),
+          ),
+        ),
+      );
+    }
+    if (_unitErrorText != null) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: _rsPanelBg,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: _rsBorder),
+        ),
+        child: Text(
+          _unitErrorText!,
+          style: const TextStyle(color: _rsTextSub, fontSize: 12.5),
+        ),
+      );
+    }
+    if (_units.isEmpty) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: _rsPanelBg,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: _rsBorder),
+        ),
+        child: const Text(
+          '메타데이터 단원 정보가 없습니다.',
+          style: TextStyle(color: _rsTextSub, fontSize: 12.5),
+        ),
+      );
+    }
+    final selectedPages = _collectSelectedPages();
+    final selectedRange = _pagesToRangeText(selectedPages);
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: _rsPanelBg,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _rsBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (_pageOffset != 0)
+            Text(
+              '페이지 오프셋 ${_pageOffset >= 0 ? '+' : ''}$_pageOffset 적용',
+              style: const TextStyle(
+                color: _rsTextSub,
+                fontSize: 11.5,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          if (_pageOffset != 0) const SizedBox(height: 6),
+          if (selectedRange.isNotEmpty)
+            Text(
+              '선택 페이지: $selectedRange',
+              style: const TextStyle(
+                color: _rsTextSub,
+                fontSize: 11.8,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          if (selectedRange.isNotEmpty) const SizedBox(height: 8),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 300),
+            child: SingleChildScrollView(
+              child: Theme(
+                data: Theme.of(context).copyWith(
+                  dividerColor: Colors.transparent,
+                  splashColor: Colors.transparent,
+                  highlightColor: Colors.transparent,
+                ),
+                child: Column(
+                  children: [
+                    for (final big in _units)
+                      ExpansionTile(
+                        key: ValueKey(
+                          'print_big_${big.orderIndex}_${_expandedBigKey ?? ''}',
+                        ),
+                        initiallyExpanded:
+                            _expandedBigKey == 'big:${big.orderIndex}',
+                        onExpansionChanged: (expanded) {
+                          setState(() {
+                            final key = 'big:${big.orderIndex}';
+                            if (expanded) {
+                              _expandedBigKey = key;
+                            } else if (_expandedBigKey == key) {
+                              _expandedBigKey = null;
+                              _expandedMidKey = null;
+                            }
+                          });
+                        },
+                        tilePadding: const EdgeInsets.symmetric(
+                            horizontal: 2, vertical: 2),
+                        childrenPadding:
+                            const EdgeInsets.fromLTRB(10, 0, 10, 8),
+                        iconColor: _rsTextSub,
+                        collapsedIconColor: _rsTextSub,
+                        title: Row(
+                          children: [
+                            _buildTreeCheckbox(
+                              value: big.selected,
+                              onChanged: _hasEditableSmallInBig(big)
+                                  ? (v) => _toggleBig(big, v ?? false)
+                                  : null,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                '${_orderText(big.orderIndex)}. ${big.name}',
+                                style: const TextStyle(
+                                  color: _rsText,
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 13.5,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        children: [
+                          for (final mid in big.middles)
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 6),
+                              child: ExpansionTile(
+                                key: ValueKey(
+                                  'print_mid_${big.orderIndex}_${mid.orderIndex}_${_expandedMidKey ?? ''}',
+                                ),
+                                initiallyExpanded: _expandedMidKey ==
+                                    'big:${big.orderIndex}|mid:${mid.orderIndex}',
+                                onExpansionChanged: (expanded) {
+                                  setState(() {
+                                    final bigKey = 'big:${big.orderIndex}';
+                                    final midKey =
+                                        'big:${big.orderIndex}|mid:${mid.orderIndex}';
+                                    if (expanded) {
+                                      _expandedBigKey = bigKey;
+                                      _expandedMidKey = midKey;
+                                    } else if (_expandedMidKey == midKey) {
+                                      _expandedMidKey = null;
+                                    }
+                                  });
+                                },
+                                tilePadding: const EdgeInsets.symmetric(
+                                    horizontal: 8, vertical: 1),
+                                childrenPadding:
+                                    const EdgeInsets.fromLTRB(8, 0, 8, 8),
+                                iconColor: _rsTextSub,
+                                collapsedIconColor: _rsTextSub,
+                                title: Row(
+                                  children: [
+                                    _buildTreeCheckbox(
+                                      value: mid.selected,
+                                      onChanged: _hasEditableSmallInMid(mid)
+                                          ? (v) =>
+                                              _toggleMid(big, mid, v ?? false)
+                                          : null,
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Text(
+                                        '${_orderText(big.orderIndex)}.${_orderText(mid.orderIndex)} ${mid.name}',
+                                        style: const TextStyle(
+                                          color: _rsText,
+                                          fontWeight: FontWeight.w600,
+                                          fontSize: 13,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                children: [
+                                  for (final small in mid.smalls)
+                                    Builder(builder: (_) {
+                                      final pageText = _smallPageText(small);
+                                      final titleText = pageText.isEmpty
+                                          ? small.name
+                                          : '${small.name} ($pageText)';
+                                      return Padding(
+                                        padding: const EdgeInsets.fromLTRB(
+                                            4, 3, 4, 3),
+                                        child: InkWell(
+                                          borderRadius:
+                                              BorderRadius.circular(8),
+                                          mouseCursor:
+                                              SystemMouseCursors.click,
+                                          onTap: () => _toggleSmall(
+                                            big,
+                                            mid,
+                                            small,
+                                            !small.selected,
+                                          ),
+                                          child: AnimatedContainer(
+                                            duration: const Duration(
+                                                milliseconds: 140),
+                                            padding: const EdgeInsets.symmetric(
+                                                horizontal: 8, vertical: 7),
+                                            decoration: BoxDecoration(
+                                              color: small.selected
+                                                  ? const Color(0x1A33A373)
+                                                  : Colors.transparent,
+                                              borderRadius:
+                                                  BorderRadius.circular(8),
+                                              border: Border.all(
+                                                color: small.selected
+                                                    ? _rsAccent
+                                                    : _rsBorder.withOpacity(0.8),
+                                              ),
+                                            ),
+                                            child: Row(
+                                              children: [
+                                                _buildTreeCheckbox(
+                                                  value: small.selected,
+                                                  onChanged: (v) => _toggleSmall(
+                                                    big,
+                                                    mid,
+                                                    small,
+                                                    v ?? false,
+                                                  ),
+                                                ),
+                                                const SizedBox(width: 8),
+                                                Expanded(
+                                                  child: Text(
+                                                    '${_orderText(big.orderIndex)}.${_orderText(mid.orderIndex)}.(${_orderText(small.orderIndex)}) $titleText',
+                                                    style: const TextStyle(
+                                                      color: _rsTextSub,
+                                                      fontWeight:
+                                                          FontWeight.w600,
+                                                      fontSize: 12.5,
+                                                      height: 1.2,
+                                                    ),
+                                                    overflow:
+                                                        TextOverflow.ellipsis,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                      );
+                                    }),
+                                ],
+                              ),
+                            ),
+                        ],
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _submitPrint() {
+    if (_unitMode) {
+      final range = _pagesToRangeText(_collectSelectedPages());
+      if (range.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('인쇄할 단원을 선택하세요.')),
+        );
+        return;
+      }
+      Navigator.of(context).pop(range);
+      return;
+    }
+    Navigator.of(context).pop(_rangeCtrl.text.trim());
+  }
+
   @override
   Widget build(BuildContext context) {
     final gradeLabel = widget.gradeLabel;
+    final hasUnitFeature = _unitLoading || _unitErrorText != null || _units.isNotEmpty;
     return AlertDialog(
       backgroundColor: _rsBg,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -6797,32 +7475,60 @@ class _PrintRangeDialogState extends State<_PrintRangeDialog> {
                   style: const TextStyle(color: _rsTextSub, fontSize: 12)),
             ],
             const SizedBox(height: 12),
-            TextField(
-              controller: _rangeCtrl,
-              cursorColor: _rsAccent,
-              style: const TextStyle(color: _rsText, fontSize: 14),
-              decoration: InputDecoration(
-                isDense: true,
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                hintText: '예: 10-15,20 (비우면 전체 인쇄)',
-                hintStyle: const TextStyle(color: _rsTextSub, fontSize: 12),
-                filled: true,
-                fillColor: _rsFieldBg,
-                border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(10),
-                    borderSide: const BorderSide(color: _rsBorder)),
-                enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(10),
-                    borderSide: const BorderSide(color: _rsBorder)),
-                focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(10),
-                    borderSide: const BorderSide(color: _rsAccent)),
+            if (hasUnitFeature) ...[
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  _buildModeChip(
+                    label: '페이지 입력',
+                    selected: !_unitMode,
+                    onTap: () {
+                      if (!_unitMode) return;
+                      setState(() => _unitMode = false);
+                    },
+                  ),
+                  _buildModeChip(
+                    label: '단원 선택',
+                    selected: _unitMode,
+                    onTap: () {
+                      if (_unitMode) return;
+                      setState(() => _unitMode = true);
+                    },
+                  ),
+                ],
               ),
-            ),
-            const SizedBox(height: 6),
-            const Text('비우면 전체 인쇄',
-                style: TextStyle(color: _rsTextSub, fontSize: 11)),
+              const SizedBox(height: 10),
+            ],
+            if (!_unitMode) ...[
+              TextField(
+                controller: _rangeCtrl,
+                cursorColor: _rsAccent,
+                style: const TextStyle(color: _rsText, fontSize: 14),
+                decoration: InputDecoration(
+                  isDense: true,
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                  hintText: '예: 10-15,20 (비우면 전체 인쇄)',
+                  hintStyle: const TextStyle(color: _rsTextSub, fontSize: 12),
+                  filled: true,
+                  fillColor: _rsFieldBg,
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: const BorderSide(color: _rsBorder)),
+                  enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: const BorderSide(color: _rsBorder)),
+                  focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: const BorderSide(color: _rsAccent)),
+                ),
+              ),
+              const SizedBox(height: 6),
+              const Text('비우면 전체 인쇄',
+                  style: TextStyle(color: _rsTextSub, fontSize: 11)),
+            ] else
+              _buildUnitTree(),
           ],
         ),
       ),
@@ -6832,13 +7538,52 @@ class _PrintRangeDialogState extends State<_PrintRangeDialog> {
           child: const Text('취소', style: TextStyle(color: _rsTextSub)),
         ),
         FilledButton(
-          onPressed: () => Navigator.of(context).pop(_rangeCtrl.text.trim()),
+          onPressed: _submitPrint,
           style: FilledButton.styleFrom(backgroundColor: _rsAccent),
           child: const Text('인쇄'),
         ),
       ],
     );
   }
+}
+
+class _PrintBigUnitNode {
+  final String name;
+  final int orderIndex;
+  final List<_PrintMidUnitNode> middles = <_PrintMidUnitNode>[];
+  bool selected = false;
+
+  _PrintBigUnitNode({
+    required this.name,
+    required this.orderIndex,
+  });
+}
+
+class _PrintMidUnitNode {
+  final String name;
+  final int orderIndex;
+  final List<_PrintSmallUnitNode> smalls = <_PrintSmallUnitNode>[];
+  bool selected = false;
+
+  _PrintMidUnitNode({
+    required this.name,
+    required this.orderIndex,
+  });
+}
+
+class _PrintSmallUnitNode {
+  final String name;
+  final int orderIndex;
+  final int? startPage;
+  final int? endPage;
+  bool selected = false;
+
+  _PrintSmallUnitNode({
+    required this.name,
+    required this.orderIndex,
+    required this.startPage,
+    required this.endPage,
+  });
 }
 
 class _MoreMenuButton extends StatelessWidget {

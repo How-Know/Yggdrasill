@@ -357,7 +357,11 @@ class HomeworkQuickAddProxyDialogState
         gradeLabel: linked.gradeLabel,
       );
       if (!mounted) return;
-      final parsed = _parseSelectionUnits(row?['payload']);
+      final pageOffset = _toInt(row?['page_offset']) ?? 0;
+      final parsed = _parseSelectionUnits(
+        row?['payload'],
+        pageOffset: pageOffset,
+      );
       final textbookType = _sanitizeTextbookType(row?['textbook_type']);
       try {
         await HomeworkStore.instance.loadAll();
@@ -397,7 +401,20 @@ class HomeworkQuickAddProxyDialogState
     }
   }
 
-  List<_BigUnitSelectionNode> _parseSelectionUnits(dynamic payload) {
+  int _toDisplayPage(int raw, int pageOffset) {
+    final adjusted = raw - pageOffset;
+    return adjusted > 0 ? adjusted : raw;
+  }
+
+  int? _toDisplayPageNullable(int? raw, int pageOffset) {
+    if (raw == null) return null;
+    return _toDisplayPage(raw, pageOffset);
+  }
+
+  List<_BigUnitSelectionNode> _parseSelectionUnits(
+    dynamic payload, {
+    int pageOffset = 0,
+  }) {
     if (payload is! Map) return const <_BigUnitSelectionNode>[];
     final unitsRaw = payload['units'];
     if (unitsRaw is! List) return const <_BigUnitSelectionNode>[];
@@ -443,16 +460,23 @@ class HomeworkQuickAddProxyDialogState
                 .compareTo(_orderIndex(b['order_index'])));
             for (final s in smalls) {
               final smallOrder = _orderIndex(s['order_index']);
-              final start = _toInt(s['start_page']);
-              final end = _toInt(s['end_page']);
+              final start = _toDisplayPageNullable(
+                _toInt(s['start_page']),
+                pageOffset,
+              );
+              final end = _toDisplayPageNullable(
+                _toInt(s['end_page']),
+                pageOffset,
+              );
               final Map<int, int> pageCounts = <int, int>{};
               final countsRaw = s['page_counts'];
               if (countsRaw is Map) {
                 countsRaw.forEach((k, v) {
-                  final p = _toInt(k);
+                  final rawPage = _toInt(k);
                   final c = _toInt(v);
-                  if (p == null || c == null) return;
-                  pageCounts[p] = c;
+                  if (rawPage == null || c == null) return;
+                  final page = _toDisplayPage(rawPage, pageOffset);
+                  pageCounts[page] = (pageCounts[page] ?? 0) + c;
                 });
               }
               mid.smalls.add(

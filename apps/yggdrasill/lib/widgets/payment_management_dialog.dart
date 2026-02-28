@@ -90,6 +90,23 @@ class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
     return DateTime(tYear, tMonth, 1);
   }
 
+  // 목표 월의 말일을 넘지 않도록 일자를 보정하며 개월 이동
+  static DateTime _shiftMonthsClamped(DateTime base, int deltaMonths) {
+    int year = base.year;
+    int month = base.month + deltaMonths;
+    while (month <= 0) {
+      month += 12;
+      year -= 1;
+    }
+    while (month > 12) {
+      month -= 12;
+      year += 1;
+    }
+    final int lastDay = DateUtils.getDaysInMonth(year, month);
+    final int day = base.day > lastDay ? lastDay : base.day;
+    return DateTime(year, month, day);
+  }
+
   @override
   void initState() {
     super.initState();
@@ -98,9 +115,9 @@ class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
     _paidListScrollCtrl = ScrollController();
     final now = DateTime.now();
     final today = _dateOnly(now);
-    // 기본: 이번달(1일~말일)
-    _queryStart = DateTime(today.year, today.month, 1);
-    _queryEnd = DateTime(today.year, today.month + 1, 0);
+    // 기본: 최근 3개월(오늘 기준 과거 3개월 ~ 오늘)
+    _queryStart = _shiftMonthsClamped(today, -3);
+    _queryEnd = today;
     _loadPaymentData();
     DataManager.instance.paymentRecordsNotifier.addListener(_loadPaymentData);
     DataManager.instance.studentChargePointsRevision.addListener(_loadPaymentData);
@@ -112,6 +129,9 @@ class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
     final today = _dateOnly(now);
     final start = _dateOnly(_queryStart);
     final end = _dateOnly(_queryEnd);
+    final thisMonthEnd = DateTime(today.year, today.month + 1, 0);
+    // 예정 목록은 이번달 기준으로 고정되므로, 계산 범위 끝은 최소 이번달 말일까지 보장한다.
+    final effectiveEnd = end.isAfter(thisMonthEnd) ? end : thisMonthEnd;
 
     final students = DataManager.instance.students;
     final unpaid = <_PaymentItem>[];
@@ -124,7 +144,7 @@ class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
       final reg = _dateOnly(reg0);
 
       // 범위가 등록월보다 완전히 과거면 스킵
-      if (end.isBefore(DateTime(reg.year, reg.month, 1))) {
+      if (effectiveEnd.isBefore(DateTime(reg.year, reg.month, 1))) {
         continue;
       }
 
@@ -174,7 +194,7 @@ class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
 
       // 대략적인 cycle 범위(월 단위) + 여유 버퍼
       final approxStartCycle = _monthsBetween(reg, start) + 1;
-      final approxEndCycle = _monthsBetween(reg, end) + 1;
+      final approxEndCycle = _monthsBetween(reg, effectiveEnd) + 1;
       int minCycle = (approxStartCycle < approxEndCycle ? approxStartCycle : approxEndCycle) - 6;
       int maxCycle = (approxStartCycle > approxEndCycle ? approxStartCycle : approxEndCycle) + 6;
       if (minCycle < 1) minCycle = 1;
@@ -187,7 +207,7 @@ class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
       // ✅ 예외 케이스: 연기(postpone) 등으로 due_date가 크게 이동한 레코드는 실제 due_date 범위로 보강
       for (final r in recordsSorted) {
         final d = _dateOnly(r.dueDate);
-        if (!d.isBefore(start) && !d.isAfter(end)) {
+        if (!d.isBefore(start) && !d.isAfter(effectiveEnd)) {
           candidateCycles.add(r.cycle);
         }
       }
@@ -196,7 +216,7 @@ class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
       for (final cycle in candidateCycles) {
         if (cycle < 1) continue;
         final due = resolveDueDateForCycle(cycle);
-        if (due.isBefore(start) || due.isAfter(end)) continue;
+        if (due.isBefore(start) || due.isAfter(effectiveEnd)) continue;
         final prevDue = cycle <= 1 ? reg : resolveDueDateForCycle(cycle - 1);
         final nextDue = resolveDueDateForCycle(cycle + 1);
         final rec = byCycle[cycle];
@@ -213,13 +233,26 @@ class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
 
       final unpaidItems = items.where((i) => !i.isPaid).toList();
       if (unpaidItems.isNotEmpty) {
-        final pastDue = unpaidItems.where((i) => i.dueDate.isBefore(today)).toList();
+        final pastDue = unpaidItems
+            .where((i) =>
+                i.dueDate.isBefore(today) &&
+                !i.dueDate.isBefore(start) &&
+                !i.dueDate.isAfter(end))
+            .toList();
         if (pastDue.isNotEmpty) {
           pastDue.sort((a, b) => b.dueDate.compareTo(a.dueDate)); // 최근(가까운 과거) 먼저
-          unpaid.add(pastDue.first);
+          unpaid.addAll(pastDue);
         } else {
-          unpaidItems.sort((a, b) => a.dueDate.compareTo(b.dueDate)); // 가까운 미래 먼저
-          upcoming.add(unpaidItems.first);
+          final upcomingInCurrentMonth = unpaidItems
+              .where((i) =>
+                  !i.dueDate.isBefore(today) &&
+                  i.dueDate.month == today.month &&
+                  i.dueDate.year == today.year)
+              .toList()
+            ..sort((a, b) => a.dueDate.compareTo(b.dueDate)); // 가까운 미래 먼저
+          if (upcomingInCurrentMonth.isNotEmpty) {
+            upcoming.add(upcomingInCurrentMonth.first);
+          }
         }
         continue;
       }
@@ -553,12 +586,7 @@ class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
     required bool isUnpaid,
     required ScrollController scrollController,
   }) {
-    return Container(
-      decoration: BoxDecoration(
-        color: _pmPanelBg,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: _pmBorder),
-      ),
+    return Padding(
       padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -655,7 +683,14 @@ class _PaymentManagementDialogState extends State<PaymentManagementDialog> {
                         scrollController: _overdueScrollCtrl,
                       ),
                     ),
-                    const SizedBox(width: 14),
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 6),
+                      child: VerticalDivider(
+                        width: 1,
+                        thickness: 1,
+                        color: _pmBorder,
+                      ),
+                    ),
                     Expanded(
                       child: _buildPanel(
                         title: '결제 예정',

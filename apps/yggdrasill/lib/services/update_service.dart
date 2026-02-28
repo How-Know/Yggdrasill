@@ -35,13 +35,68 @@ class UpdateService {
   ];
 
   static const String _kLastInstalledTag = 'last_installed_tag';
+  static const String _kUpdateNoticeSnoozeUntil = 'update_notice_snooze_until';
 
   // 간단한 진행 상태 노출용 모델/노티파이어 (앱 내 커스텀 UI 연동)
   static final ValueNotifier<UpdateInfo> progressNotifier =
       ValueNotifier<UpdateInfo>(const UpdateInfo(phase: UpdatePhase.idle));
+  static final ValueNotifier<UpdateNotice?> availableNoticeNotifier =
+      ValueNotifier<UpdateNotice?>(null);
 
   static void _setProgress(UpdateInfo info) {
-    try { progressNotifier.value = info; } catch (_) {}
+    try {
+      progressNotifier.value = info;
+    } catch (_) {}
+  }
+
+  static void _setNotice(UpdateNotice? notice) {
+    try {
+      availableNoticeNotifier.value = notice;
+    } catch (_) {}
+  }
+
+  // 시작 시 최신 버전 존재 여부만 확인하고, 전역 알림 노티파이어에 반영한다.
+  static Future<void> checkForAvailableUpdateNotice() async {
+    try {
+      if (!Platform.isWindows) {
+        _setNotice(null);
+        return;
+      }
+      final tag = await _fetchLatestTag();
+      if (tag == null || tag.isEmpty) {
+        _setNotice(null);
+        return;
+      }
+
+      final prefs = await SharedPreferences.getInstance();
+      final diskTag = await _readInstalledTagFromDisk();
+      final last = diskTag ?? prefs.getString(_kLastInstalledTag);
+      if (last == tag) {
+        _setNotice(null);
+        return;
+      }
+
+      final nowMs = DateTime.now().millisecondsSinceEpoch;
+      final snoozeUntil = prefs.getInt(_kUpdateNoticeSnoozeUntil) ?? 0;
+      if (snoozeUntil > nowMs) {
+        _setNotice(null);
+        return;
+      }
+      _setNotice(UpdateNotice(tag: tag));
+    } catch (_) {
+      _setNotice(null);
+    }
+  }
+
+  static Future<void> snoozeAvailableUpdateNotice({
+    Duration duration = const Duration(hours: 12),
+  }) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final until = DateTime.now().add(duration).millisecondsSinceEpoch;
+      await prefs.setInt(_kUpdateNoticeSnoozeUntil, until);
+    } catch (_) {}
+    _setNotice(null);
   }
 
   // 앱 실행 시 무인 자동 업데이트: 최신 태그와 로컬 저장 태그가 다르면 ZIP 업데이트 수행
@@ -55,7 +110,8 @@ class UpdateService {
       final last = diskTag ?? prefs.getString(_kLastInstalledTag);
       if (last == tag) return;
       // 포터블 ZIP 백그라운드 업데이트
-      _setProgress(UpdateInfo(phase: UpdatePhase.downloading, message: '업데이트 다운로드 중...', tag: tag));
+      _setProgress(UpdateInfo(
+          phase: UpdatePhase.downloading, message: '업데이트 다운로드 중...', tag: tag));
       unawaited(_updateUsingZip(context, tag: tag));
     } catch (_) {}
   }
@@ -64,7 +120,8 @@ class UpdateService {
     // 1) GitHub REST API (차단/레이트리밋될 수 있음)
     try {
       final resp = await http.get(
-        Uri.parse('https://api.github.com/repos/How-Know/Yggdrasill/releases/latest'),
+        Uri.parse(
+            'https://api.github.com/repos/How-Know/Yggdrasill/releases/latest'),
         headers: {'User-Agent': 'Yggdrasill-Updater'},
       );
       if (resp.statusCode == 200) {
@@ -76,13 +133,15 @@ class UpdateService {
     // 2) Fallback: GitHub 웹 리다이렉트로 태그 추출
     // - https://github.com/.../releases/latest 는 /releases/tag/vX.Y.Z.N 으로 302/301 리다이렉트 됨
     try {
-      final req = http.Request('GET', Uri.parse('https://github.com/How-Know/Yggdrasill/releases/latest'));
+      final req = http.Request('GET',
+          Uri.parse('https://github.com/How-Know/Yggdrasill/releases/latest'));
       req.followRedirects = false;
       final resp = await http.Client().send(req);
       try {
         final loc = resp.headers['location'];
         if (loc != null && loc.isNotEmpty) {
-          final m = RegExp(r'/releases/tag/(v[0-9]+(?:\.[0-9]+){2,3})$').firstMatch(loc.trim());
+          final m = RegExp(r'/releases/tag/(v[0-9]+(?:\.[0-9]+){2,3})$')
+              .firstMatch(loc.trim());
           if (m != null) return m.group(1);
         }
       } finally {
@@ -97,13 +156,19 @@ class UpdateService {
       _showSnack(context, 'Windows에서만 지원됩니다.');
       return;
     }
+    _setNotice(null);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_kUpdateNoticeSnoozeUntil);
+    } catch (_) {}
 
     // 항상 ZIP 자체업데이터 사용 (MSIX/AppInstaller 경로는 폐기)
     final latest = await _fetchLatestTag();
     await _updateUsingZip(context, tag: latest);
   }
 
-  static Future<void> _updateUsingZip(BuildContext context, {String? tag}) async {
+  static Future<void> _updateUsingZip(BuildContext context,
+      {String? tag}) async {
     _showSnack(context, '업데이트 파일을 확인 중입니다...');
     final client = http.Client();
     try {
@@ -118,7 +183,8 @@ class UpdateService {
       for (final url in candidates) {
         try {
           final req = http.Request('GET', Uri.parse(url));
-          final resp = await client.send(req).timeout(const Duration(seconds: 20));
+          final resp =
+              await client.send(req).timeout(const Duration(seconds: 20));
           if (resp.statusCode == 200) {
             found = Uri.parse(url);
             streamResp = resp;
@@ -131,7 +197,8 @@ class UpdateService {
       if (found == null || streamResp == null) {
         // 최종 폴백: 릴리스 페이지 열기
         _showSnack(context, '업데이트 패키지를 찾을 수 없습니다. 릴리스 페이지를 엽니다.');
-        final rel = Uri.parse('https://github.com/How-Know/Yggdrasill/releases/latest');
+        final rel =
+            Uri.parse('https://github.com/How-Know/Yggdrasill/releases/latest');
         if (await canLaunchUrl(rel)) {
           await launchUrl(rel);
         }
@@ -148,23 +215,33 @@ class UpdateService {
       int lastTick = 0;
       _setProgress(UpdateInfo(
         phase: UpdatePhase.downloading,
-        message: total > 0 ? '다운로드 중... (0/${(total / (1024 * 1024)).toStringAsFixed(0)}MB)' : '다운로드 중...',
+        message: total > 0
+            ? '다운로드 중... (0/${(total / (1024 * 1024)).toStringAsFixed(0)}MB)'
+            : '다운로드 중...',
         tag: tag,
       ));
-      await for (final chunk in streamResp.stream.timeout(const Duration(seconds: 30))) {
+      await for (final chunk
+          in streamResp.stream.timeout(const Duration(seconds: 30))) {
         received += chunk.length;
         sink.add(chunk);
         final now = sw.elapsedMilliseconds;
         if (now - lastTick > 900) {
           lastTick = now;
           if (total > 0) {
-            final pct = (received / total * 100).clamp(0, 100).toStringAsFixed(0);
+            final pct =
+                (received / total * 100).clamp(0, 100).toStringAsFixed(0);
             final mb = (received / (1024 * 1024)).toStringAsFixed(0);
             final tmb = (total / (1024 * 1024)).toStringAsFixed(0);
-            _setProgress(UpdateInfo(phase: UpdatePhase.downloading, message: '다운로드 중... ($pct% · ${mb}MB/${tmb}MB)', tag: tag));
+            _setProgress(UpdateInfo(
+                phase: UpdatePhase.downloading,
+                message: '다운로드 중... ($pct% · ${mb}MB/${tmb}MB)',
+                tag: tag));
           } else {
             final mb = (received / (1024 * 1024)).toStringAsFixed(0);
-            _setProgress(UpdateInfo(phase: UpdatePhase.downloading, message: '다운로드 중... (${mb}MB)', tag: tag));
+            _setProgress(UpdateInfo(
+                phase: UpdatePhase.downloading,
+                message: '다운로드 중... (${mb}MB)',
+                tag: tag));
           }
         }
       }
@@ -184,11 +261,15 @@ class UpdateService {
       final ps1 = p.join(tempDir.path, 'ygg_do_update.ps1');
       await File(ps1).writeAsString(_psScriptContent);
       final sentinelPath = p.join(tempDir.path, 'ygg_update_started.txt');
-      try { await File(sentinelPath).delete(); } catch (_) {}
-      final launcherLogPath = p.join(Directory.systemTemp.path, 'ygg_update_launcher_log.txt');
+      try {
+        await File(sentinelPath).delete();
+      } catch (_) {}
+      final launcherLogPath =
+          p.join(Directory.systemTemp.path, 'ygg_update_launcher_log.txt');
       try {
         final b = StringBuffer()
-          ..writeln('=== Yggdrasill updater launcher ${(DateTime.now()).toIso8601String()} ===')
+          ..writeln(
+              '=== Yggdrasill updater launcher ${(DateTime.now()).toIso8601String()} ===')
           ..writeln('ps1=$ps1')
           ..writeln('zipPath=$zipPath')
           ..writeln('installDir=$exeDir')
@@ -196,7 +277,8 @@ class UpdateService {
           ..writeln('tag=${tag ?? ''}')
           ..writeln('tempDir=${tempDir.path}')
           ..writeln('systemTemp=${Directory.systemTemp.path}');
-        await File(launcherLogPath).writeAsString(b.toString(), mode: FileMode.append);
+        await File(launcherLogPath)
+            .writeAsString(b.toString(), mode: FileMode.append);
       } catch (_) {}
 
       // 스크립트 실행 (현재 프로세스 종료 후 교체 및 재실행)
@@ -224,9 +306,12 @@ class UpdateService {
         sentinelPath,
       ];
       try {
-        await File(launcherLogPath).writeAsString('psExe=$psExe\nargs=${args.join(' ')}\n', mode: FileMode.append);
+        await File(launcherLogPath).writeAsString(
+            'psExe=$psExe\nargs=${args.join(' ')}\n',
+            mode: FileMode.append);
       } catch (_) {}
-      final proc = await Process.start(psExe, args, mode: ProcessStartMode.normal);
+      final proc =
+          await Process.start(psExe, args, mode: ProcessStartMode.normal);
 
       // PowerShell이 실제로 시작됐는지(=sentinel 파일 생성) 확인 후에만 앱 종료
       final startedDeadline = DateTime.now().add(const Duration(seconds: 6));
@@ -235,13 +320,20 @@ class UpdateService {
         await Future.delayed(const Duration(milliseconds: 250));
       }
       if (!await File(sentinelPath).exists()) {
-        try { proc.kill(); } catch (_) {}
-        _setProgress(const UpdateInfo(phase: UpdatePhase.error, message: '업데이트 스크립트를 시작하지 못했습니다.'));
-        _showSnack(context, '업데이트 실행이 차단됐습니다. (PowerShell/보안 정책) 로그: $launcherLogPath');
+        try {
+          proc.kill();
+        } catch (_) {}
+        _setProgress(const UpdateInfo(
+            phase: UpdatePhase.error, message: '업데이트 스크립트를 시작하지 못했습니다.'));
+        _showSnack(context,
+            '업데이트 실행이 차단됐습니다. (PowerShell/보안 정책) 로그: $launcherLogPath');
         return;
       }
 
-      _setProgress(UpdateInfo(phase: UpdatePhase.readyToApply, message: '업데이트 준비 완료. 재시작합니다.', tag: tag));
+      _setProgress(UpdateInfo(
+          phase: UpdatePhase.readyToApply,
+          message: '업데이트 준비 완료. 재시작합니다.',
+          tag: tag));
       _showSnack(context, '업데이트를 시작합니다. 잠시 후 앱이 재실행됩니다.');
       await Future.delayed(const Duration(milliseconds: 800));
       try {
@@ -251,7 +343,8 @@ class UpdateService {
       exit(0);
     } catch (e) {
       _showSnack(context, '업데이트 중 오류: $e');
-      _setProgress(UpdateInfo(phase: UpdatePhase.error, message: e.toString(), tag: tag));
+      _setProgress(UpdateInfo(
+          phase: UpdatePhase.error, message: e.toString(), tag: tag));
     } finally {
       client.close();
     }
@@ -262,14 +355,18 @@ class UpdateService {
     try {
       final p1 = await Process.run('where', ['pwsh.exe']);
       if (p1.exitCode == 0) {
-        final line = (p1.stdout?.toString() ?? '').split(RegExp(r'\r?\n')).firstWhere((s) => s.trim().isNotEmpty, orElse: () => '');
+        final line = (p1.stdout?.toString() ?? '')
+            .split(RegExp(r'\r?\n'))
+            .firstWhere((s) => s.trim().isNotEmpty, orElse: () => '');
         if (line.isNotEmpty) return line.trim();
       }
     } catch (_) {}
     try {
       final p2 = await Process.run('where', ['powershell.exe']);
       if (p2.exitCode == 0) {
-        final line = (p2.stdout?.toString() ?? '').split(RegExp(r'\r?\n')).firstWhere((s) => s.trim().isNotEmpty, orElse: () => '');
+        final line = (p2.stdout?.toString() ?? '')
+            .split(RegExp(r'\r?\n'))
+            .firstWhere((s) => s.trim().isNotEmpty, orElse: () => '');
         if (line.isNotEmpty) return line.trim();
       }
     } catch (_) {}
@@ -281,7 +378,8 @@ class UpdateService {
       SnackBar(
         content: Text(
           message,
-          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+          style:
+              const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
         ),
         backgroundColor: const Color(0xFF232326),
         behavior: SnackBarBehavior.floating,
@@ -297,7 +395,9 @@ class UpdateService {
 
   static _WinArch _detectWindowsArch() {
     final env = Platform.environment;
-    final arch = (env['PROCESSOR_ARCHITEW6432'] ?? env['PROCESSOR_ARCHITECTURE'] ?? '').toUpperCase();
+    final arch =
+        (env['PROCESSOR_ARCHITEW6432'] ?? env['PROCESSOR_ARCHITECTURE'] ?? '')
+            .toUpperCase();
     if (arch.contains('ARM64')) return _WinArch.arm64;
     if (arch.contains('AMD64') || arch.contains('X64')) return _WinArch.x64;
     return _WinArch.unknown;
@@ -305,7 +405,8 @@ class UpdateService {
 
   static bool _isMsixInstall() {
     try {
-      final exe = Platform.resolvedExecutable.replaceAll('\\', '/').toLowerCase();
+      final exe =
+          Platform.resolvedExecutable.replaceAll('\\', '/').toLowerCase();
       return exe.contains('/windowsapps/');
     } catch (_) {
       return false;
@@ -317,7 +418,8 @@ class UpdateService {
     try {
       final normalized = exePath.replaceAll('\\', '/').toLowerCase();
       if (normalized.contains('/windowsapps/')) {
-        final local = Platform.environment['LOCALAPPDATA'] ?? Directory.systemTemp.path;
+        final local =
+            Platform.environment['LOCALAPPDATA'] ?? Directory.systemTemp.path;
         return p.join(local, 'Yggdrasill', 'app');
       }
       return p.dirname(exePath);
@@ -459,7 +561,6 @@ try {
 
 enum _WinArch { x64, arm64, unknown }
 
-
 enum UpdatePhase { idle, checking, downloading, readyToApply, error }
 
 class UpdateInfo {
@@ -467,6 +568,11 @@ class UpdateInfo {
   final String? message;
   final String? tag;
   const UpdateInfo({required this.phase, this.message, this.tag});
+}
+
+class UpdateNotice {
+  final String tag;
+  const UpdateNotice({required this.tag});
 }
 
 extension UpdateServiceActions on UpdateService {
@@ -478,4 +584,3 @@ extension UpdateServiceActions on UpdateService {
     exit(0);
   }
 }
-

@@ -1595,7 +1595,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                 children: [
                                   Padding(
                                     padding: const EdgeInsets.fromLTRB(
-                                        24, 5, 24, 12),
+                                        24, 8, 24, 12),
                                     child: Column(
                                       mainAxisSize: MainAxisSize.min,
                                       children: [
@@ -2452,7 +2452,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         }
         final assignmentsFuture = _activeAssignmentsFutureByStudent.putIfAbsent(
           studentId,
-          () => HomeworkAssignmentStore.instance.loadActiveAssignments(studentId),
+          () =>
+              HomeworkAssignmentStore.instance.loadActiveAssignments(studentId),
         );
         return FutureBuilder<List<HomeworkAssignmentDetail>>(
           future: assignmentsFuture,
@@ -2530,8 +2531,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       for (int i = 0; i < baseList.length; i++) baseList[i].id: i,
     };
     int phaseRank(HomeworkItem item) {
-      final bool isRunning =
-          item.runStart != null || item.phase == 2;
+      final bool isRunning = item.runStart != null || item.phase == 2;
       if (isRunning) return 0; // 수행
       if (item.phase == 4) return 1; // 확인
       if (item.phase == 3) return 2; // 제출

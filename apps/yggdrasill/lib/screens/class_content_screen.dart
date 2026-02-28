@@ -463,7 +463,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         color: Color(0xFF151A1C),
       ),
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(24, 10, 24, 10),
+        padding: const EdgeInsets.fromLTRB(8, 10, 8, 10),
         child: showContent
             ? _buildReservedHomeworkChipsReactiveForStudent(
                 context,
@@ -2571,7 +2571,7 @@ List<Widget> _buildReservedHomeworkChipsForStudent(
       if (countText.isNotEmpty) countText,
     ];
     final String cycleText = splitParts > 1
-        ? '${repeatIndex}회차 · ${splitParts}분할 ${splitRound}회차'
+        ? '${repeatIndex}회차 · ${splitParts}분할 ${splitRound}차'
         : '${repeatIndex}회차';
     final assignmentCount = assignmentCounts[hw.id] ?? 0;
     final String title = hw.title.trim().isEmpty ? '(제목 없음)' : hw.title.trim();
@@ -3198,6 +3198,64 @@ String _normalizePageRangeForPrint(String raw) {
   return normalized;
 }
 
+String _shiftNormalizedPageRangeForPdf(String normalizedRange, int pageOffset) {
+  final cleaned = normalizedRange.trim();
+  if (cleaned.isEmpty || pageOffset == 0) return cleaned;
+  final tokens = cleaned.split(',');
+  final out = <String>[];
+  for (final token in tokens) {
+    final t = token.trim();
+    if (t.isEmpty) continue;
+    if (t.contains('-')) {
+      final parts = t.split('-');
+      if (parts.length != 2) continue;
+      final s = int.tryParse(parts[0]);
+      final e = int.tryParse(parts[1]);
+      if (s == null || e == null) continue;
+      int a = s + pageOffset;
+      int b = e + pageOffset;
+      if (a <= 0 && b <= 0) continue;
+      if (a < 1) a = 1;
+      if (b < 1) b = 1;
+      if (a > b) {
+        final temp = a;
+        a = b;
+        b = temp;
+      }
+      out.add(a == b ? '$a' : '$a-$b');
+      continue;
+    }
+    final v = int.tryParse(t);
+    if (v == null) continue;
+    final shifted = v + pageOffset;
+    if (shifted <= 0) continue;
+    out.add('$shifted');
+  }
+  return out.join(',');
+}
+
+Future<int> _loadTextbookPageOffset({
+  required String bookId,
+  required String gradeLabel,
+}) async {
+  final bid = bookId.trim();
+  final gl = gradeLabel.trim();
+  if (bid.isEmpty || gl.isEmpty) return 0;
+  try {
+    final row = await DataManager.instance.loadTextbookMetadataPayload(
+      bookId: bid,
+      gradeLabel: gl,
+    );
+    final raw = row?['page_offset'];
+    if (raw is int) return raw;
+    if (raw is num) return raw.toInt();
+    if (raw is String) return int.tryParse(raw.trim()) ?? 0;
+    return 0;
+  } catch (_) {
+    return 0;
+  }
+}
+
 List<int> _parsePageRange(String input, int pageCount) {
   final cleaned = input.trim();
   if (cleaned.isEmpty) {
@@ -3634,6 +3692,12 @@ Future<void> _handleWaitingChipLongPressPrint({
   }
 
   final bool isPdf = bodyPath.toLowerCase().endsWith('.pdf');
+  final int pageOffset = isPdf
+      ? await _loadTextbookPageOffset(
+          bookId: resolved.bookId,
+          gradeLabel: resolved.gradeLabel,
+        )
+      : 0;
   final initialRange = isPdf ? _normalizePageRangeForPrint(hw.page ?? '') : '';
   final selectedRange = await _showHomeworkPrintConfirmDialog(
     context: context,
@@ -3645,7 +3709,8 @@ Future<void> _handleWaitingChipLongPressPrint({
   if (!context.mounted || selectedRange == null) return;
 
   String pathToPrint = bodyPath;
-  final rangeRaw = _normalizePageRangeForPrint(selectedRange);
+  final rangeDisplay = _normalizePageRangeForPrint(selectedRange);
+  final rangeRaw = _shiftNormalizedPageRangeForPdf(rangeDisplay, pageOffset);
   String? printError;
   try {
     await _runWithPrintProgressDialog(
@@ -3898,7 +3963,7 @@ Widget _buildHomeworkChipVisual(
   final String line5Left = '검사 ${hw.checkCount}회 · 숙제 ${homeworkCount}회';
   final String repeatCycleText = '${repeatIndex}회차';
   final String splitCycleText =
-      splitParts > 1 ? '${splitParts}분할 ${splitRound}회차' : '';
+      splitParts > 1 ? '${splitParts}분할 ${splitRound}차' : '';
   final String line5Right = splitCycleText.isEmpty
       ? repeatCycleText
       : '$repeatCycleText · $splitCycleText';

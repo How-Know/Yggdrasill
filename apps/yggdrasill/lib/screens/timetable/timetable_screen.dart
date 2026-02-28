@@ -1848,7 +1848,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
                 color: const Color(0xFF0B1112), // 프로그램 전체 배경색
                 child: Column(
                   children: [
-                    SizedBox(height: 5), // TimetableHeader 위 여백을 5로 수정
+                    const SizedBox(height: 8), // TimetableHeader 위 여백
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 24),
                       child: TimetableTopBar(

@@ -19,7 +19,7 @@ class _LearningScreenState extends State<LearningScreen> {
       backgroundColor: const Color(0xFF0B1112),
       body: Column(
         children: [
-          const SizedBox(height: 5),
+          const SizedBox(height: 8),
           Center(
             child: PillTabSelector(
               selectedIndex: _selectedTab,

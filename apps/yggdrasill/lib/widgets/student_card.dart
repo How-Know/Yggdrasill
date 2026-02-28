@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform, kIsWeb;
+import 'package:flutter/foundation.dart'
+    show defaultTargetPlatform, TargetPlatform, kIsWeb;
 import '../models/student.dart';
 import '../models/group_info.dart';
 // removed student_details_dialog
@@ -61,7 +62,8 @@ class StudentCard extends StatelessWidget {
   void _showDetails(BuildContext context) {}
 
   Future<void> _handleDelete(BuildContext context) async {
-    print('[DEBUG][StudentCard] _handleDelete 진입: id=${studentWithInfo.student.id}, name=${studentWithInfo.student.name}');
+    print(
+        '[DEBUG][StudentCard] _handleDelete 진입: id=${studentWithInfo.student.id}, name=${studentWithInfo.student.name}');
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -152,10 +154,12 @@ class _StudentCardWithCheckboxDelay extends StatefulWidget {
   }) : super(key: key);
 
   @override
-  State<_StudentCardWithCheckboxDelay> createState() => _StudentCardWithCheckboxDelayState();
+  State<_StudentCardWithCheckboxDelay> createState() =>
+      _StudentCardWithCheckboxDelayState();
 }
 
-class _StudentCardWithCheckboxDelayState extends State<_StudentCardWithCheckboxDelay> {
+class _StudentCardWithCheckboxDelayState
+    extends State<_StudentCardWithCheckboxDelay> {
   bool _showRealCheckbox = false;
   bool _prevShowCheckbox = false;
 
@@ -191,7 +195,8 @@ class _StudentCardWithCheckboxDelayState extends State<_StudentCardWithCheckboxD
         backgroundColor: const Color(0xFF1F1F1F),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text('학생 삭제', style: TextStyle(color: Colors.white)),
-        content: const Text('정말로 이 학생을 삭제하시겠습니까?', style: TextStyle(color: Colors.white70)),
+        content: const Text('정말로 이 학생을 삭제하시겠습니까?',
+            style: TextStyle(color: Colors.white70)),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -210,7 +215,8 @@ class _StudentCardWithCheckboxDelayState extends State<_StudentCardWithCheckboxD
 
     if (confirmed == true) {
       try {
-        await DataManager.instance.deleteStudent(widget.studentWithInfo.student.id);
+        await DataManager.instance
+            .deleteStudent(widget.studentWithInfo.student.id);
         if (!context.mounted) return;
         showAppSnackBar(context, '학생이 삭제되었습니다.', useRoot: true);
       } catch (e) {
@@ -229,68 +235,85 @@ class _StudentCardWithCheckboxDelayState extends State<_StudentCardWithCheckboxD
       margin: const EdgeInsets.symmetric(vertical: 4.0, horizontal: 4.0),
       elevation: 6,
       shadowColor: Colors.black.withOpacity(0.4),
+      clipBehavior: Clip.antiAlias,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(10.0),
-        side: widget.isSelected
-            ? const BorderSide(color: _studentCardHighlight, width: 2)
-            : BorderSide.none,
       ),
       child: AnimatedContainer(
-          width: widget.showCheckbox ? 135 : 100,
-          duration: const Duration(milliseconds: 220),
-          curve: Curves.easeInOut,
-          height: 50,
-          onEnd: _onAnimEnd,
-          padding: const EdgeInsets.symmetric(horizontal: 8.0),
-          child: SizedBox(
-            width: double.infinity,
-            child: Stack(
-              alignment: Alignment.center,
-              children: [
-                if (student.groupInfo != null)
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: Container(
-                      width: 5,
-                      height: 26,
-                      decoration: BoxDecoration(
-                        color: student.groupInfo!.color,
-                        borderRadius: BorderRadius.circular(2.5),
-                      ),
+        width: widget.showCheckbox ? 135 : 100,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeInOut,
+        height: 50,
+        onEnd: _onAnimEnd,
+        padding: const EdgeInsets.symmetric(horizontal: 8.0),
+        child: SizedBox(
+          width: double.infinity,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              if (student.groupInfo != null)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Container(
+                    width: 5,
+                    height: 26,
+                    decoration: BoxDecoration(
+                      color: student.groupInfo!.color,
+                      borderRadius: BorderRadius.circular(2.5),
                     ),
-                  ),
-                Padding(
-                  padding: EdgeInsets.only(left: 12, right: widget.showCheckbox ? 32 : 12),
-                  child: Text(
-                    student.name,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      color: Color(0xFFEAF2F2),
-                      fontSize: 16,
-                      fontWeight: FontWeight.w500,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    softWrap: false,
                   ),
                 ),
-                if (_showRealCheckbox)
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: Checkbox(
-                      value: widget.checked,
-                      onChanged: widget.onCheckboxChanged,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-                      side: BorderSide(color: Colors.grey.shade500, width: 1.2),
-                      fillColor: MaterialStateProperty.resolveWith((states) => states.contains(MaterialState.selected) ? Colors.blue.shade400 : Colors.grey.shade200),
-                      checkColor: Colors.white,
-                      visualDensity: VisualDensity.compact,
-                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    ),
+              Padding(
+                padding: EdgeInsets.only(
+                    left: 12, right: widget.showCheckbox ? 32 : 12),
+                child: Text(
+                  student.name,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Color(0xFFEAF2F2),
+                    fontSize: 16,
+                    fontWeight: FontWeight.w500,
                   ),
-              ],
-            ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  softWrap: false,
+                ),
+              ),
+              if (_showRealCheckbox)
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: Checkbox(
+                    value: widget.checked,
+                    onChanged: widget.onCheckboxChanged,
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(6)),
+                    side: BorderSide(color: Colors.grey.shade500, width: 1.2),
+                    fillColor: MaterialStateProperty.resolveWith((states) =>
+                        states.contains(MaterialState.selected)
+                            ? Colors.blue.shade400
+                            : Colors.grey.shade200),
+                    checkColor: Colors.white,
+                    visualDensity: VisualDensity.compact,
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                ),
+              Positioned(
+                  left: 0,
+                  right: 0,
+                bottom: 0,
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 170),
+                  curve: Curves.easeOutCubic,
+                  height: widget.isSelected ? 3 : 0,
+                  decoration: BoxDecoration(
+                    color: _studentCardHighlight,
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                ),
+              ),
+            ],
           ),
+        ),
       ),
     );
 
@@ -298,23 +321,33 @@ class _StudentCardWithCheckboxDelayState extends State<_StudentCardWithCheckboxD
     Widget cardCore = MouseRegion(
       cursor: SystemMouseCursors.click,
       child: GestureDetector(
-      behavior: HitTestBehavior.deferToChild,
-      onTap: widget.disableTapInteractions ? null : () {
-        final s = widget.studentWithInfo.student;
-        print('[DEBUG][StudentCard] onTap(좌클릭) fired: id=' + s.id + ', name=' + s.name);
-        widget.onShowDetails(widget.studentWithInfo);
-      },
-      onDoubleTap: widget.disableTapInteractions
-          ? null
-          : () {
-              final s = widget.studentWithInfo.student;
-              print('[DEBUG][StudentCard] onDoubleTap(더블클릭) fired: id=' + s.id + ', name=' + s.name + ', hasOpenCb=' + (widget.onOpenStudentPage != null).toString());
-              if (widget.onOpenStudentPage != null) {
-                widget.onOpenStudentPage!(widget.studentWithInfo);
-              }
-            },
-      child: cardCoreInner,
-    ),
+        behavior: HitTestBehavior.deferToChild,
+        onTap: widget.disableTapInteractions
+            ? null
+            : () {
+                final s = widget.studentWithInfo.student;
+                print('[DEBUG][StudentCard] onTap(좌클릭) fired: id=' +
+                    s.id +
+                    ', name=' +
+                    s.name);
+                widget.onShowDetails(widget.studentWithInfo);
+              },
+        onDoubleTap: widget.disableTapInteractions
+            ? null
+            : () {
+                final s = widget.studentWithInfo.student;
+                print('[DEBUG][StudentCard] onDoubleTap(더블클릭) fired: id=' +
+                    s.id +
+                    ', name=' +
+                    s.name +
+                    ', hasOpenCb=' +
+                    (widget.onOpenStudentPage != null).toString());
+                if (widget.onOpenStudentPage != null) {
+                  widget.onOpenStudentPage!(widget.studentWithInfo);
+                }
+              },
+        child: cardCoreInner,
+      ),
     );
 
     if (!widget.enableLongPressDrag) {
@@ -405,7 +438,7 @@ class _StudentCardWithCheckboxDelayState extends State<_StudentCardWithCheckboxD
       child: cardCore,
     );
   }
-} 
+}
 
 class _ArrowPopupShape extends ShapeBorder {
   final double radius;
@@ -424,14 +457,16 @@ class _ArrowPopupShape extends ShapeBorder {
   EdgeInsetsGeometry get dimensions => EdgeInsets.zero;
 
   @override
-  Path getInnerPath(Rect rect, {TextDirection? textDirection}) => getOuterPath(rect, textDirection: textDirection);
+  Path getInnerPath(Rect rect, {TextDirection? textDirection}) =>
+      getOuterPath(rect, textDirection: textDirection);
 
   @override
   Path getOuterPath(Rect rect, {TextDirection? textDirection}) {
     final r = Radius.circular(radius);
     final arrowHeight = arrowSize;
     final arrowWidth = arrowSize * 1.2;
-    final double arrowX = (rect.width / 2).clamp(arrowOffset, rect.width - arrowOffset);
+    final double arrowX =
+        (rect.width / 2).clamp(arrowOffset, rect.width - arrowOffset);
     final Path path = Path()
       ..moveTo(rect.left + r.x, rect.top + arrowHeight)
       ..lineTo(rect.left + arrowX - arrowWidth / 2, rect.top + arrowHeight)
@@ -460,4 +495,4 @@ class _ArrowPopupShape extends ShapeBorder {
 
   @override
   ShapeBorder scale(double t) => this;
-} 
+}

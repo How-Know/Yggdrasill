@@ -3226,7 +3226,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       body: Column(
         children: [
           const SizedBox(height: 0),
-          const SizedBox(height: 5),
+          const SizedBox(height: 8),
           Center(
             child: PillTabSelector(
               selectedIndex: _customTabIndex,

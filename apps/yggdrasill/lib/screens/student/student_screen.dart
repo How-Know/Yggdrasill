@@ -23,6 +23,7 @@ import '../../widgets/pill_tab_selector.dart';
 import 'package:flutter/foundation.dart';
 import '../../widgets/app_snackbar.dart';
 import 'components/tendency_webview.dart';
+import 'components/student_registration_status_dialog.dart';
 // removed student_details_dialog
 import '../../models/payment_record.dart';
 import '../../models/student_time_block.dart';
@@ -58,7 +59,8 @@ class StudentScreen extends StatefulWidget {
 class StudentScreenState extends State<StudentScreen> {
   StudentViewType get viewType => _viewType;
   StudentViewType _viewType = StudentViewType.all;
-  final TextEditingController _searchController = ImeAwareTextEditingController();
+  final TextEditingController _searchController =
+      ImeAwareTextEditingController();
   String _searchQuery = '';
   // 학생 탭 상단: 검색 확장 상태
   bool _isSearchExpanded = false;
@@ -76,11 +78,11 @@ class StudentScreenState extends State<StudentScreen> {
   DateTime _currentDate = DateTime.now();
   DateTime _currentCalendarDate = DateTime.now();
   int _prevTabIndex = 0;
-  
+
   // 수강료납부 및 출석체크 네비게이션을 위한 상태 변수
   int _paymentPageIndex = 0; // 수강료납부 페이지 인덱스 (0이 현재)
   int _attendancePageIndex = 0; // 출석체크 페이지 인덱스 (0이 현재)
-  
+
   // 화살표 활성화 상태 (실제 데이터 존재 여부에 따라 동적 계산)
   bool _paymentHasPastRecords = false;
   bool _paymentHasFutureCards = false;
@@ -97,7 +99,7 @@ class StudentScreenState extends State<StudentScreen> {
   @override
   void didUpdateWidget(StudentScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
-    
+
     // 위젯이 업데이트될 때 페이지 인덱스 초기화 (학생 변경 시)
     // 실제로는 학생 선택이 _selectedStudent 변수로 관리되므로 여기서는 초기화하지 않음
     // 대신 학생 변경 시 직접 초기화하는 로직을 별도로 구현
@@ -144,9 +146,11 @@ class StudentScreenState extends State<StudentScreen> {
 
   List<StudentWithInfo> filterStudents(List<StudentWithInfo> students) {
     if (!_isSearchExpanded || _searchQuery.isEmpty) return students;
-    return students.where((studentWithInfo) =>
-      studentWithInfo.student.name.toLowerCase().contains(_searchQuery.toLowerCase())
-    ).toList();
+    return students
+        .where((studentWithInfo) => studentWithInfo.student.name
+            .toLowerCase()
+            .contains(_searchQuery.toLowerCase()))
+        .toList();
   }
 
   // (상단 학생 추가 버튼은 드롭다운 없이 단일 동작)
@@ -177,8 +181,9 @@ class StudentScreenState extends State<StudentScreen> {
         border: Border.all(color: Colors.transparent),
       ),
       child: Row(
-        mainAxisAlignment:
-            _isSearchExpanded ? MainAxisAlignment.start : MainAxisAlignment.center,
+        mainAxisAlignment: _isSearchExpanded
+            ? MainAxisAlignment.start
+            : MainAxisAlignment.center,
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           if (_isSearchExpanded) const SizedBox(width: 5),
@@ -186,7 +191,9 @@ class StudentScreenState extends State<StudentScreen> {
             offset: _isSearchExpanded ? Offset.zero : const Offset(1, 0),
             child: IconButton(
               visualDensity: const VisualDensity(horizontal: -4, vertical: -4),
-              padding: _isSearchExpanded ? const EdgeInsets.only(left: 8) : EdgeInsets.zero,
+              padding: _isSearchExpanded
+                  ? const EdgeInsets.only(left: 8)
+                  : EdgeInsets.zero,
               constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
               icon: const Icon(Icons.search, color: Colors.white70, size: 22),
               onPressed: () {
@@ -212,13 +219,15 @@ class StudentScreenState extends State<StudentScreen> {
             Expanded(
               child: Align(
                 alignment: Alignment.centerLeft,
-              child: TextField(
+                child: TextField(
                   controller: _searchController,
                   focusNode: _searchFocusNode,
-                  style: const TextStyle(color: _studentPrimaryTextColor, fontSize: 16.5),
+                  style: const TextStyle(
+                      color: _studentPrimaryTextColor, fontSize: 16.5),
                   decoration: const InputDecoration(
                     hintText: '검색',
-                    hintStyle: TextStyle(color: _studentMutedTextColor, fontSize: 16.5),
+                    hintStyle: TextStyle(
+                        color: _studentMutedTextColor, fontSize: 16.5),
                     border: InputBorder.none,
                     isDense: true,
                     contentPadding: EdgeInsets.zero,
@@ -267,7 +276,8 @@ class StudentScreenState extends State<StudentScreen> {
     // ✅ 모양은 예전 스타일(검색 버튼과 동일한 pill)로 롤백
     return GestureDetector(
       onTap: openDialog,
-      onLongPress: hasFilter ? () => setState(() => _activeFilter = null) : null,
+      onLongPress:
+          hasFilter ? () => setState(() => _activeFilter = null) : null,
       child: Container(
         width: controlHeight,
         height: controlHeight,
@@ -281,8 +291,9 @@ class StudentScreenState extends State<StudentScreen> {
             Center(
               child: Icon(
                 hasFilter ? Icons.filter_alt : Icons.filter_alt_outlined,
-                color:
-                    hasFilter ? _studentPrimaryTextColor : _studentMutedTextColor,
+                color: hasFilter
+                    ? _studentPrimaryTextColor
+                    : _studentMutedTextColor,
                 size: 24,
               ),
             ),
@@ -333,23 +344,27 @@ class StudentScreenState extends State<StudentScreen> {
             ),
             child: Icon(
               Icons.menu,
-              color: _toolsDropdownOpen ? _studentPrimaryTextColor.withOpacity(0.8) : _studentPrimaryTextColor,
+              color: _toolsDropdownOpen
+                  ? _studentPrimaryTextColor.withOpacity(0.8)
+                  : _studentPrimaryTextColor,
             ),
           ),
         ),
       ),
     );
   }
+
   void _showToolsDropdown() {
     final overlay = Overlay.of(context);
     if (overlay == null) return;
-    final renderBox = _toolsDropdownAnchorKey.currentContext?.findRenderObject() as RenderBox?;
+    final renderBox = _toolsDropdownAnchorKey.currentContext?.findRenderObject()
+        as RenderBox?;
     if (renderBox == null) return;
     final overlayBox = overlay.context.findRenderObject() as RenderBox;
     final Offset origin = renderBox.localToGlobal(Offset.zero);
     final Size buttonSize = renderBox.size;
     const double menuWidth = 220;
-    const double menuHeight = 150;
+    const double menuHeight = 208;
     double left = origin.dx + buttonSize.width - menuWidth;
     const double dropdownTopOffset = 6;
     double top = origin.dy - dropdownTopOffset;
@@ -440,6 +455,15 @@ class StudentScreenState extends State<StudentScreen> {
                 _openAttendanceStatus();
               },
             ),
+            const Divider(height: 16, color: Color(0xFF3D4348)),
+            _buildToolsMenuItem(
+              icon: Icons.how_to_reg_outlined,
+              label: '등록 현황',
+              onTap: () {
+                _removeToolsDropdown();
+                _openRegistrationStatusDialog();
+              },
+            ),
           ],
         ),
       ),
@@ -492,6 +516,13 @@ class StudentScreenState extends State<StudentScreen> {
     );
   }
 
+  Future<void> _openRegistrationStatusDialog() async {
+    await showDialog<void>(
+      context: context,
+      builder: (_) => const StudentRegistrationStatusDialog(),
+    );
+  }
+
   Widget _buildStudentAddSplitButton() {
     // ✅ 시간메뉴 상단 "+ 추가" 버튼과 동일한 알약 스타일
     const double controlHeight = 48;
@@ -536,7 +567,9 @@ class StudentScreenState extends State<StudentScreen> {
         return ValueListenableBuilder<List<StudentWithInfo>>(
           valueListenable: DataManager.instance.studentsNotifier,
           builder: (context, students, __) {
-            _dlog('[DEBUG][StudentScreen] ValueListenableBuilder build: students.length=' + students.length.toString());
+            _dlog(
+                '[DEBUG][StudentScreen] ValueListenableBuilder build: students.length=' +
+                    students.length.toString());
             final filteredStudents = filterStudents(students);
             if (_viewType == StudentViewType.byClass) {
               return const Center(
@@ -581,25 +614,33 @@ class StudentScreenState extends State<StudentScreen> {
                   });
                 },
                 onStudentMoved: (studentWithInfo, newGroup) async {
-                  _dlog('[DEBUG] onStudentMoved: ${studentWithInfo.student.name}, ${newGroup?.name}');
+                  _dlog(
+                      '[DEBUG] onStudentMoved: ${studentWithInfo.student.name}, ${newGroup?.name}');
                   if (newGroup != null) {
                     // capacity 체크 (null/0 이면 제한 없음)
-                    final groupStudents = DataManager.instance.students.where((s) => s.student.groupInfo?.id == newGroup.id).toList();
+                    final groupStudents = DataManager.instance.students
+                        .where((s) => s.student.groupInfo?.id == newGroup.id)
+                        .toList();
                     final cap = newGroup.capacity;
-                    _dlog('[DEBUG] onStudentMoved - 현재 그룹 인원: ${groupStudents.length}, 정원: ${newGroup.capacity}');
+                    _dlog(
+                        '[DEBUG] onStudentMoved - 현재 그룹 인원: ${groupStudents.length}, 정원: ${newGroup.capacity}');
                     if (cap != null && cap > 0 && groupStudents.length >= cap) {
                       _dlog('[DEBUG] onStudentMoved - 정원 초과 다이얼로그 진입');
                       await showDialog(
                         context: context,
                         builder: (context) => AlertDialog(
                           backgroundColor: const Color(0xFF232326),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                          title: Text('${newGroup.name} 정원 초과', style: const TextStyle(color: Colors.white)),
-                          content: const Text('정원을 초과하여 학생을 추가할 수 없습니다.', style: TextStyle(color: Colors.white70)),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(16)),
+                          title: Text('${newGroup.name} 정원 초과',
+                              style: const TextStyle(color: Colors.white)),
+                          content: const Text('정원을 초과하여 학생을 추가할 수 없습니다.',
+                              style: TextStyle(color: Colors.white70)),
                           actions: [
                             TextButton(
                               onPressed: () => Navigator.of(context).pop(),
-                              child: const Text('확인', style: TextStyle(color: Colors.white70)),
+                              child: const Text('확인',
+                                  style: TextStyle(color: Colors.white70)),
                             ),
                           ],
                         ),
@@ -631,10 +672,15 @@ class StudentScreenState extends State<StudentScreen> {
                   DataManager.instance.setGroupsOrder(newGroups);
                 },
                 onDeleteStudent: (studentWithInfo) async {
-                  _dlog('[DEBUG][StudentScreen] onDeleteStudent 진입: id=' + studentWithInfo.student.id + ', name=' + studentWithInfo.student.name);
+                  _dlog('[DEBUG][StudentScreen] onDeleteStudent 진입: id=' +
+                      studentWithInfo.student.id +
+                      ', name=' +
+                      studentWithInfo.student.name);
                   try {
-                    await DataManager.instance.deleteStudent(studentWithInfo.student.id);
-                    _dlog('[DEBUG][StudentScreen] DataManager.deleteStudent 호출 완료');
+                    await DataManager.instance
+                        .deleteStudent(studentWithInfo.student.id);
+                    _dlog(
+                        '[DEBUG][StudentScreen] DataManager.deleteStudent 호출 완료');
                     showAppSnackBar(context, '학생이 삭제되었습니다.', useRoot: true);
                     _dlog('[DEBUG][StudentScreen] 스낵바 호출 완료');
                   } catch (e) {
@@ -648,7 +694,8 @@ class StudentScreenState extends State<StudentScreen> {
                     builder: (context) => StudentRegistrationDialog(
                       student: studentWithInfo.student,
                       onSave: (updatedStudent, basicInfo) async {
-                        await DataManager.instance.updateStudent(updatedStudent, basicInfo);
+                        await DataManager.instance
+                            .updateStudent(updatedStudent, basicInfo);
                         showAppSnackBar(context, '학생 정보가 수정되었습니다.');
                       },
                       groups: DataManager.instance.groups,
@@ -725,7 +772,9 @@ class StudentScreenState extends State<StudentScreen> {
         onSave: (student, basicInfo) async {
           await DataManager.instance.addStudent(student, basicInfo);
           // 저장 직후 즉시 목록 재로딩을 한번 더 보장 (실시간/디바운스 지연 대비)
-          try { await DataManager.instance.loadStudents(); } catch (_) {}
+          try {
+            await DataManager.instance.loadStudents();
+          } catch (_) {}
           showAppSnackBar(context, '학생이 등록되었습니다.');
         },
         groups: DataManager.instance.groups,
@@ -735,17 +784,17 @@ class StudentScreenState extends State<StudentScreen> {
 
   @override
   Widget build(BuildContext context) {
-        return Scaffold(
-          backgroundColor: const Color(0xFF0B1112),
-          body: Column(
-            children: [
-              const SizedBox(height: 0),
-              SizedBox(height: 5),
+    return Scaffold(
+      backgroundColor: const Color(0xFF0B1112),
+      body: Column(
+        children: [
+          const SizedBox(height: 0),
+          const SizedBox(height: 8),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 24),
             child: Column(
               children: [
-              const SizedBox(height: 0),
+                const SizedBox(height: 0),
                 Row(
                   children: [
                     Expanded(
@@ -782,14 +831,18 @@ class StudentScreenState extends State<StudentScreen> {
                         alignment: Alignment.centerRight,
                         child: _customTabIndex == 0
                             ? ConstrainedBox(
-                                constraints: const BoxConstraints(maxWidth: 260),
+                                constraints:
+                                    const BoxConstraints(maxWidth: 260),
                                 child: LayoutBuilder(
                                   builder: (context, constraints) {
                                     const double controlHeight = 48;
                                     const double spacing = 12;
-                                    final double reservedWidth = (controlHeight * 2) + (spacing * 2);
+                                    final double reservedWidth =
+                                        (controlHeight * 2) + (spacing * 2);
                                     final double availableForSearch =
-                                        (constraints.maxWidth - reservedWidth).clamp(controlHeight, constraints.maxWidth);
+                                        (constraints.maxWidth - reservedWidth)
+                                            .clamp(controlHeight,
+                                                constraints.maxWidth);
                                     return Row(
                                       mainAxisAlignment: MainAxisAlignment.end,
                                       mainAxisSize: MainAxisSize.min,
@@ -798,7 +851,9 @@ class StudentScreenState extends State<StudentScreen> {
                                         const SizedBox(width: spacing),
                                         _buildFilterButton(),
                                         const SizedBox(width: spacing),
-                                        _buildSearchButton(maxExpandedWidth: availableForSearch),
+                                        _buildSearchButton(
+                                            maxExpandedWidth:
+                                                availableForSearch),
                                       ],
                                     );
                                   },
@@ -813,8 +868,7 @@ class StudentScreenState extends State<StudentScreen> {
             ),
           ),
           const SizedBox(height: 1),
-          if (_customTabIndex == 0)
-            const SizedBox(height: 20),
+          if (_customTabIndex == 0) const SizedBox(height: 20),
           Expanded(
             child: Builder(
               builder: (context) {
@@ -882,20 +936,26 @@ class StudentScreenState extends State<StudentScreen> {
               },
               onStudentMoved: (studentWithInfo, newGroup) async {
                 if (newGroup != null) {
-                  final groupStudents = DataManager.instance.students.where((s) => s.student.groupInfo?.id == newGroup.id).toList();
+                  final groupStudents = DataManager.instance.students
+                      .where((s) => s.student.groupInfo?.id == newGroup.id)
+                      .toList();
                   final cap = newGroup.capacity;
                   if (cap != null && cap > 0 && groupStudents.length >= cap) {
                     await showDialog(
                       context: context,
                       builder: (context) => AlertDialog(
                         backgroundColor: const Color(0xFF232326),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                        title: Text('${newGroup.name} 정원 초과', style: const TextStyle(color: Colors.white)),
-                        content: const Text('정원을 초과하여 학생을 추가할 수 없습니다.', style: TextStyle(color: Colors.white70)),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16)),
+                        title: Text('${newGroup.name} 정원 초과',
+                            style: const TextStyle(color: Colors.white)),
+                        content: const Text('정원을 초과하여 학생을 추가할 수 없습니다.',
+                            style: TextStyle(color: Colors.white70)),
                         actions: [
                           TextButton(
                             onPressed: () => Navigator.of(context).pop(),
-                            child: const Text('확인', style: TextStyle(color: Colors.white70)),
+                            child: const Text('확인',
+                                style: TextStyle(color: Colors.white70)),
                           ),
                         ],
                       ),
@@ -923,23 +983,37 @@ class StudentScreenState extends State<StudentScreen> {
                 DataManager.instance.setGroupsOrder(current);
               },
               onDeleteStudent: (studentWithInfo) async {
-                _dlog('[DEBUG][StudentScreen] onDeleteStudent 호출: ' + studentWithInfo.student.id);
+                _dlog('[DEBUG][StudentScreen] onDeleteStudent 호출: ' +
+                    studentWithInfo.student.id);
                 final confirmed = await showDialog<bool>(
                   context: context,
                   builder: (context) => AlertDialog(
                     backgroundColor: const Color(0xFF232326),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                    title: const Text('학생 삭제', style: TextStyle(color: Colors.white)),
-                    content: Text('${studentWithInfo.student.name} 학생을 삭제하시겠습니까?', style: const TextStyle(color: Colors.white70)),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16)),
+                    title: const Text('학생 삭제',
+                        style: TextStyle(color: Colors.white)),
+                    content: Text(
+                        '${studentWithInfo.student.name} 학생을 삭제하시겠습니까?',
+                        style: const TextStyle(color: Colors.white70)),
                     actions: [
-                      TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('취소', style: TextStyle(color: Colors.white70))),
-                      TextButton(onPressed: () => Navigator.of(context).pop(true), child: const Text('삭제', style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold))),
+                      TextButton(
+                          onPressed: () => Navigator.of(context).pop(false),
+                          child: const Text('취소',
+                              style: TextStyle(color: Colors.white70))),
+                      TextButton(
+                          onPressed: () => Navigator.of(context).pop(true),
+                          child: const Text('삭제',
+                              style: TextStyle(
+                                  color: Colors.red,
+                                  fontWeight: FontWeight.bold))),
                     ],
                   ),
                 );
                 if (confirmed == true) {
                   try {
-                    await DataManager.instance.deleteStudent(studentWithInfo.student.id);
+                    await DataManager.instance
+                        .deleteStudent(studentWithInfo.student.id);
                     showAppSnackBar(context, '학생이 삭제되었습니다.', useRoot: true);
                   } catch (e) {
                     _dlog('[ERROR][StudentScreen] 학생 삭제 실패: $e');
@@ -948,13 +1022,15 @@ class StudentScreenState extends State<StudentScreen> {
                 }
               },
               onStudentUpdated: (studentWithInfo) async {
-                _dlog('[DEBUG][StudentScreen] onStudentUpdated 호출: ' + studentWithInfo.student.id);
+                _dlog('[DEBUG][StudentScreen] onStudentUpdated 호출: ' +
+                    studentWithInfo.student.id);
                 await showDialog(
                   context: context,
                   builder: (context) => StudentRegistrationDialog(
                     student: studentWithInfo.student,
                     onSave: (updatedStudent, basicInfo) async {
-                      await DataManager.instance.updateStudent(updatedStudent, basicInfo);
+                      await DataManager.instance
+                          .updateStudent(updatedStudent, basicInfo);
                       showAppSnackBar(context, '학생 정보가 수정되었습니다.');
                     },
                     groups: DataManager.instance.groups,
@@ -1008,16 +1084,19 @@ class StudentScreenState extends State<StudentScreen> {
                       // 학생 리스트
                       Expanded(
                         child: ValueListenableBuilder<List<StudentWithInfo>>(
-                          valueListenable: DataManager.instance.studentsNotifier,
+                          valueListenable:
+                              DataManager.instance.studentsNotifier,
                           builder: (context, students, child) {
                             final gradeGroups = _groupStudentsByGrade(students);
                             return ListView(
-                              padding: const EdgeInsets.symmetric(horizontal: 8),
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 8),
                               children: [
                                 ...gradeGroups.entries.map((entry) {
                                   return Padding(
                                     padding: const EdgeInsets.only(bottom: 4),
-                                    child: _buildGradeGroup(entry.key, entry.value),
+                                    child: _buildGradeGroup(
+                                        entry.key, entry.value),
                                   );
                                 }).toList(),
                                 const SizedBox(height: 32),
@@ -1043,96 +1122,128 @@ class StudentScreenState extends State<StudentScreen> {
                           decoration: BoxDecoration(
                             color: const Color(0xFF1F1F1F),
                             borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: Colors.transparent, width: 1),
+                            border:
+                                Border.all(color: Colors.transparent, width: 1),
                           ),
                           child: Row(
                             children: [
-                          // 학생 정보 영역
-                          Expanded(
-                            flex: 1,
-                            child: Padding(
-                              padding: const EdgeInsets.all(16.0),
-                              child: _selectedStudent != null
-                                  ? _buildStudentInfoDisplay(_selectedStudent!)
-                                  : const Center(
-                                      child: Text(
-                                        '학생을 선택해주세요',
-                                        style: TextStyle(color: Colors.white70, fontSize: 16),
-                                      ),
-                                    ),
-                            ),
-                          ),
-                          // 중간 요약 영역 (1:1:1 비율, 푸른 회색 계열)
-                          Expanded(
-                            flex: 1,
-                            child: Container(
-                              margin: const EdgeInsets.symmetric(vertical: 16, horizontal: 8),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF212A31),
-                                borderRadius: BorderRadius.circular(8),
-                                border: Border.all(color: const Color(0xFF212A31), width: 1),
+                              // 학생 정보 영역
+                              Expanded(
+                                flex: 1,
+                                child: Padding(
+                                  padding: const EdgeInsets.all(16.0),
+                                  child: _selectedStudent != null
+                                      ? _buildStudentInfoDisplay(
+                                          _selectedStudent!)
+                                      : const Center(
+                                          child: Text(
+                                            '학생을 선택해주세요',
+                                            style: TextStyle(
+                                                color: Colors.white70,
+                                                fontSize: 16),
+                                          ),
+                                        ),
+                                ),
                               ),
-                              child: _selectedStudent != null
-                                  ? SizedBox.expand(child: _buildOverviewSummary(_selectedStudent!))
-                                  : const Center(
-                                      child: Text(
-                                        '학생을 선택하면 요약이 표시됩니다.',
-                                        style: TextStyle(color: Colors.white70, fontSize: 16),
-                                      ),
-                                    ),
-                            ),
-                          ),
-                          // 달력 영역
-                          Expanded(
-                            flex: 1,
-                            child: Padding(
-                              padding: const EdgeInsets.fromLTRB(0, 16, 16, 16),
-                              child: Column(
-                                children: [
-                                  // 달력 헤더
-                                  Padding(
-                                    padding: const EdgeInsets.symmetric(horizontal: 8.0),
-                                    child: Row(
-                                      mainAxisAlignment: MainAxisAlignment.center,
-                                      children: [
-                                        IconButton(
-                                          icon: const Icon(Icons.chevron_left, color: Colors.white, size: 20),
-                                          onPressed: () => setState(() => _currentDate = DateTime(_currentDate.year, _currentDate.month - 1)),
-                                          padding: EdgeInsets.zero,
-                                          constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
-                                        ),
-                                        const SizedBox(width: 8),
-                                        Text(
-                                          '${_currentDate.year}년 ${_currentDate.month}월',
-                                          style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600),
-                                        ),
-                                        const SizedBox(width: 8),
-                                        IconButton(
-                                          icon: const Icon(Icons.chevron_right, color: Colors.white, size: 20),
-                                          onPressed: () => setState(() => _currentDate = DateTime(_currentDate.year, _currentDate.month + 1)),
-                                          padding: EdgeInsets.zero,
-                                          constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
-                                        ),
-                                      ],
-                                    ),
+                              // 중간 요약 영역 (1:1:1 비율, 푸른 회색 계열)
+                              Expanded(
+                                flex: 1,
+                                child: Container(
+                                  margin: const EdgeInsets.symmetric(
+                                      vertical: 16, horizontal: 8),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF212A31),
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(
+                                        color: const Color(0xFF212A31),
+                                        width: 1),
                                   ),
-                                  // 달력 본체
-                                  Expanded(child: _buildCalendar()),
-                                  // 출석 상태 범례 (선택된 학생이 있을 때만)
-                                  if (_selectedStudent != null)
-                                    const Padding(
-                                      padding: EdgeInsets.only(top: 8, bottom: 24),
-                                      child: AttendanceLegend(
-                                        showTitle: false,
-                                        iconSize: 30,
-                                        fontSize: 15,
-                                      ),
-                                    ),
-                                ],
+                                  child: _selectedStudent != null
+                                      ? SizedBox.expand(
+                                          child: _buildOverviewSummary(
+                                              _selectedStudent!))
+                                      : const Center(
+                                          child: Text(
+                                            '학생을 선택하면 요약이 표시됩니다.',
+                                            style: TextStyle(
+                                                color: Colors.white70,
+                                                fontSize: 16),
+                                          ),
+                                        ),
+                                ),
                               ),
-                            ),
-                          ),
-                        ],
+                              // 달력 영역
+                              Expanded(
+                                flex: 1,
+                                child: Padding(
+                                  padding:
+                                      const EdgeInsets.fromLTRB(0, 16, 16, 16),
+                                  child: Column(
+                                    children: [
+                                      // 달력 헤더
+                                      Padding(
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 8.0),
+                                        child: Row(
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.center,
+                                          children: [
+                                            IconButton(
+                                              icon: const Icon(
+                                                  Icons.chevron_left,
+                                                  color: Colors.white,
+                                                  size: 20),
+                                              onPressed: () => setState(() =>
+                                                  _currentDate = DateTime(
+                                                      _currentDate.year,
+                                                      _currentDate.month - 1)),
+                                              padding: EdgeInsets.zero,
+                                              constraints: const BoxConstraints(
+                                                  minWidth: 24, minHeight: 24),
+                                            ),
+                                            const SizedBox(width: 8),
+                                            Text(
+                                              '${_currentDate.year}년 ${_currentDate.month}월',
+                                              style: const TextStyle(
+                                                  color: Colors.white,
+                                                  fontSize: 18,
+                                                  fontWeight: FontWeight.w600),
+                                            ),
+                                            const SizedBox(width: 8),
+                                            IconButton(
+                                              icon: const Icon(
+                                                  Icons.chevron_right,
+                                                  color: Colors.white,
+                                                  size: 20),
+                                              onPressed: () => setState(() =>
+                                                  _currentDate = DateTime(
+                                                      _currentDate.year,
+                                                      _currentDate.month + 1)),
+                                              padding: EdgeInsets.zero,
+                                              constraints: const BoxConstraints(
+                                                  minWidth: 24, minHeight: 24),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      // 달력 본체
+                                      Expanded(child: _buildCalendar()),
+                                      // 출석 상태 범례 (선택된 학생이 있을 때만)
+                                      if (_selectedStudent != null)
+                                        const Padding(
+                                          padding: EdgeInsets.only(
+                                              top: 8, bottom: 24),
+                                          child: AttendanceLegend(
+                                            showTitle: false,
+                                            iconSize: 30,
+                                            fontSize: 15,
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                         // 하단: 수강료 납부 + 출석체크
@@ -1143,29 +1254,35 @@ class StudentScreenState extends State<StudentScreen> {
                               // 수강료 납부
                               Container(
                                 height: 220,
-                                margin: const EdgeInsets.only(bottom: 24, right: 24),
+                                margin: const EdgeInsets.only(
+                                    bottom: 24, right: 24),
                                 decoration: BoxDecoration(
                                   color: const Color(0xFF18181A),
                                   borderRadius: BorderRadius.circular(12),
-                                  border: Border.all(color: const Color(0xFF18181A), width: 1),
+                                  border: Border.all(
+                                      color: const Color(0xFF18181A), width: 1),
                                 ),
                                 child: _selectedStudent != null
                                     ? _buildPaymentSchedule(_selectedStudent!)
                                     : const Center(
                                         child: Text(
                                           '학생을 선택하면 수강료 납부 일정이 표시됩니다.',
-                                          style: TextStyle(color: Colors.white54, fontSize: 16),
+                                          style: TextStyle(
+                                              color: Colors.white54,
+                                              fontSize: 16),
                                         ),
                                       ),
                               ),
                               // 출석 체크
                               Container(
                                 height: 260,
-                                margin: const EdgeInsets.only(bottom: 24, right: 24),
+                                margin: const EdgeInsets.only(
+                                    bottom: 24, right: 24),
                                 decoration: BoxDecoration(
                                   color: const Color(0xFF18181A),
                                   borderRadius: BorderRadius.circular(12),
-                                  border: Border.all(color: const Color(0xFF18181A), width: 1),
+                                  border: Border.all(
+                                      color: const Color(0xFF18181A), width: 1),
                                 ),
                                 child: AttendanceCheckView(
                                   selectedStudent: _selectedStudent,
@@ -1206,7 +1323,7 @@ class StudentScreenState extends State<StudentScreen> {
   }
 
   // ========== 출석 관리 헬퍼 메서드들 ==========
-  
+
   // 초기 대시보드(학생 미선택시): 어제 출결, 오늘 출결, 이번달 납입, 오늘 납입 + 하단 리스트
   Widget _buildInitialDashboard() {
     return ValueListenableBuilder<List<AttendanceRecord>>(
@@ -1215,55 +1332,73 @@ class StudentScreenState extends State<StudentScreen> {
         final DateTime now = DateTime.now();
         final DateTime todayStart = DateTime(now.year, now.month, now.day);
         final DateTime todayEnd = todayStart.add(const Duration(days: 1));
-        final DateTime yesterdayStart = todayStart.subtract(const Duration(days: 1));
+        final DateTime yesterdayStart =
+            todayStart.subtract(const Duration(days: 1));
         final DateTime yesterdayEnd = todayStart;
 
         // 전체 학생 기준 요약 (삭제된 학생 제외)
-        final Set<String> activeStudentIds = DataManager.instance.students.map((s) => s.student.id).toSet();
+        final Set<String> activeStudentIds =
+            DataManager.instance.students.map((s) => s.student.id).toSet();
 
-    int yPresent = 0, yLate = 0, yAbsent = 0;
-    int tPresent = 0, tLate = 0, tAbsent = 0;
+        int yPresent = 0, yLate = 0, yAbsent = 0;
+        int tPresent = 0, tLate = 0, tAbsent = 0;
 
-    // 지각 임계는 학생별 다를 수 있으나, 초기 대시보드는 보수적으로 10분 기본 사용
-    const int defaultLateMinutes = 10;
+        // 지각 임계는 학생별 다를 수 있으나, 초기 대시보드는 보수적으로 10분 기본 사용
+        const int defaultLateMinutes = 10;
 
-    for (final r in DataManager.instance.attendanceRecords) {
-      if (!activeStudentIds.contains(r.studentId)) continue;
-      final dt = r.classDateTime;
-      final isYesterday = dt.isAfter(yesterdayStart) && dt.isBefore(yesterdayEnd);
-      final isToday = dt.isAfter(todayStart) && dt.isBefore(todayEnd);
-      if (!isYesterday && !isToday) continue;
+        for (final r in DataManager.instance.attendanceRecords) {
+          if (!activeStudentIds.contains(r.studentId)) continue;
+          final dt = r.classDateTime;
+          final isYesterday =
+              dt.isAfter(yesterdayStart) && dt.isBefore(yesterdayEnd);
+          final isToday = dt.isAfter(todayStart) && dt.isBefore(todayEnd);
+          if (!isYesterday && !isToday) continue;
 
-      if (!r.isPresent) {
-        if (isYesterday) yAbsent++; else tAbsent++;
-      } else {
-        final threshold = r.classDateTime.add(const Duration(minutes: defaultLateMinutes));
-        final isLate = r.arrivalTime != null && r.arrivalTime!.isAfter(threshold);
-        if (isYesterday) {
-          if (isLate) yLate++; else yPresent++;
-        } else {
-          if (isLate) tLate++; else tPresent++;
+          if (!r.isPresent) {
+            if (isYesterday)
+              yAbsent++;
+            else
+              tAbsent++;
+          } else {
+            final threshold = r.classDateTime
+                .add(const Duration(minutes: defaultLateMinutes));
+            final isLate =
+                r.arrivalTime != null && r.arrivalTime!.isAfter(threshold);
+            if (isYesterday) {
+              if (isLate)
+                yLate++;
+              else
+                yPresent++;
+            } else {
+              if (isLate)
+                tLate++;
+              else
+                tPresent++;
+            }
+          }
         }
 
-        
-      }
-    }
-
-    // 납부 요약(이번달)
+        // 납부 요약(이번달)
         final DateTime monthStart = DateTime(now.year, now.month, 1);
         final DateTime nextMonthStart = DateTime(now.year, now.month + 1, 1);
-    int monthPaid = 0, monthDue = 0;
-    for (final pr in DataManager.instance.paymentRecords) {
-      if (!activeStudentIds.contains(pr.studentId)) continue;
-      final due = pr.dueDate;
-      final paid = pr.paidDate;
-      final isThisMonth = due.isAfter(monthStart.subtract(const Duration(milliseconds: 1))) && due.isBefore(nextMonthStart);
-      if (isThisMonth) {
-        if (paid != null) monthPaid++; else monthDue++;
-      }
-    }
+        int monthPaid = 0, monthDue = 0;
+        for (final pr in DataManager.instance.paymentRecords) {
+          if (!activeStudentIds.contains(pr.studentId)) continue;
+          final due = pr.dueDate;
+          final paid = pr.paidDate;
+          final isThisMonth = due.isAfter(
+                  monthStart.subtract(const Duration(milliseconds: 1))) &&
+              due.isBefore(nextMonthStart);
+          if (isThisMonth) {
+            if (paid != null)
+              monthPaid++;
+            else
+              monthDue++;
+          }
+        }
 
-        Widget tile(String title, String big, String sub, {Color accent = const Color(0xFF90CAF9), Widget? trailing}) {
+        Widget tile(String title, String big, String sub,
+            {Color accent = const Color(0xFF90CAF9), Widget? trailing}) {
           final double screenW = MediaQuery.of(context).size.width;
           // 최소창(≈1430)에서 17, 넓을수록 23까지 선형 증가
           const double minW = 1430;
@@ -1273,59 +1408,73 @@ class StudentScreenState extends State<StudentScreen> {
           double t = ((screenW - minW) / (maxW - minW)).clamp(0.0, 1.0);
           final double bigFontSize = fsMin + (fsMax - fsMin) * t;
           return Container(
-        margin: const EdgeInsets.symmetric(vertical: 12, horizontal: 10),
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: const Color(0xFF212A31),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: const Color(0xFF2A2A2A)),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Row(
+            margin: const EdgeInsets.symmetric(vertical: 12, horizontal: 10),
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: const Color(0xFF212A31),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: const Color(0xFF2A2A2A)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Text(title, style: const TextStyle(color: Colors.white70, fontSize: 15, fontWeight: FontWeight.w600)),
-                const Spacer(),
-                if (trailing != null) trailing,
+                Row(
+                  children: [
+                    Text(title,
+                        style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600)),
+                    const Spacer(),
+                    if (trailing != null) trailing,
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(big,
+                    style: TextStyle(
+                        color: accent,
+                        fontSize: bigFontSize,
+                        fontWeight: FontWeight.w800)),
+                const SizedBox(height: 4),
+                Text(sub,
+                    style:
+                        const TextStyle(color: Colors.white60, fontSize: 14)),
               ],
             ),
-            const SizedBox(height: 8),
-            Text(big, style: TextStyle(color: accent, fontSize: bigFontSize, fontWeight: FontWeight.w800)),
-            const SizedBox(height: 4),
-            Text(sub, style: const TextStyle(color: Colors.white60, fontSize: 14)),
-          ],
-        ),
           );
         }
 
-    // 리스트 데이터: 어제/오늘 출석, 이번달/오늘 납입
+        // 리스트 데이터: 어제/오늘 출석, 이번달/오늘 납입
         final Map<String, _AttendanceInfo> yesterdayAttendanceByStudent = {};
         final Map<String, _AttendanceInfo> todayAttendanceByStudent = {};
         for (final r in DataManager.instance.attendanceRecords) {
-      if (!activeStudentIds.contains(r.studentId)) continue;
-      final dt = r.classDateTime;
-      if (dt.isAfter(yesterdayStart) && dt.isBefore(yesterdayEnd)) {
-        yesterdayAttendanceByStudent[r.studentId] = _AttendanceInfo(
-          arrival: r.arrivalTime,
-          departure: r.departureTime,
-          isPresent: r.isPresent,
-          isLate: r.arrivalTime != null && r.arrivalTime!.isAfter(r.classDateTime.add(const Duration(minutes: defaultLateMinutes))),
-          classDateTime: r.classDateTime,
-        );
-      } else if (dt.isAfter(todayStart) && dt.isBefore(todayEnd)) {
-        todayAttendanceByStudent[r.studentId] = _AttendanceInfo(
-          arrival: r.arrivalTime,
-          departure: r.departureTime,
-          isPresent: r.isPresent,
-          isLate: r.arrivalTime != null && r.arrivalTime!.isAfter(r.classDateTime.add(const Duration(minutes: defaultLateMinutes))),
-          classDateTime: r.classDateTime,
-        );
-      }
-    }
+          if (!activeStudentIds.contains(r.studentId)) continue;
+          final dt = r.classDateTime;
+          if (dt.isAfter(yesterdayStart) && dt.isBefore(yesterdayEnd)) {
+            yesterdayAttendanceByStudent[r.studentId] = _AttendanceInfo(
+              arrival: r.arrivalTime,
+              departure: r.departureTime,
+              isPresent: r.isPresent,
+              isLate: r.arrivalTime != null &&
+                  r.arrivalTime!.isAfter(r.classDateTime
+                      .add(const Duration(minutes: defaultLateMinutes))),
+              classDateTime: r.classDateTime,
+            );
+          } else if (dt.isAfter(todayStart) && dt.isBefore(todayEnd)) {
+            todayAttendanceByStudent[r.studentId] = _AttendanceInfo(
+              arrival: r.arrivalTime,
+              departure: r.departureTime,
+              isPresent: r.isPresent,
+              isLate: r.arrivalTime != null &&
+                  r.arrivalTime!.isAfter(r.classDateTime
+                      .add(const Duration(minutes: defaultLateMinutes))),
+              classDateTime: r.classDateTime,
+            );
+          }
+        }
 
-    // 지난달/이번달 납입 요약(기록이 없는 학생은 앱 상태로 미납 표시)
+        // 지난달/이번달 납입 요약(기록이 없는 학생은 앱 상태로 미납 표시)
         final DateTime thisMonth = DateTime(now.year, now.month);
         final DateTime prevMonth = DateTime(now.year, now.month - 1);
         final DateTime prevMonthEnd = DateTime(
@@ -1344,60 +1493,73 @@ class StudentScreenState extends State<StudentScreen> {
           final int day = candidate.day > lastDay ? lastDay : candidate.day;
           return DateTime(y, m, day);
         }
-        for (final s in DataManager.instance.students) {
-      final String sid = s.student.id;
-      if (!activeStudentIds.contains(sid)) continue; // 퇴원 제외
-      final DateTime reg = (s.registrationDate ?? s.basicInfo.registrationDate) ?? DateTime.now();
-      // 이번달
-      final DateTime baseDueThis = DateTime(thisMonth.year, thisMonth.month, reg.day);
-      final DateTime dueThis = _clampToMonthLastDay(baseDueThis);
-      final int cycleThis = _calculateCycleNumber(reg, dueThis);
-      final recordThis = DataManager.instance.getPaymentRecord(sid, cycleThis);
-      monthDueByStudent[sid] = recordThis?.dueDate ?? dueThis;
-      if (recordThis?.paidDate != null) monthPaidByStudent[sid] = recordThis!.paidDate!;
-      // 지난달: 등록일 이전에는 기록 생성하지 않음
-      if (!reg.isAfter(prevMonthEnd)) {
-        final DateTime baseDuePrev = DateTime(prevMonth.year, prevMonth.month, reg.day);
-        final DateTime duePrev = _clampToMonthLastDay(baseDuePrev);
-        final int cyclePrev = _calculateCycleNumber(reg, duePrev);
-        final recordPrev = DataManager.instance.getPaymentRecord(sid, cyclePrev);
-        prevMonthDueByStudent[sid] = recordPrev?.dueDate ?? duePrev;
-        if (recordPrev?.paidDate != null) prevMonthPaidByStudent[sid] = recordPrev!.paidDate!;
-      }
-    }
 
-    // 납입 리스트용 데이터(납부/미납 포함)
+        for (final s in DataManager.instance.students) {
+          final String sid = s.student.id;
+          if (!activeStudentIds.contains(sid)) continue; // 퇴원 제외
+          final DateTime reg =
+              (s.registrationDate ?? s.basicInfo.registrationDate) ??
+                  DateTime.now();
+          // 이번달
+          final DateTime baseDueThis =
+              DateTime(thisMonth.year, thisMonth.month, reg.day);
+          final DateTime dueThis = _clampToMonthLastDay(baseDueThis);
+          final int cycleThis = _calculateCycleNumber(reg, dueThis);
+          final recordThis =
+              DataManager.instance.getPaymentRecord(sid, cycleThis);
+          monthDueByStudent[sid] = recordThis?.dueDate ?? dueThis;
+          if (recordThis?.paidDate != null)
+            monthPaidByStudent[sid] = recordThis!.paidDate!;
+          // 지난달: 등록일 이전에는 기록 생성하지 않음
+          if (!reg.isAfter(prevMonthEnd)) {
+            final DateTime baseDuePrev =
+                DateTime(prevMonth.year, prevMonth.month, reg.day);
+            final DateTime duePrev = _clampToMonthLastDay(baseDuePrev);
+            final int cyclePrev = _calculateCycleNumber(reg, duePrev);
+            final recordPrev =
+                DataManager.instance.getPaymentRecord(sid, cyclePrev);
+            prevMonthDueByStudent[sid] = recordPrev?.dueDate ?? duePrev;
+            if (recordPrev?.paidDate != null)
+              prevMonthPaidByStudent[sid] = recordPrev!.paidDate!;
+          }
+        }
+
+        // 납입 리스트용 데이터(납부/미납 포함)
         final Map<String, _AttendanceInfo> thisMonthPaymentByStudent = {
-      for (final entry in monthDueByStudent.entries)
-        entry.key: _AttendanceInfo(
-          arrival: monthPaidByStudent[entry.key],
-          departure: null,
-          isPresent: monthPaidByStudent[entry.key] != null,
-          isLate: false,
-          classDateTime: entry.value, // due date 보관
-        )
-    };
+          for (final entry in monthDueByStudent.entries)
+            entry.key: _AttendanceInfo(
+              arrival: monthPaidByStudent[entry.key],
+              departure: null,
+              isPresent: monthPaidByStudent[entry.key] != null,
+              isLate: false,
+              classDateTime: entry.value, // due date 보관
+            )
+        };
 
         final Map<String, _AttendanceInfo> prevMonthPaymentByStudent = {
-      for (final entry in prevMonthDueByStudent.entries)
-        entry.key: _AttendanceInfo(
-          arrival: prevMonthPaidByStudent[entry.key],
-          departure: null,
-          isPresent: prevMonthPaidByStudent[entry.key] != null,
-          isLate: false,
-          classDateTime: entry.value,
-        )
-    };
+          for (final entry in prevMonthDueByStudent.entries)
+            entry.key: _AttendanceInfo(
+              arrival: prevMonthPaidByStudent[entry.key],
+              departure: null,
+              isPresent: prevMonthPaidByStudent[entry.key] != null,
+              isLate: false,
+              classDateTime: entry.value,
+            )
+        };
 
         String _nameOf(String studentId) {
           try {
-            return DataManager.instance.students.firstWhere((s) => s.student.id == studentId).student.name;
+            return DataManager.instance.students
+                .firstWhere((s) => s.student.id == studentId)
+                .student
+                .name;
           } catch (_) {
             return studentId;
           }
         }
 
-        Widget _simpleRow(String left, {required Widget statusLine, String? timeLine}) {
+        Widget _simpleRow(String left,
+            {required Widget statusLine, String? timeLine}) {
           final double screenW = MediaQuery.of(context).size.width;
           // 1430에서 14, 2200에서 18까지 선형 보간
           const double minW = 1430;
@@ -1407,145 +1569,184 @@ class StudentScreenState extends State<StudentScreen> {
           double t = ((screenW - minW) / (maxW - minW)).clamp(0.0, 1.0);
           final double nameFontSize = minFs + (maxFs - minFs) * t;
           return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          color: const Color(0xFF1F1F1F),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: const Color(0xFF2A2A2A)),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // 1행: 이름 + 상태 (붙여서 표시)
-            Row(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1F1F1F),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xFF2A2A2A)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(
-                  child: Row(
-                    children: [
-                      Expanded(child: Text(left, style: TextStyle(color: Colors.white, fontSize: nameFontSize, fontWeight: FontWeight.w700), overflow: TextOverflow.ellipsis)),
-                      const SizedBox(width: 6),
-                      statusLine,
-                    ],
-                  ),
+                // 1행: 이름 + 상태 (붙여서 표시)
+                Row(
+                  children: [
+                    Expanded(
+                      child: Row(
+                        children: [
+                          Expanded(
+                              child: Text(left,
+                                  style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: nameFontSize,
+                                      fontWeight: FontWeight.w700),
+                                  overflow: TextOverflow.ellipsis)),
+                          const SizedBox(width: 6),
+                          statusLine,
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
+                if (timeLine != null) ...[
+                  const SizedBox(height: 4),
+                  Text(timeLine,
+                      style:
+                          const TextStyle(color: Colors.white70, fontSize: 13)),
+                ],
               ],
             ),
-            if (timeLine != null) ...[
-              const SizedBox(height: 4),
-              Text(timeLine, style: const TextStyle(color: Colors.white70, fontSize: 13)),
-            ],
-          ],
-        ),
           );
         }
 
-    // 각 타일별 개별 리스트를 같은 칼럼에 배치
-        Widget listFor(Map<String, _AttendanceInfo> data, {required bool isAttendance, bool showListButton = false, bool sortByDue = false}) {
+        // 각 타일별 개별 리스트를 같은 칼럼에 배치
+        Widget listFor(Map<String, _AttendanceInfo> data,
+            {required bool isAttendance,
+            bool showListButton = false,
+            bool sortByDue = false}) {
           // 부모 컨테이너(타일과 동일 너비/여백)로 래핑하여 너비 일치
           return Container(
-        margin: const EdgeInsets.symmetric(horizontal: 10),
-        padding: const EdgeInsets.all(10),
-        decoration: BoxDecoration(
-          color: const Color(0xFF212A31),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: const Color(0xFF2A2A2A)),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // 리스트 버튼은 타이틀 우측에 배치되므로 여기선 사용하지 않음
-            (data.isEmpty)
-            ? const Align(
-                alignment: Alignment.centerLeft,
-                child: Text('기록 없음', style: TextStyle(color: Colors.white54, fontSize: 13)),
-              )
-            : Column(
-                children: (() {
-                  final entries = data.entries.toList();
-                  if (!isAttendance && sortByDue) {
-                    entries.sort((a, b) => a.value.classDateTime.compareTo(b.value.classDateTime));
-                  }
-                  return entries.map((e) {
-                  final name = _nameOf(e.key);
-                  final info = e.value;
-                      Widget rightWidget;
-                  if (isAttendance) {
-                    // 상태 폰트 반응형 크기 (최소창≈1430에서 12 → 넓을수록 16)
-                    final double screenW = MediaQuery.of(context).size.width;
-                    const double minW = 1430;
-                    const double maxW = 2200;
-                    const double fsMin = 12;
-                    const double fsMax = 16;
-                    double tFS = ((screenW - minW) / (maxW - minW)).clamp(0.0, 1.0);
-                    final double statusFontSize = fsMin + (fsMax - fsMin) * tFS;
-                    if (!info.isPresent) {
-                          rightWidget = Text('결석', style: TextStyle(color: const Color(0xFFE53E3E), fontSize: statusFontSize, fontWeight: FontWeight.w700));
-                    } else {
-                      final arr = info.arrival != null ? '${info.arrival!.hour.toString().padLeft(2,'0')}:${info.arrival!.minute.toString().padLeft(2,'0')}' : '--:--';
-                      final dep = info.departure != null ? '${info.departure!.hour.toString().padLeft(2,'0')}:${info.departure!.minute.toString().padLeft(2,'0')}' : '--:--';
-                          rightWidget = Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              if (info.isLate)
-                                Text('지각', style: TextStyle(color: const Color(0xFFFF9800), fontSize: statusFontSize, fontWeight: FontWeight.w700)),
-                            ],
-                          );
-                    }
-                  } else {
-                    // 납입 리스트: 1행 이름+상태, 2행 예정/납부일 (상태 폰트 크기는 출결 상태와 동일 규칙 적용)
-                        final double screenW = MediaQuery.of(context).size.width;
-                        const double minW = 1430;
-                        const double maxW = 2200;
-                        const double fsMin = 12;
-                        const double fsMax = 16;
-                        double tFS = ((screenW - minW) / (maxW - minW)).clamp(0.0, 1.0);
-                        final double statusFontSize = fsMin + (fsMax - fsMin) * tFS;
-                        final paid = info.arrival;
-                        final due = info.classDateTime;
-                        rightWidget = Text(
-                          paid != null ? '납부' : '미납',
-                          style: TextStyle(
-                            color: paid != null ? Colors.white70 : const Color(0xFFE53E3E),
-                            fontSize: statusFontSize,
-                            fontWeight: paid != null ? FontWeight.w400 : FontWeight.w700,
-                          ),
-                        );
-                        final String timeLineStr = paid != null
-                            ? '예정 ${due.month}/${due.day} · 납부 ${paid.month}/${paid.day}'
-                            : '예정 ${due.month}/${due.day}';
-                        return Padding(
-                          padding: const EdgeInsets.only(bottom: 8),
-                          child: InkWell(
-                            onTap: null,
-                            child: _simpleRow(
-                              name,
-                              statusLine: rightWidget,
-                              timeLine: timeLineStr,
-                            ),
-                          ),
-                        );
-                  }
-                  return Padding(
-                    padding: const EdgeInsets.only(bottom: 8),
-                    child: InkWell(
-                      onTap: () async {
-                        if (isAttendance) {
-                          await _jumpToAttendanceEdit(e.key, info.classDateTime, info.isPresent);
-                        }
-                      },
-                      child: _simpleRow(
-                        name,
-                        statusLine: rightWidget,
-                        timeLine: isAttendance ? _formatAttendanceTimeLine(info) : null,
+            margin: const EdgeInsets.symmetric(horizontal: 10),
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: const Color(0xFF212A31),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: const Color(0xFF2A2A2A)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // 리스트 버튼은 타이틀 우측에 배치되므로 여기선 사용하지 않음
+                (data.isEmpty)
+                    ? const Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text('기록 없음',
+                            style:
+                                TextStyle(color: Colors.white54, fontSize: 13)),
+                      )
+                    : Column(
+                        children: (() {
+                          final entries = data.entries.toList();
+                          if (!isAttendance && sortByDue) {
+                            entries.sort((a, b) => a.value.classDateTime
+                                .compareTo(b.value.classDateTime));
+                          }
+                          return entries.map((e) {
+                            final name = _nameOf(e.key);
+                            final info = e.value;
+                            Widget rightWidget;
+                            if (isAttendance) {
+                              // 상태 폰트 반응형 크기 (최소창≈1430에서 12 → 넓을수록 16)
+                              final double screenW =
+                                  MediaQuery.of(context).size.width;
+                              const double minW = 1430;
+                              const double maxW = 2200;
+                              const double fsMin = 12;
+                              const double fsMax = 16;
+                              double tFS = ((screenW - minW) / (maxW - minW))
+                                  .clamp(0.0, 1.0);
+                              final double statusFontSize =
+                                  fsMin + (fsMax - fsMin) * tFS;
+                              if (!info.isPresent) {
+                                rightWidget = Text('결석',
+                                    style: TextStyle(
+                                        color: const Color(0xFFE53E3E),
+                                        fontSize: statusFontSize,
+                                        fontWeight: FontWeight.w700));
+                              } else {
+                                final arr = info.arrival != null
+                                    ? '${info.arrival!.hour.toString().padLeft(2, '0')}:${info.arrival!.minute.toString().padLeft(2, '0')}'
+                                    : '--:--';
+                                final dep = info.departure != null
+                                    ? '${info.departure!.hour.toString().padLeft(2, '0')}:${info.departure!.minute.toString().padLeft(2, '0')}'
+                                    : '--:--';
+                                rightWidget = Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    if (info.isLate)
+                                      Text('지각',
+                                          style: TextStyle(
+                                              color: const Color(0xFFFF9800),
+                                              fontSize: statusFontSize,
+                                              fontWeight: FontWeight.w700)),
+                                  ],
+                                );
+                              }
+                            } else {
+                              // 납입 리스트: 1행 이름+상태, 2행 예정/납부일 (상태 폰트 크기는 출결 상태와 동일 규칙 적용)
+                              final double screenW =
+                                  MediaQuery.of(context).size.width;
+                              const double minW = 1430;
+                              const double maxW = 2200;
+                              const double fsMin = 12;
+                              const double fsMax = 16;
+                              double tFS = ((screenW - minW) / (maxW - minW))
+                                  .clamp(0.0, 1.0);
+                              final double statusFontSize =
+                                  fsMin + (fsMax - fsMin) * tFS;
+                              final paid = info.arrival;
+                              final due = info.classDateTime;
+                              rightWidget = Text(
+                                paid != null ? '납부' : '미납',
+                                style: TextStyle(
+                                  color: paid != null
+                                      ? Colors.white70
+                                      : const Color(0xFFE53E3E),
+                                  fontSize: statusFontSize,
+                                  fontWeight: paid != null
+                                      ? FontWeight.w400
+                                      : FontWeight.w700,
+                                ),
+                              );
+                              final String timeLineStr = paid != null
+                                  ? '예정 ${due.month}/${due.day} · 납부 ${paid.month}/${paid.day}'
+                                  : '예정 ${due.month}/${due.day}';
+                              return Padding(
+                                padding: const EdgeInsets.only(bottom: 8),
+                                child: InkWell(
+                                  onTap: null,
+                                  child: _simpleRow(
+                                    name,
+                                    statusLine: rightWidget,
+                                    timeLine: timeLineStr,
+                                  ),
+                                ),
+                              );
+                            }
+                            return Padding(
+                              padding: const EdgeInsets.only(bottom: 8),
+                              child: InkWell(
+                                onTap: () async {
+                                  if (isAttendance) {
+                                    await _jumpToAttendanceEdit(e.key,
+                                        info.classDateTime, info.isPresent);
+                                  }
+                                },
+                                child: _simpleRow(
+                                  name,
+                                  statusLine: rightWidget,
+                                  timeLine: isAttendance
+                                      ? _formatAttendanceTimeLine(info)
+                                      : null,
+                                ),
+                              ),
+                            );
+                          }).toList();
+                        })(),
                       ),
-                    ),
-                  );
-                  }).toList();
-                })(),
-              ),
-          ],
-        ),
-        );
+              ],
+            ),
+          );
         }
 
         return SingleChildScrollView(
@@ -1554,70 +1755,86 @@ class StudentScreenState extends State<StudentScreen> {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  tile(
-                    '어제 출결',
-                    '출석 ${yPresent + yLate} · 결석 $yAbsent',
-                    '지각 $yLate',
-                    accent: const Color(0xFF64B5F6),
-                    trailing: TextButton.icon(
-                      onPressed: () => _showRecentAttendanceDialog(),
-                      icon: const Icon(Icons.list, color: Colors.white70, size: 19.8),
-                      label: const Text('리스트', style: TextStyle(color: Colors.white70)),
-                      style: TextButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(horizontal: 13.2, vertical: 8.8),
-                        foregroundColor: Colors.white70,
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      tile(
+                        '어제 출결',
+                        '출석 ${yPresent + yLate} · 결석 $yAbsent',
+                        '지각 $yLate',
+                        accent: const Color(0xFF64B5F6),
+                        trailing: TextButton.icon(
+                          onPressed: () => _showRecentAttendanceDialog(),
+                          icon: const Icon(Icons.list,
+                              color: Colors.white70, size: 19.8),
+                          label: const Text('리스트',
+                              style: TextStyle(color: Colors.white70)),
+                          style: TextButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 13.2, vertical: 8.8),
+                            foregroundColor: Colors.white70,
+                          ),
+                        ),
                       ),
-                    ),
+                      listFor(yesterdayAttendanceByStudent,
+                          isAttendance: true, showListButton: false),
+                    ],
                   ),
-                  listFor(yesterdayAttendanceByStudent, isAttendance: true, showListButton: false),
-                ],
-              ),
-            ),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  tile('오늘 출결', '출석 ${tPresent + tLate} · 결석 $tAbsent', '지각 $tLate', accent: const Color(0xFF64B5F6)),
-                  listFor(todayAttendanceByStudent, isAttendance: true, showListButton: false),
-                ],
-              ),
-            ),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  tile(
-                    '지난달 납입',
-                    '납부 ${prevMonthPaidByStudent.length} · 총 인원 ${prevMonthDueByStudent.length}',
-                    '${now.month - 1}월 납부 현황',
-                    accent: const Color(0xFF90CAF9),
-                    trailing: TextButton.icon(
-                      onPressed: () => _showRecentPaymentDialog(),
-                      icon: const Icon(Icons.list, color: Colors.white70, size: 19.8),
-                      label: const Text('리스트', style: TextStyle(color: Colors.white70)),
-                      style: TextButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(horizontal: 13.2, vertical: 8.8),
-                        foregroundColor: Colors.white70,
+                ),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      tile('오늘 출결', '출석 ${tPresent + tLate} · 결석 $tAbsent',
+                          '지각 $tLate',
+                          accent: const Color(0xFF64B5F6)),
+                      listFor(todayAttendanceByStudent,
+                          isAttendance: true, showListButton: false),
+                    ],
+                  ),
+                ),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      tile(
+                        '지난달 납입',
+                        '납부 ${prevMonthPaidByStudent.length} · 총 인원 ${prevMonthDueByStudent.length}',
+                        '${now.month - 1}월 납부 현황',
+                        accent: const Color(0xFF90CAF9),
+                        trailing: TextButton.icon(
+                          onPressed: () => _showRecentPaymentDialog(),
+                          icon: const Icon(Icons.list,
+                              color: Colors.white70, size: 19.8),
+                          label: const Text('리스트',
+                              style: TextStyle(color: Colors.white70)),
+                          style: TextButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 13.2, vertical: 8.8),
+                            foregroundColor: Colors.white70,
+                          ),
+                        ),
                       ),
-                    ),
+                      listFor(prevMonthPaymentByStudent,
+                          isAttendance: false, sortByDue: true),
+                    ],
                   ),
-                  listFor(prevMonthPaymentByStudent, isAttendance: false, sortByDue: true),
-                ],
-              ),
-            ),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  tile('이번달 납입', '납부 ${monthPaidByStudent.length} · 총 인원 ${monthDueByStudent.length}', '${now.month}월 납부 현황', accent: const Color(0xFF90CAF9)),
-                  listFor(thisMonthPaymentByStudent, isAttendance: false, sortByDue: true),
-                ],
-              ),
-            ),
+                ),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      tile(
+                          '이번달 납입',
+                          '납부 ${monthPaidByStudent.length} · 총 인원 ${monthDueByStudent.length}',
+                          '${now.month}월 납부 현황',
+                          accent: const Color(0xFF90CAF9)),
+                      listFor(thisMonthPaymentByStudent,
+                          isAttendance: false, sortByDue: true),
+                    ],
+                  ),
+                ),
               ],
             ),
           ),
@@ -1625,13 +1842,15 @@ class StudentScreenState extends State<StudentScreen> {
       },
     );
   }
-  
+
   // 학생 리스트 학년별 그룹핑
-  Map<String, List<StudentWithInfo>> _groupStudentsByGrade(List<StudentWithInfo> students) {
+  Map<String, List<StudentWithInfo>> _groupStudentsByGrade(
+      List<StudentWithInfo> students) {
     final Map<String, List<StudentWithInfo>> gradeGroups = {};
     for (var student in students) {
       // educationLevel과 grade를 조합하여 '초6', '중1' 등으로 표시
-      final levelPrefix = _getEducationLevelPrefix(student.student.educationLevel);
+      final levelPrefix =
+          _getEducationLevelPrefix(student.student.educationLevel);
       final grade = '$levelPrefix${student.student.grade}';
       if (gradeGroups[grade] == null) {
         gradeGroups[grade] = [];
@@ -1671,7 +1890,9 @@ class StudentScreenState extends State<StudentScreen> {
     final isExpanded = _isExpanded[key] ?? false;
     return Container(
       decoration: BoxDecoration(
-        color: isExpanded ? const Color(0xFF2A2A2A) : const Color(0xFF2D2D2D), // 접혀있을 때도 배경색 지정
+        color: isExpanded
+            ? const Color(0xFF2A2A2A)
+            : const Color(0xFF2D2D2D), // 접혀있을 때도 배경색 지정
         borderRadius: BorderRadius.circular(0),
       ),
       child: Column(
@@ -1731,14 +1952,17 @@ class StudentScreenState extends State<StudentScreen> {
                 final studentWithInfo = students[index];
                 return _AttendanceStudentCard(
                   studentWithInfo: studentWithInfo,
-                  isSelected: _selectedStudent?.student.id == studentWithInfo.student.id,
+                  isSelected: _selectedStudent?.student.id ==
+                      studentWithInfo.student.id,
                   onTap: () {
                     setState(() {
                       // 다른 학생으로 변경될 때 페이지 인덱스 초기화
-                      if (_selectedStudent?.student.id != studentWithInfo.student.id) {
+                      if (_selectedStudent?.student.id !=
+                          studentWithInfo.student.id) {
                         _paymentPageIndex = 0;
                         _attendancePageIndex = 0;
-                        _dlog('[DEBUG][onTap] 학생 변경으로 인한 초기화 - ${studentWithInfo.student.name}');
+                        _dlog(
+                            '[DEBUG][onTap] 학생 변경으로 인한 초기화 - ${studentWithInfo.student.name}');
                       }
                       _selectedStudent = studentWithInfo;
                     });
@@ -1769,7 +1993,10 @@ class StudentScreenState extends State<StudentScreen> {
             children: [
               Text(
                 student.name,
-                style: const TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: Colors.white),
+                style: const TextStyle(
+                    fontSize: 26,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -1779,7 +2006,8 @@ class StudentScreenState extends State<StudentScreen> {
                 ),
               ),
               IconButton(
-                onPressed: () => _showStudentPaymentSettingsDialog(studentWithInfo),
+                onPressed: () =>
+                    _showStudentPaymentSettingsDialog(studentWithInfo),
                 icon: const Icon(Icons.settings, color: Colors.white70),
                 tooltip: '결제 및 수업 설정',
               ),
@@ -1788,8 +2016,8 @@ class StudentScreenState extends State<StudentScreen> {
           const SizedBox(height: 16),
           const Divider(color: Colors.white24),
           const SizedBox(height: 16),
-              Expanded(
-                child: SingleChildScrollView(
+          Expanded(
+            child: SingleChildScrollView(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -1803,13 +2031,17 @@ class StudentScreenState extends State<StudentScreen> {
                         children: [
                           Text(
                             className,
-                            style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w600, color: Colors.white),
+                            style: const TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.white),
                           ),
                           const SizedBox(height: 8),
                           ...schedules.map((schedule) => Text(
-                            '${schedule['day']} ${schedule['start']} ~ ${schedule['end']}',
-                            style: const TextStyle(fontSize: 17, color: Colors.white70),
-                          )),
+                                '${schedule['day']} ${schedule['start']} ~ ${schedule['end']}',
+                                style: const TextStyle(
+                                    fontSize: 17, color: Colors.white70),
+                              )),
                         ],
                       ),
                     );
@@ -1832,8 +2064,10 @@ class StudentScreenState extends State<StudentScreen> {
   }
 
   // 수업 시간 블록 그룹핑
-  Map<String, List<Map<String, String>>> _groupTimeBlocksByClass(List<StudentTimeBlock> timeBlocks) {
-    final Map<String?, List<StudentTimeBlock>> blocksBySet = {}; // 키 타입을 String?로 변경
+  Map<String, List<Map<String, String>>> _groupTimeBlocksByClass(
+      List<StudentTimeBlock> timeBlocks) {
+    final Map<String?, List<StudentTimeBlock>> blocksBySet =
+        {}; // 키 타입을 String?로 변경
     for (var block in timeBlocks) {
       if (blocksBySet[block.setId] == null) {
         blocksBySet[block.setId] = [];
@@ -1849,7 +2083,8 @@ class StudentScreenState extends State<StudentScreen> {
       try {
         // sessionTypeId를 직접 사용하여 ClassInfo를 찾습니다.
         if (firstBlock.sessionTypeId != null) {
-          final classInfo = DataManager.instance.classes.firstWhere((c) => c.id == firstBlock.sessionTypeId);
+          final classInfo = DataManager.instance.classes
+              .firstWhere((c) => c.id == firstBlock.sessionTypeId);
           className = classInfo.name;
         }
       } catch (e) {
@@ -1875,23 +2110,27 @@ class StudentScreenState extends State<StudentScreen> {
 
     int startHour = firstBlock.startHour;
     int startMinute = firstBlock.startMinute;
-    
+
     // endHour와 endMinute는 duration을 사용하여 계산합니다.
-    final startTime = DateTime(2023, 1, 1, lastBlock.startHour, lastBlock.startMinute);
+    final startTime =
+        DateTime(2023, 1, 1, lastBlock.startHour, lastBlock.startMinute);
     final endTime = startTime.add(lastBlock.duration);
     int endHour = endTime.hour;
     int endMinute = endTime.minute;
 
     return {
       'day': dayOfWeek[firstBlock.dayIndex], // day -> dayIndex
-      'start': '${startHour.toString().padLeft(2, '0')}:${startMinute.toString().padLeft(2, '0')}',
-      'end': '${endHour.toString().padLeft(2, '0')}:${endMinute.toString().padLeft(2, '0')}',
+      'start':
+          '${startHour.toString().padLeft(2, '0')}:${startMinute.toString().padLeft(2, '0')}',
+      'end':
+          '${endHour.toString().padLeft(2, '0')}:${endMinute.toString().padLeft(2, '0')}',
     };
   }
 
   // 달력 위젯
   Widget _buildCalendar() {
-    final daysInMonth = DateUtils.getDaysInMonth(_currentDate.year, _currentDate.month);
+    final daysInMonth =
+        DateUtils.getDaysInMonth(_currentDate.year, _currentDate.month);
     final firstDayOfMonth = DateTime(_currentDate.year, _currentDate.month, 1);
     final weekdayOfFirstDay = firstDayOfMonth.weekday; // 월요일=1, 일요일=7
 
@@ -1904,29 +2143,37 @@ class StudentScreenState extends State<StudentScreen> {
           padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 4.0),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceAround,
-            children: dayOfWeekHeaders.map((day) => Text(day, style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.bold))).toList(),
+            children: dayOfWeekHeaders
+                .map((day) => Text(day,
+                    style: const TextStyle(
+                        color: Colors.white70, fontWeight: FontWeight.bold)))
+                .toList(),
           ),
         ),
         Expanded(
           child: GridView.builder(
-            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 7),
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 7),
             itemCount: daysInMonth + weekdayOfFirstDay - 1,
             itemBuilder: (context, index) {
               if (index < weekdayOfFirstDay - 1) {
                 return Container(); // Empty container for days before the 1st
               }
               final dayNumber = index - (weekdayOfFirstDay - 1) + 1;
-              final date = DateTime(_currentDate.year, _currentDate.month, dayNumber);
+              final date =
+                  DateTime(_currentDate.year, _currentDate.month, dayNumber);
               final isToday = DateUtils.isSameDay(date, today);
 
               return LayoutBuilder(
                 builder: (context, constraints) {
-                  final indicatorWidth = constraints.maxWidth * 0.5; // 셀 너비의 절반으로 고정
+                  final indicatorWidth =
+                      constraints.maxWidth * 0.5; // 셀 너비의 절반으로 고정
                   return Container(
                     margin: const EdgeInsets.all(5),
                     decoration: isToday
                         ? BoxDecoration(
-                            border: Border.all(color: const Color(0xFF1976D2), width: 3),
+                            border: Border.all(
+                                color: const Color(0xFF1976D2), width: 3),
                             borderRadius: BorderRadius.circular(7),
                           )
                         : null,
@@ -1937,9 +2184,10 @@ class StudentScreenState extends State<StudentScreen> {
                           child: Text(
                             '$dayNumber',
                             style: TextStyle(
-                              color: isToday ? Colors.white : Colors.white, 
+                              color: isToday ? Colors.white : Colors.white,
                               fontSize: 17,
-                              fontWeight: isToday ? FontWeight.bold : FontWeight.normal,
+                              fontWeight:
+                                  isToday ? FontWeight.bold : FontWeight.normal,
                             ),
                           ),
                         ),
@@ -1990,16 +2238,21 @@ class StudentScreenState extends State<StudentScreen> {
     final dateStart = DateTime(date.year, date.month, date.day);
     final dateEnd = dateStart.add(const Duration(days: 1));
     bool sameMinute(DateTime a, DateTime b) =>
-        a.year == b.year && a.month == b.month && a.day == b.day && a.hour == b.hour && a.minute == b.minute;
+        a.year == b.year &&
+        a.month == b.month &&
+        a.day == b.day &&
+        a.hour == b.hour &&
+        a.minute == b.minute;
 
-    final addOnDate = overrides.where((o) =>
-      o.studentId == studentId &&
-      o.overrideType == OverrideType.add &&
-      o.status != OverrideStatus.canceled &&
-      o.replacementClassDateTime != null &&
-      o.replacementClassDateTime!.isAfter(dateStart) &&
-      o.replacementClassDateTime!.isBefore(dateEnd)
-    ).toList();
+    final addOnDate = overrides
+        .where((o) =>
+            o.studentId == studentId &&
+            o.overrideType == OverrideType.add &&
+            o.status != OverrideStatus.canceled &&
+            o.replacementClassDateTime != null &&
+            o.replacementClassDateTime!.isAfter(dateStart) &&
+            o.replacementClassDateTime!.isBefore(dateEnd))
+        .toList();
 
     if (addOnDate.isEmpty) return const SizedBox.shrink();
 
@@ -2007,7 +2260,9 @@ class StudentScreenState extends State<StudentScreen> {
     Color dotColor = Colors.white24; // 기본(예정)
     for (final o in addOnDate) {
       final rec = records.firstWhere(
-        (r) => r.studentId == studentId && sameMinute(r.classDateTime, o.replacementClassDateTime!),
+        (r) =>
+            r.studentId == studentId &&
+            sameMinute(r.classDateTime, o.replacementClassDateTime!),
         orElse: () => AttendanceRecord(
           id: null,
           studentId: studentId,
@@ -2023,13 +2278,22 @@ class StudentScreenState extends State<StudentScreen> {
         ),
       );
       if (rec.id == null) continue; // 기록 없음 → 예정
-      if (!rec.isPresent) { dotColor = Colors.red; break; }
+      if (!rec.isPresent) {
+        dotColor = Colors.red;
+        break;
+      }
       if (rec.arrivalTime != null) {
         // 지각 기준: 학생별 설정을 쓰기엔 컨텍스트 부족하므로 기본 10분
-        final lateThreshold = rec.classDateTime.add(const Duration(minutes: 10));
-        if (rec.arrivalTime!.isAfter(lateThreshold)) { dotColor = const Color(0xFFFB8C00); }
-        else { dotColor = const Color(0xFF0C3A69); }
-      } else { dotColor = const Color(0xFF0C3A69); }
+        final lateThreshold =
+            rec.classDateTime.add(const Duration(minutes: 10));
+        if (rec.arrivalTime!.isAfter(lateThreshold)) {
+          dotColor = const Color(0xFFFB8C00);
+        } else {
+          dotColor = const Color(0xFF0C3A69);
+        }
+      } else {
+        dotColor = const Color(0xFF0C3A69);
+      }
     }
 
     return Container(
@@ -2040,38 +2304,44 @@ class StudentScreenState extends State<StudentScreen> {
   }
 
   // 왼쪽 화살표 활성화 조건 확인
-  bool _hasPastPaymentRecords(StudentWithInfo studentWithInfo, DateTime currentMonth) {
+  bool _hasPastPaymentRecords(
+      StudentWithInfo studentWithInfo, DateTime currentMonth) {
     final registrationDate = studentWithInfo.basicInfo.registrationDate;
     if (registrationDate == null) return false;
-    
-    final registrationMonth = DateTime(registrationDate.year, registrationDate.month);
-    
+
+    final registrationMonth =
+        DateTime(registrationDate.year, registrationDate.month);
+
     // 전체 월 리스트 생성
     final allMonths = <DateTime>[];
     DateTime month = registrationMonth;
-    while (month.isBefore(DateTime(currentMonth.year, currentMonth.month + 3))) {
+    while (
+        month.isBefore(DateTime(currentMonth.year, currentMonth.month + 3))) {
       allMonths.add(month);
       month = DateTime(month.year, month.month + 1);
     }
-    
+
     // 현재월의 인덱스 찾기
-    final currentMonthIndex = allMonths.indexWhere((m) => 
-      m.year == currentMonth.year && m.month == currentMonth.month);
-    
+    final currentMonthIndex = allMonths.indexWhere(
+        (m) => m.year == currentMonth.year && m.month == currentMonth.month);
+
     if (currentMonthIndex == -1) return false;
-    
+
     // 조건: 현재월 기준 왼쪽에 3개 이상 카드가 있어야 함
     // 그리고 아직 최대한 왼쪽으로 이동하지 않은 상태
     final leftCardsCount = currentMonthIndex; // 현재월 왼쪽에 있는 카드 수
-    final maxLeftMove = (leftCardsCount - 2).clamp(0, leftCardsCount); // 최대 왼쪽 이동 가능 횟수
-    
-    _dlog('[DEBUG][_hasPastPaymentRecords] 현재월 인덱스: $currentMonthIndex, 왼쪽 카드 수: $leftCardsCount, 최대 이동: $maxLeftMove, 현재 페이지: $_paymentPageIndex');
-    
+    final maxLeftMove =
+        (leftCardsCount - 2).clamp(0, leftCardsCount); // 최대 왼쪽 이동 가능 횟수
+
+    _dlog(
+        '[DEBUG][_hasPastPaymentRecords] 현재월 인덱스: $currentMonthIndex, 왼쪽 카드 수: $leftCardsCount, 최대 이동: $maxLeftMove, 현재 페이지: $_paymentPageIndex');
+
     return leftCardsCount >= 3 && _paymentPageIndex < maxLeftMove;
   }
-  
+
   // 오른쪽 화살표 활성화 조건 확인 (복귀용)
-  bool _hasFuturePaymentCards(StudentWithInfo studentWithInfo, DateTime currentMonth) {
+  bool _hasFuturePaymentCards(
+      StudentWithInfo studentWithInfo, DateTime currentMonth) {
     // 왼쪽으로 이동한 상태(_paymentPageIndex > 0)에서만 오른쪽으로 복귀 가능
     return _paymentPageIndex > 0;
   }
@@ -2082,47 +2352,57 @@ class StudentScreenState extends State<StudentScreen> {
     final registrationDate = basicInfo.registrationDate;
 
     if (registrationDate == null) {
-      return const Center(child: Text('등록일자 정보가 없습니다.', style: TextStyle(color: Colors.white70)));
+      return const Center(
+          child:
+              Text('등록일자 정보가 없습니다.', style: TextStyle(color: Colors.white70)));
     }
 
     final now = DateTime.now();
     final currentMonth = DateTime(now.year, now.month);
-    final registrationMonth = DateTime(registrationDate.year, registrationDate.month);
-    
+    final registrationMonth =
+        DateTime(registrationDate.year, registrationDate.month);
+
     // 화살표 활성화 상태 계산 및 업데이트
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final hasPastRecords = _hasPastPaymentRecords(studentWithInfo, currentMonth);
-      final hasFutureCards = _hasFuturePaymentCards(studentWithInfo, currentMonth);
-      
-      if (_paymentHasPastRecords != hasPastRecords || _paymentHasFutureCards != hasFutureCards) {
+      final hasPastRecords =
+          _hasPastPaymentRecords(studentWithInfo, currentMonth);
+      final hasFutureCards =
+          _hasFuturePaymentCards(studentWithInfo, currentMonth);
+
+      if (_paymentHasPastRecords != hasPastRecords ||
+          _paymentHasFutureCards != hasFutureCards) {
         setState(() {
           _paymentHasPastRecords = hasPastRecords;
           _paymentHasFutureCards = hasFutureCards;
         });
       }
     });
-    
+
     // 페이지 인덱스에 따라 월별 카드 생성
-    _dlog('[DEBUG][_buildPaymentSchedule] _paymentPageIndex: $_paymentPageIndex');
+    _dlog(
+        '[DEBUG][_buildPaymentSchedule] _paymentPageIndex: $_paymentPageIndex');
     _dlog('[DEBUG][_buildPaymentSchedule] currentMonth: $currentMonth');
-    _dlog('[DEBUG][_buildPaymentSchedule] registrationMonth: $registrationMonth');
-    
+    _dlog(
+        '[DEBUG][_buildPaymentSchedule] registrationMonth: $registrationMonth');
+
     // 전체 가능한 월 리스트 생성 (등록월부터 현재월+2달까지)
     final allMonths = <DateTime>[];
     DateTime month = registrationMonth;
-    while (month.isBefore(DateTime(currentMonth.year, currentMonth.month + 3))) {
+    while (
+        month.isBefore(DateTime(currentMonth.year, currentMonth.month + 3))) {
       allMonths.add(month);
       month = DateTime(month.year, month.month + 1);
     }
-    
-    _dlog('[DEBUG][_buildPaymentSchedule] 전체 가능한 월: ${allMonths.map((m) => '${m.year}-${m.month}').join(', ')}');
-    
+
+    _dlog(
+        '[DEBUG][_buildPaymentSchedule] 전체 가능한 월: ${allMonths.map((m) => '${m.year}-${m.month}').join(', ')}');
+
     // 현재월의 인덱스 찾기
-    final currentMonthIndex = allMonths.indexWhere((m) => 
-      m.year == currentMonth.year && m.month == currentMonth.month);
-    
+    final currentMonthIndex = allMonths.indexWhere(
+        (m) => m.year == currentMonth.year && m.month == currentMonth.month);
+
     _dlog('[DEBUG][_buildPaymentSchedule] 현재월 인덱스: $currentMonthIndex');
-    
+
     final candidateMonths = <DateTime>[];
     if (currentMonthIndex == -1) {
       // 현재월이 없으면 전체 표시
@@ -2130,24 +2410,29 @@ class StudentScreenState extends State<StudentScreen> {
     } else {
       // 스마트 페이징: 현재월을 기준으로 5개 윈도우 계산
       int windowStart;
-      
+
       if (_paymentPageIndex == 0) {
         // 초기 상태: 현재월이 가운데 오도록 (또는 오른쪽에 치우치게)
-        windowStart = (currentMonthIndex - 2).clamp(0, (allMonths.length - 5).clamp(0, allMonths.length));
+        windowStart = (currentMonthIndex - 2)
+            .clamp(0, (allMonths.length - 5).clamp(0, allMonths.length));
       } else {
         // 페이징 상태: _paymentPageIndex만큼 왼쪽으로 이동
-        windowStart = (currentMonthIndex - 2 - _paymentPageIndex).clamp(0, (allMonths.length - 5).clamp(0, allMonths.length));
+        windowStart = (currentMonthIndex - 2 - _paymentPageIndex)
+            .clamp(0, (allMonths.length - 5).clamp(0, allMonths.length));
       }
-      
+
       final windowEnd = (windowStart + 5).clamp(0, allMonths.length);
       candidateMonths.addAll(allMonths.sublist(windowStart, windowEnd));
-      
-      _dlog('[DEBUG][_buildPaymentSchedule] 윈도우 범위: $windowStart~${windowEnd-1}, 표시 월: ${candidateMonths.map((m) => '${m.year}-${m.month}').join(', ')}');
+
+      _dlog(
+          '[DEBUG][_buildPaymentSchedule] 윈도우 범위: $windowStart~${windowEnd - 1}, 표시 월: ${candidateMonths.map((m) => '${m.year}-${m.month}').join(', ')}');
     }
-    
+
     // 등록월 이후의 달만 필터링
     final validMonths = candidateMonths
-        .where((month) => month.isAfter(registrationMonth) || month.isAtSameMomentAs(registrationMonth))
+        .where((month) =>
+            month.isAfter(registrationMonth) ||
+            month.isAtSameMomentAs(registrationMonth))
         .toList();
 
     return Padding(
@@ -2159,21 +2444,25 @@ class StudentScreenState extends State<StudentScreen> {
             children: [
               const Text(
                 '수강료 납부',
-                style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600, color: Colors.white),
+                style: TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.white),
               ),
               const SizedBox(width: 8),
               GestureDetector(
                 onTap: _showDueDateEditDialog,
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 7.2),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 28, vertical: 7.2),
                   decoration: BoxDecoration(
                     color: const Color(0xFF1976D2),
                     borderRadius: BorderRadius.circular(20),
                   ),
                   child: const Text(
-                    '수정', 
+                    '수정',
                     style: TextStyle(
-                      color: Colors.white, 
+                      color: Colors.white,
                       fontWeight: FontWeight.bold,
                       fontSize: 15,
                     ),
@@ -2185,9 +2474,11 @@ class StudentScreenState extends State<StudentScreen> {
               TextButton.icon(
                 onPressed: () => _showPaymentListDialog(studentWithInfo),
                 icon: Icon(Icons.list, color: Colors.white70, size: 19.8),
-                label: const Text('리스트', style: TextStyle(color: Colors.white70)),
+                label:
+                    const Text('리스트', style: TextStyle(color: Colors.white70)),
                 style: TextButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 13.2, vertical: 8.8),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 13.2, vertical: 8.8),
                   foregroundColor: Colors.white70,
                 ),
               ),
@@ -2202,7 +2493,8 @@ class StudentScreenState extends State<StudentScreen> {
 
               // 동적으로 라벨 생성
               String label;
-              final monthDiff = (month.year - currentMonth.year) * 12 + (month.month - currentMonth.month);
+              final monthDiff = (month.year - currentMonth.year) * 12 +
+                  (month.month - currentMonth.month);
               if (monthDiff == 0) {
                 label = '이번달';
               } else if (monthDiff < 0) {
@@ -2218,9 +2510,11 @@ class StudentScreenState extends State<StudentScreen> {
 
               return Expanded(
                 child: Padding(
-                  padding: EdgeInsets.only(right: index < validMonths.length - 1 ? 8 : 0),
+                  padding: EdgeInsets.only(
+                      right: index < validMonths.length - 1 ? 8 : 0),
                   child: _buildPaymentDateCard(
-                    _getActualPaymentDateForMonth(studentWithInfo.student.id, registrationDate, month),
+                    _getActualPaymentDateForMonth(
+                        studentWithInfo.student.id, registrationDate, month),
                     label,
                     isCurrentMonth,
                     registrationDate,
@@ -2235,12 +2529,15 @@ class StudentScreenState extends State<StudentScreen> {
             children: validMonths.asMap().entries.map((entry) {
               final index = entry.key;
               final month = entry.value;
-              final paymentDate = _getActualPaymentDateForMonth(studentWithInfo.student.id, registrationDate, month);
-              final cycleNumber = _calculateCycleNumber(registrationDate, paymentDate);
+              final paymentDate = _getActualPaymentDateForMonth(
+                  studentWithInfo.student.id, registrationDate, month);
+              final cycleNumber =
+                  _calculateCycleNumber(registrationDate, paymentDate);
 
               return Expanded(
                 child: Padding(
-                  padding: EdgeInsets.only(right: index < validMonths.length - 1 ? 8 : 0),
+                  padding: EdgeInsets.only(
+                      right: index < validMonths.length - 1 ? 8 : 0),
                   child: _buildActualPaymentCard(paymentDate, cycleNumber),
                 ),
               );
@@ -2255,7 +2552,8 @@ class StudentScreenState extends State<StudentScreen> {
   Widget _buildOverviewSummary(StudentWithInfo studentWithInfo) {
     final String studentId = studentWithInfo.student.id;
     final DateTime now = DateTime.now();
-    final DateTime todayEnd = DateTime(now.year, now.month, now.day, 23, 59, 59);
+    final DateTime todayEnd =
+        DateTime(now.year, now.month, now.day, 23, 59, 59);
 
     // 출석 통계 (과거 기준)
     final paymentInfo = DataManager.instance.getStudentPaymentInfo(studentId);
@@ -2264,13 +2562,15 @@ class StudentScreenState extends State<StudentScreen> {
     int countLate = 0;
     int countAbsent = 0;
 
-    for (final r in DataManager.instance.getAttendanceRecordsForStudent(studentId)) {
+    for (final r
+        in DataManager.instance.getAttendanceRecordsForStudent(studentId)) {
       if (!r.classDateTime.isBefore(todayEnd)) continue; // 미래 제외
       if (!r.isPresent) {
         countAbsent++;
       } else {
         if (r.arrivalTime != null) {
-          final threshold = r.classDateTime.add(Duration(minutes: lateThresholdMinutes));
+          final threshold =
+              r.classDateTime.add(Duration(minutes: lateThresholdMinutes));
           if (r.arrivalTime!.isAfter(threshold)) {
             countLate++;
           } else {
@@ -2284,10 +2584,12 @@ class StudentScreenState extends State<StudentScreen> {
     }
     final int totalAttendance = countPresent + countLate + countAbsent;
     final int attendedCount = countPresent + countLate;
-    final double tardinessRate = attendedCount > 0 ? (countLate / attendedCount) * 100.0 : 0.0;
+    final double tardinessRate =
+        attendedCount > 0 ? (countLate / attendedCount) * 100.0 : 0.0;
 
     // 수강료 통계 수정: 분모=등록월~현재월 예정 개수, 이전/다음 납부일 계산
-    final DateTime? registrationDate = studentWithInfo.basicInfo.registrationDate;
+    final DateTime? registrationDate =
+        studentWithInfo.basicInfo.registrationDate;
     int paidCycles = 0;
     int totalCycles = 0;
     DateTime? previousPaidDate;
@@ -2316,10 +2618,14 @@ class StudentScreenState extends State<StudentScreen> {
 
       DateTime probe = currentMonth;
       for (int i = 0; i < 12; i++) {
-        final due = _getActualPaymentDateForMonth(studentId, registrationDate, probe);
+        final due =
+            _getActualPaymentDateForMonth(studentId, registrationDate, probe);
         final cycle = _calculateCycleNumber(registrationDate, due);
         final record = DataManager.instance.getPaymentRecord(studentId, cycle);
-        if (record?.paidDate == null) { nextDueDate = due; break; }
+        if (record?.paidDate == null) {
+          nextDueDate = due;
+          break;
+        }
         probe = DateTime(probe.year, probe.month + 1);
       }
     }
@@ -2347,13 +2653,21 @@ class StudentScreenState extends State<StudentScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Text(title, style: const TextStyle(color: Colors.white70, fontSize: 16.2, fontWeight: FontWeight.w600)),
+            Text(title,
+                style: const TextStyle(
+                    color: Colors.white70,
+                    fontSize: 16.2,
+                    fontWeight: FontWeight.w600)),
             const SizedBox(height: 9),
             Text(
               mainText,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: TextStyle(color: accent, fontSize: 24.3, fontWeight: FontWeight.w800, height: 1.0),
+              style: TextStyle(
+                  color: accent,
+                  fontSize: 24.3,
+                  fontWeight: FontWeight.w800,
+                  height: 1.0),
             ),
             if (subText != null) ...[
               const SizedBox(height: 6),
@@ -2361,7 +2675,8 @@ class StudentScreenState extends State<StudentScreen> {
                 subText,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: Colors.white60, fontSize: 16.2, height: 1.2),
+                style: const TextStyle(
+                    color: Colors.white60, fontSize: 16.2, height: 1.2),
               ),
             ],
           ],
@@ -2381,17 +2696,21 @@ class StudentScreenState extends State<StudentScreen> {
           children: [
             _statCard(
               title: '수강료',
-              mainText: registrationDate != null ? '$paidCycles/$totalCycles 납부' : '-',
+              mainText: registrationDate != null
+                  ? '$paidCycles/$totalCycles 납부'
+                  : '-',
               subText: registrationDate != null
                   ? '${previousPaidDate != null ? '이전 ${previousPaidDate!.year}/${previousPaidDate!.month}/${previousPaidDate!.day}' : '이전 없음'} · '
-                    '${nextDueDate != null ? '다음 ${nextDueDate!.year}/${nextDueDate!.month}/${nextDueDate!.day}' : '다음 없음'}'
+                      '${nextDueDate != null ? '다음 ${nextDueDate!.year}/${nextDueDate!.month}/${nextDueDate!.day}' : '다음 없음'}'
                   : '정보 없음',
               accent: const Color(0xFF90CAF9),
             ),
             const SizedBox(height: 9),
             _statCard(
               title: '출석',
-              mainText: totalAttendance > 0 ? '출석 ${countPresent + countLate} · 결석 $countAbsent' : '-',
+              mainText: totalAttendance > 0
+                  ? '출석 ${countPresent + countLate} · 결석 $countAbsent'
+                  : '-',
               subText: totalAttendance > 0 ? '총 $totalAttendance회' : '기록 없음',
               accent: const Color(0xFF64B5F6),
             ),
@@ -2406,7 +2725,9 @@ class StudentScreenState extends State<StudentScreen> {
             _statCard(
               title: '출석율',
               mainText: '${attendanceRate.toStringAsFixed(1)}%',
-              subText: totalAttendance > 0 ? '(${countPresent + countLate} / $totalAttendance회)' : '기록 없음',
+              subText: totalAttendance > 0
+                  ? '(${countPresent + countLate} / $totalAttendance회)'
+                  : '기록 없음',
               accent: const Color(0xFF81C784),
             ),
           ],
@@ -2421,11 +2742,13 @@ class StudentScreenState extends State<StudentScreen> {
     final registrationDate = studentWithInfo.basicInfo.registrationDate!;
     final now = DateTime.now();
     final currentMonth = DateTime(now.year, now.month);
-    final registrationMonth = DateTime(registrationDate.year, registrationDate.month);
+    final registrationMonth =
+        DateTime(registrationDate.year, registrationDate.month);
     // 전체 가능한 월 리스트 생성 (등록월부터 현재월+2달까지)
     final List<DateTime> allMonths = <DateTime>[];
     DateTime month = registrationMonth;
-    while (month.isBefore(DateTime(currentMonth.year, currentMonth.month + 3))) {
+    while (
+        month.isBefore(DateTime(currentMonth.year, currentMonth.month + 3))) {
       allMonths.add(month);
       month = DateTime(month.year, month.month + 1);
     }
@@ -2444,27 +2767,39 @@ class StudentScreenState extends State<StudentScreen> {
               thumbVisibility: true,
               child: ListView.separated(
                 itemCount: validMonths.length,
-                separatorBuilder: (_, __) => const Divider(color: Colors.white12, height: 12),
+                separatorBuilder: (_, __) =>
+                    const Divider(color: Colors.white12, height: 12),
                 itemBuilder: (context, index) {
                   final month = validMonths[index];
-                  final paymentDate = _getActualPaymentDateForMonth(studentWithInfo.student.id, registrationDate, month);
-                  final cycleNumber = _calculateCycleNumber(registrationDate, paymentDate);
-                  final record = DataManager.instance.getPaymentRecord(studentWithInfo.student.id, cycleNumber);
+                  final paymentDate = _getActualPaymentDateForMonth(
+                      studentWithInfo.student.id, registrationDate, month);
+                  final cycleNumber =
+                      _calculateCycleNumber(registrationDate, paymentDate);
+                  final record = DataManager.instance.getPaymentRecord(
+                      studentWithInfo.student.id, cycleNumber);
 
                   // 라벨: 상대 월 표기 대신 사이클 번호로 표시
                   final String label = '${cycleNumber}번째';
 
                   // 기본 예정일(등록일 기준)과 변경 여부 계산
-                  final defaultDue = DateTime(month.year, month.month, registrationDate.day);
-                  final bool isChanged = record != null && record!.dueDate.millisecondsSinceEpoch != defaultDue.millisecondsSinceEpoch;
+                  final defaultDue =
+                      DateTime(month.year, month.month, registrationDate.day);
+                  final bool isChanged = record != null &&
+                      record!.dueDate.millisecondsSinceEpoch !=
+                          defaultDue.millisecondsSinceEpoch;
 
                   return GestureDetector(
                     onTap: () => _showPaymentDatePicker(
-                      record ?? PaymentRecord(studentId: studentWithInfo.student.id, cycle: cycleNumber, dueDate: paymentDate),
+                      record ??
+                          PaymentRecord(
+                              studentId: studentWithInfo.student.id,
+                              cycle: cycleNumber,
+                              dueDate: paymentDate),
                     ),
                     child: Container(
                       height: 60,
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 10),
                       decoration: BoxDecoration(
                         color: const Color(0xFF1F1F1F),
                         borderRadius: BorderRadius.circular(8),
@@ -2476,18 +2811,24 @@ class StudentScreenState extends State<StudentScreen> {
                           SizedBox(
                             width: 88,
                             child: Text(
-                              '${month.year}.${month.month.toString().padLeft(2,'0')}',
-                              style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600),
+                              '${month.year}.${month.month.toString().padLeft(2, '0')}',
+                              style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600),
                             ),
                           ),
                           // 사이클 라벨
                           Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 4),
                             decoration: BoxDecoration(
                               color: const Color(0xFF2A2A2A),
                               borderRadius: BorderRadius.circular(6),
                             ),
-                            child: Text(label, style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                            child: Text(label,
+                                style: const TextStyle(
+                                    color: Colors.white70, fontSize: 12)),
                           ),
                           const Spacer(),
                           // 예정일 + 변경됨 배지(사유 툴팁)
@@ -2496,13 +2837,23 @@ class StudentScreenState extends State<StudentScreen> {
                             children: [
                               Text(
                                 '예정 ${paymentDate.month}/${paymentDate.day}',
-                                style: const TextStyle(color: Colors.white70, fontSize: 14, fontWeight: FontWeight.w600),
+                                style: const TextStyle(
+                                    color: Colors.white70,
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w600),
                               ),
                               if (isChanged) ...[
                                 const SizedBox(width: 6),
                                 Tooltip(
-                                  message: (record?.postponeReason ?? '').isNotEmpty ? record!.postponeReason! : '납부 예정일이 변경되었습니다.',
-                                  child: const Text('변경됨', style: TextStyle(color: Colors.orangeAccent, fontSize: 12, fontWeight: FontWeight.w600)),
+                                  message:
+                                      (record?.postponeReason ?? '').isNotEmpty
+                                          ? record!.postponeReason!
+                                          : '납부 예정일이 변경되었습니다.',
+                                  child: const Text('변경됨',
+                                      style: TextStyle(
+                                          color: Colors.orangeAccent,
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w600)),
                                 ),
                               ],
                             ],
@@ -2510,15 +2861,23 @@ class StudentScreenState extends State<StudentScreen> {
                           const SizedBox(width: 12),
                           // 실제 납부일 or 미납
                           Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 10, vertical: 6),
                             decoration: BoxDecoration(
                               color: Colors.transparent,
                               borderRadius: BorderRadius.circular(6),
                               border: Border.all(color: Colors.white24),
                             ),
                             child: Text(
-                              record?.paidDate != null ? '${record!.paidDate!.month}/${record.paidDate!.day}' : '미납',
-                              style: TextStyle(color: record?.paidDate != null ? const Color(0xFF4CAF50) : Colors.white70, fontSize: 14, fontWeight: FontWeight.w600),
+                              record?.paidDate != null
+                                  ? '${record!.paidDate!.month}/${record.paidDate!.day}'
+                                  : '미납',
+                              style: TextStyle(
+                                  color: record?.paidDate != null
+                                      ? const Color(0xFF4CAF50)
+                                      : Colors.white70,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600),
                             ),
                           ),
                         ],
@@ -2541,7 +2900,8 @@ class StudentScreenState extends State<StudentScreen> {
   }
 
   // 납부 예정일 카드
-  Widget _buildPaymentDateCard(DateTime paymentDate, String label, bool isCurrentMonth, DateTime registrationDate) {
+  Widget _buildPaymentDateCard(DateTime paymentDate, String label,
+      bool isCurrentMonth, DateTime registrationDate) {
     final cycleNumber = _calculateCycleNumber(registrationDate, paymentDate);
     return Tooltip(
       message: '$cycleNumber번째',
@@ -2550,15 +2910,26 @@ class StudentScreenState extends State<StudentScreen> {
         decoration: BoxDecoration(
           color: const Color(0xFF2A2A2A),
           borderRadius: BorderRadius.circular(8),
-          border: isCurrentMonth ? Border.all(color: const Color(0xFF1976D2), width: 2) : Border.all(color: const Color(0xFF444444), width: 1),
+          border: isCurrentMonth
+              ? Border.all(color: const Color(0xFF1976D2), width: 2)
+              : Border.all(color: const Color(0xFF444444), width: 1),
         ),
         child: Column(
           children: [
-            Text(label, style: TextStyle(color: isCurrentMonth ? const Color(0xFF1976D2) : Colors.white70, fontSize: 13, fontWeight: FontWeight.w500)),
+            Text(label,
+                style: TextStyle(
+                    color: isCurrentMonth
+                        ? const Color(0xFF1976D2)
+                        : Colors.white70,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500)),
             const SizedBox(height: 4),
             Text(
               '${paymentDate.month}/${paymentDate.day}',
-              style: TextStyle(color: isCurrentMonth ? Colors.white : Colors.white70, fontSize: 17, fontWeight: FontWeight.w600),
+              style: TextStyle(
+                  color: isCurrentMonth ? Colors.white : Colors.white70,
+                  fontSize: 17,
+                  fontWeight: FontWeight.w600),
             ),
           ],
         ),
@@ -2568,9 +2939,14 @@ class StudentScreenState extends State<StudentScreen> {
 
   // 실제 납부일 카드
   Widget _buildActualPaymentCard(DateTime paymentDate, int cycleNumber) {
-    final record = DataManager.instance.getPaymentRecord(_selectedStudent!.student.id, cycleNumber);
+    final record = DataManager.instance
+        .getPaymentRecord(_selectedStudent!.student.id, cycleNumber);
     return GestureDetector(
-      onTap: () => _showPaymentDatePicker(record ?? PaymentRecord(studentId: _selectedStudent!.student.id, cycle: cycleNumber, dueDate: paymentDate)),
+      onTap: () => _showPaymentDatePicker(record ??
+          PaymentRecord(
+              studentId: _selectedStudent!.student.id,
+              cycle: cycleNumber,
+              dueDate: paymentDate)),
       child: Container(
         height: 30,
         decoration: BoxDecoration(
@@ -2590,12 +2966,17 @@ class StudentScreenState extends State<StudentScreen> {
             child: record?.paidDate != null
                 ? Text(
                     '${record!.paidDate!.month}/${record.paidDate!.day}',
-                    style: const TextStyle(color: Color(0xFF4CAF50), fontSize: 19, fontWeight: FontWeight.w600),
+                    style: const TextStyle(
+                        color: Color(0xFF4CAF50),
+                        fontSize: 19,
+                        fontWeight: FontWeight.w600),
                   )
                 : Container(
                     width: 20,
                     height: 2,
-                    decoration: BoxDecoration(color: Colors.white60, borderRadius: BorderRadius.circular(1.5)),
+                    decoration: BoxDecoration(
+                        color: Colors.white60,
+                        borderRadius: BorderRadius.circular(1.5)),
                   ),
           ),
         ),
@@ -2656,19 +3037,21 @@ class StudentScreenState extends State<StudentScreen> {
     // 1. 이번달부터 시작하여 아직 납부하지 않은 가장 빠른 달 찾기
     final now = DateTime.now();
     final currentMonth = DateTime(now.year, now.month);
-    
+
     DateTime? earliestUnpaidMonth;
     int? earliestUnpaidCycle;
-    
+
     // 이번달부터 6개월간 확인 (충분한 범위)
     for (int i = 0; i < 6; i++) {
       final targetMonth = DateTime(currentMonth.year, currentMonth.month + i);
-      final paymentDate = _getActualPaymentDateForMonth(_selectedStudent!.student.id, registrationDate, targetMonth);
+      final paymentDate = _getActualPaymentDateForMonth(
+          _selectedStudent!.student.id, registrationDate, targetMonth);
       final cycle = _calculateCycleNumber(registrationDate, paymentDate);
-      
+
       // 해당 사이클의 납부 기록 확인
-      final record = DataManager.instance.getPaymentRecord(_selectedStudent!.student.id, cycle);
-      
+      final record = DataManager.instance
+          .getPaymentRecord(_selectedStudent!.student.id, cycle);
+
       // 아직 납부하지 않은 첫 번째 달을 찾았으면 중단
       if (record?.paidDate == null) {
         earliestUnpaidMonth = targetMonth;
@@ -2688,9 +3071,11 @@ class StudentScreenState extends State<StudentScreen> {
     }
 
     // 2. 현재 납부 예정일 가져오기
-    final currentRecord = DataManager.instance.getPaymentRecord(_selectedStudent!.student.id, earliestUnpaidCycle);
-    final currentDueDate = currentRecord?.dueDate ?? 
-        DateTime(earliestUnpaidMonth.year, earliestUnpaidMonth.month, registrationDate.day);
+    final currentRecord = DataManager.instance
+        .getPaymentRecord(_selectedStudent!.student.id, earliestUnpaidCycle);
+    final currentDueDate = currentRecord?.dueDate ??
+        DateTime(earliestUnpaidMonth.year, earliestUnpaidMonth.month,
+            registrationDate.day);
 
     // 3. 날짜 선택 다이얼로그
     final DateTime? picked = await showDatePicker(
@@ -2727,16 +3112,21 @@ class StudentScreenState extends State<StudentScreen> {
             decoration: const InputDecoration(
               hintText: '연기 사유를 입력하세요 (선택)',
               hintStyle: TextStyle(color: Colors.white38),
-              enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
-              focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))),
+              enabledBorder: OutlineInputBorder(
+                  borderSide: BorderSide(color: Colors.white24)),
+              focusedBorder: OutlineInputBorder(
+                  borderSide: BorderSide(color: Color(0xFF1976D2))),
             ),
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.of(context).pop(null), child: const Text('취소', style: TextStyle(color: Colors.white70))),
+          TextButton(
+              onPressed: () => Navigator.of(context).pop(null),
+              child: const Text('취소', style: TextStyle(color: Colors.white70))),
           FilledButton(
             onPressed: () => Navigator.of(context).pop(reasonController.text),
-            style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+            style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFF1976D2)),
             child: const Text('확인'),
           ),
         ],
@@ -2746,7 +3136,8 @@ class StudentScreenState extends State<StudentScreen> {
     // 취소 시 전체 변경 취소
     if (reason == null) return;
 
-    final String? normalizedReason = reason.trim().isEmpty ? null : reason.trim();
+    final String? normalizedReason =
+        reason.trim().isEmpty ? null : reason.trim();
 
     // 4-2. 선택한 날짜로 해당 사이클 업데이트 또는 추가
     final updatedRecord = PaymentRecord(
@@ -2768,31 +3159,28 @@ class StudentScreenState extends State<StudentScreen> {
   }
 
   // 이후 월들의 납부 예정일 재계산
-  Future<void> _recalculateSubsequentPaymentDates(
-    String studentId, 
-    DateTime registrationDate, 
-    int startCycle, 
-    DateTime newBaseDate
-  ) async {
+  Future<void> _recalculateSubsequentPaymentDates(String studentId,
+      DateTime registrationDate, int startCycle, DateTime newBaseDate) async {
     // 수정된 날짜의 day를 기준으로 이후 월들 재계산
     final newDay = newBaseDate.day;
-    
+
     // 다음 6개월간 재계산 (충분한 범위)
     for (int i = 1; i <= 6; i++) {
       final targetCycle = startCycle + i;
-      
+
       // 기존 레코드 확인
-      final existingRecord = DataManager.instance.getPaymentRecord(studentId, targetCycle);
-      
+      final existingRecord =
+          DataManager.instance.getPaymentRecord(studentId, targetCycle);
+
       // 이미 납부 완료된 경우는 건드리지 않음
       if (existingRecord?.paidDate != null) {
         continue;
       }
-      
+
       // 새로운 납부 예정일 계산
       final baseMonth = DateTime(newBaseDate.year, newBaseDate.month + i);
       final newDueDate = DateTime(baseMonth.year, baseMonth.month, newDay);
-      
+
       final updatedRecord = PaymentRecord(
         id: existingRecord?.id,
         studentId: studentId,
@@ -2800,7 +3188,7 @@ class StudentScreenState extends State<StudentScreen> {
         dueDate: newDueDate,
         paidDate: existingRecord?.paidDate,
       );
-      
+
       if (existingRecord?.id != null) {
         await DataManager.instance.updatePaymentRecord(updatedRecord);
       } else {
@@ -2810,15 +3198,17 @@ class StudentScreenState extends State<StudentScreen> {
   }
 
   // 월별 실제 납부일 계산
-  DateTime _getActualPaymentDateForMonth(String studentId, DateTime registrationDate, DateTime targetMonth) {
-    final defaultDate = DateTime(targetMonth.year, targetMonth.month, registrationDate.day);
+  DateTime _getActualPaymentDateForMonth(
+      String studentId, DateTime registrationDate, DateTime targetMonth) {
+    final defaultDate =
+        DateTime(targetMonth.year, targetMonth.month, registrationDate.day);
     final cycle = _calculateCycleNumber(registrationDate, defaultDate);
-    
+
     final record = DataManager.instance.getPaymentRecord(studentId, cycle);
     if (record != null) {
       return record.dueDate;
     }
-    
+
     return defaultDate;
   }
 
@@ -2826,20 +3216,25 @@ class StudentScreenState extends State<StudentScreen> {
   int _calculateCycleNumber(DateTime registrationDate, DateTime paymentDate) {
     final regMonth = DateTime(registrationDate.year, registrationDate.month);
     final payMonth = DateTime(paymentDate.year, paymentDate.month);
-    return (payMonth.year - regMonth.year) * 12 + (payMonth.month - regMonth.month) + 1;
+    return (payMonth.year - regMonth.year) * 12 +
+        (payMonth.month - regMonth.month) +
+        1;
   }
 
   // 학생 결제 및 수업 설정 다이얼로그 표시
   void _showStudentPaymentSettingsDialog(StudentWithInfo studentWithInfo) {
     showDialog(
       context: context,
-      builder: (context) => StudentPaymentSettingsDialog(studentWithInfo: studentWithInfo),
+      builder: (context) =>
+          StudentPaymentSettingsDialog(studentWithInfo: studentWithInfo),
     );
   }
 
-  Future<void> _jumpToAttendanceEdit(String studentId, DateTime classDateTime, bool isPresent) async {
+  Future<void> _jumpToAttendanceEdit(
+      String studentId, DateTime classDateTime, bool isPresent) async {
     try {
-      final record = DataManager.instance.getAttendanceRecord(studentId, classDateTime);
+      final record =
+          DataManager.instance.getAttendanceRecord(studentId, classDateTime);
       final int duration = DataManager.instance.academySettings.lessonDuration;
       final String className = '-';
       if (record == null || !record.isPresent) {
@@ -2877,7 +3272,10 @@ class StudentScreenState extends State<StudentScreen> {
 
   String _lookupStudentName(String studentId) {
     try {
-      return DataManager.instance.students.firstWhere((s) => s.student.id == studentId).student.name;
+      return DataManager.instance.students
+          .firstWhere((s) => s.student.id == studentId)
+          .student
+          .name;
     } catch (_) {
       return studentId;
     }
@@ -2892,30 +3290,39 @@ class StudentScreenState extends State<StudentScreen> {
     await showDialog(
       context: context,
       builder: (context) {
-        DateTime anchor = DateTime(DateTime.now().year, DateTime.now().month, 1);
+        DateTime anchor =
+            DateTime(DateTime.now().year, DateTime.now().month, 1);
         return StatefulBuilder(
           builder: (context, setLocalState) {
-            List<DateTime> months = List.generate(5, (i) => DateTime(anchor.year, anchor.month - i, 1));
+            List<DateTime> months = List.generate(
+                5, (i) => DateTime(anchor.year, anchor.month - i, 1));
             months.sort();
 
             Widget monthTile(DateTime month) {
-              final Set<String> activeStudentIds = DataManager.instance.students.map((s) => s.student.id).toSet();
+              final Set<String> activeStudentIds = DataManager.instance.students
+                  .map((s) => s.student.id)
+                  .toSet();
               // 앱 상태를 활용해 해당 월의 due 대상 전원을 구성 (등록일 day 기반, 월말 클램프)
               DateTime clampToMonthEnd(DateTime m, DateTime reg) {
                 final int last = DateUtils.getDaysInMonth(m.year, m.month);
                 final int d = reg.day > last ? last : reg.day;
                 return DateTime(m.year, m.month, d);
               }
+
               final List<_AttendanceInfo> monthInfos = [];
               for (final s in DataManager.instance.students) {
                 if (!activeStudentIds.contains(s.student.id)) continue;
-                final DateTime reg = (s.registrationDate ?? s.basicInfo.registrationDate) ?? DateTime.now();
+                final DateTime reg =
+                    (s.registrationDate ?? s.basicInfo.registrationDate) ??
+                        DateTime.now();
                 // 등록 이전 월은 제외
-                final DateTime monthEnd = DateTime(month.year, month.month, DateUtils.getDaysInMonth(month.year, month.month));
+                final DateTime monthEnd = DateTime(month.year, month.month,
+                    DateUtils.getDaysInMonth(month.year, month.month));
                 if (reg.isAfter(monthEnd)) continue;
                 final DateTime due = clampToMonthEnd(month, reg);
                 final int cycle = _calculateCycleNumber(reg, due);
-                final rec = DataManager.instance.getPaymentRecord(s.student.id, cycle);
+                final rec =
+                    DataManager.instance.getPaymentRecord(s.student.id, cycle);
                 monthInfos.add(_AttendanceInfo(
                   arrival: rec?.paidDate, // paid
                   departure: null,
@@ -2924,7 +3331,8 @@ class StudentScreenState extends State<StudentScreen> {
                   classDateTime: rec?.dueDate ?? due,
                 ));
               }
-              monthInfos.sort((a, b) => a.classDateTime.compareTo(b.classDateTime));
+              monthInfos
+                  .sort((a, b) => a.classDateTime.compareTo(b.classDateTime));
               return Container(
                 margin: const EdgeInsets.symmetric(vertical: 8),
                 padding: const EdgeInsets.all(12),
@@ -2938,17 +3346,34 @@ class StudentScreenState extends State<StudentScreen> {
                   children: [
                     Row(
                       children: [
-                        Text('${month.year}.${month.month.toString().padLeft(2,'0')}', style: const TextStyle(color: Colors.white70, fontSize: 15, fontWeight: FontWeight.w600)),
+                        Text(
+                            '${month.year}.${month.month.toString().padLeft(2, '0')}',
+                            style: const TextStyle(
+                                color: Colors.white70,
+                                fontSize: 15,
+                                fontWeight: FontWeight.w600)),
                         const Spacer(),
-                        Text('총 ${monthInfos.length}건', style: const TextStyle(color: Colors.white38, fontSize: 13)),
+                        Text('총 ${monthInfos.length}건',
+                            style: const TextStyle(
+                                color: Colors.white38, fontSize: 13)),
                       ],
                     ),
                     const SizedBox(height: 8),
                     Column(
                       children: monthInfos.map((info) {
-                        final name = _lookupStudentName(DataManager.instance.students.firstWhere((s) {
-                          return clampToMonthEnd(month, (s.registrationDate ?? s.basicInfo.registrationDate) ?? DateTime.now()) == info.classDateTime;
-                        }).student.id);
+                        final name =
+                            _lookupStudentName(DataManager.instance.students
+                                .firstWhere((s) {
+                                  return clampToMonthEnd(
+                                          month,
+                                          (s.registrationDate ??
+                                                  s.basicInfo
+                                                      .registrationDate) ??
+                                              DateTime.now()) ==
+                                      info.classDateTime;
+                                })
+                                .student
+                                .id);
                         final paid = info.arrival;
                         return Padding(
                           padding: const EdgeInsets.symmetric(vertical: 4),
@@ -2957,17 +3382,38 @@ class StudentScreenState extends State<StudentScreen> {
                             children: [
                               Row(
                                 children: [
-                                  Expanded(child: Text(name, style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600), overflow: TextOverflow.ellipsis)),
+                                  Expanded(
+                                      child: Text(name,
+                                          style: const TextStyle(
+                                              color: Colors.white,
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.w600),
+                                          overflow: TextOverflow.ellipsis)),
                                   const SizedBox(width: 6),
-                                  Text(paid != null ? '납부' : '미납', style: TextStyle(color: paid != null ? Colors.white70 : const Color(0xFFE53E3E), fontWeight: paid != null ? FontWeight.w400 : FontWeight.w700)),
+                                  Text(paid != null ? '납부' : '미납',
+                                      style: TextStyle(
+                                          color: paid != null
+                                              ? Colors.white70
+                                              : const Color(0xFFE53E3E),
+                                          fontWeight: paid != null
+                                              ? FontWeight.w400
+                                              : FontWeight.w700)),
                                 ],
                               ),
                               const SizedBox(height: 4),
                               Row(
                                 children: [
-                                  Text('예정 ${info.classDateTime.month}/${info.classDateTime.day}', style: const TextStyle(color: Colors.white38, fontSize: 12)),
+                                  Text(
+                                      '예정 ${info.classDateTime.month}/${info.classDateTime.day}',
+                                      style: const TextStyle(
+                                          color: Colors.white38, fontSize: 12)),
                                   const SizedBox(width: 12),
-                                  Text(paid != null ? '납부 ${paid.month}/${paid.day}' : '', style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                                  Text(
+                                      paid != null
+                                          ? '납부 ${paid.month}/${paid.day}'
+                                          : '',
+                                      style: const TextStyle(
+                                          color: Colors.white70, fontSize: 12)),
                                 ],
                               ),
                             ],
@@ -2981,14 +3427,18 @@ class StudentScreenState extends State<StudentScreen> {
             }
 
             return Dialog(
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
               backgroundColor: const Color(0xFF1F1F1F),
               child: LayoutBuilder(
                 builder: (context, constraints) {
-                  final double dialogWidth = (constraints.maxWidth * 0.64).clamp(768.0, constraints.maxWidth);
-                  final double dialogHeight = (constraints.maxHeight * 0.77).clamp(448.0, constraints.maxHeight);
+                  final double dialogWidth = (constraints.maxWidth * 0.64)
+                      .clamp(768.0, constraints.maxWidth);
+                  final double dialogHeight = (constraints.maxHeight * 0.77)
+                      .clamp(448.0, constraints.maxHeight);
                   return ConstrainedBox(
-                    constraints: BoxConstraints(maxWidth: dialogWidth, maxHeight: dialogHeight),
+                    constraints: BoxConstraints(
+                        maxWidth: dialogWidth, maxHeight: dialogHeight),
                     child: Container(
                       padding: const EdgeInsets.all(16),
                       child: Column(
@@ -2997,8 +3447,10 @@ class StudentScreenState extends State<StudentScreen> {
                           Row(
                             children: [
                               IconButton(
-                                onPressed: () => setLocalState(() => anchor = DateTime(anchor.year, anchor.month - 5, 1)),
-                                icon: const Icon(Icons.chevron_left, color: Colors.white70),
+                                onPressed: () => setLocalState(() => anchor =
+                                    DateTime(anchor.year, anchor.month - 5, 1)),
+                                icon: const Icon(Icons.chevron_left,
+                                    color: Colors.white70),
                               ),
                               IconButton(
                                 onPressed: () async {
@@ -3023,22 +3475,32 @@ class StudentScreenState extends State<StudentScreen> {
                                     },
                                   );
                                   if (picked != null) {
-                                    setLocalState(() => anchor = DateTime(picked.year, picked.month, 1));
+                                    setLocalState(() => anchor =
+                                        DateTime(picked.year, picked.month, 1));
                                   }
                                 },
-                                icon: const Icon(Icons.calendar_month, color: Colors.white70),
+                                icon: const Icon(Icons.calendar_month,
+                                    color: Colors.white70),
                                 tooltip: '월 선택',
                               ),
                               const SizedBox(width: 8),
-                              Text('최근 납부 ( ${anchor.year}.${anchor.month.toString().padLeft(2,'0')} 기준 )', style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700)),
+                              Text(
+                                  '최근 납부 ( ${anchor.year}.${anchor.month.toString().padLeft(2, '0')} 기준 )',
+                                  style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w700)),
                               const Spacer(),
                               IconButton(
-                                onPressed: () => setLocalState(() => anchor = DateTime(anchor.year, anchor.month + 5, 1)),
-                                icon: const Icon(Icons.chevron_right, color: Colors.white70),
+                                onPressed: () => setLocalState(() => anchor =
+                                    DateTime(anchor.year, anchor.month + 5, 1)),
+                                icon: const Icon(Icons.chevron_right,
+                                    color: Colors.white70),
                               ),
                               IconButton(
                                 onPressed: () => Navigator.of(context).pop(),
-                                icon: const Icon(Icons.close, color: Colors.white70),
+                                icon: const Icon(Icons.close,
+                                    color: Colors.white70),
                               ),
                             ],
                           ),
@@ -3048,15 +3510,24 @@ class StudentScreenState extends State<StudentScreen> {
                               builder: (context, box) {
                                 const int columns = 5;
                                 const double spacing = 16.0;
-                                final double colWidth = (box.maxWidth - spacing * (columns - 1)) / columns;
+                                final double colWidth =
+                                    (box.maxWidth - spacing * (columns - 1)) /
+                                        columns;
                                 final List<Widget> children = [];
                                 for (int i = 0; i < months.length; i++) {
-                                  children.add(SizedBox(width: colWidth, child: monthTile(months[i])));
-                                  if (i < months.length - 1) children.add(const SizedBox(width: spacing));
+                                  children.add(SizedBox(
+                                      width: colWidth,
+                                      child: monthTile(months[i])));
+                                  if (i < months.length - 1)
+                                    children
+                                        .add(const SizedBox(width: spacing));
                                 }
                                 return SingleChildScrollView(
                                   padding: const EdgeInsets.only(top: 8),
-                                  child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: children),
+                                  child: Row(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: children),
                                 );
                               },
                             ),
@@ -3073,26 +3544,33 @@ class StudentScreenState extends State<StudentScreen> {
       },
     );
   }
+
   Future<void> _showRecentAttendanceDialog() async {
     await showDialog(
       context: context,
       builder: (context) {
-        DateTime anchor = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
+        DateTime anchor = DateTime(
+            DateTime.now().year, DateTime.now().month, DateTime.now().day);
         return StatefulBuilder(
           builder: (context, setLocalState) {
             final DateTime start = anchor.subtract(const Duration(days: 5));
             final DateTime end = anchor;
-            final Set<String> activeStudentIds = DataManager.instance.students.map((s) => s.student.id).toSet();
+            final Set<String> activeStudentIds =
+                DataManager.instance.students.map((s) => s.student.id).toSet();
             final Map<DateTime, List<AttendanceRecord>> byDay = {};
             for (final r in DataManager.instance.attendanceRecords) {
               if (!activeStudentIds.contains(r.studentId)) continue;
-              final d = DateTime(r.classDateTime.year, r.classDateTime.month, r.classDateTime.day);
-              if (d.isAfter(start.subtract(const Duration(milliseconds: 1))) && d.isBefore(end.add(const Duration(days: 1)))) {
+              final d = DateTime(r.classDateTime.year, r.classDateTime.month,
+                  r.classDateTime.day);
+              if (d.isAfter(start.subtract(const Duration(milliseconds: 1))) &&
+                  d.isBefore(end.add(const Duration(days: 1)))) {
                 (byDay[d] ??= []).add(r);
               }
             }
 
-            List<DateTime> days = List.generate(5, (i) => anchor.subtract(Duration(days: i))).toList();
+            List<DateTime> days =
+                List.generate(5, (i) => anchor.subtract(Duration(days: i)))
+                    .toList();
             days.sort();
 
             Widget dayTile(DateTime day) {
@@ -3113,31 +3591,47 @@ class StudentScreenState extends State<StudentScreen> {
                       children: [
                         Text(
                           '${day.month}/${day.day}',
-                          style: const TextStyle(color: Colors.white70, fontSize: 15, fontWeight: FontWeight.w600),
+                          style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 15,
+                              fontWeight: FontWeight.w600),
                         ),
                         const Spacer(),
                         Text(
                           '총 ${items.length}건',
-                          style: const TextStyle(color: Colors.white38, fontSize: 13),
+                          style: const TextStyle(
+                              color: Colors.white38, fontSize: 13),
                         ),
                       ],
                     ),
                     const SizedBox(height: 8),
                     if (items.isEmpty)
-                      const Text('기록 없음', style: TextStyle(color: Colors.white54, fontSize: 13))
+                      const Text('기록 없음',
+                          style: TextStyle(color: Colors.white54, fontSize: 13))
                     else
                       Column(
                         children: items.map((r) {
                           final name = _lookupStudentName(r.studentId);
-                          final lateThreshold = DataManager.instance.getStudentPaymentInfo(r.studentId)?.latenessThreshold ?? 10;
-                          final isLate = r.arrivalTime != null && r.arrivalTime!.isAfter(r.classDateTime.add(Duration(minutes: lateThreshold)));
+                          final lateThreshold = DataManager.instance
+                                  .getStudentPaymentInfo(r.studentId)
+                                  ?.latenessThreshold ??
+                              10;
+                          final isLate = r.arrivalTime != null &&
+                              r.arrivalTime!.isAfter(r.classDateTime
+                                  .add(Duration(minutes: lateThreshold)));
                           final status = !r.isPresent
-                              ? const Text('결석', style: TextStyle(color: Color(0xFFE53E3E), fontWeight: FontWeight.w700))
+                              ? const Text('결석',
+                                  style: TextStyle(
+                                      color: Color(0xFFE53E3E),
+                                      fontWeight: FontWeight.w700))
                               : Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
                                     if (isLate)
-                                      const Text('지각', style: TextStyle(color: Color(0xFFFF9800), fontWeight: FontWeight.w700)),
+                                      const Text('지각',
+                                          style: TextStyle(
+                                              color: Color(0xFFFF9800),
+                                              fontWeight: FontWeight.w700)),
                                   ],
                                 );
                           return Padding(
@@ -3147,7 +3641,13 @@ class StudentScreenState extends State<StudentScreen> {
                               children: [
                                 Row(
                                   children: [
-                                    Expanded(child: Text(name, style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600), overflow: TextOverflow.ellipsis)),
+                                    Expanded(
+                                        child: Text(name,
+                                            style: const TextStyle(
+                                                color: Colors.white,
+                                                fontSize: 14,
+                                                fontWeight: FontWeight.w600),
+                                            overflow: TextOverflow.ellipsis)),
                                     const SizedBox(width: 6),
                                     status,
                                   ],
@@ -3155,7 +3655,8 @@ class StudentScreenState extends State<StudentScreen> {
                                 const SizedBox(height: 4),
                                 Text(
                                   '등원 ${_hhmm(r.arrivalTime)} · 하원 ${_hhmm(r.departureTime)}',
-                                  style: const TextStyle(color: Colors.white70, fontSize: 12),
+                                  style: const TextStyle(
+                                      color: Colors.white70, fontSize: 12),
                                 ),
                               ],
                             ),
@@ -3168,12 +3669,15 @@ class StudentScreenState extends State<StudentScreen> {
             }
 
             return Dialog(
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
               backgroundColor: const Color(0xFF1F1F1F),
               child: LayoutBuilder(
                 builder: (context, constraints) {
-                  final double dialogWidth = (constraints.maxWidth * 0.64).clamp(768.0, constraints.maxWidth);
-                  final double dialogHeight = (constraints.maxHeight * 0.77).clamp(448.0, constraints.maxHeight);
+                  final double dialogWidth = (constraints.maxWidth * 0.64)
+                      .clamp(768.0, constraints.maxWidth);
+                  final double dialogHeight = (constraints.maxHeight * 0.77)
+                      .clamp(448.0, constraints.maxHeight);
                   return ConstrainedBox(
                     constraints: BoxConstraints(
                       maxWidth: dialogWidth,
@@ -3185,71 +3689,90 @@ class StudentScreenState extends State<StudentScreen> {
                         mainAxisSize: MainAxisSize.max,
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                    Row(
-                      children: [
-                        IconButton(
-                          onPressed: () => setLocalState(() => anchor = anchor.subtract(const Duration(days: 5))),
-                          icon: const Icon(Icons.chevron_left, color: Colors.white70),
-                        ),
-                        IconButton(
-                          onPressed: () async {
-                            final picked = await showDatePicker(
-                              context: context,
-                              initialDate: anchor,
-                              firstDate: DateTime(anchor.year - 5, 1, 1),
-                              lastDate: DateTime(anchor.year + 5, 12, 31),
-                              locale: const Locale('ko', 'KR'),
-                              builder: (context, child) {
-                                return Theme(
-                                  data: Theme.of(context).copyWith(
-                                    colorScheme: const ColorScheme.dark(
-                                      primary: Color(0xFF1976D2),
-                                      onPrimary: Colors.white,
-                                      surface: Color(0xFF2A2A2A),
-                                      onSurface: Colors.white,
-                                    ),
-                                  ),
-                                  child: child!,
-                                );
-                              },
-                            );
-                            if (picked != null) {
-                              setLocalState(() => anchor = DateTime(picked.year, picked.month, picked.day));
-                            }
-                          },
-                          icon: const Icon(Icons.calendar_month, color: Colors.white70),
-                          tooltip: '날짜 선택',
-                        ),
-                        const SizedBox(width: 8),
-                        Text('최근 출결 ( ${anchor.month}/${anchor.day} 기준 )', style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700)),
-                        const Spacer(),
-                        IconButton(
-                          onPressed: () => setLocalState(() => anchor = anchor.add(const Duration(days: 5))),
-                          icon: const Icon(Icons.chevron_right, color: Colors.white70),
-                        ),
-                        IconButton(
-                          onPressed: () => Navigator.of(context).pop(),
-                          icon: const Icon(Icons.close, color: Colors.white70),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
+                          Row(
+                            children: [
+                              IconButton(
+                                onPressed: () => setLocalState(() => anchor =
+                                    anchor.subtract(const Duration(days: 5))),
+                                icon: const Icon(Icons.chevron_left,
+                                    color: Colors.white70),
+                              ),
+                              IconButton(
+                                onPressed: () async {
+                                  final picked = await showDatePicker(
+                                    context: context,
+                                    initialDate: anchor,
+                                    firstDate: DateTime(anchor.year - 5, 1, 1),
+                                    lastDate: DateTime(anchor.year + 5, 12, 31),
+                                    locale: const Locale('ko', 'KR'),
+                                    builder: (context, child) {
+                                      return Theme(
+                                        data: Theme.of(context).copyWith(
+                                          colorScheme: const ColorScheme.dark(
+                                            primary: Color(0xFF1976D2),
+                                            onPrimary: Colors.white,
+                                            surface: Color(0xFF2A2A2A),
+                                            onSurface: Colors.white,
+                                          ),
+                                        ),
+                                        child: child!,
+                                      );
+                                    },
+                                  );
+                                  if (picked != null) {
+                                    setLocalState(() => anchor = DateTime(
+                                        picked.year, picked.month, picked.day));
+                                  }
+                                },
+                                icon: const Icon(Icons.calendar_month,
+                                    color: Colors.white70),
+                                tooltip: '날짜 선택',
+                              ),
+                              const SizedBox(width: 8),
+                              Text('최근 출결 ( ${anchor.month}/${anchor.day} 기준 )',
+                                  style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w700)),
+                              const Spacer(),
+                              IconButton(
+                                onPressed: () => setLocalState(() => anchor =
+                                    anchor.add(const Duration(days: 5))),
+                                icon: const Icon(Icons.chevron_right,
+                                    color: Colors.white70),
+                              ),
+                              IconButton(
+                                onPressed: () => Navigator.of(context).pop(),
+                                icon: const Icon(Icons.close,
+                                    color: Colors.white70),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
                           Expanded(
                             child: LayoutBuilder(
                               builder: (context, box) {
                                 const int columns = 5;
                                 const double spacing = 16.0;
-                                final double colWidth = (box.maxWidth - spacing * (columns - 1)) / columns;
+                                final double colWidth =
+                                    (box.maxWidth - spacing * (columns - 1)) /
+                                        columns;
                                 final List<Widget> children = [];
                                 for (int i = 0; i < days.length; i++) {
-                                  children.add(SizedBox(width: colWidth, child: dayTile(days[i])));
+                                  children.add(SizedBox(
+                                      width: colWidth,
+                                      child: dayTile(days[i])));
                                   if (i < days.length - 1) {
-                                    children.add(const SizedBox(width: spacing));
+                                    children
+                                        .add(const SizedBox(width: spacing));
                                   }
                                 }
                                 return SingleChildScrollView(
                                   padding: const EdgeInsets.only(top: 8),
-                                  child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: children),
+                                  child: Row(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: children),
                                 );
                               },
                             ),
@@ -3266,9 +3789,7 @@ class StudentScreenState extends State<StudentScreen> {
       },
     );
   }
-
 }
-
 
 class _AttendanceInfo {
   final DateTime? arrival;
@@ -3276,7 +3797,12 @@ class _AttendanceInfo {
   final bool isPresent;
   final bool isLate;
   final DateTime classDateTime;
-  _AttendanceInfo({required this.arrival, required this.departure, required this.isPresent, required this.isLate, required this.classDateTime});
+  _AttendanceInfo(
+      {required this.arrival,
+      required this.departure,
+      required this.isPresent,
+      required this.isLate,
+      required this.classDateTime});
 }
 
 // 학생 리스트 카드
@@ -3301,7 +3827,7 @@ class _AttendanceStudentCardState extends State<_AttendanceStudentCard> {
   @override
   Widget build(BuildContext context) {
     final student = widget.studentWithInfo.student;
-    
+
     return Tooltip(
       message: student.school,
       decoration: BoxDecoration(
@@ -3375,15 +3901,17 @@ class StudentPaymentSettingsDialog extends StatefulWidget {
   });
 
   @override
-  State<StudentPaymentSettingsDialog> createState() => _StudentPaymentSettingsDialogState();
+  State<StudentPaymentSettingsDialog> createState() =>
+      _StudentPaymentSettingsDialogState();
 }
 
-class _StudentPaymentSettingsDialogState extends State<StudentPaymentSettingsDialog> {
+class _StudentPaymentSettingsDialogState
+    extends State<StudentPaymentSettingsDialog> {
   late DateTime _registrationDate;
   late String _paymentMethod;
   late TextEditingController _tuitionFeeController;
   late TextEditingController _latenessThresholdController;
-  
+
   bool _scheduleNotification = false;
   bool _attendanceNotification = false;
   bool _departureNotification = false;
@@ -3392,15 +3920,18 @@ class _StudentPaymentSettingsDialogState extends State<StudentPaymentSettingsDia
   @override
   void initState() {
     super.initState();
-    
+
     // 기존 결제 정보 로드 또는 기본값 설정
-    final existingPaymentInfo = DataManager.instance.getStudentPaymentInfo(widget.studentWithInfo.student.id);
-    
+    final existingPaymentInfo = DataManager.instance
+        .getStudentPaymentInfo(widget.studentWithInfo.student.id);
+
     if (existingPaymentInfo != null) {
       _registrationDate = existingPaymentInfo.registrationDate;
       _paymentMethod = existingPaymentInfo.paymentMethod;
-      _tuitionFeeController = ImeAwareTextEditingController(text: existingPaymentInfo.tuitionFee.toString());
-      _latenessThresholdController = ImeAwareTextEditingController(text: existingPaymentInfo.latenessThreshold.toString());
+      _tuitionFeeController = ImeAwareTextEditingController(
+          text: existingPaymentInfo.tuitionFee.toString());
+      _latenessThresholdController = ImeAwareTextEditingController(
+          text: existingPaymentInfo.latenessThreshold.toString());
       _scheduleNotification = existingPaymentInfo.scheduleNotification;
       _attendanceNotification = existingPaymentInfo.attendanceNotification;
       _departureNotification = existingPaymentInfo.departureNotification;
@@ -3411,13 +3942,13 @@ class _StudentPaymentSettingsDialogState extends State<StudentPaymentSettingsDia
       _paymentMethod = 'monthly';
       _tuitionFeeController = ImeAwareTextEditingController();
       _latenessThresholdController = ImeAwareTextEditingController(text: '10');
-      
+
       // 기존 student_basic_info 데이터가 있다면 student_payment_info로 자동 마이그레이션
       _migrateFromBasicInfo();
     }
   }
 
-      // 기존 student_basic_info에서 student_payment_info로 데이터 마이그레이션
+  // 기존 student_basic_info에서 student_payment_info로 데이터 마이그레이션
   Future<void> _migrateFromBasicInfo() async {
     final basicInfo = widget.studentWithInfo.basicInfo;
     if (basicInfo != null) {
@@ -3436,9 +3967,10 @@ class _StudentPaymentSettingsDialogState extends State<StudentPaymentSettingsDia
           createdAt: DateTime.now(),
           updatedAt: DateTime.now(),
         );
-        
+
         await DataManager.instance.addStudentPaymentInfo(paymentInfo);
-        _dlog('[INFO] 학생 ${widget.studentWithInfo.student.name}의 정보를 student_payment_info로 마이그레이션 완료');
+        _dlog(
+            '[INFO] 학생 ${widget.studentWithInfo.student.name}의 정보를 student_payment_info로 마이그레이션 완료');
       } catch (e) {
         _dlog('[ERROR] 마이그레이션 실패: $e');
       }
@@ -3483,7 +4015,7 @@ class _StudentPaymentSettingsDialogState extends State<StudentPaymentSettingsDia
               ],
             ),
             const SizedBox(height: 24),
-            
+
             // 1. 등록일자와 지불방식
             Row(
               children: [
@@ -3515,7 +4047,8 @@ class _StudentPaymentSettingsDialogState extends State<StudentPaymentSettingsDia
                         labelText: '등록일자',
                         labelStyle: const TextStyle(color: Colors.white70),
                         enabledBorder: OutlineInputBorder(
-                          borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
+                          borderSide:
+                              BorderSide(color: Colors.white.withOpacity(0.3)),
                         ),
                         focusedBorder: const OutlineInputBorder(
                           borderSide: BorderSide(color: Color(0xFF1976D2)),
@@ -3548,7 +4081,8 @@ class _StudentPaymentSettingsDialogState extends State<StudentPaymentSettingsDia
                       labelText: '지불방식',
                       labelStyle: const TextStyle(color: Colors.white70),
                       enabledBorder: OutlineInputBorder(
-                        borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
+                        borderSide:
+                            BorderSide(color: Colors.white.withOpacity(0.3)),
                       ),
                       focusedBorder: const OutlineInputBorder(
                         borderSide: BorderSide(color: Color(0xFF1976D2)),
@@ -3557,11 +4091,13 @@ class _StudentPaymentSettingsDialogState extends State<StudentPaymentSettingsDia
                     items: const [
                       DropdownMenuItem(
                         value: 'monthly',
-                        child: Text('월결제', style: TextStyle(color: Colors.white)),
+                        child:
+                            Text('월결제', style: TextStyle(color: Colors.white)),
                       ),
                       DropdownMenuItem(
                         value: 'session',
-                        child: Text('횟수제', style: TextStyle(color: Colors.white)),
+                        child:
+                            Text('횟수제', style: TextStyle(color: Colors.white)),
                       ),
                     ],
                     onChanged: (value) {
@@ -3576,7 +4112,7 @@ class _StudentPaymentSettingsDialogState extends State<StudentPaymentSettingsDia
               ],
             ),
             const SizedBox(height: 20),
-            
+
             // 2. 수업료 입력란
             Row(
               children: [
@@ -3589,7 +4125,8 @@ class _StudentPaymentSettingsDialogState extends State<StudentPaymentSettingsDia
                       labelText: '수업료',
                       labelStyle: const TextStyle(color: Colors.white70),
                       enabledBorder: OutlineInputBorder(
-                        borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
+                        borderSide:
+                            BorderSide(color: Colors.white.withOpacity(0.3)),
                       ),
                       focusedBorder: const OutlineInputBorder(
                         borderSide: BorderSide(color: Color(0xFF1976D2)),
@@ -3621,7 +4158,7 @@ class _StudentPaymentSettingsDialogState extends State<StudentPaymentSettingsDia
               ],
             ),
             const SizedBox(height: 20),
-            
+
             // 3. 지각기준 필드
             SizedBox(
               width: 200,
@@ -3633,7 +4170,8 @@ class _StudentPaymentSettingsDialogState extends State<StudentPaymentSettingsDia
                   labelText: '지각기준',
                   labelStyle: const TextStyle(color: Colors.white70),
                   enabledBorder: OutlineInputBorder(
-                    borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
+                    borderSide:
+                        BorderSide(color: Colors.white.withOpacity(0.3)),
                   ),
                   focusedBorder: const OutlineInputBorder(
                     borderSide: BorderSide(color: Color(0xFF1976D2)),
@@ -3646,18 +4184,20 @@ class _StudentPaymentSettingsDialogState extends State<StudentPaymentSettingsDia
               ),
             ),
             const SizedBox(height: 20),
-            
+
             // 4. 안내문자 체크박스들
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('안내문자', style: TextStyle(color: Colors.white70, fontSize: 14)),
+                const Text('안내문자',
+                    style: TextStyle(color: Colors.white70, fontSize: 14)),
                 const SizedBox(height: 12),
                 Wrap(
                   spacing: 16,
                   runSpacing: 8,
                   children: [
-                    _buildCheckboxItem('수강일자 안내', _scheduleNotification, (value) {
+                    _buildCheckboxItem('수강일자 안내', _scheduleNotification,
+                        (value) {
                       setState(() => _scheduleNotification = value);
                     }),
                     _buildCheckboxItem('출결', _attendanceNotification, (value) {
@@ -3674,25 +4214,28 @@ class _StudentPaymentSettingsDialogState extends State<StudentPaymentSettingsDia
               ],
             ),
             const SizedBox(height: 32),
-            
+
             // 버튼들
             Row(
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
                 TextButton(
                   onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('취소', style: TextStyle(color: Colors.white70)),
+                  child:
+                      const Text('취소', style: TextStyle(color: Colors.white70)),
                 ),
                 const SizedBox(width: 12),
                 ElevatedButton(
                   onPressed: _saveSettings,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF1976D2),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8)),
                   ),
                   child: const Text(
                     '저장',
-                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                    style: TextStyle(
+                        color: Colors.white, fontWeight: FontWeight.bold),
                   ),
                 ),
               ],
@@ -3703,7 +4246,8 @@ class _StudentPaymentSettingsDialogState extends State<StudentPaymentSettingsDia
     );
   }
 
-  Widget _buildCheckboxItem(String title, bool value, Function(bool) onChanged) {
+  Widget _buildCheckboxItem(
+      String title, bool value, Function(bool) onChanged) {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -3728,10 +4272,10 @@ class _StudentPaymentSettingsDialogState extends State<StudentPaymentSettingsDia
         .toList();
 
     final Map<String, List<StudentTimeBlock>> classGroups = {};
-    
+
     for (final block in studentBlocks) {
       String className = '일반 수업';
-      
+
       // sessionTypeId가 있으면 해당 클래스 이름 찾기
       if (block.sessionTypeId != null) {
         try {
@@ -3743,16 +4287,16 @@ class _StudentPaymentSettingsDialogState extends State<StudentPaymentSettingsDia
           className = '일반 수업';
         }
       }
-      
+
       classGroups.putIfAbsent(className, () => []).add(block);
     }
-    
+
     return classGroups;
   }
 
   void _showTuitionCustomDialog() {
     final classGroups = _getStudentClassesGrouped();
-    
+
     showDialog(
       context: context,
       builder: (context) => TuitionCustomDialog(
@@ -3765,7 +4309,8 @@ class _StudentPaymentSettingsDialogState extends State<StudentPaymentSettingsDia
   void _saveSettings() async {
     try {
       final tuitionFee = int.tryParse(_tuitionFeeController.text) ?? 0;
-      final latenessThreshold = int.tryParse(_latenessThresholdController.text) ?? 10;
+      final latenessThreshold =
+          int.tryParse(_latenessThresholdController.text) ?? 10;
 
       final paymentInfo = StudentPaymentInfo(
         id: const Uuid().v4(),
@@ -3783,7 +4328,7 @@ class _StudentPaymentSettingsDialogState extends State<StudentPaymentSettingsDia
       );
 
       await DataManager.instance.addStudentPaymentInfo(paymentInfo);
-      
+
       if (mounted) {
         Navigator.of(context).pop();
         ScaffoldMessenger.of(context).showSnackBar(
@@ -3910,7 +4455,7 @@ class _TuitionCustomDialogState extends State<TuitionCustomDialog> {
                   itemBuilder: (context, index) {
                     final className = widget.classGroups.keys.elementAt(index);
                     final blocks = widget.classGroups[className]!;
-                    
+
                     // 주당 횟수 계산 (중복 제거)
                     final uniqueDays = blocks.map((b) => b.dayIndex).toSet();
                     final weeklyCount = uniqueDays.length;
@@ -3939,19 +4484,26 @@ class _TuitionCustomDialogState extends State<TuitionCustomDialog> {
                               spacing: 8,
                               runSpacing: 4,
                               children: uniqueDays.map((dayIndex) {
-                                final dayBlocks = blocks.where((b) => b.dayIndex == dayIndex).toList();
+                                final dayBlocks = blocks
+                                    .where((b) => b.dayIndex == dayIndex)
+                                    .toList();
                                 if (dayBlocks.isEmpty) return const SizedBox();
-                                
-                                final startTime = _formatTime(dayBlocks.first.startHour, dayBlocks.first.startMinute);
+
+                                final startTime = _formatTime(
+                                    dayBlocks.first.startHour,
+                                    dayBlocks.first.startMinute);
                                 return Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 8, vertical: 4),
                                   decoration: BoxDecoration(
-                                    color: const Color(0xFF1976D2).withOpacity(0.3),
+                                    color: const Color(0xFF1976D2)
+                                        .withOpacity(0.3),
                                     borderRadius: BorderRadius.circular(4),
                                   ),
                                   child: Text(
                                     '${_getDayName(dayIndex)} $startTime',
-                                    style: const TextStyle(color: Colors.white70, fontSize: 12),
+                                    style: const TextStyle(
+                                        color: Colors.white70, fontSize: 12),
                                   ),
                                 );
                               }).toList(),
@@ -3968,20 +4520,26 @@ class _TuitionCustomDialogState extends State<TuitionCustomDialog> {
                                     style: const TextStyle(color: Colors.white),
                                     onChanged: (value) {
                                       setState(() {
-                                        _classFees[className] = int.tryParse(value) ?? 0;
+                                        _classFees[className] =
+                                            int.tryParse(value) ?? 0;
                                       });
                                     },
                                     decoration: InputDecoration(
                                       labelText: '수업료',
-                                      labelStyle: const TextStyle(color: Colors.white70),
+                                      labelStyle: const TextStyle(
+                                          color: Colors.white70),
                                       enabledBorder: OutlineInputBorder(
-                                        borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
+                                        borderSide: BorderSide(
+                                            color:
+                                                Colors.white.withOpacity(0.3)),
                                       ),
                                       focusedBorder: const OutlineInputBorder(
-                                        borderSide: BorderSide(color: Color(0xFF1976D2)),
+                                        borderSide: BorderSide(
+                                            color: Color(0xFF1976D2)),
                                       ),
                                       suffixText: '만원',
-                                      suffixStyle: const TextStyle(color: Colors.white70),
+                                      suffixStyle: const TextStyle(
+                                          color: Colors.white70),
                                     ),
                                   ),
                                 ),
@@ -4003,7 +4561,8 @@ class _TuitionCustomDialogState extends State<TuitionCustomDialog> {
               decoration: BoxDecoration(
                 color: const Color(0xFF2A2A2A),
                 borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: const Color(0xFF1976D2).withOpacity(0.5)),
+                border:
+                    Border.all(color: const Color(0xFF1976D2).withOpacity(0.5)),
               ),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -4047,7 +4606,8 @@ class _TuitionCustomDialogState extends State<TuitionCustomDialog> {
                     Navigator.of(context).pop();
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
-                        content: Text('수업별 수업료 설정이 저장되었습니다. (총 ${_getTotalFee()}만원)'),
+                        content: Text(
+                            '수업별 수업료 설정이 저장되었습니다. (총 ${_getTotalFee()}만원)'),
                         backgroundColor: const Color(0xFF4CAF50),
                       ),
                     );
@@ -4067,5 +4627,4 @@ class _TuitionCustomDialogState extends State<TuitionCustomDialog> {
       ),
     );
   }
-} 
-
+}

@@ -1050,7 +1050,7 @@ class TimetableCell extends StatelessWidget {
                   left: 1,
                   right: 1,
                   child: Container(
-                    height: 23,
+                    height: 20,
                     padding: const EdgeInsets.symmetric(horizontal: 10),
                     decoration: BoxDecoration(
                       color: countColor ?? Colors.green,
