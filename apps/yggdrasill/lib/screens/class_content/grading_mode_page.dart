@@ -271,8 +271,16 @@ class _GradingModePageState extends State<GradingModePage> {
   ) async {
     final out = <String, Set<String>>{};
     for (final studentId in studentIds) {
-      final ids = await HomeworkAssignmentStore.instance
-          .loadActiveAssignedItemIds(studentId);
+      final assignments = await HomeworkAssignmentStore.instance
+          .loadActiveAssignments(studentId);
+      final ids = assignments
+          .where((assignment) {
+            final note = (assignment.note ?? '').trim();
+            return note != HomeworkAssignmentStore.reservationNote;
+          })
+          .map((assignment) => assignment.homeworkItemId.trim())
+          .where((id) => id.isNotEmpty)
+          .toSet();
       out[studentId] = ids;
     }
     return out;

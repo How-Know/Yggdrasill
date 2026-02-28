@@ -22,6 +22,9 @@ class HomeworkAssignmentDetail {
   final int? count;
   final String? content;
   final String? flowId;
+  final int repeatIndex;
+  final int splitParts;
+  final int splitRound;
 
   const HomeworkAssignmentDetail({
     required this.id,
@@ -40,6 +43,9 @@ class HomeworkAssignmentDetail {
     required this.count,
     required this.content,
     required this.flowId,
+    required this.repeatIndex,
+    required this.splitParts,
+    required this.splitRound,
   });
 }
 
@@ -51,6 +57,9 @@ class HomeworkAssignmentBrief {
   final int orderIndex;
   final String status;
   final int progress;
+  final int repeatIndex;
+  final int splitParts;
+  final int splitRound;
 
   const HomeworkAssignmentBrief({
     required this.id,
@@ -60,6 +69,25 @@ class HomeworkAssignmentBrief {
     required this.orderIndex,
     required this.status,
     required this.progress,
+    required this.repeatIndex,
+    required this.splitParts,
+    required this.splitRound,
+  });
+}
+
+class HomeworkAssignmentCycleMeta {
+  final String assignmentId;
+  final String homeworkItemId;
+  final int repeatIndex;
+  final int splitParts;
+  final int splitRound;
+
+  const HomeworkAssignmentCycleMeta({
+    required this.assignmentId,
+    required this.homeworkItemId,
+    required this.repeatIndex,
+    required this.splitParts,
+    required this.splitRound,
   });
 }
 
@@ -103,6 +131,188 @@ class HomeworkAssignmentStore {
     if (value is num) return value.toInt();
     if (value is String) return int.tryParse(value) ?? fallback;
     return fallback;
+  }
+
+  int _normalizeRepeatIndex(dynamic value) {
+    final parsed = _asInt(value, 1);
+    return parsed < 1 ? 1 : parsed;
+  }
+
+  int _normalizeSplitParts(dynamic value) {
+    final parsed = _asInt(value, 1);
+    return parsed < 1 ? 1 : parsed;
+  }
+
+  int _normalizeSplitRound(dynamic value, int splitParts) {
+    final parsed = _asInt(value, 1);
+    if (parsed < 1) return 1;
+    if (parsed > splitParts) return splitParts;
+    return parsed;
+  }
+
+  int? _asIntOpt(dynamic value) {
+    if (value == null) return null;
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    if (value is String) return int.tryParse(value.trim());
+    return null;
+  }
+
+  String _asTrimmed(dynamic value) {
+    return (value ?? '').toString().trim();
+  }
+
+  void _addPageRange(Set<int> out, int? a, int? b) {
+    if (a == null && b == null) return;
+    if (a != null && b != null) {
+      int start = a;
+      int end = b;
+      if (start > end) {
+        final t = start;
+        start = end;
+        end = t;
+      }
+      if (end - start > 1600) {
+        if (start > 0) out.add(start);
+        if (end > 0) out.add(end);
+        return;
+      }
+      for (int p = start; p <= end; p++) {
+        if (p > 0) out.add(p);
+      }
+      return;
+    }
+    final one = a ?? b;
+    if (one != null && one > 0) out.add(one);
+  }
+
+  String _normalizePageSignature(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) return '';
+    final normalized = trimmed
+        .replaceAll(RegExp(r'p\.', caseSensitive: false), '')
+        .replaceAll('페이지', '')
+        .replaceAll('쪽', '')
+        .replaceAll('~', '-')
+        .replaceAll('–', '-')
+        .replaceAll('—', '-');
+    final tokens = normalized
+        .split(RegExp(r'[,/\s]+'))
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty);
+    final pages = <int>{};
+    for (final token in tokens) {
+      if (token.contains('-')) {
+        final parts = token
+            .split('-')
+            .map((e) => e.trim())
+            .where((e) => e.isNotEmpty)
+            .toList();
+        if (parts.length != 2) continue;
+        _addPageRange(pages, _asIntOpt(parts[0]), _asIntOpt(parts[1]));
+      } else {
+        final value = _asIntOpt(token);
+        if (value != null && value > 0) pages.add(value);
+      }
+    }
+    if (pages.isEmpty) return '';
+    final sorted = pages.toList()..sort();
+    return sorted.join(',');
+  }
+
+  String _unitSignatureFromMappings(List<Map<String, dynamic>>? mappings) {
+    if (mappings == null || mappings.isEmpty) return '';
+    final tuples = <String>{};
+    for (final raw in mappings) {
+      final m = Map<String, dynamic>.from(raw);
+      final big = _asIntOpt(m['bigOrder'] ?? m['big_order']);
+      final mid = _asIntOpt(m['midOrder'] ?? m['mid_order']);
+      final small = _asIntOpt(m['smallOrder'] ?? m['small_order']);
+      if (big == null || mid == null || small == null) continue;
+      tuples.add('$big.$mid.$small');
+    }
+    if (tuples.isEmpty) return '';
+    final list = tuples.toList()..sort();
+    return list.join(';');
+  }
+
+  Map<String, String> _buildUnitSignatureByItemFromRows(List<dynamic> rows) {
+    final tuplesByItem = <String, Set<String>>{};
+    for (final raw in rows) {
+      if (raw is! Map) continue;
+      final row = Map<String, dynamic>.from(raw);
+      final itemId = _asTrimmed(row['homework_item_id']);
+      if (itemId.isEmpty) continue;
+      final big = _asIntOpt(row['big_order']);
+      final mid = _asIntOpt(row['mid_order']);
+      final small = _asIntOpt(row['small_order']);
+      if (big == null || mid == null || small == null) continue;
+      tuplesByItem.putIfAbsent(itemId, () => <String>{}).add('$big.$mid.$small');
+    }
+    final out = <String, String>{};
+    for (final entry in tuplesByItem.entries) {
+      final list = entry.value.toList()..sort();
+      if (list.isEmpty) continue;
+      out[entry.key] = list.join(';');
+    }
+    return out;
+  }
+
+  String _composeCycleKey({
+    required String itemId,
+    required String bookId,
+    required String gradeLabel,
+    required String unitSignature,
+    required String pageSignature,
+  }) {
+    final b = bookId.trim();
+    final g = gradeLabel.trim();
+    if (b.isEmpty || g.isEmpty) return 'item:$itemId';
+    final base = '$b|$g';
+    if (unitSignature.isNotEmpty) return '$base|u:$unitSignature';
+    if (pageSignature.isNotEmpty) return '$base|p:$pageSignature';
+    return '$base|item:$itemId';
+  }
+
+  String _buildCycleKeyFromHistoryRow(
+    Map<String, dynamic> row,
+    Map<String, String> unitSignatureByItemId,
+  ) {
+    final itemId = _asTrimmed(row['homework_item_id']);
+    if (itemId.isEmpty) return '';
+    Map<String, dynamic>? hw;
+    final hwRaw = row['homework_items'];
+    if (hwRaw is Map) {
+      hw = Map<String, dynamic>.from(hwRaw);
+    } else if (hwRaw is List && hwRaw.isNotEmpty && hwRaw.first is Map) {
+      hw = Map<String, dynamic>.from(hwRaw.first as Map);
+    }
+    final bookId = _asTrimmed(hw?['book_id']);
+    final gradeLabel = _asTrimmed(hw?['grade_label']);
+    final page = _asTrimmed(hw?['page']);
+    final unitSig = unitSignatureByItemId[itemId] ?? '';
+    final pageSig = _normalizePageSignature(page);
+    return _composeCycleKey(
+      itemId: itemId,
+      bookId: bookId,
+      gradeLabel: gradeLabel,
+      unitSignature: unitSig,
+      pageSignature: pageSig,
+    );
+  }
+
+  String buildCycleKeyForItem(HomeworkItem item) {
+    final bookId = (item.bookId ?? '').trim();
+    final gradeLabel = (item.gradeLabel ?? '').trim();
+    final unitSig = _unitSignatureFromMappings(item.unitMappings);
+    final pageSig = _normalizePageSignature((item.page ?? '').trim());
+    return _composeCycleKey(
+      itemId: item.id,
+      bookId: bookId,
+      gradeLabel: gradeLabel,
+      unitSignature: unitSig,
+      pageSignature: pageSig,
+    );
   }
 
   Future<List<Map<String, dynamic>>> _loadActiveRowsForDueGroup({
@@ -181,6 +391,52 @@ class HomeworkAssignmentStore {
     }
   }
 
+  Future<Set<String>> loadAssignedCycleKeys(String studentId) async {
+    try {
+      final academyId = await TenantService.instance.getActiveAcademyId() ??
+          await TenantService.instance.ensureActiveAcademy();
+      final supa = Supabase.instance.client;
+      final rows = await supa
+          .from('homework_assignments')
+          .select(
+            'homework_item_id,homework_items(book_id,grade_label,page)',
+          )
+          .eq('academy_id', academyId)
+          .eq('student_id', studentId)
+          .order('assigned_at', ascending: false);
+      final typedRows =
+          (rows as List<dynamic>).cast<Map<String, dynamic>>();
+      if (typedRows.isEmpty) return <String>{};
+
+      final itemIds = <String>{};
+      for (final row in typedRows) {
+        final id = _asTrimmed(row['homework_item_id']);
+        if (id.isNotEmpty) itemIds.add(id);
+      }
+      final unitSignatureByItemId = <String, String>{};
+      if (itemIds.isNotEmpty) {
+        final unitRows = await supa
+            .from('homework_item_units')
+            .select('homework_item_id,big_order,mid_order,small_order')
+            .eq('academy_id', academyId)
+            .inFilter('homework_item_id', itemIds.toList());
+        unitSignatureByItemId.addAll(
+          _buildUnitSignatureByItemFromRows(unitRows as List<dynamic>),
+        );
+      }
+
+      final keys = <String>{};
+      for (final row in typedRows) {
+        final key = _buildCycleKeyFromHistoryRow(row, unitSignatureByItemId);
+        if (key.isNotEmpty) keys.add(key);
+      }
+      return keys;
+    } catch (e, st) {
+      debugPrint('[HW_ASSIGN][load_cycle_keys][ERROR] $e\n$st');
+      return <String>{};
+    }
+  }
+
   Future<Set<String>> loadActiveAssignedItemIds(String studentId) async {
     try {
       final academyId = await TenantService.instance.getActiveAcademyId() ??
@@ -210,18 +466,58 @@ class HomeworkAssignmentStore {
       final supa = Supabase.instance.client;
       final rows = await supa
           .from('homework_assignments')
-          .select('homework_item_id')
+          .select('homework_item_id,note')
           .eq('academy_id', academyId)
           .eq('student_id', studentId);
       final Map<String, int> counts = {};
       for (final r in (rows as List<dynamic>).cast<Map<String, dynamic>>()) {
         final id = (r['homework_item_id'] as String?) ?? '';
+        final note = (r['note'] as String?)?.trim() ?? '';
         if (id.isEmpty) continue;
+        if (note == reservationNote) continue;
         counts[id] = (counts[id] ?? 0) + 1;
       }
       return counts;
     } catch (_) {
       return <String, int>{};
+    }
+  }
+
+  Future<Map<String, HomeworkAssignmentCycleMeta>> loadLatestCycleMetaByItem(
+    String studentId, {
+    bool excludeReservation = false,
+  }) async {
+    try {
+      final academyId = await TenantService.instance.getActiveAcademyId() ??
+          await TenantService.instance.ensureActiveAcademy();
+      final supa = Supabase.instance.client;
+      final rows = await supa
+          .from('homework_assignments')
+          .select(
+            'id,homework_item_id,repeat_index,split_parts,split_round,note,assigned_at,created_at',
+          )
+          .eq('academy_id', academyId)
+          .eq('student_id', studentId)
+          .order('assigned_at', ascending: false)
+          .order('created_at', ascending: false);
+      final out = <String, HomeworkAssignmentCycleMeta>{};
+      for (final r in (rows as List<dynamic>).cast<Map<String, dynamic>>()) {
+        final itemId = (r['homework_item_id'] as String?)?.trim() ?? '';
+        if (itemId.isEmpty || out.containsKey(itemId)) continue;
+        final note = (r['note'] as String?)?.trim() ?? '';
+        if (excludeReservation && note == reservationNote) continue;
+        final splitParts = _normalizeSplitParts(r['split_parts']);
+        out[itemId] = HomeworkAssignmentCycleMeta(
+          assignmentId: (r['id'] as String?)?.trim() ?? '',
+          homeworkItemId: itemId,
+          repeatIndex: _normalizeRepeatIndex(r['repeat_index']),
+          splitParts: splitParts,
+          splitRound: _normalizeSplitRound(r['split_round'], splitParts),
+        );
+      }
+      return out;
+    } catch (_) {
+      return <String, HomeworkAssignmentCycleMeta>{};
     }
   }
 
@@ -235,7 +531,7 @@ class HomeworkAssignmentStore {
       final rows = await supa
           .from('homework_assignments')
           .select(
-              'id,homework_item_id,assigned_at,due_date,order_index,status,note,progress,issue_type,issue_note,homework_items(id,title,type,page,count,content,flow_id)')
+              'id,homework_item_id,assigned_at,due_date,order_index,status,note,progress,issue_type,issue_note,repeat_index,split_parts,split_round,homework_items(id,title,type,page,count,content,flow_id)')
           .eq('academy_id', academyId)
           .eq('student_id', studentId)
           .eq('status', 'assigned')
@@ -260,6 +556,7 @@ class HomeworkAssignmentStore {
 
       for (final r in (rows as List<dynamic>).cast<Map<String, dynamic>>()) {
         final hw = r['homework_items'] as Map<String, dynamic>?;
+        final splitParts = _normalizeSplitParts(r['split_parts']);
         list.add(
           HomeworkAssignmentDetail(
             id: (r['id'] as String?) ?? '',
@@ -280,6 +577,9 @@ class HomeworkAssignmentStore {
                 : int.tryParse('${hw?['count'] ?? ''}'),
             content: (hw?['content'] as String?)?.trim(),
             flowId: hw?['flow_id'] as String?,
+            repeatIndex: _normalizeRepeatIndex(r['repeat_index']),
+            splitParts: splitParts,
+            splitRound: _normalizeSplitRound(r['split_round'], splitParts),
           ),
         );
       }
@@ -535,7 +835,9 @@ class HomeworkAssignmentStore {
       final supa = Supabase.instance.client;
       final rows = await supa
           .from('homework_assignments')
-          .select('id,homework_item_id,assigned_at,due_date,order_index,status,progress')
+          .select(
+            'id,homework_item_id,assigned_at,due_date,order_index,status,progress,repeat_index,split_parts,split_round',
+          )
           .eq('academy_id', academyId)
           .eq('student_id', studentId)
           .order('due_date', ascending: true)
@@ -564,6 +866,7 @@ class HomeworkAssignmentStore {
       for (final r in (rows as List<dynamic>).cast<Map<String, dynamic>>()) {
         final itemId = (r['homework_item_id'] as String?) ?? '';
         if (itemId.isEmpty) continue;
+        final splitParts = _normalizeSplitParts(r['split_parts']);
         map.putIfAbsent(itemId, () => <HomeworkAssignmentBrief>[]).add(
               HomeworkAssignmentBrief(
                 id: (r['id'] as String?) ?? '',
@@ -573,6 +876,9 @@ class HomeworkAssignmentStore {
                 orderIndex: parseInt(r['order_index']),
                 status: (r['status'] as String?) ?? 'assigned',
                 progress: parseInt(r['progress']),
+                repeatIndex: _normalizeRepeatIndex(r['repeat_index']),
+                splitParts: splitParts,
+                splitRound: _normalizeSplitRound(r['split_round'], splitParts),
               ),
             );
       }
@@ -650,29 +956,55 @@ class HomeworkAssignmentStore {
     DateTime? assignedAt,
     DateTime? dueDate,
     String? note,
+    int splitParts = 1,
+    Map<String, int>? splitPartsByItem,
   }) async {
     if (items.isEmpty) return;
     try {
       final academyId = await TenantService.instance.getActiveAcademyId() ??
           await TenantService.instance.ensureActiveAcademy();
       final supa = Supabase.instance.client;
-      final itemIds = items.map((e) => e.id).toSet().toList();
       final dueDateIso = _dueDateIso(dueDate);
 
       final existingRows = await supa
           .from('homework_assignments')
-          .select('id,homework_item_id,status,assigned_at,due_date')
+          .select(
+            'id,homework_item_id,status,assigned_at,due_date,repeat_index,split_parts,split_round,homework_items(book_id,grade_label,page)',
+          )
           .eq('academy_id', academyId)
           .eq('student_id', studentId)
-          .inFilter('homework_item_id', itemIds)
           .order('assigned_at', ascending: false);
+      final typedExistingRows =
+          (existingRows as List<dynamic>).cast<Map<String, dynamic>>();
+
+      final allItemIds = <String>{for (final item in items) item.id};
+      for (final row in typedExistingRows) {
+        final itemId = _asTrimmed(row['homework_item_id']);
+        if (itemId.isNotEmpty) allItemIds.add(itemId);
+      }
+      final unitSignatureByItemId = <String, String>{};
+      if (allItemIds.isNotEmpty) {
+        final unitRows = await supa
+            .from('homework_item_units')
+            .select('homework_item_id,big_order,mid_order,small_order')
+            .eq('academy_id', academyId)
+            .inFilter('homework_item_id', allItemIds.toList());
+        unitSignatureByItemId.addAll(
+          _buildUnitSignatureByItemFromRows(unitRows as List<dynamic>),
+        );
+      }
 
       final Map<String, Map<String, dynamic>> latestByItem = {};
-      for (final r
-          in (existingRows as List<dynamic>).cast<Map<String, dynamic>>()) {
+      final Map<String, Map<String, dynamic>> latestByCycleKey = {};
+      for (final r in typedExistingRows) {
         final itemId = (r['homework_item_id'] as String?) ?? '';
         if (itemId.isEmpty || latestByItem.containsKey(itemId)) continue;
         latestByItem[itemId] = r;
+      }
+      for (final r in typedExistingRows) {
+        final key = _buildCycleKeyFromHistoryRow(r, unitSignatureByItemId);
+        if (key.isEmpty || latestByCycleKey.containsKey(key)) continue;
+        latestByCycleKey[key] = r;
       }
 
       final List<String> carriedOverIds = [];
@@ -699,9 +1031,43 @@ class HomeworkAssignmentStore {
       }
       final affectedDueDates = <String?>{dueDateIso};
       for (final item in items) {
-        final last = latestByItem[item.id];
+        final int requestedSplitParts =
+            (splitPartsByItem?[item.id] ?? splitParts).clamp(1, 4).toInt();
+        final cycleKey = buildCycleKeyForItem(item);
+        final last = latestByCycleKey[cycleKey] ?? latestByItem[item.id];
         final String? lastId = last?['id'] as String?;
         final String? lastStatus = last?['status'] as String?;
+        int repeatIndex = 1;
+        int nextSplitParts = requestedSplitParts;
+        int nextSplitRound = 1;
+        if (last != null) {
+          final lastRepeat = _normalizeRepeatIndex(last['repeat_index']);
+          final lastSplitParts = _normalizeSplitParts(last['split_parts']);
+          final lastSplitRound =
+              _normalizeSplitRound(last['split_round'], lastSplitParts);
+          final bool lastSplitCompleted = lastSplitRound >= lastSplitParts;
+
+          repeatIndex = lastSplitCompleted ? lastRepeat + 1 : lastRepeat;
+          if (nextSplitParts > 1) {
+            if (!lastSplitCompleted && lastSplitParts == nextSplitParts) {
+              repeatIndex = lastRepeat;
+              nextSplitRound = (lastSplitRound + 1).clamp(1, nextSplitParts);
+            } else if (!lastSplitCompleted) {
+              // 분할 회차가 끝나기 전에는 반복 카운트를 올리지 않는다.
+              repeatIndex = lastRepeat;
+            }
+          } else {
+            nextSplitParts = 1;
+            nextSplitRound = 1;
+            if (!lastSplitCompleted) {
+              repeatIndex = lastRepeat;
+            }
+          }
+        } else {
+          repeatIndex = 1;
+          nextSplitParts = nextSplitParts < 1 ? 1 : nextSplitParts;
+          nextSplitRound = 1;
+        }
         if (lastId != null && lastStatus != 'completed') {
           carriedOverIds.add(lastId);
           affectedDueDates.add((last?['due_date'] as String?)?.trim());
@@ -716,6 +1082,9 @@ class HomeworkAssignmentStore {
           'order_index': nextOrder++,
           'status': 'assigned',
           'note': note,
+          'repeat_index': repeatIndex,
+          'split_parts': nextSplitParts,
+          'split_round': nextSplitRound,
           'carry_over_from_id':
               (lastId != null && lastStatus != 'completed') ? lastId : null,
         });

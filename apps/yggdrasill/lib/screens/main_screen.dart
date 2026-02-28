@@ -1985,25 +1985,14 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   }
 
   void _showFloatingSnackBar(BuildContext context, String message) {
-    setState(() {
-      _fabBottomPadding = 80.0 + 16.0;
-    });
     _snackBarController = ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(message),
         backgroundColor: const Color(0xFF2A2A2A),
-        behavior: SnackBarBehavior.floating,
-        margin: const EdgeInsets.only(bottom: 16.0, right: 16.0, left: 16.0),
+        behavior: SnackBarBehavior.fixed,
         duration: const Duration(seconds: 2),
       ),
     );
-    _snackBarController?.closed.then((_) {
-      if (mounted) {
-        setState(() {
-          _fabBottomPadding = 16.0;
-        });
-      }
-    });
   }
 
   // 출석/하원 카드 위젯 (툴팁은 외부에서 처리)
@@ -2134,9 +2123,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               direction: DismissDirection.startToEnd,
               confirmDismiss: (_) async {
                 final now = DateTime.now();
-                final hasHomeworkItems = HomeworkStore.instance
-                    .items(t.student.id)
-                    .any((e) => e.status != HomeworkStatus.completed);
+                final hasHomeworkItems =
+                    HomeworkStore.instance.items(t.student.id).isNotEmpty;
                 final allPendingItemIds = HomeworkStore.instance
                     .items(t.student.id)
                     .where((e) => e.status != HomeworkStatus.completed)
@@ -2183,6 +2171,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                       t.student.id,
                       selection.itemIds,
                       dueDate: selection.dueDate,
+                      cloneCompletedItems: true,
                     );
                   }
                   final selectedIds =
@@ -2525,12 +2514,39 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     Set<String> hiddenItemIds = const <String>{},
   }) {
     final List<Widget> chips = [];
-    List<HomeworkItem> hwList = List<HomeworkItem>.from(
+    final List<HomeworkItem> baseList = List<HomeworkItem>.from(
       HomeworkStore.instance
           .items(t.student.id)
           .where((e) => e.status != HomeworkStatus.completed)
+          // 숙제 상태라도 active assignment가 해제된 항목은 현재 과제로 복귀한 것으로 본다.
+          .where(
+            (e) =>
+                e.status != HomeworkStatus.homework ||
+                !hiddenItemIds.contains(e.id),
+          )
           .where((e) => !hiddenItemIds.contains(e.id)),
     );
+    final Map<String, int> originalIndexById = <String, int>{
+      for (int i = 0; i < baseList.length; i++) baseList[i].id: i,
+    };
+    int phaseRank(HomeworkItem item) {
+      final bool isRunning =
+          item.runStart != null || item.phase == 2;
+      if (isRunning) return 0; // 수행
+      if (item.phase == 4) return 1; // 확인
+      if (item.phase == 3) return 2; // 제출
+      return 3; // 대기(및 기타)
+    }
+
+    final List<HomeworkItem> hwList = List<HomeworkItem>.from(baseList)
+      ..sort((a, b) {
+        final byPhase = phaseRank(a).compareTo(phaseRank(b));
+        if (byPhase != 0) return byPhase;
+        final ai = originalIndexById[a.id] ?? 1 << 30;
+        final bi = originalIndexById[b.id] ?? 1 << 30;
+        return ai.compareTo(bi);
+      });
+
     for (final hw in hwList) {
       final chipTitle = _chipDisplayTitle(hw.title);
       if (chips.isNotEmpty) chips.add(const SizedBox(width: 8));
@@ -2880,6 +2896,7 @@ extension on _MainScreenState {
           : List<Map<String, dynamic>>.from(
               item.unitMappings!.map((e) => Map<String, dynamic>.from(e)),
             ),
+      defaultSplitParts: item.defaultSplitParts,
       checkCount: item.checkCount,
       createdAt: item.createdAt,
       updatedAt: DateTime.now(),
@@ -3011,8 +3028,19 @@ extension on _MainScreenState {
         } else {
           entries.add(result);
         }
+        int _parseSplitParts(dynamic value) {
+          if (value is int) return value.clamp(1, 4).toInt();
+          if (value is num) return value.toInt().clamp(1, 4).toInt();
+          if (value is String) {
+            return (int.tryParse(value) ?? 1).clamp(1, 4).toInt();
+          }
+          return 1;
+        }
+
         for (final entry in entries) {
           final countStr = (entry['count'] as String?)?.trim();
+          final splitParts =
+              _parseSplitParts(entry['splitParts'] ?? result['splitParts']);
           final created = HomeworkStore.instance.add(
             result['studentId'],
             title: (entry['title'] as String?) ?? '',
@@ -3036,6 +3064,7 @@ extension on _MainScreenState {
                         .map((e) => Map<String, dynamic>.from(e)),
                   )
                 : null,
+            defaultSplitParts: splitParts,
           );
           createdItems.add(created);
         }
@@ -3044,6 +3073,10 @@ extension on _MainScreenState {
             target.student.id,
             createdItems,
             note: HomeworkAssignmentStore.reservationNote,
+            splitPartsByItem: <String, int>{
+              for (final hw in createdItems)
+                hw.id: hw.defaultSplitParts.clamp(1, 4).toInt(),
+            },
           );
         }
         final String msg = isReserve

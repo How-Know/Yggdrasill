@@ -23,6 +23,7 @@ class HomeworkItem {
   String? sourceUnitLevel;
   String? sourceUnitPath;
   List<Map<String, dynamic>>? unitMappings;
+  int defaultSplitParts;
   int checkCount;
   int orderIndex;
   DateTime? createdAt;
@@ -52,6 +53,7 @@ class HomeworkItem {
     this.sourceUnitLevel,
     this.sourceUnitPath,
     this.unitMappings,
+    this.defaultSplitParts = 1,
     this.checkCount = 0,
     this.orderIndex = 0,
     this.createdAt,
@@ -72,6 +74,10 @@ class HomeworkItem {
 class HomeworkStore {
   HomeworkStore._internal();
   static final HomeworkStore instance = HomeworkStore._internal();
+  static const String _homeworkItemSelectWithSplit =
+      'id,student_id,title,body,color,flow_id,type,page,count,content,book_id,grade_label,source_unit_level,source_unit_path,default_split_parts,order_index,check_count,status,phase,accumulated_ms,run_start,completed_at,first_started_at,submitted_at,confirmed_at,waiting_at,created_at,updated_at,version';
+  static const String _homeworkItemSelectLegacy =
+      'id,student_id,title,body,color,flow_id,type,page,count,content,book_id,grade_label,source_unit_level,source_unit_path,order_index,check_count,status,phase,accumulated_ms,run_start,completed_at,first_started_at,submitted_at,confirmed_at,waiting_at,created_at,updated_at,version';
 
   final Map<String, List<HomeworkItem>> _byStudentId = {};
   final ValueNotifier<int> revision = ValueNotifier<int>(0);
@@ -80,6 +86,40 @@ class HomeworkStore {
   // 간단 영속화 캐시 (앱 시작 시 한번 로드, 변경 시 저장)
   bool _loaded = false;
   RealtimeChannel? _rt;
+
+  bool _isMissingDefaultSplitPartsError(Object error) {
+    final message = error.toString().toLowerCase();
+    return message.contains('default_split_parts') &&
+        (message.contains('does not exist') || message.contains('42703'));
+  }
+
+  Future<List<Map<String, dynamic>>> _fetchHomeworkRows({
+    required SupabaseClient supa,
+    required String academyId,
+    String? studentId,
+  }) async {
+    dynamic buildQuery(String selectColumns) {
+      dynamic query = supa
+          .from('homework_items')
+          .select(selectColumns)
+          .eq('academy_id', academyId);
+      if (studentId != null && studentId.trim().isNotEmpty) {
+        query = query.eq('student_id', studentId.trim());
+      }
+      return query
+          .order('order_index', ascending: true)
+          .order('updated_at', ascending: false);
+    }
+
+    try {
+      final data = await buildQuery(_homeworkItemSelectWithSplit);
+      return (data as List<dynamic>).cast<Map<String, dynamic>>();
+    } catch (e) {
+      if (!_isMissingDefaultSplitPartsError(e)) rethrow;
+      final data = await buildQuery(_homeworkItemSelectLegacy);
+      return (data as List<dynamic>).cast<Map<String, dynamic>>();
+    }
+  }
 
   int _compareByOrder(HomeworkItem a, HomeworkItem b) {
     final orderCmp = a.orderIndex.compareTo(b.orderIndex);
@@ -131,14 +171,12 @@ class HomeworkStore {
     try {
       final String academyId = (await TenantService.instance.getActiveAcademyId()) ?? await TenantService.instance.ensureActiveAcademy();
       final supa = Supabase.instance.client;
-      final data = await supa
-          .from('homework_items')
-          .select('id,student_id,title,body,color,flow_id,type,page,count,content,book_id,grade_label,source_unit_level,source_unit_path,order_index,check_count,status,phase,accumulated_ms,run_start,completed_at,first_started_at,submitted_at,confirmed_at,waiting_at,created_at,updated_at,version')
-          .eq('academy_id', academyId)
-          .order('order_index', ascending: true)
-          .order('updated_at', ascending: false);
+      final data = await _fetchHomeworkRows(
+        supa: supa,
+        academyId: academyId,
+      );
       _byStudentId.clear();
-      for (final r in (data as List<dynamic>).cast<Map<String, dynamic>>()) {
+      for (final r in data) {
         final sid = (r['student_id'] as String?) ?? '';
         if (sid.isEmpty) continue;
         DateTime? parseTsOpt(dynamic v) {
@@ -168,6 +206,9 @@ class HomeworkStore {
           gradeLabel: (r['grade_label'] as String?)?.trim(),
           sourceUnitLevel: (r['source_unit_level'] as String?)?.trim(),
           sourceUnitPath: (r['source_unit_path'] as String?)?.trim(),
+          defaultSplitParts: (parseInt(r['default_split_parts']) ?? 1)
+              .clamp(1, 4)
+              .toInt(),
           orderIndex: parseInt(r['order_index']) ?? 0,
           checkCount: parseInt(r['check_count']) ?? 0,
           createdAt: parseTsOpt(r['created_at']),
@@ -233,6 +274,9 @@ class HomeworkStore {
                 gradeLabel: (r['grade_label'] as String?)?.trim(),
                 sourceUnitLevel: (r['source_unit_level'] as String?)?.trim(),
                 sourceUnitPath: (r['source_unit_path'] as String?)?.trim(),
+                defaultSplitParts: (_asIntOpt(r['default_split_parts']) ?? 1)
+                    .clamp(1, 4)
+                    .toInt(),
                 orderIndex: _asIntOpt(r['order_index']) ?? 0,
                 checkCount: _asIntOpt(r['check_count']) ?? 0,
                 createdAt: _parse(r['created_at']),
@@ -274,6 +318,11 @@ class HomeworkStore {
             final String sid = (m['student_id'] as String?) ?? '';
             if (sid.isEmpty) return;
             int _asInt(dynamic v) => (v is num) ? v.toInt() : int.tryParse('$v') ?? 0;
+            int? _asIntOpt(dynamic v) {
+              if (v == null) return null;
+              if (v is num) return v.toInt();
+              return int.tryParse('$v');
+            }
             DateTime? _parse(dynamic v) => (v == null) ? null : DateTime.tryParse(v as String)?.toLocal();
             final updated = HomeworkItem(
               id: (m['id'] as String?) ?? const Uuid().v4(),
@@ -289,6 +338,9 @@ class HomeworkStore {
               gradeLabel: (m['grade_label'] as String?)?.trim(),
               sourceUnitLevel: (m['source_unit_level'] as String?)?.trim(),
               sourceUnitPath: (m['source_unit_path'] as String?)?.trim(),
+              defaultSplitParts: (_asIntOpt(m['default_split_parts']) ?? 1)
+                  .clamp(1, 4)
+                  .toInt(),
               orderIndex: m['order_index'] is num
                   ? (m['order_index'] as num).toInt()
                   : int.tryParse('${m['order_index']}') ?? 0,
@@ -367,6 +419,7 @@ class HomeworkStore {
         'grade_label': it.gradeLabel,
         'source_unit_level': it.sourceUnitLevel,
         'source_unit_path': it.sourceUnitPath,
+        'default_split_parts': it.defaultSplitParts.clamp(1, 4).toInt(),
         'order_index': it.orderIndex,
         'check_count': it.checkCount,
         'status': it.status.index,
@@ -521,6 +574,7 @@ class HomeworkStore {
     String? sourceUnitLevel,
     String? sourceUnitPath,
     List<Map<String, dynamic>>? unitMappings,
+    int defaultSplitParts = 1,
   }) {
     final id = const Uuid().v4();
     final orderIndex = _nextActiveOrderIndex(studentId);
@@ -543,6 +597,7 @@ class HomeworkStore {
           : List<Map<String, dynamic>>.from(
               unitMappings.map((e) => Map<String, dynamic>.from(e)),
             ),
+      defaultSplitParts: defaultSplitParts.clamp(1, 4).toInt(),
       checkCount: 0,
       orderIndex: orderIndex,
       createdAt: DateTime.now(),
@@ -862,6 +917,7 @@ class HomeworkStore {
     String? page,
     int? count,
     String? content,
+    int? defaultSplitParts,
   }) {
     final list = _byStudentId[studentId];
     if (list == null) {
@@ -874,6 +930,7 @@ class HomeworkStore {
         page: page,
         count: count,
         content: content ?? body,
+        defaultSplitParts: defaultSplitParts ?? 1,
       );
     }
     final idx = list.indexWhere((e) => e.id == sourceId);
@@ -887,6 +944,7 @@ class HomeworkStore {
         page: page,
         count: count,
         content: content ?? body,
+        defaultSplitParts: defaultSplitParts ?? 1,
       );
     }
     final src = list[idx];
@@ -909,6 +967,8 @@ class HomeworkStore {
           : List<Map<String, dynamic>>.from(
               src.unitMappings!.map((e) => Map<String, dynamic>.from(e)),
             ),
+      defaultSplitParts:
+          (defaultSplitParts ?? src.defaultSplitParts).clamp(1, 4).toInt(),
     );
     // add()가 서버 upsert를 처리함
     return created;
@@ -951,8 +1011,16 @@ class HomeworkStore {
         unawaited(_upsertItem(studentId, e));
       }
       if (toAssign.isNotEmpty) {
+        final splitPartsByItem = <String, int>{
+          for (final item in toAssign)
+            item.id: item.defaultSplitParts.clamp(1, 4).toInt(),
+        };
         unawaited(HomeworkAssignmentStore.instance
-            .recordAssignments(studentId, toAssign));
+            .recordAssignments(
+          studentId,
+          toAssign,
+          splitPartsByItem: splitPartsByItem,
+        ));
       }
     }
   }
@@ -962,18 +1030,38 @@ class HomeworkStore {
     String studentId,
     List<String> itemIds, {
     DateTime? dueDate,
+    int splitParts = 1,
+    bool cloneCompletedItems = false,
   }) {
     if (itemIds.isEmpty) return;
     final list = _byStudentId[studentId];
     if (list == null) return;
     final Set<String> idSet = itemIds.toSet();
+    final Map<String, HomeworkItem> byId = <String, HomeworkItem>{
+      for (final item in list) item.id: item,
+    };
     bool changed = false;
     final now = DateTime.now();
     final List<HomeworkItem> toAssign = [];
+    final Map<String, int> splitPartsByItem = <String, int>{};
     final Map<String, HomeworkItem> toUpsert = {};
-    for (final e in list) {
-      if (!idSet.contains(e.id)) continue;
-      if (e.status == HomeworkStatus.completed) continue;
+    for (final id in idSet) {
+      HomeworkItem? e = byId[id];
+      if (e == null) continue;
+      if (e.status == HomeworkStatus.completed) {
+        if (!cloneCompletedItems) continue;
+        e = continueAdd(
+          studentId,
+          e.id,
+          body: e.body,
+          flowId: e.flowId,
+          type: e.type,
+          page: e.page,
+          count: e.count,
+          content: e.content,
+        );
+        byId[e.id] = e;
+      }
       bool updated = false;
       if (e.runStart != null) {
         e.accumulatedMs += now.difference(e.runStart!).inMilliseconds;
@@ -992,6 +1080,10 @@ class HomeworkStore {
         updated = true;
       }
       toAssign.add(e);
+      final int itemSplitParts = splitParts > 1
+          ? splitParts.clamp(1, 4).toInt()
+          : e.defaultSplitParts.clamp(1, 4).toInt();
+      splitPartsByItem[e.id] = itemSplitParts;
       if (updated) {
         changed = true;
         toUpsert[e.id] = e;
@@ -1008,6 +1100,8 @@ class HomeworkStore {
         studentId,
         toAssign,
         dueDate: dueDate,
+        splitParts: splitParts,
+        splitPartsByItem: splitPartsByItem,
       ));
     }
   }
@@ -1081,16 +1175,19 @@ class HomeworkStore {
     try {
       final String academyId = (await TenantService.instance.getActiveAcademyId()) ?? await TenantService.instance.ensureActiveAcademy();
       final supa = Supabase.instance.client;
-      final data = await supa
-          .from('homework_items')
-          .select('id,student_id,title,body,color,flow_id,type,page,count,content,book_id,grade_label,source_unit_level,source_unit_path,order_index,check_count,status,phase,accumulated_ms,run_start,completed_at,first_started_at,submitted_at,confirmed_at,waiting_at,created_at,updated_at,version')
-          .eq('academy_id', academyId)
-          .eq('student_id', studentId)
-          .order('order_index', ascending: true)
-          .order('updated_at', ascending: false);
+      final data = await _fetchHomeworkRows(
+        supa: supa,
+        academyId: academyId,
+        studentId: studentId,
+      );
       final List<HomeworkItem> list = [];
-      for (final r in (data as List<dynamic>).cast<Map<String, dynamic>>()) {
+      for (final r in data) {
         int _asInt(dynamic v) => (v is num) ? v.toInt() : int.tryParse('$v') ?? 0;
+        int? _asIntOpt(dynamic v) {
+          if (v == null) return null;
+          if (v is num) return v.toInt();
+          return int.tryParse('$v');
+        }
         DateTime? _parse(dynamic v) => (v == null) ? null : DateTime.tryParse(v as String)?.toLocal();
         list.add(HomeworkItem(
           id: (r['id'] as String?) ?? const Uuid().v4(),
@@ -1106,6 +1203,9 @@ class HomeworkStore {
           gradeLabel: (r['grade_label'] as String?)?.trim(),
           sourceUnitLevel: (r['source_unit_level'] as String?)?.trim(),
           sourceUnitPath: (r['source_unit_path'] as String?)?.trim(),
+          defaultSplitParts: (_asIntOpt(r['default_split_parts']) ?? 1)
+              .clamp(1, 4)
+              .toInt(),
           orderIndex: _asInt(r['order_index']),
           checkCount: _asInt(r['check_count']),
           createdAt: _parse(r['created_at']),

@@ -33,7 +33,7 @@ class AcademyDbService {
     final String path = mem ? inMemoryDatabasePath : await _resolveLocalDbPath();
     return await openDatabaseWithLog(
       path,
-      version: 49,
+      version: 51,
       onConfigure: (db) async {
         // 잠금 최소화를 위한 설정은 유지
         await db.execute('PRAGMA journal_mode=WAL');
@@ -523,6 +523,7 @@ class AcademyDbService {
             page TEXT,
             count INTEGER,
             content TEXT,
+            default_split_parts INTEGER,
             order_index INTEGER,
             check_count INTEGER,
             status INTEGER,
@@ -548,6 +549,9 @@ class AcademyDbService {
             progress INTEGER,
             issue_type TEXT,
             issue_note TEXT,
+            repeat_index INTEGER,
+            split_parts INTEGER,
+            split_round INTEGER,
             created_at TEXT,
             updated_at TEXT
           )
@@ -605,6 +609,7 @@ class AcademyDbService {
                 page TEXT,
                 count INTEGER,
                 content TEXT,
+                default_split_parts INTEGER,
                 check_count INTEGER,
                 status INTEGER,
                 accumulated_ms INTEGER,
@@ -1627,6 +1632,77 @@ class AcademyDbService {
             }
           } catch (e) {
             print('[DB][마이그레이션] v49 homework_assignments.order_index 추가/백필 실패: $e');
+          }
+        }
+        if (oldVersion < 50) {
+          try {
+            await db.execute(
+              'ALTER TABLE homework_assignments ADD COLUMN repeat_index INTEGER',
+            );
+          } catch (e) {
+            print('[DB][마이그레이션] v50 homework_assignments.repeat_index 추가 실패: $e');
+          }
+          try {
+            await db.execute(
+              'ALTER TABLE homework_assignments ADD COLUMN split_parts INTEGER',
+            );
+          } catch (e) {
+            print('[DB][마이그레이션] v50 homework_assignments.split_parts 추가 실패: $e');
+          }
+          try {
+            await db.execute(
+              'ALTER TABLE homework_assignments ADD COLUMN split_round INTEGER',
+            );
+          } catch (e) {
+            print('[DB][마이그레이션] v50 homework_assignments.split_round 추가 실패: $e');
+          }
+          try {
+            await db.execute('''
+              UPDATE homework_assignments
+                 SET repeat_index = COALESCE(repeat_index, 1),
+                     split_parts = CASE
+                       WHEN split_parts IS NULL OR split_parts < 1 THEN 1
+                       ELSE split_parts
+                     END,
+                     split_round = CASE
+                       WHEN split_round IS NULL OR split_round < 1 THEN 1
+                       WHEN split_parts IS NULL OR split_parts < 1 THEN 1
+                       WHEN split_round > split_parts THEN split_parts
+                       ELSE split_round
+                     END
+               WHERE repeat_index IS NULL
+                  OR split_parts IS NULL
+                  OR split_parts < 1
+                  OR split_round IS NULL
+                  OR split_round < 1
+                  OR split_round > split_parts
+            ''');
+          } catch (e) {
+            print('[DB][마이그레이션] v50 homework_assignments 반복/분할 백필 실패: $e');
+          }
+        }
+        if (oldVersion < 51) {
+          try {
+            await db.execute(
+              'ALTER TABLE homework_items ADD COLUMN default_split_parts INTEGER',
+            );
+          } catch (e) {
+            print('[DB][마이그레이션] v51 homework_items.default_split_parts 추가 실패: $e');
+          }
+          try {
+            await db.execute('''
+              UPDATE homework_items
+                 SET default_split_parts = CASE
+                   WHEN default_split_parts IS NULL OR default_split_parts < 1 THEN 1
+                   WHEN default_split_parts > 4 THEN 4
+                   ELSE default_split_parts
+                 END
+               WHERE default_split_parts IS NULL
+                  OR default_split_parts < 1
+                  OR default_split_parts > 4
+            ''');
+          } catch (e) {
+            print('[DB][마이그레이션] v51 homework_items.default_split_parts 백필 실패: $e');
           }
         }
       },

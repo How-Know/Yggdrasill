@@ -94,11 +94,8 @@ Future<HomeworkAssignSelection?> showHomeworkAssignDialog(
   String studentId, {
   DateTime? anchorTime,
 }) async {
-  final items = HomeworkStore.instance
-      .items(studentId)
-      .where((e) => e.status != HomeworkStatus.completed)
-      .toList();
-  if (items.isEmpty) return null;
+  final allItems = HomeworkStore.instance.items(studentId);
+  if (allItems.isEmpty) return null;
   final behaviorAssignments = await StudentBehaviorAssignmentStore.instance
       .loadForStudent(studentId, force: true);
   behaviorAssignments.sort((a, b) => a.orderIndex.compareTo(b.orderIndex));
@@ -188,7 +185,7 @@ Future<HomeworkAssignSelection?> showHomeworkAssignDialog(
   DateTime? selectedDueDate =
       nextSessions.isNotEmpty ? nextSessions.first.dateTime : null;
   final Map<String, bool> selected = {
-    for (final e in items) e.id: true,
+    for (final e in allItems) e.id: e.status != HomeworkStatus.completed,
   };
   final Map<String, bool> selectedBehaviors = {
     for (final b in behaviorAssignments) b.id: !b.isIrregular,
@@ -203,6 +200,8 @@ Future<HomeworkAssignSelection?> showHomeworkAssignDialog(
     builder: (ctx) {
       return StatefulBuilder(
         builder: (ctx, setState) {
+          final List<HomeworkItem> visibleItems =
+              List<HomeworkItem>.from(allItems);
           return AlertDialog(
             backgroundColor: kDlgBg,
             shape:
@@ -268,65 +267,88 @@ Future<HomeworkAssignSelection?> showHomeworkAssignDialog(
                   const SizedBox(height: 16),
                   const YggDialogSectionHeader(
                       icon: Icons.assignment_turned_in, title: '등록된 과제'),
-                  ConstrainedBox(
-                    constraints: const BoxConstraints(maxHeight: 220),
-                    child: ListView.separated(
-                      shrinkWrap: true,
-                      itemCount: items.length,
-                      separatorBuilder: (_, __) => const SizedBox(height: 10),
-                      itemBuilder: (ctx, idx) {
-                        final hw = items[idx];
-                        final String type = (hw.type ?? '').trim();
-                        final String page = (hw.page ?? '').trim();
-                        final String count =
-                            hw.count != null ? hw.count.toString() : '';
-                        final String title = hw.title.trim();
-                        final String meta = [
-                          if (type.isNotEmpty) type,
-                          if (page.isNotEmpty) 'p.$page',
-                          if (count.isNotEmpty) '${count}문항',
-                        ].join(' · ');
-                        return Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8),
-                          decoration: BoxDecoration(
-                            color: kDlgPanelBg,
-                            borderRadius: BorderRadius.circular(10),
-                            border: Border.all(color: kDlgBorder),
-                          ),
-                          child: CheckboxListTile(
-                            value: selected[hw.id] ?? false,
-                            onChanged: (v) {
-                              setState(() {
-                                selected[hw.id] = v ?? false;
-                              });
-                            },
-                            dense: true,
-                            contentPadding: EdgeInsets.zero,
-                            controlAffinity: ListTileControlAffinity.leading,
-                            activeColor: kDlgAccent,
-                            checkColor: Colors.white,
-                            title: Text(
-                              title,
-                              style: const TextStyle(
-                                color: kDlgText,
-                                fontWeight: FontWeight.w700,
-                                fontSize: 14,
-                              ),
+                  if (visibleItems.isEmpty)
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
+                      decoration: BoxDecoration(
+                        color: kDlgPanelBg,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: kDlgBorder),
+                      ),
+                      child: const Text(
+                        '표시할 과제가 없습니다.',
+                        style: TextStyle(color: kDlgTextSub, fontSize: 13),
+                      ),
+                    )
+                  else
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(maxHeight: 220),
+                      child: ListView.separated(
+                        shrinkWrap: true,
+                        itemCount: visibleItems.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 10),
+                        itemBuilder: (ctx, idx) {
+                          final hw = visibleItems[idx];
+                          final bool isCompleted =
+                              hw.status == HomeworkStatus.completed;
+                          final String type = (hw.type ?? '').trim();
+                          final String page = (hw.page ?? '').trim();
+                          final String count =
+                              hw.count != null ? hw.count.toString() : '';
+                          final String title = hw.title.trim();
+                          final String meta = [
+                            if (isCompleted) '완료 ${hw.checkCount}회',
+                            if (type.isNotEmpty) type,
+                            if (page.isNotEmpty) 'p.$page',
+                            if (count.isNotEmpty) '${count}문항',
+                          ].join(' · ');
+                          return Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8),
+                            decoration: BoxDecoration(
+                              color: kDlgPanelBg,
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(color: kDlgBorder),
                             ),
-                            subtitle: meta.isEmpty
-                                ? null
-                                : Text(
-                                    meta,
-                                    style: const TextStyle(
-                                      color: kDlgTextSub,
-                                      fontSize: 12,
+                            child: CheckboxListTile(
+                              value: selected[hw.id] ?? false,
+                              onChanged: (v) {
+                                setState(() {
+                                  selected[hw.id] = v ?? false;
+                                });
+                              },
+                              dense: true,
+                              contentPadding: EdgeInsets.zero,
+                              controlAffinity: ListTileControlAffinity.leading,
+                              activeColor: kDlgAccent,
+                              checkColor: Colors.white,
+                              title: Text(
+                                title,
+                                style: TextStyle(
+                                  color: isCompleted
+                                      ? kDlgTextSub
+                                      : kDlgText,
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 14,
+                                ),
+                              ),
+                              subtitle: meta.isEmpty
+                                  ? null
+                                  : Text(
+                                      meta,
+                                      style: const TextStyle(
+                                        color: kDlgTextSub,
+                                        fontSize: 12,
+                                      ),
                                     ),
-                                  ),
-                          ),
-                        );
-                      },
+                            ),
+                          );
+                        },
+                      ),
                     ),
-                  ),
                   const SizedBox(height: 16),
                   const YggDialogSectionHeader(
                     icon: Icons.self_improvement_rounded,

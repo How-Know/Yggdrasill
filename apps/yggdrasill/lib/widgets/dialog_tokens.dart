@@ -35,12 +35,16 @@ class YggDialogSectionHeader extends StatelessWidget {
           const SizedBox(width: 10),
           Icon(icon, color: kDlgTextSub, size: 18),
           const SizedBox(width: 8),
-          Text(
-            title,
-            style: const TextStyle(
-              color: kDlgText,
-              fontSize: 15,
-              fontWeight: FontWeight.w800,
+          Expanded(
+            child: Text(
+              title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: kDlgText,
+                fontSize: 15,
+                fontWeight: FontWeight.w800,
+              ),
             ),
           ),
         ],
@@ -98,4 +102,3 @@ class YggDialogFilterChip extends StatelessWidget {
     );
   }
 }
-

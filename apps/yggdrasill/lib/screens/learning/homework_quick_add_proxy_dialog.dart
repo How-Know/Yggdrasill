@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../services/ai_summary.dart';
 import '../../services/data_manager.dart';
 import '../../services/homework_store.dart';
@@ -60,6 +61,10 @@ class HomeworkQuickAddProxyDialogState
       const <Map<String, dynamic>>[];
   bool _rangeAiLoading = false;
   int _rangeAiRequestId = 0;
+  String _selectedLinkedTextbookType = '';
+  int _selectedSplitParts = 1;
+  String? _expandedBigKey;
+  String? _expandedMidKey;
 
   _LinkedTextbook? get _selectedLinkedBook {
     final key = _selectedLinkedBookKey;
@@ -144,6 +149,19 @@ class HomeworkQuickAddProxyDialogState
       default:
         return Colors.blue;
     }
+  }
+
+  String _sanitizeTextbookType(dynamic value) {
+    final raw = (value as String?)?.trim() ?? '';
+    if (raw == '개념서' || raw == '문제집') return raw;
+    return '';
+  }
+
+  String _effectiveLinkedHomeworkType() {
+    if (_selectedLinkedTextbookType == '문제집') return '문제집';
+    final bookName = (_selectedLinkedBook?.bookName ?? '').trim();
+    if (bookName.contains('문제집')) return '문제집';
+    return '교재';
   }
 
   String _composeBody() {
@@ -247,7 +265,10 @@ class HomeworkQuickAddProxyDialogState
       setState(() {
         _linkedTextbooks = const <_LinkedTextbook>[];
         _selectedLinkedBookKey = null;
+        _selectedLinkedTextbookType = '';
         _units = const <_BigUnitSelectionNode>[];
+        _expandedBigKey = null;
+        _expandedMidKey = null;
         _manualPageMode = false;
       });
       _refreshRangeAutoDraft();
@@ -262,7 +283,10 @@ class HomeworkQuickAddProxyDialogState
       } else if (preferredLinkedBookKey != null) {
         _selectedLinkedBookKey = preferredLinkedBookKey;
       }
+      _selectedLinkedTextbookType = '';
       _units = const <_BigUnitSelectionNode>[];
+      _expandedBigKey = null;
+      _expandedMidKey = null;
       _manualPageMode = false;
     });
     try {
@@ -286,7 +310,12 @@ class HomeworkQuickAddProxyDialogState
         await _loadMetadataForSelectedBook();
       } else {
         if (mounted) {
-          setState(() => _units = const <_BigUnitSelectionNode>[]);
+          setState(() {
+            _units = const <_BigUnitSelectionNode>[];
+            _selectedLinkedTextbookType = '';
+            _expandedBigKey = null;
+            _expandedMidKey = null;
+          });
         }
         _refreshRangeAutoDraft();
       }
@@ -295,7 +324,10 @@ class HomeworkQuickAddProxyDialogState
       setState(() {
         _linkedTextbooks = const <_LinkedTextbook>[];
         _selectedLinkedBookKey = null;
+        _selectedLinkedTextbookType = '';
         _units = const <_BigUnitSelectionNode>[];
+        _expandedBigKey = null;
+        _expandedMidKey = null;
       });
       _refreshRangeAutoDraft();
     } finally {
@@ -309,7 +341,12 @@ class HomeworkQuickAddProxyDialogState
     final linked = _selectedLinkedBook;
     if (linked == null) {
       if (!mounted) return;
-      setState(() => _units = const <_BigUnitSelectionNode>[]);
+      setState(() {
+        _units = const <_BigUnitSelectionNode>[];
+        _selectedLinkedTextbookType = '';
+        _expandedBigKey = null;
+        _expandedMidKey = null;
+      });
       _refreshRangeAutoDraft();
       return;
     }
@@ -321,20 +358,37 @@ class HomeworkQuickAddProxyDialogState
       );
       if (!mounted) return;
       final parsed = _parseSelectionUnits(row?['payload']);
+      final textbookType = _sanitizeTextbookType(row?['textbook_type']);
       try {
         await HomeworkStore.instance.loadAll();
       } catch (_) {}
-      final issuedBySmallKey = _issuedSmallFinishedAtByBook(
+      final issuedSummaryBySmallKey = _issuedSmallSummaryByBook(
         bookId: linked.bookId,
         gradeLabel: linked.gradeLabel,
         units: parsed,
       );
-      _applyIssuedLockedState(parsed, issuedBySmallKey);
-      setState(() => _units = parsed);
+      final acknowledgedSmallKeys =
+          await _loadAcknowledgedSmallKeysForLinkedBook(linked);
+      _applyIssuedLockedState(
+        parsed,
+        issuedSummaryBySmallKey,
+        acknowledgedSmallKeys,
+      );
+      setState(() {
+        _units = parsed;
+        _selectedLinkedTextbookType = textbookType;
+        _expandedBigKey = null;
+        _expandedMidKey = null;
+      });
       _refreshRangeAutoDraft();
     } catch (_) {
       if (!mounted) return;
-      setState(() => _units = const <_BigUnitSelectionNode>[]);
+      setState(() {
+        _units = const <_BigUnitSelectionNode>[];
+        _selectedLinkedTextbookType = '';
+        _expandedBigKey = null;
+        _expandedMidKey = null;
+      });
       _refreshRangeAutoDraft();
     } finally {
       if (mounted) {
@@ -432,16 +486,26 @@ class HomeworkQuickAddProxyDialogState
     return null;
   }
 
-  String _fmtYmd(DateTime? dt) {
-    if (dt == null) return '--.--.--';
-    final yy = (dt.year % 100).toString().padLeft(2, '0');
-    final mm = dt.month.toString().padLeft(2, '0');
-    final dd = dt.day.toString().padLeft(2, '0');
-    return '$yy.$mm.$dd';
-  }
-
   String _smallKey(int bigOrder, int midOrder, int smallOrder) {
     return '$bigOrder|$midOrder|$smallOrder';
+  }
+
+  String _ackPrefsKeyForLinkedBook(_LinkedTextbook linked) {
+    final bookKey = '${linked.bookId}|${linked.gradeLabel}';
+    return 'flow_textbook_ack_units_v1:${widget.studentId}|${linked.flowId}|$bookKey';
+  }
+
+  Future<Set<String>> _loadAcknowledgedSmallKeysForLinkedBook(
+    _LinkedTextbook linked,
+  ) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final values = prefs.getStringList(_ackPrefsKeyForLinkedBook(linked)) ??
+          const <String>[];
+      return values.map((e) => e.trim()).where((e) => e.isNotEmpty).toSet();
+    } catch (_) {
+      return <String>{};
+    }
   }
 
   void _addPageRange(Set<int> pages, int? a, int? b) {
@@ -516,13 +580,13 @@ class HomeworkQuickAddProxyDialogState
     return hw.status == HomeworkStatus.completed || hw.phase == 4;
   }
 
-  Map<String, DateTime?> _issuedSmallFinishedAtByBook({
+  Map<String, _IssuedSmallSummary> _issuedSmallSummaryByBook({
     required String bookId,
     required String gradeLabel,
     required List<_BigUnitSelectionNode> units,
   }) {
     if (bookId.trim().isEmpty || gradeLabel.trim().isEmpty) {
-      return <String, DateTime?>{};
+      return <String, _IssuedSmallSummary>{};
     }
     final pagesBySmallKey = <String, Set<int>>{};
     for (final big in units) {
@@ -536,9 +600,10 @@ class HomeworkQuickAddProxyDialogState
         }
       }
     }
-    if (pagesBySmallKey.isEmpty) return <String, DateTime?>{};
+    if (pagesBySmallKey.isEmpty) return <String, _IssuedSmallSummary>{};
 
-    final issued = <String, DateTime?>{};
+    final latestFinishedAtBySmallKey = <String, DateTime?>{};
+    final completedCountBySmallKey = <String, int>{};
     final items = HomeworkStore.instance.items(widget.studentId);
     for (final hw in items) {
       final hwBookId = (hw.bookId ?? '').trim();
@@ -576,18 +641,32 @@ class HomeworkQuickAddProxyDialogState
       }
 
       for (final key in touched) {
-        final prev = issued[key];
+        completedCountBySmallKey[key] =
+            (completedCountBySmallKey[key] ?? 0) + 1;
+        final prev = latestFinishedAtBySmallKey[key];
         if (prev == null || (finishedAt != null && finishedAt.isAfter(prev))) {
-          issued[key] = finishedAt;
+          latestFinishedAtBySmallKey[key] = finishedAt;
         }
       }
     }
-    return issued;
+    final summary = <String, _IssuedSmallSummary>{};
+    final keys = <String>{
+      ...completedCountBySmallKey.keys,
+      ...latestFinishedAtBySmallKey.keys,
+    };
+    for (final key in keys) {
+      summary[key] = _IssuedSmallSummary(
+        latestFinishedAt: latestFinishedAtBySmallKey[key],
+        completedCount: completedCountBySmallKey[key] ?? 0,
+      );
+    }
+    return summary;
   }
 
   void _applyIssuedLockedState(
     List<_BigUnitSelectionNode> units,
-    Map<String, DateTime?> issuedBySmallKey,
+    Map<String, _IssuedSmallSummary> issuedSummaryBySmallKey,
+    Set<String> acknowledgedSmallKeys,
   ) {
     for (final big in units) {
       big.explicitSelected = false;
@@ -596,14 +675,13 @@ class HomeworkQuickAddProxyDialogState
         for (final small in mid.smalls) {
           final key =
               _smallKey(big.orderIndex, mid.orderIndex, small.orderIndex);
-          final finishedAt = issuedBySmallKey[key];
-          final locked = issuedBySmallKey.containsKey(key);
+          final summary = issuedSummaryBySmallKey[key];
+          final locked = acknowledgedSmallKeys.contains(key);
           small.locked = locked;
-          small.finishedAt = finishedAt;
-          if (locked) {
-            small.selected = true;
-            small.explicitSelected = false;
-          }
+          small.finishedAt = summary?.latestFinishedAt;
+          small.completedCount = summary?.completedCount ?? 0;
+          small.selected = false;
+          small.explicitSelected = false;
         }
         mid.selected = _allSmallSelected(mid);
       }
@@ -787,6 +865,54 @@ class HomeworkQuickAddProxyDialogState
   String _prefixFromSelectedSmall(_SelectedSmallUnit small) =>
       '${_n(small.bigOrder)}.${_n(small.midOrder)}.(${_n(small.smallOrder)})';
 
+  String _prefixFromBigOrder(int bigOrder) => _n(bigOrder);
+
+  String _prefixFromMidOrder(int bigOrder, int midOrder) =>
+      '${_n(bigOrder)}.${_n(midOrder)}';
+
+  _ExplicitSelectionAutoTitle? _resolveExplicitSelectionAutoTitle() {
+    final explicitBigs = <_BigUnitSelectionNode>[];
+    final explicitMids =
+        <MapEntry<_BigUnitSelectionNode, _MidUnitSelectionNode>>[];
+
+    for (final big in _units) {
+      if (big.explicitSelected && big.selected) {
+        explicitBigs.add(big);
+      }
+      for (final mid in big.middles) {
+        if (mid.explicitSelected && mid.selected) {
+          explicitMids.add(MapEntry(big, mid));
+        }
+      }
+    }
+
+    if (explicitBigs.length == 1 && explicitMids.isEmpty) {
+      final big = explicitBigs.first;
+      final prefix = _prefixFromBigOrder(big.orderIndex);
+      return _ExplicitSelectionAutoTitle(
+        title: '$prefix ${big.name}',
+        sourceUnitLevel: 'big',
+        sourceUnitPath: prefix,
+        pathSummary: big.name,
+      );
+    }
+
+    if (explicitMids.length == 1 && explicitBigs.isEmpty) {
+      final ref = explicitMids.first;
+      final big = ref.key;
+      final mid = ref.value;
+      final prefix = _prefixFromMidOrder(big.orderIndex, mid.orderIndex);
+      return _ExplicitSelectionAutoTitle(
+        title: '$prefix ${mid.name}',
+        sourceUnitLevel: 'mid',
+        sourceUnitPath: prefix,
+        pathSummary: '${big.name} > ${mid.name}',
+      );
+    }
+
+    return null;
+  }
+
   String _rangeScopeTextFromSelected(List<_SelectedSmallUnit> selected) {
     if (selected.isEmpty) return '-';
     final sorted = _sortedSelectedSmallUnits(selected);
@@ -884,7 +1010,7 @@ class HomeworkQuickAddProxyDialogState
         'endPage': s.endPage,
         'pageCount': pageCount,
         'weight': 1.0,
-        'sourceScope': 'merged_selection',
+        'sourceScope': 'direct_small',
       });
     }
     return out;
@@ -895,24 +1021,33 @@ class HomeworkQuickAddProxyDialogState
     if (selected.isEmpty) return null;
     final first = selected.first;
     final firstPrefix = _prefixFromSelectedSmall(first);
+    final explicitAutoTitle = _resolveExplicitSelectionAutoTitle();
     final page = _mergedPageText(selected);
     final count = _mergedCountText(selected) ?? '';
-    final title = selected.length == 1
-        ? '$firstPrefix ${first.smallName}'
-        : '교재 과제 (${selected.length}개 소단원)';
-    final pathSummary = selected.length == 1
-        ? '${first.bigName} > ${first.midName} > ${first.smallName}'
-        : '${first.bigName} > ${first.midName} > ${first.smallName} 외 ${selected.length - 1}개';
+    final title = explicitAutoTitle?.title ??
+        (selected.length == 1
+            ? '$firstPrefix ${first.smallName}'
+            : '교재 과제 (${selected.length}개 소단원)');
+    final pathSummary = explicitAutoTitle?.pathSummary ??
+        (selected.length == 1
+            ? '${first.bigName} > ${first.midName} > ${first.smallName}'
+            : '${first.bigName} > ${first.midName} > ${first.smallName} 외 ${selected.length - 1}개');
+    final sourceUnitLevel = explicitAutoTitle?.sourceUnitLevel ?? 'merged';
+    final sourceUnitPath = explicitAutoTitle?.sourceUnitPath ??
+        (selected.length == 1
+            ? firstPrefix
+            : '$firstPrefix 외 ${selected.length - 1}개');
+    final allowAiSummaryTitle =
+        explicitAutoTitle == null && selected.length > 1;
     return _UnitTask(
       title: title,
       page: page,
       count: count,
       content: '${_bookMetaText(book)}\n$pathSummary',
-      sourceUnitLevel: 'merged',
-      sourceUnitPath: selected.length == 1
-          ? firstPrefix
-          : '$firstPrefix 외 ${selected.length - 1}개',
+      sourceUnitLevel: sourceUnitLevel,
+      sourceUnitPath: sourceUnitPath,
       unitMappings: _unitMappingsFromSelectedSmalls(selected),
+      allowAiSummaryTitle: allowAiSummaryTitle,
     );
   }
 
@@ -964,6 +1099,7 @@ class HomeworkQuickAddProxyDialogState
       return;
     }
     if (mounted) {
+      final shouldRunAiSummary = merged.allowAiSummaryTitle;
       setState(() {
         _rangeAutoPage = merged.page;
         _rangeAutoCount = merged.count;
@@ -971,12 +1107,12 @@ class HomeworkQuickAddProxyDialogState
         _rangeAutoUnitMappings = List<Map<String, dynamic>>.from(
           merged.unitMappings.map((e) => Map<String, dynamic>.from(e)),
         );
-        _rangeAiLoading = selected.length > 1;
+        _rangeAiLoading = shouldRunAiSummary;
       });
     }
     _setControllerText(_rangeTitle, merged.title);
     _setControllerText(_rangeContent, merged.content);
-    if (selected.length > 1) {
+    if (merged.allowAiSummaryTitle) {
       unawaited(
         _applyAiSummaryForMultiSelection(
           requestId: requestId,
@@ -1108,72 +1244,6 @@ class HomeworkQuickAddProxyDialogState
     );
   }
 
-  Widget _buildLinkedFlowMode(_LinkedTextbook selectedBook) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Padding(
-          padding: EdgeInsets.only(left: 2, bottom: 8),
-          child: Text(
-            '범위 선택',
-            style: TextStyle(
-              color: kDlgTextSub,
-              fontSize: 13,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-        ),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            _buildPickerChip(
-              label: '교재 단원 선택',
-              selected: !_manualPageMode,
-              onTap: () {
-                if (!_manualPageMode) return;
-                setState(() => _manualPageMode = false);
-                _refreshRangeAutoDraft();
-              },
-            ),
-            _buildPickerChip(
-              label: '페이지 직접 입력',
-              selected: _manualPageMode,
-              onTap: () {
-                if (_manualPageMode) return;
-                setState(() => _manualPageMode = true);
-                _refreshRangeAutoDraft();
-              },
-            ),
-          ],
-        ),
-        const SizedBox(height: 10),
-        if (_manualPageMode)
-          Column(
-            children: [
-              TextField(
-                controller: _title,
-                style: const TextStyle(
-                  color: kDlgText,
-                  fontWeight: FontWeight.w600,
-                ),
-                decoration: _inputDecoration('과제명', hint: '예: 교재 과제'),
-              ),
-              const SizedBox(height: 12),
-              _buildManualPageInputs(),
-            ],
-          )
-        else ...[
-          _buildMetadataTree(selectedBook),
-          const SizedBox(height: 10),
-          const Divider(height: 1, thickness: 1, color: kDlgBorder),
-          const SizedBox(height: 12),
-          _buildRangeInlineEditors(),
-        ],
-      ],
-    );
-  }
-
   Widget _buildManualPageInputs() {
     return Column(
       children: [
@@ -1292,6 +1362,77 @@ class HomeworkQuickAddProxyDialogState
     );
   }
 
+  Widget _buildAssignmentOptions() {
+    return Row(
+      children: [
+        const SizedBox(
+          width: 72,
+          child: Text(
+            '분할',
+            style: TextStyle(
+              color: kDlgTextSub,
+              fontSize: 12.5,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+        Expanded(
+          child: DropdownButtonFormField<int>(
+            value: _selectedSplitParts,
+            items: const [
+              DropdownMenuItem<int>(
+                value: 1,
+                child: Text('없음'),
+              ),
+              DropdownMenuItem<int>(
+                value: 2,
+                child: Text('1/2'),
+              ),
+              DropdownMenuItem<int>(
+                value: 3,
+                child: Text('1/3'),
+              ),
+              DropdownMenuItem<int>(
+                value: 4,
+                child: Text('1/4'),
+              ),
+            ],
+            onChanged: (v) {
+              setState(() {
+                _selectedSplitParts = (v ?? 1).clamp(1, 4);
+              });
+            },
+            dropdownColor: kDlgBg,
+            style: const TextStyle(
+              color: kDlgText,
+              fontWeight: FontWeight.w600,
+            ),
+            decoration: InputDecoration(
+              filled: true,
+              fillColor: kDlgFieldBg,
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: const BorderSide(color: kDlgBorder),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: const BorderSide(
+                  color: kDlgAccent,
+                  width: 1.4,
+                ),
+              ),
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 12,
+                vertical: 10,
+              ),
+            ),
+            iconEnabledColor: kDlgTextSub,
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildMetadataTree(_LinkedTextbook? selectedBook) {
     if (selectedBook == null) {
       return _buildNoticeCard('연결된 교재를 선택하세요.');
@@ -1327,187 +1468,214 @@ class HomeworkQuickAddProxyDialogState
         splashColor: Colors.transparent,
         highlightColor: Colors.transparent,
       ),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxHeight: 360),
-        child: ListView(
-          shrinkWrap: true,
-          padding: const EdgeInsets.symmetric(vertical: 2),
-          children: [
-            for (final big in _units)
-              ExpansionTile(
-                expansionAnimationStyle: _fastTreeExpansionStyle,
-                tilePadding: const EdgeInsets.symmetric(
-                  horizontal: 2,
-                  vertical: 2,
-                ),
-                childrenPadding: const EdgeInsets.fromLTRB(10, 0, 10, 8),
-                maintainState: true,
-                iconColor: kDlgTextSub,
-                collapsedIconColor: kDlgTextSub,
-                title: Row(
-                  children: [
-                    _buildTreeCheckbox(
-                      value: big.selected,
-                      onChanged: _hasEditableSmallInBig(big)
-                          ? (v) => _toggleBig(big, v ?? false)
-                          : null,
-                      disabled: !_hasEditableSmallInBig(big),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        big.name,
-                        style: const TextStyle(
-                          color: kDlgText,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 13.5,
-                        ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (final big in _units)
+            ExpansionTile(
+              key: ValueKey(
+                'quickadd_big_${big.orderIndex}_${_expandedBigKey ?? ''}',
+              ),
+              initiallyExpanded: _expandedBigKey == 'big:${big.orderIndex}',
+              onExpansionChanged: (expanded) {
+                setState(() {
+                  final key = 'big:${big.orderIndex}';
+                  if (expanded) {
+                    _expandedBigKey = key;
+                  } else if (_expandedBigKey == key) {
+                    _expandedBigKey = null;
+                    _expandedMidKey = null;
+                  }
+                });
+              },
+              expansionAnimationStyle: _fastTreeExpansionStyle,
+              tilePadding: const EdgeInsets.symmetric(
+                horizontal: 2,
+                vertical: 2,
+              ),
+              childrenPadding: const EdgeInsets.fromLTRB(10, 0, 10, 8),
+              maintainState: false,
+              iconColor: kDlgTextSub,
+              collapsedIconColor: kDlgTextSub,
+              title: Row(
+                children: [
+                  _buildTreeCheckbox(
+                    value: big.selected,
+                    onChanged: _hasEditableSmallInBig(big)
+                        ? (v) => _toggleBig(big, v ?? false)
+                        : null,
+                    disabled: !_hasEditableSmallInBig(big),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      big.name,
+                      style: const TextStyle(
+                        color: kDlgText,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 13.5,
                       ),
                     ),
-                  ],
-                ),
-                children: [
-                  for (final mid in big.middles)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 6),
-                      child: ExpansionTile(
-                        expansionAnimationStyle: _fastTreeExpansionStyle,
-                        tilePadding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 1,
-                        ),
-                        childrenPadding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
-                        maintainState: true,
-                        iconColor: kDlgTextSub,
-                        collapsedIconColor: kDlgTextSub,
-                        title: Row(
-                          children: [
-                            _buildTreeCheckbox(
-                              value: mid.selected,
-                              onChanged: _hasEditableSmallInMid(mid)
-                                  ? (v) => _toggleMid(big, mid, v ?? false)
-                                  : null,
-                              disabled: !_hasEditableSmallInMid(mid),
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                mid.name,
-                                style: const TextStyle(
-                                  color: kDlgText,
-                                  fontWeight: FontWeight.w600,
-                                  fontSize: 13,
-                                ),
+                  ),
+                ],
+              ),
+              children: [
+                for (final mid in big.middles)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: ExpansionTile(
+                      key: ValueKey(
+                        'quickadd_mid_${big.orderIndex}_${mid.orderIndex}_${_expandedMidKey ?? ''}',
+                      ),
+                      initiallyExpanded: _expandedMidKey ==
+                          'big:${big.orderIndex}|mid:${mid.orderIndex}',
+                      onExpansionChanged: (expanded) {
+                        setState(() {
+                          final bigKey = 'big:${big.orderIndex}';
+                          final midKey =
+                              'big:${big.orderIndex}|mid:${mid.orderIndex}';
+                          if (expanded) {
+                            _expandedBigKey = bigKey;
+                            _expandedMidKey = midKey;
+                          } else if (_expandedMidKey == midKey) {
+                            _expandedMidKey = null;
+                          }
+                        });
+                      },
+                      expansionAnimationStyle: _fastTreeExpansionStyle,
+                      tilePadding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 1,
+                      ),
+                      childrenPadding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+                      maintainState: false,
+                      iconColor: kDlgTextSub,
+                      collapsedIconColor: kDlgTextSub,
+                      title: Row(
+                        children: [
+                          _buildTreeCheckbox(
+                            value: mid.selected,
+                            onChanged: _hasEditableSmallInMid(mid)
+                                ? (v) => _toggleMid(big, mid, v ?? false)
+                                : null,
+                            disabled: !_hasEditableSmallInMid(mid),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              mid.name,
+                              style: const TextStyle(
+                                color: kDlgText,
+                                fontWeight: FontWeight.w600,
+                                fontSize: 13,
                               ),
                             ),
-                          ],
-                        ),
-                        children: [
-                          for (final small in mid.smalls)
-                            Builder(
-                              builder: (_) {
-                                final page = _pageTextForSmall(small);
-                                final count = _countTextForSmall(small);
-                                final titleText = page.isEmpty
-                                    ? small.name
-                                    : '${small.name} (p.$page)';
-                                final countText =
-                                    count.isEmpty ? '-문항' : '${count}문항';
-                                final doneText = small.locked
-                                    ? '완료 ${_fmtYmd(small.finishedAt)}'
-                                    : countText;
-                                return Padding(
-                                  padding:
-                                      const EdgeInsets.fromLTRB(4, 3, 4, 3),
-                                  child: InkWell(
-                                    borderRadius: BorderRadius.circular(8),
-                                    mouseCursor: small.locked
-                                        ? SystemMouseCursors.basic
-                                        : SystemMouseCursors.click,
-                                    onTap: small.locked
-                                        ? null
-                                        : () => _toggleSmall(
-                                              big,
-                                              mid,
-                                              small,
-                                              !small.selected,
-                                            ),
-                                    child: AnimatedContainer(
-                                      duration:
-                                          const Duration(milliseconds: 140),
-                                      padding: const EdgeInsets.symmetric(
-                                          horizontal: 8, vertical: 7),
-                                      decoration: BoxDecoration(
+                          ),
+                        ],
+                      ),
+                      children: [
+                        for (final small in mid.smalls)
+                          Builder(
+                            builder: (_) {
+                              final page = _pageTextForSmall(small);
+                              final count = _countTextForSmall(small);
+                              final titleText = page.isEmpty
+                                  ? small.name
+                                  : '${small.name} (p.$page)';
+                              final countText =
+                                  count.isEmpty ? '-문항' : '${count}문항';
+                              final doneText = small.locked
+                                  ? '완료 인정'
+                                  : (small.completedCount > 0
+                                      ? '완료 ${small.completedCount}회'
+                                      : countText);
+                              return Padding(
+                                padding: const EdgeInsets.fromLTRB(4, 3, 4, 3),
+                                child: InkWell(
+                                  borderRadius: BorderRadius.circular(8),
+                                  mouseCursor: small.locked
+                                      ? SystemMouseCursors.basic
+                                      : SystemMouseCursors.click,
+                                  onTap: small.locked
+                                      ? null
+                                      : () => _toggleSmall(
+                                            big,
+                                            mid,
+                                            small,
+                                            !small.selected,
+                                          ),
+                                  child: AnimatedContainer(
+                                    duration: const Duration(milliseconds: 140),
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 8, vertical: 7),
+                                    decoration: BoxDecoration(
+                                      color: small.locked
+                                          ? const Color(0x1F0F1518)
+                                          : (small.selected
+                                              ? const Color(0x1A33A373)
+                                              : Colors.transparent),
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(
                                         color: small.locked
-                                            ? const Color(0x1F0F1518)
+                                            ? const Color(0xFF2E3C3F)
                                             : (small.selected
-                                                ? const Color(0x1A33A373)
-                                                : Colors.transparent),
-                                        borderRadius: BorderRadius.circular(8),
-                                        border: Border.all(
-                                          color: small.locked
-                                              ? const Color(0xFF2E3C3F)
-                                              : (small.selected
-                                                  ? kDlgAccent.withOpacity(0.9)
-                                                  : kDlgBorder
-                                                      .withOpacity(0.8)),
-                                        ),
+                                                ? kDlgAccent.withOpacity(0.9)
+                                                : kDlgBorder.withOpacity(0.8)),
                                       ),
-                                      child: Row(
-                                        children: [
-                                          _buildTreeCheckbox(
-                                            value: small.selected,
-                                            onChanged: small.locked
-                                                ? null
-                                                : (v) => _toggleSmall(
-                                                      big,
-                                                      mid,
-                                                      small,
-                                                      v ?? false,
-                                                    ),
-                                            disabled: small.locked,
-                                          ),
-                                          const SizedBox(width: 8),
-                                          Expanded(
-                                            child: Text(
-                                              titleText,
-                                              style: TextStyle(
-                                                color: small.locked
-                                                    ? const Color(0xFF6D7777)
-                                                    : kDlgTextSub,
-                                                fontWeight: FontWeight.w600,
-                                                fontSize: 12.5,
-                                                height: 1.2,
-                                              ),
-                                              overflow: TextOverflow.ellipsis,
-                                            ),
-                                          ),
-                                          const SizedBox(width: 8),
-                                          Text(
-                                            doneText,
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        _buildTreeCheckbox(
+                                          value: small.selected,
+                                          onChanged: small.locked
+                                              ? null
+                                              : (v) => _toggleSmall(
+                                                    big,
+                                                    mid,
+                                                    small,
+                                                    v ?? false,
+                                                  ),
+                                          disabled: small.locked,
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: Text(
+                                            titleText,
                                             style: TextStyle(
                                               color: small.locked
                                                   ? const Color(0xFF6D7777)
                                                   : kDlgTextSub,
-                                              fontWeight: FontWeight.w700,
-                                              fontSize:
-                                                  small.locked ? 11.5 : 12,
+                                              fontWeight: FontWeight.w600,
+                                              fontSize: 12.5,
+                                              height: 1.2,
                                             ),
+                                            overflow: TextOverflow.ellipsis,
                                           ),
-                                        ],
-                                      ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Text(
+                                          doneText,
+                                          style: TextStyle(
+                                            color: small.locked
+                                                ? const Color(0xFF6D7777)
+                                                : kDlgTextSub,
+                                            fontWeight: FontWeight.w700,
+                                            fontSize: small.locked ? 11.5 : 12,
+                                          ),
+                                        ),
+                                      ],
                                     ),
                                   ),
-                                );
-                              },
-                            ),
-                        ],
-                      ),
+                                ),
+                              );
+                            },
+                          ),
+                      ],
                     ),
-                ],
-              ),
-          ],
-        ),
+                  ),
+              ],
+            ),
+        ],
       ),
     );
   }
@@ -1542,11 +1710,13 @@ class HomeworkQuickAddProxyDialogState
         'content': _content.text.trim(),
         'body': _composeBody(),
         'color': _color,
+        'splitParts': _selectedSplitParts,
       });
       return;
     }
 
     if (_manualPageMode) {
+      final linkedType = _effectiveLinkedHomeworkType();
       final page = _page.text.trim();
       final count = _count.text.trim();
       var content = _content.text.trim();
@@ -1564,7 +1734,7 @@ class HomeworkQuickAddProxyDialogState
         'studentId': widget.studentId,
         'flowId': _flowId,
         'action': action,
-        'type': '교재',
+        'type': linkedType,
         'title': title,
         'page': page,
         'count': count,
@@ -1574,12 +1744,13 @@ class HomeworkQuickAddProxyDialogState
           count: count,
           content: content,
         ),
-        'color': _colorForType('교재'),
+        'color': _colorForType(linkedType),
         'bookId': selectedBook.bookId,
         'gradeLabel': selectedBook.gradeLabel,
         'sourceUnitLevel': 'manual',
         'sourceUnitPath': null,
         'unitMappings': const <Map<String, dynamic>>[],
+        'splitParts': _selectedSplitParts,
       });
       return;
     }
@@ -1597,7 +1768,7 @@ class HomeworkQuickAddProxyDialogState
     final contentRaw = _rangeContent.text.trim();
     var title = titleRaw.isEmpty ? mergedTask.title : titleRaw;
     var content = contentRaw;
-    if (selectedUnits.length > 1) {
+    if (selectedUnits.length > 1 && mergedTask.allowAiSummaryTitle) {
       final aiSummary =
           await _createAiSummaryLabel(selectedBook, selectedUnits);
       if (!mounted) return;
@@ -1619,11 +1790,12 @@ class HomeworkQuickAddProxyDialogState
       return;
     }
 
+    final linkedType = _effectiveLinkedHomeworkType();
     Navigator.pop(context, {
       'studentId': widget.studentId,
       'flowId': _flowId,
       'action': action,
-      'type': '교재',
+      'type': linkedType,
       'title': title,
       'page': mergedTask.page,
       'count': mergedTask.count,
@@ -1633,7 +1805,7 @@ class HomeworkQuickAddProxyDialogState
         count: mergedTask.count,
         content: content,
       ),
-      'color': _colorForType('교재'),
+      'color': _colorForType(linkedType),
       'bookId': selectedBook.bookId,
       'gradeLabel': selectedBook.gradeLabel,
       'sourceUnitLevel': mergedTask.sourceUnitLevel,
@@ -1641,7 +1813,165 @@ class HomeworkQuickAddProxyDialogState
       'unitMappings': List<Map<String, dynamic>>.from(
         mergedTask.unitMappings.map((e) => Map<String, dynamic>.from(e)),
       ),
+      'splitParts': _selectedSplitParts,
     });
+  }
+
+  Widget _buildFlowBookPicker() {
+    if (_loadingAllFlowTextbooks) {
+      return const SizedBox(
+        width: 18,
+        height: 18,
+        child: CircularProgressIndicator(
+          strokeWidth: 2,
+          valueColor: AlwaysStoppedAnimation<Color>(kDlgTextSub),
+        ),
+      );
+    }
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        for (final flow in widget.flows)
+          _buildPickerChip(
+            label: flow.name,
+            selected: _flowId == flow.id && _selectedLinkedBookKey == null,
+            onTap: () async {
+              if (_flowId == flow.id && _selectedLinkedBookKey == null) return;
+              setState(() {
+                _flowId = flow.id;
+                _selectedLinkedBookKey = null;
+              });
+              await _handleFlowChanged(forceNoBookSelection: true);
+            },
+          ),
+        _buildPickerChip(
+          label: '교재 선택 안함',
+          selected: _selectedLinkedBookKey == null,
+          onTap: () async {
+            if (_selectedLinkedBookKey == null) return;
+            setState(() {
+              _selectedLinkedBookKey = null;
+              _units = const <_BigUnitSelectionNode>[];
+            });
+            await _handleFlowChanged(forceNoBookSelection: true);
+          },
+        ),
+        for (final link in _allLinkedTextbooks)
+          _buildPickerChip(
+            label: '${link.bookName} · ${link.gradeLabel}',
+            selected: _selectedLinkedBookKey == link.key,
+            onTap: () async {
+              if (_selectedLinkedBookKey == link.key) return;
+              setState(() {
+                _flowId = link.flowId;
+                _selectedLinkedBookKey = link.key;
+              });
+              await _handleFlowChanged(
+                preferredLinkedBookKey: link.key,
+              );
+            },
+          ),
+      ],
+    );
+  }
+
+  Widget _buildRangeSelectionPanel({
+    required _LinkedTextbook? selectedBook,
+    required bool waitingSelectedBook,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const YggDialogSectionHeader(
+          icon: Icons.account_tree_outlined,
+          title: '범위 선택',
+        ),
+        const SizedBox(height: 8),
+        if (waitingSelectedBook)
+          const SizedBox(
+            width: 18,
+            height: 18,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              valueColor: AlwaysStoppedAnimation<Color>(kDlgTextSub),
+            ),
+          )
+        else if (selectedBook == null)
+          _buildNoticeCard('교재를 선택하면 단원 범위를 지정할 수 있습니다.')
+        else ...[
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _buildPickerChip(
+                label: '교재 단원 선택',
+                selected: !_manualPageMode,
+                onTap: () {
+                  if (!_manualPageMode) return;
+                  setState(() => _manualPageMode = false);
+                  _refreshRangeAutoDraft();
+                },
+              ),
+              _buildPickerChip(
+                label: '페이지 직접 입력',
+                selected: _manualPageMode,
+                onTap: () {
+                  if (_manualPageMode) return;
+                  setState(() => _manualPageMode = true);
+                  _refreshRangeAutoDraft();
+                },
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          if (_manualPageMode)
+            _buildNoticeCard('페이지/문항/내용 입력은 왼쪽 패널에서 설정하세요.')
+          else
+            _buildMetadataTree(selectedBook),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildRightDetailPanel({
+    required bool waitingSelectedBook,
+    required _LinkedTextbook? selectedBook,
+  }) {
+    if (waitingSelectedBook) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 8),
+        child: SizedBox(
+          width: 18,
+          height: 18,
+          child: CircularProgressIndicator(
+            strokeWidth: 2,
+            valueColor: AlwaysStoppedAnimation<Color>(kDlgTextSub),
+          ),
+        ),
+      );
+    }
+    if (selectedBook == null) {
+      return _buildUnlinkedFlowMode();
+    }
+    if (_manualPageMode) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          TextField(
+            controller: _title,
+            style: const TextStyle(
+              color: kDlgText,
+              fontWeight: FontWeight.w600,
+            ),
+            decoration: _inputDecoration('과제명', hint: '예: 교재 과제'),
+          ),
+          const SizedBox(height: 12),
+          _buildManualPageInputs(),
+        ],
+      );
+    }
+    return _buildRangeInlineEditors();
   }
 
   @override
@@ -1650,96 +1980,94 @@ class HomeworkQuickAddProxyDialogState
     final waitingSelectedBook = _loadingFlowTextbooks &&
         _selectedLinkedBookKey != null &&
         selectedBook == null;
+    final showRangePanel = _selectedLinkedBookKey != null;
+    final double targetDialogWidth = showRangePanel ? 980 : 500;
+    final int pickerChipCount =
+        widget.flows.length + _allLinkedTextbooks.length + 1;
+    final int estimatedPickerRows =
+        ((pickerChipCount / (showRangePanel ? 5 : 4)).ceil().clamp(1, 8))
+            .toInt();
+    double targetDialogHeight = showRangePanel ? 700 : 620;
+    targetDialogHeight += (estimatedPickerRows - 2) * 24;
+    if (_manualPageMode) {
+      targetDialogHeight -= 46;
+    }
+    if (targetDialogHeight < (showRangePanel ? 660 : 580)) {
+      targetDialogHeight = showRangePanel ? 660 : 580;
+    }
+    final double maxDialogHeight = MediaQuery.of(context).size.height * 0.9;
+    if (targetDialogHeight > maxDialogHeight) {
+      targetDialogHeight = maxDialogHeight;
+    }
     return AlertDialog(
       backgroundColor: kDlgBg,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       title: const Text('과제 추가',
           style: TextStyle(color: kDlgText, fontWeight: FontWeight.w900)),
-      content: SizedBox(
-        width: 520,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
+      content: AnimatedContainer(
+        duration: const Duration(milliseconds: 130),
+        curve: Curves.easeOutQuad,
+        width: targetDialogWidth,
+        height: targetDialogHeight,
+        child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const YggDialogSectionHeader(icon: Icons.task_alt, title: '과제 정보'),
-            const SizedBox(height: 8),
-            if (_loadingAllFlowTextbooks)
-              const SizedBox(
-                width: 18,
-                height: 18,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  valueColor: AlwaysStoppedAnimation<Color>(kDlgTextSub),
+            Expanded(
+              flex: 12,
+              child: Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: kDlgPanelBg,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: kDlgBorder),
                 ),
-              )
-            else
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  for (final flow in widget.flows)
-                    _buildPickerChip(
-                      label: flow.name,
-                      selected:
-                          _flowId == flow.id && _selectedLinkedBookKey == null,
-                      onTap: () async {
-                        if (_flowId == flow.id &&
-                            _selectedLinkedBookKey == null) return;
-                        setState(() {
-                          _flowId = flow.id;
-                          _selectedLinkedBookKey = null;
-                        });
-                        await _handleFlowChanged(forceNoBookSelection: true);
-                      },
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const YggDialogSectionHeader(
+                      icon: Icons.task_alt,
+                      title: '과제 정보',
                     ),
-                  _buildPickerChip(
-                    label: '교재 선택 안함',
-                    selected: _selectedLinkedBookKey == null,
-                    onTap: () async {
-                      if (_selectedLinkedBookKey == null) return;
-                      setState(() {
-                        _selectedLinkedBookKey = null;
-                        _units = const <_BigUnitSelectionNode>[];
-                      });
-                      await _handleFlowChanged(forceNoBookSelection: true);
-                    },
-                  ),
-                  for (final link in _allLinkedTextbooks)
-                    _buildPickerChip(
-                      label: '${link.bookName} · ${link.gradeLabel}',
-                      selected: _selectedLinkedBookKey == link.key,
-                      onTap: () async {
-                        if (_selectedLinkedBookKey == link.key) return;
-                        setState(() {
-                          _flowId = link.flowId;
-                          _selectedLinkedBookKey = link.key;
-                        });
-                        await _handleFlowChanged(
-                          preferredLinkedBookKey: link.key,
-                        );
-                      },
+                    const SizedBox(height: 8),
+                    _buildFlowBookPicker(),
+                    const SizedBox(height: 10),
+                    const Divider(height: 1, thickness: 1, color: kDlgBorder),
+                    const SizedBox(height: 12),
+                    _buildRightDetailPanel(
+                      waitingSelectedBook: waitingSelectedBook,
+                      selectedBook: selectedBook,
                     ),
-                ],
+                    const SizedBox(height: 10),
+                    const Divider(height: 1, thickness: 1, color: kDlgBorder),
+                    const SizedBox(height: 8),
+                    const YggDialogSectionHeader(
+                      icon: Icons.tune_rounded,
+                      title: '출제 기본 옵션',
+                    ),
+                    const SizedBox(height: 6),
+                    _buildAssignmentOptions(),
+                  ],
+                ),
               ),
-            const SizedBox(height: 10),
-            const Divider(height: 1, thickness: 1, color: kDlgBorder),
-            const SizedBox(height: 12),
-            if (waitingSelectedBook)
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 8),
-                child: SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    valueColor: AlwaysStoppedAnimation<Color>(kDlgTextSub),
+            ),
+            if (showRangePanel) ...[
+              const SizedBox(width: 12),
+              Expanded(
+                flex: 11,
+                child: Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: kDlgPanelBg,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: kDlgBorder),
+                  ),
+                  child: _buildRangeSelectionPanel(
+                    selectedBook: selectedBook,
+                    waitingSelectedBook: waitingSelectedBook,
                   ),
                 ),
-              )
-            else if (selectedBook != null)
-              _buildLinkedFlowMode(selectedBook)
-            else
-              _buildUnlinkedFlowMode(),
+              ),
+            ],
           ],
         ),
       ),
@@ -1788,6 +2116,16 @@ class _LinkedTextbook {
   String get label => '$bookName · $gradeLabel';
 }
 
+class _IssuedSmallSummary {
+  final DateTime? latestFinishedAt;
+  final int completedCount;
+
+  const _IssuedSmallSummary({
+    required this.latestFinishedAt,
+    required this.completedCount,
+  });
+}
+
 class _BigUnitSelectionNode {
   final String name;
   final int orderIndex;
@@ -1816,6 +2154,7 @@ class _SmallUnitSelectionNode {
   final Map<int, int> pageCounts;
   bool locked;
   DateTime? finishedAt;
+  int completedCount;
   bool selected = false;
   bool explicitSelected = false;
 
@@ -1827,6 +2166,7 @@ class _SmallUnitSelectionNode {
     required this.pageCounts,
     this.locked = false,
     this.finishedAt,
+    this.completedCount = 0,
   });
 
   String get label {
@@ -1868,6 +2208,7 @@ class _UnitTask {
   final String sourceUnitLevel;
   final String sourceUnitPath;
   final List<Map<String, dynamic>> unitMappings;
+  final bool allowAiSummaryTitle;
 
   const _UnitTask({
     required this.title,
@@ -1877,6 +2218,21 @@ class _UnitTask {
     required this.sourceUnitLevel,
     required this.sourceUnitPath,
     required this.unitMappings,
+    required this.allowAiSummaryTitle,
+  });
+}
+
+class _ExplicitSelectionAutoTitle {
+  final String title;
+  final String sourceUnitLevel;
+  final String sourceUnitPath;
+  final String pathSummary;
+
+  const _ExplicitSelectionAutoTitle({
+    required this.title,
+    required this.sourceUnitLevel,
+    required this.sourceUnitPath,
+    required this.pathSummary,
   });
 }
 

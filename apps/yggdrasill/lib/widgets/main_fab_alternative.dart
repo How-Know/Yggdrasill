@@ -86,25 +86,14 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
   }
 
   void _showFloatingSnackBar(BuildContext context, String message) {
-    setState(() {
-      _fabBottomPadding = 80.0 + 16.0;
-    });
     _snackBarController = ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(message),
         backgroundColor: const Color(0xFF2A2A2A),
-        behavior: SnackBarBehavior.floating,
-        margin: const EdgeInsets.only(bottom: 16.0, right: 16.0, left: 16.0),
+        behavior: SnackBarBehavior.fixed,
         duration: const Duration(seconds: 2),
       ),
     );
-    _snackBarController?.closed.then((_) {
-      if (mounted) {
-        setState(() {
-          _fabBottomPadding = 16.0;
-        });
-      }
-    });
   }
 
   void _insertMenuOverlay(BuildContext context) {
@@ -366,7 +355,7 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
           SnackBar(
             content: Text('메모 추가 실패: $e'),
             backgroundColor: const Color(0xFFE53E3E),
-            behavior: SnackBarBehavior.floating,
+            behavior: SnackBarBehavior.fixed,
           ),
         );
       }
