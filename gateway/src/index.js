@@ -110,27 +110,7 @@ client.on('message', async (topic, payload) => {
     const { error } = await supa.rpc(rpc, params);
     if (error) console.error('[gateway] rpc error', error);
 
-    // Immediately publish fresh list to bound devices for this student (optimistic refresh)
-    try {
-      const { data: binds, error: bErr } = await supa
-        .from('m5_device_bindings')
-        .select('device_id')
-        .eq('academy_id', academy_id)
-        .eq('student_id', student_id)
-        .eq('active', true)
-        .limit(10);
-      if (!bErr && Array.isArray(binds) && binds.length > 0) {
-        const { data: items, error: lerr } = await supa.rpc('m5_list_homeworks', { p_academy_id: academy_id, p_student_id: student_id });
-        if (!lerr) {
-          for (const b of binds) {
-            const device_id2 = b.device_id;
-            client.publish(`academies/${academy_id}/devices/${device_id2}/homeworks`, JSON.stringify({ items: items || [] }), { qos: 1, retain: false });
-          }
-        }
-      }
-    } catch (e) {
-      console.warn('[gateway] immediate refresh failed', e);
-    }
+    // Realtime subscription handles pushing updated list to devices (no optimistic refresh to avoid double-send)
 
       // Optional: publish ack
       client.publish(`academies/${academy_id}/ack/${idempotency_key}`, JSON.stringify({ ok: !error, action }), { qos: 1, retain: false });

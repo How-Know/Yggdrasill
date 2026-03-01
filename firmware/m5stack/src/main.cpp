@@ -134,6 +134,8 @@ static void configureMqttServer() {
   Serial.print("MQTT host: "); Serial.println(host);
 }
 
+void fw_publish_list_homeworks(const char* studentIdArg);
+
 void onMqttConnect(bool sessionPresent) {
   (void)sessionPresent;
   ackFilterPrefix = String("academies/") + academyId + "/ack/";
@@ -162,9 +164,9 @@ void onMqttConnect(bool sessionPresent) {
   // Request initial data: 바인딩된 학생이 있으면 student_info 요청, 없으면 list_today 요청
   String cmdTopic = String("academies/") + academyId + "/devices/" + deviceId + "/command";
   if (studentId.length() > 0) {
-    // 바인딩된 학생이 있으면 정보 요청 (homeworks는 서버에서 자동 푸시)
-    Serial.printf("[MQTT] Requesting student_info for: %s\n", studentId.c_str());
+    Serial.printf("[MQTT] Requesting student_info + list_homeworks for: %s\n", studentId.c_str());
     fw_publish_student_info(studentId.c_str());
+    fw_publish_list_homeworks(studentId.c_str());
   } else {
     // 바인딩 없으면 학생 리스트 요청
     DynamicJsonDocument cmd(64);
@@ -228,12 +230,21 @@ void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties 
     ui_port_update_students(arr);
   }
   if (t == homeworksTopic) {
-    DynamicJsonDocument doc(4096);
-    DeserializationError err = deserializeJson(doc, payload, len);
-    if (!err) {
-      JsonArray arr = doc["items"].as<JsonArray>();
-      ui_port_update_homeworks(arr);
-    }
+    static String hw_acc; static size_t hw_expected = 0; static size_t hw_received = 0;
+    if (index == 0) { hw_acc.remove(0); hw_acc.reserve(total ? total : (len + 512)); hw_expected = total ? total : len; hw_received = 0; }
+    hw_acc.concat(String(payload).substring(0, (int)len));
+    hw_received += len;
+    Serial.printf("[HW] chunk: idx=%u len=%u total=%u recv=%u\n", (unsigned)index, (unsigned)len, (unsigned)total, (unsigned)hw_received);
+    if (total && hw_received < total) { return; }
+    DynamicJsonDocument doc(hw_expected + 2048);
+    DeserializationError err = deserializeJson(doc, hw_acc.c_str(), hw_acc.length());
+    if (err) { Serial.print("[HW] parse error: "); Serial.println(err.c_str()); hw_acc.remove(0); return; }
+    JsonArray arr = doc["items"].as<JsonArray>();
+    Serial.printf("[HW] items count=%d heap=%u\n", (int)arr.size(), (unsigned)esp_get_free_heap_size());
+    Serial.println("[HW] >>> calling ui_port_update_homeworks");
+    ui_port_update_homeworks(arr);
+    Serial.printf("[HW] <<< ui_port_update_homeworks returned heap=%u\n", (unsigned)esp_get_free_heap_size());
+    hw_acc.remove(0);
   }
   if (t == updateTopic) {
     String body; body.reserve(len + 1);
@@ -252,16 +263,19 @@ void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties 
 }
 
 void sendCommand(const char* action, const char* itemId) {
+  Serial.printf("[CMD] >>> sendCommand action=%s itemId=%s heap=%u\n", action, itemId, (unsigned)esp_get_free_heap_size());
   DynamicJsonDocument doc(256);
   doc["action"] = action;
   doc["academy_id"] = academyId;
   doc["student_id"] = studentId;
   doc["item_id"] = itemId;
   doc["idempotency_key"] = String((uint32_t)esp_random(), HEX);
-  doc["at"] = ""; // optional
+  doc["at"] = "";
   String payload; serializeJson(doc, payload);
   String topic = String("academies/") + academyId + "/students/" + studentId + "/homework/" + itemId + "/command";
+  Serial.printf("[CMD] publish topic=%s len=%d\n", topic.c_str(), (int)payload.length());
   mqtt.publish(topic.c_str(), 1, false, payload.c_str());
+  Serial.println("[CMD] <<< sendCommand done");
 }
 
 // ===== UI publish bridge implementations =====
@@ -318,8 +332,22 @@ void fw_publish_student_info(const char* studentIdArg) {
   mqtt.publish(topic.c_str(), 1, false, payload.c_str());
 }
 
+void fw_publish_list_homeworks(const char* studentIdArg) {
+  if (!studentIdArg || !*studentIdArg) return;
+  DynamicJsonDocument doc(128);
+  doc["action"] = "list_homeworks";
+  doc["student_id"] = studentIdArg;
+  String payload; serializeJson(doc, payload);
+  String topic = String("academies/") + academyId + "/devices/" + deviceId + "/command";
+  mqtt.publish(topic.c_str(), 1, false, payload.c_str());
+}
+
 void fw_publish_homework_action(const char* action, const char* itemId) {
-  if (!action || !*action || !itemId || !*itemId) return;
+  Serial.printf("[HW-ACTION] >>> action=%s itemId=%s heap=%u\n", action ? action : "null", itemId ? itemId : "null", (unsigned)esp_get_free_heap_size());
+  if (!action || !*action || !itemId || !*itemId) {
+    Serial.println("[HW-ACTION] SKIP: null action or itemId");
+    return;
+  }
   DynamicJsonDocument doc(256);
   doc["action"] = action;
   doc["academy_id"] = academyId;
@@ -330,7 +358,9 @@ void fw_publish_homework_action(const char* action, const char* itemId) {
   doc["updated_by"] = studentId;
   String payload; serializeJson(doc, payload);
   String topic = String("academies/") + academyId + "/students/" + studentId + "/homework/" + itemId + "/command";
+  Serial.printf("[HW-ACTION] publish topic len=%d payload len=%d\n", (int)topic.length(), (int)payload.length());
   mqtt.publish(topic.c_str(), 1, false, payload.c_str());
+  Serial.println("[HW-ACTION] <<< done");
 }
 
 void fw_publish_pause_all() {
@@ -490,10 +520,7 @@ void loop() {
       M5.Power.setVibration(0);
     }
   }
-  // Example: A button to submit, B to confirm, C to wait
-  if (M5.BtnA.wasPressed()) { sendCommand("start", "item-1"); }
-  if (M5.BtnB.wasPressed()) { sendCommand("submit", "item-1"); }
-  if (M5.BtnC.wasPressed()) { sendCommand("wait", "item-1"); }
+  // Physical buttons disabled (no longer needed with touch UI)
 
   // Periodic online retained presence
   static uint32_t lastPresence = 0;

@@ -3,6 +3,7 @@
 #include <lvgl.h>
 #include "screensaver.h"
 #include <LittleFS.h>
+#include <cstring>
 #include "ota_update.h"
 #include "version.h"
 
@@ -38,10 +39,14 @@ static lv_obj_t* s_bottom_sheet = nullptr;
 static lv_obj_t* s_bottom_handle = nullptr;
 static lv_obj_t* s_settings_scr = nullptr;
 static const lv_font_t* s_global_font = nullptr;
-static bool s_homeworks_mode = false; // false: 학생 리스트, true: 과제/정보 pager
+static bool s_homeworks_mode = false; // false: 학생 리스트, true: 바인딩 후 메인 플로우
 static lv_obj_t* s_empty_label = nullptr;
 static lv_obj_t* s_empty_overlay = nullptr;
 static lv_obj_t* s_volume_popup = nullptr;
+static lv_obj_t* s_bind_confirm_popup = nullptr;
+static lv_obj_t* s_entry_hub = nullptr;
+static lv_obj_t* s_entry_name_label = nullptr;
+static lv_obj_t* s_student_info_screen = nullptr;
 static uint8_t s_current_volume = 50;
 static lv_timer_t* s_vibration_timer = nullptr;
 static bool s_vibration_on = false;
@@ -53,58 +58,55 @@ static lv_obj_t* s_ota_popup = nullptr;
 static lv_obj_t* s_ota_progress_bar = nullptr;
 static lv_obj_t* s_ota_status_label = nullptr;
 static uint32_t s_last_refresh_ms = 0;
+static String s_pending_bind_student_id = "";
+static String s_pending_bind_student_name = "";
+static String s_student_name_cache = u8"학생";
+static String s_student_school_cache = "";
+static int s_student_grade_cache = -1;
+static bool s_sheet_dragging = false;
+static bool s_sheet_drag_moved = false;
+static lv_coord_t s_drag_start_touch_y = 0;
+static lv_coord_t s_drag_start_sheet_y = 240;
 
-// Phase 2 카드의 accumulated 실시간 업데이트용
-struct Phase2CardData {
-  lv_obj_t* card;
-  lv_obj_t* time_lbl;
-  uint32_t base_accumulated;
-  uint32_t start_tick;
-  lv_timer_t* timer;
-};
+// 이전 과제 상태 캐시 (flicker 방지)
+struct HwCacheEntry { char id[64]; int phase; };
+static HwCacheEntry s_hw_cache[16];
+static uint8_t s_hw_cache_cnt = 0;
 
-static void update_phase2_time_cb(lv_timer_t* timer) {
-  if (!timer || !timer->user_data) return;
-  Phase2CardData* data = (Phase2CardData*)timer->user_data;
-  
-  // 강화된 유효성 체크: 카드와 라벨 모두 확인
-  if (!data->card || !data->time_lbl) {
-    Serial.println("[TIMER] Invalid data pointers - deleting timer");
-    lv_timer_del(timer);
-    free(data);
-    return;
+// Phase 2 실시간 시간 & Phase 4 깜빡임: 글로벌 단일 타이머로 관리
+struct Phase2Entry { lv_obj_t* lbl; uint32_t base_acc; uint32_t start_tick; };
+static Phase2Entry s_p2_entries[8];
+static uint8_t s_p2_cnt = 0;
+
+static lv_obj_t* s_p4_cards[8];
+static uint8_t s_p4_cnt = 0;
+static uint32_t s_p4_colors[8];
+static bool s_p4_blink_on = false;
+
+static lv_timer_t* s_hw_global_timer = nullptr;
+static uint32_t s_hw_timer_epoch = 0;
+
+static void hw_global_timer_cb(lv_timer_t* timer) {
+  uint32_t epoch = (uint32_t)(uintptr_t)timer->user_data;
+  if (epoch != s_hw_timer_epoch) { lv_timer_del(timer); return; }
+
+  for (uint8_t i = 0; i < s_p2_cnt; i++) {
+    if (!s_p2_entries[i].lbl || !lv_obj_is_valid(s_p2_entries[i].lbl)) continue;
+    uint32_t elapsed = (lv_tick_get() - s_p2_entries[i].start_tick) / 1000;
+    uint32_t total = s_p2_entries[i].base_acc + elapsed;
+    int h = total / 3600, m = (total % 3600) / 60;
+    char buf[32];
+    if (h > 0) snprintf(buf, sizeof(buf), "%dh %dm", h, m);
+    else snprintf(buf, sizeof(buf), "%dm", m);
+    lv_label_set_text(s_p2_entries[i].lbl, buf);
   }
-  
-  // lv_obj_is_valid는 완벽하지 않으므로, 추가로 부모 체크
-  if (!lv_obj_is_valid(data->card) || !lv_obj_is_valid(data->time_lbl)) {
-    Serial.println("[TIMER] Objects invalidated - deleting timer");
-    lv_timer_del(timer);
-    free(data);
-    return;
+
+  s_p4_blink_on = !s_p4_blink_on;
+  for (uint8_t i = 0; i < s_p4_cnt; i++) {
+    if (!s_p4_cards[i] || !lv_obj_is_valid(s_p4_cards[i])) continue;
+    lv_opa_t opa = s_p4_blink_on ? LV_OPA_COVER : LV_OPA_TRANSP;
+    lv_obj_set_style_border_opa(s_p4_cards[i], opa, 0);
   }
-  
-  // 카드가 리스트에 여전히 속해있는지 확인
-  lv_obj_t* parent = lv_obj_get_parent(data->card);
-  if (!parent || !lv_obj_is_valid(parent)) {
-    Serial.println("[TIMER] Parent invalidated - deleting timer");
-    lv_timer_del(timer);
-    free(data);
-    return;
-  }
-  
-  // 정상 동작
-  uint32_t elapsed_sec = (lv_tick_get() - data->start_tick) / 1000;
-  uint32_t total_sec = data->base_accumulated + elapsed_sec;
-  int hours = total_sec / 3600;
-  int mins = (total_sec % 3600) / 60;
-  
-  char time_buf[32];
-  if (hours > 0) {
-    snprintf(time_buf, sizeof(time_buf), "%dh %dm", hours, mins);
-  } else {
-    snprintf(time_buf, sizeof(time_buf), "%dm", mins);
-  }
-  lv_label_set_text(data->time_lbl, time_buf);
 }
 
 bool g_bottom_sheet_open = false;
@@ -114,6 +116,14 @@ static void show_volume_popup(void);
 static void close_volume_popup(void);
 static void show_brightness_popup(void);
 static void close_brightness_popup(void);
+static void close_bind_confirm_popup(void);
+static void show_entry_hub_overlay(void);
+static void close_student_info_screen(bool show_entry_hub);
+static void show_student_info_screen(void);
+static void show_bind_confirm_popup(const char* student_id, const char* student_name);
+static void populate_student_info_container(lv_obj_t* target, bool include_back_header);
+static void build_homeworks_ui_internal(void);
+static void bottom_sheet_drag_cb(lv_event_t* e);
 static void update_battery_widget(void);
 // Delayed restart helper so UI message can render before reboot
 static void restart_app_timer_cb(lv_timer_t* timer) {
@@ -126,10 +136,6 @@ static void anim_set_bg_gray(void* obj, int32_t v) {
   lv_obj_set_style_bg_color((lv_obj_t*)obj, lv_color_hex(hex), 0);
 }
 
-// Safe exec wrapper for border opacity animation (avoid mismatched function signature)
-static void anim_exec_set_border_opa(void* obj, int32_t v) {
-  lv_obj_set_style_border_opa((lv_obj_t*)obj, (lv_opa_t)v, LV_PART_MAIN);
-}
 
 static void refresh_list_cb(lv_event_t* e) {
   if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
@@ -172,81 +178,501 @@ static void append_empty_message() {
   lv_obj_center(lbl);
 }
 
-static void handle_drag_end(lv_event_t* e) {
+static lv_coord_t clamp_sheet_y(lv_coord_t y) {
+  if (y < 140) return 140;
+  if (y > 240) return 240;
+  return y;
+}
+
+static void set_bottom_sheet_position(lv_coord_t sheet_y) {
   if (!s_bottom_sheet || !s_bottom_handle) return;
-  lv_coord_t sheetY = lv_obj_get_y(s_bottom_sheet);
-  lv_coord_t threshold = (140 + 240) / 2; // 중간 지점 = 190
-  
+  lv_coord_t clamped_sheet = clamp_sheet_y(sheet_y);
+  lv_coord_t clamped_handle = clamped_sheet - 24;
+  lv_obj_set_y(s_bottom_sheet, clamped_sheet);
+  lv_obj_set_y(s_bottom_handle, clamped_handle);
+}
+
+static void anim_set_sheet_y(void* obj, int32_t v) {
+  lv_obj_set_y((lv_obj_t*)obj, clamp_sheet_y((lv_coord_t)v));
+}
+static void anim_set_handle_y(void* obj, int32_t v) {
+  lv_coord_t clamped = clamp_sheet_y((lv_coord_t)(v + 24)) - 24;
+  lv_obj_set_y((lv_obj_t*)obj, clamped);
+}
+
+static void animate_bottom_sheet_to(bool open_target) {
+  if (!s_bottom_sheet || !s_bottom_handle) return;
+  lv_coord_t target_sheet = open_target ? 140 : 240;
+  lv_coord_t target_handle = target_sheet - 24;
+
+  lv_anim_del(s_bottom_sheet, anim_set_sheet_y);
+  lv_anim_del(s_bottom_handle, anim_set_handle_y);
+  lv_anim_del(s_bottom_sheet, (lv_anim_exec_xcb_t)lv_obj_set_y);
+  lv_anim_del(s_bottom_handle, (lv_anim_exec_xcb_t)lv_obj_set_y);
+
   lv_anim_t a1; lv_anim_init(&a1); lv_anim_set_var(&a1, s_bottom_sheet);
-  lv_anim_set_time(&a1, 250); lv_anim_set_path_cb(&a1, lv_anim_path_ease_out);
-  lv_anim_set_exec_cb(&a1, (lv_anim_exec_xcb_t)lv_obj_set_y);
+  lv_anim_set_time(&a1, 230); lv_anim_set_path_cb(&a1, lv_anim_path_ease_out);
+  lv_anim_set_exec_cb(&a1, anim_set_sheet_y);
+  lv_anim_set_values(&a1, clamp_sheet_y(lv_obj_get_y(s_bottom_sheet)), target_sheet);
+
   lv_anim_t a2; lv_anim_init(&a2); lv_anim_set_var(&a2, s_bottom_handle);
-  lv_anim_set_time(&a2, 250); lv_anim_set_path_cb(&a2, lv_anim_path_ease_out);
-  lv_anim_set_exec_cb(&a2, (lv_anim_exec_xcb_t)lv_obj_set_y);
-  
-  if (sheetY < threshold) {
-    // 더 위쪽이면 완전히 열기
-    lv_anim_set_values(&a1, sheetY, 140);
-    lv_anim_set_values(&a2, lv_obj_get_y(s_bottom_handle), 116);
-    g_bottom_sheet_open = true;
-  } else {
-    // 더 아래쪽이면 완전히 닫기
-    lv_anim_set_values(&a1, sheetY, 240);
-    lv_anim_set_values(&a2, lv_obj_get_y(s_bottom_handle), 216);
-    g_bottom_sheet_open = false;
+  lv_anim_set_time(&a2, 230); lv_anim_set_path_cb(&a2, lv_anim_path_ease_out);
+  lv_anim_set_exec_cb(&a2, anim_set_handle_y);
+  lv_anim_set_values(&a2, lv_obj_get_y(s_bottom_handle), target_handle);
+
+  lv_anim_start(&a1);
+  lv_anim_start(&a2);
+  g_bottom_sheet_open = open_target;
+}
+
+static void handle_drag_end(lv_event_t* e) {
+  (void)e;
+  if (!s_bottom_sheet || !s_bottom_handle) return;
+  lv_coord_t sheet_y = clamp_sheet_y(lv_obj_get_y(s_bottom_sheet));
+  lv_coord_t threshold = (140 + 240) / 2; // 190
+  animate_bottom_sheet_to(sheet_y < threshold);
+}
+
+static bool is_entry_hub_visible(void) {
+  return s_entry_hub && lv_obj_is_valid(s_entry_hub) && !lv_obj_has_flag(s_entry_hub, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void bottom_sheet_drag_cb(lv_event_t* e) {
+  if (!s_bottom_sheet || !s_bottom_handle) return;
+  if (is_entry_hub_visible()) return;
+  lv_event_code_t code = lv_event_get_code(e);
+  lv_indev_t* indev = lv_event_get_indev(e);
+  if (!indev) return;
+  lv_point_t p;
+  lv_indev_get_point(indev, &p);
+
+  if (code == LV_EVENT_PRESSED) {
+    lv_anim_del(s_bottom_sheet, (lv_anim_exec_xcb_t)lv_obj_set_y);
+    lv_anim_del(s_bottom_handle, (lv_anim_exec_xcb_t)lv_obj_set_y);
+    s_sheet_dragging = true;
+    s_sheet_drag_moved = false;
+    s_drag_start_touch_y = p.y;
+    s_drag_start_sheet_y = clamp_sheet_y(lv_obj_get_y(s_bottom_sheet));
+    return;
   }
-  lv_anim_start(&a1); lv_anim_start(&a2);
+
+  if (code == LV_EVENT_PRESSING && s_sheet_dragging) {
+    lv_coord_t delta = (lv_coord_t)(p.y - s_drag_start_touch_y);
+    if (delta > 3 || delta < -3) s_sheet_drag_moved = true;
+    lv_coord_t raw_y = s_drag_start_sheet_y + delta;
+    set_bottom_sheet_position(raw_y);
+    return;
+  }
+
+  if ((code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) && s_sheet_dragging) {
+    s_sheet_dragging = false;
+    if (s_sheet_drag_moved) {
+      handle_drag_end(e);
+    }
+  }
 }
 
 void toggle_bottom_sheet(void) {
   if (!s_bottom_sheet || !s_bottom_handle) return;
-  lv_anim_t a1; lv_anim_init(&a1); lv_anim_set_var(&a1, s_bottom_sheet);
-  lv_anim_set_time(&a1, 250); lv_anim_set_path_cb(&a1, lv_anim_path_ease_out);
-  lv_anim_set_exec_cb(&a1, (lv_anim_exec_xcb_t)lv_obj_set_y);
-  lv_anim_t a2; lv_anim_init(&a2); lv_anim_set_var(&a2, s_bottom_handle);
-  lv_anim_set_time(&a2, 250); lv_anim_set_path_cb(&a2, lv_anim_path_ease_out);
-  lv_anim_set_exec_cb(&a2, (lv_anim_exec_xcb_t)lv_obj_set_y);
-  if (g_bottom_sheet_open) {
-    lv_anim_set_values(&a1, 140, 240);
-    lv_anim_set_values(&a2, 116, 216);
-    g_bottom_sheet_open = false;
-  } else {
-    lv_anim_set_values(&a1, 240, 140);
-    lv_anim_set_values(&a2, 216, 116);
-    g_bottom_sheet_open = true;
-  }
-  lv_anim_start(&a1); lv_anim_start(&a2);
+  if (is_entry_hub_visible()) return;
+  animate_bottom_sheet_to(!g_bottom_sheet_open);
 }
 
 static void create_base_container() {
   if (s_stage) return;
   lv_obj_t* scr = lv_scr_act();
-  // container (full screen, no rounding)
-  lv_obj_t* container = lv_obj_create(scr);
-  lv_obj_set_size(container, lv_pct(100), lv_pct(100));
-  lv_obj_set_style_bg_color(container, lv_color_hex(0x0B1112), 0);
-  lv_obj_set_style_border_width(container, 0, 0);
-  lv_obj_set_style_radius(container, 0, 0);
-  lv_obj_set_style_pad_all(container, 0, 0);
-  lv_obj_set_scrollbar_mode(container, LV_SCROLLBAR_MODE_OFF);
-  if (s_global_font) lv_obj_set_style_text_font(container, s_global_font, 0);
-
-  // stage
-  s_stage = lv_obj_create(container);
+  // 단일 루트(stage)로 평탄화해 불필요한 컨테이너 중첩 제거
+  s_stage = lv_obj_create(scr);
   lv_obj_set_size(s_stage, lv_pct(100), lv_pct(100));
-  lv_obj_set_style_bg_opa(s_stage, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_bg_color(s_stage, lv_color_hex(0x0B1112), 0);
+  lv_obj_set_style_bg_opa(s_stage, LV_OPA_COVER, 0);
   lv_obj_set_style_border_width(s_stage, 0, 0);
   lv_obj_set_style_radius(s_stage, 0, 0);
   lv_obj_set_style_pad_all(s_stage, 0, 0);
   lv_obj_set_scrollbar_mode(s_stage, LV_SCROLLBAR_MODE_OFF);
+  lv_obj_clear_flag(s_stage, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_style_pad_all(s_stage, 0, 0);
+  lv_obj_set_scrollbar_mode(s_stage, LV_SCROLLBAR_MODE_OFF);
+  lv_obj_clear_flag(s_stage, LV_OBJ_FLAG_SCROLLABLE);
   if (s_global_font) lv_obj_set_style_text_font(s_stage, s_global_font, 0);
   // stage 하위 라벨에도 기본 폰트 전파
   lv_obj_set_style_text_font(s_stage, s_global_font, LV_PART_MAIN | LV_STATE_DEFAULT);
 }
 
+static void show_transient_notice(const char* message) {
+  if (!message || !*message) return;
+  lv_obj_t* popup = lv_obj_create(lv_scr_act());
+  lv_obj_set_size(popup, 220, 90);
+  lv_obj_center(popup);
+  lv_obj_set_style_bg_color(popup, lv_color_hex(0x202020), 0);
+  lv_obj_set_style_bg_opa(popup, LV_OPA_90, 0);
+  lv_obj_set_style_border_width(popup, 0, 0);
+  lv_obj_set_style_radius(popup, 12, 0);
+  lv_obj_set_style_pad_all(popup, 12, 0);
+  lv_obj_clear_flag(popup, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_t* label = lv_label_create(popup);
+  if (s_global_font) lv_obj_set_style_text_font(label, s_global_font, 0);
+  lv_obj_set_style_text_color(label, lv_color_hex(0xFFFFFF), 0);
+  lv_label_set_text(label, message);
+  lv_obj_center(label);
+
+  lv_timer_t* close_timer = lv_timer_create([](lv_timer_t* t) {
+    lv_obj_t* target = (lv_obj_t*)t->user_data;
+    if (target && lv_obj_is_valid(target)) lv_obj_del(target);
+    lv_timer_del(t);
+  }, 1200, popup);
+  lv_timer_set_repeat_count(close_timer, 1);
+}
+
+static void close_bind_confirm_popup(void) {
+  if (s_bind_confirm_popup && lv_obj_is_valid(s_bind_confirm_popup)) {
+    lv_obj_del(s_bind_confirm_popup);
+  }
+  s_bind_confirm_popup = nullptr;
+  s_pending_bind_student_id = "";
+  s_pending_bind_student_name = "";
+}
+
+static void close_student_info_screen(bool show_entry_hub) {
+  if (s_student_info_screen && lv_obj_is_valid(s_student_info_screen)) {
+    lv_obj_del(s_student_info_screen);
+  }
+  s_student_info_screen = nullptr;
+  if (show_entry_hub) show_entry_hub_overlay();
+}
+
+static void populate_student_info_container(lv_obj_t* target, bool include_back_header) {
+  if (!target || !lv_obj_is_valid(target)) return;
+  lv_obj_clean(target);
+  lv_obj_set_style_bg_color(target, lv_color_hex(0x141414), 0);
+  lv_obj_set_style_bg_opa(target, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(target, 0, 0);
+  lv_obj_set_style_radius(target, 0, 0);
+  lv_obj_set_style_pad_all(target, 16, 0);
+  lv_obj_set_style_pad_row(target, 8, 0);
+  lv_obj_set_scrollbar_mode(target, LV_SCROLLBAR_MODE_OFF);
+  lv_obj_set_scroll_dir(target, LV_DIR_VER);
+  lv_obj_set_flex_flow(target, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_flex_align(target, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START);
+
+  if (include_back_header) {
+    lv_obj_t* header = lv_obj_create(target);
+    lv_obj_set_width(header, lv_pct(100));
+    lv_obj_set_height(header, 44);
+    lv_obj_set_style_bg_opa(header, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(header, 0, 0);
+    lv_obj_set_style_pad_all(header, 0, 0);
+    lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(header, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+    lv_obj_t* back_btn = lv_btn_create(header);
+    lv_obj_set_size(back_btn, 38, 38);
+    lv_obj_set_style_radius(back_btn, 10, 0);
+    lv_obj_set_style_bg_color(back_btn, lv_color_hex(0x1E1E1E), 0);
+    lv_obj_set_style_border_width(back_btn, 0, 0);
+    lv_obj_set_style_shadow_width(back_btn, 0, 0);
+    lv_obj_t* back_lbl = lv_label_create(back_btn);
+    if (s_global_font) lv_obj_set_style_text_font(back_lbl, s_global_font, 0);
+    lv_obj_set_style_text_color(back_lbl, lv_color_hex(0xE6E6E6), 0);
+    lv_label_set_text(back_lbl, "<");
+    lv_obj_center(back_lbl);
+    lv_obj_add_event_cb(back_btn, [](lv_event_t* e) {
+      (void)e;
+      close_student_info_screen(true);
+    }, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t* title = lv_label_create(header);
+    if (s_global_font) lv_obj_set_style_text_font(title, s_global_font, 0);
+    lv_obj_set_style_text_color(title, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_pad_left(title, 10, 0);
+    lv_label_set_text(title, u8"학생 정보");
+  }
+
+  lv_obj_t* name_lbl = lv_label_create(target);
+  if (s_global_font) lv_obj_set_style_text_font(name_lbl, s_global_font, 0);
+  lv_obj_set_style_text_color(name_lbl, lv_color_hex(0xE6E6E6), 0);
+  lv_label_set_text(name_lbl, s_student_name_cache.c_str());
+
+  lv_obj_t* spacer = lv_obj_create(target);
+  lv_obj_set_size(spacer, 1, 14);
+  lv_obj_set_style_bg_opa(spacer, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(spacer, 0, 0);
+
+  lv_obj_t* sg = lv_label_create(target);
+  lv_obj_set_style_text_color(sg, lv_color_hex(0xA0A0A0), 0);
+  if (s_global_font) lv_obj_set_style_text_font(sg, s_global_font, 0);
+  char line2[128];
+  if (s_student_school_cache.length() > 0 && s_student_grade_cache >= 0) {
+    snprintf(line2, sizeof(line2), u8"%s · %d학년", s_student_school_cache.c_str(), s_student_grade_cache);
+  } else if (s_student_school_cache.length() > 0) {
+    snprintf(line2, sizeof(line2), "%s", s_student_school_cache.c_str());
+  } else if (s_student_grade_cache >= 0) {
+    snprintf(line2, sizeof(line2), u8"%d학년", s_student_grade_cache);
+  } else {
+    snprintf(line2, sizeof(line2), u8"—");
+  }
+  lv_label_set_text(sg, line2);
+
+  lv_obj_t* spacer2 = lv_obj_create(target);
+  lv_obj_set_size(spacer2, 1, 28);
+  lv_obj_set_style_bg_opa(spacer2, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(spacer2, 0, 0);
+
+  lv_obj_t* logout_btn = lv_btn_create(target);
+  lv_obj_set_size(logout_btn, 200, 44);
+  lv_obj_set_style_radius(logout_btn, 22, 0);
+  lv_obj_set_style_bg_color(logout_btn, lv_color_hex(0xDC143C), 0);
+  lv_obj_set_style_border_width(logout_btn, 0, 0);
+  lv_obj_set_style_shadow_width(logout_btn, 0, 0);
+  lv_obj_t* logout_lbl = lv_label_create(logout_btn);
+  if (s_global_font) lv_obj_set_style_text_font(logout_lbl, s_global_font, 0);
+  lv_label_set_text(logout_lbl, u8"로그아웃");
+  lv_obj_center(logout_lbl);
+  lv_obj_add_event_cb(logout_btn, [](lv_event_t* e) {
+    (void)e;
+
+    lv_obj_t* popup = lv_obj_create(lv_scr_act());
+    lv_obj_set_size(popup, 280, 160);
+    lv_obj_center(popup);
+    lv_obj_set_style_radius(popup, 20, 0);
+    lv_obj_set_style_bg_color(popup, lv_color_hex(0x202020), 0);
+    lv_obj_set_style_border_width(popup, 0, 0);
+    lv_obj_set_style_shadow_width(popup, 20, 0);
+    lv_obj_set_style_shadow_opa(popup, LV_OPA_30, 0);
+    lv_obj_clear_flag(popup, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t* msg_lbl = lv_label_create(popup);
+    if (s_global_font) lv_obj_set_style_text_font(msg_lbl, s_global_font, 0);
+    lv_obj_set_style_text_color(msg_lbl, lv_color_hex(0xFFFFFF), 0);
+    lv_label_set_text(msg_lbl, u8"오늘도 수고했어!");
+    lv_obj_center(msg_lbl);
+
+    fw_publish_unbind();
+    lv_timer_t* restart_timer = lv_timer_create(restart_app_timer_cb, 1800, NULL);
+    lv_timer_set_repeat_count(restart_timer, 1);
+  }, LV_EVENT_CLICKED, NULL);
+}
+
+static void show_student_info_screen(void) {
+  if (!s_stage || !lv_obj_is_valid(s_stage)) return;
+  if (s_entry_hub && lv_obj_is_valid(s_entry_hub)) {
+    lv_obj_add_flag(s_entry_hub, LV_OBJ_FLAG_HIDDEN);
+  }
+  if (s_student_info_screen && lv_obj_is_valid(s_student_info_screen)) {
+    lv_obj_move_foreground(s_student_info_screen);
+    return;
+  }
+  s_student_info_screen = lv_obj_create(s_stage);
+  lv_obj_set_size(s_student_info_screen, lv_pct(100), lv_pct(100));
+  lv_obj_set_pos(s_student_info_screen, 0, 0);
+  lv_obj_set_style_bg_color(s_student_info_screen, lv_color_hex(0x141414), 0);
+  lv_obj_set_style_bg_opa(s_student_info_screen, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(s_student_info_screen, 0, 0);
+  lv_obj_set_style_radius(s_student_info_screen, 0, 0);
+  if (s_global_font) lv_obj_set_style_text_font(s_student_info_screen, s_global_font, 0);
+
+  populate_student_info_container(s_student_info_screen, true);
+  lv_obj_set_x(s_student_info_screen, 320);
+  lv_anim_t a;
+  lv_anim_init(&a);
+  lv_anim_set_var(&a, s_student_info_screen);
+  lv_anim_set_values(&a, 320, 0);
+  lv_anim_set_time(&a, 220);
+  lv_anim_set_exec_cb(&a, (lv_anim_exec_xcb_t)lv_obj_set_x);
+  lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+  lv_anim_start(&a);
+  screensaver_attach_activity(s_student_info_screen);
+}
+
+static void show_entry_hub_overlay(void) {
+  if (!s_stage || !lv_obj_is_valid(s_stage) || !s_homeworks_mode) return;
+  if (s_student_info_screen && lv_obj_is_valid(s_student_info_screen)) {
+    lv_obj_del(s_student_info_screen);
+    s_student_info_screen = nullptr;
+  }
+
+  if (!s_entry_hub || !lv_obj_is_valid(s_entry_hub)) {
+    s_entry_hub = lv_obj_create(s_stage);
+    lv_obj_set_size(s_entry_hub, lv_pct(100), lv_pct(100));
+    lv_obj_set_pos(s_entry_hub, 0, 0);
+    lv_obj_set_style_bg_color(s_entry_hub, lv_color_hex(0x0B1112), 0);
+    lv_obj_set_style_bg_opa(s_entry_hub, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_entry_hub, 0, 0);
+    lv_obj_set_style_radius(s_entry_hub, 0, 0);
+    lv_obj_set_style_pad_all(s_entry_hub, 0, 0);
+    lv_obj_set_scrollbar_mode(s_entry_hub, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_clear_flag(s_entry_hub, LV_OBJ_FLAG_SCROLLABLE);
+    if (s_global_font) lv_obj_set_style_text_font(s_entry_hub, s_global_font, 0);
+
+    s_entry_name_label = lv_label_create(s_entry_hub);
+    lv_obj_set_width(s_entry_name_label, 280);
+    lv_obj_set_style_text_align(s_entry_name_label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_color(s_entry_name_label, lv_color_hex(0xE6E6E6), 0);
+    lv_obj_set_style_text_font(s_entry_name_label, &kakao_kr_16, 0);
+    lv_label_set_long_mode(s_entry_name_label, LV_LABEL_LONG_DOT);
+    lv_label_set_text(s_entry_name_label, s_student_name_cache.c_str());
+    lv_obj_align(s_entry_name_label, LV_ALIGN_TOP_MID, 0, 20);
+
+    auto make_hub_btn = [](lv_obj_t* parent, const char* text, lv_coord_t y_off) -> lv_obj_t* {
+      lv_obj_t* btn = lv_btn_create(parent);
+      lv_obj_set_size(btn, 284, 48);
+      lv_obj_set_style_radius(btn, 12, 0);
+      lv_obj_set_style_bg_color(btn, lv_color_hex(0x1A1A1A), 0);
+      lv_obj_set_style_border_color(btn, lv_color_hex(0x2C2C2C), 0);
+      lv_obj_set_style_border_width(btn, 2, 0);
+      lv_obj_set_style_shadow_width(btn, 0, 0);
+      lv_obj_align(btn, LV_ALIGN_TOP_MID, 0, y_off);
+      lv_obj_t* lbl = lv_label_create(btn);
+      if (s_global_font) lv_obj_set_style_text_font(lbl, s_global_font, 0);
+      lv_obj_set_style_text_color(lbl, lv_color_hex(0xE6E6E6), 0);
+      lv_label_set_text(lbl, text);
+      lv_obj_center(lbl);
+      return btn;
+    };
+
+    lv_obj_t* watch_btn = make_hub_btn(s_entry_hub, u8"워치", 56);
+    lv_obj_add_event_cb(watch_btn, [](lv_event_t* e) {
+      (void)e;
+      show_transient_notice(u8"스탑워치 준비 중");
+    }, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t* info_btn = make_hub_btn(s_entry_hub, u8"정보", 116);
+    lv_obj_add_event_cb(info_btn, [](lv_event_t* e) {
+      (void)e;
+      show_student_info_screen();
+    }, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t* hw_btn = make_hub_btn(s_entry_hub, u8"과제", 176);
+    lv_obj_add_event_cb(hw_btn, [](lv_event_t* e) {
+      (void)e;
+      if (s_entry_hub && lv_obj_is_valid(s_entry_hub)) {
+        lv_obj_add_flag(s_entry_hub, LV_OBJ_FLAG_HIDDEN);
+      }
+      if (s_pages && lv_obj_is_valid(s_pages)) {
+        lv_obj_clear_flag(s_pages, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_scroll_to_view(lv_obj_get_child(s_pages, 0), LV_ANIM_OFF);
+      }
+      if (s_fab && lv_obj_is_valid(s_fab)) {
+        lv_obj_clear_flag(s_fab, LV_OBJ_FLAG_HIDDEN);
+      }
+      if (s_bottom_handle && lv_obj_is_valid(s_bottom_handle)) lv_obj_clear_flag(s_bottom_handle, LV_OBJ_FLAG_HIDDEN);
+      if (s_bottom_sheet && lv_obj_is_valid(s_bottom_sheet)) lv_obj_clear_flag(s_bottom_sheet, LV_OBJ_FLAG_HIDDEN);
+    }, LV_EVENT_CLICKED, NULL);
+  }
+
+  if (s_entry_name_label && lv_obj_is_valid(s_entry_name_label)) {
+    lv_label_set_text(s_entry_name_label, s_student_name_cache.c_str());
+  }
+  lv_obj_clear_flag(s_entry_hub, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_move_foreground(s_entry_hub);
+  if (s_pages && lv_obj_is_valid(s_pages)) lv_obj_add_flag(s_pages, LV_OBJ_FLAG_HIDDEN);
+  if (s_fab && lv_obj_is_valid(s_fab)) {
+    lv_obj_add_flag(s_fab, LV_OBJ_FLAG_HIDDEN);
+  }
+  if (s_bottom_handle && lv_obj_is_valid(s_bottom_handle)) lv_obj_add_flag(s_bottom_handle, LV_OBJ_FLAG_HIDDEN);
+  if (s_bottom_sheet && lv_obj_is_valid(s_bottom_sheet)) lv_obj_add_flag(s_bottom_sheet, LV_OBJ_FLAG_HIDDEN);
+  if (g_bottom_sheet_open) {
+    set_bottom_sheet_position(240);
+    g_bottom_sheet_open = false;
+  }
+  screensaver_attach_activity(s_entry_hub);
+}
+
+static void show_bind_confirm_popup(const char* student_id, const char* student_name) {
+  if (!student_id || !*student_id) return;
+  if (s_bind_confirm_popup && lv_obj_is_valid(s_bind_confirm_popup)) return;
+  s_pending_bind_student_id = student_id;
+  s_pending_bind_student_name = (student_name && *student_name) ? String(student_name) : u8"학생";
+
+  s_bind_confirm_popup = lv_obj_create(lv_scr_act());
+  lv_obj_set_size(s_bind_confirm_popup, 276, 148);
+  lv_obj_center(s_bind_confirm_popup);
+  lv_obj_set_style_bg_color(s_bind_confirm_popup, lv_color_hex(0x202020), 0);
+  lv_obj_set_style_bg_opa(s_bind_confirm_popup, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(s_bind_confirm_popup, 1, 0);
+  lv_obj_set_style_border_color(s_bind_confirm_popup, lv_color_hex(0x3A3A3A), 0);
+  lv_obj_set_style_radius(s_bind_confirm_popup, 14, 0);
+  lv_obj_set_style_pad_all(s_bind_confirm_popup, 12, 0);
+  lv_obj_set_style_pad_row(s_bind_confirm_popup, 10, 0);
+  lv_obj_clear_flag(s_bind_confirm_popup, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_flex_flow(s_bind_confirm_popup, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_flex_align(s_bind_confirm_popup, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+  lv_obj_t* msg = lv_label_create(s_bind_confirm_popup);
+  lv_obj_set_width(msg, 248);
+  lv_obj_set_style_text_align(msg, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_set_style_text_font(msg, &kakao_kr_16, 0);
+  lv_obj_set_style_text_color(msg, lv_color_hex(0xD0D0D0), 0);
+  lv_label_set_long_mode(msg, LV_LABEL_LONG_WRAP);
+  String message;
+  message = s_pending_bind_student_name + u8" 학생으로 로그인할까요?";
+  lv_label_set_text(msg, message.c_str());
+
+  lv_obj_t* row = lv_obj_create(s_bind_confirm_popup);
+  lv_obj_set_width(row, lv_pct(100));
+  lv_obj_set_height(row, 50);
+  lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(row, 0, 0);
+  lv_obj_set_style_pad_all(row, 0, 0);
+  lv_obj_set_style_pad_column(row, 12, 0);
+  lv_obj_set_scrollbar_mode(row, LV_SCROLLBAR_MODE_OFF);
+  lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+  lv_obj_t* cancel_btn = lv_btn_create(row);
+  lv_obj_set_size(cancel_btn, 118, 40);
+  lv_obj_set_style_radius(cancel_btn, 10, 0);
+  lv_obj_set_style_bg_color(cancel_btn, lv_color_hex(0x323232), 0);
+  lv_obj_set_style_border_width(cancel_btn, 0, 0);
+  lv_obj_t* cancel_lbl = lv_label_create(cancel_btn);
+  lv_obj_set_style_text_font(cancel_lbl, &kakao_kr_16, 0);
+  lv_label_set_text(cancel_lbl, u8"취소");
+  lv_obj_center(cancel_lbl);
+  lv_obj_add_event_cb(cancel_btn, [](lv_event_t* e) {
+    (void)e;
+    close_bind_confirm_popup();
+  }, LV_EVENT_CLICKED, NULL);
+
+  lv_obj_t* confirm_btn = lv_btn_create(row);
+  lv_obj_set_size(confirm_btn, 118, 40);
+  lv_obj_set_style_radius(confirm_btn, 10, 0);
+  lv_obj_set_style_bg_color(confirm_btn, lv_color_hex(0x1FA95B), 0);
+  lv_obj_set_style_border_width(confirm_btn, 0, 0);
+  lv_obj_t* confirm_lbl = lv_label_create(confirm_btn);
+  lv_obj_set_style_text_font(confirm_lbl, &kakao_kr_16, 0);
+  lv_label_set_text(confirm_lbl, u8"확인");
+  lv_obj_center(confirm_lbl);
+  lv_obj_add_event_cb(confirm_btn, [](lv_event_t* e) {
+    (void)e;
+    const String sid = s_pending_bind_student_id;
+    const String name = s_pending_bind_student_name;
+    close_bind_confirm_popup();
+    if (sid.length() == 0) return;
+    if (name.length() > 0) s_student_name_cache = name;
+    fw_publish_bind(sid.c_str());
+    build_homeworks_ui_internal();
+    fw_publish_student_info(sid.c_str());
+    show_entry_hub_overlay();
+  }, LV_EVENT_CLICKED, NULL);
+
+  screensaver_attach_activity(s_bind_confirm_popup);
+}
+
 static void build_student_list_ui() {
   create_base_container();
+  close_bind_confirm_popup();
+  if (s_entry_hub && lv_obj_is_valid(s_entry_hub)) { lv_obj_del(s_entry_hub); s_entry_hub = nullptr; s_entry_name_label = nullptr; }
+  if (s_student_info_screen && lv_obj_is_valid(s_student_info_screen)) { lv_obj_del(s_student_info_screen); s_student_info_screen = nullptr; }
+  if (s_bottom_handle && lv_obj_is_valid(s_bottom_handle)) { lv_obj_del(s_bottom_handle); s_bottom_handle = nullptr; }
+  if (s_bottom_sheet && lv_obj_is_valid(s_bottom_sheet)) { lv_obj_del(s_bottom_sheet); s_bottom_sheet = nullptr; }
+  if (s_fab && lv_obj_is_valid(s_fab)) { lv_obj_del(s_fab); s_fab = nullptr; }
+  g_bottom_sheet_open = false;
+  s_sheet_dragging = false;
+  s_sheet_drag_moved = false;
   lv_obj_clean(s_stage);
+  s_pages = nullptr;
+  s_info_panel = nullptr;
   s_homeworks_mode = false;
   // student list only
   s_list = lv_obj_create(s_stage);
@@ -285,56 +711,40 @@ static void build_student_list_ui() {
 
 static void build_homeworks_ui_internal() {
   create_base_container();
+  close_bind_confirm_popup();
+  if (s_entry_hub && lv_obj_is_valid(s_entry_hub)) { lv_obj_del(s_entry_hub); s_entry_hub = nullptr; s_entry_name_label = nullptr; }
+  if (s_student_info_screen && lv_obj_is_valid(s_student_info_screen)) { lv_obj_del(s_student_info_screen); s_student_info_screen = nullptr; }
+  if (s_bottom_handle && lv_obj_is_valid(s_bottom_handle)) { lv_obj_del(s_bottom_handle); s_bottom_handle = nullptr; }
+  if (s_bottom_sheet && lv_obj_is_valid(s_bottom_sheet)) { lv_obj_del(s_bottom_sheet); s_bottom_sheet = nullptr; }
+  if (s_fab && lv_obj_is_valid(s_fab)) { lv_obj_del(s_fab); s_fab = nullptr; }
+  g_bottom_sheet_open = false;
+  s_sheet_dragging = false;
+  s_sheet_drag_moved = false;
   lv_obj_clean(s_stage);
   s_homeworks_mode = true;
 
-  // pages: info | homeworks | classes
   s_pages = lv_obj_create(s_stage);
-  lv_obj_set_size(s_pages, lv_pct(100), lv_pct(100));
+  lv_obj_set_size(s_pages, 320, 216);
   lv_obj_set_style_bg_opa(s_pages, LV_OPA_TRANSP, 0);
   lv_obj_set_style_border_width(s_pages, 0, 0);
   lv_obj_set_style_radius(s_pages, 0, 0);
+  lv_obj_set_style_pad_all(s_pages, 0, 0);
   lv_obj_set_flex_flow(s_pages, LV_FLEX_FLOW_ROW);
   lv_obj_set_scroll_dir(s_pages, LV_DIR_HOR);
   lv_obj_set_scroll_snap_x(s_pages, LV_SCROLL_SNAP_CENTER);
-  // 과도한 관성으로 2페이지 이동 방지
   lv_obj_clear_flag(s_pages, LV_OBJ_FLAG_SCROLL_MOMENTUM);
   lv_obj_set_style_pad_column(s_pages, 12, 0);
   lv_obj_set_scrollbar_mode(s_pages, LV_SCROLLBAR_MODE_OFF);
   // 페이지 스크롤 감지를 위한 직접 훅
   lv_obj_add_flag(s_pages, LV_OBJ_FLAG_EVENT_BUBBLE);
   screensaver_attach_activity(s_pages);
+  s_info_panel = nullptr;
 
-  // info panel
-  s_info_panel = lv_obj_create(s_pages);
-  lv_obj_set_size(s_info_panel, lv_pct(100), lv_pct(100));
-  lv_obj_set_style_bg_color(s_info_panel, lv_color_hex(0x141414), 0);
-  lv_obj_set_style_border_width(s_info_panel, 0, 0);
-  lv_obj_set_style_radius(s_info_panel, 0, 0);
-  lv_obj_set_style_pad_all(s_info_panel, 12, 0);
-  lv_obj_set_style_pad_right(s_info_panel, 12, 0);
-  lv_obj_set_style_pad_row(s_info_panel, 4, 0);
-  lv_obj_set_style_pad_bottom(s_info_panel, 16, 0);
-  lv_obj_set_scrollbar_mode(s_info_panel, LV_SCROLLBAR_MODE_OFF);
-  lv_obj_set_scroll_dir(s_info_panel, LV_DIR_VER);
-  lv_obj_set_flex_flow(s_info_panel, LV_FLEX_FLOW_COLUMN);
-  lv_obj_set_flex_align(s_info_panel, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-  if (s_global_font) lv_obj_set_style_text_font(s_info_panel, s_global_font, 0);
-  // 정보 패널 스크롤 감지
-  lv_obj_add_flag(s_info_panel, LV_OBJ_FLAG_EVENT_BUBBLE);
-  screensaver_attach_activity(s_info_panel);
-
-  // homeworks page
-  lv_obj_t* homeworks_page = lv_obj_create(s_pages);
-  lv_obj_set_size(homeworks_page, lv_pct(100), lv_pct(100));
-  lv_obj_set_style_bg_opa(homeworks_page, LV_OPA_TRANSP, 0);
-  lv_obj_set_style_border_width(homeworks_page, 0, 0);
-  lv_obj_set_style_radius(homeworks_page, 0, 0);
-  lv_obj_set_style_pad_all(homeworks_page, 0, 0);
-
-  s_list = lv_obj_create(homeworks_page);
+  // homeworks page (s_list directly under s_pages)
+  s_list = lv_obj_create(s_pages);
   lv_obj_set_size(s_list, lv_pct(100), lv_pct(100));
-  lv_obj_set_style_bg_color(s_list, lv_color_hex(0x141414), 0);
+  lv_obj_set_style_bg_color(s_list, lv_color_hex(0x0B1112), 0);
+  lv_obj_set_style_bg_opa(s_list, LV_OPA_COVER, 0);
   lv_obj_set_style_border_width(s_list, 0, 0);
   lv_obj_set_style_radius(s_list, 0, 0);
   lv_obj_set_style_pad_all(s_list, 8, 0);
@@ -342,15 +752,14 @@ static void build_homeworks_ui_internal() {
   lv_obj_set_flex_align(s_list, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START);
   lv_obj_set_style_pad_row(s_list, 12, 0);
   lv_obj_set_scroll_dir(s_list, LV_DIR_VER);
-  lv_obj_set_scrollbar_mode(s_list, LV_SCROLLBAR_MODE_OFF);
-  // 과제 리스트 스크롤 이벤트를 화면보호기에 직접 부착
+  lv_obj_set_scrollbar_mode(s_list, LV_SCROLLBAR_MODE_ACTIVE);
   lv_obj_add_flag(s_list, LV_OBJ_FLAG_EVENT_BUBBLE);
   screensaver_attach_activity(s_list);
 
   // classes page (placeholder)
   lv_obj_t* classes_page = lv_obj_create(s_pages);
   lv_obj_set_size(classes_page, lv_pct(100), lv_pct(100));
-  lv_obj_set_style_bg_color(classes_page, lv_color_hex(0x141414), 0);
+  lv_obj_set_style_bg_color(classes_page, lv_color_hex(0x0B1112), 0);
   lv_obj_set_style_border_width(classes_page, 0, 0);
   lv_obj_set_style_radius(classes_page, 0, 0);
   lv_obj_set_style_pad_all(classes_page, 12, 0);
@@ -361,8 +770,7 @@ static void build_homeworks_ui_internal() {
   lv_label_set_text(classes_label, u8"수업 페이지\n(준비 중)");
   lv_obj_center(classes_label);
 
-  // bottom sheet handle
-  s_bottom_handle = lv_obj_create(lv_obj_get_parent(s_stage));
+  s_bottom_handle = lv_obj_create(s_stage);
   lv_obj_set_size(s_bottom_handle, 320, 24);
   lv_obj_set_pos(s_bottom_handle, 0, 216);
   lv_obj_set_style_bg_opa(s_bottom_handle, LV_OPA_TRANSP, 0);
@@ -377,13 +785,22 @@ static void build_homeworks_ui_internal() {
   lv_obj_set_style_radius(indicator, 3, 0);
   lv_obj_set_style_border_width(indicator, 0, 0);
   lv_obj_align(indicator, LV_ALIGN_CENTER, 0, 0);
-  lv_obj_add_event_cb(s_bottom_handle, [](lv_event_t* e){ 
+  lv_obj_add_event_cb(s_bottom_handle, [](lv_event_t* e){
     lv_event_code_t code = lv_event_get_code(e);
-    if (code == LV_EVENT_CLICKED) toggle_bottom_sheet();
+    if (code == LV_EVENT_CLICKED) {
+      if (s_sheet_drag_moved) {
+        s_sheet_drag_moved = false;
+        return;
+      }
+      toggle_bottom_sheet();
+    }
   }, LV_EVENT_CLICKED, NULL);
+  lv_obj_add_event_cb(s_bottom_handle, bottom_sheet_drag_cb, LV_EVENT_PRESSED, NULL);
+  lv_obj_add_event_cb(s_bottom_handle, bottom_sheet_drag_cb, LV_EVENT_PRESSING, NULL);
+  lv_obj_add_event_cb(s_bottom_handle, bottom_sheet_drag_cb, LV_EVENT_RELEASED, NULL);
+  lv_obj_add_event_cb(s_bottom_handle, bottom_sheet_drag_cb, LV_EVENT_PRESS_LOST, NULL);
 
-  // bottom sheet body
-  s_bottom_sheet = lv_obj_create(lv_obj_get_parent(s_stage));
+  s_bottom_sheet = lv_obj_create(s_stage);
   lv_obj_set_size(s_bottom_sheet, 320, 100);
   lv_obj_set_pos(s_bottom_sheet, 0, 240);
   lv_obj_set_style_bg_color(s_bottom_sheet, lv_color_hex(0x1A1A1A), 0);
@@ -396,23 +813,23 @@ static void build_homeworks_ui_internal() {
   lv_obj_set_scrollbar_mode(s_bottom_sheet, LV_SCROLLBAR_MODE_OFF);
   lv_obj_clear_flag(s_bottom_sheet, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_set_style_clip_corner(s_bottom_sheet, true, 0);
+  lv_obj_add_event_cb(s_bottom_sheet, bottom_sheet_drag_cb, LV_EVENT_PRESSED, NULL);
+  lv_obj_add_event_cb(s_bottom_sheet, bottom_sheet_drag_cb, LV_EVENT_PRESSING, NULL);
+  lv_obj_add_event_cb(s_bottom_sheet, bottom_sheet_drag_cb, LV_EVENT_RELEASED, NULL);
+  lv_obj_add_event_cb(s_bottom_sheet, bottom_sheet_drag_cb, LV_EVENT_PRESS_LOST, NULL);
 
-  // volume button (10% larger) - transparent background, gray icon
-  lv_obj_t* vol_btn = lv_btn_create(s_bottom_sheet);
-  lv_obj_set_size(vol_btn, 55, 55);
-  lv_obj_set_style_radius(vol_btn, 10, 0);
-  lv_obj_set_style_bg_opa(vol_btn, LV_OPA_TRANSP, 0);
-  lv_obj_set_style_border_width(vol_btn, 0, 0);
-  lv_obj_set_style_shadow_width(vol_btn, 0, 0);
-  // 왼쪽으로 3px 이동
-  lv_obj_set_style_translate_x(vol_btn, -3, 0);
-  lv_obj_t* vol_img = lv_img_create(vol_btn);
-  lv_img_set_src(vol_img, &volume_mute_64dp_E3E3E3_FILL0_wght400_GRAD0_opsz48);
-  lv_obj_set_style_img_recolor(vol_img, lv_color_hex(0xC0C0C0), 0);
-  lv_obj_set_style_img_recolor_opa(vol_img, LV_OPA_COVER, 0);
-  lv_img_set_zoom(vol_img, 220);
-  lv_obj_center(vol_img);
-  lv_obj_add_event_cb(vol_btn, [](lv_event_t* e){ (void)e; show_volume_popup(); }, LV_EVENT_CLICKED, NULL);
+  lv_obj_t* pause_btn = lv_btn_create(s_bottom_sheet);
+  lv_obj_set_size(pause_btn, 50, 50);
+  lv_obj_set_style_radius(pause_btn, 10, 0);
+  lv_obj_set_style_bg_opa(pause_btn, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(pause_btn, 0, 0);
+  lv_obj_set_style_shadow_width(pause_btn, 0, 0);
+  lv_obj_t* pause_lbl = lv_label_create(pause_btn);
+  if (s_global_font) lv_obj_set_style_text_font(pause_lbl, s_global_font, 0);
+  lv_obj_set_style_text_color(pause_lbl, lv_color_hex(0xC0C0C0), 0);
+  lv_label_set_text(pause_lbl, u8"휴식");
+  lv_obj_center(pause_lbl);
+  lv_obj_add_event_cb(pause_btn, [](lv_event_t* e){ (void)e; fw_publish_pause_all(); }, LV_EVENT_CLICKED, NULL);
 
   // home button
   lv_obj_t* home_btn = lv_btn_create(s_bottom_sheet);
@@ -429,7 +846,7 @@ static void build_homeworks_ui_internal() {
   lv_obj_set_style_img_recolor_opa(home_img, LV_OPA_COVER, 0);
   lv_img_set_zoom(home_img, 200);
   lv_obj_center(home_img);
-  lv_obj_add_event_cb(home_btn, [](lv_event_t* e){ (void)e; if (s_pages) { lv_obj_scroll_to_view(lv_obj_get_child(s_pages, 1), LV_ANIM_ON); } }, LV_EVENT_CLICKED, NULL);
+  lv_obj_add_event_cb(home_btn, [](lv_event_t* e){ (void)e; show_entry_hub_overlay(); }, LV_EVENT_CLICKED, NULL);
 
   // settings button
   lv_obj_t* settings_btn = lv_btn_create(s_bottom_sheet);
@@ -446,22 +863,7 @@ static void build_homeworks_ui_internal() {
   lv_obj_center(set_img);
   lv_obj_add_event_cb(settings_btn, [](lv_event_t* e){ (void)e; ui_port_show_settings(FIRMWARE_VERSION); }, LV_EVENT_CLICKED, NULL);
 
-  // FAB (휴식)
-  if (!s_fab) {
-    s_fab = lv_btn_create(lv_obj_get_parent(s_stage));
-    lv_obj_set_size(s_fab, 67, 57);
-    lv_obj_set_style_radius(s_fab, 12, 0);
-    lv_obj_set_style_bg_color(s_fab, lv_color_hex(0x1E88E5), 0);
-    lv_obj_set_style_border_width(s_fab, 0, 0);
-    lv_obj_set_style_shadow_width(s_fab, 14, 0);
-    lv_obj_set_style_shadow_opa(s_fab, LV_OPA_30, 0);
-    lv_obj_align(s_fab, LV_ALIGN_BOTTOM_RIGHT, -16, -16);
-    lv_obj_t* icon = lv_label_create(s_fab);
-    lv_obj_set_style_text_color(icon, lv_color_hex(0xFFFFFF), 0);
-    lv_label_set_text(icon, u8"휴식");
-    lv_obj_center(icon);
-    lv_obj_add_event_cb(s_fab, [](lv_event_t* e){ (void)e; fw_publish_pause_all(); }, LV_EVENT_CLICKED, NULL);
-  }
+  s_fab = nullptr;
   
   // Re-attach screensaver activity handlers
   screensaver_attach_activity(lv_scr_act());
@@ -500,10 +902,11 @@ void ui_port_init() {
     LittleFS.end();
   }
   
-  // 바인딩된 학생이 있으면 과제 모드로 시작, 없으면 학생 리스트 모드
+  // 바인딩된 학생이 있으면 과제 데이터를 준비하고 홈 허브부터 노출
   if (savedStudentId.length() > 0) {
     studentId = savedStudentId;
     build_homeworks_ui_internal();
+    show_entry_hub_overlay();
     Serial.printf("[INIT] Starting in homework mode for student: %s\n", studentId.c_str());
     // MQTT 연결 후 student_info와 homeworks는 onMqttConnect에서 자동 요청됨
   } else {
@@ -523,6 +926,11 @@ void ui_before_screen_change(void) {
   // Close any transient overlays or popups here
   if (g_bottom_sheet_open) {
     toggle_bottom_sheet();
+  }
+  close_bind_confirm_popup();
+  close_student_info_screen(false);
+  if (s_entry_hub && lv_obj_is_valid(s_entry_hub)) {
+    lv_obj_add_flag(s_entry_hub, LV_OBJ_FLAG_HIDDEN);
   }
   close_volume_popup();
   close_brightness_popup();
@@ -800,9 +1208,12 @@ void ui_port_update_students(const JsonArray& students) {
   if (!s_stage || !lv_obj_is_valid(s_stage)) build_student_list_ui();
   if (s_homeworks_mode) {
     // 학생 리스트 모드가 아니면 학생 목록 갱신은 무시
-    // 또는 좌측 정보 페이지로 바꿀 때까지 대기
-    // 여기서는 homeworks 모드에서도 학생 리스트 갱신 시 별도 처리 없이 반환
+    return;
   }
+  struct StudentBindData {
+    char sid[64];
+    char name[96];
+  };
   lv_obj_clean(s_list);
   s_empty_label = nullptr;
   size_t count = 0;
@@ -821,10 +1232,10 @@ void ui_port_update_students(const JsonArray& students) {
     lv_obj_t* card = lv_obj_create(s_list);
     lv_obj_set_width(card, lv_pct(100));
     lv_obj_set_height(card, 96);
-    lv_obj_set_style_radius(card, 10, 0);
+    lv_obj_set_style_radius(card, 20, 0);
     lv_obj_set_style_bg_color(card, lv_color_hex(0x1A1A1A), 0);
     lv_obj_set_style_border_color(card, lv_color_hex(0x2C2C2C), 0);
-    lv_obj_set_style_border_width(card, 2, 0);
+    lv_obj_set_style_border_width(card, 1, 0);
     lv_obj_set_style_pad_all(card, 14, 0);
     lv_obj_set_style_pad_left(card, 21, 0);
     lv_obj_t* lbl = lv_label_create(card);
@@ -850,250 +1261,334 @@ void ui_port_update_students(const JsonArray& students) {
       lv_obj_align(meta_lbl, LV_ALIGN_RIGHT_MID, -6, 0);
     }
     if (sid && *sid) {
-      char* sid_copy = (char*)malloc(strlen(sid) + 1);
-      if (sid_copy) {
-        strcpy(sid_copy, sid);
+      StudentBindData* bind_data = (StudentBindData*)malloc(sizeof(StudentBindData));
+      if (bind_data) {
+        strncpy(bind_data->sid, sid, sizeof(bind_data->sid) - 1);
+        bind_data->sid[sizeof(bind_data->sid) - 1] = '\0';
+        strncpy(bind_data->name, name, sizeof(bind_data->name) - 1);
+        bind_data->name[sizeof(bind_data->name) - 1] = '\0';
         lv_obj_add_event_cb(card, [](lv_event_t* e){
-          const char* studentId = (const char*)lv_event_get_user_data(e);
-          fw_publish_bind(studentId);
-          // 홈워크 UI로 전환 후 정보 요청
-          build_homeworks_ui_internal();
-          fw_publish_student_info(studentId);
-          if (lv_obj_is_valid(s_pages)) { lv_obj_scroll_to_view(lv_obj_get_child(s_pages, 1), LV_ANIM_OFF); }
-        }, LV_EVENT_CLICKED, sid_copy);
+          StudentBindData* data = (StudentBindData*)lv_event_get_user_data(e);
+          if (!data) return;
+          show_bind_confirm_popup(data->sid, data->name);
+        }, LV_EVENT_CLICKED, bind_data);
+        lv_obj_add_event_cb(card, [](lv_event_t* e){
+          if (lv_event_get_code(e) == LV_EVENT_DELETE) {
+            void* ud = lv_event_get_user_data(e);
+            if (ud) free(ud);
+          }
+        }, LV_EVENT_DELETE, bind_data);
       }
     }
   }
   append_refresh_button();
 }
 
-// Debounce: M5에서 연속 업데이트 시 충돌 방지 (300ms)
+// Debounce: M5에서 연속 업데이트 시 충돌 방지 (500ms)
 static uint32_t s_last_homework_update_ms = 0;
-static const uint32_t HOMEWORK_UPDATE_DEBOUNCE_MS = 300;
+static const uint32_t HOMEWORK_UPDATE_DEBOUNCE_MS = 500;
 // 카드 클릭 디바운스 (500ms)
 static uint32_t s_last_card_click_ms = 0;
 static const uint32_t CARD_CLICK_DEBOUNCE_MS = 500;
 
 void ui_port_update_homeworks(const JsonArray& items) {
+  Serial.printf("[HW] >>> update_homeworks START items=%d mode=%d s_list=%p heap=%u\n",
+                (int)items.size(), (int)s_homeworks_mode, s_list, (unsigned)esp_get_free_heap_size());
   uint32_t now = millis();
   if (now - s_last_homework_update_ms < HOMEWORK_UPDATE_DEBOUNCE_MS) {
-    Serial.println("[HW] Debounced - update too fast, skipping");
+    Serial.println("[HW] Debounced - skipping");
     return;
   }
   s_last_homework_update_ms = now;
   
   if (!s_homeworks_mode) {
+    Serial.println("[HW] Not in homeworks mode, building UI...");
     build_homeworks_ui_internal();
+    Serial.printf("[HW] build done, s_list=%p heap=%u\n", s_list, (unsigned)esp_get_free_heap_size());
   }
-  
-  // 기존 Phase2 타이머 모두 강제 정리 (카드 삭제 전) - 해결책 2
-  if (s_list && lv_obj_is_valid(s_list)) {
-    uint32_t child_count = lv_obj_get_child_cnt(s_list);
-    for (uint32_t i = 0; i < child_count; i++) {
-      lv_obj_t* frame = lv_obj_get_child(s_list, i);
-      if (!frame || !lv_obj_is_valid(frame)) continue;
-      if (lv_obj_get_child_cnt(frame) == 0) continue;
-      lv_obj_t* card = lv_obj_get_child(frame, 0);
-      if (!card || !lv_obj_is_valid(card)) continue;
-      
-      // DELETE 이벤트 핸들러 수동 트리거하여 타이머 정리
-      lv_event_send(card, LV_EVENT_DELETE, NULL);
+  if (!s_list || !lv_obj_is_valid(s_list)) {
+    Serial.println("[HW] ERROR: s_list is null or invalid!");
+    return;
+  }
+
+  // diff 비교: item_id+phase가 동일하면 재렌더링 skip
+  {
+    bool same = ((int)items.size() == s_hw_cache_cnt);
+    if (same) {
+      uint8_t idx = 0;
+      for (JsonObject it : items) {
+        const char* iid = it.containsKey("item_id") ? (const char*)it["item_id"] : "";
+        int ph = it.containsKey("phase") ? (int)it["phase"] : 1;
+        if (strcmp(s_hw_cache[idx].id, iid) != 0 || s_hw_cache[idx].phase != ph) { same = false; break; }
+        idx++;
+      }
     }
-    // 약간의 지연으로 이벤트 처리 완료 보장
-    lv_timer_handler();
+    if (same && s_hw_cache_cnt > 0) {
+      Serial.println("[HW] Cache match - skipping re-render");
+      return;
+    }
+    s_hw_cache_cnt = 0;
+    for (JsonObject it : items) {
+      if (s_hw_cache_cnt >= 16) break;
+      const char* iid = it.containsKey("item_id") ? (const char*)it["item_id"] : "";
+      int ph = it.containsKey("phase") ? (int)it["phase"] : 1;
+      strncpy(s_hw_cache[s_hw_cache_cnt].id, iid, 63);
+      s_hw_cache[s_hw_cache_cnt].id[63] = '\0';
+      s_hw_cache[s_hw_cache_cnt].phase = ph;
+      s_hw_cache_cnt++;
+    }
   }
-  
+
   g_should_vibrate_phase4 = false;
-  lv_obj_clean(s_list);
+  {
+    Serial.printf("[HW] pre-clean heap=%u\n", (unsigned)esp_get_free_heap_size());
+    s_hw_timer_epoch++;
+    s_p2_cnt = 0;
+    s_p4_cnt = 0;
+    s_p4_blink_on = false;
+    s_hw_global_timer = nullptr;
+    lv_obj_clean(s_list);
+  }
+  Serial.printf("[HW] clean done heap=%u\n", (unsigned)esp_get_free_heap_size());
+  extern const lv_font_t kakao_kr_16;
+
   for (JsonObject it : items) {
     const char* title = it["title"] | it["name"] | u8"과제";
     const char* itemId = it.containsKey("item_id") ? (const char*)it["item_id"] : "";
     int phase = it.containsKey("phase") ? (int)it["phase"] : 1;
+    const char* page = it["page"] | "";
+    int count = it.containsKey("count") ? (int)it["count"] : 0;
+    int check_count = it.containsKey("check_count") ? (int)it["check_count"] : 0;
+    int accumulated = it.containsKey("accumulated") ? (int)it["accumulated"] : 0;
+    const char* content = it["content"] | "";
+    const char* hw_type = it["type"] | "";
+    const char* book_id = it["book_id"] | "";
+    const char* grade_label = it["grade_label"] | "";
     uint32_t srv_color = 0x1E88E5;
     if (it.containsKey("color")) {
       double v = it["color"];
       if (v > 0) srv_color = ((uint32_t)v) & 0xFFFFFFu;
     }
-    
-    // wrapper frame for gradient border
-    lv_obj_t* frame = lv_obj_create(s_list);
-    lv_obj_set_width(frame, lv_pct(100));
-    lv_obj_set_height(frame, 96);
-    lv_obj_set_style_pad_all(frame, 2, 0);
-    lv_obj_set_style_radius(frame, 12, 0);
-    lv_obj_set_style_bg_color(frame, lv_color_hex(0x141414), 0);
-    lv_obj_set_style_border_width(frame, 0, 0);
-    lv_obj_clear_flag(frame, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_obj_t* card = lv_obj_create(frame);
+    // Extract book name (same logic as Flutter app)
+    char book_name[128] = {0};
+    {
+      // 1) content에서 "교재: xxx" 패턴
+      const char* marker = strstr(content, u8"교재:");
+      if (!marker) marker = strstr(content, u8"교재: ");
+      if (marker) {
+        const char* start = marker + strlen(u8"교재:");
+        while (*start == ' ') start++;
+        const char* end = strchr(start, '\n');
+        size_t len = end ? (size_t)(end - start) : strlen(start);
+        if (len > sizeof(book_name)-1) len = sizeof(book_name)-1;
+        memcpy(book_name, start, len);
+        book_name[len] = '\0';
+      }
+      // 2) bookId + gradeLabel이 있으면 title에서 · 앞부분
+      if (!book_name[0] && *book_id && *grade_label) {
+        const char* dot = strstr(title, u8"·");
+        if (dot) {
+          size_t len = (size_t)(dot - title);
+          while (len > 0 && title[len-1] == ' ') len--;
+          if (len > sizeof(book_name)-1) len = sizeof(book_name)-1;
+          memcpy(book_name, title, len);
+          book_name[len] = '\0';
+        }
+      }
+      // 3) type 필드
+      if (!book_name[0] && *hw_type) {
+        strncpy(book_name, hw_type, sizeof(book_name)-1);
+      }
+      // 4) fallback: title 자체
+      if (!book_name[0]) {
+        strncpy(book_name, title, sizeof(book_name)-1);
+      }
+    }
+
+    // Build page+count string
+    char page_count_buf[64] = {0};
+    if (*page && count > 0) {
+      snprintf(page_count_buf, sizeof(page_count_buf), "%s · %d%s", page, count, u8"문항");
+    } else if (*page) {
+      snprintf(page_count_buf, sizeof(page_count_buf), "%s", page);
+    } else if (count > 0) {
+      snprintf(page_count_buf, sizeof(page_count_buf), "%d%s", count, u8"문항");
+    }
+
+    auto fmt_time = [](int secs, char* buf, size_t sz) {
+      int h = secs / 3600; int m = (secs % 3600) / 60;
+      if (h > 0) snprintf(buf, sz, "%dh %dm", h, m);
+      else snprintf(buf, sz, "%dm", m);
+    };
+
+    Serial.printf("[HW-CARD] book=%s phase=%d page=%s count=%d chk=%d acc=%d\n",
+                  book_name, phase, page, count, check_count, accumulated);
+
+    lv_obj_t* card = lv_obj_create(s_list);
     lv_obj_set_width(card, lv_pct(100));
     lv_obj_set_height(card, 92);
-    lv_obj_set_style_radius(card, 10, 0);
+    lv_obj_set_style_radius(card, 12, 0);
     lv_obj_set_style_bg_color(card, lv_color_hex(0x1A1A1A), 0);
     lv_obj_set_style_border_color(card, lv_color_hex(0x2C2C2C), 0);
-    lv_obj_set_style_border_width(card, 2, 0);
-    lv_obj_set_style_pad_all(card, 14, 0);
-    lv_obj_set_style_pad_left(card, 21, 0);
+    lv_obj_set_style_border_width(card, 1, 0);
+    lv_obj_set_style_pad_top(card, 12, 0);
+    lv_obj_set_style_pad_bottom(card, 12, 0);
+    lv_obj_set_style_pad_left(card, 14, 0);
+    lv_obj_set_style_pad_right(card, 14, 0);
     lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
-    
-    lv_obj_t* lbl = lv_label_create(card);
-    lv_obj_set_style_text_color(lbl, lv_color_hex(0xE6E6E6), 0);
-    lv_label_set_text(lbl, title);
-    lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(lbl, lv_pct(60));
-    lv_obj_align(lbl, LV_ALIGN_LEFT_MID, 0, 0);
-    lv_obj_add_flag(lbl, LV_OBJ_FLAG_EVENT_BUBBLE);
-    
-    if (phase == 2) {
-      // 수행: gradient border + shadow + body/time info
-      uint8_t r = (srv_color >> 16) & 0xFF, g = (srv_color >> 8) & 0xFF, b = srv_color & 0xFF;
-      int lr = r + 40; if (lr > 255) lr = 255; int lg = g + 40; if (lg > 255) lg = 255; int lb = b + 40; if (lb > 255) lb = 255;
-      int dr = r - 30; if (dr < 0) dr = 0; int dg = g - 30; if (dg < 0) dg = 0; int db = b - 30; if (db < 0) db = 0;
-      uint32_t c1 = ((uint32_t)lr << 16) | ((uint32_t)lg << 8) | (uint32_t)lb;
-      uint32_t c2 = ((uint32_t)dr << 16) | ((uint32_t)dg << 8) | (uint32_t)db;
-      lv_obj_set_style_bg_color(frame, lv_color_hex(c1), 0);
-      lv_obj_set_style_bg_grad_color(frame, lv_color_hex(c2), 0);
-      lv_obj_set_style_bg_grad_dir(frame, LV_GRAD_DIR_HOR, 0);
+
+    // Row 1: book name (left)
+    lv_obj_t* title_lbl = lv_label_create(card);
+    if (s_global_font) lv_obj_set_style_text_font(title_lbl, s_global_font, 0);
+    lv_obj_set_style_text_color(title_lbl, lv_color_hex(0xE6E6E6), 0);
+    lv_label_set_text(title_lbl, book_name);
+    lv_label_set_long_mode(title_lbl, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(title_lbl, lv_pct(65));
+    lv_obj_align(title_lbl, LV_ALIGN_TOP_LEFT, 0, 0);
+    lv_obj_add_flag(title_lbl, LV_OBJ_FLAG_EVENT_BUBBLE);
+
+    if (phase == 1) {
+      lv_obj_t* hint = lv_label_create(card);
+      lv_obj_set_style_text_font(hint, &kakao_kr_16, 0);
+      lv_obj_set_style_text_color(hint, lv_color_hex(0x1FA95B), 0);
+      lv_label_set_text(hint, u8"시작 >");
+      lv_obj_align(hint, LV_ALIGN_TOP_RIGHT, 0, 4);
+      lv_obj_add_flag(hint, LV_OBJ_FLAG_EVENT_BUBBLE);
+
+      if (page_count_buf[0] || check_count > 0) {
+        if (page_count_buf[0]) {
+          lv_obj_t* pc_lbl = lv_label_create(card);
+          lv_obj_set_style_text_font(pc_lbl, &kakao_kr_16, 0);
+          lv_obj_set_style_text_color(pc_lbl, lv_color_hex(0x909090), 0);
+          lv_label_set_text(pc_lbl, page_count_buf);
+          lv_label_set_long_mode(pc_lbl, LV_LABEL_LONG_DOT);
+          lv_obj_set_width(pc_lbl, lv_pct(60));
+          lv_obj_align(pc_lbl, LV_ALIGN_TOP_LEFT, 0, 32);
+          lv_obj_add_flag(pc_lbl, LV_OBJ_FLAG_EVENT_BUBBLE);
+        }
+        if (check_count > 0) {
+          char chk_buf[32];
+          snprintf(chk_buf, sizeof(chk_buf), u8"검사 %d회", check_count);
+          lv_obj_t* chk_lbl = lv_label_create(card);
+          lv_obj_set_style_text_font(chk_lbl, &kakao_kr_16, 0);
+          lv_obj_set_style_text_color(chk_lbl, lv_color_hex(0x707070), 0);
+          lv_label_set_text(chk_lbl, chk_buf);
+          lv_obj_align(chk_lbl, LV_ALIGN_TOP_RIGHT, 0, 32);
+          lv_obj_add_flag(chk_lbl, LV_OBJ_FLAG_EVENT_BUBBLE);
+        }
+      }
+    } else if (phase == 2) {
+      lv_obj_set_style_border_color(card, lv_color_hex(srv_color), 0);
+      lv_obj_set_style_border_width(card, 2, 0);
       lv_obj_set_style_shadow_width(card, 10, 0);
       lv_obj_set_style_shadow_color(card, lv_color_hex(srv_color), 0);
       lv_obj_set_style_shadow_opa(card, LV_OPA_20, 0);
-      
-      // body와 accumulated 표시 (카드 우측, 작은 폰트)
-      const char* body = it["body"] | "";
-      int accumulated = it.containsKey("accumulated") ? (int)it["accumulated"] : 0;
-      
-      if (*body || accumulated > 0) {
-        lv_obj_t* info_cont = lv_obj_create(card);
-        lv_obj_set_size(info_cont, 100, LV_SIZE_CONTENT);
-        lv_obj_align(info_cont, LV_ALIGN_RIGHT_MID, -8, 0);
-        lv_obj_set_style_bg_opa(info_cont, LV_OPA_TRANSP, 0);
-        lv_obj_set_style_border_width(info_cont, 0, 0);
-        lv_obj_set_style_pad_all(info_cont, 0, 0);
-        lv_obj_set_flex_flow(info_cont, LV_FLEX_FLOW_COLUMN);
-        lv_obj_set_flex_align(info_cont, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END);
-        lv_obj_add_flag(info_cont, LV_OBJ_FLAG_EVENT_BUBBLE);
-        
-        extern const lv_font_t kakao_kr_18;
-        extern const lv_font_t kakao_kr_16;
-        
-        if (*body) {
-          lv_obj_t* body_lbl = lv_label_create(info_cont);
-          lv_obj_set_style_text_font(body_lbl, &kakao_kr_16, 0);
-          lv_obj_set_style_text_color(body_lbl, lv_color_hex(0xB0B0B0), 0);
-          lv_obj_set_style_text_align(body_lbl, LV_TEXT_ALIGN_RIGHT, 0);
-          lv_label_set_text(body_lbl, body);
-          lv_label_set_long_mode(body_lbl, LV_LABEL_LONG_DOT);
-          lv_obj_set_width(body_lbl, lv_pct(100));
-          lv_obj_add_flag(body_lbl, LV_OBJ_FLAG_EVENT_BUBBLE);
+
+      {
+        char p2_page_buf[80] = {0};
+        if (*page) snprintf(p2_page_buf, sizeof(p2_page_buf), "p %s", page);
+        if (p2_page_buf[0] && count > 0) {
+          char tmp[80];
+          snprintf(tmp, sizeof(tmp), "%s · %d%s", p2_page_buf, count, u8"문항");
+          strncpy(p2_page_buf, tmp, sizeof(p2_page_buf)-1);
+        } else if (!p2_page_buf[0] && count > 0) {
+          snprintf(p2_page_buf, sizeof(p2_page_buf), "%d%s", count, u8"문항");
         }
-        
-        // accumulated 시간 (실시간 업데이트)
-        lv_obj_t* time_lbl = lv_label_create(info_cont);
-        lv_obj_set_style_text_font(time_lbl, &kakao_kr_16, 0);
-        lv_obj_set_style_text_color(time_lbl, lv_color_hex(0x808080), 0);
-        lv_obj_add_flag(time_lbl, LV_OBJ_FLAG_EVENT_BUBBLE);
-        
-        // 타이머로 1초마다 업데이트 (안전하게)
-        Phase2CardData* timer_data = (Phase2CardData*)malloc(sizeof(Phase2CardData));
-        if (timer_data) {
-          timer_data->card = card;
-          timer_data->time_lbl = time_lbl;
-          timer_data->base_accumulated = accumulated;
-          timer_data->start_tick = lv_tick_get();
-          
-          lv_timer_t* upd_timer = lv_timer_create(update_phase2_time_cb, 1000, timer_data);
-          lv_timer_set_repeat_count(upd_timer, -1);
-          timer_data->timer = upd_timer;
-          
-          // 카드 삭제 시 타이머도 명시적으로 정리
-          lv_obj_add_event_cb(card, [](lv_event_t* e){
-            if (lv_event_get_code(e) == LV_EVENT_DELETE) {
-              void* ud = lv_event_get_user_data(e);
-              if (ud) {
-                Phase2CardData* d = (Phase2CardData*)ud;
-                if (d->timer) lv_timer_del(d->timer);
-                free(d);
-              }
-            }
-          }, LV_EVENT_DELETE, timer_data);
-          
-          // 초기 표시
-          int hours = accumulated / 3600;
-          int mins = (accumulated % 3600) / 60;
-          char time_buf[32];
-          if (hours > 0) {
-            snprintf(time_buf, sizeof(time_buf), "%dh %dm", hours, mins);
-          } else {
-            snprintf(time_buf, sizeof(time_buf), "%dm", mins);
-          }
-          lv_label_set_text(time_lbl, time_buf);
+        if (p2_page_buf[0]) {
+          lv_obj_t* pc_lbl = lv_label_create(card);
+          lv_obj_set_style_text_font(pc_lbl, &kakao_kr_16, 0);
+          lv_obj_set_style_text_color(pc_lbl, lv_color_hex(0x909090), 0);
+          lv_label_set_text(pc_lbl, p2_page_buf);
+          lv_label_set_long_mode(pc_lbl, LV_LABEL_LONG_DOT);
+          lv_obj_set_width(pc_lbl, lv_pct(55));
+          lv_obj_align(pc_lbl, LV_ALIGN_TOP_LEFT, 0, 32);
+          lv_obj_add_flag(pc_lbl, LV_OBJ_FLAG_EVENT_BUBBLE);
         }
       }
+
+      lv_obj_t* time_lbl = lv_label_create(card);
+      lv_obj_set_style_text_font(time_lbl, &kakao_kr_16, 0);
+      lv_obj_set_style_text_color(time_lbl, lv_color_hex(srv_color), 0);
+      lv_obj_align(time_lbl, LV_ALIGN_TOP_RIGHT, 0, 32);
+      lv_obj_add_flag(time_lbl, LV_OBJ_FLAG_EVENT_BUBBLE);
+
+      char time_buf[32];
+      fmt_time(accumulated, time_buf, sizeof(time_buf));
+      lv_label_set_text(time_lbl, time_buf);
+
+      if (s_p2_cnt < 8) {
+        s_p2_entries[s_p2_cnt].lbl = time_lbl;
+        s_p2_entries[s_p2_cnt].base_acc = accumulated;
+        s_p2_entries[s_p2_cnt].start_tick = lv_tick_get();
+        s_p2_cnt++;
+      }
     } else if (phase == 3) {
-      // 제출: donut spinner
-      lv_obj_set_style_border_width(card, 0, 0);
-      lv_obj_t* sp = lv_spinner_create(card, 1000, 60);
-      lv_obj_set_size(sp, 24, 24);
-      lv_obj_align(sp, LV_ALIGN_RIGHT_MID, -8, 0);
-      lv_obj_set_style_bg_opa(sp, LV_OPA_TRANSP, 0);
-      lv_obj_set_style_arc_color(sp, lv_color_hex(0x1A1A1A), 0);
-      lv_obj_set_style_arc_width(sp, 4, 0);
-      lv_obj_set_style_arc_color(sp, lv_color_hex(srv_color), LV_PART_INDICATOR);
-      lv_obj_set_style_arc_width(sp, 4, LV_PART_INDICATOR);
-      lv_obj_add_flag(sp, LV_OBJ_FLAG_EVENT_BUBBLE);
-      lv_obj_set_style_shadow_color(card, lv_color_hex(srv_color), 0);
-      lv_obj_set_style_shadow_width(card, 12, 0);
-      lv_obj_set_style_shadow_opa(card, LV_OPA_20, 0);
+      lv_obj_t* wait_hint = lv_label_create(card);
+      lv_obj_set_style_text_font(wait_hint, &kakao_kr_16, 0);
+      lv_obj_set_style_text_color(wait_hint, lv_color_hex(srv_color), 0);
+      lv_label_set_text(wait_hint, u8"채점중..");
+      lv_obj_align(wait_hint, LV_ALIGN_TOP_RIGHT, 0, 4);
+      lv_obj_add_flag(wait_hint, LV_OBJ_FLAG_EVENT_BUBBLE);
+
+      if (accumulated > 0) {
+        char time_buf[32];
+        fmt_time(accumulated, time_buf, sizeof(time_buf));
+        lv_obj_t* t_lbl = lv_label_create(card);
+        lv_obj_set_style_text_font(t_lbl, &kakao_kr_16, 0);
+        lv_obj_set_style_text_color(t_lbl, lv_color_hex(0x808080), 0);
+        lv_label_set_text(t_lbl, time_buf);
+        lv_obj_align(t_lbl, LV_ALIGN_TOP_LEFT, 0, 32);
+        lv_obj_add_flag(t_lbl, LV_OBJ_FLAG_EVENT_BUBBLE);
+      }
     } else if (phase == 4) {
-      // 확인: blinking border + vibration
-      Serial.println("[PHASE4] Setting up card styles...");
-      lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
       lv_obj_set_style_bg_color(card, lv_color_hex(0x202020), 0);
       lv_obj_set_style_border_color(card, lv_color_hex(srv_color), 0);
       lv_obj_set_style_border_width(card, 3, 0);
       lv_obj_set_style_border_opa(card, LV_OPA_TRANSP, 0);
-      // 애니 중복 방지: 카드 대상 기존 애니 삭제
-      lv_anim_del(card, NULL);
-      Serial.println("[PHASE4] Creating animation...");
-      lv_anim_t a1;
-      lv_anim_init(&a1);
-      lv_anim_set_var(&a1, card);
-      lv_anim_set_time(&a1, 1000);
-      lv_anim_set_playback_time(&a1, 1000);
-      lv_anim_set_repeat_count(&a1, LV_ANIM_REPEAT_INFINITE);
-      lv_anim_set_values(&a1, 0, 250);
-      lv_anim_set_exec_cb(&a1, anim_exec_set_border_opa);
-      lv_anim_set_path_cb(&a1, lv_anim_path_ease_in_out);
-      lv_anim_start(&a1);
-      Serial.println("[PHASE4] Animation started");
       g_should_vibrate_phase4 = true;
-      Serial.println("[PHASE4] Complete!");
+      if (s_p4_cnt < 8) {
+        s_p4_cards[s_p4_cnt] = card;
+        s_p4_colors[s_p4_cnt] = srv_color;
+        s_p4_cnt++;
+      }
+
+      lv_obj_t* hint4 = lv_label_create(card);
+      lv_obj_set_style_text_font(hint4, &kakao_kr_16, 0);
+      lv_obj_set_style_text_color(hint4, lv_color_hex(srv_color), 0);
+      lv_label_set_text(hint4, u8"확인 >");
+      lv_obj_align(hint4, LV_ALIGN_TOP_RIGHT, 0, 4);
+      lv_obj_add_flag(hint4, LV_OBJ_FLAG_EVENT_BUBBLE);
+
+      if (*page) {
+        lv_obj_t* pg_lbl = lv_label_create(card);
+        lv_obj_set_style_text_font(pg_lbl, &kakao_kr_16, 0);
+        lv_obj_set_style_text_color(pg_lbl, lv_color_hex(0x808080), 0);
+        lv_label_set_text(pg_lbl, page);
+        lv_obj_align(pg_lbl, LV_ALIGN_TOP_LEFT, 0, 32);
+        lv_obj_add_flag(pg_lbl, LV_OBJ_FLAG_EVENT_BUBBLE);
+      }
+
     }
+
     if (itemId && *itemId) {
       struct HwData { char id[64]; int phase; };
       HwData* d = (HwData*)malloc(sizeof(HwData));
       if (d) {
         strncpy(d->id, itemId, sizeof(d->id)-1); d->id[sizeof(d->id)-1] = '\0';
         d->phase = phase;
-        // 클릭 이벤트 (디바운스 적용) - 해결책 1
         lv_obj_add_event_cb(card, [](lv_event_t* e){
           uint32_t now = millis();
-          if (now - s_last_card_click_ms < CARD_CLICK_DEBOUNCE_MS) {
-            Serial.println("[CARD] Click debounced - too fast");
-            return;
-          }
+          if (now - s_last_card_click_ms < CARD_CLICK_DEBOUNCE_MS) return;
           s_last_card_click_ms = now;
-          
           HwData* dd = (HwData*)lv_event_get_user_data(e);
           const char* act = nullptr;
-          if (dd->phase == 1) act = "start"; 
-          else if (dd->phase == 2) act = "submit"; 
-          else if (dd->phase == 4) act = "wait"; 
-          else act = nullptr;
+          if (dd->phase == 1) act = "start";
+          else if (dd->phase == 2) act = "submit";
+          else if (dd->phase == 4) act = "wait";
           if (act) fw_publish_homework_action(act, dd->id);
         }, LV_EVENT_CLICKED, d);
-        // 삭제 시 user_data 해제
         lv_obj_add_event_cb(card, [](lv_event_t* e){
           if (lv_event_get_code(e) == LV_EVENT_DELETE) {
             void* ud = lv_event_get_user_data(e);
@@ -1102,6 +1597,12 @@ void ui_port_update_homeworks(const JsonArray& items) {
         }, LV_EVENT_DELETE, d);
       }
     }
+    yield();
+  }
+
+  if (s_p2_cnt > 0 || s_p4_cnt > 0) {
+    s_hw_global_timer = lv_timer_create(hw_global_timer_cb, 1000, (void*)(uintptr_t)s_hw_timer_epoch);
+    lv_timer_set_repeat_count(s_hw_global_timer, -1);
   }
 }
 
@@ -1109,74 +1610,22 @@ void ui_port_update_student_info(const JsonObject& info) {
   if (!s_homeworks_mode) {
     build_homeworks_ui_internal();
   }
-  lv_obj_clean(s_info_panel);
   const char* name = info["name"] | u8"학생";
   const char* school = info["school"] | "";
   const int grade = info.containsKey("grade") ? (int)info["grade"] : -1;
-  
-  // 이름
-  lv_obj_t* name_lbl = lv_label_create(s_info_panel);
-  lv_obj_set_style_text_color(name_lbl, lv_color_hex(0xE6E6E6), 0);
-  lv_label_set_text(name_lbl, name);
-  
-  // 여백 추가 (spacer)
-  lv_obj_t* spacer = lv_obj_create(s_info_panel);
-  lv_obj_set_size(spacer, 1, 16);
-  lv_obj_set_style_bg_opa(spacer, LV_OPA_TRANSP, 0);
-  lv_obj_set_style_border_width(spacer, 0, 0);
-  
-  // 학교/학년 (밝은 회색)
-  lv_obj_t* sg = lv_label_create(s_info_panel);
-  lv_obj_set_style_text_color(sg, lv_color_hex(0xA0A0A0), 0);
-  char line2[128];
-  if (*school && grade >= 0) snprintf(line2, sizeof(line2), u8"%s · %d학년", school, grade); 
-  else if (*school) snprintf(line2, sizeof(line2), "%s", school); 
-  else if (grade >= 0) snprintf(line2, sizeof(line2), u8"%d학년", grade); 
-  else snprintf(line2, sizeof(line2), u8"—");
-  lv_label_set_text(sg, line2);
-  
-  // 상단 내용과 버튼 사이 여백 (spacer)
-  lv_obj_t* spacer2 = lv_obj_create(s_info_panel);
-  lv_obj_set_size(spacer2, 1, 30);
-  lv_obj_set_style_bg_opa(spacer2, LV_OPA_TRANSP, 0);
-  lv_obj_set_style_border_width(spacer2, 0, 0);
-  
-  // 로그아웃 버튼 (하단)
-  lv_obj_t* logout_btn = lv_btn_create(s_info_panel);
-  lv_obj_set_size(logout_btn, 200, 44);
-  lv_obj_set_style_radius(logout_btn, 22, 0);
-  lv_obj_set_style_bg_color(logout_btn, lv_color_hex(0xDC143C), 0);
-  lv_obj_set_style_border_width(logout_btn, 0, 0);
-  lv_obj_set_style_shadow_width(logout_btn, 0, 0);
-  lv_obj_t* logout_lbl = lv_label_create(logout_btn);
-  if (s_global_font) lv_obj_set_style_text_font(logout_lbl, s_global_font, 0);
-  lv_label_set_text(logout_lbl, u8"로그아웃");
-  lv_obj_center(logout_lbl);
-  lv_obj_add_event_cb(logout_btn, [](lv_event_t* e){ 
-    (void)e; 
-    
-    // "오늘도 수고했어" 메시지 팝업 생성
-    lv_obj_t* popup = lv_obj_create(lv_scr_act());
-    lv_obj_set_size(popup, 280, 160);
-    lv_obj_center(popup);
-    lv_obj_set_style_radius(popup, 20, 0);
-    lv_obj_set_style_bg_color(popup, lv_color_hex(0x202020), 0);
-    lv_obj_set_style_border_width(popup, 0, 0);
-    lv_obj_set_style_shadow_width(popup, 20, 0);
-    lv_obj_set_style_shadow_opa(popup, LV_OPA_30, 0);
-    lv_obj_clear_flag(popup, LV_OBJ_FLAG_SCROLLABLE);
-    
-    lv_obj_t* msg_lbl = lv_label_create(popup);
-    if (s_global_font) lv_obj_set_style_text_font(msg_lbl, s_global_font, 0);
-    lv_obj_set_style_text_color(msg_lbl, lv_color_hex(0xFFFFFF), 0);
-    lv_label_set_text(msg_lbl, u8"오늘도 수고했어!");
-    lv_obj_center(msg_lbl);
-    
-    // 하원 기록 요청을 즉시 전송하고, 재시작은 타이머로 지연 수행
-    fw_publish_unbind();
-    lv_timer_t* restart_timer = lv_timer_create(restart_app_timer_cb, 1800, NULL);
-    lv_timer_set_repeat_count(restart_timer, 1);
-  }, LV_EVENT_CLICKED, NULL);
+  s_student_name_cache = name;
+  s_student_school_cache = school;
+  s_student_grade_cache = grade;
+
+  if (s_info_panel && lv_obj_is_valid(s_info_panel)) {
+    populate_student_info_container(s_info_panel, false);
+  }
+  if (s_entry_name_label && lv_obj_is_valid(s_entry_name_label)) {
+    lv_label_set_text(s_entry_name_label, s_student_name_cache.c_str());
+  }
+  if (s_student_info_screen && lv_obj_is_valid(s_student_info_screen)) {
+    populate_student_info_container(s_student_info_screen, true);
+  }
 }
 
 void ui_port_show_settings(const char* appVersion) {
@@ -1227,20 +1676,20 @@ void ui_port_show_settings(const char* appVersion) {
       lv_obj_set_style_text_color(ver, lv_color_hex(0x999999), 0);
       lv_obj_align(ver, LV_ALIGN_TOP_MID, 0, 64);
     }
-    // WiFi button (icon)
-    lv_obj_t* wifi_btn = lv_btn_create(s_settings_scr);
-    lv_obj_set_size(wifi_btn, 51, 51);
-    lv_obj_set_style_radius(wifi_btn, 26, 0);
-    lv_obj_set_style_bg_color(wifi_btn, lv_color_hex(0x1E1E1E), 0);
-    lv_obj_set_style_border_width(wifi_btn, 0, 0);
-    lv_obj_set_style_shadow_width(wifi_btn, 0, 0);
-    lv_obj_align(wifi_btn, LV_ALIGN_CENTER, -70, 5);
-    lv_obj_t* wifi_img = lv_img_create(wifi_btn);
-    lv_img_set_src(wifi_img, &wifi_64dp_E3E3E3_FILL0_wght400_GRAD0_opsz48);
-    lv_obj_set_style_img_recolor(wifi_img, lv_color_hex(0xE3E3E3), 0);
-    lv_obj_set_style_img_recolor_opa(wifi_img, LV_OPA_COVER, 0);
-    lv_img_set_zoom(wifi_img, 180);
-    lv_obj_center(wifi_img);
+    lv_obj_t* vol_settings_btn = lv_btn_create(s_settings_scr);
+    lv_obj_set_size(vol_settings_btn, 51, 51);
+    lv_obj_set_style_radius(vol_settings_btn, 26, 0);
+    lv_obj_set_style_bg_color(vol_settings_btn, lv_color_hex(0x1E1E1E), 0);
+    lv_obj_set_style_border_width(vol_settings_btn, 0, 0);
+    lv_obj_set_style_shadow_width(vol_settings_btn, 0, 0);
+    lv_obj_align(vol_settings_btn, LV_ALIGN_CENTER, -70, 5);
+    lv_obj_t* vol_settings_img = lv_img_create(vol_settings_btn);
+    lv_img_set_src(vol_settings_img, &volume_mute_64dp_E3E3E3_FILL0_wght400_GRAD0_opsz48);
+    lv_obj_set_style_img_recolor(vol_settings_img, lv_color_hex(0xE3E3E3), 0);
+    lv_obj_set_style_img_recolor_opa(vol_settings_img, LV_OPA_COVER, 0);
+    lv_img_set_zoom(vol_settings_img, 180);
+    lv_obj_center(vol_settings_img);
+    lv_obj_add_event_cb(vol_settings_btn, [](lv_event_t* e){ (void)e; show_volume_popup(); }, LV_EVENT_CLICKED, NULL);
     // Brightness button (icon, center)
     lv_obj_t* bright_btn = lv_btn_create(s_settings_scr);
     lv_obj_set_size(bright_btn, 51, 51);
