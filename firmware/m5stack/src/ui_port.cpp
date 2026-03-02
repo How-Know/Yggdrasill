@@ -46,6 +46,10 @@ static lv_obj_t* s_volume_popup = nullptr;
 static lv_obj_t* s_bind_confirm_popup = nullptr;
 static lv_obj_t* s_entry_hub = nullptr;
 static lv_obj_t* s_entry_name_label = nullptr;
+static lv_obj_t* s_hub_clock_label = nullptr;
+static lv_obj_t* s_hub_battery_widget = nullptr;
+static lv_obj_t* s_hub_battery_label = nullptr;
+static lv_timer_t* s_hub_clock_timer = nullptr;
 static lv_obj_t* s_student_info_screen = nullptr;
 static uint8_t s_current_volume = 50;
 static lv_timer_t* s_vibration_timer = nullptr;
@@ -123,6 +127,13 @@ static void hw_global_timer_cb(lv_timer_t* timer) {
 bool g_bottom_sheet_open = false;
 bool g_should_vibrate_phase4 = false;
 
+static lv_obj_t* s_snackbar = nullptr;
+static lv_obj_t* s_snackbar_lbl = nullptr;
+static lv_obj_t* s_snackbar_dot = nullptr;
+static uint8_t s_snackbar_type = 0;
+static int8_t s_first_p4_card_idx = -1;
+static bool s_rest_mode = false;
+
 static void show_volume_popup(void);
 static void close_volume_popup(void);
 static void show_brightness_popup(void);
@@ -136,6 +147,58 @@ static void populate_student_info_container(lv_obj_t* target, bool include_back_
 static void build_homeworks_ui_internal(void);
 static void bottom_sheet_drag_cb(lv_event_t* e);
 static void update_battery_widget(void);
+static void update_hub_battery(void);
+static void hub_clock_timer_cb(lv_timer_t* timer);
+static void snackbar_clicked_cb(lv_event_t* e) {
+  (void)e;
+  if (s_snackbar_type == 1 && s_first_p4_card_idx >= 0 && s_list && lv_obj_is_valid(s_list)) {
+    lv_obj_t* target = lv_obj_get_child(s_list, s_first_p4_card_idx);
+    if (target && lv_obj_is_valid(target)) lv_obj_scroll_to_view(target, LV_ANIM_ON);
+  }
+}
+
+static void show_snackbar_phase4(int count, uint32_t color) {
+  if (!s_snackbar || !lv_obj_is_valid(s_snackbar)) return;
+  s_snackbar_type = 1;
+  lv_obj_set_style_border_color(s_snackbar, lv_color_hex(0x2A2A2A), 0);
+  lv_obj_set_style_border_width(s_snackbar, 1, 0);
+  char buf[32];
+  snprintf(buf, sizeof(buf), u8"확인 과제 %d건", count);
+  if (s_snackbar_lbl) {
+    lv_label_set_text(s_snackbar_lbl, buf);
+    lv_obj_set_style_text_color(s_snackbar_lbl, lv_color_white(), 0);
+    lv_obj_align(s_snackbar_lbl, LV_ALIGN_LEFT_MID, 14, 0);
+  }
+  if (s_snackbar_dot) {
+    lv_obj_set_style_bg_color(s_snackbar_dot, lv_color_hex(color), 0);
+    lv_obj_clear_flag(s_snackbar_dot, LV_OBJ_FLAG_HIDDEN);
+  }
+  lv_obj_clear_flag(s_snackbar, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_align(s_snackbar, LV_ALIGN_TOP_MID, 0, 4);
+}
+
+static void show_snackbar_rest(void) {
+  if (!s_snackbar || !lv_obj_is_valid(s_snackbar)) return;
+  s_snackbar_type = 2;
+  s_rest_mode = true;
+  lv_obj_set_style_border_color(s_snackbar, lv_color_hex(0x1FA95B), 0);
+  lv_obj_set_style_border_width(s_snackbar, 1, 0);
+  if (s_snackbar_lbl) {
+    lv_label_set_text(s_snackbar_lbl, u8"휴식 중");
+    lv_obj_set_style_text_color(s_snackbar_lbl, lv_color_hex(0x1FA95B), 0);
+    lv_obj_align(s_snackbar_lbl, LV_ALIGN_LEFT_MID, 2, 0);
+  }
+  if (s_snackbar_dot) lv_obj_add_flag(s_snackbar_dot, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_clear_flag(s_snackbar, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_align(s_snackbar, LV_ALIGN_TOP_MID, 0, 4);
+}
+
+static void hide_snackbar(void) {
+  if (!s_snackbar || !lv_obj_is_valid(s_snackbar)) return;
+  s_snackbar_type = 0;
+  lv_obj_add_flag(s_snackbar, LV_OBJ_FLAG_HIDDEN);
+}
+
 // Delayed restart helper so UI message can render before reboot
 static void restart_app_timer_cb(lv_timer_t* timer) {
   (void)timer;
@@ -515,24 +578,61 @@ static void show_entry_hub_overlay(void) {
     lv_obj_clear_flag(s_entry_hub, LV_OBJ_FLAG_SCROLLABLE);
     if (s_global_font) lv_obj_set_style_text_font(s_entry_hub, s_global_font, 0);
 
+    // --- Top bar: student name (left), clock (center), battery (right) ---
     s_entry_name_label = lv_label_create(s_entry_hub);
-    lv_obj_set_width(s_entry_name_label, 280);
-    lv_obj_set_style_text_align(s_entry_name_label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(s_entry_name_label, 120);
     lv_obj_set_style_text_color(s_entry_name_label, lv_color_hex(0xE6E6E6), 0);
     lv_obj_set_style_text_font(s_entry_name_label, &kakao_kr_16, 0);
     lv_label_set_long_mode(s_entry_name_label, LV_LABEL_LONG_DOT);
     lv_label_set_text(s_entry_name_label, s_student_name_cache.c_str());
-    lv_obj_align(s_entry_name_label, LV_ALIGN_TOP_MID, 0, 20);
+    lv_obj_align(s_entry_name_label, LV_ALIGN_TOP_LEFT, 14, 8);
 
-    auto make_hub_btn = [](lv_obj_t* parent, const char* text, lv_coord_t y_off) -> lv_obj_t* {
+    s_hub_clock_label = lv_label_create(s_entry_hub);
+    lv_obj_set_style_text_color(s_hub_clock_label, lv_color_hex(0xE6E6E6), 0);
+    lv_obj_set_style_text_font(s_hub_clock_label, &lv_font_montserrat_14, 0);
+    struct tm ti;
+    if (getLocalTime(&ti, 0)) {
+      char buf[8]; snprintf(buf, sizeof(buf), "%02d:%02d", ti.tm_hour, ti.tm_min);
+      lv_label_set_text(s_hub_clock_label, buf);
+    } else {
+      lv_label_set_text(s_hub_clock_label, "--:--");
+    }
+    lv_obj_align(s_hub_clock_label, LV_ALIGN_TOP_MID, 0, 10);
+
+    s_hub_battery_widget = lv_obj_create(s_entry_hub);
+    lv_obj_set_size(s_hub_battery_widget, 72, 28);
+    lv_obj_set_style_bg_opa(s_hub_battery_widget, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_hub_battery_widget, 0, 0);
+    lv_obj_set_style_pad_all(s_hub_battery_widget, 0, 0);
+    lv_obj_set_flex_flow(s_hub_battery_widget, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(s_hub_battery_widget, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_align(s_hub_battery_widget, LV_ALIGN_TOP_RIGHT, -8, 4);
+    s_hub_battery_label = lv_label_create(s_hub_battery_widget);
+    lv_label_set_text(s_hub_battery_label, "");
+    lv_obj_set_style_text_color(s_hub_battery_label, lv_color_hex(0xC0C0C0), 0);
+    lv_obj_set_style_text_font(s_hub_battery_label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_pad_right(s_hub_battery_label, 2, 0);
+    lv_obj_t* bat_img = lv_img_create(s_hub_battery_widget);
+    lv_img_set_src(bat_img, &battery_android_frame_full_32dp_999999_FILL0_wght400_GRAD0_opsz40);
+    lv_obj_set_style_img_recolor(bat_img, lv_color_hex(0xC0C0C0), 0);
+    lv_obj_set_style_img_recolor_opa(bat_img, LV_OPA_COVER, 0);
+
+    // --- 2x2 grid buttons ---
+    const lv_coord_t btn_w = 136, btn_h = 88, gap = 12, margin_x = 18;
+    const lv_coord_t grid_y = 40;
+    const lv_coord_t col1_x = margin_x, col2_x = margin_x + btn_w + gap;
+    const lv_coord_t row1_y = grid_y, row2_y = grid_y + btn_h + gap;
+
+    auto make_grid_btn = [](lv_obj_t* parent, const char* text, lv_coord_t x, lv_coord_t y,
+                            lv_coord_t w, lv_coord_t h) -> lv_obj_t* {
       lv_obj_t* btn = lv_btn_create(parent);
-      lv_obj_set_size(btn, 284, 48);
-      lv_obj_set_style_radius(btn, 12, 0);
+      lv_obj_set_size(btn, w, h);
+      lv_obj_set_pos(btn, x, y);
+      lv_obj_set_style_radius(btn, 20, 0);
       lv_obj_set_style_bg_color(btn, lv_color_hex(0x1A1A1A), 0);
       lv_obj_set_style_border_color(btn, lv_color_hex(0x2C2C2C), 0);
-      lv_obj_set_style_border_width(btn, 2, 0);
+      lv_obj_set_style_border_width(btn, 1, 0);
       lv_obj_set_style_shadow_width(btn, 0, 0);
-      lv_obj_align(btn, LV_ALIGN_TOP_MID, 0, y_off);
       lv_obj_t* lbl = lv_label_create(btn);
       if (s_global_font) lv_obj_set_style_text_font(lbl, s_global_font, 0);
       lv_obj_set_style_text_color(lbl, lv_color_hex(0xE6E6E6), 0);
@@ -541,33 +641,42 @@ static void show_entry_hub_overlay(void) {
       return btn;
     };
 
-    lv_obj_t* watch_btn = make_hub_btn(s_entry_hub, u8"워치", 56);
+    lv_obj_t* hw_btn = make_grid_btn(s_entry_hub, u8"과제", col1_x, row1_y, btn_w, btn_h);
+    lv_obj_add_event_cb(hw_btn, [](lv_event_t* e) {
+      (void)e;
+      if (s_hub_clock_timer) { lv_timer_del(s_hub_clock_timer); s_hub_clock_timer = nullptr; }
+      if (s_entry_hub && lv_obj_is_valid(s_entry_hub)) {
+        lv_obj_add_flag(s_entry_hub, LV_OBJ_FLAG_HIDDEN);
+      }
+      if (s_pages && lv_obj_is_valid(s_pages)) lv_obj_clear_flag(s_pages, LV_OBJ_FLAG_HIDDEN);
+      if (s_fab && lv_obj_is_valid(s_fab)) lv_obj_clear_flag(s_fab, LV_OBJ_FLAG_HIDDEN);
+      if (s_bottom_handle && lv_obj_is_valid(s_bottom_handle)) lv_obj_clear_flag(s_bottom_handle, LV_OBJ_FLAG_HIDDEN);
+      if (s_bottom_sheet && lv_obj_is_valid(s_bottom_sheet)) lv_obj_clear_flag(s_bottom_sheet, LV_OBJ_FLAG_HIDDEN);
+      if (s_snackbar && lv_obj_is_valid(s_snackbar) && s_snackbar_type > 0) lv_obj_clear_flag(s_snackbar, LV_OBJ_FLAG_HIDDEN);
+    }, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t* watch_btn = make_grid_btn(s_entry_hub, u8"스탑", col2_x, row1_y, btn_w, btn_h);
     lv_obj_add_event_cb(watch_btn, [](lv_event_t* e) {
       (void)e;
       show_transient_notice(u8"스탑워치 준비 중");
     }, LV_EVENT_CLICKED, NULL);
 
-    lv_obj_t* info_btn = make_hub_btn(s_entry_hub, u8"정보", 116);
+    lv_obj_t* info_btn = make_grid_btn(s_entry_hub, u8"정보", col1_x, row2_y, btn_w, btn_h);
     lv_obj_add_event_cb(info_btn, [](lv_event_t* e) {
       (void)e;
       show_student_info_screen();
     }, LV_EVENT_CLICKED, NULL);
 
-    lv_obj_t* hw_btn = make_hub_btn(s_entry_hub, u8"과제", 176);
-    lv_obj_add_event_cb(hw_btn, [](lv_event_t* e) {
+    lv_obj_t* settings_btn = make_grid_btn(s_entry_hub, u8"설정", col2_x, row2_y, btn_w, btn_h);
+    lv_obj_add_event_cb(settings_btn, [](lv_event_t* e) {
       (void)e;
-      if (s_entry_hub && lv_obj_is_valid(s_entry_hub)) {
-        lv_obj_add_flag(s_entry_hub, LV_OBJ_FLAG_HIDDEN);
-      }
-      if (s_pages && lv_obj_is_valid(s_pages)) {
-        lv_obj_clear_flag(s_pages, LV_OBJ_FLAG_HIDDEN);
-      }
-      if (s_fab && lv_obj_is_valid(s_fab)) {
-        lv_obj_clear_flag(s_fab, LV_OBJ_FLAG_HIDDEN);
-      }
-      if (s_bottom_handle && lv_obj_is_valid(s_bottom_handle)) lv_obj_clear_flag(s_bottom_handle, LV_OBJ_FLAG_HIDDEN);
-      if (s_bottom_sheet && lv_obj_is_valid(s_bottom_sheet)) lv_obj_clear_flag(s_bottom_sheet, LV_OBJ_FLAG_HIDDEN);
+      ui_port_show_settings(FIRMWARE_VERSION);
     }, LV_EVENT_CLICKED, NULL);
+
+    // Clock + battery refresh timer (30s interval)
+    if (s_hub_clock_timer) { lv_timer_del(s_hub_clock_timer); s_hub_clock_timer = nullptr; }
+    s_hub_clock_timer = lv_timer_create(hub_clock_timer_cb, 30000, NULL);
+    lv_timer_set_repeat_count(s_hub_clock_timer, -1);
   }
 
   if (s_entry_name_label && lv_obj_is_valid(s_entry_name_label)) {
@@ -576,14 +685,19 @@ static void show_entry_hub_overlay(void) {
   lv_obj_clear_flag(s_entry_hub, LV_OBJ_FLAG_HIDDEN);
   lv_obj_move_foreground(s_entry_hub);
   if (s_pages && lv_obj_is_valid(s_pages)) lv_obj_add_flag(s_pages, LV_OBJ_FLAG_HIDDEN);
-  if (s_fab && lv_obj_is_valid(s_fab)) {
-    lv_obj_add_flag(s_fab, LV_OBJ_FLAG_HIDDEN);
-  }
+  if (s_fab && lv_obj_is_valid(s_fab)) lv_obj_add_flag(s_fab, LV_OBJ_FLAG_HIDDEN);
   if (s_bottom_handle && lv_obj_is_valid(s_bottom_handle)) lv_obj_add_flag(s_bottom_handle, LV_OBJ_FLAG_HIDDEN);
   if (s_bottom_sheet && lv_obj_is_valid(s_bottom_sheet)) lv_obj_add_flag(s_bottom_sheet, LV_OBJ_FLAG_HIDDEN);
+  if (s_snackbar && lv_obj_is_valid(s_snackbar)) lv_obj_add_flag(s_snackbar, LV_OBJ_FLAG_HIDDEN);
   if (g_bottom_sheet_open) {
     set_bottom_sheet_position(240);
     g_bottom_sheet_open = false;
+  }
+  update_hub_battery();
+  hub_clock_timer_cb(nullptr);
+  if (!s_hub_clock_timer) {
+    s_hub_clock_timer = lv_timer_create(hub_clock_timer_cb, 30000, NULL);
+    lv_timer_set_repeat_count(s_hub_clock_timer, -1);
   }
   screensaver_attach_activity(s_entry_hub);
 }
@@ -672,7 +786,8 @@ static void show_bind_confirm_popup(const char* student_id, const char* student_
 static void build_student_list_ui() {
   create_base_container();
   close_bind_confirm_popup();
-  if (s_entry_hub && lv_obj_is_valid(s_entry_hub)) { lv_obj_del(s_entry_hub); s_entry_hub = nullptr; s_entry_name_label = nullptr; }
+  if (s_hub_clock_timer) { lv_timer_del(s_hub_clock_timer); s_hub_clock_timer = nullptr; }
+  if (s_entry_hub && lv_obj_is_valid(s_entry_hub)) { lv_obj_del(s_entry_hub); s_entry_hub = nullptr; s_entry_name_label = nullptr; s_hub_clock_label = nullptr; s_hub_battery_widget = nullptr; s_hub_battery_label = nullptr; }
   if (s_student_info_screen && lv_obj_is_valid(s_student_info_screen)) { lv_obj_del(s_student_info_screen); s_student_info_screen = nullptr; }
   if (s_bottom_handle && lv_obj_is_valid(s_bottom_handle)) { lv_obj_del(s_bottom_handle); s_bottom_handle = nullptr; }
   if (s_bottom_sheet && lv_obj_is_valid(s_bottom_sheet)) { lv_obj_del(s_bottom_sheet); s_bottom_sheet = nullptr; }
@@ -722,7 +837,8 @@ static void build_student_list_ui() {
 static void build_homeworks_ui_internal() {
   create_base_container();
   close_bind_confirm_popup();
-  if (s_entry_hub && lv_obj_is_valid(s_entry_hub)) { lv_obj_del(s_entry_hub); s_entry_hub = nullptr; s_entry_name_label = nullptr; }
+  if (s_hub_clock_timer) { lv_timer_del(s_hub_clock_timer); s_hub_clock_timer = nullptr; }
+  if (s_entry_hub && lv_obj_is_valid(s_entry_hub)) { lv_obj_del(s_entry_hub); s_entry_hub = nullptr; s_entry_name_label = nullptr; s_hub_clock_label = nullptr; s_hub_battery_widget = nullptr; s_hub_battery_label = nullptr; }
   if (s_student_info_screen && lv_obj_is_valid(s_student_info_screen)) { lv_obj_del(s_student_info_screen); s_student_info_screen = nullptr; }
   if (s_bottom_handle && lv_obj_is_valid(s_bottom_handle)) { lv_obj_del(s_bottom_handle); s_bottom_handle = nullptr; }
   if (s_bottom_sheet && lv_obj_is_valid(s_bottom_sheet)) { lv_obj_del(s_bottom_sheet); s_bottom_sheet = nullptr; }
@@ -823,7 +939,7 @@ static void build_homeworks_ui_internal() {
   lv_obj_set_style_text_color(pause_lbl, lv_color_hex(0xC0C0C0), 0);
   lv_label_set_text(pause_lbl, u8"휴식");
   lv_obj_center(pause_lbl);
-  lv_obj_add_event_cb(pause_btn, [](lv_event_t* e){ (void)e; fw_publish_pause_all(); }, LV_EVENT_CLICKED, NULL);
+  lv_obj_add_event_cb(pause_btn, [](lv_event_t* e){ (void)e; fw_publish_pause_all(); show_snackbar_rest(); }, LV_EVENT_CLICKED, NULL);
 
   // home button
   lv_obj_t* home_btn = lv_btn_create(s_bottom_sheet);
@@ -858,7 +974,47 @@ static void build_homeworks_ui_internal() {
   lv_obj_add_event_cb(settings_btn, [](lv_event_t* e){ (void)e; ui_port_show_settings(FIRMWARE_VERSION); }, LV_EVENT_CLICKED, NULL);
 
   s_fab = nullptr;
-  
+
+  // Floating snackbar (z-order above everything in s_stage)
+  s_snackbar = lv_obj_create(s_stage);
+  lv_obj_set_height(s_snackbar, 30);
+  lv_obj_set_style_bg_color(s_snackbar, lv_color_hex(0x232326), 0);
+  lv_obj_set_style_bg_opa(s_snackbar, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_color(s_snackbar, lv_color_hex(0x2A2A2A), 0);
+  lv_obj_set_style_border_width(s_snackbar, 1, 0);
+  lv_obj_set_style_radius(s_snackbar, 15, 0);
+  lv_obj_set_style_pad_left(s_snackbar, 10, 0);
+  lv_obj_set_style_pad_right(s_snackbar, 12, 0);
+  lv_obj_set_style_pad_top(s_snackbar, 0, 0);
+  lv_obj_set_style_pad_bottom(s_snackbar, 0, 0);
+  lv_obj_set_scrollbar_mode(s_snackbar, LV_SCROLLBAR_MODE_OFF);
+  lv_obj_clear_flag(s_snackbar, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(s_snackbar, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_flag(s_snackbar, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_add_event_cb(s_snackbar, snackbar_clicked_cb, LV_EVENT_CLICKED, NULL);
+
+  s_snackbar_dot = lv_obj_create(s_snackbar);
+  lv_obj_set_size(s_snackbar_dot, 8, 8);
+  lv_obj_set_style_radius(s_snackbar_dot, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_bg_opa(s_snackbar_dot, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(s_snackbar_dot, 0, 0);
+  lv_obj_set_style_pad_all(s_snackbar_dot, 0, 0);
+  lv_obj_align(s_snackbar_dot, LV_ALIGN_LEFT_MID, 0, 0);
+  lv_obj_add_flag(s_snackbar_dot, LV_OBJ_FLAG_HIDDEN);
+
+  s_snackbar_lbl = lv_label_create(s_snackbar);
+  lv_obj_set_style_text_font(s_snackbar_lbl, &kakao_kr_16, 0);
+  lv_obj_set_style_text_color(s_snackbar_lbl, lv_color_white(), 0);
+  lv_label_set_text(s_snackbar_lbl, "");
+  lv_obj_align(s_snackbar_lbl, LV_ALIGN_LEFT_MID, 12, 0);
+
+  lv_obj_set_width(s_snackbar, LV_SIZE_CONTENT);
+  lv_obj_align(s_snackbar, LV_ALIGN_TOP_MID, 0, 4);
+
+  s_snackbar_type = 0;
+  s_first_p4_card_idx = -1;
+  s_rest_mode = false;
+
   // Re-attach screensaver activity handlers
   screensaver_attach_activity(lv_scr_act());
 }
@@ -1158,6 +1314,43 @@ static void update_battery_widget(void) {
   Serial.println("[BAT] icon applied");
 }
 
+static void update_hub_battery(void) {
+  if (!s_hub_battery_widget || !lv_obj_is_valid(s_hub_battery_widget)) return;
+  int level = M5.Power.getBatteryLevel();
+  bool charging = M5.Power.isCharging();
+  if (s_hub_battery_label && lv_obj_is_valid(s_hub_battery_label)) {
+    lv_label_set_text_fmt(s_hub_battery_label, "%d%%", level);
+  }
+  lv_obj_t* bat_img = lv_obj_get_child(s_hub_battery_widget, 1);
+  if (!bat_img) return;
+  const lv_img_dsc_t* icon = nullptr;
+  if (charging) icon = &battery_android_bolt_32dp_999999_FILL0_wght400_GRAD0_opsz40;
+  else if (level <= 1) icon = &battery_android_alert_32dp_999999_FILL0_wght400_GRAD0_opsz40;
+  else if (level <= 5) icon = &battery_android_frame_1_32dp_999999_FILL0_wght400_GRAD0_opsz40;
+  else if (level <= 20) icon = &battery_android_frame_2_32dp_999999_FILL0_wght400_GRAD0_opsz40;
+  else if (level <= 35) icon = &battery_android_frame_3_32dp_999999_FILL0_wght400_GRAD0_opsz40;
+  else if (level <= 50) icon = &battery_android_frame_4_32dp_999999_FILL0_wght400_GRAD0_opsz40;
+  else if (level <= 65) icon = &battery_android_frame_5_32dp_999999_FILL0_wght400_GRAD0_opsz40;
+  else if (level <= 80) icon = &battery_android_frame_6_32dp_999999_FILL0_wght400_GRAD0_opsz40;
+  else icon = &battery_android_frame_full_32dp_999999_FILL0_wght400_GRAD0_opsz40;
+  lv_img_set_src(bat_img, icon);
+  lv_obj_set_style_img_recolor(bat_img, lv_color_hex(0xC0C0C0), 0);
+  lv_obj_set_style_img_recolor_opa(bat_img, LV_OPA_COVER, 0);
+}
+
+static void hub_clock_timer_cb(lv_timer_t* timer) {
+  (void)timer;
+  if (s_hub_clock_label && lv_obj_is_valid(s_hub_clock_label)) {
+    struct tm ti;
+    if (getLocalTime(&ti, 0)) {
+      char buf[8];
+      snprintf(buf, sizeof(buf), "%02d:%02d", ti.tm_hour, ti.tm_min);
+      lv_label_set_text(s_hub_clock_label, buf);
+    }
+  }
+  update_hub_battery();
+}
+
 static void show_volume_popup(void) {
   if (s_volume_popup) return;
   s_volume_popup = lv_obj_create(lv_scr_act());
@@ -1323,7 +1516,7 @@ static lv_obj_t* create_hw_card(lv_obj_t* parent, const char* book_name, int pha
   lv_obj_t* card = lv_obj_create(parent);
   lv_obj_set_width(card, lv_pct(100));
   lv_obj_set_height(card, 92);
-  lv_obj_set_style_radius(card, 12, 0);
+  lv_obj_set_style_radius(card, 20, 0);
   lv_obj_set_style_bg_color(card, lv_color_hex(0x1A1A1A), 0);
   lv_obj_set_style_border_color(card, lv_color_hex(0x2C2C2C), 0);
   lv_obj_set_style_border_width(card, 1, 0);
@@ -1377,7 +1570,7 @@ static lv_obj_t* create_hw_card(lv_obj_t* parent, const char* book_name, int pha
   } else if (phase == 2) {
     lv_obj_set_style_outline_color(card, lv_color_hex(srv_color), 0);
     lv_obj_set_style_outline_width(card, 2, 0);
-    lv_obj_set_style_outline_pad(card, 0, 0);
+    lv_obj_set_style_outline_pad(card, 1, 0);
     lv_obj_set_style_shadow_width(card, 10, 0);
     lv_obj_set_style_shadow_color(card, lv_color_hex(srv_color), 0);
     lv_obj_set_style_shadow_opa(card, LV_OPA_20, 0);
@@ -1422,8 +1615,8 @@ static lv_obj_t* create_hw_card(lv_obj_t* parent, const char* book_name, int pha
   } else if (phase == 4) {
     lv_obj_set_style_bg_color(card, lv_color_hex(0x202020), 0);
     lv_obj_set_style_outline_color(card, lv_color_hex(srv_color), 0);
-    lv_obj_set_style_outline_width(card, 3, 0);
-    lv_obj_set_style_outline_pad(card, 0, 0);
+    lv_obj_set_style_outline_width(card, 2, 0);
+    lv_obj_set_style_outline_pad(card, 1, 0);
     lv_obj_set_style_outline_opa(card, LV_OPA_TRANSP, 0);
     g_should_vibrate_phase4 = true;
     if (s_p4_cnt < 8) { s_p4_cards[s_p4_cnt] = card; s_p4_colors[s_p4_cnt] = srv_color; s_p4_cnt++; }
@@ -1601,7 +1794,24 @@ void ui_port_update_homeworks(const JsonArray& items) {
   memcpy(s_hw_cache, new_cache, sizeof(HwCacheEntry) * new_cnt);
   s_hw_cache_cnt = new_cnt;
   restart_hw_timer();
-  // update done
+
+  s_first_p4_card_idx = -1;
+  for (uint8_t i = 0; i < new_cnt; i++) {
+    if (new_cache[i].phase == 4) { s_first_p4_card_idx = (int8_t)i; break; }
+  }
+  bool has_active = false;
+  for (uint8_t i = 0; i < new_cnt; i++) {
+    if (new_cache[i].phase == 2) { has_active = true; break; }
+  }
+  if (has_active && s_rest_mode) { s_rest_mode = false; }
+
+  if (s_p4_cnt > 0) {
+    show_snackbar_phase4(s_p4_cnt, s_p4_colors[0]);
+  } else if (s_rest_mode) {
+    show_snackbar_rest();
+  } else {
+    hide_snackbar();
+  }
 }
 
 void ui_port_update_student_info(const JsonObject& info) {

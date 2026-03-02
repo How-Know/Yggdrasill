@@ -468,6 +468,7 @@ void setup() {
   mqtt.setWill(willTopicBuf, 1, true, willPayloadBuf, strlen(willPayloadBuf));
   mqtt.connect();
   Serial.print("WiFi connected, IP: "); Serial.println(WiFi.localIP());
+  configTime(9 * 3600, 0, "pool.ntp.org", "time.google.com");
   Serial.println("MQTT connecting...");
   
   // Initialize screensaver after MQTT setup (60 seconds timeout)
