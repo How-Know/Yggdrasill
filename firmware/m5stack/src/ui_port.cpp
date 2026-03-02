@@ -55,6 +55,18 @@ static lv_obj_t* s_hub_battery_widget = nullptr;
 static lv_obj_t* s_hub_battery_label = nullptr;
 static lv_timer_t* s_hub_clock_timer = nullptr;
 static lv_obj_t* s_student_info_screen = nullptr;
+static lv_obj_t* s_stopwatch_screen = nullptr;
+static lv_obj_t* s_sw_time_label = nullptr;
+static lv_obj_t* s_sw_left_btn = nullptr;
+static lv_obj_t* s_sw_right_btn = nullptr;
+static lv_obj_t* s_sw_left_lbl = nullptr;
+static lv_obj_t* s_sw_right_lbl = nullptr;
+static lv_obj_t* s_sw_lap_list = nullptr;
+static lv_timer_t* s_sw_timer = nullptr;
+static uint32_t s_sw_start_tick = 0;
+static uint32_t s_sw_elapsed_ms = 0;
+static bool s_sw_running = false;
+static int s_sw_lap_count = 0;
 static uint8_t s_current_volume = 50;
 static lv_timer_t* s_vibration_timer = nullptr;
 static bool s_vibration_on = false;
@@ -146,6 +158,8 @@ static void close_bind_confirm_popup(void);
 static void show_entry_hub_overlay(void);
 static void close_student_info_screen(bool show_entry_hub);
 static void show_student_info_screen(void);
+static void show_stopwatch_screen(void);
+static void close_stopwatch_screen(bool show_hub);
 static void show_bind_confirm_popup(const char* student_id, const char* student_name);
 static void populate_student_info_container(lv_obj_t* target, bool include_back_header);
 static void build_homeworks_ui_internal(void);
@@ -531,6 +545,237 @@ static void populate_student_info_container(lv_obj_t* target, bool include_back_
   }, LV_EVENT_CLICKED, NULL);
 }
 
+// ─── Stopwatch ───
+
+static void sw_format_time(uint32_t ms, char* buf, size_t len) {
+  uint32_t total_cs = ms / 10;
+  uint32_t cs = total_cs % 100;
+  uint32_t total_sec = ms / 1000;
+  uint32_t sec = total_sec % 60;
+  uint32_t min = total_sec / 60;
+  snprintf(buf, len, "%02lu:%02lu.%02lu", (unsigned long)min, (unsigned long)sec, (unsigned long)cs);
+}
+
+static void sw_update_display(void) {
+  if (!s_sw_time_label || !lv_obj_is_valid(s_sw_time_label)) return;
+  uint32_t elapsed = s_sw_elapsed_ms;
+  if (s_sw_running) elapsed += (lv_tick_get() - s_sw_start_tick);
+  char buf[16];
+  sw_format_time(elapsed, buf, sizeof(buf));
+  lv_label_set_text(s_sw_time_label, buf);
+}
+
+static void sw_timer_cb(lv_timer_t* t) {
+  (void)t;
+  sw_update_display();
+}
+
+static void sw_update_buttons(void);
+
+static void sw_start(void) {
+  s_sw_start_tick = lv_tick_get();
+  s_sw_running = true;
+  if (!s_sw_timer) {
+    s_sw_timer = lv_timer_create(sw_timer_cb, 50, NULL);
+    lv_timer_set_repeat_count(s_sw_timer, -1);
+  }
+  sw_update_buttons();
+}
+
+static void sw_stop(void) {
+  if (s_sw_running) {
+    s_sw_elapsed_ms += (lv_tick_get() - s_sw_start_tick);
+    s_sw_running = false;
+  }
+  sw_update_display();
+  sw_update_buttons();
+}
+
+static void sw_reset(void) {
+  s_sw_elapsed_ms = 0;
+  s_sw_running = false;
+  s_sw_lap_count = 0;
+  if (s_sw_timer) { lv_timer_del(s_sw_timer); s_sw_timer = nullptr; }
+  sw_update_display();
+  if (s_sw_lap_list && lv_obj_is_valid(s_sw_lap_list)) lv_obj_clean(s_sw_lap_list);
+  sw_update_buttons();
+}
+
+static void sw_lap(void) {
+  if (!s_sw_running || !s_sw_lap_list || !lv_obj_is_valid(s_sw_lap_list)) return;
+  uint32_t elapsed = s_sw_elapsed_ms + (lv_tick_get() - s_sw_start_tick);
+  s_sw_lap_count++;
+  char buf[32];
+  char tbuf[16];
+  sw_format_time(elapsed, tbuf, sizeof(tbuf));
+  snprintf(buf, sizeof(buf), "#%d  %s", s_sw_lap_count, tbuf);
+  lv_obj_t* lbl = lv_label_create(s_sw_lap_list);
+  lv_obj_set_width(lbl, lv_pct(100));
+  lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(lbl, lv_color_hex(0xC0C0C0), 0);
+  lv_label_set_text(lbl, buf);
+  lv_obj_move_to_index(lbl, 0);
+  lv_obj_scroll_to_y(s_sw_lap_list, 0, LV_ANIM_ON);
+}
+
+static void sw_update_buttons(void) {
+  if (!s_sw_left_btn || !s_sw_right_btn) return;
+  if (s_sw_running) {
+    if (s_sw_left_lbl) lv_label_set_text(s_sw_left_lbl, u8"랩");
+    lv_obj_set_style_bg_color(s_sw_left_btn, lv_color_hex(0x333333), 0);
+    lv_obj_set_style_bg_opa(s_sw_left_btn, LV_OPA_80, 0);
+    if (s_sw_right_lbl) lv_label_set_text(s_sw_right_lbl, u8"중단");
+    lv_obj_set_style_bg_color(s_sw_right_btn, lv_color_hex(0xDC143C), 0);
+    lv_obj_set_style_bg_opa(s_sw_right_btn, LV_OPA_60, 0);
+  } else {
+    bool has_time = s_sw_elapsed_ms > 0;
+    if (s_sw_left_lbl) lv_label_set_text(s_sw_left_lbl, u8"재설정");
+    lv_obj_set_style_bg_color(s_sw_left_btn, lv_color_hex(0x333333), 0);
+    lv_obj_set_style_bg_opa(s_sw_left_btn, has_time ? LV_OPA_80 : LV_OPA_40, 0);
+    if (s_sw_right_lbl) lv_label_set_text(s_sw_right_lbl, u8"시작");
+    lv_obj_set_style_bg_color(s_sw_right_btn, lv_color_hex(0x1FA95B), 0);
+    lv_obj_set_style_bg_opa(s_sw_right_btn, LV_OPA_60, 0);
+  }
+}
+
+static void close_stopwatch_screen(bool show_hub) {
+  if (s_sw_timer) { lv_timer_del(s_sw_timer); s_sw_timer = nullptr; }
+  s_sw_running = false;
+  s_sw_elapsed_ms = 0;
+  s_sw_lap_count = 0;
+  if (s_stopwatch_screen && lv_obj_is_valid(s_stopwatch_screen)) {
+    lv_obj_del(s_stopwatch_screen);
+  }
+  s_stopwatch_screen = nullptr;
+  s_sw_time_label = nullptr;
+  s_sw_left_btn = nullptr;
+  s_sw_right_btn = nullptr;
+  s_sw_left_lbl = nullptr;
+  s_sw_right_lbl = nullptr;
+  s_sw_lap_list = nullptr;
+  if (show_hub) show_entry_hub_overlay();
+}
+
+static void show_stopwatch_screen(void) {
+  if (!s_stage || !lv_obj_is_valid(s_stage)) return;
+  if (s_entry_hub && lv_obj_is_valid(s_entry_hub)) {
+    lv_obj_add_flag(s_entry_hub, LV_OBJ_FLAG_HIDDEN);
+  }
+  if (s_stopwatch_screen && lv_obj_is_valid(s_stopwatch_screen)) {
+    lv_obj_move_foreground(s_stopwatch_screen);
+    return;
+  }
+
+  s_stopwatch_screen = lv_obj_create(s_stage);
+  lv_obj_set_size(s_stopwatch_screen, 320, 240);
+  lv_obj_set_pos(s_stopwatch_screen, 0, 0);
+  lv_obj_set_style_bg_color(s_stopwatch_screen, lv_color_hex(0x141414), 0);
+  lv_obj_set_style_bg_opa(s_stopwatch_screen, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(s_stopwatch_screen, 0, 0);
+  lv_obj_set_style_radius(s_stopwatch_screen, 0, 0);
+  lv_obj_set_style_pad_all(s_stopwatch_screen, 0, 0);
+  lv_obj_clear_flag(s_stopwatch_screen, LV_OBJ_FLAG_SCROLLABLE);
+
+  // Header (same style as student info screen)
+  lv_obj_t* header = lv_obj_create(s_stopwatch_screen);
+  lv_obj_set_size(header, 320, 44);
+  lv_obj_set_pos(header, 0, 0);
+  lv_obj_set_style_bg_opa(header, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(header, 0, 0);
+  lv_obj_set_style_pad_left(header, 16, 0);
+  lv_obj_set_style_pad_top(header, 0, 0);
+  lv_obj_set_style_pad_bottom(header, 0, 0);
+  lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(header, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+  lv_obj_t* back_btn = lv_btn_create(header);
+  lv_obj_set_size(back_btn, 38, 38);
+  lv_obj_set_style_radius(back_btn, 10, 0);
+  lv_obj_set_style_bg_color(back_btn, lv_color_hex(0x1E1E1E), 0);
+  lv_obj_set_style_border_width(back_btn, 0, 0);
+  lv_obj_set_style_shadow_width(back_btn, 0, 0);
+  lv_obj_t* back_lbl = lv_label_create(back_btn);
+  if (s_global_font) lv_obj_set_style_text_font(back_lbl, s_global_font, 0);
+  lv_obj_set_style_text_color(back_lbl, lv_color_hex(0xE6E6E6), 0);
+  lv_label_set_text(back_lbl, "<");
+  lv_obj_center(back_lbl);
+  lv_obj_add_event_cb(back_btn, [](lv_event_t* e) {
+    (void)e;
+    close_stopwatch_screen(true);
+  }, LV_EVENT_CLICKED, NULL);
+
+  lv_obj_t* title = lv_label_create(header);
+  if (s_global_font) lv_obj_set_style_text_font(title, s_global_font, 0);
+  lv_obj_set_style_text_color(title, lv_color_hex(0xFFFFFF), 0);
+  lv_obj_set_style_pad_left(title, 10, 0);
+  lv_label_set_text(title, u8"스톱워치");
+
+  // Time display
+  s_sw_time_label = lv_label_create(s_stopwatch_screen);
+  lv_obj_set_style_text_font(s_sw_time_label, &lv_font_montserrat_28, 0);
+  lv_obj_set_style_text_color(s_sw_time_label, lv_color_hex(0xFFFFFF), 0);
+  lv_label_set_text(s_sw_time_label, "00:00.00");
+  lv_obj_align(s_sw_time_label, LV_ALIGN_TOP_MID, 0, 70);
+
+  // Bottom buttons
+  const lv_coord_t btn_w = 110, btn_h = 44, btn_y = 120;
+  s_sw_left_btn = lv_btn_create(s_stopwatch_screen);
+  lv_obj_set_size(s_sw_left_btn, btn_w, btn_h);
+  lv_obj_set_pos(s_sw_left_btn, 24, btn_y);
+  lv_obj_set_style_radius(s_sw_left_btn, 22, 0);
+  lv_obj_set_style_bg_color(s_sw_left_btn, lv_color_hex(0x333333), 0);
+  lv_obj_set_style_bg_opa(s_sw_left_btn, LV_OPA_40, 0);
+  lv_obj_set_style_border_width(s_sw_left_btn, 0, 0);
+  lv_obj_set_style_shadow_width(s_sw_left_btn, 0, 0);
+  s_sw_left_lbl = lv_label_create(s_sw_left_btn);
+  lv_obj_set_style_text_font(s_sw_left_lbl, &kakao_kr_16, 0);
+  lv_obj_set_style_text_color(s_sw_left_lbl, lv_color_hex(0xE6E6E6), 0);
+  lv_label_set_text(s_sw_left_lbl, u8"재설정");
+  lv_obj_center(s_sw_left_lbl);
+  lv_obj_add_event_cb(s_sw_left_btn, [](lv_event_t* e) {
+    (void)e;
+    if (s_sw_running) sw_lap();
+    else sw_reset();
+  }, LV_EVENT_CLICKED, NULL);
+
+  s_sw_right_btn = lv_btn_create(s_stopwatch_screen);
+  lv_obj_set_size(s_sw_right_btn, btn_w, btn_h);
+  lv_obj_set_pos(s_sw_right_btn, 320 - 24 - btn_w, btn_y);
+  lv_obj_set_style_radius(s_sw_right_btn, 22, 0);
+  lv_obj_set_style_bg_color(s_sw_right_btn, lv_color_hex(0x1FA95B), 0);
+  lv_obj_set_style_bg_opa(s_sw_right_btn, LV_OPA_60, 0);
+  lv_obj_set_style_border_width(s_sw_right_btn, 0, 0);
+  lv_obj_set_style_shadow_width(s_sw_right_btn, 0, 0);
+  s_sw_right_lbl = lv_label_create(s_sw_right_btn);
+  lv_obj_set_style_text_font(s_sw_right_lbl, &kakao_kr_16, 0);
+  lv_obj_set_style_text_color(s_sw_right_lbl, lv_color_hex(0xE6E6E6), 0);
+  lv_label_set_text(s_sw_right_lbl, u8"시작");
+  lv_obj_center(s_sw_right_lbl);
+  lv_obj_add_event_cb(s_sw_right_btn, [](lv_event_t* e) {
+    (void)e;
+    if (s_sw_running) sw_stop();
+    else sw_start();
+  }, LV_EVENT_CLICKED, NULL);
+
+  // Lap list
+  s_sw_lap_list = lv_obj_create(s_stopwatch_screen);
+  lv_obj_set_size(s_sw_lap_list, 280, 240 - btn_y - btn_h - 12);
+  lv_obj_set_pos(s_sw_lap_list, 20, btn_y + btn_h + 8);
+  lv_obj_set_style_bg_opa(s_sw_lap_list, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(s_sw_lap_list, 0, 0);
+  lv_obj_set_style_pad_all(s_sw_lap_list, 4, 0);
+  lv_obj_set_style_pad_row(s_sw_lap_list, 4, 0);
+  lv_obj_set_flex_flow(s_sw_lap_list, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_scrollbar_mode(s_sw_lap_list, LV_SCROLLBAR_MODE_ACTIVE);
+  lv_obj_set_scroll_dir(s_sw_lap_list, LV_DIR_VER);
+
+  s_sw_elapsed_ms = 0;
+  s_sw_running = false;
+  s_sw_lap_count = 0;
+
+  screensaver_attach_activity(s_stopwatch_screen);
+}
+
 static void show_student_info_screen(void) {
   if (!s_stage || !lv_obj_is_valid(s_stage)) return;
   if (s_entry_hub && lv_obj_is_valid(s_entry_hub)) {
@@ -682,7 +927,7 @@ static void show_entry_hub_overlay(void) {
                                         &timer_90dp_999999_FILL0_wght400_GRAD0_opsz48);
     lv_obj_add_event_cb(watch_btn, [](lv_event_t* e) {
       (void)e;
-      show_transient_notice(u8"스탑워치 준비 중");
+      show_stopwatch_screen();
     }, LV_EVENT_CLICKED, NULL);
 
     lv_obj_t* info_btn = make_grid_btn(s_entry_hub, u8"정보", col1_x, row2_y, btn_w, btn_h,
@@ -1116,6 +1361,7 @@ void ui_before_screen_change(void) {
   }
   close_bind_confirm_popup();
   close_student_info_screen(false);
+  close_stopwatch_screen(false);
   if (s_hub_clock_timer) { lv_timer_del(s_hub_clock_timer); s_hub_clock_timer = nullptr; }
   close_volume_popup();
   close_brightness_popup();
