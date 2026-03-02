@@ -68,8 +68,8 @@ static bool s_sheet_drag_moved = false;
 static lv_coord_t s_drag_start_touch_y = 0;
 static lv_coord_t s_drag_start_sheet_y = 240;
 
-// 이전 과제 상태 캐시 (flicker 방지)
-struct HwCacheEntry { char id[64]; int phase; };
+// 이전 과제 상태 캐시 (diff 기반 업데이트)
+struct HwCacheEntry { char id[64]; int phase; int acc; };
 static HwCacheEntry s_hw_cache[16];
 static uint8_t s_hw_cache_cnt = 0;
 
@@ -81,31 +81,42 @@ static uint8_t s_p2_cnt = 0;
 static lv_obj_t* s_p4_cards[8];
 static uint8_t s_p4_cnt = 0;
 static uint32_t s_p4_colors[8];
-static bool s_p4_blink_on = false;
+static uint8_t s_p4_breath_step = 0;
 
 static lv_timer_t* s_hw_global_timer = nullptr;
 static uint32_t s_hw_timer_epoch = 0;
+
+static const lv_opa_t BREATH_LUT[] = {
+  0, 10, 25, 45, 70, 100, 130, 160, 190, 215, 235, 248, 255, 248, 235, 215,
+  190, 160, 130, 100, 70, 45, 25, 10
+};
+#define BREATH_STEPS (sizeof(BREATH_LUT)/sizeof(BREATH_LUT[0]))
 
 static void hw_global_timer_cb(lv_timer_t* timer) {
   uint32_t epoch = (uint32_t)(uintptr_t)timer->user_data;
   if (epoch != s_hw_timer_epoch) { lv_timer_del(timer); return; }
 
-  for (uint8_t i = 0; i < s_p2_cnt; i++) {
-    if (!s_p2_entries[i].lbl || !lv_obj_is_valid(s_p2_entries[i].lbl)) continue;
-    uint32_t elapsed = (lv_tick_get() - s_p2_entries[i].start_tick) / 1000;
-    uint32_t total = s_p2_entries[i].base_acc + elapsed;
-    int h = total / 3600, m = (total % 3600) / 60;
-    char buf[32];
-    if (h > 0) snprintf(buf, sizeof(buf), "%dh %dm", h, m);
-    else snprintf(buf, sizeof(buf), "%dm", m);
-    lv_label_set_text(s_p2_entries[i].lbl, buf);
+  static uint8_t sec_tick = 0;
+  sec_tick++;
+  if (sec_tick >= 10) {
+    sec_tick = 0;
+    for (uint8_t i = 0; i < s_p2_cnt; i++) {
+      if (!s_p2_entries[i].lbl || !lv_obj_is_valid(s_p2_entries[i].lbl)) continue;
+      uint32_t elapsed = (lv_tick_get() - s_p2_entries[i].start_tick) / 1000;
+      uint32_t total = s_p2_entries[i].base_acc + elapsed;
+      int h = total / 3600, m = (total % 3600) / 60;
+      char buf[32];
+      if (h > 0) snprintf(buf, sizeof(buf), "%dh %dm", h, m);
+      else snprintf(buf, sizeof(buf), "%dm", m);
+      lv_label_set_text(s_p2_entries[i].lbl, buf);
+    }
   }
 
-  s_p4_blink_on = !s_p4_blink_on;
+  s_p4_breath_step = (s_p4_breath_step + 1) % BREATH_STEPS;
+  lv_opa_t opa = BREATH_LUT[s_p4_breath_step];
   for (uint8_t i = 0; i < s_p4_cnt; i++) {
     if (!s_p4_cards[i] || !lv_obj_is_valid(s_p4_cards[i])) continue;
-    lv_opa_t opa = s_p4_blink_on ? LV_OPA_COVER : LV_OPA_TRANSP;
-    lv_obj_set_style_border_opa(s_p4_cards[i], opa, 0);
+    lv_obj_set_style_outline_opa(s_p4_cards[i], opa, 0);
   }
 }
 
@@ -187,23 +198,23 @@ static lv_coord_t clamp_sheet_y(lv_coord_t y) {
 static void set_bottom_sheet_position(lv_coord_t sheet_y) {
   if (!s_bottom_sheet || !s_bottom_handle) return;
   lv_coord_t clamped_sheet = clamp_sheet_y(sheet_y);
-  lv_coord_t clamped_handle = clamped_sheet - 24;
+  lv_coord_t handle_y = clamped_sheet - 20;
   lv_obj_set_y(s_bottom_sheet, clamped_sheet);
-  lv_obj_set_y(s_bottom_handle, clamped_handle);
+  lv_obj_set_y(s_bottom_handle, handle_y);
 }
 
 static void anim_set_sheet_y(void* obj, int32_t v) {
   lv_obj_set_y((lv_obj_t*)obj, clamp_sheet_y((lv_coord_t)v));
 }
 static void anim_set_handle_y(void* obj, int32_t v) {
-  lv_coord_t clamped = clamp_sheet_y((lv_coord_t)(v + 24)) - 24;
+  lv_coord_t clamped = clamp_sheet_y((lv_coord_t)(v + 20)) - 20;
   lv_obj_set_y((lv_obj_t*)obj, clamped);
 }
 
 static void animate_bottom_sheet_to(bool open_target) {
   if (!s_bottom_sheet || !s_bottom_handle) return;
   lv_coord_t target_sheet = open_target ? 140 : 240;
-  lv_coord_t target_handle = target_sheet - 24;
+  lv_coord_t target_handle = target_sheet - 20;
 
   lv_anim_del(s_bottom_sheet, anim_set_sheet_y);
   lv_anim_del(s_bottom_handle, anim_set_handle_y);
@@ -550,7 +561,6 @@ static void show_entry_hub_overlay(void) {
       }
       if (s_pages && lv_obj_is_valid(s_pages)) {
         lv_obj_clear_flag(s_pages, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_scroll_to_view(lv_obj_get_child(s_pages, 0), LV_ANIM_OFF);
       }
       if (s_fab && lv_obj_is_valid(s_fab)) {
         lv_obj_clear_flag(s_fab, LV_OBJ_FLAG_HIDDEN);
@@ -724,30 +734,27 @@ static void build_homeworks_ui_internal() {
   s_homeworks_mode = true;
 
   s_pages = lv_obj_create(s_stage);
-  lv_obj_set_size(s_pages, 320, 216);
+  lv_obj_set_size(s_pages, 320, 240);
   lv_obj_set_style_bg_opa(s_pages, LV_OPA_TRANSP, 0);
   lv_obj_set_style_border_width(s_pages, 0, 0);
   lv_obj_set_style_radius(s_pages, 0, 0);
   lv_obj_set_style_pad_all(s_pages, 0, 0);
-  lv_obj_set_flex_flow(s_pages, LV_FLEX_FLOW_ROW);
-  lv_obj_set_scroll_dir(s_pages, LV_DIR_HOR);
-  lv_obj_set_scroll_snap_x(s_pages, LV_SCROLL_SNAP_CENTER);
-  lv_obj_clear_flag(s_pages, LV_OBJ_FLAG_SCROLL_MOMENTUM);
-  lv_obj_set_style_pad_column(s_pages, 12, 0);
   lv_obj_set_scrollbar_mode(s_pages, LV_SCROLLBAR_MODE_OFF);
-  // 페이지 스크롤 감지를 위한 직접 훅
+  lv_obj_clear_flag(s_pages, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_add_flag(s_pages, LV_OBJ_FLAG_EVENT_BUBBLE);
   screensaver_attach_activity(s_pages);
   s_info_panel = nullptr;
 
-  // homeworks page (s_list directly under s_pages)
   s_list = lv_obj_create(s_pages);
   lv_obj_set_size(s_list, lv_pct(100), lv_pct(100));
   lv_obj_set_style_bg_color(s_list, lv_color_hex(0x0B1112), 0);
   lv_obj_set_style_bg_opa(s_list, LV_OPA_COVER, 0);
   lv_obj_set_style_border_width(s_list, 0, 0);
   lv_obj_set_style_radius(s_list, 0, 0);
-  lv_obj_set_style_pad_all(s_list, 8, 0);
+  lv_obj_set_style_pad_top(s_list, 8, 0);
+  lv_obj_set_style_pad_left(s_list, 8, 0);
+  lv_obj_set_style_pad_right(s_list, 8, 0);
+  lv_obj_set_style_pad_bottom(s_list, 28, 0);
   lv_obj_set_flex_flow(s_list, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_flex_align(s_list, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START);
   lv_obj_set_style_pad_row(s_list, 12, 0);
@@ -756,26 +763,13 @@ static void build_homeworks_ui_internal() {
   lv_obj_add_flag(s_list, LV_OBJ_FLAG_EVENT_BUBBLE);
   screensaver_attach_activity(s_list);
 
-  // classes page (placeholder)
-  lv_obj_t* classes_page = lv_obj_create(s_pages);
-  lv_obj_set_size(classes_page, lv_pct(100), lv_pct(100));
-  lv_obj_set_style_bg_color(classes_page, lv_color_hex(0x0B1112), 0);
-  lv_obj_set_style_border_width(classes_page, 0, 0);
-  lv_obj_set_style_radius(classes_page, 0, 0);
-  lv_obj_set_style_pad_all(classes_page, 12, 0);
-  lv_obj_set_scrollbar_mode(classes_page, LV_SCROLLBAR_MODE_OFF);
-  if (s_global_font) lv_obj_set_style_text_font(classes_page, s_global_font, 0);
-  lv_obj_t* classes_label = lv_label_create(classes_page);
-  lv_obj_set_style_text_color(classes_label, lv_color_hex(0x808080), 0);
-  lv_label_set_text(classes_label, u8"수업 페이지\n(준비 중)");
-  lv_obj_center(classes_label);
-
   s_bottom_handle = lv_obj_create(s_stage);
-  lv_obj_set_size(s_bottom_handle, 320, 24);
-  lv_obj_set_pos(s_bottom_handle, 0, 216);
+  lv_obj_set_size(s_bottom_handle, 80, 18);
+  lv_obj_set_pos(s_bottom_handle, 120, 220);
   lv_obj_set_style_bg_opa(s_bottom_handle, LV_OPA_TRANSP, 0);
   lv_obj_set_style_border_width(s_bottom_handle, 0, 0);
-  lv_obj_set_style_radius(s_bottom_handle, 0, 0);
+  lv_obj_set_style_radius(s_bottom_handle, 8, 0);
+  lv_obj_set_style_pad_all(s_bottom_handle, 0, 0);
   lv_obj_set_scrollbar_mode(s_bottom_handle, LV_SCROLLBAR_MODE_OFF);
   lv_obj_clear_flag(s_bottom_handle, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_t* indicator = lv_obj_create(s_bottom_handle);
@@ -1291,319 +1285,323 @@ static const uint32_t HOMEWORK_UPDATE_DEBOUNCE_MS = 500;
 static uint32_t s_last_card_click_ms = 0;
 static const uint32_t CARD_CLICK_DEBOUNCE_MS = 500;
 
+static void extract_book_name(const char* content, const char* title, const char* book_id, const char* grade_label, const char* hw_type, char* out, size_t out_sz) {
+  out[0] = '\0';
+  const char* marker = strstr(content, u8"교재:");
+  if (!marker) marker = strstr(content, u8"교재: ");
+  if (marker) {
+    const char* start = marker + strlen(u8"교재:");
+    while (*start == ' ') start++;
+    const char* end = strchr(start, '\n');
+    size_t len = end ? (size_t)(end - start) : strlen(start);
+    if (len > out_sz-1) len = out_sz-1;
+    memcpy(out, start, len); out[len] = '\0'; return;
+  }
+  if (*book_id && *grade_label) {
+    const char* dot = strstr(title, u8"·");
+    if (dot) {
+      size_t len = (size_t)(dot - title);
+      while (len > 0 && title[len-1] == ' ') len--;
+      if (len > out_sz-1) len = out_sz-1;
+      memcpy(out, title, len); out[len] = '\0'; return;
+    }
+  }
+  if (*hw_type) { strncpy(out, hw_type, out_sz-1); out[out_sz-1] = '\0'; return; }
+  strncpy(out, title, out_sz-1); out[out_sz-1] = '\0';
+}
+
+static void fmt_time_static(int secs, char* buf, size_t sz) {
+  int h = secs / 3600; int m = (secs % 3600) / 60;
+  if (h > 0) snprintf(buf, sz, "%dh %dm", h, m);
+  else snprintf(buf, sz, "%dm", m);
+}
+
+static lv_obj_t* create_hw_card(lv_obj_t* parent, const char* book_name, int phase,
+    const char* page, int count, int check_count, int accumulated,
+    uint32_t srv_color, const char* itemId) {
+  extern const lv_font_t kakao_kr_16;
+  lv_obj_t* card = lv_obj_create(parent);
+  lv_obj_set_width(card, lv_pct(100));
+  lv_obj_set_height(card, 92);
+  lv_obj_set_style_radius(card, 12, 0);
+  lv_obj_set_style_bg_color(card, lv_color_hex(0x1A1A1A), 0);
+  lv_obj_set_style_border_color(card, lv_color_hex(0x2C2C2C), 0);
+  lv_obj_set_style_border_width(card, 1, 0);
+  lv_obj_set_style_pad_top(card, 12, 0);
+  lv_obj_set_style_pad_bottom(card, 12, 0);
+  lv_obj_set_style_pad_left(card, 14, 0);
+  lv_obj_set_style_pad_right(card, 14, 0);
+  lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
+
+  lv_obj_t* title_lbl = lv_label_create(card);
+  if (s_global_font) lv_obj_set_style_text_font(title_lbl, s_global_font, 0);
+  lv_obj_set_style_text_color(title_lbl, lv_color_hex(0xE6E6E6), 0);
+  lv_label_set_text(title_lbl, book_name);
+  lv_label_set_long_mode(title_lbl, LV_LABEL_LONG_DOT);
+  lv_obj_set_width(title_lbl, lv_pct(65));
+  lv_obj_align(title_lbl, LV_ALIGN_TOP_LEFT, 0, 0);
+  lv_obj_add_flag(title_lbl, LV_OBJ_FLAG_EVENT_BUBBLE);
+
+  char page_count_buf[64] = {0};
+  if (*page && count > 0) snprintf(page_count_buf, sizeof(page_count_buf), "%s · %d%s", page, count, u8"문항");
+  else if (*page) snprintf(page_count_buf, sizeof(page_count_buf), "%s", page);
+  else if (count > 0) snprintf(page_count_buf, sizeof(page_count_buf), "%d%s", count, u8"문항");
+
+  if (phase == 1) {
+    lv_obj_t* hint = lv_label_create(card);
+    lv_obj_set_style_text_font(hint, &kakao_kr_16, 0);
+    lv_obj_set_style_text_color(hint, lv_color_hex(0x1FA95B), 0);
+    lv_label_set_text(hint, u8"시작 >");
+    lv_obj_align(hint, LV_ALIGN_TOP_RIGHT, 0, 4);
+    lv_obj_add_flag(hint, LV_OBJ_FLAG_EVENT_BUBBLE);
+    if (page_count_buf[0]) {
+      lv_obj_t* pc_lbl = lv_label_create(card);
+      lv_obj_set_style_text_font(pc_lbl, &kakao_kr_16, 0);
+      lv_obj_set_style_text_color(pc_lbl, lv_color_hex(0x909090), 0);
+      lv_label_set_text(pc_lbl, page_count_buf);
+      lv_label_set_long_mode(pc_lbl, LV_LABEL_LONG_DOT);
+      lv_obj_set_width(pc_lbl, lv_pct(60));
+      lv_obj_align(pc_lbl, LV_ALIGN_TOP_LEFT, 0, 32);
+      lv_obj_add_flag(pc_lbl, LV_OBJ_FLAG_EVENT_BUBBLE);
+    }
+    if (check_count > 0) {
+      char chk_buf[32]; snprintf(chk_buf, sizeof(chk_buf), u8"검사 %d회", check_count);
+      lv_obj_t* chk_lbl = lv_label_create(card);
+      lv_obj_set_style_text_font(chk_lbl, &kakao_kr_16, 0);
+      lv_obj_set_style_text_color(chk_lbl, lv_color_hex(0x707070), 0);
+      lv_label_set_text(chk_lbl, chk_buf);
+      lv_obj_align(chk_lbl, LV_ALIGN_TOP_RIGHT, 0, 32);
+      lv_obj_add_flag(chk_lbl, LV_OBJ_FLAG_EVENT_BUBBLE);
+    }
+  } else if (phase == 2) {
+    lv_obj_set_style_outline_color(card, lv_color_hex(srv_color), 0);
+    lv_obj_set_style_outline_width(card, 2, 0);
+    lv_obj_set_style_outline_pad(card, 0, 0);
+    lv_obj_set_style_shadow_width(card, 10, 0);
+    lv_obj_set_style_shadow_color(card, lv_color_hex(srv_color), 0);
+    lv_obj_set_style_shadow_opa(card, LV_OPA_20, 0);
+    char p2_buf[80] = {0};
+    if (*page) snprintf(p2_buf, sizeof(p2_buf), "p %s", page);
+    if (p2_buf[0] && count > 0) { char t[80]; snprintf(t, sizeof(t), "%s · %d%s", p2_buf, count, u8"문항"); strncpy(p2_buf, t, sizeof(p2_buf)-1); }
+    else if (!p2_buf[0] && count > 0) snprintf(p2_buf, sizeof(p2_buf), "%d%s", count, u8"문항");
+    if (p2_buf[0]) {
+      lv_obj_t* pc = lv_label_create(card);
+      lv_obj_set_style_text_font(pc, &kakao_kr_16, 0);
+      lv_obj_set_style_text_color(pc, lv_color_hex(0x909090), 0);
+      lv_label_set_text(pc, p2_buf);
+      lv_label_set_long_mode(pc, LV_LABEL_LONG_DOT);
+      lv_obj_set_width(pc, lv_pct(55));
+      lv_obj_align(pc, LV_ALIGN_TOP_LEFT, 0, 32);
+      lv_obj_add_flag(pc, LV_OBJ_FLAG_EVENT_BUBBLE);
+    }
+    lv_obj_t* time_lbl = lv_label_create(card);
+    lv_obj_set_style_text_font(time_lbl, &kakao_kr_16, 0);
+    lv_obj_set_style_text_color(time_lbl, lv_color_hex(srv_color), 0);
+    lv_obj_align(time_lbl, LV_ALIGN_TOP_RIGHT, 0, 32);
+    lv_obj_add_flag(time_lbl, LV_OBJ_FLAG_EVENT_BUBBLE);
+    char tb[32]; fmt_time_static(accumulated, tb, sizeof(tb));
+    lv_label_set_text(time_lbl, tb);
+    if (s_p2_cnt < 8) { s_p2_entries[s_p2_cnt] = {time_lbl, (uint32_t)accumulated, lv_tick_get()}; s_p2_cnt++; }
+  } else if (phase == 3) {
+    lv_obj_t* wh = lv_label_create(card);
+    lv_obj_set_style_text_font(wh, &kakao_kr_16, 0);
+    lv_obj_set_style_text_color(wh, lv_color_hex(srv_color), 0);
+    lv_label_set_text(wh, u8"채점중..");
+    lv_obj_align(wh, LV_ALIGN_TOP_RIGHT, 0, 4);
+    lv_obj_add_flag(wh, LV_OBJ_FLAG_EVENT_BUBBLE);
+    if (accumulated > 0) {
+      char tb[32]; fmt_time_static(accumulated, tb, sizeof(tb));
+      lv_obj_t* tl = lv_label_create(card);
+      lv_obj_set_style_text_font(tl, &kakao_kr_16, 0);
+      lv_obj_set_style_text_color(tl, lv_color_hex(0x808080), 0);
+      lv_label_set_text(tl, tb);
+      lv_obj_align(tl, LV_ALIGN_TOP_LEFT, 0, 32);
+      lv_obj_add_flag(tl, LV_OBJ_FLAG_EVENT_BUBBLE);
+    }
+  } else if (phase == 4) {
+    lv_obj_set_style_bg_color(card, lv_color_hex(0x202020), 0);
+    lv_obj_set_style_outline_color(card, lv_color_hex(srv_color), 0);
+    lv_obj_set_style_outline_width(card, 3, 0);
+    lv_obj_set_style_outline_pad(card, 0, 0);
+    lv_obj_set_style_outline_opa(card, LV_OPA_TRANSP, 0);
+    g_should_vibrate_phase4 = true;
+    if (s_p4_cnt < 8) { s_p4_cards[s_p4_cnt] = card; s_p4_colors[s_p4_cnt] = srv_color; s_p4_cnt++; }
+    lv_obj_t* h4 = lv_label_create(card);
+    lv_obj_set_style_text_font(h4, &kakao_kr_16, 0);
+    lv_obj_set_style_text_color(h4, lv_color_hex(srv_color), 0);
+    lv_label_set_text(h4, u8"확인 >");
+    lv_obj_align(h4, LV_ALIGN_TOP_RIGHT, 0, 4);
+    lv_obj_add_flag(h4, LV_OBJ_FLAG_EVENT_BUBBLE);
+    if (*page) {
+      lv_obj_t* pg = lv_label_create(card);
+      lv_obj_set_style_text_font(pg, &kakao_kr_16, 0);
+      lv_obj_set_style_text_color(pg, lv_color_hex(0x808080), 0);
+      lv_label_set_text(pg, page);
+      lv_obj_align(pg, LV_ALIGN_TOP_LEFT, 0, 32);
+      lv_obj_add_flag(pg, LV_OBJ_FLAG_EVENT_BUBBLE);
+    }
+  }
+
+  if (itemId && *itemId) {
+    struct HwData { char id[64]; int phase; };
+    HwData* d = (HwData*)malloc(sizeof(HwData));
+    if (d) {
+      strncpy(d->id, itemId, sizeof(d->id)-1); d->id[sizeof(d->id)-1] = '\0';
+      d->phase = phase;
+      lv_obj_add_event_cb(card, [](lv_event_t* e){
+        uint32_t now = millis();
+        if (now - s_last_card_click_ms < CARD_CLICK_DEBOUNCE_MS) return;
+        s_last_card_click_ms = now;
+        HwData* dd = (HwData*)lv_event_get_user_data(e);
+        const char* act = nullptr;
+        if (dd->phase == 1) act = "start";
+        else if (dd->phase == 2) act = "submit";
+        else if (dd->phase == 4) act = "wait";
+        if (act) fw_publish_homework_action(act, dd->id);
+      }, LV_EVENT_CLICKED, d);
+      lv_obj_add_event_cb(card, [](lv_event_t* e){
+        if (lv_event_get_code(e) == LV_EVENT_DELETE) { void* ud = lv_event_get_user_data(e); if (ud) free(ud); }
+      }, LV_EVENT_DELETE, d);
+    }
+  }
+  return card;
+}
+
+static void restart_hw_timer() {
+  if (s_p2_cnt > 0 || s_p4_cnt > 0) {
+    uint32_t interval = s_p4_cnt > 0 ? 100 : 1000;
+    s_hw_global_timer = lv_timer_create(hw_global_timer_cb, interval, (void*)(uintptr_t)s_hw_timer_epoch);
+    lv_timer_set_repeat_count(s_hw_global_timer, -1);
+  }
+}
+
 void ui_port_update_homeworks(const JsonArray& items) {
-  Serial.printf("[HW] >>> update_homeworks START items=%d mode=%d s_list=%p heap=%u\n",
-                (int)items.size(), (int)s_homeworks_mode, s_list, (unsigned)esp_get_free_heap_size());
+  // Serial.printf("[HW] update items=%d\n", (int)items.size());
   uint32_t now = millis();
   if (now - s_last_homework_update_ms < HOMEWORK_UPDATE_DEBOUNCE_MS) {
-    Serial.println("[HW] Debounced - skipping");
+    // debounced
     return;
   }
   s_last_homework_update_ms = now;
-  
+
   if (!s_homeworks_mode) {
-    Serial.println("[HW] Not in homeworks mode, building UI...");
     build_homeworks_ui_internal();
-    Serial.printf("[HW] build done, s_list=%p heap=%u\n", s_list, (unsigned)esp_get_free_heap_size());
   }
-  if (!s_list || !lv_obj_is_valid(s_list)) {
-    Serial.println("[HW] ERROR: s_list is null or invalid!");
+  if (!s_list || !lv_obj_is_valid(s_list)) { Serial.println("[HW] ERROR: s_list invalid"); return; }
+
+  // Build new cache from incoming data
+  HwCacheEntry new_cache[16];
+  uint8_t new_cnt = 0;
+  for (JsonObject it : items) {
+    if (new_cnt >= 16) break;
+    const char* iid = it.containsKey("item_id") ? (const char*)it["item_id"] : "";
+    int ph = it.containsKey("phase") ? (int)it["phase"] : 1;
+    int acc = it.containsKey("accumulated") ? (int)it["accumulated"] : 0;
+    strncpy(new_cache[new_cnt].id, iid, 63); new_cache[new_cnt].id[63] = '\0';
+    new_cache[new_cnt].phase = ph;
+    new_cache[new_cnt].acc = acc;
+    new_cnt++;
+  }
+
+  // Diff: find which indices changed
+  bool need_full = (new_cnt != s_hw_cache_cnt);
+  uint8_t changed[16]; uint8_t changed_cnt = 0;
+  if (!need_full) {
+    for (uint8_t i = 0; i < new_cnt; i++) {
+      if (strcmp(new_cache[i].id, s_hw_cache[i].id) != 0) { need_full = true; break; }
+      if (new_cache[i].phase != s_hw_cache[i].phase) {
+        if (changed_cnt < 16) changed[changed_cnt++] = i;
+      }
+    }
+  }
+
+  if (!need_full && changed_cnt == 0) {
+    // no changes
     return;
   }
 
-  // diff 비교: item_id+phase가 동일하면 재렌더링 skip
-  {
-    bool same = ((int)items.size() == s_hw_cache_cnt);
-    if (same) {
-      uint8_t idx = 0;
-      for (JsonObject it : items) {
-        const char* iid = it.containsKey("item_id") ? (const char*)it["item_id"] : "";
-        int ph = it.containsKey("phase") ? (int)it["phase"] : 1;
-        if (strcmp(s_hw_cache[idx].id, iid) != 0 || s_hw_cache[idx].phase != ph) { same = false; break; }
-        idx++;
-      }
-    }
-    if (same && s_hw_cache_cnt > 0) {
-      Serial.println("[HW] Cache match - skipping re-render");
-      return;
-    }
-    s_hw_cache_cnt = 0;
-    for (JsonObject it : items) {
-      if (s_hw_cache_cnt >= 16) break;
-      const char* iid = it.containsKey("item_id") ? (const char*)it["item_id"] : "";
-      int ph = it.containsKey("phase") ? (int)it["phase"] : 1;
-      strncpy(s_hw_cache[s_hw_cache_cnt].id, iid, 63);
-      s_hw_cache[s_hw_cache_cnt].id[63] = '\0';
-      s_hw_cache[s_hw_cache_cnt].phase = ph;
-      s_hw_cache_cnt++;
-    }
-  }
-
+  // Invalidate old timer
+  s_hw_timer_epoch++;
+  s_p2_cnt = 0; s_p4_cnt = 0; s_p4_breath_step = 0;
+  s_hw_global_timer = nullptr;
   g_should_vibrate_phase4 = false;
-  {
-    Serial.printf("[HW] pre-clean heap=%u\n", (unsigned)esp_get_free_heap_size());
-    s_hw_timer_epoch++;
-    s_p2_cnt = 0;
-    s_p4_cnt = 0;
-    s_p4_blink_on = false;
-    s_hw_global_timer = nullptr;
+
+  if (need_full) {
+    // full rebuild
+    lv_obj_add_flag(s_list, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clean(s_list);
-  }
-  Serial.printf("[HW] clean done heap=%u\n", (unsigned)esp_get_free_heap_size());
-  extern const lv_font_t kakao_kr_16;
 
-  for (JsonObject it : items) {
-    const char* title = it["title"] | it["name"] | u8"과제";
-    const char* itemId = it.containsKey("item_id") ? (const char*)it["item_id"] : "";
-    int phase = it.containsKey("phase") ? (int)it["phase"] : 1;
-    const char* page = it["page"] | "";
-    int count = it.containsKey("count") ? (int)it["count"] : 0;
-    int check_count = it.containsKey("check_count") ? (int)it["check_count"] : 0;
-    int accumulated = it.containsKey("accumulated") ? (int)it["accumulated"] : 0;
-    const char* content = it["content"] | "";
-    const char* hw_type = it["type"] | "";
-    const char* book_id = it["book_id"] | "";
-    const char* grade_label = it["grade_label"] | "";
-    uint32_t srv_color = 0x1E88E5;
-    if (it.containsKey("color")) {
-      double v = it["color"];
-      if (v > 0) srv_color = ((uint32_t)v) & 0xFFFFFFu;
+    uint8_t idx = 0;
+    for (JsonObject it : items) {
+      const char* title = it["title"] | it["name"] | u8"과제";
+      const char* itemId = it.containsKey("item_id") ? (const char*)it["item_id"] : "";
+      int phase = it.containsKey("phase") ? (int)it["phase"] : 1;
+      const char* page = it["page"] | "";
+      int count = it.containsKey("count") ? (int)it["count"] : 0;
+      int check_count = it.containsKey("check_count") ? (int)it["check_count"] : 0;
+      int accumulated = it.containsKey("accumulated") ? (int)it["accumulated"] : 0;
+      const char* content = it["content"] | "";
+      const char* hw_type = it["type"] | "";
+      const char* book_id = it["book_id"] | "";
+      const char* grade_label = it["grade_label"] | "";
+      uint32_t srv_color = 0x1E88E5;
+      if (it.containsKey("color")) { double v = it["color"]; if (v > 0) srv_color = ((uint32_t)v) & 0xFFFFFFu; }
+      char bn[128]; extract_book_name(content, title, book_id, grade_label, hw_type, bn, sizeof(bn));
+      if (!bn[0]) strncpy(bn, title, sizeof(bn)-1);
+      // card created
+      create_hw_card(s_list, bn, phase, page, count, check_count, accumulated, srv_color, itemId);
+      idx++;
+      yield();
     }
+    lv_obj_clear_flag(s_list, LV_OBJ_FLAG_HIDDEN);
+  } else {
+    // partial update
+    // Re-scan all cards to rebuild p2/p4 arrays for unchanged cards
+    uint8_t idx = 0;
+    uint8_t ci = 0;
+    for (JsonObject it : items) {
+      bool is_changed = (ci < changed_cnt && changed[ci] == idx);
+      if (is_changed) ci++;
 
-    // Extract book name (same logic as Flutter app)
-    char book_name[128] = {0};
-    {
-      // 1) content에서 "교재: xxx" 패턴
-      const char* marker = strstr(content, u8"교재:");
-      if (!marker) marker = strstr(content, u8"교재: ");
-      if (marker) {
-        const char* start = marker + strlen(u8"교재:");
-        while (*start == ' ') start++;
-        const char* end = strchr(start, '\n');
-        size_t len = end ? (size_t)(end - start) : strlen(start);
-        if (len > sizeof(book_name)-1) len = sizeof(book_name)-1;
-        memcpy(book_name, start, len);
-        book_name[len] = '\0';
-      }
-      // 2) bookId + gradeLabel이 있으면 title에서 · 앞부분
-      if (!book_name[0] && *book_id && *grade_label) {
-        const char* dot = strstr(title, u8"·");
-        if (dot) {
-          size_t len = (size_t)(dot - title);
-          while (len > 0 && title[len-1] == ' ') len--;
-          if (len > sizeof(book_name)-1) len = sizeof(book_name)-1;
-          memcpy(book_name, title, len);
-          book_name[len] = '\0';
+      const char* title = it["title"] | it["name"] | u8"과제";
+      const char* itemId = it.containsKey("item_id") ? (const char*)it["item_id"] : "";
+      int phase = it.containsKey("phase") ? (int)it["phase"] : 1;
+      const char* page = it["page"] | "";
+      int count = it.containsKey("count") ? (int)it["count"] : 0;
+      int check_count = it.containsKey("check_count") ? (int)it["check_count"] : 0;
+      int accumulated = it.containsKey("accumulated") ? (int)it["accumulated"] : 0;
+      const char* content = it["content"] | "";
+      const char* hw_type = it["type"] | "";
+      const char* book_id = it["book_id"] | "";
+      const char* grade_label = it["grade_label"] | "";
+      uint32_t srv_color = 0x1E88E5;
+      if (it.containsKey("color")) { double v = it["color"]; if (v > 0) srv_color = ((uint32_t)v) & 0xFFFFFFu; }
+
+      if (is_changed) {
+        lv_obj_t* old_card = lv_obj_get_child(s_list, idx);
+        if (old_card && lv_obj_is_valid(old_card)) lv_obj_del(old_card);
+        char bn[128]; extract_book_name(content, title, book_id, grade_label, hw_type, bn, sizeof(bn));
+        if (!bn[0]) strncpy(bn, title, sizeof(bn)-1);
+        // card updated
+        lv_obj_t* nc = create_hw_card(s_list, bn, phase, page, count, check_count, accumulated, srv_color, itemId);
+        lv_obj_move_to_index(nc, idx);
+      } else {
+        // unchanged card - but still register p2/p4 if applicable
+        lv_obj_t* card = lv_obj_get_child(s_list, idx);
+        if (phase == 4 && card && lv_obj_is_valid(card) && s_p4_cnt < 8) {
+          s_p4_cards[s_p4_cnt] = card; s_p4_colors[s_p4_cnt] = srv_color; s_p4_cnt++;
+          g_should_vibrate_phase4 = true;
         }
       }
-      // 3) type 필드
-      if (!book_name[0] && *hw_type) {
-        strncpy(book_name, hw_type, sizeof(book_name)-1);
-      }
-      // 4) fallback: title 자체
-      if (!book_name[0]) {
-        strncpy(book_name, title, sizeof(book_name)-1);
-      }
+      idx++;
     }
-
-    // Build page+count string
-    char page_count_buf[64] = {0};
-    if (*page && count > 0) {
-      snprintf(page_count_buf, sizeof(page_count_buf), "%s · %d%s", page, count, u8"문항");
-    } else if (*page) {
-      snprintf(page_count_buf, sizeof(page_count_buf), "%s", page);
-    } else if (count > 0) {
-      snprintf(page_count_buf, sizeof(page_count_buf), "%d%s", count, u8"문항");
-    }
-
-    auto fmt_time = [](int secs, char* buf, size_t sz) {
-      int h = secs / 3600; int m = (secs % 3600) / 60;
-      if (h > 0) snprintf(buf, sz, "%dh %dm", h, m);
-      else snprintf(buf, sz, "%dm", m);
-    };
-
-    Serial.printf("[HW-CARD] book=%s phase=%d page=%s count=%d chk=%d acc=%d\n",
-                  book_name, phase, page, count, check_count, accumulated);
-
-    lv_obj_t* card = lv_obj_create(s_list);
-    lv_obj_set_width(card, lv_pct(100));
-    lv_obj_set_height(card, 92);
-    lv_obj_set_style_radius(card, 12, 0);
-    lv_obj_set_style_bg_color(card, lv_color_hex(0x1A1A1A), 0);
-    lv_obj_set_style_border_color(card, lv_color_hex(0x2C2C2C), 0);
-    lv_obj_set_style_border_width(card, 1, 0);
-    lv_obj_set_style_pad_top(card, 12, 0);
-    lv_obj_set_style_pad_bottom(card, 12, 0);
-    lv_obj_set_style_pad_left(card, 14, 0);
-    lv_obj_set_style_pad_right(card, 14, 0);
-    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
-
-    // Row 1: book name (left)
-    lv_obj_t* title_lbl = lv_label_create(card);
-    if (s_global_font) lv_obj_set_style_text_font(title_lbl, s_global_font, 0);
-    lv_obj_set_style_text_color(title_lbl, lv_color_hex(0xE6E6E6), 0);
-    lv_label_set_text(title_lbl, book_name);
-    lv_label_set_long_mode(title_lbl, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(title_lbl, lv_pct(65));
-    lv_obj_align(title_lbl, LV_ALIGN_TOP_LEFT, 0, 0);
-    lv_obj_add_flag(title_lbl, LV_OBJ_FLAG_EVENT_BUBBLE);
-
-    if (phase == 1) {
-      lv_obj_t* hint = lv_label_create(card);
-      lv_obj_set_style_text_font(hint, &kakao_kr_16, 0);
-      lv_obj_set_style_text_color(hint, lv_color_hex(0x1FA95B), 0);
-      lv_label_set_text(hint, u8"시작 >");
-      lv_obj_align(hint, LV_ALIGN_TOP_RIGHT, 0, 4);
-      lv_obj_add_flag(hint, LV_OBJ_FLAG_EVENT_BUBBLE);
-
-      if (page_count_buf[0] || check_count > 0) {
-        if (page_count_buf[0]) {
-          lv_obj_t* pc_lbl = lv_label_create(card);
-          lv_obj_set_style_text_font(pc_lbl, &kakao_kr_16, 0);
-          lv_obj_set_style_text_color(pc_lbl, lv_color_hex(0x909090), 0);
-          lv_label_set_text(pc_lbl, page_count_buf);
-          lv_label_set_long_mode(pc_lbl, LV_LABEL_LONG_DOT);
-          lv_obj_set_width(pc_lbl, lv_pct(60));
-          lv_obj_align(pc_lbl, LV_ALIGN_TOP_LEFT, 0, 32);
-          lv_obj_add_flag(pc_lbl, LV_OBJ_FLAG_EVENT_BUBBLE);
-        }
-        if (check_count > 0) {
-          char chk_buf[32];
-          snprintf(chk_buf, sizeof(chk_buf), u8"검사 %d회", check_count);
-          lv_obj_t* chk_lbl = lv_label_create(card);
-          lv_obj_set_style_text_font(chk_lbl, &kakao_kr_16, 0);
-          lv_obj_set_style_text_color(chk_lbl, lv_color_hex(0x707070), 0);
-          lv_label_set_text(chk_lbl, chk_buf);
-          lv_obj_align(chk_lbl, LV_ALIGN_TOP_RIGHT, 0, 32);
-          lv_obj_add_flag(chk_lbl, LV_OBJ_FLAG_EVENT_BUBBLE);
-        }
-      }
-    } else if (phase == 2) {
-      lv_obj_set_style_border_color(card, lv_color_hex(srv_color), 0);
-      lv_obj_set_style_border_width(card, 2, 0);
-      lv_obj_set_style_shadow_width(card, 10, 0);
-      lv_obj_set_style_shadow_color(card, lv_color_hex(srv_color), 0);
-      lv_obj_set_style_shadow_opa(card, LV_OPA_20, 0);
-
-      {
-        char p2_page_buf[80] = {0};
-        if (*page) snprintf(p2_page_buf, sizeof(p2_page_buf), "p %s", page);
-        if (p2_page_buf[0] && count > 0) {
-          char tmp[80];
-          snprintf(tmp, sizeof(tmp), "%s · %d%s", p2_page_buf, count, u8"문항");
-          strncpy(p2_page_buf, tmp, sizeof(p2_page_buf)-1);
-        } else if (!p2_page_buf[0] && count > 0) {
-          snprintf(p2_page_buf, sizeof(p2_page_buf), "%d%s", count, u8"문항");
-        }
-        if (p2_page_buf[0]) {
-          lv_obj_t* pc_lbl = lv_label_create(card);
-          lv_obj_set_style_text_font(pc_lbl, &kakao_kr_16, 0);
-          lv_obj_set_style_text_color(pc_lbl, lv_color_hex(0x909090), 0);
-          lv_label_set_text(pc_lbl, p2_page_buf);
-          lv_label_set_long_mode(pc_lbl, LV_LABEL_LONG_DOT);
-          lv_obj_set_width(pc_lbl, lv_pct(55));
-          lv_obj_align(pc_lbl, LV_ALIGN_TOP_LEFT, 0, 32);
-          lv_obj_add_flag(pc_lbl, LV_OBJ_FLAG_EVENT_BUBBLE);
-        }
-      }
-
-      lv_obj_t* time_lbl = lv_label_create(card);
-      lv_obj_set_style_text_font(time_lbl, &kakao_kr_16, 0);
-      lv_obj_set_style_text_color(time_lbl, lv_color_hex(srv_color), 0);
-      lv_obj_align(time_lbl, LV_ALIGN_TOP_RIGHT, 0, 32);
-      lv_obj_add_flag(time_lbl, LV_OBJ_FLAG_EVENT_BUBBLE);
-
-      char time_buf[32];
-      fmt_time(accumulated, time_buf, sizeof(time_buf));
-      lv_label_set_text(time_lbl, time_buf);
-
-      if (s_p2_cnt < 8) {
-        s_p2_entries[s_p2_cnt].lbl = time_lbl;
-        s_p2_entries[s_p2_cnt].base_acc = accumulated;
-        s_p2_entries[s_p2_cnt].start_tick = lv_tick_get();
-        s_p2_cnt++;
-      }
-    } else if (phase == 3) {
-      lv_obj_t* wait_hint = lv_label_create(card);
-      lv_obj_set_style_text_font(wait_hint, &kakao_kr_16, 0);
-      lv_obj_set_style_text_color(wait_hint, lv_color_hex(srv_color), 0);
-      lv_label_set_text(wait_hint, u8"채점중..");
-      lv_obj_align(wait_hint, LV_ALIGN_TOP_RIGHT, 0, 4);
-      lv_obj_add_flag(wait_hint, LV_OBJ_FLAG_EVENT_BUBBLE);
-
-      if (accumulated > 0) {
-        char time_buf[32];
-        fmt_time(accumulated, time_buf, sizeof(time_buf));
-        lv_obj_t* t_lbl = lv_label_create(card);
-        lv_obj_set_style_text_font(t_lbl, &kakao_kr_16, 0);
-        lv_obj_set_style_text_color(t_lbl, lv_color_hex(0x808080), 0);
-        lv_label_set_text(t_lbl, time_buf);
-        lv_obj_align(t_lbl, LV_ALIGN_TOP_LEFT, 0, 32);
-        lv_obj_add_flag(t_lbl, LV_OBJ_FLAG_EVENT_BUBBLE);
-      }
-    } else if (phase == 4) {
-      lv_obj_set_style_bg_color(card, lv_color_hex(0x202020), 0);
-      lv_obj_set_style_border_color(card, lv_color_hex(srv_color), 0);
-      lv_obj_set_style_border_width(card, 3, 0);
-      lv_obj_set_style_border_opa(card, LV_OPA_TRANSP, 0);
-      g_should_vibrate_phase4 = true;
-      if (s_p4_cnt < 8) {
-        s_p4_cards[s_p4_cnt] = card;
-        s_p4_colors[s_p4_cnt] = srv_color;
-        s_p4_cnt++;
-      }
-
-      lv_obj_t* hint4 = lv_label_create(card);
-      lv_obj_set_style_text_font(hint4, &kakao_kr_16, 0);
-      lv_obj_set_style_text_color(hint4, lv_color_hex(srv_color), 0);
-      lv_label_set_text(hint4, u8"확인 >");
-      lv_obj_align(hint4, LV_ALIGN_TOP_RIGHT, 0, 4);
-      lv_obj_add_flag(hint4, LV_OBJ_FLAG_EVENT_BUBBLE);
-
-      if (*page) {
-        lv_obj_t* pg_lbl = lv_label_create(card);
-        lv_obj_set_style_text_font(pg_lbl, &kakao_kr_16, 0);
-        lv_obj_set_style_text_color(pg_lbl, lv_color_hex(0x808080), 0);
-        lv_label_set_text(pg_lbl, page);
-        lv_obj_align(pg_lbl, LV_ALIGN_TOP_LEFT, 0, 32);
-        lv_obj_add_flag(pg_lbl, LV_OBJ_FLAG_EVENT_BUBBLE);
-      }
-
-    }
-
-    if (itemId && *itemId) {
-      struct HwData { char id[64]; int phase; };
-      HwData* d = (HwData*)malloc(sizeof(HwData));
-      if (d) {
-        strncpy(d->id, itemId, sizeof(d->id)-1); d->id[sizeof(d->id)-1] = '\0';
-        d->phase = phase;
-        lv_obj_add_event_cb(card, [](lv_event_t* e){
-          uint32_t now = millis();
-          if (now - s_last_card_click_ms < CARD_CLICK_DEBOUNCE_MS) return;
-          s_last_card_click_ms = now;
-          HwData* dd = (HwData*)lv_event_get_user_data(e);
-          const char* act = nullptr;
-          if (dd->phase == 1) act = "start";
-          else if (dd->phase == 2) act = "submit";
-          else if (dd->phase == 4) act = "wait";
-          if (act) fw_publish_homework_action(act, dd->id);
-        }, LV_EVENT_CLICKED, d);
-        lv_obj_add_event_cb(card, [](lv_event_t* e){
-          if (lv_event_get_code(e) == LV_EVENT_DELETE) {
-            void* ud = lv_event_get_user_data(e);
-            if (ud) free(ud);
-          }
-        }, LV_EVENT_DELETE, d);
-      }
-    }
-    yield();
   }
 
-  if (s_p2_cnt > 0 || s_p4_cnt > 0) {
-    s_hw_global_timer = lv_timer_create(hw_global_timer_cb, 1000, (void*)(uintptr_t)s_hw_timer_epoch);
-    lv_timer_set_repeat_count(s_hw_global_timer, -1);
-  }
+  memcpy(s_hw_cache, new_cache, sizeof(HwCacheEntry) * new_cnt);
+  s_hw_cache_cnt = new_cnt;
+  restart_hw_timer();
+  // update done
 }
 
 void ui_port_update_student_info(const JsonObject& info) {

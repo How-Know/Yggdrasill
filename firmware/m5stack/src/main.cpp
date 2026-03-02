@@ -234,16 +234,12 @@ void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties 
     if (index == 0) { hw_acc.remove(0); hw_acc.reserve(total ? total : (len + 512)); hw_expected = total ? total : len; hw_received = 0; }
     hw_acc.concat(String(payload).substring(0, (int)len));
     hw_received += len;
-    Serial.printf("[HW] chunk: idx=%u len=%u total=%u recv=%u\n", (unsigned)index, (unsigned)len, (unsigned)total, (unsigned)hw_received);
     if (total && hw_received < total) { return; }
     DynamicJsonDocument doc(hw_expected + 2048);
     DeserializationError err = deserializeJson(doc, hw_acc.c_str(), hw_acc.length());
-    if (err) { Serial.print("[HW] parse error: "); Serial.println(err.c_str()); hw_acc.remove(0); return; }
+    if (err) { Serial.print("[HW] parse err: "); Serial.println(err.c_str()); hw_acc.remove(0); return; }
     JsonArray arr = doc["items"].as<JsonArray>();
-    Serial.printf("[HW] items count=%d heap=%u\n", (int)arr.size(), (unsigned)esp_get_free_heap_size());
-    Serial.println("[HW] >>> calling ui_port_update_homeworks");
     ui_port_update_homeworks(arr);
-    Serial.printf("[HW] <<< ui_port_update_homeworks returned heap=%u\n", (unsigned)esp_get_free_heap_size());
     hw_acc.remove(0);
   }
   if (t == updateTopic) {
@@ -343,11 +339,7 @@ void fw_publish_list_homeworks(const char* studentIdArg) {
 }
 
 void fw_publish_homework_action(const char* action, const char* itemId) {
-  Serial.printf("[HW-ACTION] >>> action=%s itemId=%s heap=%u\n", action ? action : "null", itemId ? itemId : "null", (unsigned)esp_get_free_heap_size());
-  if (!action || !*action || !itemId || !*itemId) {
-    Serial.println("[HW-ACTION] SKIP: null action or itemId");
-    return;
-  }
+  if (!action || !*action || !itemId || !*itemId) return;
   DynamicJsonDocument doc(256);
   doc["action"] = action;
   doc["academy_id"] = academyId;
@@ -358,9 +350,7 @@ void fw_publish_homework_action(const char* action, const char* itemId) {
   doc["updated_by"] = studentId;
   String payload; serializeJson(doc, payload);
   String topic = String("academies/") + academyId + "/students/" + studentId + "/homework/" + itemId + "/command";
-  Serial.printf("[HW-ACTION] publish topic len=%d payload len=%d\n", (int)topic.length(), (int)payload.length());
   mqtt.publish(topic.c_str(), 1, false, payload.c_str());
-  Serial.println("[HW-ACTION] <<< done");
 }
 
 void fw_publish_pause_all() {
