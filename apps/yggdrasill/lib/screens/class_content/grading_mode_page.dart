@@ -33,6 +33,8 @@ class GradingModePage extends StatefulWidget {
   final Map<String, String> studentNamesById;
   final Future<void> Function(String studentId, HomeworkItem hw)? onSubmittedCardTap;
   final Future<void> Function(String studentId, HomeworkItem hw)? onHomeworkCardTap;
+  final Set<({String studentId, String itemId})> pendingConfirms;
+  final void Function(String studentId, String itemId)? onTogglePending;
 
   const GradingModePage({
     super.key,
@@ -40,6 +42,8 @@ class GradingModePage extends StatefulWidget {
     required this.studentNamesById,
     this.onSubmittedCardTap,
     this.onHomeworkCardTap,
+    this.pendingConfirms = const {},
+    this.onTogglePending,
   });
 
   @override
@@ -325,6 +329,9 @@ class _GradingModePageState extends State<GradingModePage> {
               entry: entry,
               cardHeight: cardLayout.height,
               metaHeight: cardLayout.metaHeight,
+              isPendingConfirm: widget.pendingConfirms.contains(
+                (studentId: entry.studentId, itemId: entry.item.id),
+              ),
               coverPathFuture: _resolveCoverPath(
                 bookId: (entry.item.bookId ?? '').trim(),
                 gradeLabel: (entry.item.gradeLabel ?? '').trim(),
@@ -480,6 +487,7 @@ class _SubmittedHomeworkCard extends StatelessWidget {
   final double metaHeight;
   final Future<String?> coverPathFuture;
   final Future<void> Function()? onTap;
+  final bool isPendingConfirm;
 
   const _SubmittedHomeworkCard({
     required this.entry,
@@ -487,6 +495,7 @@ class _SubmittedHomeworkCard extends StatelessWidget {
     required this.metaHeight,
     required this.coverPathFuture,
     this.onTap,
+    this.isPendingConfirm = false,
   });
 
   @override
@@ -531,63 +540,82 @@ class _SubmittedHomeworkCard extends StatelessWidget {
           builder: (context, constraints) {
             final coverHeight =
                 (constraints.maxHeight - metaHeight).clamp(0.0, constraints.maxHeight);
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            return Stack(
               children: [
-                SizedBox(
-                  height: coverHeight,
-                  width: double.infinity,
-                  child: _buildCoverArea(scale),
-                ),
-                Expanded(
-                  child: Padding(
-                    padding: EdgeInsets.fromLTRB(
-                      contentPadH,
-                      contentPadTop,
-                      contentPadH,
-                      contentPadBottom,
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SizedBox(
+                      height: coverHeight,
+                      width: double.infinity,
+                      child: _buildCoverArea(scale),
                     ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          line1,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: kDlgText,
-                            fontSize: line1Size,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: -0.2,
+                    Expanded(
+                      child: Padding(
+                        padding: EdgeInsets.fromLTRB(
+                          contentPadH,
+                          contentPadTop,
+                          contentPadH,
+                          contentPadBottom,
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              line1,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: kDlgText,
+                                fontSize: line1Size,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: -0.2,
+                              ),
+                            ),
+                            SizedBox(height: rowGap1),
+                            Text(
+                              line2,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: kDlgTextSub,
+                                fontSize: line2Size,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: -0.1,
+                              ),
+                            ),
+                            SizedBox(height: rowGap2),
+                            Text(
+                              line3,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: Color(0xFF7F8C8C),
+                                fontSize: line3Size,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                if (isPendingConfirm)
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: Container(
+                        color: const Color(0xCC0B1112),
+                        child: Center(
+                          child: Icon(
+                            Icons.check_circle,
+                            color: const Color(0xFF1B6B63),
+                            size: (67.0 * scale).clamp(38.0, 67.0),
                           ),
                         ),
-                        SizedBox(height: rowGap1),
-                        Text(
-                          line2,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: kDlgTextSub,
-                            fontSize: line2Size,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: -0.1,
-                          ),
-                        ),
-                        SizedBox(height: rowGap2),
-                        Text(
-                          line3,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: Color(0xFF7F8C8C),
-                            fontSize: line3Size,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ],
+                      ),
                     ),
                   ),
-                ),
               ],
             );
           },

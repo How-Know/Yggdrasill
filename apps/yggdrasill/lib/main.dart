@@ -919,8 +919,12 @@ class _GlobalUpdateNoticeChipState extends State<_GlobalUpdateNoticeChip> {
         _updating;
     if (busy) return const SizedBox.shrink();
 
+    // 네비게이션 레일(minWidth 84) 오른쪽에 배치해 프로필 버튼을 가리지 않음
+    const double navRailWidth = 84.0;
+    const double chipLeft = navRailWidth + 12;
+
     return Positioned(
-      left: 16,
+      left: chipLeft,
       bottom: 16,
       child: SafeArea(
         minimum: const EdgeInsets.only(left: 4, bottom: 4),
@@ -947,9 +951,9 @@ class _GlobalUpdateNoticeChipState extends State<_GlobalUpdateNoticeChip> {
                 const Row(
                   children: [
                     Icon(Icons.notifications_active,
-                        color: Color(0xFF9CCBFF), size: 18),
-                    SizedBox(width: 8),
-                    Expanded(
+                        color: Color(0xFF1B6B63), size: 18),
+                    const SizedBox(width: 8),
+                    const Expanded(
                       child: Text(
                         '새 업데이트가 있어요',
                         style: TextStyle(
@@ -1000,7 +1004,7 @@ class _GlobalUpdateNoticeChipState extends State<_GlobalUpdateNoticeChip> {
                           }
                         },
                         style: FilledButton.styleFrom(
-                            backgroundColor: const Color(0xFF1976D2)),
+                            backgroundColor: const Color(0xFF1B6B63)),
                         icon: const Icon(Icons.system_update_alt, size: 17),
                         label: const Text('업데이트'),
                       ),

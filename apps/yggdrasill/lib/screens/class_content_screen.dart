@@ -45,6 +45,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
   late final Timer _clockTimer;
   DateTime _now = DateTime.now();
   bool _isGradingMode = false;
+  final Set<({String studentId, String itemId})> _pendingConfirms = {};
   String? _expandedReservedStudentId;
 
   @override
@@ -182,9 +183,46 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                   onChanged: (value) {
                                     setState(() {
                                       _isGradingMode = value;
+                                      if (!value) _pendingConfirms.clear();
                                     });
                                   },
                                   activeColor: kDlgAccent,
+                                ),
+                                const SizedBox(width: 12),
+                                Opacity(
+                                  opacity: _pendingConfirms.isEmpty ? 0.4 : 1.0,
+                                  child: SizedBox(
+                                    width: 130,
+                                    height: 48,
+                                    child: Material(
+                                      color: const Color(0xFF1B6B63),
+                                      borderRadius: BorderRadius.circular(24),
+                                      child: InkWell(
+                                        borderRadius: BorderRadius.circular(24),
+                                        onTap: _pendingConfirms.isEmpty
+                                            ? null
+                                            : () => _executeBatchConfirm(context),
+                                        child: const Padding(
+                                          padding: EdgeInsets.only(right: 10),
+                                          child: Row(
+                                            mainAxisAlignment: MainAxisAlignment.center,
+                                            children: [
+                                              Icon(Icons.check, color: Color(0xFFEAF2F2), size: 20),
+                                              SizedBox(width: 8),
+                                              Text(
+                                                '확인',
+                                                style: TextStyle(
+                                                  color: Color(0xFFEAF2F2),
+                                                  fontSize: 18,
+                                                  fontWeight: FontWeight.bold,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
                                 ),
                               ],
                             ),
@@ -201,19 +239,30 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                         ? GradingModePage(
                             attendingStudentIds: attendingStudentIds,
                             studentNamesById: studentNamesById,
+                            pendingConfirms: _pendingConfirms,
                             onSubmittedCardTap: (studentId, hw) {
-                              return _handleSubmittedChipTapWithAnswerViewer(
+                              return _handleSubmittedChipTapForPending(
                                 context: context,
                                 studentId: studentId,
                                 hw: hw,
                               );
                             },
                             onHomeworkCardTap: (studentId, hw) {
-                              return _runHomeworkCheckDialogOnly(
+                              return _handleHomeworkCardTapForPending(
                                 context: context,
                                 studentId: studentId,
                                 hw: hw,
                               );
+                            },
+                            onTogglePending: (studentId, itemId) {
+                              setState(() {
+                                final key = (studentId: studentId, itemId: itemId);
+                                if (_pendingConfirms.contains(key)) {
+                                  _pendingConfirms.remove(key);
+                                } else {
+                                  _pendingConfirms.add(key);
+                                }
+                              });
                             },
                           )
                         : ListView.separated(
@@ -363,6 +412,8 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                       return _buildHomeworkChipsReactiveForStudent(
                         student.id,
                         tick,
+                        pendingConfirms: _pendingConfirms,
+                        onPhase3Tap: _handleSubmittedChipTapForPending,
                       );
                     },
                   ),
@@ -962,6 +1013,181 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         ],
       ),
     );
+  }
+
+  Future<void> _handleSubmittedChipTapForPending({
+    required BuildContext context,
+    required String studentId,
+    required HomeworkItem hw,
+  }) async {
+    final key = (studentId: studentId, itemId: hw.id);
+    if (_pendingConfirms.contains(key)) {
+      setState(() => _pendingConfirms.remove(key));
+      return;
+    }
+
+    if (!_hasDirectHomeworkTextbookLink(hw)) {
+      setState(() => _pendingConfirms.add(key));
+      return;
+    }
+    final resolved = await _resolveHomeworkPdfLinks(hw, allowFlowFallback: false);
+    if (!context.mounted) return;
+
+    final answerRaw = resolved.answerPathRaw;
+    if (answerRaw.isEmpty) {
+      setState(() => _pendingConfirms.add(key));
+      return;
+    }
+    final answerIsUrl = _isWebUrl(answerRaw);
+    final answerPath =
+        answerIsUrl ? answerRaw.trim() : _toLocalFilePath(answerRaw);
+    if (answerPath.isEmpty ||
+        (!answerIsUrl && !answerPath.toLowerCase().endsWith('.pdf'))) {
+      setState(() => _pendingConfirms.add(key));
+      return;
+    }
+    if (!answerIsUrl && !await File(answerPath).exists()) {
+      if (!context.mounted) return;
+      setState(() => _pendingConfirms.add(key));
+      return;
+    }
+
+    String? solutionPath;
+    final solutionRaw = resolved.solutionPathRaw;
+    if (_isWebUrl(solutionRaw)) {
+      solutionPath = solutionRaw.trim();
+    } else if (solutionRaw.isNotEmpty) {
+      final candidate = _toLocalFilePath(solutionRaw);
+      if (candidate.isNotEmpty &&
+          candidate.toLowerCase().endsWith('.pdf') &&
+          await File(candidate).exists()) {
+        solutionPath = candidate;
+      }
+    }
+
+    final action = await openHomeworkAnswerViewerPage(
+      context,
+      filePath: answerPath,
+      title: hw.title.trim().isEmpty ? '답지 확인' : hw.title.trim(),
+      solutionFilePath: solutionPath,
+      cacheKey: 'student:$studentId|answer:$answerPath',
+      enableConfirm: true,
+    );
+    if (!context.mounted) return;
+    if (action == HomeworkAnswerViewerAction.complete ||
+        action == HomeworkAnswerViewerAction.confirm) {
+      setState(() => _pendingConfirms.add(key));
+    }
+  }
+
+  Future<void> _handleHomeworkCardTapForPending({
+    required BuildContext context,
+    required String studentId,
+    required HomeworkItem hw,
+  }) async {
+    final key = (studentId: studentId, itemId: hw.id);
+    if (_pendingConfirms.contains(key)) {
+      setState(() => _pendingConfirms.remove(key));
+      return;
+    }
+
+    final latest = HomeworkStore.instance.getById(studentId, hw.id);
+    if (latest == null) return;
+
+    final target = await _resolveHomeworkCheckTarget(
+      studentId,
+      hw.id,
+      includeHistory: false,
+    );
+    if (!context.mounted) return;
+    if (target == null) {
+      setState(() => _pendingConfirms.add(key));
+      return;
+    }
+
+    final checks = await HomeworkAssignmentStore.instance
+        .loadChecksForItem(studentId, hw.id);
+    checks.sort((a, b) => a.checkedAt.compareTo(b.checkedAt));
+    final previousProgress = checks.isEmpty ? 0 : checks.last.progress;
+    final minProgress = math.max(previousProgress, target.progress).clamp(0, 150);
+
+    if (!context.mounted) return;
+    final draft = await _showHomeworkItemCheckDialog(
+      context: context,
+      hw: latest,
+      target: target,
+      minProgress: minProgress,
+    );
+    if (!context.mounted || draft == null) return;
+
+    setState(() => _pendingConfirms.add(key));
+  }
+
+  Future<void> _executeBatchConfirm(BuildContext context) async {
+    if (_pendingConfirms.isEmpty) return;
+    final pending = Set<({String studentId, String itemId})>.from(_pendingConfirms);
+    setState(() => _pendingConfirms.clear());
+    unawaited(_processBatchConfirmInBackground(context, pending));
+  }
+
+  Future<void> _processBatchConfirmInBackground(
+    BuildContext context,
+    Set<({String studentId, String itemId})> pending,
+  ) async {
+    for (final entry in pending) {
+      final hw = HomeworkStore.instance.getById(entry.studentId, entry.itemId);
+      if (hw == null) continue;
+
+      if (hw.phase == 3) {
+        final target = await _resolveHomeworkCheckTarget(
+          entry.studentId,
+          entry.itemId,
+          includeHistory: false,
+        );
+        if (target != null) {
+          await HomeworkAssignmentStore.instance.saveAssignmentCheck(
+            assignmentId: target.assignmentId,
+            studentId: entry.studentId,
+            homeworkItemId: entry.itemId,
+            progress: target.progress,
+            issueType: null,
+            issueNote: null,
+            markCompleted: true,
+          );
+        }
+        await HomeworkStore.instance.confirm(
+          entry.studentId,
+          entry.itemId,
+          recordAssignmentCheck: false,
+        );
+      } else {
+        final target = await _resolveHomeworkCheckTarget(
+          entry.studentId,
+          entry.itemId,
+          includeHistory: false,
+        );
+        if (target != null) {
+          await HomeworkAssignmentStore.instance.saveAssignmentCheck(
+            assignmentId: target.assignmentId,
+            studentId: entry.studentId,
+            homeworkItemId: entry.itemId,
+            progress: target.progress,
+            issueType: null,
+            issueNote: null,
+            markCompleted: false,
+          );
+        }
+        HomeworkStore.instance.restoreItemsToWaiting(entry.studentId, [entry.itemId]);
+        await HomeworkAssignmentStore.instance.clearActiveAssignmentsForItems(
+          entry.studentId,
+          [entry.itemId],
+        );
+        await HomeworkStore.instance.moveToBottom(entry.studentId, entry.itemId);
+      }
+    }
+    if (mounted && context.mounted) {
+      _showHomeworkChipSnackBar(context, '${pending.length}건의 과제를 일괄 처리했어요.');
+    }
   }
 }
 
@@ -2101,8 +2327,10 @@ const String _homeworkPrintTempPrefix = 'hw_print_';
 // ------------------------
 Widget _buildHomeworkChipsReactiveForStudent(
   String studentId,
-  double tick,
-) {
+  double tick, {
+  Set<({String studentId, String itemId})> pendingConfirms = const {},
+  Future<void> Function({required BuildContext context, required String studentId, required HomeworkItem hw})? onPhase3Tap,
+}) {
   return ValueListenableBuilder<int>(
     valueListenable: StudentFlowStore.instance.revision,
     builder: (context, __, ___) {
@@ -2207,6 +2435,8 @@ Widget _buildHomeworkChipsReactiveForStudent(
                                 assignmentCounts,
                                 hiddenAssignedIds,
                                 assignmentCycleMetaByItem,
+                                pendingConfirms: pendingConfirms,
+                                onPhase3Tap: onPhase3Tap,
                               );
                               final assignedHomeworkSections =
                                   _buildAssignedHomeworkChipsForStudent(
@@ -2217,6 +2447,7 @@ Widget _buildHomeworkChipsReactiveForStudent(
                                 assignmentCounts,
                                 activeAssignments,
                                 assignmentCycleMetaByItem,
+                                pendingConfirms: pendingConfirms,
                               );
                               final columnChildren = <Widget>[];
                               for (final chip in chips) {
@@ -2709,8 +2940,9 @@ List<Widget> _buildAssignedHomeworkChipsForStudent(
   Map<String, String> flowNames,
   Map<String, int> assignmentCounts,
   List<HomeworkAssignmentDetail> activeAssignments,
-  Map<String, HomeworkAssignmentCycleMeta> assignmentCycleMetaByItem,
-) {
+  Map<String, HomeworkAssignmentCycleMeta> assignmentCycleMetaByItem, {
+  Set<({String studentId, String itemId})> pendingConfirms = const {},
+}) {
   final assigned = activeAssignments
       .where((a) => a.homeworkItemId.trim().isNotEmpty)
       .where((a) => !_isReservationAssignment(a))
@@ -2812,6 +3044,9 @@ List<Widget> _buildAssignedHomeworkChipsForStudent(
               tick: tick,
               isReservation: isReservation,
               cycleMeta: assignmentCycleMetaByItem[hw.id],
+              isPendingConfirm: pendingConfirms.contains(
+                (studentId: studentId, itemId: hw.id),
+              ),
             ),
           ),
         ),
@@ -2863,8 +3098,10 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
   Map<String, String> flowNames,
   Map<String, int> assignmentCounts,
   Set<String> activeAssignedItemIds,
-  Map<String, HomeworkAssignmentCycleMeta> assignmentCycleMetaByItem,
-) {
+  Map<String, HomeworkAssignmentCycleMeta> assignmentCycleMetaByItem, {
+  Set<({String studentId, String itemId})> pendingConfirms = const {},
+  Future<void> Function({required BuildContext context, required String studentId, required HomeworkItem hw})? onPhase3Tap,
+}) {
   final List<Widget> chips = [];
   final List<HomeworkItem> hwList = HomeworkStore.instance
       .items(studentId)
@@ -2907,14 +3144,24 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
             case 2: // 수행 → 제출
               unawaited(HomeworkStore.instance.submit(studentId, hw.id));
               break;
-            case 3: // 제출 → 확인
-              unawaited(
-                _handleSubmittedChipTapWithAnswerViewer(
-                  context: context,
-                  studentId: studentId,
-                  hw: item,
-                ),
-              );
+            case 3: // 제출 → 확인 대기
+              if (onPhase3Tap != null) {
+                unawaited(
+                  onPhase3Tap(
+                    context: context,
+                    studentId: studentId,
+                    hw: item,
+                  ),
+                );
+              } else {
+                unawaited(
+                  _handleSubmittedChipTapWithAnswerViewer(
+                    context: context,
+                    studentId: studentId,
+                    hw: item,
+                  ),
+                );
+              }
               break;
             case 4: // 확인 → 대기
               unawaited(HomeworkStore.instance.waitPhase(studentId, hw.id));
@@ -3099,6 +3346,9 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
             assignmentCounts[hw.id] ?? 0,
             tick: tick,
             cycleMeta: assignmentCycleMetaByItem[hw.id],
+            isPendingConfirm: pendingConfirms.contains(
+              (studentId: studentId, itemId: hw.id),
+            ),
           ),
         ),
       ),
@@ -3846,6 +4096,7 @@ Widget _buildHomeworkChipVisual(
   required double tick,
   bool isReservation = false,
   HomeworkAssignmentCycleMeta? cycleMeta,
+  bool isPendingConfirm = false,
 }) {
   final bool isRunning =
       HomeworkStore.instance.runningOf(studentId)?.id == hw.id;
@@ -4141,6 +4392,31 @@ Widget _buildHomeworkChipVisual(
           strokeWidth: 3.0,
           cornerRadius: 12.0),
       child: chipInner,
+    );
+  }
+
+  if (isPendingConfirm) {
+    chipInner = Stack(
+      children: [
+        chipInner,
+        Positioned.fill(
+          child: IgnorePointer(
+            child: Container(
+              decoration: BoxDecoration(
+                color: const Color(0xCC0B1112),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Center(
+                child: Icon(
+                  Icons.check_circle,
+                  color: Color(0xFF1B6B63),
+                  size: 48,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 
