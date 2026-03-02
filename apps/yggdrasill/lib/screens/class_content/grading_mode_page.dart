@@ -515,6 +515,8 @@ class _SubmittedHomeworkCard extends StatelessWidget {
     final line3Size = (15.0 * scale).clamp(9.5, 15.0).toDouble();
     final rowGap1 = (6.0 * scale).clamp(3.0, 6.0).toDouble();
     final rowGap2 = (5.0 * scale).clamp(2.5, 5.0).toDouble();
+    final rowGap3 = (12.0 * scale).clamp(6.0, 12.0).toDouble();
+    final line4 = _buildLine4MinutesSinceSubmitted(entry);
 
     final card = Container(
       decoration: BoxDecoration(
@@ -593,6 +595,19 @@ class _SubmittedHomeworkCard extends StatelessWidget {
                                 color: Color(0xFF7F8C8C),
                                 fontSize: line3Size,
                                 fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            SizedBox(height: rowGap3),
+                            Center(
+                              child: Text(
+                                line4,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: const Color(0xFF7F8C8C),
+                                  fontSize: line1Size,
+                                  fontWeight: FontWeight.w700,
+                                ),
                               ),
                             ),
                           ],
@@ -727,6 +742,18 @@ class _SubmittedHomeworkCard extends StatelessWidget {
     final pageText = page.isEmpty ? '-' : page;
     final countText = count.isEmpty ? '-' : count;
     return '페이지 p.$pageText · 문항 ${countText}문항';
+  }
+
+  String _buildLine4MinutesSinceSubmitted(_GradingCardEntry entry) {
+    if (entry.item.phase != 3) return '-';
+    final submitted = entry.submittedTime;
+    final totalMinutes = DateTime.now().difference(submitted).inMinutes;
+    if (totalMinutes < 0) return '0분';
+    if (totalMinutes < 60) return '${totalMinutes}분';
+    final hours = totalMinutes ~/ 60;
+    final mins = totalMinutes % 60;
+    if (mins == 0) return '${hours}시간';
+    return '${hours}시간 ${mins}분';
   }
 
   String _extractBookName(HomeworkItem hw) {
