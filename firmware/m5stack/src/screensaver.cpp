@@ -23,6 +23,10 @@ static bool g_display_sleeping = false;
 static uint32_t g_display_sleep_delay_ms = 180000; // 3분
 static uint32_t g_saver_entered_ms = 0;
 
+static screensaver_wake_cb_t g_wake_cb = NULL;
+
+void screensaver_set_wake_callback(screensaver_wake_cb_t cb) { g_wake_cb = cb; }
+
 static lv_obj_t* g_eye_l = NULL;
 static lv_obj_t* g_eye_r = NULL;
 static lv_obj_t* g_brow_l = NULL;
@@ -73,6 +77,7 @@ static void close_timer_cb(lv_timer_t* t) {
     if (g_prev_scr) lv_scr_load(g_prev_scr);
     if (g_saver_scr) { lv_obj_del(g_saver_scr); g_saver_scr = NULL; }
     g_last_activity_ms = lv_tick_get();
+    if (g_wake_cb) g_wake_cb();
 }
 
 static void surprised_reaction(lv_coord_t touch_x, lv_coord_t touch_y) {
@@ -786,6 +791,7 @@ void screensaver_check_shake(void) {
         if (g_prev_scr) lv_scr_load(g_prev_scr);
         if (g_saver_scr) { lv_obj_del(g_saver_scr); g_saver_scr = NULL; }
         g_last_activity_ms = lv_tick_get();
+        if (g_wake_cb) g_wake_cb();
     }
 }
 

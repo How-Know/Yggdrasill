@@ -28,6 +28,10 @@ LV_IMG_DECLARE(battery_android_frame_4_32dp_999999_FILL0_wght400_GRAD0_opsz40);
 LV_IMG_DECLARE(battery_android_frame_5_32dp_999999_FILL0_wght400_GRAD0_opsz40);
 LV_IMG_DECLARE(battery_android_frame_6_32dp_999999_FILL0_wght400_GRAD0_opsz40);
 LV_IMG_DECLARE(battery_android_frame_full_32dp_999999_FILL0_wght400_GRAD0_opsz40);
+LV_IMG_DECLARE(format_list_bulleted_90dp_999999_FILL0_wght400_GRAD0_opsz48);
+LV_IMG_DECLARE(timer_90dp_999999_FILL0_wght400_GRAD0_opsz48);
+LV_IMG_DECLARE(info_i_90dp_999999_FILL0_wght400_GRAD0_opsz48);
+LV_IMG_DECLARE(settings_90dp_999999_FILL0_wght400_GRAD0_opsz48);
 
 // 간단 포팅: 시뮬레이터 레이아웃을 축약 반영
 static lv_obj_t* s_stage = nullptr;
@@ -600,7 +604,7 @@ static void show_entry_hub_overlay(void) {
     lv_obj_align(s_hub_clock_label, LV_ALIGN_TOP_MID, 0, 10);
 
     s_hub_battery_widget = lv_obj_create(s_entry_hub);
-    lv_obj_set_size(s_hub_battery_widget, 72, 28);
+    lv_obj_set_size(s_hub_battery_widget, 84, 28);
     lv_obj_set_style_bg_opa(s_hub_battery_widget, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_hub_battery_widget, 0, 0);
     lv_obj_set_style_pad_all(s_hub_battery_widget, 0, 0);
@@ -618,13 +622,17 @@ static void show_entry_hub_overlay(void) {
     lv_obj_set_style_img_recolor_opa(bat_img, LV_OPA_COVER, 0);
 
     // --- 2x2 grid buttons ---
-    const lv_coord_t btn_w = 136, btn_h = 88, gap = 12, margin_x = 18;
-    const lv_coord_t grid_y = 40;
-    const lv_coord_t col1_x = margin_x, col2_x = margin_x + btn_w + gap;
-    const lv_coord_t row1_y = grid_y, row2_y = grid_y + btn_h + gap;
+    const lv_coord_t btn_w = 116, btn_h = 90;
+    const lv_coord_t gap_h = 30;
+    const lv_coord_t margin_x = (320 - btn_w * 2 - gap_h) / 2;
+    const lv_coord_t grid_y = 36;
+    const lv_coord_t gap_v = 12;
+    const lv_coord_t col1_x = margin_x, col2_x = margin_x + btn_w + gap_h;
+    const lv_coord_t row1_y = grid_y, row2_y = grid_y + btn_h + gap_v;
 
     auto make_grid_btn = [](lv_obj_t* parent, const char* text, lv_coord_t x, lv_coord_t y,
-                            lv_coord_t w, lv_coord_t h) -> lv_obj_t* {
+                            lv_coord_t w, lv_coord_t h,
+                            const lv_img_dsc_t* icon) -> lv_obj_t* {
       lv_obj_t* btn = lv_btn_create(parent);
       lv_obj_set_size(btn, w, h);
       lv_obj_set_pos(btn, x, y);
@@ -633,15 +641,30 @@ static void show_entry_hub_overlay(void) {
       lv_obj_set_style_border_color(btn, lv_color_hex(0x2C2C2C), 0);
       lv_obj_set_style_border_width(btn, 1, 0);
       lv_obj_set_style_shadow_width(btn, 0, 0);
-      lv_obj_t* lbl = lv_label_create(btn);
-      if (s_global_font) lv_obj_set_style_text_font(lbl, s_global_font, 0);
-      lv_obj_set_style_text_color(lbl, lv_color_hex(0xE6E6E6), 0);
-      lv_label_set_text(lbl, text);
-      lv_obj_center(lbl);
+      if (icon) {
+        lv_obj_t* img = lv_img_create(btn);
+        lv_img_set_src(img, icon);
+        lv_img_set_zoom(img, 154);
+        lv_obj_set_style_img_recolor(img, lv_color_hex(0xE6E6E6), 0);
+        lv_obj_set_style_img_recolor_opa(img, LV_OPA_COVER, 0);
+        lv_obj_align(img, LV_ALIGN_CENTER, 0, -8);
+        lv_obj_t* lbl = lv_label_create(btn);
+        lv_obj_set_style_text_font(lbl, &kakao_kr_16, 0);
+        lv_obj_set_style_text_color(lbl, lv_color_hex(0xA0A0A0), 0);
+        lv_label_set_text(lbl, text);
+        lv_obj_align(lbl, LV_ALIGN_BOTTOM_MID, 0, 2);
+      } else {
+        lv_obj_t* lbl = lv_label_create(btn);
+        if (s_global_font) lv_obj_set_style_text_font(lbl, s_global_font, 0);
+        lv_obj_set_style_text_color(lbl, lv_color_hex(0xE6E6E6), 0);
+        lv_label_set_text(lbl, text);
+        lv_obj_center(lbl);
+      }
       return btn;
     };
 
-    lv_obj_t* hw_btn = make_grid_btn(s_entry_hub, u8"과제", col1_x, row1_y, btn_w, btn_h);
+    lv_obj_t* hw_btn = make_grid_btn(s_entry_hub, u8"과제", col1_x, row1_y, btn_w, btn_h,
+                                      &format_list_bulleted_90dp_999999_FILL0_wght400_GRAD0_opsz48);
     lv_obj_add_event_cb(hw_btn, [](lv_event_t* e) {
       (void)e;
       if (s_hub_clock_timer) { lv_timer_del(s_hub_clock_timer); s_hub_clock_timer = nullptr; }
@@ -655,19 +678,22 @@ static void show_entry_hub_overlay(void) {
       if (s_snackbar && lv_obj_is_valid(s_snackbar) && s_snackbar_type > 0) lv_obj_clear_flag(s_snackbar, LV_OBJ_FLAG_HIDDEN);
     }, LV_EVENT_CLICKED, NULL);
 
-    lv_obj_t* watch_btn = make_grid_btn(s_entry_hub, u8"스탑", col2_x, row1_y, btn_w, btn_h);
+    lv_obj_t* watch_btn = make_grid_btn(s_entry_hub, u8"스탑", col2_x, row1_y, btn_w, btn_h,
+                                        &timer_90dp_999999_FILL0_wght400_GRAD0_opsz48);
     lv_obj_add_event_cb(watch_btn, [](lv_event_t* e) {
       (void)e;
       show_transient_notice(u8"스탑워치 준비 중");
     }, LV_EVENT_CLICKED, NULL);
 
-    lv_obj_t* info_btn = make_grid_btn(s_entry_hub, u8"정보", col1_x, row2_y, btn_w, btn_h);
+    lv_obj_t* info_btn = make_grid_btn(s_entry_hub, u8"정보", col1_x, row2_y, btn_w, btn_h,
+                                       &info_i_90dp_999999_FILL0_wght400_GRAD0_opsz48);
     lv_obj_add_event_cb(info_btn, [](lv_event_t* e) {
       (void)e;
       show_student_info_screen();
     }, LV_EVENT_CLICKED, NULL);
 
-    lv_obj_t* settings_btn = make_grid_btn(s_entry_hub, u8"설정", col2_x, row2_y, btn_w, btn_h);
+    lv_obj_t* settings_btn = make_grid_btn(s_entry_hub, u8"설정", col2_x, row2_y, btn_w, btn_h,
+                                          &settings_90dp_999999_FILL0_wght400_GRAD0_opsz48);
     lv_obj_add_event_cb(settings_btn, [](lv_event_t* e) {
       (void)e;
       ui_port_show_settings(FIRMWARE_VERSION);
@@ -1019,7 +1045,19 @@ static void build_homeworks_ui_internal() {
   screensaver_attach_activity(lv_scr_act());
 }
 
-void ui_port_init() { 
+static void on_screensaver_wake(void) {
+  if (s_homeworks_mode && is_entry_hub_visible()) {
+    hub_clock_timer_cb(nullptr);
+    if (!s_hub_clock_timer) {
+      s_hub_clock_timer = lv_timer_create(hub_clock_timer_cb, 30000, NULL);
+      lv_timer_set_repeat_count(s_hub_clock_timer, -1);
+    }
+  } else if (s_homeworks_mode) {
+    show_entry_hub_overlay();
+  }
+}
+
+void ui_port_init() {
   // Load saved brightness/volume/student_id from LittleFS
   String savedStudentId = "";
   if (LittleFS.begin()) {
@@ -1064,6 +1102,7 @@ void ui_port_init() {
     build_student_list_ui();
     Serial.println("[INIT] Starting in student list mode");
   }
+  screensaver_set_wake_callback(on_screensaver_wake);
 }
 
 void ui_port_set_global_font(const lv_font_t* font) {
@@ -1072,16 +1111,12 @@ void ui_port_set_global_font(const lv_font_t* font) {
 }
 
 void ui_before_screen_change(void) {
-  // Called by screensaver before switching screens
-  // Close any transient overlays or popups here
   if (g_bottom_sheet_open) {
     toggle_bottom_sheet();
   }
   close_bind_confirm_popup();
   close_student_info_screen(false);
-  if (s_entry_hub && lv_obj_is_valid(s_entry_hub)) {
-    lv_obj_add_flag(s_entry_hub, LV_OBJ_FLAG_HIDDEN);
-  }
+  if (s_hub_clock_timer) { lv_timer_del(s_hub_clock_timer); s_hub_clock_timer = nullptr; }
   close_volume_popup();
   close_brightness_popup();
 }
@@ -1265,16 +1300,15 @@ static void show_brightness_popup(void) {
 static void update_battery_widget(void) {
   if (!s_battery_widget || !lv_obj_is_valid(s_battery_widget)) return;
   
-  // M5.Power.getBatteryLevel() 0-100, isCharging()
-  int level = M5.Power.getBatteryLevel();
+  int32_t raw = M5.Power.getBatteryLevel();
+  int level = (raw < 0 || raw > 100) ? -1 : (int)raw;
   bool charging = M5.Power.isCharging();
   
-  Serial.printf("[BAT] update: level=%d, charging=%d\n", level, charging ? 1 : 0);
-  
-  // Update percentage label (first child, index 0)
   if (s_battery_label && lv_obj_is_valid(s_battery_label)) {
-    lv_label_set_text_fmt(s_battery_label, "%d%%", level);
+    if (level < 0) lv_label_set_text(s_battery_label, "--%");
+    else lv_label_set_text_fmt(s_battery_label, "%d%%", level);
   }
+  if (level < 0) level = 0;
   
   // Get icon image (second child, index 1)
   lv_obj_t* bat_img = lv_obj_get_child(s_battery_widget, 1);
@@ -1316,13 +1350,16 @@ static void update_battery_widget(void) {
 
 static void update_hub_battery(void) {
   if (!s_hub_battery_widget || !lv_obj_is_valid(s_hub_battery_widget)) return;
-  int level = M5.Power.getBatteryLevel();
+  int32_t raw = M5.Power.getBatteryLevel();
+  int level = (raw < 0 || raw > 100) ? -1 : (int)raw;
   bool charging = M5.Power.isCharging();
   if (s_hub_battery_label && lv_obj_is_valid(s_hub_battery_label)) {
-    lv_label_set_text_fmt(s_hub_battery_label, "%d%%", level);
+    if (level < 0) lv_label_set_text(s_hub_battery_label, "--%");
+    else lv_label_set_text_fmt(s_hub_battery_label, "%d%%", level);
   }
   lv_obj_t* bat_img = lv_obj_get_child(s_hub_battery_widget, 1);
   if (!bat_img) return;
+  if (level < 0) level = 0;
   const lv_img_dsc_t* icon = nullptr;
   if (charging) icon = &battery_android_bolt_32dp_999999_FILL0_wght400_GRAD0_opsz40;
   else if (level <= 1) icon = &battery_android_alert_32dp_999999_FILL0_wght400_GRAD0_opsz40;

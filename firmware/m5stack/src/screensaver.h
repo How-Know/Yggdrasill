@@ -11,6 +11,9 @@ void screensaver_poll(void);
 void screensaver_blink_set(uint32_t blink_ms, uint32_t interval_ms);
 void screensaver_check_shake(void);
 
+typedef void (*screensaver_wake_cb_t)(void);
+void screensaver_set_wake_callback(screensaver_wake_cb_t cb);
+
 #ifdef __cplusplus
 }
 #endif
