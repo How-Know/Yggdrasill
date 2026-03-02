@@ -1344,8 +1344,8 @@ static lv_obj_t* create_hw_card(lv_obj_t* parent, const char* book_name, int pha
   lv_obj_add_flag(title_lbl, LV_OBJ_FLAG_EVENT_BUBBLE);
 
   char page_count_buf[64] = {0};
-  if (*page && count > 0) snprintf(page_count_buf, sizeof(page_count_buf), "%s · %d%s", page, count, u8"문항");
-  else if (*page) snprintf(page_count_buf, sizeof(page_count_buf), "%s", page);
+  if (*page && count > 0) snprintf(page_count_buf, sizeof(page_count_buf), "p.%s · %d%s", page, count, u8"문항");
+  else if (*page) snprintf(page_count_buf, sizeof(page_count_buf), "p.%s", page);
   else if (count > 0) snprintf(page_count_buf, sizeof(page_count_buf), "%d%s", count, u8"문항");
 
   if (phase == 1) {
@@ -1382,9 +1382,9 @@ static lv_obj_t* create_hw_card(lv_obj_t* parent, const char* book_name, int pha
     lv_obj_set_style_shadow_color(card, lv_color_hex(srv_color), 0);
     lv_obj_set_style_shadow_opa(card, LV_OPA_20, 0);
     char p2_buf[80] = {0};
-    if (*page) snprintf(p2_buf, sizeof(p2_buf), "p %s", page);
-    if (p2_buf[0] && count > 0) { char t[80]; snprintf(t, sizeof(t), "%s · %d%s", p2_buf, count, u8"문항"); strncpy(p2_buf, t, sizeof(p2_buf)-1); }
-    else if (!p2_buf[0] && count > 0) snprintf(p2_buf, sizeof(p2_buf), "%d%s", count, u8"문항");
+    if (*page && count > 0) snprintf(p2_buf, sizeof(p2_buf), "p.%s · %d%s", page, count, u8"문항");
+    else if (*page) snprintf(p2_buf, sizeof(p2_buf), "p.%s", page);
+    else if (count > 0) snprintf(p2_buf, sizeof(p2_buf), "%d%s", count, u8"문항");
     if (p2_buf[0]) {
       lv_obj_t* pc = lv_label_create(card);
       lv_obj_set_style_text_font(pc, &kakao_kr_16, 0);
