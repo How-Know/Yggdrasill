@@ -32,6 +32,7 @@ LV_IMG_DECLARE(format_list_bulleted_90dp_999999_FILL0_wght400_GRAD0_opsz48);
 LV_IMG_DECLARE(timer_90dp_999999_FILL0_wght400_GRAD0_opsz48);
 LV_IMG_DECLARE(info_i_90dp_999999_FILL0_wght400_GRAD0_opsz48);
 LV_IMG_DECLARE(settings_90dp_999999_FILL0_wght400_GRAD0_opsz48);
+LV_IMG_DECLARE(pause_circle_90dp_999999_FILL0_wght400_GRAD0_opsz48);
 
 // 간단 포팅: 시뮬레이터 레이아웃을 축약 반영
 static lv_obj_t* s_stage = nullptr;
@@ -57,6 +58,7 @@ static lv_timer_t* s_hub_clock_timer = nullptr;
 static lv_obj_t* s_student_info_screen = nullptr;
 static lv_obj_t* s_stopwatch_screen = nullptr;
 static lv_obj_t* s_sw_time_label = nullptr;
+static lv_obj_t* s_sw_digits[8] = {}; // min10 min1 : sec10 sec1 . cs10 cs1
 static lv_obj_t* s_sw_left_btn = nullptr;
 static lv_obj_t* s_sw_right_btn = nullptr;
 static lv_obj_t* s_sw_left_lbl = nullptr;
@@ -172,6 +174,7 @@ static void snackbar_clicked_cb(lv_event_t* e) {
   if (s_snackbar_type == 1 && s_first_p4_card_idx >= 0 && s_list && lv_obj_is_valid(s_list)) {
     lv_obj_t* target = lv_obj_get_child(s_list, s_first_p4_card_idx);
     if (target && lv_obj_is_valid(target)) lv_obj_scroll_to_view(target, LV_ANIM_ON);
+    g_should_vibrate_phase4 = false;
   }
 }
 
@@ -557,12 +560,21 @@ static void sw_format_time(uint32_t ms, char* buf, size_t len) {
 }
 
 static void sw_update_display(void) {
-  if (!s_sw_time_label || !lv_obj_is_valid(s_sw_time_label)) return;
+  if (!s_sw_digits[0] || !lv_obj_is_valid(s_sw_digits[0])) return;
   uint32_t elapsed = s_sw_elapsed_ms;
   if (s_sw_running) elapsed += (lv_tick_get() - s_sw_start_tick);
-  char buf[16];
-  sw_format_time(elapsed, buf, sizeof(buf));
-  lv_label_set_text(s_sw_time_label, buf);
+  uint32_t total_cs = elapsed / 10;
+  uint32_t cs = total_cs % 100;
+  uint32_t total_sec = elapsed / 1000;
+  uint32_t sec = total_sec % 60;
+  uint32_t min = total_sec / 60;
+  char d[2] = {0, 0};
+  d[0] = '0' + (min / 10) % 10;  lv_label_set_text(s_sw_digits[0], d);
+  d[0] = '0' + min % 10;         lv_label_set_text(s_sw_digits[1], d);
+  d[0] = '0' + sec / 10;         lv_label_set_text(s_sw_digits[3], d);
+  d[0] = '0' + sec % 10;         lv_label_set_text(s_sw_digits[4], d);
+  d[0] = '0' + cs / 10;          lv_label_set_text(s_sw_digits[6], d);
+  d[0] = '0' + cs % 10;          lv_label_set_text(s_sw_digits[7], d);
 }
 
 static void sw_timer_cb(lv_timer_t* t) {
@@ -648,6 +660,7 @@ static void close_stopwatch_screen(bool show_hub) {
   }
   s_stopwatch_screen = nullptr;
   s_sw_time_label = nullptr;
+  memset(s_sw_digits, 0, sizeof(s_sw_digits));
   s_sw_left_btn = nullptr;
   s_sw_right_btn = nullptr;
   s_sw_left_lbl = nullptr;
@@ -710,12 +723,39 @@ static void show_stopwatch_screen(void) {
   lv_obj_set_style_pad_left(title, 10, 0);
   lv_label_set_text(title, u8"스톱워치");
 
-  // Time display
-  s_sw_time_label = lv_label_create(s_stopwatch_screen);
-  lv_obj_set_style_text_font(s_sw_time_label, &lv_font_montserrat_28, 0);
-  lv_obj_set_style_text_color(s_sw_time_label, lv_color_hex(0xFFFFFF), 0);
-  lv_label_set_text(s_sw_time_label, "00:00.00");
+  // Time display — each single digit in its own fixed-width label
+  s_sw_time_label = lv_obj_create(s_stopwatch_screen);
+  lv_obj_remove_style_all(s_sw_time_label);
+  lv_obj_set_size(s_sw_time_label, 260, 36);
   lv_obj_align(s_sw_time_label, LV_ALIGN_TOP_MID, 0, 70);
+  lv_obj_set_layout(s_sw_time_label, LV_LAYOUT_FLEX);
+  lv_obj_set_flex_flow(s_sw_time_label, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(s_sw_time_label, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_column(s_sw_time_label, 0, 0);
+  lv_obj_clear_flag(s_sw_time_label, LV_OBJ_FLAG_SCROLLABLE);
+
+  const lv_coord_t dw = 26;  // single digit width
+  const lv_coord_t sw = 16;  // separator width
+
+  auto make_digit = [&](const char* txt, lv_coord_t w, uint32_t color) -> lv_obj_t* {
+    lv_obj_t* lbl = lv_label_create(s_sw_time_label);
+    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(lbl, lv_color_hex(color), 0);
+    lv_obj_set_width(lbl, w);
+    lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_text(lbl, txt);
+    return lbl;
+  };
+
+  // min10, min1, ":", sec10, sec1, ".", cs10, cs1
+  s_sw_digits[0] = make_digit("0", dw, 0xFFFFFF);
+  s_sw_digits[1] = make_digit("0", dw, 0xFFFFFF);
+  s_sw_digits[2] = make_digit(":", sw, 0x888888);
+  s_sw_digits[3] = make_digit("0", dw, 0xFFFFFF);
+  s_sw_digits[4] = make_digit("0", dw, 0xFFFFFF);
+  s_sw_digits[5] = make_digit(".", sw, 0x888888);
+  s_sw_digits[6] = make_digit("0", dw, 0xFFFFFF);
+  s_sw_digits[7] = make_digit("0", dw, 0xFFFFFF);
 
   // Bottom buttons
   const lv_coord_t btn_w = 110, btn_h = 44, btn_y = 120;
@@ -1205,11 +1245,12 @@ static void build_homeworks_ui_internal() {
   lv_obj_set_style_bg_opa(pause_btn, LV_OPA_TRANSP, 0);
   lv_obj_set_style_border_width(pause_btn, 0, 0);
   lv_obj_set_style_shadow_width(pause_btn, 0, 0);
-  lv_obj_t* pause_lbl = lv_label_create(pause_btn);
-  if (s_global_font) lv_obj_set_style_text_font(pause_lbl, s_global_font, 0);
-  lv_obj_set_style_text_color(pause_lbl, lv_color_hex(0xC0C0C0), 0);
-  lv_label_set_text(pause_lbl, u8"휴식");
-  lv_obj_center(pause_lbl);
+  lv_obj_t* pause_img = lv_img_create(pause_btn);
+  lv_img_set_src(pause_img, &pause_circle_90dp_999999_FILL0_wght400_GRAD0_opsz48);
+  lv_obj_set_style_img_recolor(pause_img, lv_color_hex(0xC0C0C0), 0);
+  lv_obj_set_style_img_recolor_opa(pause_img, LV_OPA_COVER, 0);
+  lv_img_set_zoom(pause_img, 142);
+  lv_obj_center(pause_img);
   lv_obj_add_event_cb(pause_btn, [](lv_event_t* e){ (void)e; fw_publish_pause_all(); show_snackbar_rest(); }, LV_EVENT_CLICKED, NULL);
 
   // home button
@@ -1248,7 +1289,7 @@ static void build_homeworks_ui_internal() {
 
   // Floating snackbar (z-order above everything in s_stage)
   s_snackbar = lv_obj_create(s_stage);
-  lv_obj_set_height(s_snackbar, 30);
+  lv_obj_set_height(s_snackbar, 32);
   lv_obj_set_style_bg_color(s_snackbar, lv_color_hex(0x232326), 0);
   lv_obj_set_style_bg_opa(s_snackbar, LV_OPA_COVER, 0);
   lv_obj_set_style_border_color(s_snackbar, lv_color_hex(0x2A2A2A), 0);
@@ -1297,8 +1338,6 @@ static void on_screensaver_wake(void) {
       s_hub_clock_timer = lv_timer_create(hub_clock_timer_cb, 30000, NULL);
       lv_timer_set_repeat_count(s_hub_clock_timer, -1);
     }
-  } else if (s_homeworks_mode) {
-    show_entry_hub_overlay();
   }
 }
 

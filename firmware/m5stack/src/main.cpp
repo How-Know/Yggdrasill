@@ -472,7 +472,7 @@ void setup() {
   Serial.println("MQTT connecting...");
   
   // Initialize screensaver after MQTT setup (60 seconds timeout)
-  screensaver_init(60000);
+  screensaver_init(10000);
   screensaver_attach_activity(lv_scr_act());
 }
 
@@ -492,7 +492,7 @@ void loop() {
   // 주기 20% 감소: 3000ms -> 2400ms
   if (g_should_vibrate_phase4 && nowTick - lastVibMs >= 2400) {
     Serial.println("[VIB] setVibration: pulse start");
-    // 세기 30% 감소 (기존 200 -> 140)
+    screensaver_dismiss();
     M5.Power.setVibration(140);
     // 짧은 펄스 종료 예약 (non-blocking): 다음 틱에서 0으로
     // 즉시 끄지 않도록 최소 80ms 유지

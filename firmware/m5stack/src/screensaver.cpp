@@ -5,7 +5,7 @@
 // Forward declaration from ui_port
 extern void ui_before_screen_change(void);
 
-static uint32_t g_timeout_ms = 60000;
+static uint32_t g_timeout_ms = 10000;
 static uint32_t g_last_activity_ms = 0;
 static lv_obj_t* g_saver_scr = NULL;
 static lv_obj_t* g_prev_scr = NULL;
@@ -20,7 +20,7 @@ static uint32_t g_last_activity_log_ms = 0;
 
 // Display sleep state
 static bool g_display_sleeping = false;
-static uint32_t g_display_sleep_delay_ms = 180000; // 3분
+static uint32_t g_display_sleep_delay_ms = 30000; // 30초
 static uint32_t g_saver_entered_ms = 0;
 
 static screensaver_wake_cb_t g_wake_cb = NULL;
@@ -792,6 +792,30 @@ void screensaver_check_shake(void) {
         if (g_saver_scr) { lv_obj_del(g_saver_scr); g_saver_scr = NULL; }
         g_last_activity_ms = lv_tick_get();
         if (g_wake_cb) g_wake_cb();
+    }
+}
+
+void screensaver_dismiss(void) {
+    if (!g_saver_scr && !g_display_sleeping) return;
+    if (g_display_sleeping) {
+        M5.Display.wakeup();
+        M5.Display.setBrightness(128);
+        g_display_sleeping = false;
+    }
+    if (g_saver_scr) {
+        if (g_close_timer) { lv_timer_del(g_close_timer); g_close_timer = NULL; }
+        if (g_blink_timer) { lv_timer_del(g_blink_timer); g_blink_timer = NULL; }
+        if (g_blink_once_timer) { lv_timer_del(g_blink_once_timer); g_blink_once_timer = NULL; }
+        g_brow_l = NULL; g_brow_r = NULL;
+        g_eye_l = NULL; g_eye_r = NULL;
+        g_lid_l = NULL; g_lid_r = NULL;
+        g_mouth = NULL; g_face_container = NULL;
+        if (g_prev_scr) lv_scr_load(g_prev_scr);
+        if (g_saver_scr) { lv_obj_del(g_saver_scr); g_saver_scr = NULL; }
+        g_last_activity_ms = lv_tick_get();
+        if (g_wake_cb) g_wake_cb();
+    } else {
+        g_last_activity_ms = lv_tick_get();
     }
 }
 
