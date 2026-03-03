@@ -15,6 +15,9 @@ final GlobalKey<OverlayState> fabDropdownOverlayKey = GlobalKey<OverlayState>();
 /// 전역 메모 플로팅 배너 표시 여부 제어 (true면 숨김)
 final ValueNotifier<bool> hideGlobalMemoFloatingBanners = ValueNotifier<bool>(false);
 
+/// 홈(수업 내용) 채점 모드 활성 시 true. FAB 숨김에 사용.
+final ValueNotifier<bool> gradingModeActive = ValueNotifier<bool>(false);
+
 /// 전역 오른쪽 사이드시트 열림 방지 (성향 탭 등에서 사용)
 final ValueNotifier<bool> blockRightSideSheetOpen = ValueNotifier<bool>(false);
 

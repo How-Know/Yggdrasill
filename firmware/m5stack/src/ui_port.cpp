@@ -82,6 +82,8 @@ static lv_obj_t* s_ota_status_label = nullptr;
 static uint32_t s_last_refresh_ms = 0;
 static String s_pending_bind_student_id = "";
 static String s_pending_bind_student_name = "";
+static bool s_screensaver_hid_student_info = false;
+static bool s_screensaver_hid_stopwatch = false;
 static String s_student_name_cache = u8"학생";
 static String s_student_school_cache = "";
 static int s_student_grade_cache = -1;
@@ -1332,6 +1334,7 @@ static void build_homeworks_ui_internal() {
 }
 
 static void on_screensaver_wake(void) {
+  ui_after_screensaver_wake();
   if (s_homeworks_mode && is_entry_hub_visible()) {
     hub_clock_timer_cb(nullptr);
     if (!s_hub_clock_timer) {
@@ -1404,6 +1407,36 @@ void ui_before_screen_change(void) {
   if (s_hub_clock_timer) { lv_timer_del(s_hub_clock_timer); s_hub_clock_timer = nullptr; }
   close_volume_popup();
   close_brightness_popup();
+}
+
+// 화면보호기 전용: 오버레이를 삭제하지 않고 숨기기만 해서 복귀 시 복원
+void ui_before_screensaver(void) {
+  if (g_bottom_sheet_open) toggle_bottom_sheet();
+  close_bind_confirm_popup();
+  close_volume_popup();
+  close_brightness_popup();
+  if (s_hub_clock_timer) { lv_timer_del(s_hub_clock_timer); s_hub_clock_timer = nullptr; }
+  s_screensaver_hid_student_info = false;
+  s_screensaver_hid_stopwatch = false;
+  if (s_student_info_screen && lv_obj_is_valid(s_student_info_screen)) {
+    lv_obj_add_flag(s_student_info_screen, LV_OBJ_FLAG_HIDDEN);
+    s_screensaver_hid_student_info = true;
+  }
+  if (s_stopwatch_screen && lv_obj_is_valid(s_stopwatch_screen)) {
+    lv_obj_add_flag(s_stopwatch_screen, LV_OBJ_FLAG_HIDDEN);
+    s_screensaver_hid_stopwatch = true;
+  }
+}
+
+void ui_after_screensaver_wake(void) {
+  if (s_screensaver_hid_student_info && s_student_info_screen && lv_obj_is_valid(s_student_info_screen)) {
+    lv_obj_clear_flag(s_student_info_screen, LV_OBJ_FLAG_HIDDEN);
+  }
+  s_screensaver_hid_student_info = false;
+  if (s_screensaver_hid_stopwatch && s_stopwatch_screen && lv_obj_is_valid(s_stopwatch_screen)) {
+    lv_obj_clear_flag(s_stopwatch_screen, LV_OBJ_FLAG_HIDDEN);
+  }
+  s_screensaver_hid_stopwatch = false;
 }
 
 static void volume_slider_cb(lv_event_t* e) {

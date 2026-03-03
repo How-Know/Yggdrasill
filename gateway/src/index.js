@@ -170,8 +170,17 @@ client.on('message', async (topic, payload) => {
       if (action === 'list_today') {
         const { data, error } = await supa.rpc('m5_get_students_today_basic', { p_academy_id: academy_id });
         if (error) { console.error('[gateway] list_today error', error); return; }
-        client.publish(`academies/${academy_id}/devices/${device_id}/students_today`, JSON.stringify({ students: data || [] }), { qos: 1, retain: false });
-        client.publish(`academies/${academy_id}/devices/${device_id}/ack`, JSON.stringify({ ok: true, action: 'list_today', count: (data||[]).length }), { qos: 1, retain: false });
+        const { data: binds } = await supa
+          .from('m5_device_bindings')
+          .select('student_id,device_id')
+          .eq('academy_id', academy_id)
+          .eq('active', true);
+        const boundToOther = new Set(
+          (binds || []).filter(b => b.device_id !== device_id).map(b => b.student_id)
+        );
+        const filtered = (data || []).filter(s => !boundToOther.has(s.student_id));
+        client.publish(`academies/${academy_id}/devices/${device_id}/students_today`, JSON.stringify({ students: filtered }), { qos: 1, retain: false });
+        client.publish(`academies/${academy_id}/devices/${device_id}/ack`, JSON.stringify({ ok: true, action: 'list_today', count: filtered.length }), { qos: 1, retain: false });
         return;
       }
       if (action === 'list_homeworks') {

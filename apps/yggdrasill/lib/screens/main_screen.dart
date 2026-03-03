@@ -16,6 +16,7 @@ import '../models/student.dart';
 import '../models/group_info.dart';
 import '../models/student_view_type.dart';
 import '../widgets/main_fab_alternative.dart';
+import '../app_overlays.dart';
 import '../models/class_info.dart';
 import '../models/session_override.dart';
 import '../models/student_time_block.dart';
@@ -1980,7 +1981,13 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
           ),
         ],
       ),
-      floatingActionButton: MainFabAlternative(),
+      floatingActionButton: ValueListenableBuilder<bool>(
+        valueListenable: gradingModeActive,
+        builder: (context, gradingOn, _) {
+          if (_selectedIndex == 0 && gradingOn) return const SizedBox.shrink();
+          return MainFabAlternative();
+        },
+      ),
     );
   }
 

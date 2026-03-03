@@ -6,7 +6,9 @@ import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart' as sf;
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../services/data_manager.dart';
+import '../services/tenant_service.dart';
 import '../services/homework_store.dart';
 import '../services/student_flow_store.dart';
 import '../services/homework_assignment_store.dart';
@@ -51,6 +53,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
   @override
   void initState() {
     super.initState();
+    gradingModeActive.value = _isGradingMode;
     _uiAnimController = AnimationController(
         duration: const Duration(milliseconds: 1800), vsync: this)
       ..repeat();
@@ -185,6 +188,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                       _isGradingMode = value;
                                       if (!value) _pendingConfirms.clear();
                                     });
+                                    gradingModeActive.value = value;
                                   },
                                   activeColor: kDlgAccent,
                                 ),
@@ -4954,7 +4958,7 @@ class _AttendingButton extends StatelessWidget {
         width: width,
         height: ClassContentScreen._attendingCardHeight,
         margin: margin,
-        padding: const EdgeInsets.fromLTRB(22, 0, 32, 0),
+        padding: const EdgeInsets.fromLTRB(22, 0, 12, 0),
         decoration: BoxDecoration(
           color: Colors.transparent,
           border: showHorizontalDivider
@@ -4963,7 +4967,9 @@ class _AttendingButton extends StatelessWidget {
                 )
               : null,
         ),
-        child: ValueListenableBuilder<int>(
+        child: ValueListenableBuilder(
+          valueListenable: DataManager.instance.studentsNotifier,
+          builder: (context, _, __) => ValueListenableBuilder<int>(
           valueListenable: HomeworkStore.instance.revision,
           builder: (context, _rev, _) {
             // 과제 진행 상태 확인
@@ -4987,6 +4993,11 @@ class _AttendingButton extends StatelessWidget {
               gradeText = g > 0 ? (g.toString() + '학년') : '';
             } catch (_) {}
 
+            final boundDevice = DataManager.instance.boundDeviceId(studentId);
+            final deviceLabel = boundDevice != null
+                ? boundDevice.replaceAll(RegExp(r'^m5-device-'), '')
+                : null;
+
             final nameStyle = TextStyle(
               color: isResting ? Colors.white54 : Colors.white,
               fontSize: 38,
@@ -5002,60 +5013,128 @@ class _AttendingButton extends StatelessWidget {
             final double nameHeight =
                 (nameStyle.fontSize ?? 34) * (nameStyle.height ?? 1.0);
 
-            return Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
+            return Column(
+              mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                const SizedBox(width: 12),
-                Expanded(
-                  flex: 3,
-                  child: Text(
-                    name,
-                    style: nameStyle,
-                    overflow: TextOverflow.ellipsis,
-                  ),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    const SizedBox(width: 12),
+                    Expanded(
+                      flex: 3,
+                      child: Text(
+                        name,
+                        style: nameStyle,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    const SizedBox(width: 20),
+                    Expanded(
+                      flex: 3,
+                      child: Align(
+                        alignment: Alignment.centerRight,
+                        child: SizedBox(
+                          height: nameHeight,
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                              Text(
+                                infoLine.isEmpty ? '-' : infoLine,
+                                style: const TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 16,
+                                  height: 1.2,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              Text(
+                                '등원 $arrivalText',
+                                style: const TextStyle(
+                                  color: Colors.white54,
+                                  fontSize: 14,
+                                  height: 1.2,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 20),
-                Expanded(
-                  flex: 3,
-                  child: Align(
-                    alignment: Alignment.centerRight,
-                    child: SizedBox(
-                      height: nameHeight,
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: [
-                          Text(
-                            infoLine.isEmpty ? '-' : infoLine,
-                            style: const TextStyle(
-                              color: Colors.white70,
-                              fontSize: 16,
-                              height: 1.2,
-                              fontWeight: FontWeight.w600,
+                if (deviceLabel != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6, right: 0),
+                    child: Align(
+                      alignment: Alignment.centerRight,
+                      child: MouseRegion(
+                        cursor: SystemMouseCursors.click,
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: () async {
+                            final confirm = await showDialog<bool>(
+                              context: context,
+                              builder: (ctx) => AlertDialog(
+                                backgroundColor: const Color(0xFF1E1E1E),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                                content: Text(
+                                  '$name 학생의 기기 바인딩을 해제할까요?',
+                                  style: const TextStyle(color: Colors.white70, fontSize: 15),
+                                ),
+                                actions: [
+                                  TextButton(
+                                    onPressed: () => Navigator.pop(ctx, false),
+                                    child: const Text('취소', style: TextStyle(color: Colors.white54)),
+                                  ),
+                                  TextButton(
+                                    onPressed: () => Navigator.pop(ctx, true),
+                                    child: const Text('해제', style: TextStyle(color: Color(0xFF1FA95B))),
+                                  ),
+                                ],
+                              ),
+                            );
+                            if (confirm == true) {
+                              try {
+                                final academyId = await TenantService.instance.getActiveAcademyId();
+                                if (academyId == null) return;
+                                await Supabase.instance.client.rpc('m5_unbind_by_student', params: {
+                                  'p_academy_id': academyId,
+                                  'p_student_id': studentId,
+                                });
+                                await DataManager.instance.loadStudents();
+                              } catch (_) {}
+                            }
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.12),
+                              borderRadius: BorderRadius.circular(999),
                             ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          Text(
-                            '등원 $arrivalText',
-                            style: const TextStyle(
-                              color: Colors.white54,
-                              fontSize: 14,
-                              height: 1.2,
-                              fontWeight: FontWeight.w600,
+                            child: Text(
+                              '기기 $deviceLabel',
+                              style: const TextStyle(
+                                color: Colors.white38,
+                                fontSize: 12,
+                                height: 1.2,
+                                fontWeight: FontWeight.w500,
+                              ),
                             ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
                           ),
-                        ],
+                        ),
                       ),
                     ),
                   ),
-                ),
               ],
             );
           },
-        ),
+        )),
       ),
     );
   }

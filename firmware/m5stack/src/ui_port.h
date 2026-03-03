@@ -24,6 +24,8 @@ void ui_port_update_student_info(const JsonObject& info);
 void ui_port_show_settings(const char* appVersion);
 void ui_port_set_global_font(const lv_font_t* font);
 void ui_before_screen_change(void);
+void ui_before_screensaver(void);
+void ui_after_screensaver_wake(void);
 
 // 펌웨어 측 MQTT publish 콜백(메인에서 구현)
 void fw_publish_bind(const char* studentId);

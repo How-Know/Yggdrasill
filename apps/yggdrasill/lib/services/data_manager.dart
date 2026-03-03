@@ -87,6 +87,7 @@ class DataManager {
   List<GroupInfo> _groups = [];
   List<OperatingHours> _operatingHours = [];
   Map<String, GroupInfo> _groupsById = {};
+  Map<String, String> _deviceBindings = {};
   bool _isInitialized = false;
   List<PaymentRecord> _paymentRecords = [];
   List<StudentPaymentInfo> _studentPaymentInfos = [];
@@ -119,6 +120,7 @@ class DataManager {
     return List.unmodifiable(_groups);
   }
   List<StudentWithInfo> get students => List.unmodifiable(_studentsWithInfo);
+  String? boundDeviceId(String studentId) => _deviceBindings[studentId];
   List<PaymentRecord> get paymentRecords => List.unmodifiable(_paymentRecords);
   List<AttendanceRecord> get attendanceRecords => AttendanceService.instance.attendanceRecords;
   ValueNotifier<List<AttendanceRecord>> get attendanceRecordsNotifier =>
@@ -1121,6 +1123,19 @@ class DataManager {
         ];
         studentsNotifier.value = List.unmodifiable(_studentsWithInfo);
         print('[DEBUG][loadStudents] (Supabase) ${_studentsWithInfo.length}명');
+        try {
+          final bindRows = await supa
+              .from('m5_device_bindings')
+              .select('student_id,device_id')
+              .eq('academy_id', academyId)
+              .eq('active', true);
+          _deviceBindings = {
+            for (final r in (bindRows as List))
+              (r['student_id'] as String): (r['device_id'] as String)
+          };
+        } catch (_) {
+          _deviceBindings = {};
+        }
         return;
       } catch (_) {
         // fallback below

@@ -2,8 +2,8 @@
 #include <Arduino.h>
 #include <M5Unified.h>
 
-// Forward declaration from ui_port
-extern void ui_before_screen_change(void);
+// Forward declaration from ui_port (화면보호기는 삭제 대신 숨김으로 진입해 복귀 시 복원)
+extern void ui_before_screensaver(void);
 
 static uint32_t g_timeout_ms = 10000;
 static uint32_t g_last_activity_ms = 0;
@@ -381,7 +381,7 @@ static void blink_timer_cb(lv_timer_t* t) {
 
 static void show_screensaver(void) {
     if (g_saver_scr) return;
-    ui_before_screen_change();
+    ui_before_screensaver();
     lv_disp_t* disp = lv_disp_get_default();
     lv_coord_t sw = disp ? lv_disp_get_hor_res(disp) : 320;
     lv_coord_t sh = disp ? lv_disp_get_ver_res(disp) : 240;

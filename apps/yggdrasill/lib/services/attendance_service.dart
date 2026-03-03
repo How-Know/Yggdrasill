@@ -285,25 +285,54 @@ class AttendanceService {
         if (offset > 200000) break;
       }
 
-      _attendanceRecords = allRows.map<AttendanceRecord>((m0) {
+      final List<AttendanceRecord> parsed = [];
+      for (final m0 in allRows) {
         final m = Map<String, dynamic>.from(m0 as Map);
-        DateTime parseTs(String k) => DateTime.parse(m[k] as String).toLocal();
+        if (m['student_id'] == null) {
+          print('[SUPA][ATT] 출석 행 스킵(student_id null): id=${m['id']}');
+          continue;
+        }
+        DateTime? parseTsSafe(String k) {
+          final v = m[k];
+          if (v == null) return null;
+          if (v is! String || v.isEmpty) return null;
+          try {
+            return DateTime.parse(v).toLocal();
+          } catch (_) {
+            return null;
+          }
+        }
         DateTime? parseTsOpt(String k) {
           final v = m[k] as String?;
           if (v == null || v.isEmpty) return null;
           return DateTime.parse(v).toLocal();
         }
 
+        final DateTime? classDateTime = parseTsSafe('class_date_time');
+        final DateTime? classEndTime = parseTsSafe('class_end_time');
+        final DateTime? createdAt = parseTsSafe('created_at');
+        final DateTime? updatedAt = parseTsSafe('updated_at');
+        if (classDateTime == null ||
+            classEndTime == null ||
+            createdAt == null ||
+            updatedAt == null) {
+          print(
+            '[SUPA][ATT] 출석 행 스킵(필수 시각 null): id=${m['id']} student_id=${m['student_id']} '
+            'class_date_time=${m['class_date_time']} created_at=${m['created_at']}',
+          );
+          continue;
+        }
+
         final dynamic isPresentDyn = m['is_present'];
         final bool isPresent = (isPresentDyn is bool)
             ? isPresentDyn
             : ((isPresentDyn is num) ? isPresentDyn == 1 : false);
-        return AttendanceRecord(
+        parsed.add(AttendanceRecord(
           id: m['id'] as String?,
           studentId: m['student_id'] as String,
           occurrenceId: m['occurrence_id']?.toString(),
-          classDateTime: parseTs('class_date_time'),
-          classEndTime: parseTs('class_end_time'),
+          classDateTime: classDateTime,
+          classEndTime: classEndTime,
           className: (m['class_name'] as String?) ?? '',
           isPresent: isPresent,
           arrivalTime: parseTsOpt('arrival_time'),
@@ -318,11 +347,12 @@ class AttendanceService {
               ? (m['session_order'] as num).toInt()
               : null,
           isPlanned: m['is_planned'] == true || m['is_planned'] == 1,
-          createdAt: parseTs('created_at'),
-          updatedAt: parseTs('updated_at'),
+          createdAt: createdAt,
+          updatedAt: updatedAt,
           version: (m['version'] is num) ? (m['version'] as num).toInt() : 1,
-        );
-      }).toList()
+        ));
+      }
+      _attendanceRecords = parsed
         ..sort((a, b) => b.classDateTime.compareTo(a.classDateTime));
 
       attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
