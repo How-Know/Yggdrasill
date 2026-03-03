@@ -75,10 +75,30 @@ if($SkipFirmware){
         throw "PlatformIO(pio)를 찾지 못했습니다. (PATH 또는 $env:USERPROFILE\\.platformio\\penv\\Scripts\\pio.exe 확인)"
       } else {
         Push-Location $m5Dir
-        $fw = Join-Path $m5Dir '.pio\build\m5stack-core2\firmware.bin'
+        $platformioIni = Join-Path $m5Dir 'platformio.ini'
+        $targetEnv = 'm5stack-core2'
+        if(Test-Path $platformioIni){
+          $iniRaw = Get-Content $platformioIni -Raw
+          $envMatches = [regex]::Matches($iniRaw, '(?m)^\[env:([^\]\r\n]+)\]')
+          $envNames = @()
+          foreach($m in $envMatches){
+            $n = $m.Groups[1].Value.Trim()
+            if(-not [string]::IsNullOrWhiteSpace($n)){ $envNames += $n }
+          }
+          if($envNames.Count -gt 0){
+            if($envNames -contains 'm5stack-core2'){
+              $targetEnv = 'm5stack-core2'
+            } else {
+              # 최신 환경명(m5-device-*)으로 전환된 경우 첫 번째 env를 기본 빌드 타깃으로 사용
+              $targetEnv = $envNames[0]
+            }
+          }
+        }
+        Write-Host "[INFO] PlatformIO target env: $targetEnv" -ForegroundColor Cyan
+        $fw = Join-Path $m5Dir (".pio\build\$targetEnv\firmware.bin")
         # 실패 시 이전 산출물 복사되는 문제 방지: 기존 파일 제거
         if(Test-Path $fw){ Remove-Item $fw -Force -ErrorAction SilentlyContinue }
-        & $pioExe run -e m5stack-core2 | Out-Host
+        & $pioExe run -e $targetEnv | Out-Host
         if($LASTEXITCODE -ne 0){ throw "pio build failed (exit=$LASTEXITCODE)" }
         if(Test-Path $fw){
           $out = Join-Path $dist 'm5stack-core2_firmware.bin'
