@@ -29,6 +29,7 @@ import '../../../widgets/dialog_tokens.dart';
 import '../../../widgets/textbook_flow_link_action.dart';
 import '../../../app_overlays.dart';
 import 'student_promotion_dialog.dart';
+import 'student_notification_consent_dialog.dart';
 import 'package:uuid/uuid.dart';
 import '../../../services/student_flow_store.dart';
 
@@ -1057,6 +1058,29 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                                       icon: const Icon(Symbols.exposure_plus_1,
                                           color: Colors.white70, size: 26),
                                       splashRadius: 22,
+                                      padding: EdgeInsets.zero,
+                                      constraints: const BoxConstraints(
+                                          minWidth: 32, minHeight: 32),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 1.4),
+                                  SizedBox(
+                                    width: 48,
+                                    height: 48,
+                                    child: IconButton(
+                                      tooltip: '알람',
+                                      onPressed: () {
+                                        showDialog<void>(
+                                          context: context,
+                                          builder: (context) =>
+                                              const StudentNotificationConsentDialog(),
+                                        );
+                                      },
+                                      icon: const Icon(Symbols.notifications,
+                                          color: Colors.white70, size: 26),
+                                      style: IconButton.styleFrom(
+                                        overlayColor: Colors.transparent,
+                                      ),
                                       padding: EdgeInsets.zero,
                                       constraints: const BoxConstraints(
                                           minWidth: 32, minHeight: 32),

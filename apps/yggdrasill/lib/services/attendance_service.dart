@@ -2712,7 +2712,8 @@ class AttendanceService {
     // ⚠️ _attendanceRecords는 Supabase(PostgREST) max_rows 설정에 의해 ~1000개로 잘릴 수 있어(실제 로그: recordsLen≈990),
     //     이 메모리 기반 체크만으로는 중복 생성 방지가 불완전해질 수 있다.
     // ✅ DB에서 DISTINCT로 키를 가져와 중복 폭증을 방지한다.
-    final Set<String> existingPlannedKeys = {};
+    final Set<String> existingPlannedMinuteKeys = {};
+    final Map<String, Set<String>> existingPlannedSetIdsByMinute = {};
     try {
       final fromUtc = anchor.toUtc();
       final toUtc = anchor.add(Duration(days: days)).toUtc();
@@ -2728,16 +2729,21 @@ class AttendanceService {
           final setId = m['set_id']?.toString();
           final minuteStr = m['class_minute']?.toString();
           if (sid == null || sid.isEmpty) continue;
-          if (setId == null || setId.isEmpty) continue;
           if (minuteStr == null || minuteStr.isEmpty) continue;
           final dt = DateTime.tryParse(minuteStr);
           if (dt == null) continue;
-          existingPlannedKeys.add('$sid|$setId|${_dateKey(dt.toLocal())}');
+          final minuteKey = _plannedMinuteKey(sid, dt.toLocal());
+          existingPlannedMinuteKeys.add(minuteKey);
+          if (setId != null && setId.trim().isNotEmpty) {
+            existingPlannedSetIdsByMinute
+                .putIfAbsent(minuteKey, () => <String>{})
+                .add(setId.trim());
+          }
         }
       }
       if (_sideDebug) {
         print(
-            '[PLAN][existing-keys] via rpc keys=${existingPlannedKeys.length} rangeUtc=$fromUtc..$toUtc');
+            '[PLAN][existing-keys] via rpc keys=${existingPlannedMinuteKeys.length} rangeUtc=$fromUtc..$toUtc');
       }
     } catch (e) {
       // fallback: 기존 메모리 기반(정확도 낮을 수 있음)
@@ -2748,11 +2754,14 @@ class AttendanceService {
         if (!r.isPlanned) continue;
         if (r.isPresent || r.arrivalTime != null) continue;
         if (r.setId == null || r.setId!.isEmpty) continue;
-        final dk = _dateKey(r.classDateTime);
         final classDate = DateTime(
             r.classDateTime.year, r.classDateTime.month, r.classDateTime.day);
         if (classDate.isBefore(anchor)) continue;
-        existingPlannedKeys.add('${r.studentId}|${r.setId}|$dk');
+        final minuteKey = _plannedMinuteKey(r.studentId, r.classDateTime);
+        existingPlannedMinuteKeys.add(minuteKey);
+        existingPlannedSetIdsByMinute
+            .putIfAbsent(minuteKey, () => <String>{})
+            .add(r.setId!.trim());
       }
     }
 
@@ -2800,7 +2809,6 @@ class AttendanceService {
         final classDateTime = agg.start;
         final classEndTime = agg.end;
         final keyBase = '${agg.studentId}|${agg.setId}';
-        final dateKey = _dateKey(classDateTime);
 
         // ✅ 휴강/대체(원래 회차)면 base planned는 만들지 않는다.
         final ov =
@@ -2874,16 +2882,36 @@ class AttendanceService {
             regularOccByKey[occKey(agg.studentId, agg.setId, classDateTime)];
         // occurrence는 링크용(occurrence_id)으로만 사용한다. session_order는 스케줄 기반(orderMap) 값이 정답.
 
-        final plannedKey =
-            '${agg.studentId}|${agg.setId}|${_dateKey(classDateTime)}';
-        if (existingPlannedKeys.contains(plannedKey)) {
+        final minuteKey = _plannedMinuteKey(agg.studentId, classDateTime);
+        final candidateSetId = agg.setId.trim();
+        final existingSetsForMinute = existingPlannedSetIdsByMinute[minuteKey];
+        if (existingSetsForMinute != null &&
+            existingSetsForMinute.isNotEmpty &&
+            candidateSetId.isNotEmpty &&
+            !existingSetsForMinute.contains(candidateSetId)) {
+          // DB 유니크키는 (academy, student, class_date_time) 기준이므로
+          // 같은 분(minute)에 과거 set의 순수 planned가 남아있으면 먼저 치운다.
+          await removePlannedAttendanceForDate(
+            studentId: agg.studentId,
+            classDateTime: classDateTime,
+          );
+          existingPlannedMinuteKeys.remove(minuteKey);
+          existingPlannedSetIdsByMinute.remove(minuteKey);
+        }
+
+        if (existingPlannedMinuteKeys.contains(minuteKey)) {
           if (_sideDebug) {
             print(
-                '[PLAN][skip-dup] setId=${agg.setId} student=${agg.studentId} date=$classDateTime');
+                '[PLAN][skip-dup] setId=${agg.setId} student=${agg.studentId} date=$classDateTime minuteKey=$minuteKey');
           }
           continue;
         }
-        existingPlannedKeys.add(plannedKey);
+        existingPlannedMinuteKeys.add(minuteKey);
+        if (candidateSetId.isNotEmpty) {
+          existingPlannedSetIdsByMinute
+              .putIfAbsent(minuteKey, () => <String>{})
+              .add(candidateSetId);
+        }
         if (_sideDebug && !samplePrinted) {
           // ignore: avoid_print
           print(
@@ -2971,8 +2999,22 @@ class AttendanceService {
           return o.setId ?? o.id;
         }();
 
-        final plannedKey = '${o.studentId}|$setId|${_dateKey(start)}';
-        if (existingPlannedKeys.contains(plannedKey)) continue;
+        final minuteKey = _plannedMinuteKey(o.studentId, start);
+        final candidateSetId = setId.trim();
+        final existingSetsForMinute = existingPlannedSetIdsByMinute[minuteKey];
+        if (existingSetsForMinute != null &&
+            existingSetsForMinute.isNotEmpty &&
+            candidateSetId.isNotEmpty &&
+            !existingSetsForMinute.contains(candidateSetId)) {
+          await removePlannedAttendanceForDate(
+            studentId: o.studentId,
+            classDateTime: start,
+          );
+          existingPlannedMinuteKeys.remove(minuteKey);
+          existingPlannedSetIdsByMinute.remove(minuteKey);
+        }
+
+        if (existingPlannedMinuteKeys.contains(minuteKey)) continue;
 
         final durMin =
             o.durationMinutes ?? _d.getAcademySettings().lessonDuration;
@@ -3208,7 +3250,12 @@ class AttendanceService {
           'version': record.version,
         });
         localAdds.add(record);
-        existingPlannedKeys.add(plannedKey);
+        existingPlannedMinuteKeys.add(minuteKey);
+        if (candidateSetId.isNotEmpty) {
+          existingPlannedSetIdsByMinute
+              .putIfAbsent(minuteKey, () => <String>{})
+              .add(candidateSetId);
+        }
       }
     }
 
@@ -3282,6 +3329,9 @@ class AttendanceService {
   }
 
   String _dateKey(DateTime dt) => '${dt.year}-${dt.month}-${dt.day}';
+
+  String _plannedMinuteKey(String studentId, DateTime dt) =>
+      '$studentId|${_dateKey(dt)}';
 
   int? _resolveCycleByDueDate(String studentId, DateTime classDate) {
     final prs = _d
@@ -3654,20 +3704,23 @@ class AttendanceService {
       regularOccByKey[occKey(sid, o.originalClassDateTime)] = o;
     }
 
-    // 중복 생성 방지: 하루/세트 키 (동일 학생)
-    final Set<String> existingPlannedKeys = {};
+    // 중복 생성 방지: DB 유니크키와 동일하게 "학생+분(minute)" 기준으로 관리
+    final Set<String> existingPlannedMinuteKeys = {};
+    final Map<String, Set<String>> existingPlannedSetIdsByMinute = {};
     for (final r in _attendanceRecords) {
       if (r.studentId != studentId) continue;
       if (!r.isPlanned) continue;
       if (r.isPresent || r.arrivalTime != null) continue;
       if (r.setId == null || r.setId!.isEmpty) continue;
-      if (!setIds.contains(r.setId)) continue;
       // anchor(오늘 00:00) 이후만 고려
       final classDate = DateTime(
           r.classDateTime.year, r.classDateTime.month, r.classDateTime.day);
       if (classDate.isBefore(anchor)) continue;
-      existingPlannedKeys
-          .add('$studentId|${r.setId}|${_dateKey(r.classDateTime)}');
+      final minuteKey = _plannedMinuteKey(studentId, r.classDateTime);
+      existingPlannedMinuteKeys.add(minuteKey);
+      existingPlannedSetIdsByMinute
+          .putIfAbsent(minuteKey, () => <String>{})
+          .add(r.setId!.trim());
     }
 
     bool samplePrinted = false;
@@ -3795,15 +3848,34 @@ class AttendanceService {
           samplePrinted = true;
         }
 
-        final plannedKey = '$studentId|${agg.setId}|${_dateKey(classDateTime)}';
-        if (existingPlannedKeys.contains(plannedKey)) {
+        final minuteKey = _plannedMinuteKey(studentId, classDateTime);
+        final candidateSetId = agg.setId.trim();
+        final existingSetsForMinute = existingPlannedSetIdsByMinute[minuteKey];
+        if (existingSetsForMinute != null &&
+            existingSetsForMinute.isNotEmpty &&
+            candidateSetId.isNotEmpty &&
+            !existingSetsForMinute.contains(candidateSetId)) {
+          await removePlannedAttendanceForDate(
+            studentId: studentId,
+            classDateTime: classDateTime,
+          );
+          existingPlannedMinuteKeys.remove(minuteKey);
+          existingPlannedSetIdsByMinute.remove(minuteKey);
+        }
+
+        if (existingPlannedMinuteKeys.contains(minuteKey)) {
           if (_sideDebug) {
             print(
-                '[PLAN-student][skip-dup] setId=${agg.setId} student=$studentId date=$classDateTime');
+                '[PLAN-student][skip-dup] setId=${agg.setId} student=$studentId date=$classDateTime minuteKey=$minuteKey');
           }
           continue;
         }
-        existingPlannedKeys.add(plannedKey);
+        existingPlannedMinuteKeys.add(minuteKey);
+        if (candidateSetId.isNotEmpty) {
+          existingPlannedSetIdsByMinute
+              .putIfAbsent(minuteKey, () => <String>{})
+              .add(candidateSetId);
+        }
 
         final record = AttendanceRecord.create(
           studentId: studentId,
@@ -3871,8 +3943,22 @@ class AttendanceService {
         }();
         if (!setIds.contains(setId)) continue;
 
-        final plannedKey = '$studentId|$setId|${_dateKey(start)}';
-        if (existingPlannedKeys.contains(plannedKey)) continue;
+        final minuteKey = _plannedMinuteKey(studentId, start);
+        final candidateSetId = setId.trim();
+        final existingSetsForMinute = existingPlannedSetIdsByMinute[minuteKey];
+        if (existingSetsForMinute != null &&
+            existingSetsForMinute.isNotEmpty &&
+            candidateSetId.isNotEmpty &&
+            !existingSetsForMinute.contains(candidateSetId)) {
+          await removePlannedAttendanceForDate(
+            studentId: studentId,
+            classDateTime: start,
+          );
+          existingPlannedMinuteKeys.remove(minuteKey);
+          existingPlannedSetIdsByMinute.remove(minuteKey);
+        }
+
+        if (existingPlannedMinuteKeys.contains(minuteKey)) continue;
 
         final existing = getAttendanceRecord(studentId, start);
         if (existing != null &&
@@ -3957,7 +4043,12 @@ class AttendanceService {
           'version': record.version,
         });
         localAdds.add(record);
-        existingPlannedKeys.add(plannedKey);
+        existingPlannedMinuteKeys.add(minuteKey);
+        if (candidateSetId.isNotEmpty) {
+          existingPlannedSetIdsByMinute
+              .putIfAbsent(minuteKey, () => <String>{})
+              .add(candidateSetId);
+        }
       }
     }
 
@@ -4944,8 +5035,23 @@ class AttendanceService {
       regularOccByMinute[minKey(o.originalClassDateTime)] = o;
     }
 
-    // 중복 생성 방지: 하루/세트 키
-    final Set<String> existingPlannedKeys = {};
+    // 중복 생성 방지: DB 유니크키와 동일하게 "학생+분(minute)" 기준으로 관리
+    final Set<String> existingPlannedMinuteKeys = {};
+    final Map<String, Set<String>> existingPlannedSetIdsByMinute = {};
+    for (final r in _attendanceRecords) {
+      if (r.studentId != studentId) continue;
+      if (!r.isPlanned) continue;
+      if (r.isPresent || r.arrivalTime != null) continue;
+      if (r.setId == null || r.setId!.isEmpty) continue;
+      final classDate = DateTime(
+          r.classDateTime.year, r.classDateTime.month, r.classDateTime.day);
+      if (classDate.isBefore(anchor)) continue;
+      final minuteKey = _plannedMinuteKey(studentId, r.classDateTime);
+      existingPlannedMinuteKeys.add(minuteKey);
+      existingPlannedSetIdsByMinute
+          .putIfAbsent(minuteKey, () => <String>{})
+          .add(r.setId!.trim());
+    }
 
     bool samplePrinted = false;
     int decisionLogCount = 0;
@@ -5030,15 +5136,34 @@ class AttendanceService {
 
         final occ = regularOccByMinute[minKey(classDateTime)];
         // occurrence는 링크용(occurrence_id)으로만 사용한다. session_order는 스케줄 기반(orderMap) 값이 정답.
-        final plannedKey = '$studentId|$setId|${_dateKey(classDateTime)}';
-        if (existingPlannedKeys.contains(plannedKey)) {
+        final minuteKey = _plannedMinuteKey(studentId, classDateTime);
+        final candidateSetId = setId.trim();
+        final existingSetsForMinute = existingPlannedSetIdsByMinute[minuteKey];
+        if (existingSetsForMinute != null &&
+            existingSetsForMinute.isNotEmpty &&
+            candidateSetId.isNotEmpty &&
+            !existingSetsForMinute.contains(candidateSetId)) {
+          await removePlannedAttendanceForDate(
+            studentId: studentId,
+            classDateTime: classDateTime,
+          );
+          existingPlannedMinuteKeys.remove(minuteKey);
+          existingPlannedSetIdsByMinute.remove(minuteKey);
+        }
+
+        if (existingPlannedMinuteKeys.contains(minuteKey)) {
           if (_sideDebug) {
             print(
-                '[PLAN-set][skip-dup] setId=$setId student=$studentId date=$classDateTime');
+                '[PLAN-set][skip-dup] setId=$setId student=$studentId date=$classDateTime minuteKey=$minuteKey');
           }
           continue;
         }
-        existingPlannedKeys.add(plannedKey);
+        existingPlannedMinuteKeys.add(minuteKey);
+        if (candidateSetId.isNotEmpty) {
+          existingPlannedSetIdsByMinute
+              .putIfAbsent(minuteKey, () => <String>{})
+              .add(candidateSetId);
+        }
         if (decisionLogCount < 3 ||
             cycle == null ||
             cycle == 0 ||

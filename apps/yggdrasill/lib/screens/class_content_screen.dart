@@ -1501,6 +1501,78 @@ Future<_HomeworkCheckTarget?> _resolveHomeworkCheckTarget(
   );
 }
 
+List<Widget> _buildHomeworkCheckTargetInfo(HomeworkItem hw) {
+  String extractBookName() {
+    final contentRaw = (hw.content ?? '').trim();
+    final match = RegExp(r'(?:^|\n)\s*교재:\s*([^\n]+)').firstMatch(contentRaw);
+    final fromContent = match?.group(1)?.trim() ?? '';
+    if (fromContent.isNotEmpty) return fromContent;
+    final hasLinkedTextbook = (hw.bookId ?? '').trim().isNotEmpty &&
+        (hw.gradeLabel ?? '').trim().isNotEmpty;
+    if (hasLinkedTextbook) {
+      final stripped = hw.title.trim().replaceFirst(RegExp(r'^\s*\d+\.\d+\.\(\d+\)\s+'), '').trim();
+      if (stripped.isNotEmpty) {
+        final idx = stripped.indexOf('·');
+        if (idx == -1) return stripped;
+        final candidate = stripped.substring(0, idx).trim();
+        if (candidate.isNotEmpty) return candidate;
+      }
+    }
+    final typeLabel = (hw.type ?? '').trim();
+    if (typeLabel.isNotEmpty) return typeLabel;
+    return '';
+  }
+  String extractCourseName() {
+    final contentRaw = (hw.content ?? '').trim();
+    final match = RegExp(r'(?:^|\n)\s*과정:\s*([^\n]+)').firstMatch(contentRaw);
+    return match?.group(1)?.trim() ?? '';
+  }
+
+  final bookName = extractBookName();
+  final courseName = extractCourseName();
+  final bookAndCourse = [bookName, courseName].where((s) => s.isNotEmpty).join(' · ');
+  final title = hw.title.trim().isEmpty ? '(제목 없음)' : hw.title.trim();
+  final page = (hw.page ?? '').trim();
+  final count = hw.count;
+  final pageAndCount = [
+    if (page.isNotEmpty) 'p.$page',
+    if (count != null && count > 0) '$count문항',
+  ].join('  ');
+
+  return [
+    if (bookAndCourse.isNotEmpty) ...[
+      Text(
+        bookAndCourse,
+        style: const TextStyle(
+          color: kDlgText,
+          fontSize: 20,
+          fontWeight: FontWeight.w900,
+        ),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+      const SizedBox(height: 4),
+    ],
+    Text(
+      title,
+      style: TextStyle(
+        color: bookAndCourse.isNotEmpty ? kDlgTextSub : kDlgText,
+        fontSize: bookAndCourse.isNotEmpty ? 15 : 18,
+        fontWeight: bookAndCourse.isNotEmpty ? FontWeight.w600 : FontWeight.w800,
+      ),
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+    ),
+    if (pageAndCount.isNotEmpty) ...[
+      const SizedBox(height: 3),
+      Text(
+        pageAndCount,
+        style: const TextStyle(color: kDlgTextSub, fontSize: 13),
+      ),
+    ],
+  ];
+}
+
 Future<_HomeworkCheckDraft?> _showHomeworkItemCheckDialog({
   required BuildContext context,
   required HomeworkItem hw,
@@ -1510,7 +1582,9 @@ Future<_HomeworkCheckDraft?> _showHomeworkItemCheckDialog({
   int progress = minProgress.clamp(0, 150);
   final progressController =
       ImeAwareTextEditingController(text: progress.toString());
-  final validIssues = const {'lost', 'forgot', 'other'};
+  const int sliderMax = 100;
+  const int progressMax = 150;
+  const validIssues = {'lost', 'forgot', 'other'};
   String? issueType =
       validIssues.contains(target.issueType) ? target.issueType : null;
   final noteController = ImeAwareTextEditingController(
@@ -1522,195 +1596,198 @@ Future<_HomeworkCheckDraft?> _showHomeworkItemCheckDialog({
     builder: (ctx) {
       return StatefulBuilder(
         builder: (ctx, setState) {
+          final maxContentHeight = math.max(
+            320.0,
+            math.min(MediaQuery.of(ctx).size.height * 0.66, 620.0),
+          );
           return AlertDialog(
             backgroundColor: kDlgBg,
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-            title: const Text(
-              '숙제 검사',
-              style: TextStyle(color: kDlgText, fontWeight: FontWeight.w900),
-            ),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: const Text('숙제 검사', style: TextStyle(color: kDlgText, fontWeight: FontWeight.w900)),
             content: SizedBox(
-              width: 560,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const YggDialogSectionHeader(
-                    icon: Icons.assignment_turned_in,
-                    title: '검사 대상',
-                  ),
-                  Text(
-                    hw.title.trim().isEmpty ? '(제목 없음)' : hw.title.trim(),
-                    style: const TextStyle(
-                      color: kDlgText,
-                      fontSize: 18,
-                      fontWeight: FontWeight.w800,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    _formatDateRange(target.assignedAt, target.dueDate),
-                    style: const TextStyle(color: kDlgTextSub, fontSize: 13),
-                  ),
-                  const SizedBox(height: 14),
-                  const YggDialogSectionHeader(
-                    icon: Icons.tune_rounded,
-                    title: '완료율',
-                  ),
-                  Row(
+              width: 480,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(maxHeight: maxContentHeight),
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Expanded(
-                        child: Slider(
-                          value: progress.toDouble(),
-                          min: 0,
-                          max: 150,
-                          divisions: 15,
-                          label: '$progress%',
-                          activeColor: kDlgAccent,
-                          inactiveColor: kDlgBorder,
-                          onChanged: (v) {
-                            final next =
-                                ((v / 10).round() * 10).clamp(minProgress, 150);
-                            setState(() {
-                              progress = next;
-                              final text = next.toString();
-                              if (progressController.text != text) {
-                                progressController.text = text;
-                                progressController.selection =
-                                    TextSelection.collapsed(
-                                        offset: text.length);
-                              }
-                            });
-                          },
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 10, top: 2),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 4,
+                              height: 16,
+                              decoration: BoxDecoration(
+                                color: kDlgAccent,
+                                borderRadius: BorderRadius.circular(2),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            const Icon(
+                              Icons.assignment_turned_in,
+                              color: kDlgTextSub,
+                              size: 18,
+                            ),
+                            const SizedBox(width: 8),
+                            const Text(
+                              '숙제 내용',
+                              style: TextStyle(
+                                color: kDlgText,
+                                fontSize: 15,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Text(
+                                _formatDateRange(target.assignedAt, target.dueDate),
+                                textAlign: TextAlign.right,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: kDlgTextSub,
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
-                      const SizedBox(width: 10),
-                      SizedBox(
-                        width: 70,
-                        child: TextField(
-                          controller: progressController,
-                          keyboardType: TextInputType.number,
-                          inputFormatters: [
-                            FilteringTextInputFormatter.digitsOnly
-                          ],
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(
-                            color: kDlgText,
-                            fontSize: 14,
-                            fontWeight: FontWeight.w800,
+                      Padding(
+                        padding: const EdgeInsets.only(left: 24),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: _buildHomeworkCheckTargetInfo(hw),
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      const YggDialogSectionHeader(icon: Icons.tune_rounded, title: '완료율'),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Slider(
+                              value: progress > sliderMax ? sliderMax.toDouble() : progress.toDouble(),
+                              min: 0,
+                              max: sliderMax.toDouble(),
+                              divisions: 10,
+                              label: '$progress%',
+                              activeColor: kDlgAccent,
+                              inactiveColor: kDlgBorder,
+                              onChanged: (v) {
+                                final next = ((v / 10).round() * 10).clamp(minProgress, sliderMax);
+                                setState(() {
+                                  progress = next;
+                                  final text = next.toString();
+                                  if (progressController.text != text) {
+                                    progressController.text = text;
+                                    progressController.selection = TextSelection.collapsed(offset: text.length);
+                                  }
+                                });
+                              },
+                            ),
                           ),
+                          const SizedBox(width: 10),
+                          SizedBox(
+                            width: 70,
+                            child: TextField(
+                              controller: progressController,
+                              keyboardType: TextInputType.number,
+                              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(color: kDlgText, fontSize: 14, fontWeight: FontWeight.w800),
+                              decoration: InputDecoration(
+                                suffixText: '%',
+                                suffixStyle: const TextStyle(color: kDlgTextSub),
+                                filled: true,
+                                fillColor: kDlgFieldBg,
+                                enabledBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                  borderSide: const BorderSide(color: kDlgBorder),
+                                ),
+                                focusedBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                  borderSide: const BorderSide(color: kDlgAccent, width: 1.4),
+                                ),
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+                              ),
+                              onChanged: (v) {
+                                final parsed = int.tryParse(v);
+                                if (parsed == null) return;
+                                final safe = parsed.clamp(minProgress, progressMax);
+                                setState(() => progress = safe);
+                                final safeText = safe.toString();
+                                if (safeText != v) {
+                                  progressController.text = safeText;
+                                  progressController.selection = TextSelection.collapsed(offset: safeText.length);
+                                }
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      const YggDialogSectionHeader(icon: Icons.flag_outlined, title: '미완료 사유 (선택)'),
+                      Wrap(
+                        spacing: 8,
+                        children: [
+                          YggDialogFilterChip(
+                            label: '분실',
+                            selected: issueType == 'lost',
+                            onSelected: (v) => setState(() {
+                              issueType = v ? 'lost' : null;
+                              if (issueType != 'other') noteController.text = '';
+                            }),
+                          ),
+                          YggDialogFilterChip(
+                            label: '잊음',
+                            selected: issueType == 'forgot',
+                            onSelected: (v) => setState(() {
+                              issueType = v ? 'forgot' : null;
+                              if (issueType != 'other') noteController.text = '';
+                            }),
+                          ),
+                          YggDialogFilterChip(
+                            label: '기타',
+                            selected: issueType == 'other',
+                            onSelected: (v) => setState(() {
+                              issueType = v ? 'other' : null;
+                              if (!v) noteController.text = '';
+                            }),
+                          ),
+                        ],
+                      ),
+                      if (issueType == 'other') ...[
+                        const SizedBox(height: 8),
+                        TextField(
+                          controller: noteController,
+                          minLines: 1,
+                          maxLines: 2,
+                          style: const TextStyle(color: kDlgText),
                           decoration: InputDecoration(
-                            suffixText: '%',
-                            suffixStyle: const TextStyle(color: kDlgTextSub),
+                            hintText: '사유를 입력하세요',
+                            hintStyle: const TextStyle(color: Color(0xFF6E7E7E)),
                             filled: true,
                             fillColor: kDlgFieldBg,
                             enabledBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(8),
+                              borderRadius: BorderRadius.circular(10),
                               borderSide: const BorderSide(color: kDlgBorder),
                             ),
                             focusedBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(8),
-                              borderSide: const BorderSide(
-                                color: kDlgAccent,
-                                width: 1.4,
-                              ),
+                              borderRadius: BorderRadius.circular(10),
+                              borderSide: const BorderSide(color: kDlgAccent, width: 1.4),
                             ),
-                            contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 6,
-                              vertical: 8,
-                            ),
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                           ),
-                          onChanged: (v) {
-                            final parsed = int.tryParse(v);
-                            if (parsed == null) return;
-                            final safe = parsed.clamp(minProgress, 150);
-                            setState(() {
-                              progress = safe;
-                            });
-                            final safeText = safe.toString();
-                            if (safeText != v) {
-                              progressController.text = safeText;
-                              progressController.selection =
-                                  TextSelection.collapsed(
-                                      offset: safeText.length);
-                            }
-                          },
                         ),
-                      ),
+                      ],
                     ],
                   ),
-                  const SizedBox(height: 12),
-                  const YggDialogSectionHeader(
-                    icon: Icons.flag_outlined,
-                    title: '사유(선택)',
-                  ),
-                  Wrap(
-                    spacing: 8,
-                    children: [
-                      YggDialogFilterChip(
-                        label: '분실',
-                        selected: issueType == 'lost',
-                        onSelected: (v) {
-                          setState(() {
-                            issueType = v ? 'lost' : null;
-                            if (issueType != 'other') noteController.text = '';
-                          });
-                        },
-                      ),
-                      YggDialogFilterChip(
-                        label: '잊음',
-                        selected: issueType == 'forgot',
-                        onSelected: (v) {
-                          setState(() {
-                            issueType = v ? 'forgot' : null;
-                            if (issueType != 'other') noteController.text = '';
-                          });
-                        },
-                      ),
-                      YggDialogFilterChip(
-                        label: '기타',
-                        selected: issueType == 'other',
-                        onSelected: (v) {
-                          setState(() {
-                            issueType = v ? 'other' : null;
-                            if (!v) noteController.text = '';
-                          });
-                        },
-                      ),
-                    ],
-                  ),
-                  if (issueType == 'other') ...[
-                    const SizedBox(height: 8),
-                    TextField(
-                      controller: noteController,
-                      minLines: 1,
-                      maxLines: 2,
-                      style: const TextStyle(color: kDlgText),
-                      decoration: InputDecoration(
-                        hintText: '사유를 입력하세요',
-                        hintStyle: const TextStyle(color: Color(0xFF6E7E7E)),
-                        filled: true,
-                        fillColor: kDlgFieldBg,
-                        enabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(10),
-                          borderSide: const BorderSide(color: kDlgBorder),
-                        ),
-                        focusedBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(10),
-                          borderSide:
-                              const BorderSide(color: kDlgAccent, width: 1.4),
-                        ),
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 10,
-                        ),
-                      ),
-                    ),
-                  ],
-                ],
+                ),
               ),
             ),
             actions: [
@@ -1722,10 +1799,8 @@ Future<_HomeworkCheckDraft?> _showHomeworkItemCheckDialog({
               FilledButton(
                 onPressed: () {
                   final parsed = int.tryParse(progressController.text.trim());
-                  final safeProgress =
-                      (parsed ?? progress).clamp(minProgress, 150);
-                  final issueNote =
-                      issueType == 'other' ? noteController.text.trim() : null;
+                  final safeProgress = (parsed ?? progress).clamp(minProgress, 150);
+                  final issueNote = issueType == 'other' ? noteController.text.trim() : null;
                   Navigator.of(ctx).pop(
                     _HomeworkCheckDraft(
                       progress: safeProgress,
@@ -1863,14 +1938,17 @@ Future<void> _runHomeworkCheckDialogOnly({
     _showHomeworkChipSnackBar(context, '숙제 검사 저장에 실패했습니다.');
     return;
   }
-  HomeworkStore.instance.restoreItemsToWaiting(studentId, [hw.id]);
+  // 현재 과제 목록에 다시 보이기 전에 먼저 하단 정렬을 끝내서,
+  // "잠깐 상단에 나타났다 하단으로 이동"하는 깜빡임을 막는다.
+  await HomeworkStore.instance.moveToBottom(studentId, hw.id);
   await HomeworkAssignmentStore.instance.clearActiveAssignmentsForItems(
     studentId,
     [hw.id],
   );
-  await HomeworkStore.instance.moveToBottom(studentId, hw.id);
+  await HomeworkStore.instance.restoreStatusFromHomework(studentId, hw.id);
+  await HomeworkStore.instance.submit(studentId, hw.id);
   if (!context.mounted) return;
-  _showHomeworkChipSnackBar(context, '숙제 검사 기록 저장 후 현재 과제로 이동했어요.');
+  _showHomeworkChipSnackBar(context, '숙제 검사 완료 — 제출 상태로 이동했어요.');
 }
 
 String _formatDateTime(DateTime dt) {
@@ -2408,18 +2486,7 @@ Widget _buildHomeworkChipsReactiveForStudent(
                           hiddenAssignedIds.add(hwId);
                           continue;
                         }
-                        final item =
-                            HomeworkStore.instance.getById(studentId, hwId);
-                        if (item?.status == HomeworkStatus.homework) {
-                          hiddenAssignedIds.add(hwId);
-                        }
-                      }
-                      for (final hwId in activeAssignedIds) {
-                        final item =
-                            HomeworkStore.instance.getById(studentId, hwId);
-                        if (item?.status == HomeworkStatus.homework) {
-                          hiddenAssignedIds.add(hwId);
-                        }
+                        hiddenAssignedIds.add(hwId);
                       }
                       return FutureBuilder<
                           Map<String, HomeworkAssignmentCycleMeta>>(
@@ -3110,7 +3177,6 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
   final List<HomeworkItem> hwList = HomeworkStore.instance
       .items(studentId)
       .where((e) => e.status != HomeworkStatus.completed)
-      .where((e) => e.status != HomeworkStatus.homework)
       .where((e) => !activeAssignedItemIds.contains(e.id))
       .toList();
 

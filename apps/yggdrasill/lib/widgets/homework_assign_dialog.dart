@@ -47,9 +47,34 @@ class _TodoListEntry {
 class _CheckRateEntry {
   final String title;
   final int? progress;
+  final String bookAndCourse;
+  final String page;
+  final String count;
+  final DateTime? assignedAt;
   const _CheckRateEntry({
     required this.title,
     required this.progress,
+    required this.bookAndCourse,
+    required this.page,
+    required this.count,
+    required this.assignedAt,
+  });
+}
+
+class _ClassWorkEntry {
+  final String title;
+  final String bookAndCourse;
+  final String page;
+  final String count;
+  final DateTime? assignedAt;
+  final int studyMs;
+  const _ClassWorkEntry({
+    required this.title,
+    required this.bookAndCourse,
+    required this.page,
+    required this.count,
+    required this.assignedAt,
+    required this.studyMs,
   });
 }
 
@@ -65,6 +90,7 @@ class _TodoSheetPayload {
   final String classTimeText;
   final String learningTimeText;
   final List<_CheckRateEntry> checkRates;
+  final List<_ClassWorkEntry> classWorkEntries;
   final List<_TodoListEntry> completedEntries;
   final List<_TodoListEntry> todoEntries;
   final List<_TodoListEntry> behaviorEntries;
@@ -82,6 +108,7 @@ class _TodoSheetPayload {
     required this.classTimeText,
     required this.learningTimeText,
     required this.checkRates,
+    required this.classWorkEntries,
     required this.completedEntries,
     required this.todoEntries,
     required this.behaviorEntries,
@@ -202,6 +229,19 @@ Future<HomeworkAssignSelection?> showHomeworkAssignDialog(
         builder: (ctx, setState) {
           final List<HomeworkItem> visibleItems =
               List<HomeworkItem>.from(allItems);
+          final media = MediaQuery.of(ctx);
+          final homeworkListMaxHeight = math.max(
+            180.0,
+            math.min(430.0, media.size.height * 0.42),
+          );
+          final behaviorListMaxHeight = math.max(
+            160.0,
+            math.min(360.0, media.size.height * 0.34),
+          );
+          final dialogContentMaxHeight = math.max(
+            420.0,
+            math.min(media.size.height * 0.78, 920.0),
+          );
           return AlertDialog(
             backgroundColor: kDlgBg,
             shape:
@@ -210,10 +250,13 @@ Future<HomeworkAssignSelection?> showHomeworkAssignDialog(
                 style: TextStyle(color: kDlgText, fontWeight: FontWeight.w900)),
             content: SizedBox(
               width: 520,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
+              child: ConstrainedBox(
+                constraints: BoxConstraints(maxHeight: dialogContentMaxHeight),
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
                   const YggDialogSectionHeader(
                     icon: Icons.event,
                     title: '검사 날짜',
@@ -286,7 +329,7 @@ Future<HomeworkAssignSelection?> showHomeworkAssignDialog(
                     )
                   else
                     ConstrainedBox(
-                      constraints: const BoxConstraints(maxHeight: 220),
+                      constraints: BoxConstraints(maxHeight: homeworkListMaxHeight),
                       child: ListView.separated(
                         shrinkWrap: true,
                         itemCount: visibleItems.length,
@@ -373,7 +416,7 @@ Future<HomeworkAssignSelection?> showHomeworkAssignDialog(
                     )
                   else
                     ConstrainedBox(
-                      constraints: const BoxConstraints(maxHeight: 220),
+                      constraints: BoxConstraints(maxHeight: behaviorListMaxHeight),
                       child: ListView.separated(
                         shrinkWrap: true,
                         itemCount: behaviorAssignments.length,
@@ -670,7 +713,9 @@ Future<HomeworkAssignSelection?> showHomeworkAssignDialog(
                       ),
                     ],
                   ),
-                ],
+                    ],
+                  ),
+                ),
               ),
             ),
             actions: [
@@ -817,6 +862,27 @@ String _extractBookNameFromHomework(HomeworkItem hw) {
   return '교재 미기재';
 }
 
+String _extractCourseNameFromHomework(HomeworkItem hw) {
+  final contentRaw = (hw.content ?? '').trim();
+  final fromContent = RegExp(r'(?:^|\n)\s*과정:\s*([^\n]+)')
+          .firstMatch(contentRaw)
+          ?.group(1)
+          ?.trim() ??
+      '';
+  if (fromContent.isNotEmpty) return fromContent;
+  final gradeLabel = (hw.gradeLabel ?? '').trim();
+  if (gradeLabel.isNotEmpty) return gradeLabel;
+  return '';
+}
+
+String _formatBookAndCourseFromHomework(HomeworkItem hw) {
+  final bookName = _extractBookNameFromHomework(hw);
+  final courseName = _extractCourseNameFromHomework(hw);
+  if (courseName.isEmpty) return bookName;
+  if (bookName.contains('($courseName)')) return bookName;
+  return '$bookName ($courseName)';
+}
+
 String _formatDurationKorean(int ms) {
   if (ms <= 0) return '0분';
   final d = Duration(milliseconds: ms);
@@ -834,6 +900,18 @@ String _formatDate(DateTime dt) {
 String _formatMonthDay(DateTime dt) {
   String two(int v) => v.toString().padLeft(2, '0');
   return '${two(dt.month)}.${two(dt.day)}';
+}
+
+String _formatPageText(String rawPage) {
+  final page = rawPage.trim();
+  if (page.isEmpty || page == '-') return '-';
+  return 'p. $page';
+}
+
+String _formatCountText(String rawCount) {
+  final count = rawCount.trim();
+  if (count.isEmpty || count == '-') return '-';
+  return '${count}문항';
 }
 
 String _formatDueDateForTitle(DateTime? dt) {
@@ -978,6 +1056,44 @@ int _estimateLearningMsForDate({
   return total.clamp(0, 1000 * 60 * 60 * 24);
 }
 
+bool _hasTodayHomeworkActivity(HomeworkItem hw, DateTime classDateTime) {
+  bool isToday(DateTime? ts) => ts != null && _isSameDay(ts, classDateTime);
+  return isToday(hw.firstStartedAt) ||
+      isToday(hw.runStart) ||
+      isToday(hw.submittedAt) ||
+      isToday(hw.confirmedAt) ||
+      isToday(hw.waitingAt) ||
+      isToday(hw.completedAt);
+}
+
+int _estimateLearningMsForItemToday({
+  required HomeworkItem hw,
+  required DateTime classDateTime,
+  required DateTime departureTime,
+}) {
+  final started = hw.firstStartedAt;
+  if (started != null && _isSameDay(started, classDateTime)) {
+    final endCandidates = <DateTime>[
+      if (hw.submittedAt != null) hw.submittedAt!,
+      if (hw.completedAt != null) hw.completedAt!,
+      if (hw.confirmedAt != null) hw.confirmedAt!,
+      if (hw.waitingAt != null) hw.waitingAt!,
+    ]..sort((a, b) => a.compareTo(b));
+    final end = endCandidates.isNotEmpty ? endCandidates.first : departureTime;
+    if (end.isAfter(started)) {
+      return end.difference(started).inMilliseconds.clamp(0, 1000 * 60 * 60 * 24);
+    }
+  }
+  final running = hw.runStart;
+  if (running != null && _isSameDay(running, classDateTime)) {
+    return departureTime.difference(running).inMilliseconds.clamp(0, 1000 * 60 * 60 * 24);
+  }
+  if (_hasTodayHomeworkActivity(hw, classDateTime) && hw.accumulatedMs > 0) {
+    return hw.accumulatedMs.clamp(0, 1000 * 60 * 60 * 24);
+  }
+  return 0;
+}
+
 Future<_TodoSheetPayload> _prepareTodoSheetPayload({
   required String studentId,
   required String studentName,
@@ -999,6 +1115,21 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
 
   final checksByItem =
       await HomeworkAssignmentStore.instance.loadChecksForStudent(studentId);
+  final assignmentsByItem =
+      await HomeworkAssignmentStore.instance.loadAssignmentsForStudent(studentId);
+  final latestAssignmentByItem = <String, HomeworkAssignmentBrief>{};
+  final assignmentById = <String, HomeworkAssignmentBrief>{};
+  for (final entry in assignmentsByItem.entries) {
+    final sorted = List<HomeworkAssignmentBrief>.from(entry.value)
+      ..sort((a, b) => a.assignedAt.compareTo(b.assignedAt));
+    if (sorted.isNotEmpty) {
+      latestAssignmentByItem[entry.key] = sorted.last;
+    }
+    for (final brief in sorted) {
+      assignmentById[brief.id] = brief;
+    }
+  }
+
   final checkRates = <_CheckRateEntry>[];
   for (final entry in checksByItem.entries) {
     final todays = entry.value
@@ -1008,13 +1139,67 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
     if (todays.isEmpty) continue;
     final latest = todays.last;
     final hw = HomeworkStore.instance.getById(studentId, entry.key);
+    final latestAssignmentId = (latest.assignmentId ?? '').trim();
+    final assignedBrief = latestAssignmentId.isNotEmpty
+        ? assignmentById[latestAssignmentId] ?? latestAssignmentByItem[entry.key]
+        : latestAssignmentByItem[entry.key];
     final title =
         (hw?.title.trim().isNotEmpty ?? false) ? hw!.title.trim() : '과제';
-    checkRates.add(_CheckRateEntry(title: title, progress: latest.progress));
+    final bookAndCourse = hw == null ? '교재 미기재' : _formatBookAndCourseFromHomework(hw);
+    final page = (hw?.page ?? '').trim();
+    final hwCount = hw?.count;
+    final count = (hwCount != null && hwCount > 0) ? hwCount.toString() : '-';
+    checkRates.add(
+      _CheckRateEntry(
+        title: title,
+        progress: latest.progress,
+        bookAndCourse: bookAndCourse,
+        page: page.isEmpty ? '-' : page,
+        count: count,
+        assignedAt: assignedBrief?.assignedAt,
+      ),
+    );
   }
   if (checkRates.isEmpty) {
-    checkRates.add(const _CheckRateEntry(title: '숙제 없음', progress: null));
+    checkRates.add(
+      const _CheckRateEntry(
+        title: '숙제 없음',
+        progress: null,
+        bookAndCourse: '',
+        page: '-',
+        count: '-',
+        assignedAt: null,
+      ),
+    );
   }
+
+  final classWorkEntries = <_ClassWorkEntry>[];
+  for (final hw in HomeworkStore.instance.items(studentId)) {
+    final studyMs = _estimateLearningMsForItemToday(
+      hw: hw,
+      classDateTime: classDateTime,
+      departureTime: departureTime,
+    );
+    if (!_hasTodayHomeworkActivity(hw, classDateTime) && studyMs <= 0) continue;
+    final title = hw.title.trim().isEmpty ? '과제' : hw.title.trim();
+    final page = (hw.page ?? '').trim();
+    final count = (hw.count != null && hw.count! > 0) ? hw.count!.toString() : '-';
+    classWorkEntries.add(
+      _ClassWorkEntry(
+        title: title,
+        bookAndCourse: _formatBookAndCourseFromHomework(hw),
+        page: page.isEmpty ? '-' : page,
+        count: count,
+        assignedAt: latestAssignmentByItem[hw.id]?.assignedAt,
+        studyMs: studyMs,
+      ),
+    );
+  }
+  classWorkEntries.sort((a, b) {
+    final left = a.assignedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+    final right = b.assignedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+    return right.compareTo(left);
+  });
 
   final completedEntries = <_TodoListEntry>[];
   final completedItems = HomeworkStore.instance
@@ -1045,13 +1230,20 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
     final hw = HomeworkStore.instance.getById(studentId, id);
     if (hw == null) continue;
     final title = hw.title.trim().isEmpty ? '(제목 없음)' : hw.title.trim();
-    final pageText =
-        (hw.page ?? '').trim().isEmpty ? 'p.-' : 'p.${hw.page!.trim()}';
+    final pageRaw = (hw.page ?? '').trim();
+    final bookAndCourse = _formatBookAndCourseFromHomework(hw);
+    final countText = (hw.count != null && hw.count! > 0) ? hw.count.toString() : '-';
+    final assignedAt = latestAssignmentByItem[id]?.assignedAt;
+    final assignedDateText = assignedAt == null ? '--.--' : _formatMonthDay(assignedAt);
+    final details = [
+      _formatPageText(pageRaw),
+      _formatCountText(countText),
+      assignedDateText,
+    ].join(' · ');
     todoEntries.add(
       _TodoListEntry(
-        primary: '□ $title',
-        secondary:
-            '  교재: ${_extractBookNameFromHomework(hw)}    페이지: $pageText',
+        primary: '□ $bookAndCourse · $title',
+        secondary: '  $details',
       ),
     );
   }
@@ -1114,6 +1306,7 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
     classTimeText: _formatClassTimeRange(classDateTime, resolvedClassEnd),
     learningTimeText: _formatDurationKorean(learningMs),
     checkRates: checkRates,
+    classWorkEntries: classWorkEntries,
     completedEntries: completedEntries,
     todoEntries: todoEntries,
     behaviorEntries: behaviorTodoEntries,
@@ -1407,83 +1600,134 @@ Future<String> _buildHomeworkTodoPdf({
     bounds: Rect.fromLTWH(left, contentTop, contentWidth, 18),
   );
 
-  double topY = contentTop + 22;
-  graphics.drawString(
-    '1. 숙제 완료율',
-    bodyFont,
-    brush: textBrush,
-    bounds: Rect.fromLTWH(left + 2, topY, contentWidth - 4, 14),
-  );
-  topY += 14;
-  final rateValueW = 52.0;
-  double maxRateLabelW = 0;
-  for (final line in payload.checkRates) {
-    final w = bodyFont.measureString('• ${line.title}').width;
-    if (w > maxRateLabelW) maxRateLabelW = w;
-  }
-  final rateValueX = math.min(
-    left + 6 + maxRateLabelW + 14,
-    right - rateValueW - 8,
-  );
-  final rateLabelW = math.max(120.0, rateValueX - (left + 6) - 8);
-  for (final line in payload.checkRates) {
-    final labelText = '• ${line.title}';
-    final valueText = line.progress != null ? '${line.progress}%' : '';
+  final topSectionTop = contentTop + 30;
+  const topColGap = 12.0;
+  final topColWidth = (contentWidth - topColGap) / 2;
+  final topLeftX = left;
+  final topRightX = left + topColWidth + topColGap;
+  const topTitleHeight = 16.0;
+  const topRowHeight = 31.0;
+  const topRowGap = 5.0;
+  final topRowsBottomLimit = topBottomLimit - 4;
+
+  void drawTopRow({
+    required double x,
+    required double y,
+    required double colWidth,
+    required String leftTop,
+    required String rightTop,
+    required String leftBottom,
+    required String rightBottom,
+  }) {
+    final rightCellW = colWidth * 0.40;
+    final leftCellW = colWidth - rightCellW - 8;
     graphics.drawString(
-      labelText,
+      leftTop,
       bodyFont,
-      brush: subBrush,
-      bounds: Rect.fromLTWH(left + 6, topY, rateLabelW, 14),
+      brush: textBrush,
+      bounds: Rect.fromLTWH(x + 2, y, leftCellW, 14),
     );
-    if (valueText.isNotEmpty) {
-      graphics.drawString(
-        valueText,
-        bodyFont,
-        brush: subBrush,
-        bounds: Rect.fromLTWH(rateValueX, topY, rateValueW, 14),
-        format: sf.PdfStringFormat(alignment: sf.PdfTextAlignment.right),
-      );
-    }
-    topY += 16;
-    if (topY > topBottomLimit - 76) break;
+    graphics.drawString(
+      rightTop,
+      bodyFont,
+      brush: textBrush,
+      bounds: Rect.fromLTWH(x + leftCellW + 10, y, rightCellW - 2, 14),
+      format: sf.PdfStringFormat(alignment: sf.PdfTextAlignment.right),
+    );
+    graphics.drawString(
+      leftBottom,
+      subFont,
+      brush: subBrush,
+      bounds: Rect.fromLTWH(x + 2, y + 14, leftCellW, 13),
+    );
+    graphics.drawString(
+      rightBottom,
+      subFont,
+      brush: subBrush,
+      bounds: Rect.fromLTWH(x + leftCellW + 10, y + 14, rightCellW - 2, 13),
+      format: sf.PdfStringFormat(alignment: sf.PdfTextAlignment.right),
+    );
+    graphics.drawLine(
+      weakLinePen,
+      Offset(x, y + topRowHeight),
+      Offset(x + colWidth, y + topRowHeight),
+    );
   }
 
-  topY += 5;
   graphics.drawString(
-    '2. 완료한 과제',
-    bodyFont,
+    '숙제',
+    valueFont,
     brush: textBrush,
-    bounds: Rect.fromLTWH(left + 2, topY, contentWidth - 4, 14),
+    bounds: Rect.fromLTWH(topLeftX, topSectionTop, topColWidth, topTitleHeight),
   );
-  topY += 14;
-  for (final entry in payload.completedEntries) {
-    graphics.drawString(
-      entry.primary,
-      bodyFont,
-      brush: subBrush,
-      bounds: Rect.fromLTWH(left + 6, topY, contentWidth - 12, 14),
+  graphics.drawString(
+    '수업',
+    valueFont,
+    brush: textBrush,
+    bounds: Rect.fromLTWH(topRightX, topSectionTop, topColWidth, topTitleHeight),
+  );
+  graphics.drawLine(
+    weakLinePen,
+    Offset(topLeftX, topSectionTop + topTitleHeight),
+    Offset(topLeftX + topColWidth, topSectionTop + topTitleHeight),
+  );
+  graphics.drawLine(
+    weakLinePen,
+    Offset(topRightX, topSectionTop + topTitleHeight),
+    Offset(topRightX + topColWidth, topSectionTop + topTitleHeight),
+  );
+  graphics.drawLine(
+    weakLinePen,
+    Offset(topRightX - (topColGap / 2), topSectionTop),
+    Offset(topRightX - (topColGap / 2), topBottomLimit),
+  );
+
+  double leftRowsY = topSectionTop + topTitleHeight + 4;
+  for (final line in payload.checkRates) {
+    if (leftRowsY + topRowHeight > topRowsBottomLimit) break;
+    final pageValue = _formatPageText(line.page);
+    final countValue = _formatCountText(line.count);
+    final dateValue =
+        line.assignedAt == null ? '--.--' : _formatMonthDay(line.assignedAt!);
+    drawTopRow(
+      x: topLeftX,
+      y: leftRowsY,
+      colWidth: topColWidth,
+      leftTop: line.bookAndCourse.trim().isEmpty ? '-' : line.bookAndCourse.trim(),
+      rightTop: line.title.trim().isEmpty ? '-' : line.title.trim(),
+      leftBottom: '$pageValue · $countValue · $dateValue',
+      rightBottom: line.progress == null ? '-' : '${line.progress}%',
     );
-    topY += 14;
-    if (entry.secondary != null && entry.secondary!.trim().isNotEmpty) {
-      graphics.drawString(
-        entry.secondary!,
-        subFont,
-        brush: subBrush,
-        bounds: Rect.fromLTWH(left + 6, topY, contentWidth - 12, 13),
-      );
-      topY += 13;
-    }
-    topY += 8;
-    if (topY > topBottomLimit - 26) break;
+    leftRowsY += topRowHeight + topRowGap;
   }
 
-  topY += 2;
-  graphics.drawString(
-    payload.behaviorFeedback,
-    subFont,
-    brush: subBrush,
-    bounds: Rect.fromLTWH(left + 6, topY, contentWidth - 12, 24),
-  );
+  double rightRowsY = topSectionTop + topTitleHeight + 4;
+  if (payload.classWorkEntries.isEmpty) {
+    graphics.drawString(
+      '• 오늘 수행 기록 없음',
+      bodyFont,
+      brush: subBrush,
+      bounds: Rect.fromLTWH(topRightX + 2, rightRowsY + 4, topColWidth - 4, 14),
+    );
+  } else {
+    for (final line in payload.classWorkEntries) {
+      if (rightRowsY + topRowHeight > topRowsBottomLimit) break;
+      final pageValue = _formatPageText(line.page);
+      final countValue = _formatCountText(line.count);
+      final timeValue =
+          line.assignedAt == null ? '--:--' : _formatTime(line.assignedAt);
+      drawTopRow(
+        x: topRightX,
+        y: rightRowsY,
+        colWidth: topColWidth,
+        leftTop: line.bookAndCourse.trim().isEmpty ? '-' : line.bookAndCourse.trim(),
+        rightTop: line.title.trim().isEmpty ? '-' : line.title.trim(),
+        leftBottom: '$pageValue · $countValue · $timeValue',
+        rightBottom: line.studyMs > 0 ? _formatDurationKorean(line.studyMs) : '-',
+      );
+      rightRowsY += topRowHeight + topRowGap;
+    }
+  }
 
   final todoTop = foldY + 26;
   final colGap = 10.0;

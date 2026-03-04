@@ -256,13 +256,20 @@ Deno.serve(async (req) => {
       ? Math.max(1, Math.floor((arrivalDt.getTime() - classDt.getTime()) / 60000))
       : 0;
 
-    const params = {
+    const params: Record<string, string> = {
       academyName: String(academySettings?.name ?? ''),
       studentName: String(student?.name ?? ''),
       date: classDt ? formatKstDate(classDt) : (arrivalDt ? formatKstDate(arrivalDt) : ''),
+      classStartTime: classDt ? formatKstTime(classDt) : '',
       arrivalTime: arrivalDt ? formatKstTime(arrivalDt) : '',
       departureTime: departureDt ? formatKstTime(departureDt) : '',
       lateMinutes: lateMinutes ? String(lateMinutes) : '0',
+      '학원명': String(academySettings?.name ?? ''),
+      '학생명': String(student?.name ?? ''),
+      '수업시작시간': classDt ? formatKstTime(classDt) : '',
+      '등원시간': arrivalDt ? formatKstTime(arrivalDt) : '',
+      '하원시간': departureDt ? formatKstTime(departureDt) : '',
+      '지각분': lateMinutes ? String(lateMinutes) : '0',
     };
 
     const sendTargets: Array<'arrival' | 'departure' | 'late'> = [];

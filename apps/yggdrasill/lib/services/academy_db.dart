@@ -33,7 +33,7 @@ class AcademyDbService {
     final String path = mem ? inMemoryDatabasePath : await _resolveLocalDbPath();
     return await openDatabaseWithLog(
       path,
-      version: 51,
+      version: 52,
       onConfigure: (db) async {
         // 잠금 최소화를 위한 설정은 유지
         await db.execute('PRAGMA journal_mode=WAL');
@@ -1703,6 +1703,19 @@ class AcademyDbService {
             ''');
           } catch (e) {
             print('[DB][마이그레이션] v51 homework_items.default_split_parts 백필 실패: $e');
+          }
+        }
+        if (oldVersion < 52) {
+          try {
+            final cols = await db.rawQuery("PRAGMA table_info(student_basic_info)");
+            final has = cols.any((c) => c['name'] == 'notification_consent');
+            if (!has) {
+              await db.execute(
+                "ALTER TABLE student_basic_info ADD COLUMN notification_consent INTEGER DEFAULT 0",
+              );
+            }
+          } catch (e) {
+            print('[DB][마이그레이션] v52 student_basic_info.notification_consent 추가 실패: $e');
           }
         }
       },

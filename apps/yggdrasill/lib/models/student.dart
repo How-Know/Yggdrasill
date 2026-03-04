@@ -94,6 +94,7 @@ class StudentBasicInfo {
   final DateTime? registrationDate;
   final String? memo;
   final List<StudentFlow> flows;
+  final bool notificationConsent;
 
   StudentBasicInfo({
     required this.studentId,
@@ -103,6 +104,7 @@ class StudentBasicInfo {
     this.registrationDate,
     this.memo,
     List<StudentFlow>? flows,
+    this.notificationConsent = false,
   }) : flows = flows ?? const <StudentFlow>[];
 
   StudentBasicInfo copyWith({
@@ -113,6 +115,7 @@ class StudentBasicInfo {
     String? memo,
     List<StudentFlow>? flows,
     bool clearGroupId = false,
+    bool? notificationConsent,
   }) {
     return StudentBasicInfo(
       studentId: studentId,
@@ -122,6 +125,7 @@ class StudentBasicInfo {
       registrationDate: registrationDate ?? this.registrationDate,
       memo: memo ?? this.memo,
       flows: flows ?? this.flows,
+      notificationConsent: notificationConsent ?? this.notificationConsent,
     );
   }
 
@@ -133,6 +137,7 @@ class StudentBasicInfo {
       groupId: row['group_id'] as String?,
       memo: row['memo'] as String?,
       flows: StudentFlow.decodeList(row['flows']),
+      notificationConsent: (row['notification_consent'] as int?) == 1,
     );
   }
 
@@ -144,6 +149,7 @@ class StudentBasicInfo {
       'group_id': groupId,
       'memo': memo,
       'flows': StudentFlow.encodeListToJson(flows),
+      'notification_consent': notificationConsent ? 1 : 0,
     };
   }
 

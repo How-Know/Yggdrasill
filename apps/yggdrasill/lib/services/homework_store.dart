@@ -708,6 +708,29 @@ class HomeworkStore {
     }
   }
 
+  /// 숙제(homework) → 진행중(inProgress)으로 status를 전환하고 서버에도 반영한다.
+  Future<void> restoreStatusFromHomework(String studentId, String id) async {
+    final list = _byStudentId[studentId];
+    if (list == null) return;
+    final idx = list.indexWhere((e) => e.id == id);
+    if (idx == -1) return;
+    final item = list[idx];
+    if (item.status != HomeworkStatus.homework) return;
+    item.status = HomeworkStatus.inProgress;
+    _bump();
+    try {
+      final String academyId = (await TenantService.instance.getActiveAcademyId()) ??
+          await TenantService.instance.ensureActiveAcademy();
+      await Supabase.instance.client
+          .from('homework_items')
+          .update({'status': HomeworkStatus.inProgress.index})
+          .eq('id', id)
+          .eq('academy_id', academyId);
+    } catch (e) {
+      print('[HW][restoreStatusFromHomework][ERROR] $e');
+    }
+  }
+
   HomeworkItem? getById(String studentId, String id) {
     final list = _byStudentId[studentId];
     if (list == null) return null;

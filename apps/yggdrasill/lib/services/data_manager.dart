@@ -1069,7 +1069,7 @@ class DataManager {
         )).toList();
         final sbiRows = await supa
             .from('student_basic_info')
-            .select('student_id,phone_number,parent_phone_number,group_id,memo')
+            .select('student_id,phone_number,parent_phone_number,group_id,memo,notification_consent')
             .eq('academy_id', academyId);
         final Map<String, Map<String, dynamic>> byId = {
           for (final m in (sbiRows as List)) (m['student_id'] as String): Map<String, dynamic>.from(m)
@@ -1094,6 +1094,7 @@ class DataManager {
               groupId: info['group_id'] as String?,
               registrationDate: reg,
               memo: info['memo'] as String?,
+              notificationConsent: info['notification_consent'] == true,
             ));
           } else {
             basicInfos.add(StudentBasicInfo(studentId: s.id, registrationDate: reg));
@@ -1822,6 +1823,7 @@ class DataManager {
           'parent_phone_number': basicInfo.parentPhoneNumber,
           'group_id': basicInfo.groupId,
           'memo': basicInfo.memo,
+          'notification_consent': basicInfo.notificationConsent,
         }, onConflict: 'student_id');
       } catch (e, st) { print('[SUPA][teachers insert] $e\n$st'); }
     }
@@ -1861,6 +1863,7 @@ class DataManager {
           'parent_phone_number': basicInfo.parentPhoneNumber,
           'group_id': basicInfo.groupId,
           'memo': basicInfo.memo,
+          'notification_consent': basicInfo.notificationConsent,
         }, onConflict: 'student_id');
       } catch (e, st) { print('[SUPA][updateStudent server-only] $e\n$st'); }
       await loadStudents();
@@ -1890,6 +1893,7 @@ class DataManager {
           'parent_phone_number': basicInfo.parentPhoneNumber,
           'group_id': basicInfo.groupId,
           'memo': basicInfo.memo,
+          'notification_consent': basicInfo.notificationConsent,
         }, onConflict: 'student_id');
       } catch (e, st) { print('[SUPA][classes upsert(add)] $e\n$st'); }
     }
@@ -2194,6 +2198,7 @@ class DataManager {
             'parent_phone_number': basicInfo.parentPhoneNumber,
             'group_id': basicInfo.groupId,
             'memo': basicInfo.memo,
+            'notification_consent': basicInfo.notificationConsent,
           }, onConflict: 'student_id');
         } catch (e, st) { print('[SUPA][updateStudentBasicInfo server-only] $e\n$st'); }
         await loadStudents();
@@ -2217,6 +2222,7 @@ class DataManager {
             'parent_phone_number': basicInfo.parentPhoneNumber,
             'group_id': basicInfo.groupId,
             'memo': basicInfo.memo,
+            'notification_consent': basicInfo.notificationConsent,
           }, onConflict: 'student_id');
         } catch (e, st) { print('[SUPA][student_payment_info upsert(update)] $e\n$st'); }
       }
