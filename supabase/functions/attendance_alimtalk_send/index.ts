@@ -118,6 +118,15 @@ Deno.serve(async (req) => {
   if (req.method !== 'POST' && req.method !== 'GET') {
     return fail('method_not_allowed', 'Method not allowed');
   }
+  let requestBody: Record<string, unknown> = {};
+  if (req.method === 'POST') {
+    try {
+      requestBody = await req.json();
+    } catch (_) {
+      requestBody = {};
+    }
+  }
+  const forceQueueId = String(requestBody?.queue_id ?? '').trim() || null;
   if (CRON_SECRET) {
     const secret = req.headers.get('x-cron-secret') ?? '';
     if (secret !== CRON_SECRET) {
@@ -129,19 +138,47 @@ Deno.serve(async (req) => {
   }
 
   const admin = createAdminClient();
-  const { data: queueRows, error: queueErr } = await admin
+  let lateEnqueued = 0;
+  try {
+    const lateLimit = Math.max(BATCH_SIZE * 5, 50);
+    const { data: lateData, error: lateErr } = await admin.rpc(
+      'enqueue_due_late_notifications',
+      { p_limit: lateLimit },
+    );
+    if (!lateErr) {
+      const parsed = Number(lateData ?? 0);
+      if (Number.isFinite(parsed)) lateEnqueued = parsed;
+    } else {
+      console.warn('[attendance_alimtalk_send] late enqueue rpc error', lateErr.message);
+    }
+  } catch (e) {
+    console.warn('[attendance_alimtalk_send] late enqueue rpc exception', String(e));
+  }
+
+  let queueQuery = admin
     .from('attendance_notification_queue')
     .select('id, attendance_id, academy_id, student_id, event_type, status, attempts')
     .in('status', ['pending', 'error'])
-    .lt('attempts', MAX_ATTEMPTS)
-    .order('created_at', { ascending: true })
-    .limit(BATCH_SIZE);
+    .lt('attempts', MAX_ATTEMPTS);
+  if (forceQueueId) {
+    queueQuery = queueQuery.eq('id', forceQueueId).limit(1);
+  } else {
+    queueQuery = queueQuery.order('created_at', { ascending: true }).limit(BATCH_SIZE);
+  }
+  const { data: queueRows, error: queueErr } = await queueQuery;
 
   if (queueErr) {
     return fail('queue_fetch_failed', queueErr.message);
   }
   if (!queueRows || queueRows.length === 0) {
-    return ok({ processed: 0, sent: 0, skipped: 0, failed: 0 });
+    return ok({
+      processed: 0,
+      sent: 0,
+      skipped: 0,
+      failed: 0,
+      lateEnqueued,
+      requestedQueueId: forceQueueId,
+    });
   }
 
   let processed = 0;
@@ -150,7 +187,9 @@ Deno.serve(async (req) => {
   let failed = 0;
   let token: string | null = null;
 
+  const handledQueueIds: string[] = [];
   for (const row of queueRows as QueueRow[]) {
+    handledQueueIds.push(row.id);
     processed += 1;
     const { data: locked } = await admin
       .from('attendance_notification_queue')
@@ -251,9 +290,13 @@ Deno.serve(async (req) => {
     const arrivalDt = attendance.arrival_time ? new Date(attendance.arrival_time) : null;
     const departureDt = attendance.departure_time ? new Date(attendance.departure_time) : null;
     const threshold = Number(paymentInfo?.lateness_threshold ?? 10);
-    const isLate = !!(arrivalDt && classDt && arrivalDt.getTime() > classDt.getTime() + threshold * 60 * 1000);
-    const lateMinutes = isLate && arrivalDt && classDt
-      ? Math.max(1, Math.floor((arrivalDt.getTime() - classDt.getTime()) / 60000))
+    const thresholdMs = Math.max(0, threshold) * 60 * 1000;
+    const nowMs = Date.now();
+    const lateByArrival = !!(arrivalDt && classDt && arrivalDt.getTime() > classDt.getTime() + thresholdMs);
+    const lateByNoArrival = !!(classDt && !arrivalDt && nowMs > classDt.getTime() + thresholdMs);
+    const lateReferenceMs = arrivalDt ? arrivalDt.getTime() : nowMs;
+    const lateMinutes = classDt
+      ? Math.max(0, Math.floor((lateReferenceMs - classDt.getTime()) / 60000))
       : 0;
 
     const params: Record<string, string> = {
@@ -275,19 +318,31 @@ Deno.serve(async (req) => {
     const sendTargets: Array<'arrival' | 'departure' | 'late'> = [];
     if (row.event_type === 'arrival') {
       if (paymentInfo?.attendance_notification !== false) sendTargets.push('arrival');
-      if (isLate && paymentInfo?.lateness_notification !== false) sendTargets.push('late');
     }
     if (row.event_type === 'departure') {
       if (paymentInfo?.departure_notification !== false) sendTargets.push('departure');
     }
     if (row.event_type === 'late') {
-      if (isLate && paymentInfo?.lateness_notification !== false) sendTargets.push('late');
+      if (arrivalDt) {
+        await admin.from('attendance_notification_queue').update({
+          status: 'skipped',
+          last_error: 'already_arrived',
+        }).eq('id', row.id);
+        skipped += 1;
+        continue;
+      }
+      if (lateByNoArrival && paymentInfo?.lateness_notification !== false) {
+        sendTargets.push('late');
+      }
     }
 
     if (sendTargets.length === 0) {
+      const reason = row.event_type === 'late'
+        ? (lateByArrival ? 'already_arrived_late' : 'late_not_due_or_notification_disabled')
+        : 'notifications_disabled_or_not_applicable';
       await admin.from('attendance_notification_queue').update({
         status: 'skipped',
-        last_error: 'notifications_disabled_or_not_applicable',
+        last_error: reason,
       }).eq('id', row.id);
       skipped += 1;
       continue;
@@ -415,5 +470,13 @@ Deno.serve(async (req) => {
     if (anySent) sent += 1; else skipped += 1;
   }
 
-  return ok({ processed, sent, skipped, failed });
+  return ok({
+    processed,
+    sent,
+    skipped,
+    failed,
+    lateEnqueued,
+    requestedQueueId: forceQueueId,
+    handledQueueIds,
+  });
 });
