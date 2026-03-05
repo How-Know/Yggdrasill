@@ -1428,6 +1428,14 @@ void ui_before_screensaver(void) {
   }
 }
 
+void ui_port_force_unbind(void) {
+  if (!s_homeworks_mode) return;
+  extern void screensaver_dismiss(void);
+  screensaver_dismiss();
+  build_student_list_ui();
+  fw_publish_list_today();
+}
+
 void ui_after_screensaver_wake(void) {
   if (s_screensaver_hid_student_info && s_student_info_screen && lv_obj_is_valid(s_student_info_screen)) {
     lv_obj_clear_flag(s_student_info_screen, LV_OBJ_FLAG_HIDDEN);
@@ -1771,6 +1779,8 @@ void ui_port_update_students(const JsonArray& students) {
     const char* sid = s.containsKey("student_id") ? (const char*)s["student_id"] : (s.containsKey("id") ? (const char*)s["id"] : "");
     const char* school = s["school"] | "";
     int grade = s["grade"] | 0;
+    int sh = s.containsKey("start_hour") ? (int)s["start_hour"] : -1;
+    int sm = s.containsKey("start_minute") ? (int)s["start_minute"] : -1;
     lv_obj_t* card = lv_obj_create(s_list);
     lv_obj_set_width(card, lv_pct(100));
     lv_obj_set_height(card, 96);
@@ -1786,7 +1796,7 @@ void ui_port_update_students(const JsonArray& students) {
     lv_label_set_text(lbl, name);
     lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
     lv_obj_set_width(lbl, 180);
-    lv_obj_align(lbl, LV_ALIGN_LEFT_MID, 0, 0);
+    lv_obj_align(lbl, LV_ALIGN_LEFT_MID, 0, -14);
     String meta;
     if (school && *school) {
       meta += school;
@@ -1800,7 +1810,16 @@ void ui_port_update_students(const JsonArray& students) {
       lv_obj_set_style_text_color(meta_lbl, lv_color_hex(0xA0A0A0), 0);
       lv_obj_set_style_text_font(meta_lbl, &kakao_kr_16, 0);
       lv_label_set_text(meta_lbl, meta.c_str());
-      lv_obj_align(meta_lbl, LV_ALIGN_RIGHT_MID, -6, 0);
+      lv_obj_align(meta_lbl, LV_ALIGN_RIGHT_MID, -6, -14);
+    }
+    if (sh >= 0 && sm >= 0) {
+      char time_buf[32];
+      snprintf(time_buf, sizeof(time_buf), "%d:%02d %s", sh, sm, u8"수업");
+      lv_obj_t* time_lbl = lv_label_create(card);
+      lv_obj_set_style_text_color(time_lbl, lv_color_hex(0x707070), 0);
+      lv_obj_set_style_text_font(time_lbl, &kakao_kr_16, 0);
+      lv_label_set_text(time_lbl, time_buf);
+      lv_obj_align(time_lbl, LV_ALIGN_RIGHT_MID, -6, 12);
     }
     if (sid && *sid) {
       StudentBindData* bind_data = (StudentBindData*)malloc(sizeof(StudentBindData));
@@ -2038,13 +2057,14 @@ void ui_port_update_homeworks(const JsonArray& items) {
   }
   if (!s_list || !lv_obj_is_valid(s_list)) { Serial.println("[HW] ERROR: s_list invalid"); return; }
 
-  // Build new cache from incoming data
+  // Build new cache from incoming data (phase 1~4 only: skip reserved/completed)
   HwCacheEntry new_cache[16];
   uint8_t new_cnt = 0;
   for (JsonObject it : items) {
     if (new_cnt >= 16) break;
-    const char* iid = it.containsKey("item_id") ? (const char*)it["item_id"] : "";
     int ph = it.containsKey("phase") ? (int)it["phase"] : 1;
+    if (ph < 1 || ph > 4) continue;
+    const char* iid = it.containsKey("item_id") ? (const char*)it["item_id"] : "";
     int acc = it.containsKey("accumulated") ? (int)it["accumulated"] : 0;
     strncpy(new_cache[new_cnt].id, iid, 63); new_cache[new_cnt].id[63] = '\0';
     new_cache[new_cnt].phase = ph;
@@ -2080,11 +2100,11 @@ void ui_port_update_homeworks(const JsonArray& items) {
     lv_obj_add_flag(s_list, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clean(s_list);
 
-    uint8_t idx = 0;
     for (JsonObject it : items) {
+      int phase = it.containsKey("phase") ? (int)it["phase"] : 1;
+      if (phase < 1 || phase > 4) continue;
       const char* title = it["title"] | it["name"] | u8"과제";
       const char* itemId = it.containsKey("item_id") ? (const char*)it["item_id"] : "";
-      int phase = it.containsKey("phase") ? (int)it["phase"] : 1;
       const char* page = it["page"] | "";
       int count = it.containsKey("count") ? (int)it["count"] : 0;
       int check_count = it.containsKey("check_count") ? (int)it["check_count"] : 0;
@@ -2097,24 +2117,22 @@ void ui_port_update_homeworks(const JsonArray& items) {
       if (it.containsKey("color")) { double v = it["color"]; if (v > 0) srv_color = ((uint32_t)v) & 0xFFFFFFu; }
       char bn[128]; extract_book_name(content, title, book_id, grade_label, hw_type, bn, sizeof(bn));
       if (!bn[0]) strncpy(bn, title, sizeof(bn)-1);
-      // card created
       create_hw_card(s_list, bn, phase, page, count, check_count, accumulated, srv_color, itemId);
-      idx++;
       yield();
     }
     lv_obj_clear_flag(s_list, LV_OBJ_FLAG_HIDDEN);
   } else {
     // partial update
-    // Re-scan all cards to rebuild p2/p4 arrays for unchanged cards
     uint8_t idx = 0;
     uint8_t ci = 0;
     for (JsonObject it : items) {
+      int phase = it.containsKey("phase") ? (int)it["phase"] : 1;
+      if (phase < 1 || phase > 4) continue;
       bool is_changed = (ci < changed_cnt && changed[ci] == idx);
       if (is_changed) ci++;
 
       const char* title = it["title"] | it["name"] | u8"과제";
       const char* itemId = it.containsKey("item_id") ? (const char*)it["item_id"] : "";
-      int phase = it.containsKey("phase") ? (int)it["phase"] : 1;
       const char* page = it["page"] | "";
       int count = it.containsKey("count") ? (int)it["count"] : 0;
       int check_count = it.containsKey("check_count") ? (int)it["check_count"] : 0;
@@ -2131,11 +2149,9 @@ void ui_port_update_homeworks(const JsonArray& items) {
         if (old_card && lv_obj_is_valid(old_card)) lv_obj_del(old_card);
         char bn[128]; extract_book_name(content, title, book_id, grade_label, hw_type, bn, sizeof(bn));
         if (!bn[0]) strncpy(bn, title, sizeof(bn)-1);
-        // card updated
         lv_obj_t* nc = create_hw_card(s_list, bn, phase, page, count, check_count, accumulated, srv_color, itemId);
         lv_obj_move_to_index(nc, idx);
       } else {
-        // unchanged card - but still register p2/p4 if applicable
         lv_obj_t* card = lv_obj_get_child(s_list, idx);
         if (phase == 4 && card && lv_obj_is_valid(card) && s_p4_cnt < 8) {
           s_p4_cards[s_p4_cnt] = card; s_p4_colors[s_p4_cnt] = srv_color; s_p4_cnt++;

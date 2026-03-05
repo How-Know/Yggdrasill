@@ -45,6 +45,7 @@ String todayListTopic;
 String homeworksTopic;
 String updateTopic;
 String studentInfoTopic;
+String unboundTopic;
 static uint32_t nextMqttReconnectMs = 0;
 static const char* kMqttHosts[] = { CFG_MQTT_HOST, "test.mosquitto.org", "broker.hivemq.com" };
 static int mqttHostIndex = 0;
@@ -147,6 +148,8 @@ void onMqttConnect(bool sessionPresent) {
   mqtt.subscribe(homeworksTopic.c_str(), 1);
   studentInfoTopic = String("academies/") + academyId + "/devices/" + deviceId + "/student_info";
   mqtt.subscribe(studentInfoTopic.c_str(), 1);
+  unboundTopic = String("academies/") + academyId + "/devices/" + deviceId + "/unbound";
+  mqtt.subscribe(unboundTopic.c_str(), 1);
   updateTopic = String("academies/") + academyId + "/devices/" + deviceId + "/update";
   mqtt.subscribe(updateTopic.c_str(), 1);
   Serial.println("MQTT connected & subscribed");
@@ -255,6 +258,10 @@ void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties 
       JsonObject info = doc["info"].as<JsonObject>();
       ui_port_update_student_info(info);
     }
+  }
+  if (t == unboundTopic) {
+    Serial.println("[MQTT] unbound received – returning to student list");
+    ui_port_force_unbind();
   }
 }
 
@@ -471,8 +478,7 @@ void setup() {
   configTime(9 * 3600, 0, "pool.ntp.org", "time.google.com");
   Serial.println("MQTT connecting...");
   
-  // Initialize screensaver after MQTT setup (60 seconds timeout)
-  screensaver_init(10000);
+  screensaver_init(20000);
   screensaver_attach_activity(lv_scr_act());
 }
 

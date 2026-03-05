@@ -33,7 +33,7 @@ class GradingModePage extends StatefulWidget {
   final Map<String, String> studentNamesById;
   final Future<void> Function(String studentId, HomeworkItem hw)? onSubmittedCardTap;
   final Future<void> Function(String studentId, HomeworkItem hw)? onHomeworkCardTap;
-  final Set<({String studentId, String itemId})> pendingConfirms;
+  final Map<({String studentId, String itemId}), bool> pendingConfirms;
   final void Function(String studentId, String itemId)? onTogglePending;
 
   const GradingModePage({
@@ -42,7 +42,7 @@ class GradingModePage extends StatefulWidget {
     required this.studentNamesById,
     this.onSubmittedCardTap,
     this.onHomeworkCardTap,
-    this.pendingConfirms = const {},
+    this.pendingConfirms = const <({String studentId, String itemId}), bool>{},
     this.onTogglePending,
   });
 
@@ -329,9 +329,10 @@ class _GradingModePageState extends State<GradingModePage> {
               entry: entry,
               cardHeight: cardLayout.height,
               metaHeight: cardLayout.metaHeight,
-              isPendingConfirm: widget.pendingConfirms.contains(
+              isPendingConfirm: widget.pendingConfirms.containsKey(
                 (studentId: entry.studentId, itemId: entry.item.id),
               ),
+              isCompleteCheckbox: widget.pendingConfirms[(studentId: entry.studentId, itemId: entry.item.id)] == true,
               coverPathFuture: _resolveCoverPath(
                 bookId: (entry.item.bookId ?? '').trim(),
                 gradeLabel: (entry.item.gradeLabel ?? '').trim(),
@@ -488,6 +489,7 @@ class _SubmittedHomeworkCard extends StatelessWidget {
   final Future<String?> coverPathFuture;
   final Future<void> Function()? onTap;
   final bool isPendingConfirm;
+  final bool isCompleteCheckbox;
 
   const _SubmittedHomeworkCard({
     required this.entry,
@@ -496,6 +498,7 @@ class _SubmittedHomeworkCard extends StatelessWidget {
     required this.coverPathFuture,
     this.onTap,
     this.isPendingConfirm = false,
+    this.isCompleteCheckbox = false,
   });
 
   @override
@@ -623,8 +626,8 @@ class _SubmittedHomeworkCard extends StatelessWidget {
                         color: const Color(0xCC0B1112),
                         child: Center(
                           child: Icon(
-                            Icons.check_circle,
-                            color: const Color(0xFF1B6B63),
+                            isCompleteCheckbox ? Icons.check_circle : Icons.check_circle_outline,
+                            color: isCompleteCheckbox ? const Color(0xFF4CAF50) : const Color(0xFF1B6B63),
                             size: (67.0 * scale).clamp(38.0, 67.0),
                           ),
                         ),

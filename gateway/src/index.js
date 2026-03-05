@@ -265,4 +265,47 @@ try {
   console.warn('[gateway] realtime subscribe failed', e);
 }
 
+// Realtime: listen m5_device_bindings changes → notify device on unbind
+try {
+  try { supa.realtime.setAuth?.(SUPABASE_SERVICE); } catch (_) {}
+  const bindChannel = supa
+    .channel('public:m5_device_bindings')
+    .on(
+      'postgres_changes',
+      { event: 'UPDATE', schema: 'public', table: 'm5_device_bindings' },
+      async (payload) => {
+        try {
+          const rec = payload?.new ?? {};
+          const old = payload?.old ?? {};
+          if (old.active === true && rec.active === false && rec.device_id && rec.academy_id) {
+            // Check if device already has a new active binding (rebind case → skip)
+            const { data: cur } = await supa
+              .from('m5_device_bindings')
+              .select('id')
+              .eq('academy_id', rec.academy_id)
+              .eq('device_id', rec.device_id)
+              .eq('active', true)
+              .limit(1);
+            if (cur && cur.length > 0) {
+              console.log('[gateway] binding replaced (rebind), skip unbound', { device_id: rec.device_id });
+              return;
+            }
+            console.log('[gateway] binding deactivated', { device_id: rec.device_id, student_id: rec.student_id });
+            client.publish(
+              `academies/${rec.academy_id}/devices/${rec.device_id}/unbound`,
+              JSON.stringify({ action: 'unbound', student_id: rec.student_id }),
+              { qos: 1, retain: false }
+            );
+          }
+        } catch (e) {
+          console.error('[gateway] realtime m5_device_bindings handler error', e);
+        }
+      }
+    )
+    .subscribe((status) => console.log('[gateway][rt] m5_device_bindings', status));
+  console.log('[gateway] realtime: m5_device_bindings subscribed init');
+} catch (e) {
+  console.warn('[gateway] realtime m5_device_bindings subscribe failed', e);
+}
+
 

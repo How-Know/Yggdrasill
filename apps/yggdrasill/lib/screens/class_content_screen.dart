@@ -47,7 +47,8 @@ class _ClassContentScreenState extends State<ClassContentScreen>
   late final Timer _clockTimer;
   DateTime _now = DateTime.now();
   bool _isGradingMode = false;
-  final Set<({String studentId, String itemId})> _pendingConfirms = {};
+  final Map<({String studentId, String itemId}), bool> _pendingConfirms = {};
+  // value: false = 확인(confirm, 사이클 계속), true = 완료(complete, 활성 과제 제거)
   String? _expandedReservedStudentId;
 
   @override
@@ -252,7 +253,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                               );
                             },
                             onHomeworkCardTap: (studentId, hw) {
-                              return _handleHomeworkCardTapForPending(
+                              return _runHomeworkCheckDialogOnly(
                                 context: context,
                                 studentId: studentId,
                                 hw: hw,
@@ -261,10 +262,10 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                             onTogglePending: (studentId, itemId) {
                               setState(() {
                                 final key = (studentId: studentId, itemId: itemId);
-                                if (_pendingConfirms.contains(key)) {
+                                if (_pendingConfirms.containsKey(key)) {
                                   _pendingConfirms.remove(key);
                                 } else {
-                                  _pendingConfirms.add(key);
+                                  _pendingConfirms[key] = false;
                                 }
                               });
                             },
@@ -418,6 +419,9 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                         tick,
                         pendingConfirms: _pendingConfirms,
                         onPhase3Tap: _handleSubmittedChipTapForPending,
+                        onSlideDownComplete: (key) {
+                          setState(() => _pendingConfirms[key] = true);
+                        },
                       );
                     },
                   ),
@@ -1025,13 +1029,13 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     required HomeworkItem hw,
   }) async {
     final key = (studentId: studentId, itemId: hw.id);
-    if (_pendingConfirms.contains(key)) {
+    if (_pendingConfirms.containsKey(key)) {
       setState(() => _pendingConfirms.remove(key));
       return;
     }
 
     if (!_hasDirectHomeworkTextbookLink(hw)) {
-      setState(() => _pendingConfirms.add(key));
+      setState(() => _pendingConfirms[key] = false);
       return;
     }
     final resolved = await _resolveHomeworkPdfLinks(hw, allowFlowFallback: false);
@@ -1039,7 +1043,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
 
     final answerRaw = resolved.answerPathRaw;
     if (answerRaw.isEmpty) {
-      setState(() => _pendingConfirms.add(key));
+      setState(() => _pendingConfirms[key] = false);
       return;
     }
     final answerIsUrl = _isWebUrl(answerRaw);
@@ -1047,12 +1051,12 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         answerIsUrl ? answerRaw.trim() : _toLocalFilePath(answerRaw);
     if (answerPath.isEmpty ||
         (!answerIsUrl && !answerPath.toLowerCase().endsWith('.pdf'))) {
-      setState(() => _pendingConfirms.add(key));
+      setState(() => _pendingConfirms[key] = false);
       return;
     }
     if (!answerIsUrl && !await File(answerPath).exists()) {
       if (!context.mounted) return;
-      setState(() => _pendingConfirms.add(key));
+      setState(() => _pendingConfirms[key] = false);
       return;
     }
 
@@ -1078,9 +1082,10 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       enableConfirm: true,
     );
     if (!context.mounted) return;
-    if (action == HomeworkAnswerViewerAction.complete ||
-        action == HomeworkAnswerViewerAction.confirm) {
-      setState(() => _pendingConfirms.add(key));
+    if (action == HomeworkAnswerViewerAction.complete) {
+      setState(() => _pendingConfirms[key] = true);
+    } else if (action == HomeworkAnswerViewerAction.confirm) {
+      setState(() => _pendingConfirms[key] = false);
     }
   }
 
@@ -1090,7 +1095,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     required HomeworkItem hw,
   }) async {
     final key = (studentId: studentId, itemId: hw.id);
-    if (_pendingConfirms.contains(key)) {
+    if (_pendingConfirms.containsKey(key)) {
       setState(() => _pendingConfirms.remove(key));
       return;
     }
@@ -1105,7 +1110,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     );
     if (!context.mounted) return;
     if (target == null) {
-      setState(() => _pendingConfirms.add(key));
+      setState(() => _pendingConfirms[key] = false);
       return;
     }
 
@@ -1124,69 +1129,91 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     );
     if (!context.mounted || draft == null) return;
 
-    setState(() => _pendingConfirms.add(key));
+    setState(() => _pendingConfirms[key] = false);
   }
 
   Future<void> _executeBatchConfirm(BuildContext context) async {
     if (_pendingConfirms.isEmpty) return;
-    final pending = Set<({String studentId, String itemId})>.from(_pendingConfirms);
+    final pending = Map<({String studentId, String itemId}), bool>.from(_pendingConfirms);
     setState(() => _pendingConfirms.clear());
     unawaited(_processBatchConfirmInBackground(context, pending));
   }
 
   Future<void> _processBatchConfirmInBackground(
     BuildContext context,
-    Set<({String studentId, String itemId})> pending,
+    Map<({String studentId, String itemId}), bool> pending,
   ) async {
-    for (final entry in pending) {
-      final hw = HomeworkStore.instance.getById(entry.studentId, entry.itemId);
+    for (final entry in pending.entries) {
+      final key = entry.key;
+      final hw = HomeworkStore.instance.getById(key.studentId, key.itemId);
       if (hw == null) continue;
 
-      if (hw.phase == 3) {
+      final isComplete = entry.value;
+
+      if (hw.phase == 3 && isComplete) {
         final target = await _resolveHomeworkCheckTarget(
-          entry.studentId,
-          entry.itemId,
+          key.studentId,
+          key.itemId,
           includeHistory: false,
         );
         if (target != null) {
           await HomeworkAssignmentStore.instance.saveAssignmentCheck(
             assignmentId: target.assignmentId,
-            studentId: entry.studentId,
-            homeworkItemId: entry.itemId,
-            progress: target.progress,
-            issueType: null,
-            issueNote: null,
-            markCompleted: true,
-          );
-        }
-        await HomeworkStore.instance.confirm(
-          entry.studentId,
-          entry.itemId,
-          recordAssignmentCheck: false,
-        );
-      } else {
-        final target = await _resolveHomeworkCheckTarget(
-          entry.studentId,
-          entry.itemId,
-          includeHistory: false,
-        );
-        if (target != null) {
-          await HomeworkAssignmentStore.instance.saveAssignmentCheck(
-            assignmentId: target.assignmentId,
-            studentId: entry.studentId,
-            homeworkItemId: entry.itemId,
+            studentId: key.studentId,
+            homeworkItemId: key.itemId,
             progress: target.progress,
             issueType: null,
             issueNote: null,
             markCompleted: false,
           );
         }
-        HomeworkStore.instance.restoreItemsToWaiting(entry.studentId, [entry.itemId]);
-        await HomeworkAssignmentStore.instance.clearActiveAssignmentsForItems(
-          entry.studentId,
-          [entry.itemId],
+        await HomeworkStore.instance.confirm(key.studentId, key.itemId, recordAssignmentCheck: false);
+        HomeworkStore.instance.markAutoCompleteOnNextWaiting(key.itemId);
+      } else if (hw.phase == 3 && !isComplete) {
+        final target = await _resolveHomeworkCheckTarget(
+          key.studentId,
+          key.itemId,
+          includeHistory: false,
         );
-        await HomeworkStore.instance.moveToBottom(entry.studentId, entry.itemId);
+        if (target != null) {
+          await HomeworkAssignmentStore.instance.saveAssignmentCheck(
+            assignmentId: target.assignmentId,
+            studentId: key.studentId,
+            homeworkItemId: key.itemId,
+            progress: target.progress,
+            issueType: null,
+            issueNote: null,
+            markCompleted: false,
+          );
+        }
+        await HomeworkStore.instance.confirm(
+          key.studentId,
+          key.itemId,
+          recordAssignmentCheck: false,
+        );
+      } else {
+        final target = await _resolveHomeworkCheckTarget(
+          key.studentId,
+          key.itemId,
+          includeHistory: false,
+        );
+        if (target != null) {
+          await HomeworkAssignmentStore.instance.saveAssignmentCheck(
+            assignmentId: target.assignmentId,
+            studentId: key.studentId,
+            homeworkItemId: key.itemId,
+            progress: target.progress,
+            issueType: null,
+            issueNote: null,
+            markCompleted: false,
+          );
+        }
+        HomeworkStore.instance.restoreItemsToWaiting(key.studentId, [key.itemId]);
+        await HomeworkAssignmentStore.instance.clearActiveAssignmentsForItems(
+          key.studentId,
+          [key.itemId],
+        );
+        await HomeworkStore.instance.moveToBottom(key.studentId, key.itemId);
       }
     }
     if (mounted && context.mounted) {
@@ -2410,8 +2437,9 @@ const String _homeworkPrintTempPrefix = 'hw_print_';
 Widget _buildHomeworkChipsReactiveForStudent(
   String studentId,
   double tick, {
-  Set<({String studentId, String itemId})> pendingConfirms = const {},
+  Map<({String studentId, String itemId}), bool> pendingConfirms = const {},
   Future<void> Function({required BuildContext context, required String studentId, required HomeworkItem hw})? onPhase3Tap,
+  void Function(({String studentId, String itemId}) key)? onSlideDownComplete,
 }) {
   return ValueListenableBuilder<int>(
     valueListenable: StudentFlowStore.instance.revision,
@@ -2508,6 +2536,7 @@ Widget _buildHomeworkChipsReactiveForStudent(
                                 assignmentCycleMetaByItem,
                                 pendingConfirms: pendingConfirms,
                                 onPhase3Tap: onPhase3Tap,
+                                onSlideDownComplete: onSlideDownComplete,
                               );
                               final assignedHomeworkSections =
                                   _buildAssignedHomeworkChipsForStudent(
@@ -3012,7 +3041,7 @@ List<Widget> _buildAssignedHomeworkChipsForStudent(
   Map<String, int> assignmentCounts,
   List<HomeworkAssignmentDetail> activeAssignments,
   Map<String, HomeworkAssignmentCycleMeta> assignmentCycleMetaByItem, {
-  Set<({String studentId, String itemId})> pendingConfirms = const {},
+  Map<({String studentId, String itemId}), bool> pendingConfirms = const {},
 }) {
   final assigned = activeAssignments
       .where((a) => a.homeworkItemId.trim().isNotEmpty)
@@ -3115,9 +3144,10 @@ List<Widget> _buildAssignedHomeworkChipsForStudent(
               tick: tick,
               isReservation: isReservation,
               cycleMeta: assignmentCycleMetaByItem[hw.id],
-              isPendingConfirm: pendingConfirms.contains(
+              isPendingConfirm: pendingConfirms.containsKey(
                 (studentId: studentId, itemId: hw.id),
               ),
+              isCompleteCheckbox: pendingConfirms[(studentId: studentId, itemId: hw.id)] == true,
             ),
           ),
         ),
@@ -3170,8 +3200,9 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
   Map<String, int> assignmentCounts,
   Set<String> activeAssignedItemIds,
   Map<String, HomeworkAssignmentCycleMeta> assignmentCycleMetaByItem, {
-  Set<({String studentId, String itemId})> pendingConfirms = const {},
+  Map<({String studentId, String itemId}), bool> pendingConfirms = const {},
   Future<void> Function({required BuildContext context, required String studentId, required HomeworkItem hw})? onPhase3Tap,
+  void Function(({String studentId, String itemId}) key)? onSlideDownComplete,
 }) {
   final List<Widget> chips = [];
   final List<HomeworkItem> hwList = HomeworkStore.instance
@@ -3260,14 +3291,8 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
           } else if (item.runStart != null || item.phase == 2) {
             unawaited(HomeworkStore.instance.pause(studentId, hw.id));
           } else if (item.phase == 3) {
-            unawaited(
-              _runHomeworkCheckAndConfirm(
-                context: context,
-                studentId: studentId,
-                hw: item,
-                markAutoCompleteOnNextWaiting: true,
-              ),
-            );
+            final key = (studentId: studentId, itemId: hw.id);
+            onSlideDownComplete?.call(key);
           }
         },
         onSlideUp: () async {
@@ -3416,9 +3441,10 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
             assignmentCounts[hw.id] ?? 0,
             tick: tick,
             cycleMeta: assignmentCycleMetaByItem[hw.id],
-            isPendingConfirm: pendingConfirms.contains(
+            isPendingConfirm: pendingConfirms.containsKey(
               (studentId: studentId, itemId: hw.id),
             ),
+            isCompleteCheckbox: pendingConfirms[(studentId: studentId, itemId: hw.id)] == true,
           ),
         ),
       ),
@@ -4167,6 +4193,7 @@ Widget _buildHomeworkChipVisual(
   bool isReservation = false,
   HomeworkAssignmentCycleMeta? cycleMeta,
   bool isPendingConfirm = false,
+  bool isCompleteCheckbox = false,
 }) {
   final bool isRunning =
       HomeworkStore.instance.runningOf(studentId)?.id == hw.id;
@@ -4476,10 +4503,10 @@ Widget _buildHomeworkChipVisual(
                 color: const Color(0xCC0B1112),
                 borderRadius: BorderRadius.circular(12),
               ),
-              child: const Center(
+              child: Center(
                 child: Icon(
-                  Icons.check_circle,
-                  color: Color(0xFF1B6B63),
+                  isCompleteCheckbox ? Icons.check_circle : Icons.check_circle_outline,
+                  color: isCompleteCheckbox ? const Color(0xFF4CAF50) : const Color(0xFF1B6B63),
                   size: 48,
                 ),
               ),

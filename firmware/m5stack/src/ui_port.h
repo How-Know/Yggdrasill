@@ -26,6 +26,7 @@ void ui_port_set_global_font(const lv_font_t* font);
 void ui_before_screen_change(void);
 void ui_before_screensaver(void);
 void ui_after_screensaver_wake(void);
+void ui_port_force_unbind(void);
 
 // 펌웨어 측 MQTT publish 콜백(메인에서 구현)
 void fw_publish_bind(const char* studentId);

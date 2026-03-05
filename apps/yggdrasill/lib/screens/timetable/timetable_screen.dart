@@ -922,23 +922,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
       _selectedStartTimeMinute = chosen.minute;
     });
 
-    if (centerHorizontally) {
-      final selectedDate = _selectedDate;
-      final selectedStartTime = DateTime(
-        selectedDate.year,
-        selectedDate.month,
-        selectedDate.day,
-        chosen.hour,
-        chosen.minute,
-      );
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        _scrollToTimeColumnCenter(
-          selectedStartTime,
-          preferAnimate: preferAnimate,
-        );
-      });
-    }
+    // 가로 스크롤은 ClassesView의 post-frame 콜백에서 onRequestHorizontalScrollToTime으로
+    // 세로 스크롤과 같은 프레임에 호출되어 동시에 진행되도록 함.
   }
 
   List<TimeBlock> _generateTimeBlocks() {
@@ -2362,6 +2347,7 @@ class _TimetableScreenState extends State<TimetableScreen> {
                             _selectedStartTimeHour!,
                             _selectedStartTimeMinute!)
                         : null,
+                    onRequestHorizontalScrollToTime: _scrollToTimeColumnCenter,
                     filteredClassIds:
                         filteredClassIds.isEmpty ? null : filteredClassIds,
                     onInquiryNoteTap: (noteId) =>
@@ -2369,7 +2355,6 @@ class _TimetableScreenState extends State<TimetableScreen> {
                     onTimeSelected: (dayIdx, startTime) {
                       _beginCellRenderPerfTrace(
                           dayIdx: dayIdx, startTime: startTime);
-                      bool shouldCenter = false;
                       setState(() {
                         final bool isSameCell =
                             _selectedCellDayIndex == dayIdx &&
@@ -2383,15 +2368,9 @@ class _TimetableScreenState extends State<TimetableScreen> {
                           _selectedCellDayIndex = dayIdx;
                           _selectedStartTimeHour = startTime.hour;
                           _selectedStartTimeMinute = startTime.minute;
-                          shouldCenter = true;
                         }
                       });
-                      if (shouldCenter) {
-                        WidgetsBinding.instance.addPostFrameCallback((_) {
-                          if (!mounted) return;
-                          _scrollToTimeColumnCenter(startTime);
-                        });
-                      }
+                      // 가로 스크롤은 ClassesView의 onRequestHorizontalScrollToTime으로 세로와 동시에 실행됨
                     },
                     onCellStudentsSelected:
                         (dayIdx, startTimes, students) async {
@@ -2848,11 +2827,11 @@ class _TimetableScreenState extends State<TimetableScreen> {
                     _selectedStartTimeHour!,
                     _selectedStartTimeMinute!)
                 : null,
+            onRequestHorizontalScrollToTime: _scrollToTimeColumnCenter,
             onInquiryNoteTap: (noteId) => unawaited(_openInquiryNote(noteId)),
             onTimeSelected: (int dayIdx, DateTime startTime) {
               print(
                   '[DEBUG][onTimeSelected] 셀 클릭: dayIdx=$dayIdx, startTime=$startTime');
-              bool shouldCenter = false;
               setState(() {
                 final bool isSameCell = _selectedCellDayIndex == dayIdx &&
                     _selectedStartTimeHour == startTime.hour &&
@@ -2865,17 +2844,11 @@ class _TimetableScreenState extends State<TimetableScreen> {
                   _selectedCellDayIndex = dayIdx;
                   _selectedStartTimeHour = startTime.hour;
                   _selectedStartTimeMinute = startTime.minute;
-                  shouldCenter = true;
                 }
                 print(
                     '[DEBUG][onTimeSelected][setState후] _selectedCellDayIndex=$_selectedCellDayIndex, _selectedStartTimeHour=$_selectedStartTimeHour, _selectedStartTimeMinute=$_selectedStartTimeMinute');
               });
-              if (shouldCenter) {
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  if (!mounted) return;
-                  _scrollToTimeColumnCenter(startTime);
-                });
-              }
+              // 가로 스크롤은 ClassesView의 onRequestHorizontalScrollToTime으로 세로와 동시에 실행됨
             },
             onCellStudentsSelected: (int dayIdx, List<DateTime> startTimes,
                 List<StudentWithInfo> students) async {

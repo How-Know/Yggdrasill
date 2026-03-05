@@ -66,6 +66,36 @@ function renderTemplate(template: string, params: Record<string, string>) {
   return out;
 }
 
+async function fetchEgressIp(): Promise<string | null> {
+  const endpoints = [
+    'https://api64.ipify.org?format=json',
+    'https://api.ipify.org?format=json',
+    'https://ifconfig.me/ip',
+  ];
+  for (const endpoint of endpoints) {
+    try {
+      const res = await fetch(endpoint, { method: 'GET' });
+      if (!res.ok) continue;
+      const text = (await res.text()).trim();
+      if (!text) continue;
+      if (text.startsWith('{')) {
+        try {
+          const json = JSON.parse(text) as Record<string, unknown>;
+          const ip = String(json.ip ?? '').trim();
+          if (ip) return ip;
+        } catch (_) {
+          // ignore
+        }
+      }
+      const match = text.match(/[0-9a-fA-F:.]{7,}/);
+      if (match?.[0]) return match[0];
+    } catch (_) {
+      // ignore and try next endpoint
+    }
+  }
+  return null;
+}
+
 async function issueBizppurioToken() {
   if (!BIZ_ACCOUNT || !BIZ_PASSWORD) {
     throw new Error('missing_bizppurio_credentials');
@@ -138,6 +168,7 @@ Deno.serve(async (req) => {
   }
 
   const admin = createAdminClient();
+  const egressIp = await fetchEgressIp();
   let lateEnqueued = 0;
   try {
     const lateLimit = Math.max(BATCH_SIZE * 5, 50);
@@ -178,6 +209,7 @@ Deno.serve(async (req) => {
       failed: 0,
       lateEnqueued,
       requestedQueueId: forceQueueId,
+      egressIp,
     });
   }
 
@@ -434,7 +466,10 @@ Deno.serve(async (req) => {
         }
       } catch (err) {
         const message = String((err as Error)?.message ?? err);
-        errors.push(message);
+        const enrichedMessage = message.startsWith('token_issue_failed:3010') && egressIp
+          ? `${message}:egress=${egressIp}`
+          : message;
+        errors.push(enrichedMessage);
         await admin.from('attendance_notification_logs').insert({
           queue_id: row.id,
           attendance_id: attendance.id,
@@ -446,7 +481,7 @@ Deno.serve(async (req) => {
           template_code: templateCode,
           phone: parentPhone,
           payload,
-          error: message,
+          error: enrichedMessage,
         });
       }
     }
@@ -478,5 +513,6 @@ Deno.serve(async (req) => {
     lateEnqueued,
     requestedQueueId: forceQueueId,
     handledQueueIds,
+    egressIp,
   });
 });

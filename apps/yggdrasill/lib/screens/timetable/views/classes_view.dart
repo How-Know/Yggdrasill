@@ -110,6 +110,9 @@ class ClassesView extends StatefulWidget {
   /// 키 포맷: '$dayIdx-$hour:$minute' (dayIdx: 0=월..6=일)
   final Set<String>? selectedSlotKeys;
 
+  /// 세로 스크롤 직전에 호출. 부모가 같은 프레임에서 가로 스크롤을 실행해 가로/세로가 동시에 진행되도록 할 때 사용.
+  final void Function(DateTime startTime)? onRequestHorizontalScrollToTime;
+
   const ClassesView({
     super.key,
     required this.operatingHours,
@@ -133,6 +136,7 @@ class ClassesView extends StatefulWidget {
     this.onSelectModeChanged, // 추가
     required this.weekStartDate,
     this.selectedSlotKeys,
+    this.onRequestHorizontalScrollToTime,
   });
 
   @override
@@ -1610,8 +1614,11 @@ class _ClassesViewState extends State<ClassesView>
                   _lastAutoCenteredSelectionKey = selectedAutoCenterKey;
                   final int dayToCenter = selectedDayIdx!;
                   final double expansionToCenter = selectedRowExpansionHeight;
+                  final DateTime startTimeToScroll = selectedCellStartTime!;
                   WidgetsBinding.instance.addPostFrameCallback((_) {
                     if (!mounted) return;
+                    // 같은 콜백에서 가로 스크롤 요청 후 세로 스크롤 → 동시에 진행
+                    widget.onRequestHorizontalScrollToTime?.call(startTimeToScroll);
                     _scrollToSelectedRowCenter(
                       dayIdx: dayToCenter,
                       blockHeight: blockHeight.toDouble(),
