@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "start": "node src/index.js",
-    "dev": "node --watch src/index.js"
+    "dev": "node --watch src/index.js",
+    "worker:alimtalk": "node src/attendance_alimtalk_worker.js",
+    "worker:alimtalk:once": "node src/attendance_alimtalk_worker.js --once"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.4",

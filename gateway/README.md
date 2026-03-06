@@ -40,3 +40,29 @@ pnpm dev
 ## Notes
 - TLS: MQTT_CA_PATH 지정 시 CA로 서버 인증
 - Idempotency: idempotency_key로 중복 처리 방지(메모리 TTL 간이 처리; 운영 시 Redis 권장)
+
+## Attendance AlimTalk Worker
+
+고정 IP 서버(Lightsail/VPS)에서 비즈뿌리오 알림톡 발송만 전담하는 워커입니다.
+
+### Required env
+
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+BIZPPURIO_ACCOUNT=your-biz-account
+BIZPPURIO_PASSWORD=your-biz-password
+
+### Optional env
+
+BIZPPURIO_DOMAIN=api.bizppurio.com
+ALIMTALK_BATCH_SIZE=20
+ALIMTALK_MAX_ATTEMPTS=5
+WORKER_INTERVAL_MS=60000
+
+### Run worker
+
+npm run worker:alimtalk
+
+### Run one batch only
+
+npm run worker:alimtalk:once
