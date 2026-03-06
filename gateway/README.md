@@ -72,3 +72,4 @@ npm run worker:alimtalk:once
 
 학생 탭 "알림 동의" 체크는 `student_basic_info.notification_consent`에 저장됩니다.
 워커는 `notification_consent = true`인 학생에게만 알림톡을 발송합니다.
+`student_payment_info`의 알림 플래그 값은 발송 대상 판정에 사용하지 않습니다.

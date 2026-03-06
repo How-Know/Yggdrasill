@@ -76,6 +76,7 @@ pm2 logs ygg-alimtalk-worker --lines 200
 
 알림 발송 대상은 `student_basic_info.notification_consent = true`인 학생만 포함됩니다.
 (`학생 탭 > 알림 동의` 체크 기준)
+`student_payment_info`의 알림 플래그(`attendance_notification` 등)는 발송 대상 판정에 사용하지 않습니다.
 
 ## 7) 중요: Supabase 스케줄 중복 실행 방지
 

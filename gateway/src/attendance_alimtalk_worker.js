@@ -255,7 +255,7 @@ async function processBatch() {
 
       const { data: paymentInfo } = await supa
         .from('student_payment_info')
-        .select('student_id, lateness_threshold, attendance_notification, departure_notification, lateness_notification')
+        .select('student_id, lateness_threshold')
         .eq('student_id', attendance.student_id)
         .maybeSingle();
 
@@ -332,10 +332,10 @@ async function processBatch() {
 
       const sendTargets = [];
       if (row.event_type === 'arrival') {
-        if (paymentInfo?.attendance_notification !== false) sendTargets.push('arrival');
+        sendTargets.push('arrival');
       }
       if (row.event_type === 'departure') {
-        if (paymentInfo?.departure_notification !== false) sendTargets.push('departure');
+        sendTargets.push('departure');
       }
       if (row.event_type === 'late') {
         if (arrivalDt) {
@@ -343,13 +343,13 @@ async function processBatch() {
           summary.skipped += 1;
           continue;
         }
-        if (lateByNoArrival && paymentInfo?.lateness_notification !== false) sendTargets.push('late');
+        if (lateByNoArrival) sendTargets.push('late');
       }
 
       if (sendTargets.length === 0) {
         const reason = row.event_type === 'late'
-          ? (lateByArrival ? 'already_arrived_late' : 'late_not_due_or_notification_disabled')
-          : 'notifications_disabled_or_not_applicable';
+          ? (lateByArrival ? 'already_arrived_late' : 'late_not_due')
+          : 'event_not_applicable';
         await setQueueStatus(row.id, { status: 'skipped', last_error: reason });
         summary.skipped += 1;
         continue;
