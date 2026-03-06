@@ -259,7 +259,7 @@ Deno.serve(async (req) => {
 
     const { data: basicInfo } = await admin
       .from('student_basic_info')
-      .select('student_id, parent_phone_number')
+      .select('student_id, parent_phone_number, notification_consent')
       .eq('student_id', attendance.student_id)
       .maybeSingle();
 
@@ -296,6 +296,16 @@ Deno.serve(async (req) => {
         last_error: 'missing_sender_info',
       }).eq('id', row.id);
       failed += 1;
+      continue;
+    }
+
+    const consented = basicInfo?.notification_consent === true;
+    if (!consented) {
+      await admin.from('attendance_notification_queue').update({
+        status: 'skipped',
+        last_error: 'notification_consent_required',
+      }).eq('id', row.id);
+      skipped += 1;
       continue;
     }
 

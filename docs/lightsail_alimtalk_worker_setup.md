@@ -45,6 +45,7 @@ BIZPPURIO_DOMAIN=api.bizppurio.com
 ALIMTALK_BATCH_SIZE=20
 ALIMTALK_MAX_ATTEMPTS=5
 WORKER_INTERVAL_MS=60000
+ALIMTALK_ONLY_TODAY=1
 EOF
 ```
 
@@ -72,6 +73,9 @@ pm2 startup
 pm2 status
 pm2 logs ygg-alimtalk-worker --lines 200
 ```
+
+알림 발송 대상은 `student_basic_info.notification_consent = true`인 학생만 포함됩니다.
+(`학생 탭 > 알림 동의` 체크 기준)
 
 ## 7) 중요: Supabase 스케줄 중복 실행 방지
 

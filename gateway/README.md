@@ -58,6 +58,7 @@ BIZPPURIO_DOMAIN=api.bizppurio.com
 ALIMTALK_BATCH_SIZE=20
 ALIMTALK_MAX_ATTEMPTS=5
 WORKER_INTERVAL_MS=60000
+ALIMTALK_ONLY_TODAY=1
 
 ### Run worker
 
@@ -66,3 +67,8 @@ npm run worker:alimtalk
 ### Run one batch only
 
 npm run worker:alimtalk:once
+
+### Consent filter
+
+학생 탭 "알림 동의" 체크는 `student_basic_info.notification_consent`에 저장됩니다.
+워커는 `notification_consent = true`인 학생에게만 알림톡을 발송합니다.

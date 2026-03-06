@@ -9,7 +9,9 @@ const BIZ_PASSWORD = (process.env.BIZPPURIO_PASSWORD || '').trim();
 const BATCH_SIZE = Number.parseInt(process.env.ALIMTALK_BATCH_SIZE || '20', 10);
 const MAX_ATTEMPTS = Number.parseInt(process.env.ALIMTALK_MAX_ATTEMPTS || '5', 10);
 const WORKER_INTERVAL_MS = Number.parseInt(process.env.WORKER_INTERVAL_MS || '60000', 10);
+const ONLY_TODAY = process.env.ALIMTALK_ONLY_TODAY !== '0';
 const PROCESS_ONCE = process.argv.includes('--once') || process.env.ALIMTALK_PROCESS_ONCE === '1';
+const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
   console.error('[alimtalk-worker] Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY');
@@ -55,6 +57,19 @@ function renderTemplate(template, params) {
     out = out.replaceAll(`{${key}}`, safe);
   }
   return out;
+}
+
+function getKstDayStartUtcIso(nowMs = Date.now()) {
+  const kstNow = new Date(nowMs + KST_OFFSET_MS);
+  const kstDayStartUtcMs = Date.UTC(
+    kstNow.getUTCFullYear(),
+    kstNow.getUTCMonth(),
+    kstNow.getUTCDate(),
+    0,
+    0,
+    0,
+  ) - KST_OFFSET_MS;
+  return new Date(kstDayStartUtcMs).toISOString();
 }
 
 async function fetchEgressIp() {
@@ -148,6 +163,7 @@ async function setQueueStatus(id, fields) {
 }
 
 async function processBatch() {
+  const kstDayStartIso = getKstDayStartUtcIso();
   const summary = {
     processed: 0,
     sent: 0,
@@ -155,6 +171,8 @@ async function processBatch() {
     failed: 0,
     lateEnqueued: 0,
     egressIp: await fetchEgressIp(),
+    onlyToday: ONLY_TODAY,
+    kstDayStartIso,
   };
 
   try {
@@ -173,13 +191,16 @@ async function processBatch() {
     console.warn('[alimtalk-worker] enqueue_due_late_notifications exception:', String(e));
   }
 
-  const { data: queueRows, error: queueErr } = await supa
+  let queueQuery = supa
     .from('attendance_notification_queue')
     .select('id, attendance_id, academy_id, student_id, event_type, status, attempts')
     .in('status', ['pending', 'error'])
-    .lt('attempts', MAX_ATTEMPTS)
-    .order('created_at', { ascending: true })
-    .limit(BATCH_SIZE);
+    .lt('attempts', MAX_ATTEMPTS);
+  if (ONLY_TODAY) {
+    queueQuery = queueQuery.gte('created_at', kstDayStartIso);
+  }
+  queueQuery = queueQuery.order('created_at', { ascending: true }).limit(BATCH_SIZE);
+  const { data: queueRows, error: queueErr } = await queueQuery;
 
   if (queueErr) {
     throw new Error(`queue_fetch_failed:${queueErr.message}`);
@@ -228,7 +249,7 @@ async function processBatch() {
 
       const { data: basicInfo } = await supa
         .from('student_basic_info')
-        .select('student_id, parent_phone_number')
+        .select('student_id, parent_phone_number, notification_consent')
         .eq('student_id', attendance.student_id)
         .maybeSingle();
 
@@ -258,6 +279,13 @@ async function processBatch() {
       if (!alimtalkSettings.sender_key || !alimtalkSettings.sender_number) {
         await setQueueStatus(row.id, { status: 'error', last_error: 'missing_sender_info' });
         summary.failed += 1;
+        continue;
+      }
+
+      const consented = basicInfo?.notification_consent === true;
+      if (!consented) {
+        await setQueueStatus(row.id, { status: 'skipped', last_error: 'notification_consent_required' });
+        summary.skipped += 1;
         continue;
       }
 
