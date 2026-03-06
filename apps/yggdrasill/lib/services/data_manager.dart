@@ -358,11 +358,73 @@ class DataManager {
   ) {
     if (targets.isEmpty) return null;
 
+    bool sameMinute(DateTime? a, DateTime? b) {
+      if (a == null || b == null) return false;
+      return a.year == b.year &&
+          a.month == b.month &&
+          a.day == b.day &&
+          a.hour == b.hour &&
+          a.minute == b.minute;
+    }
+
+    bool isEffectivelyCompletedPlannedMakeup(SessionOverride planned) {
+      final replacement = planned.replacementClassDateTime;
+      // replacement가 없는 planned replace는 비정상 데이터로 보고 잠금 대상에서 제외한다.
+      if (replacement == null) return true;
+
+      final replacementAttendanceId =
+          (planned.replacementAttendanceId ?? '').trim();
+      if (replacementAttendanceId.isNotEmpty) return true;
+
+      final plannedSetId = (planned.setId ?? '').trim();
+
+      // completed 오버라이드가 짝으로 존재하면 잠금 대상에서 제외한다.
+      // - 일반 완료: planned.replacement == completed.replacement
+      // - 예정 연결(legacy): planned.replacement == completed.original
+      for (final other in _sessionOverrides) {
+        if (identical(other, planned)) continue;
+        if (other.studentId != planned.studentId) continue;
+        if (other.overrideType != OverrideType.replace) continue;
+        if (other.reason != OverrideReason.makeup) continue;
+        if (other.status != OverrideStatus.completed) continue;
+
+        final otherSetId = (other.setId ?? '').trim();
+        final sameSet = plannedSetId.isNotEmpty && plannedSetId == otherSetId;
+        final sameOriginal =
+            sameMinute(other.originalClassDateTime, planned.originalClassDateTime);
+        final sameReplacement = sameMinute(
+          other.replacementClassDateTime,
+          planned.replacementClassDateTime,
+        );
+        final linkedByConnectedFlow =
+            sameMinute(other.originalClassDateTime, planned.replacementClassDateTime) &&
+            (sameSet || plannedSetId.isEmpty);
+
+        if ((sameReplacement && (sameSet || sameOriginal)) ||
+            (sameOriginal && sameSet) ||
+            linkedByConnectedFlow) {
+          return true;
+        }
+      }
+
+      // 상태 동기화 실패로 planned가 남아도, 실제 출석(등/하원)이 찍혔다면 완료로 간주한다.
+      final record = getAttendanceRecord(planned.studentId, replacement);
+      if (record != null) {
+        final effectivePresent = record.isPresent ||
+            record.arrivalTime != null ||
+            record.departureTime != null;
+        if (effectivePresent) return true;
+      }
+
+      return false;
+    }
+
     // 보강(replace) + 예정(planned)만 잠금 대상으로 본다.
     final plannedMakeups = _sessionOverrides.where((o) {
       if (o.overrideType != OverrideType.replace) return false;
       if (o.status != OverrideStatus.planned) return false;
       if (o.reason != OverrideReason.makeup) return false;
+      if (isEffectivelyCompletedPlannedMakeup(o)) return false;
       return true;
     }).toList();
     if (plannedMakeups.isEmpty) return null;
@@ -5298,7 +5360,44 @@ DateTime? _lastClassesOrderSaveStart;
       classDateTime: planned.classDateTime,
     );
 
-    // 3) 보강(replace) 오버라이드 생성(완료)
+    bool sameMinute(DateTime? a, DateTime? b) {
+      if (a == null || b == null) return false;
+      return a.year == b.year &&
+          a.month == b.month &&
+          a.day == b.day &&
+          a.hour == b.hour &&
+          a.minute == b.minute;
+    }
+
+    // 3) 기존 planned replace가 있으면 completed로 승격(중복 completed 생성 방지)
+    SessionOverride? existingPlannedReplace;
+    for (final o in _sessionOverrides) {
+      if (o.studentId != walkIn.studentId) continue;
+      if (o.overrideType != OverrideType.replace) continue;
+      if (o.reason != OverrideReason.makeup) continue;
+      if (o.status != OverrideStatus.planned) continue;
+      if (!sameMinute(o.replacementClassDateTime, planned.classDateTime)) continue;
+      existingPlannedReplace = o;
+      break;
+    }
+    if (existingPlannedReplace != null) {
+      final preservedOriginalAttendanceId =
+          (existingPlannedReplace.originalAttendanceId ?? '').trim().isNotEmpty
+              ? existingPlannedReplace.originalAttendanceId
+              : planned.id;
+      final updated = existingPlannedReplace.copyWith(
+        status: OverrideStatus.completed,
+        replacementClassDateTime: walkIn.classDateTime,
+        durationMinutes: durMin,
+        originalAttendanceId: preservedOriginalAttendanceId,
+        replacementAttendanceId: walkIn.id,
+        updatedAt: DateTime.now(),
+      );
+      await updateSessionOverride(updated);
+      return;
+    }
+
+    // 4) 기존 planned가 없으면 completed replace를 신규 생성
     final ov = SessionOverride(
       studentId: walkIn.studentId,
       sessionTypeId: planned.sessionTypeId,

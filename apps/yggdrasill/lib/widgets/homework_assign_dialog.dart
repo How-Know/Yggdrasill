@@ -123,6 +123,22 @@ Future<HomeworkAssignSelection?> showHomeworkAssignDialog(
 }) async {
   final allItems = HomeworkStore.instance.items(studentId);
   if (allItems.isEmpty) return null;
+  final activeAssignments =
+      await HomeworkAssignmentStore.instance.loadActiveAssignments(studentId);
+  final hiddenAssignedItemIds = activeAssignments
+      .map((a) => a.homeworkItemId.trim())
+      .where((id) => id.isNotEmpty)
+      .toSet();
+  final activeItems = allItems
+      .where((e) => e.status != HomeworkStatus.completed)
+      // 홈메뉴 현재 과제 리스트와 동일한 판정: active assignment로 보이는 항목은 제외
+      .where(
+        (e) =>
+            e.status != HomeworkStatus.homework ||
+            !hiddenAssignedItemIds.contains(e.id),
+      )
+      .where((e) => !hiddenAssignedItemIds.contains(e.id))
+      .toList(growable: false);
   final behaviorAssignments = await StudentBehaviorAssignmentStore.instance
       .loadForStudent(studentId, force: true);
   behaviorAssignments.sort((a, b) => a.orderIndex.compareTo(b.orderIndex));
@@ -212,7 +228,7 @@ Future<HomeworkAssignSelection?> showHomeworkAssignDialog(
   DateTime? selectedDueDate =
       nextSessions.isNotEmpty ? nextSessions.first.dateTime : null;
   final Map<String, bool> selected = {
-    for (final e in allItems) e.id: e.status != HomeworkStatus.completed,
+    for (final e in activeItems) e.id: true,
   };
   final Map<String, bool> selectedBehaviors = {
     for (final b in behaviorAssignments) b.id: !b.isIrregular,
@@ -228,7 +244,7 @@ Future<HomeworkAssignSelection?> showHomeworkAssignDialog(
       return StatefulBuilder(
         builder: (ctx, setState) {
           final List<HomeworkItem> visibleItems =
-              List<HomeworkItem>.from(allItems);
+              List<HomeworkItem>.from(activeItems);
           final media = MediaQuery.of(ctx);
           final homeworkListMaxHeight = math.max(
             180.0,

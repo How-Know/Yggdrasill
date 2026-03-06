@@ -67,6 +67,40 @@ setInterval(() => {
   for (const [k, ts] of processed.entries()) if (now - ts > IDEMP_TTL_MS) processed.delete(k);
 }, 60 * 1000);
 
+async function publishHomeworksToBoundDevices(academy_id, student_id, source = 'unknown') {
+  if (!academy_id || !student_id) return;
+  const { data: binds, error: bErr } = await supa
+    .from('m5_device_bindings')
+    .select('device_id')
+    .eq('academy_id', academy_id)
+    .eq('student_id', student_id)
+    .eq('active', true)
+    .limit(10);
+  if (bErr) {
+    console.error('[gateway] realtime bindings error', { source, error: bErr });
+    return;
+  }
+  if (!binds || binds.length === 0) return;
+
+  const { data: items, error } = await supa.rpc('m5_list_homeworks', {
+    p_academy_id: academy_id,
+    p_student_id: student_id
+  });
+  if (error) {
+    console.error('[gateway] realtime list_homeworks error', { source, error });
+    return;
+  }
+
+  for (const b of binds) {
+    const device_id = b.device_id;
+    client.publish(
+      `academies/${academy_id}/devices/${device_id}/homeworks`,
+      JSON.stringify({ items: items || [] }),
+      { qos: 1, retain: false }
+    );
+  }
+}
+
 client.on('message', async (topic, payload) => {
   try {
     const msg = JSON.parse(payload.toString());
@@ -233,27 +267,7 @@ try {
           const rec = payload?.new ?? payload?.old ?? payload?.record ?? {};
           const academy_id = rec.academy_id;
           const student_id = rec.student_id;
-          if (!academy_id || !student_id) return;
-
-          // find currently bound device(s) for the student
-          const { data: binds, error: bErr } = await supa
-            .from('m5_device_bindings')
-            .select('device_id')
-            .eq('academy_id', academy_id)
-            .eq('student_id', student_id)
-            .eq('active', true)
-            .limit(10);
-          if (bErr) { console.error('[gateway] realtime bindings error', bErr); return; }
-          if (!binds || binds.length === 0) return;
-
-          // fetch latest homeworks
-          const { data: items, error } = await supa.rpc('m5_list_homeworks', { p_academy_id: academy_id, p_student_id: student_id });
-          if (error) { console.error('[gateway] realtime list_homeworks error', error); return; }
-
-          for (const b of binds) {
-            const device_id = b.device_id;
-            client.publish(`academies/${academy_id}/devices/${device_id}/homeworks`, JSON.stringify({ items: items || [] }), { qos: 1, retain: false });
-          }
+          await publishHomeworksToBoundDevices(academy_id, student_id, 'homework_items');
         } catch (e) {
           console.error('[gateway] realtime homework_items handler error', e);
         }
@@ -263,6 +277,31 @@ try {
   console.log('[gateway] realtime: homework_items subscribed init');
 } catch (e) {
   console.warn('[gateway] realtime subscribe failed', e);
+}
+
+// Realtime: listen homework_assignments changes and push updated homeworks to bound devices
+try {
+  try { supa.realtime.setAuth?.(SUPABASE_SERVICE); } catch (_) {}
+  const assignChannel = supa
+    .channel('public:homework_assignments')
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'homework_assignments' },
+      async (payload) => {
+        try {
+          const rec = payload?.new ?? payload?.old ?? payload?.record ?? {};
+          const academy_id = rec.academy_id;
+          const student_id = rec.student_id;
+          await publishHomeworksToBoundDevices(academy_id, student_id, 'homework_assignments');
+        } catch (e) {
+          console.error('[gateway] realtime homework_assignments handler error', e);
+        }
+      }
+    )
+    .subscribe((status) => console.log('[gateway][rt] homework_assignments', status));
+  console.log('[gateway] realtime: homework_assignments subscribed init');
+} catch (e) {
+  console.warn('[gateway] realtime homework_assignments subscribe failed', e);
 }
 
 // Realtime: listen m5_device_bindings changes → notify device on unbind
