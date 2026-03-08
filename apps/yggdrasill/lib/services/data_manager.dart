@@ -98,6 +98,8 @@ class DataManager {
   final ValueNotifier<List<StudentWithInfo>> studentsNotifier = ValueNotifier<List<StudentWithInfo>>([]);
   // invalidation-only refresh: bump 시 화면에서 디바운스 재조회 트리거
   final ValueNotifier<int> studentsRevision = ValueNotifier<int>(0);
+  /// M5 기기 바인딩 변경 시 UI 즉시 반영용
+  final ValueNotifier<int> deviceBindingsRevision = ValueNotifier<int>(0);
   final ValueNotifier<List<PaymentRecord>> paymentRecordsNotifier = ValueNotifier<List<PaymentRecord>>([]);
   final ValueNotifier<List<StudentPaymentInfo>> studentPaymentInfosNotifier = ValueNotifier<List<StudentPaymentInfo>>([]);
   final ValueNotifier<int> studentPaymentInfoRevision = ValueNotifier<int>(0);
@@ -848,6 +850,9 @@ class DataManager {
   // 1Hz 전역 티커: 과제 러닝 타이머 UI 갱신용
   final ValueNotifier<int> globalTick = ValueNotifier<int>(0);
   Timer? _tickTimer;
+  DateTime? _lastPlannedCoverageDay;
+  DateTime? _plannedCoverageLastAttemptAt;
+  bool _plannedCoverageInFlight = false;
   set selfStudyTimeBlocks(List<SelfStudyTimeBlock> value) {
     _selfStudyTimeBlocks = value;
     selfStudyTimeBlocksNotifier.value = List.unmodifiable(_selfStudyTimeBlocks);
@@ -917,11 +922,13 @@ class DataManager {
       await _subscribeStudentTimeBlocksRealtime();
       await _subscribeAttendanceRealtime(); // 출석 Realtime 구독
       await _subscribePaymentsRealtime(); // 결제 Realtime 구독
+      await _subscribeM5DeviceBindingsRealtime(); // M5 기기 바인딩 Realtime 구독
       await preloadAllExamData(); // 시험 데이터 캐시 프리로드
       // 1Hz 글로벌 티커 시작
       _tickTimer?.cancel();
       _tickTimer = Timer.periodic(const Duration(seconds: 1), (_) {
         globalTick.value++;
+        unawaited(ensurePlannedCoverageForToday(days: 15));
       });
       _isInitialized = true;
     } catch (e) {
@@ -1184,8 +1191,7 @@ class DataManager {
         _studentsWithInfo = [
           for (int i = 0; i < students.length; i++) StudentWithInfo(student: students[i], basicInfo: basicInfos[i])
         ];
-        studentsNotifier.value = List.unmodifiable(_studentsWithInfo);
-        print('[DEBUG][loadStudents] (Supabase) ${_studentsWithInfo.length}명');
+        // 기기 바인딩을 먼저 갱신한 뒤 notifier 설정 → UI에서 boundDeviceId()가 최신값을 읽도록
         try {
           final bindRows = await supa
               .from('m5_device_bindings')
@@ -1199,6 +1205,9 @@ class DataManager {
         } catch (_) {
           _deviceBindings = {};
         }
+        deviceBindingsRevision.value++;
+        studentsNotifier.value = List.unmodifiable(_studentsWithInfo);
+        print('[DEBUG][loadStudents] (Supabase) ${_studentsWithInfo.length}명');
         return;
       } catch (_) {
         // fallback below
@@ -1276,6 +1285,28 @@ class DataManager {
     ];
     studentsNotifier.value = List.unmodifiable(_studentsWithInfo);
     print('[DEBUG][loadStudents] studentsNotifier.value 갱신: ${_studentsWithInfo.length}명');
+  }
+
+  /// M5 기기 바인딩만 다시 불러와 UI에 반영(바인딩/해제 시 즉시 표시)
+  Future<void> loadDeviceBindings() async {
+    if (!TagPresetService.preferSupabaseRead) return;
+    try {
+      final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+      final supa = Supabase.instance.client;
+      final bindRows = await supa
+          .from('m5_device_bindings')
+          .select('student_id,device_id')
+          .eq('academy_id', academyId)
+          .eq('active', true);
+      _deviceBindings = {
+        for (final r in (bindRows as List))
+          (r['student_id'] as String): (r['device_id'] as String)
+      };
+      deviceBindingsRevision.value++;
+    } catch (_) {
+      _deviceBindings = {};
+      deviceBindingsRevision.value++;
+    }
   }
 
   Future<void> saveStudents() async {
@@ -3289,7 +3320,7 @@ class DataManager {
     try { await loadResourceFiles(); } catch (_) {}
     try { await TagPresetService.instance.loadPresets(); } catch (_) {}
     try { await TagStore.instance.loadAllFromDb(); } catch (_) {}
-    try { await _generatePlannedAttendanceForNextDays(days: 15); } catch (_) {}
+    await ensurePlannedCoverageForToday(days: 15, force: true);
   }
   
   Future<void> bulkAddStudentTimeBlocks(
@@ -5625,6 +5656,37 @@ DateTime? _lastClassesOrderSaveStart;
   }
   Future<void> _generatePlannedAttendanceForNextDays({int days = 15}) =>
       AttendanceService.instance.generatePlannedAttendanceForNextDays(days: days);
+  static bool _sameDate(DateTime a, DateTime b) =>
+      a.year == b.year && a.month == b.month && a.day == b.day;
+  Future<void> ensurePlannedCoverageForToday({
+    int days = 15,
+    bool force = false,
+  }) async {
+    final today = _todayDateOnly();
+    if (!force &&
+        _lastPlannedCoverageDay != null &&
+        _sameDate(_lastPlannedCoverageDay!, today)) {
+      return;
+    }
+    if (_plannedCoverageInFlight) return;
+    final now = DateTime.now();
+    if (!force &&
+        _plannedCoverageLastAttemptAt != null &&
+        now.difference(_plannedCoverageLastAttemptAt!) <
+            const Duration(seconds: 20)) {
+      return;
+    }
+    _plannedCoverageInFlight = true;
+    _plannedCoverageLastAttemptAt = now;
+    try {
+      await _generatePlannedAttendanceForNextDays(days: days);
+      _lastPlannedCoverageDay = today;
+    } catch (e, st) {
+      print('[PLAN][coverage][WARN] days=$days force=$force err=$e\n$st');
+    } finally {
+      _plannedCoverageInFlight = false;
+    }
+  }
   Future<void> _regeneratePlannedAttendanceForSet({
     required String studentId,
     required String setId,
@@ -5797,6 +5859,45 @@ DateTime? _lastClassesOrderSaveStart;
           filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
           callback: (_) async {
             try { await loadPaymentRecords(); } catch (_) {}
+          },
+        )
+        ..subscribe();
+    } catch (_) {}
+  }
+
+  // =================== M5 DEVICE BINDINGS REALTIME ===================
+  RealtimeChannel? _rtM5DeviceBindings;
+  Future<void> _subscribeM5DeviceBindingsRealtime() async {
+    try {
+      _rtM5DeviceBindings?.unsubscribe();
+      final String academyId = (await TenantService.instance.getActiveAcademyId()) ?? await TenantService.instance.ensureActiveAcademy();
+      final chan = Supabase.instance.client.channel('public:m5_device_bindings:' + academyId);
+      _rtM5DeviceBindings = chan
+        ..onPostgresChanges(
+          event: PostgresChangeEvent.insert,
+          schema: 'public',
+          table: 'm5_device_bindings',
+          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
+          callback: (_) async {
+            try { await loadDeviceBindings(); } catch (_) {}
+          },
+        )
+        ..onPostgresChanges(
+          event: PostgresChangeEvent.update,
+          schema: 'public',
+          table: 'm5_device_bindings',
+          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
+          callback: (_) async {
+            try { await loadDeviceBindings(); } catch (_) {}
+          },
+        )
+        ..onPostgresChanges(
+          event: PostgresChangeEvent.delete,
+          schema: 'public',
+          table: 'm5_device_bindings',
+          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
+          callback: (_) async {
+            try { await loadDeviceBindings(); } catch (_) {}
           },
         )
         ..subscribe();

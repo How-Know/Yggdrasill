@@ -47,6 +47,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
   late final Timer _clockTimer;
   DateTime _now = DateTime.now();
   bool _isGradingMode = false;
+  bool _printPickMode = false;
   final Map<({String studentId, String itemId}), bool> _pendingConfirms = {};
   // value: false = 확인(confirm, 사이클 계속), true = 완료(complete, 활성 과제 제거)
   String? _expandedReservedStudentId;
@@ -55,6 +56,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
   void initState() {
     super.initState();
     gradingModeActive.value = _isGradingMode;
+    DataManager.instance.loadDeviceBindings();
     _uiAnimController = AnimationController(
         duration: const Duration(milliseconds: 1800), vsync: this)
       ..repeat();
@@ -142,6 +144,36 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                             Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
+                                SizedBox(
+                                  height: 44,
+                                  child: OutlinedButton(
+                                    onPressed: () => unawaited(
+                                      _openHeaderHomeworkPrintFlow(
+                                        attendingStudents: list,
+                                      ),
+                                    ),
+                                    style: OutlinedButton.styleFrom(
+                                      foregroundColor: _printPickMode
+                                          ? Colors.white
+                                          : Colors.white70,
+                                      side: BorderSide(
+                                        color: _printPickMode
+                                            ? kDlgAccent
+                                            : Colors.white24,
+                                      ),
+                                      shape: const StadiumBorder(),
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 16,
+                                        vertical: 16,
+                                      ),
+                                      backgroundColor: _printPickMode
+                                          ? const Color(0xFF132822)
+                                          : Colors.transparent,
+                                    ),
+                                    child: const Icon(Icons.print, size: 20),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
                                 if (_isGradingMode) ...[
                                   Tooltip(
                                     message: '채점 이력',
@@ -187,7 +219,9 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                   onChanged: (value) {
                                     setState(() {
                                       _isGradingMode = value;
-                                      if (!value) _pendingConfirms.clear();
+                                      if (!value) {
+                                        _pendingConfirms.clear();
+                                      }
                                     });
                                     gradingModeActive.value = value;
                                   },
@@ -206,13 +240,17 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                         borderRadius: BorderRadius.circular(24),
                                         onTap: _pendingConfirms.isEmpty
                                             ? null
-                                            : () => _executeBatchConfirm(context),
+                                            : () =>
+                                                _executeBatchConfirm(context),
                                         child: const Padding(
                                           padding: EdgeInsets.only(right: 10),
                                           child: Row(
-                                            mainAxisAlignment: MainAxisAlignment.center,
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.center,
                                             children: [
-                                              Icon(Icons.check, color: Color(0xFFEAF2F2), size: 20),
+                                              Icon(Icons.check,
+                                                  color: Color(0xFFEAF2F2),
+                                                  size: 20),
                                               SizedBox(width: 8),
                                               Text(
                                                 '확인',
@@ -253,6 +291,13 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                               );
                             },
                             onHomeworkCardTap: (studentId, hw) {
+                              if (_printPickMode) {
+                                return _handleHomeworkPrintPick(
+                                  context: context,
+                                  studentId: studentId,
+                                  hw: hw,
+                                );
+                              }
                               return _runHomeworkCheckDialogOnly(
                                 context: context,
                                 studentId: studentId,
@@ -261,7 +306,8 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                             },
                             onTogglePending: (studentId, itemId) {
                               setState(() {
-                                final key = (studentId: studentId, itemId: itemId);
+                                final key =
+                                    (studentId: studentId, itemId: itemId);
                                 if (_pendingConfirms.containsKey(key)) {
                                   _pendingConfirms.remove(key);
                                 } else {
@@ -419,6 +465,8 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                         tick,
                         pendingConfirms: _pendingConfirms,
                         onPhase3Tap: _handleSubmittedChipTapForPending,
+                        printPickMode: _printPickMode,
+                        onPrintPickTap: _handleHomeworkPrintPick,
                         onSlideDownComplete: (key) {
                           setState(() => _pendingConfirms[key] = true);
                         },
@@ -1038,7 +1086,8 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       setState(() => _pendingConfirms[key] = false);
       return;
     }
-    final resolved = await _resolveHomeworkPdfLinks(hw, allowFlowFallback: false);
+    final resolved =
+        await _resolveHomeworkPdfLinks(hw, allowFlowFallback: false);
     if (!context.mounted) return;
 
     final answerRaw = resolved.answerPathRaw;
@@ -1118,7 +1167,8 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         .loadChecksForItem(studentId, hw.id);
     checks.sort((a, b) => a.checkedAt.compareTo(b.checkedAt));
     final previousProgress = checks.isEmpty ? 0 : checks.last.progress;
-    final minProgress = math.max(previousProgress, target.progress).clamp(0, 150);
+    final minProgress =
+        math.max(previousProgress, target.progress).clamp(0, 150);
 
     if (!context.mounted) return;
     final draft = await _showHomeworkItemCheckDialog(
@@ -1132,9 +1182,78 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     setState(() => _pendingConfirms[key] = false);
   }
 
+  Future<void> _openHeaderHomeworkPrintFlow({
+    required List<_AttendingStudent> attendingStudents,
+  }) async {
+    if (_printPickMode) {
+      if (mounted) {
+        setState(() => _printPickMode = false);
+      }
+      return;
+    }
+    final waitingCandidates = <HomeworkItem>[];
+    for (final student in attendingStudents) {
+      waitingCandidates.addAll(
+        HomeworkStore.instance.items(student.id).where(
+              (hw) =>
+                  hw.status != HomeworkStatus.completed &&
+                  hw.phase == 1 &&
+                  _hasDirectHomeworkTextbookLink(hw),
+            ),
+      );
+    }
+    if (waitingCandidates.isEmpty) {
+      if (mounted) {
+        _showHomeworkChipSnackBar(context, '인쇄 가능한 대기 과제가 없습니다.');
+      }
+      return;
+    }
+
+    var hasPrintableBodyLink = false;
+    for (final hw in waitingCandidates) {
+      try {
+        final resolved =
+            await _resolveHomeworkPdfLinks(hw, allowFlowFallback: false);
+        final bodyRaw = resolved.bodyPathRaw.trim();
+        if (bodyRaw.isEmpty) continue;
+        if (_isWebUrl(bodyRaw)) continue;
+        hasPrintableBodyLink = true;
+        break;
+      } catch (_) {}
+    }
+    if (!mounted) return;
+    if (!hasPrintableBodyLink) {
+      _showHomeworkChipSnackBar(context, '인쇄 가능한 교재 본문 링크가 없습니다.');
+      return;
+    }
+    setState(() => _printPickMode = true);
+  }
+
+  Future<void> _handleHomeworkPrintPick({
+    required BuildContext context,
+    required String studentId,
+    required HomeworkItem hw,
+  }) async {
+    if (!_printPickMode) return;
+    final latest = HomeworkStore.instance.getById(studentId, hw.id);
+    if (latest == null) return;
+    if (latest.phase != 1) {
+      _showHomeworkChipSnackBar(context, '인쇄 모드에서는 대기 상태 과제만 선택할 수 있어요.');
+      return;
+    }
+    if (mounted) {
+      setState(() => _printPickMode = false);
+    }
+    await _handleWaitingChipLongPressPrint(
+      context: context,
+      hw: latest,
+    );
+  }
+
   Future<void> _executeBatchConfirm(BuildContext context) async {
     if (_pendingConfirms.isEmpty) return;
-    final pending = Map<({String studentId, String itemId}), bool>.from(_pendingConfirms);
+    final pending =
+        Map<({String studentId, String itemId}), bool>.from(_pendingConfirms);
     setState(() => _pendingConfirms.clear());
     unawaited(_processBatchConfirmInBackground(context, pending));
   }
@@ -1167,7 +1286,8 @@ class _ClassContentScreenState extends State<ClassContentScreen>
             markCompleted: false,
           );
         }
-        await HomeworkStore.instance.confirm(key.studentId, key.itemId, recordAssignmentCheck: false);
+        await HomeworkStore.instance
+            .confirm(key.studentId, key.itemId, recordAssignmentCheck: false);
         HomeworkStore.instance.markAutoCompleteOnNextWaiting(key.itemId);
       } else if (hw.phase == 3 && !isComplete) {
         final target = await _resolveHomeworkCheckTarget(
@@ -1208,12 +1328,17 @@ class _ClassContentScreenState extends State<ClassContentScreen>
             markCompleted: false,
           );
         }
-        HomeworkStore.instance.restoreItemsToWaiting(key.studentId, [key.itemId]);
+        HomeworkStore.instance
+            .restoreItemsToWaiting(key.studentId, [key.itemId]);
+        await HomeworkStore.instance.placeItemAtActiveTail(
+          key.studentId,
+          key.itemId,
+          activateFromHomework: true,
+        );
         await HomeworkAssignmentStore.instance.clearActiveAssignmentsForItems(
           key.studentId,
           [key.itemId],
         );
-        await HomeworkStore.instance.moveToBottom(key.studentId, key.itemId);
       }
     }
     if (mounted && context.mounted) {
@@ -1537,7 +1662,10 @@ List<Widget> _buildHomeworkCheckTargetInfo(HomeworkItem hw) {
     final hasLinkedTextbook = (hw.bookId ?? '').trim().isNotEmpty &&
         (hw.gradeLabel ?? '').trim().isNotEmpty;
     if (hasLinkedTextbook) {
-      final stripped = hw.title.trim().replaceFirst(RegExp(r'^\s*\d+\.\d+\.\(\d+\)\s+'), '').trim();
+      final stripped = hw.title
+          .trim()
+          .replaceFirst(RegExp(r'^\s*\d+\.\d+\.\(\d+\)\s+'), '')
+          .trim();
       if (stripped.isNotEmpty) {
         final idx = stripped.indexOf('·');
         if (idx == -1) return stripped;
@@ -1549,6 +1677,7 @@ List<Widget> _buildHomeworkCheckTargetInfo(HomeworkItem hw) {
     if (typeLabel.isNotEmpty) return typeLabel;
     return '';
   }
+
   String extractCourseName() {
     final contentRaw = (hw.content ?? '').trim();
     final match = RegExp(r'(?:^|\n)\s*과정:\s*([^\n]+)').firstMatch(contentRaw);
@@ -1557,7 +1686,8 @@ List<Widget> _buildHomeworkCheckTargetInfo(HomeworkItem hw) {
 
   final bookName = extractBookName();
   final courseName = extractCourseName();
-  final bookAndCourse = [bookName, courseName].where((s) => s.isNotEmpty).join(' · ');
+  final bookAndCourse =
+      [bookName, courseName].where((s) => s.isNotEmpty).join(' · ');
   final title = hw.title.trim().isEmpty ? '(제목 없음)' : hw.title.trim();
   final page = (hw.page ?? '').trim();
   final count = hw.count;
@@ -1585,7 +1715,8 @@ List<Widget> _buildHomeworkCheckTargetInfo(HomeworkItem hw) {
       style: TextStyle(
         color: bookAndCourse.isNotEmpty ? kDlgTextSub : kDlgText,
         fontSize: bookAndCourse.isNotEmpty ? 15 : 18,
-        fontWeight: bookAndCourse.isNotEmpty ? FontWeight.w600 : FontWeight.w800,
+        fontWeight:
+            bookAndCourse.isNotEmpty ? FontWeight.w600 : FontWeight.w800,
       ),
       maxLines: 1,
       overflow: TextOverflow.ellipsis,
@@ -1629,8 +1760,10 @@ Future<_HomeworkCheckDraft?> _showHomeworkItemCheckDialog({
           );
           return AlertDialog(
             backgroundColor: kDlgBg,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-            title: const Text('숙제 검사', style: TextStyle(color: kDlgText, fontWeight: FontWeight.w900)),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: const Text('숙제 검사',
+                style: TextStyle(color: kDlgText, fontWeight: FontWeight.w900)),
             content: SizedBox(
               width: 480,
               child: ConstrainedBox(
@@ -1670,7 +1803,8 @@ Future<_HomeworkCheckDraft?> _showHomeworkItemCheckDialog({
                             const SizedBox(width: 12),
                             Expanded(
                               child: Text(
-                                _formatDateRange(target.assignedAt, target.dueDate),
+                                _formatDateRange(
+                                    target.assignedAt, target.dueDate),
                                 textAlign: TextAlign.right,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
@@ -1693,12 +1827,15 @@ Future<_HomeworkCheckDraft?> _showHomeworkItemCheckDialog({
                         ),
                       ),
                       const SizedBox(height: 14),
-                      const YggDialogSectionHeader(icon: Icons.tune_rounded, title: '완료율'),
+                      const YggDialogSectionHeader(
+                          icon: Icons.tune_rounded, title: '완료율'),
                       Row(
                         children: [
                           Expanded(
                             child: Slider(
-                              value: progress > sliderMax ? sliderMax.toDouble() : progress.toDouble(),
+                              value: progress > sliderMax
+                                  ? sliderMax.toDouble()
+                                  : progress.toDouble(),
                               min: 0,
                               max: sliderMax.toDouble(),
                               divisions: 10,
@@ -1706,13 +1843,16 @@ Future<_HomeworkCheckDraft?> _showHomeworkItemCheckDialog({
                               activeColor: kDlgAccent,
                               inactiveColor: kDlgBorder,
                               onChanged: (v) {
-                                final next = ((v / 10).round() * 10).clamp(minProgress, sliderMax);
+                                final next = ((v / 10).round() * 10)
+                                    .clamp(minProgress, sliderMax);
                                 setState(() {
                                   progress = next;
                                   final text = next.toString();
                                   if (progressController.text != text) {
                                     progressController.text = text;
-                                    progressController.selection = TextSelection.collapsed(offset: text.length);
+                                    progressController.selection =
+                                        TextSelection.collapsed(
+                                            offset: text.length);
                                   }
                                 });
                               },
@@ -1724,33 +1864,45 @@ Future<_HomeworkCheckDraft?> _showHomeworkItemCheckDialog({
                             child: TextField(
                               controller: progressController,
                               keyboardType: TextInputType.number,
-                              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                              inputFormatters: [
+                                FilteringTextInputFormatter.digitsOnly
+                              ],
                               textAlign: TextAlign.center,
-                              style: const TextStyle(color: kDlgText, fontSize: 14, fontWeight: FontWeight.w800),
+                              style: const TextStyle(
+                                  color: kDlgText,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w800),
                               decoration: InputDecoration(
                                 suffixText: '%',
-                                suffixStyle: const TextStyle(color: kDlgTextSub),
+                                suffixStyle:
+                                    const TextStyle(color: kDlgTextSub),
                                 filled: true,
                                 fillColor: kDlgFieldBg,
                                 enabledBorder: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(8),
-                                  borderSide: const BorderSide(color: kDlgBorder),
+                                  borderSide:
+                                      const BorderSide(color: kDlgBorder),
                                 ),
                                 focusedBorder: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(8),
-                                  borderSide: const BorderSide(color: kDlgAccent, width: 1.4),
+                                  borderSide: const BorderSide(
+                                      color: kDlgAccent, width: 1.4),
                                 ),
-                                contentPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+                                contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 6, vertical: 8),
                               ),
                               onChanged: (v) {
                                 final parsed = int.tryParse(v);
                                 if (parsed == null) return;
-                                final safe = parsed.clamp(minProgress, progressMax);
+                                final safe =
+                                    parsed.clamp(minProgress, progressMax);
                                 setState(() => progress = safe);
                                 final safeText = safe.toString();
                                 if (safeText != v) {
                                   progressController.text = safeText;
-                                  progressController.selection = TextSelection.collapsed(offset: safeText.length);
+                                  progressController.selection =
+                                      TextSelection.collapsed(
+                                          offset: safeText.length);
                                 }
                               },
                             ),
@@ -1758,7 +1910,8 @@ Future<_HomeworkCheckDraft?> _showHomeworkItemCheckDialog({
                         ],
                       ),
                       const SizedBox(height: 12),
-                      const YggDialogSectionHeader(icon: Icons.flag_outlined, title: '미완료 사유 (선택)'),
+                      const YggDialogSectionHeader(
+                          icon: Icons.flag_outlined, title: '미완료 사유 (선택)'),
                       Wrap(
                         spacing: 8,
                         children: [
@@ -1767,7 +1920,8 @@ Future<_HomeworkCheckDraft?> _showHomeworkItemCheckDialog({
                             selected: issueType == 'lost',
                             onSelected: (v) => setState(() {
                               issueType = v ? 'lost' : null;
-                              if (issueType != 'other') noteController.text = '';
+                              if (issueType != 'other')
+                                noteController.text = '';
                             }),
                           ),
                           YggDialogFilterChip(
@@ -1775,7 +1929,8 @@ Future<_HomeworkCheckDraft?> _showHomeworkItemCheckDialog({
                             selected: issueType == 'forgot',
                             onSelected: (v) => setState(() {
                               issueType = v ? 'forgot' : null;
-                              if (issueType != 'other') noteController.text = '';
+                              if (issueType != 'other')
+                                noteController.text = '';
                             }),
                           ),
                           YggDialogFilterChip(
@@ -1797,7 +1952,8 @@ Future<_HomeworkCheckDraft?> _showHomeworkItemCheckDialog({
                           style: const TextStyle(color: kDlgText),
                           decoration: InputDecoration(
                             hintText: '사유를 입력하세요',
-                            hintStyle: const TextStyle(color: Color(0xFF6E7E7E)),
+                            hintStyle:
+                                const TextStyle(color: Color(0xFF6E7E7E)),
                             filled: true,
                             fillColor: kDlgFieldBg,
                             enabledBorder: OutlineInputBorder(
@@ -1806,9 +1962,11 @@ Future<_HomeworkCheckDraft?> _showHomeworkItemCheckDialog({
                             ),
                             focusedBorder: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(10),
-                              borderSide: const BorderSide(color: kDlgAccent, width: 1.4),
+                              borderSide: const BorderSide(
+                                  color: kDlgAccent, width: 1.4),
                             ),
-                            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                            contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 10),
                           ),
                         ),
                       ],
@@ -1826,8 +1984,10 @@ Future<_HomeworkCheckDraft?> _showHomeworkItemCheckDialog({
               FilledButton(
                 onPressed: () {
                   final parsed = int.tryParse(progressController.text.trim());
-                  final safeProgress = (parsed ?? progress).clamp(minProgress, 150);
-                  final issueNote = issueType == 'other' ? noteController.text.trim() : null;
+                  final safeProgress =
+                      (parsed ?? progress).clamp(minProgress, 150);
+                  final issueNote =
+                      issueType == 'other' ? noteController.text.trim() : null;
                   Navigator.of(ctx).pop(
                     _HomeworkCheckDraft(
                       progress: safeProgress,
@@ -1965,15 +2125,18 @@ Future<void> _runHomeworkCheckDialogOnly({
     _showHomeworkChipSnackBar(context, '숙제 검사 저장에 실패했습니다.');
     return;
   }
-  // 현재 과제 목록에 다시 보이기 전에 먼저 하단 정렬을 끝내서,
-  // "잠깐 상단에 나타났다 하단으로 이동"하는 깜빡임을 막는다.
-  await HomeworkStore.instance.moveToBottom(studentId, hw.id);
+  // 리얼타임 반영 중에도 순서 흔들림이 없도록,
+  // 복귀 항목의 order_index를 먼저 "활성 꼬리"로 재배정한 뒤 노출한다.
+  await HomeworkStore.instance.placeItemAtActiveTail(
+    studentId,
+    hw.id,
+    activateFromHomework: true,
+  );
+  await HomeworkStore.instance.submit(studentId, hw.id);
   await HomeworkAssignmentStore.instance.clearActiveAssignmentsForItems(
     studentId,
     [hw.id],
   );
-  await HomeworkStore.instance.restoreStatusFromHomework(studentId, hw.id);
-  await HomeworkStore.instance.submit(studentId, hw.id);
   if (!context.mounted) return;
   _showHomeworkChipSnackBar(context, '숙제 검사 완료 — 제출 상태로 이동했어요.');
 }
@@ -2438,7 +2601,17 @@ Widget _buildHomeworkChipsReactiveForStudent(
   String studentId,
   double tick, {
   Map<({String studentId, String itemId}), bool> pendingConfirms = const {},
-  Future<void> Function({required BuildContext context, required String studentId, required HomeworkItem hw})? onPhase3Tap,
+  Future<void> Function(
+          {required BuildContext context,
+          required String studentId,
+          required HomeworkItem hw})?
+      onPhase3Tap,
+  bool printPickMode = false,
+  Future<void> Function(
+          {required BuildContext context,
+          required String studentId,
+          required HomeworkItem hw})?
+      onPrintPickTap,
   void Function(({String studentId, String itemId}) key)? onSlideDownComplete,
 }) {
   return ValueListenableBuilder<int>(
@@ -2536,6 +2709,8 @@ Widget _buildHomeworkChipsReactiveForStudent(
                                 assignmentCycleMetaByItem,
                                 pendingConfirms: pendingConfirms,
                                 onPhase3Tap: onPhase3Tap,
+                                printPickMode: printPickMode,
+                                onPrintPickTap: onPrintPickTap,
                                 onSlideDownComplete: onSlideDownComplete,
                               );
                               final assignedHomeworkSections =
@@ -2764,14 +2939,19 @@ Future<void> _activateReservedHomeworkChip({
 }) async {
   final hwId = assignment.homeworkItemId.trim();
   if (hwId.isEmpty) return;
-  await HomeworkAssignmentStore.instance.clearActiveAssignmentsForItems(
+  await HomeworkStore.instance.placeItemAtActiveTail(
     studentId,
-    [hwId],
+    hwId,
+    activateFromHomework: true,
   );
   final latest = HomeworkStore.instance.getById(studentId, hwId);
   if (latest != null && latest.phase != 1) {
     await HomeworkStore.instance.waitPhase(studentId, hwId);
   }
+  await HomeworkAssignmentStore.instance.clearActiveAssignmentsForItems(
+    studentId,
+    [hwId],
+  );
   if (!context.mounted) return;
   _showHomeworkChipSnackBar(context, '예약 과제를 대기 상태로 전환했어요.');
 }
@@ -3147,7 +3327,9 @@ List<Widget> _buildAssignedHomeworkChipsForStudent(
               isPendingConfirm: pendingConfirms.containsKey(
                 (studentId: studentId, itemId: hw.id),
               ),
-              isCompleteCheckbox: pendingConfirms[(studentId: studentId, itemId: hw.id)] == true,
+              isCompleteCheckbox:
+                  pendingConfirms[(studentId: studentId, itemId: hw.id)] ==
+                      true,
             ),
           ),
         ),
@@ -3201,7 +3383,17 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
   Set<String> activeAssignedItemIds,
   Map<String, HomeworkAssignmentCycleMeta> assignmentCycleMetaByItem, {
   Map<({String studentId, String itemId}), bool> pendingConfirms = const {},
-  Future<void> Function({required BuildContext context, required String studentId, required HomeworkItem hw})? onPhase3Tap,
+  Future<void> Function(
+          {required BuildContext context,
+          required String studentId,
+          required HomeworkItem hw})?
+      onPhase3Tap,
+  bool printPickMode = false,
+  Future<void> Function(
+          {required BuildContext context,
+          required String studentId,
+          required HomeworkItem hw})?
+      onPrintPickTap,
   void Function(({String studentId, String itemId}) key)? onSlideDownComplete,
 }) {
   final List<Widget> chips = [];
@@ -3237,6 +3429,32 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
         onTap: () {
           final item = HomeworkStore.instance.getById(studentId, hw.id);
           if (item == null) return;
+          if (printPickMode) {
+            if (item.phase != 1) {
+              _showHomeworkChipSnackBar(
+                context,
+                '인쇄 모드에서는 대기 상태 과제만 선택할 수 있어요.',
+              );
+              return;
+            }
+            if (onPrintPickTap != null) {
+              unawaited(
+                onPrintPickTap(
+                  context: context,
+                  studentId: studentId,
+                  hw: item,
+                ),
+              );
+            } else {
+              unawaited(
+                _handleWaitingChipLongPressPrint(
+                  context: context,
+                  hw: item,
+                ),
+              );
+            }
+            return;
+          }
           final int phase = item.phase;
           switch (phase) {
             case 1: // 대기 → 수행
@@ -3271,18 +3489,7 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
               unawaited(HomeworkStore.instance.start(studentId, hw.id));
           }
         },
-        onLongPress: !isWaiting
-            ? null
-            : () {
-                final item = HomeworkStore.instance.getById(studentId, hw.id);
-                if (item == null || item.phase != 1) return;
-                unawaited(
-                  _handleWaitingChipLongPressPrint(
-                    context: context,
-                    hw: item,
-                  ),
-                );
-              },
+        onLongPress: null,
         onSlideDown: () {
           final item = HomeworkStore.instance.getById(studentId, hw.id);
           if (item == null) return;
@@ -3444,7 +3651,8 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
             isPendingConfirm: pendingConfirms.containsKey(
               (studentId: studentId, itemId: hw.id),
             ),
-            isCompleteCheckbox: pendingConfirms[(studentId: studentId, itemId: hw.id)] == true,
+            isCompleteCheckbox:
+                pendingConfirms[(studentId: studentId, itemId: hw.id)] == true,
           ),
         ),
       ),
@@ -4505,8 +4713,12 @@ Widget _buildHomeworkChipVisual(
               ),
               child: Center(
                 child: Icon(
-                  isCompleteCheckbox ? Icons.check_circle : Icons.check_circle_outline,
-                  color: isCompleteCheckbox ? const Color(0xFF4CAF50) : const Color(0xFF1B6B63),
+                  isCompleteCheckbox
+                      ? Icons.check_circle
+                      : Icons.check_circle_outline,
+                  color: isCompleteCheckbox
+                      ? const Color(0xFF4CAF50)
+                      : const Color(0xFF1B6B63),
                   size: 48,
                 ),
               ),
@@ -5061,173 +5273,200 @@ class _AttendingButton extends StatelessWidget {
               : null,
         ),
         child: ValueListenableBuilder(
-          valueListenable: DataManager.instance.studentsNotifier,
-          builder: (context, _, __) => ValueListenableBuilder<int>(
-          valueListenable: HomeworkStore.instance.revision,
-          builder: (context, _rev, _) {
-            // 과제 진행 상태 확인
-            final items = HomeworkStore.instance
-                .items(studentId)
-                .where((e) => e.status != HomeworkStatus.completed)
-                .toList();
-            final bool hasAny = items.isNotEmpty;
-            final bool hasRunning =
-                HomeworkStore.instance.runningOf(studentId) != null;
-            final bool isResting = hasAny && !hasRunning; // 모든 칩 정지 → 휴식 상태
+            valueListenable: DataManager.instance.studentsNotifier,
+            builder: (context, _, __) => ValueListenableBuilder<int>(
+                valueListenable: DataManager.instance.deviceBindingsRevision,
+                builder: (context, _bindRev, __) => ValueListenableBuilder<int>(
+                      valueListenable: HomeworkStore.instance.revision,
+                      builder: (context, _rev, _) {
+                        // 과제 진행 상태 확인
+                        final items = HomeworkStore.instance
+                            .items(studentId)
+                            .where((e) => e.status != HomeworkStatus.completed)
+                            .toList();
+                        final bool hasAny = items.isNotEmpty;
+                        final bool hasRunning =
+                            HomeworkStore.instance.runningOf(studentId) != null;
+                        final bool isResting =
+                            hasAny && !hasRunning; // 모든 칩 정지 → 휴식 상태
 
-            // 학생 정보 조회(학교/학년)
-            String school = '';
-            String gradeText = '';
-            try {
-              final swi = DataManager.instance.students
-                  .firstWhere((s) => s.student.id == studentId);
-              school = swi.student.school;
-              final int g = swi.student.grade;
-              gradeText = g > 0 ? (g.toString() + '학년') : '';
-            } catch (_) {}
+                        // 학생 정보 조회(학교/학년)
+                        String school = '';
+                        String gradeText = '';
+                        try {
+                          final swi = DataManager.instance.students
+                              .firstWhere((s) => s.student.id == studentId);
+                          school = swi.student.school;
+                          final int g = swi.student.grade;
+                          gradeText = g > 0 ? (g.toString() + '학년') : '';
+                        } catch (_) {}
 
-            final boundDevice = DataManager.instance.boundDeviceId(studentId);
-            final deviceLabel = boundDevice != null
-                ? boundDevice.replaceAll(RegExp(r'^m5-device-'), '')
-                : null;
+                        final boundDevice =
+                            DataManager.instance.boundDeviceId(studentId);
+                        final deviceLabel = boundDevice != null
+                            ? boundDevice.replaceAll(RegExp(r'^m5-device-'), '')
+                            : null;
 
-            final nameStyle = TextStyle(
-              color: isResting ? Colors.white54 : Colors.white,
-              fontSize: 38,
-              fontWeight: FontWeight.w600,
-              height: 1.0,
-            );
-            final infoLine = [
-              if (school.isNotEmpty) school,
-              if (gradeText.isNotEmpty) gradeText,
-            ].join(' · ');
-            final arrivalText =
-                arrivalTime != null ? _formatShortTime(arrivalTime!) : '--:--';
-            final double nameHeight =
-                (nameStyle.fontSize ?? 34) * (nameStyle.height ?? 1.0);
+                        final nameStyle = TextStyle(
+                          color: isResting ? Colors.white54 : Colors.white,
+                          fontSize: 38,
+                          fontWeight: FontWeight.w600,
+                          height: 1.0,
+                        );
+                        final infoLine = [
+                          if (school.isNotEmpty) school,
+                          if (gradeText.isNotEmpty) gradeText,
+                        ].join(' · ');
+                        final arrivalText = arrivalTime != null
+                            ? _formatShortTime(arrivalTime!)
+                            : '--:--';
+                        final double nameHeight = (nameStyle.fontSize ?? 34) *
+                            (nameStyle.height ?? 1.0);
 
-            return Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    const SizedBox(width: 12),
-                    Expanded(
-                      flex: 3,
-                      child: Text(
-                        name,
-                        style: nameStyle,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    const SizedBox(width: 20),
-                    Expanded(
-                      flex: 3,
-                      child: Align(
-                        alignment: Alignment.centerRight,
-                        child: SizedBox(
-                          height: nameHeight,
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            crossAxisAlignment: CrossAxisAlignment.end,
-                            children: [
-                              Text(
-                                infoLine.isEmpty ? '-' : infoLine,
-                                style: const TextStyle(
-                                  color: Colors.white70,
-                                  fontSize: 16,
-                                  height: 1.2,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              Text(
-                                '등원 $arrivalText',
-                                style: const TextStyle(
-                                  color: Colors.white54,
-                                  fontSize: 14,
-                                  height: 1.2,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                if (deviceLabel != null)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 6, right: 0),
-                    child: Align(
-                      alignment: Alignment.centerRight,
-                      child: MouseRegion(
-                        cursor: SystemMouseCursors.click,
-                        child: GestureDetector(
-                          behavior: HitTestBehavior.opaque,
-                          onTap: () async {
-                            final confirm = await showDialog<bool>(
-                              context: context,
-                              builder: (ctx) => AlertDialog(
-                                backgroundColor: const Color(0xFF1E1E1E),
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                                content: Text(
-                                  '$name 학생의 기기 바인딩을 해제할까요?',
-                                  style: const TextStyle(color: Colors.white70, fontSize: 15),
-                                ),
-                                actions: [
-                                  TextButton(
-                                    onPressed: () => Navigator.pop(ctx, false),
-                                    child: const Text('취소', style: TextStyle(color: Colors.white54)),
+                        return Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  flex: 3,
+                                  child: Text(
+                                    name,
+                                    style: nameStyle,
+                                    overflow: TextOverflow.ellipsis,
                                   ),
-                                  TextButton(
-                                    onPressed: () => Navigator.pop(ctx, true),
-                                    child: const Text('해제', style: TextStyle(color: Color(0xFF1FA95B))),
+                                ),
+                                const SizedBox(width: 20),
+                                Expanded(
+                                  flex: 3,
+                                  child: Align(
+                                    alignment: Alignment.centerRight,
+                                    child: SizedBox(
+                                      height: nameHeight,
+                                      child: Column(
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.spaceBetween,
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.end,
+                                        children: [
+                                          Text(
+                                            infoLine.isEmpty ? '-' : infoLine,
+                                            style: const TextStyle(
+                                              color: Colors.white70,
+                                              fontSize: 16,
+                                              height: 1.2,
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                          Text(
+                                            '등원 $arrivalText',
+                                            style: const TextStyle(
+                                              color: Colors.white54,
+                                              fontSize: 14,
+                                              height: 1.2,
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ],
+                                      ),
+                                    ),
                                   ),
-                                ],
-                              ),
-                            );
-                            if (confirm == true) {
-                              try {
-                                final academyId = await TenantService.instance.getActiveAcademyId();
-                                if (academyId == null) return;
-                                await Supabase.instance.client.rpc('m5_unbind_by_student', params: {
-                                  'p_academy_id': academyId,
-                                  'p_student_id': studentId,
-                                });
-                                await DataManager.instance.loadStudents();
-                              } catch (_) {}
-                            }
-                          },
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: Colors.white.withOpacity(0.12),
-                              borderRadius: BorderRadius.circular(999),
+                                ),
+                              ],
                             ),
-                            child: Text(
-                              '기기 $deviceLabel',
-                              style: const TextStyle(
-                                color: Colors.white38,
-                                fontSize: 12,
-                                height: 1.2,
-                                fontWeight: FontWeight.w500,
+                            if (deviceLabel != null)
+                              Padding(
+                                padding:
+                                    const EdgeInsets.only(top: 6, right: 0),
+                                child: Align(
+                                  alignment: Alignment.centerRight,
+                                  child: MouseRegion(
+                                    cursor: SystemMouseCursors.click,
+                                    child: GestureDetector(
+                                      behavior: HitTestBehavior.opaque,
+                                      onTap: () async {
+                                        final confirm = await showDialog<bool>(
+                                          context: context,
+                                          builder: (ctx) => AlertDialog(
+                                            backgroundColor:
+                                                const Color(0xFF1E1E1E),
+                                            shape: RoundedRectangleBorder(
+                                                borderRadius:
+                                                    BorderRadius.circular(16)),
+                                            content: Text(
+                                              '$name 학생의 기기 바인딩을 해제할까요?',
+                                              style: const TextStyle(
+                                                  color: Colors.white70,
+                                                  fontSize: 15),
+                                            ),
+                                            actions: [
+                                              TextButton(
+                                                onPressed: () =>
+                                                    Navigator.pop(ctx, false),
+                                                child: const Text('취소',
+                                                    style: TextStyle(
+                                                        color: Colors.white54)),
+                                              ),
+                                              TextButton(
+                                                onPressed: () =>
+                                                    Navigator.pop(ctx, true),
+                                                child: const Text('해제',
+                                                    style: TextStyle(
+                                                        color:
+                                                            Color(0xFF1FA95B))),
+                                              ),
+                                            ],
+                                          ),
+                                        );
+                                        if (confirm == true) {
+                                          try {
+                                            final academyId =
+                                                await TenantService.instance
+                                                    .getActiveAcademyId();
+                                            if (academyId == null) return;
+                                            await Supabase.instance.client.rpc(
+                                                'm5_unbind_by_student',
+                                                params: {
+                                                  'p_academy_id': academyId,
+                                                  'p_student_id': studentId,
+                                                });
+                                            await DataManager.instance
+                                                .loadStudents();
+                                          } catch (_) {}
+                                        }
+                                      },
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 10, vertical: 4),
+                                        decoration: BoxDecoration(
+                                          color: Colors.white.withOpacity(0.12),
+                                          borderRadius:
+                                              BorderRadius.circular(999),
+                                        ),
+                                        child: Text(
+                                          '기기 $deviceLabel',
+                                          style: const TextStyle(
+                                            color: Colors.white38,
+                                            fontSize: 12,
+                                            height: 1.2,
+                                            fontWeight: FontWeight.w500,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
                               ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-              ],
-            );
-          },
-        )),
+                          ],
+                        );
+                      },
+                    ))),
       ),
     );
   }

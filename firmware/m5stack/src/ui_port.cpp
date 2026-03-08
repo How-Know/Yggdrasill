@@ -1852,29 +1852,96 @@ static const uint32_t HOMEWORK_UPDATE_DEBOUNCE_MS = 500;
 static uint32_t s_last_card_click_ms = 0;
 static const uint32_t CARD_CLICK_DEBOUNCE_MS = 500;
 
+static void extract_content_marker_value(const char* content, const char* marker, char* out, size_t out_sz) {
+  if (!out || out_sz == 0) return;
+  out[0] = '\0';
+  if (!content || !*content || !marker || !*marker) return;
+  const char* pos = strstr(content, marker);
+  if (!pos) return;
+  const char* start = pos + strlen(marker);
+  while (*start == ' ' || *start == '\t') start++;
+  const char* end = strchr(start, '\n');
+  size_t len = end ? (size_t)(end - start) : strlen(start);
+  while (len > 0 && (start[len - 1] == ' ' || start[len - 1] == '\r' || start[len - 1] == '\t')) len--;
+  if (len > out_sz - 1) len = out_sz - 1;
+  memcpy(out, start, len);
+  out[len] = '\0';
+}
+
 static void extract_book_name(const char* content, const char* title, const char* book_id, const char* grade_label, const char* hw_type, char* out, size_t out_sz) {
   out[0] = '\0';
-  const char* marker = strstr(content, u8"교재:");
-  if (!marker) marker = strstr(content, u8"교재: ");
-  if (marker) {
-    const char* start = marker + strlen(u8"교재:");
-    while (*start == ' ') start++;
-    const char* end = strchr(start, '\n');
-    size_t len = end ? (size_t)(end - start) : strlen(start);
-    if (len > out_sz-1) len = out_sz-1;
-    memcpy(out, start, len); out[len] = '\0'; return;
+  char book_buf[96] = {0};
+  char course_buf[32] = {0};
+
+  // 1) 교재명 우선
+  extract_content_marker_value(content, u8"교재:", book_buf, sizeof(book_buf));
+
+  // 2) 과정은 grade_label 우선, 없으면 content의 "과정:"에서 추출
+  if (grade_label && *grade_label) {
+    strncpy(course_buf, grade_label, sizeof(course_buf) - 1);
+    course_buf[sizeof(course_buf) - 1] = '\0';
+  } else {
+    extract_content_marker_value(content, u8"과정:", course_buf, sizeof(course_buf));
   }
-  if (*book_id && *grade_label) {
+
+  // 3) 교재/과정 정보가 비어있을 때만 제목을 fallback으로 파싱
+  if (!book_buf[0] && title && *title) {
     const char* dot = strstr(title, u8"·");
     if (dot) {
       size_t len = (size_t)(dot - title);
-      while (len > 0 && title[len-1] == ' ') len--;
-      if (len > out_sz-1) len = out_sz-1;
-      memcpy(out, title, len); out[len] = '\0'; return;
+      while (len > 0 && (title[len - 1] == ' ' || title[len - 1] == '\t')) len--;
+      if (len > sizeof(book_buf) - 1) len = sizeof(book_buf) - 1;
+      memcpy(book_buf, title, len);
+      book_buf[len] = '\0';
     }
   }
-  if (*hw_type) { strncpy(out, hw_type, out_sz-1); out[out_sz-1] = '\0'; return; }
-  strncpy(out, title, out_sz-1); out[out_sz-1] = '\0';
+  if (!course_buf[0] && title && *title) {
+    const char* dot = strstr(title, u8"·");
+    if (dot) {
+      const char* start = dot + strlen(u8"·");
+      while (*start == ' ' || *start == '\t') start++;
+      size_t len = strlen(start);
+      while (len > 0 && (start[len - 1] == ' ' || start[len - 1] == '\t')) len--;
+      if (len > sizeof(course_buf) - 1) len = sizeof(course_buf) - 1;
+      memcpy(course_buf, start, len);
+      course_buf[len] = '\0';
+    }
+  }
+
+  // 4) 최종 1열: "교재명 · 과정"
+  if (book_buf[0] && course_buf[0]) {
+    if (strstr(book_buf, course_buf)) {
+      strncpy(out, book_buf, out_sz - 1);
+      out[out_sz - 1] = '\0';
+    } else {
+      snprintf(out, out_sz, "%s · %s", book_buf, course_buf);
+    }
+    return;
+  }
+  if (book_buf[0]) {
+    strncpy(out, book_buf, out_sz - 1);
+    out[out_sz - 1] = '\0';
+    return;
+  }
+  if (course_buf[0]) {
+    strncpy(out, course_buf, out_sz - 1);
+    out[out_sz - 1] = '\0';
+    return;
+  }
+  if (hw_type && *hw_type) {
+    strncpy(out, hw_type, out_sz - 1);
+    out[out_sz - 1] = '\0';
+    return;
+  }
+  if (title && *title) {
+    strncpy(out, title, out_sz - 1);
+    out[out_sz - 1] = '\0';
+    return;
+  }
+  if (book_id && *book_id) {
+    strncpy(out, book_id, out_sz - 1);
+    out[out_sz - 1] = '\0';
+  }
 }
 
 static void fmt_time_static(int secs, char* buf, size_t sz) {

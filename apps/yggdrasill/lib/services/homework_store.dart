@@ -1,7 +1,12 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:supabase_flutter/supabase_flutter.dart' show RealtimeChannel, PostgresChangeEvent, PostgresChangeFilter, PostgresChangeFilterType;
+import 'package:supabase_flutter/supabase_flutter.dart'
+    show
+        RealtimeChannel,
+        PostgresChangeEvent,
+        PostgresChangeFilter,
+        PostgresChangeFilterType;
 import 'package:uuid/uuid.dart';
 import 'tenant_service.dart';
 import 'homework_assignment_store.dart';
@@ -124,10 +129,10 @@ class HomeworkStore {
   int _compareByOrder(HomeworkItem a, HomeworkItem b) {
     final orderCmp = a.orderIndex.compareTo(b.orderIndex);
     if (orderCmp != 0) return orderCmp;
-    final aUpdated = a.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-    final bUpdated = b.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-    final updatedCmp = bUpdated.compareTo(aUpdated);
-    if (updatedCmp != 0) return updatedCmp;
+    final aCreated = a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+    final bCreated = b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+    final createdCmp = aCreated.compareTo(bCreated);
+    if (createdCmp != 0) return createdCmp;
     return a.id.compareTo(b.id);
   }
 
@@ -140,6 +145,19 @@ class HomeworkStore {
     var maxOrder = -1;
     for (final item in list) {
       if (item.status == HomeworkStatus.completed) continue;
+      if (item.orderIndex > maxOrder) {
+        maxOrder = item.orderIndex;
+      }
+    }
+    return maxOrder + 1;
+  }
+
+  int _nextActiveOrderIndexExcluding(String studentId, {String? excludeId}) {
+    final list = _byStudentId[studentId] ?? const <HomeworkItem>[];
+    var maxOrder = -1;
+    for (final item in list) {
+      if (item.status == HomeworkStatus.completed) continue;
+      if (excludeId != null && item.id == excludeId) continue;
       if (item.orderIndex > maxOrder) {
         maxOrder = item.orderIndex;
       }
@@ -169,7 +187,9 @@ class HomeworkStore {
   Future<void> loadAll() async {
     if (_loaded) return;
     try {
-      final String academyId = (await TenantService.instance.getActiveAcademyId()) ?? await TenantService.instance.ensureActiveAcademy();
+      final String academyId =
+          (await TenantService.instance.getActiveAcademyId()) ??
+              await TenantService.instance.ensureActiveAcademy();
       final supa = Supabase.instance.client;
       final data = await _fetchHomeworkRows(
         supa: supa,
@@ -185,6 +205,7 @@ class HomeworkStore {
           if (s == null || s.isEmpty) return null;
           return DateTime.parse(s).toLocal();
         }
+
         int? parseInt(dynamic v) {
           if (v == null) return null;
           if (v is int) return v;
@@ -192,6 +213,7 @@ class HomeworkStore {
           if (v is String) return int.tryParse(v);
           return null;
         }
+
         final item = HomeworkItem(
           id: (r['id'] as String?) ?? const Uuid().v4(),
           title: (r['title'] as String?) ?? '',
@@ -206,16 +228,19 @@ class HomeworkStore {
           gradeLabel: (r['grade_label'] as String?)?.trim(),
           sourceUnitLevel: (r['source_unit_level'] as String?)?.trim(),
           sourceUnitPath: (r['source_unit_path'] as String?)?.trim(),
-          defaultSplitParts: (parseInt(r['default_split_parts']) ?? 1)
-              .clamp(1, 4)
-              .toInt(),
+          defaultSplitParts:
+              (parseInt(r['default_split_parts']) ?? 1).clamp(1, 4).toInt(),
           orderIndex: parseInt(r['order_index']) ?? 0,
           checkCount: parseInt(r['check_count']) ?? 0,
           createdAt: parseTsOpt(r['created_at']),
           updatedAt: parseTsOpt(r['updated_at']),
-          status: HomeworkStatus.values[((r['status'] as int?) ?? 0).clamp(0, HomeworkStatus.values.length - 1)],
+          status: HomeworkStatus.values[((r['status'] as int?) ?? 0)
+              .clamp(0, HomeworkStatus.values.length - 1)],
           phase: (parseInt(r['phase']) ?? 1).clamp(0, 4),
-          accumulatedMs: (r['accumulated_ms'] as int?) ?? (r['accumulated_ms'] is num ? (r['accumulated_ms'] as num).toInt() : 0),
+          accumulatedMs: (r['accumulated_ms'] as int?) ??
+              (r['accumulated_ms'] is num
+                  ? (r['accumulated_ms'] as num).toInt()
+                  : 0),
           runStart: parseTsOpt(r['run_start']),
           completedAt: parseTsOpt(r['completed_at']),
           firstStartedAt: parseTsOpt(r['first_started_at']),
@@ -241,25 +266,33 @@ class HomeworkStore {
   void _subscribeRealtime(String academyId) {
     try {
       if (_rt != null) return;
-      _rt = Supabase.instance.client.channel('public:homework_items:' + academyId)
+      _rt = Supabase.instance.client
+          .channel('public:homework_items:' + academyId)
         ..onPostgresChanges(
           event: PostgresChangeEvent.insert,
           schema: 'public',
           table: 'homework_items',
-          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
+          filter: PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'academy_id',
+              value: academyId),
           callback: (payload) {
             final m = payload.newRecord;
             if (m == null) return;
             final String sid = (m['student_id'] as String?) ?? '';
             if (sid.isEmpty) return;
             HomeworkItem parse(Map<String, dynamic> r) {
-              int _asInt(dynamic v) => (v is num) ? v.toInt() : int.tryParse('$v') ?? 0;
+              int _asInt(dynamic v) =>
+                  (v is num) ? v.toInt() : int.tryParse('$v') ?? 0;
               int? _asIntOpt(dynamic v) {
                 if (v == null) return null;
                 if (v is num) return v.toInt();
                 return int.tryParse('$v');
               }
-              DateTime? _parse(dynamic v) => (v == null) ? null : DateTime.tryParse(v as String)?.toLocal();
+
+              DateTime? _parse(dynamic v) => (v == null)
+                  ? null
+                  : DateTime.tryParse(v as String)?.toLocal();
               return HomeworkItem(
                 id: (r['id'] as String?) ?? const Uuid().v4(),
                 title: (r['title'] as String?) ?? '',
@@ -281,7 +314,8 @@ class HomeworkStore {
                 checkCount: _asIntOpt(r['check_count']) ?? 0,
                 createdAt: _parse(r['created_at']),
                 updatedAt: _parse(r['updated_at']),
-                status: HomeworkStatus.values[(_asInt(r['status'])).clamp(0, HomeworkStatus.values.length - 1)],
+                status: HomeworkStatus.values[(_asInt(r['status']))
+                    .clamp(0, HomeworkStatus.values.length - 1)],
                 phase: (_asInt(r['phase'])).clamp(0, 4),
                 accumulatedMs: _asInt(r['accumulated_ms']),
                 runStart: _parse(r['run_start']),
@@ -293,6 +327,7 @@ class HomeworkStore {
                 version: _asInt(r['version']),
               );
             }
+
             final it = parse(m);
             final list = _byStudentId.putIfAbsent(sid, () => <HomeworkItem>[]);
             final idx = list.indexWhere((e) => e.id == it.id);
@@ -311,19 +346,25 @@ class HomeworkStore {
           event: PostgresChangeEvent.update,
           schema: 'public',
           table: 'homework_items',
-          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
+          filter: PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'academy_id',
+              value: academyId),
           callback: (payload) {
             final m = payload.newRecord;
             if (m == null) return;
             final String sid = (m['student_id'] as String?) ?? '';
             if (sid.isEmpty) return;
-            int _asInt(dynamic v) => (v is num) ? v.toInt() : int.tryParse('$v') ?? 0;
+            int _asInt(dynamic v) =>
+                (v is num) ? v.toInt() : int.tryParse('$v') ?? 0;
             int? _asIntOpt(dynamic v) {
               if (v == null) return null;
               if (v is num) return v.toInt();
               return int.tryParse('$v');
             }
-            DateTime? _parse(dynamic v) => (v == null) ? null : DateTime.tryParse(v as String)?.toLocal();
+
+            DateTime? _parse(dynamic v) =>
+                (v == null) ? null : DateTime.tryParse(v as String)?.toLocal();
             final updated = HomeworkItem(
               id: (m['id'] as String?) ?? const Uuid().v4(),
               title: (m['title'] as String?) ?? '',
@@ -332,7 +373,9 @@ class HomeworkStore {
               flowId: m['flow_id'] as String?,
               type: (m['type'] as String?)?.trim(),
               page: (m['page'] as String?)?.trim(),
-              count: m['count'] is num ? (m['count'] as num).toInt() : int.tryParse('${m['count']}'),
+              count: m['count'] is num
+                  ? (m['count'] as num).toInt()
+                  : int.tryParse('${m['count']}'),
               content: (m['content'] as String?)?.trim(),
               bookId: (m['book_id'] as String?)?.trim(),
               gradeLabel: (m['grade_label'] as String?)?.trim(),
@@ -349,7 +392,8 @@ class HomeworkStore {
                   : int.tryParse('${m['check_count']}') ?? 0,
               createdAt: _parse(m['created_at']),
               updatedAt: _parse(m['updated_at']),
-              status: HomeworkStatus.values[(_asInt(m['status'])).clamp(0, HomeworkStatus.values.length - 1)],
+              status: HomeworkStatus.values[(_asInt(m['status']))
+                  .clamp(0, HomeworkStatus.values.length - 1)],
               phase: (_asInt(m['phase'])).clamp(0, 4),
               accumulatedMs: _asInt(m['accumulated_ms']),
               runStart: _parse(m['run_start']),
@@ -380,7 +424,10 @@ class HomeworkStore {
           event: PostgresChangeEvent.delete,
           schema: 'public',
           table: 'homework_items',
-          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
+          filter: PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'academy_id',
+              value: academyId),
           callback: (payload) {
             final old = payload.oldRecord;
             if (old == null) return;
@@ -403,7 +450,9 @@ class HomeworkStore {
 
   Future<void> _upsertItem(String studentId, HomeworkItem it) async {
     try {
-      final String academyId = (await TenantService.instance.getActiveAcademyId()) ?? await TenantService.instance.ensureActiveAcademy();
+      final String academyId =
+          (await TenantService.instance.getActiveAcademyId()) ??
+              await TenantService.instance.ensureActiveAcademy();
       final supa = Supabase.instance.client;
       final base = {
         'student_id': studentId,
@@ -456,10 +505,8 @@ class HomeworkStore {
         ...base,
         'version': it.version,
       };
-      final insRows = await supa
-          .from('homework_items')
-          .insert(insertRow)
-          .select('version');
+      final insRows =
+          await supa.from('homework_items').insert(insertRow).select('version');
       if (insRows is List && insRows.isNotEmpty) {
         final row = (insRows.first as Map<String, dynamic>);
         it.version = (row['version'] as num?)?.toInt() ?? 1;
@@ -523,7 +570,8 @@ class HomeworkStore {
         final bigOrder = asIntOpt(m['bigOrder']);
         final midOrder = asIntOpt(m['midOrder']);
         final smallOrder = asIntOpt(m['smallOrder']);
-        if (bigOrder == null || midOrder == null || smallOrder == null) continue;
+        if (bigOrder == null || midOrder == null || smallOrder == null)
+          continue;
         final startPage = asIntOpt(m['startPage']);
         final endPage = asIntOpt(m['endPage']);
         final pageCount = asIntOpt(m['pageCount']);
@@ -644,9 +692,12 @@ class HomeworkStore {
   ) async {
     final list = _byStudentId[studentId];
     if (list == null || list.isEmpty) return;
-    final active = list.where((e) => e.status != HomeworkStatus.completed).toList();
+    final active =
+        list.where((e) => e.status != HomeworkStatus.completed).toList();
     if (active.isEmpty) return;
-    final activeById = <String, HomeworkItem>{for (final item in active) item.id: item};
+    final activeById = <String, HomeworkItem>{
+      for (final item in active) item.id: item
+    };
     final used = <String>{};
     final reordered = <HomeworkItem>[];
     for (final id in orderedIds) {
@@ -675,22 +726,15 @@ class HomeworkStore {
   }
 
   Future<void> moveToBottom(String studentId, String id) async {
-    final list = _byStudentId[studentId];
-    if (list == null || list.isEmpty) return;
-    final active = list.where((e) => e.status != HomeworkStatus.completed).toList()
-      ..sort(_compareByOrder);
-    if (!active.any((e) => e.id == id)) return;
-    final orderedIds = <String>[
-      ...active.where((e) => e.id != id).map((e) => e.id),
-      id,
-    ];
-    await reorderActiveItems(studentId, orderedIds);
+    await placeItemAtActiveTail(studentId, id);
   }
 
   Future<void> _normalizeActiveOrderIndices(String studentId) async {
     final list = _byStudentId[studentId];
     if (list == null || list.isEmpty) return;
-    final active = list.where((e) => e.status != HomeworkStatus.completed).toList()
+    final active = list
+        .where((e) => e.status != HomeworkStatus.completed)
+        .toList()
       ..sort(_compareByOrder);
     final changed = <HomeworkItem>[];
     for (int i = 0; i < active.length; i++) {
@@ -710,25 +754,42 @@ class HomeworkStore {
 
   /// 숙제(homework) → 진행중(inProgress)으로 status를 전환하고 서버에도 반영한다.
   Future<void> restoreStatusFromHomework(String studentId, String id) async {
+    await placeItemAtActiveTail(
+      studentId,
+      id,
+      activateFromHomework: true,
+    );
+  }
+
+  /// 활성 목록의 "맨 끝 순번"으로 재배치한다.
+  /// activateFromHomework=true면 숙제 상태를 진행중으로 함께 복귀시킨다.
+  Future<void> placeItemAtActiveTail(
+    String studentId,
+    String id, {
+    bool activateFromHomework = false,
+  }) async {
     final list = _byStudentId[studentId];
     if (list == null) return;
     final idx = list.indexWhere((e) => e.id == id);
     if (idx == -1) return;
     final item = list[idx];
-    if (item.status != HomeworkStatus.homework) return;
-    item.status = HomeworkStatus.inProgress;
-    _bump();
-    try {
-      final String academyId = (await TenantService.instance.getActiveAcademyId()) ??
-          await TenantService.instance.ensureActiveAcademy();
-      await Supabase.instance.client
-          .from('homework_items')
-          .update({'status': HomeworkStatus.inProgress.index})
-          .eq('id', id)
-          .eq('academy_id', academyId);
-    } catch (e) {
-      print('[HW][restoreStatusFromHomework][ERROR] $e');
+    if (item.status == HomeworkStatus.completed) return;
+
+    bool changed = false;
+    if (activateFromHomework && item.status == HomeworkStatus.homework) {
+      item.status = HomeworkStatus.inProgress;
+      changed = true;
     }
+    final nextOrder = _nextActiveOrderIndexExcluding(studentId, excludeId: id);
+    if (item.orderIndex != nextOrder) {
+      item.orderIndex = nextOrder;
+      changed = true;
+    }
+    if (!changed) return;
+
+    _sortStudentList(list);
+    _bump();
+    await _upsertItem(studentId, item);
   }
 
   HomeworkItem? getById(String studentId, String id) {
@@ -751,7 +812,9 @@ class HomeworkStore {
     final idx = list.indexWhere((e) => e.id == id);
     if (idx == -1) return;
     try {
-      final String academyId = (await TenantService.instance.getActiveAcademyId()) ?? await TenantService.instance.ensureActiveAcademy();
+      final String academyId =
+          (await TenantService.instance.getActiveAcademyId()) ??
+              await TenantService.instance.ensureActiveAcademy();
       final String? updatedBy = Supabase.instance.client.auth.currentUser?.id;
       await Supabase.instance.client.rpc('homework_start', params: {
         'p_item_id': id,
@@ -770,7 +833,9 @@ class HomeworkStore {
     final idx = list.indexWhere((e) => e.id == id);
     if (idx == -1) return;
     try {
-      final String academyId = (await TenantService.instance.getActiveAcademyId()) ?? await TenantService.instance.ensureActiveAcademy();
+      final String academyId =
+          (await TenantService.instance.getActiveAcademyId()) ??
+              await TenantService.instance.ensureActiveAcademy();
       final String? updatedBy = Supabase.instance.client.auth.currentUser?.id;
       await Supabase.instance.client.rpc('homework_pause', params: {
         'p_item_id': id,
@@ -786,13 +851,16 @@ class HomeworkStore {
     final idx = list.indexWhere((e) => e.id == id);
     if (idx == -1) return;
     try {
-      final String academyId = (await TenantService.instance.getActiveAcademyId()) ?? await TenantService.instance.ensureActiveAcademy();
+      final String academyId =
+          (await TenantService.instance.getActiveAcademyId()) ??
+              await TenantService.instance.ensureActiveAcademy();
       await Supabase.instance.client.rpc('homework_complete', params: {
         'p_item_id': id,
         'p_academy_id': academyId,
       });
       unawaited(
-        _reloadStudent(studentId).then((_) => _normalizeActiveOrderIndices(studentId)),
+        _reloadStudent(studentId)
+            .then((_) => _normalizeActiveOrderIndices(studentId)),
       );
     } catch (_) {}
   }
@@ -814,7 +882,9 @@ class HomeworkStore {
     item.updatedAt = now;
     _bump();
     try {
-      final String academyId = (await TenantService.instance.getActiveAcademyId()) ?? await TenantService.instance.ensureActiveAcademy();
+      final String academyId =
+          (await TenantService.instance.getActiveAcademyId()) ??
+              await TenantService.instance.ensureActiveAcademy();
       final String? updatedBy = Supabase.instance.client.auth.currentUser?.id;
       await Supabase.instance.client.rpc('homework_submit', params: {
         'p_item_id': id,
@@ -848,7 +918,9 @@ class HomeworkStore {
     item.updatedAt = item.confirmedAt;
     _bump();
     try {
-      final String academyId = (await TenantService.instance.getActiveAcademyId()) ?? await TenantService.instance.ensureActiveAcademy();
+      final String academyId =
+          (await TenantService.instance.getActiveAcademyId()) ??
+              await TenantService.instance.ensureActiveAcademy();
       final String? updatedBy = Supabase.instance.client.auth.currentUser?.id;
       await Supabase.instance.client.rpc('homework_confirm', params: {
         'p_item_id': id,
@@ -857,7 +929,8 @@ class HomeworkStore {
       });
       unawaited(_reloadStudent(studentId));
       if (recordAssignmentCheck) {
-        unawaited(HomeworkAssignmentStore.instance.recordAssignmentCheckForConfirm(
+        unawaited(
+            HomeworkAssignmentStore.instance.recordAssignmentCheckForConfirm(
           studentId: studentId,
           homeworkItemId: id,
         ));
@@ -876,7 +949,9 @@ class HomeworkStore {
     final idx = list.indexWhere((e) => e.id == id);
     if (idx == -1) return;
     try {
-      final String academyId = (await TenantService.instance.getActiveAcademyId()) ?? await TenantService.instance.ensureActiveAcademy();
+      final String academyId =
+          (await TenantService.instance.getActiveAcademyId()) ??
+              await TenantService.instance.ensureActiveAcademy();
       final String? updatedBy = Supabase.instance.client.auth.currentUser?.id;
       await Supabase.instance.client.rpc('homework_wait', params: {
         'p_item_id': id,
@@ -920,7 +995,8 @@ class HomeworkStore {
   }
 
   void _maybeAutoCompleteOnWaiting(String studentId, HomeworkItem item) {
-    if (item.phase == 1 /* waiting */ && _autoCompleteOnNextWaiting.remove(item.id)) {
+    if (item.phase == 1 /* waiting */ &&
+        _autoCompleteOnNextWaiting.remove(item.id)) {
       // 확인 → 대기로 전이된 첫 타이밍에 자동 완료
       unawaited(complete(studentId, item.id));
     }
@@ -1038,8 +1114,7 @@ class HomeworkStore {
           for (final item in toAssign)
             item.id: item.defaultSplitParts.clamp(1, 4).toInt(),
         };
-        unawaited(HomeworkAssignmentStore.instance
-            .recordAssignments(
+        unawaited(HomeworkAssignmentStore.instance.recordAssignments(
           studentId,
           toAssign,
           splitPartsByItem: splitPartsByItem,
@@ -1192,11 +1267,15 @@ class HomeworkStore {
     );
   }
 
-  void _bump() { revision.value++; }
+  void _bump() {
+    revision.value++;
+  }
 
   Future<void> _reloadStudent(String studentId) async {
     try {
-      final String academyId = (await TenantService.instance.getActiveAcademyId()) ?? await TenantService.instance.ensureActiveAcademy();
+      final String academyId =
+          (await TenantService.instance.getActiveAcademyId()) ??
+              await TenantService.instance.ensureActiveAcademy();
       final supa = Supabase.instance.client;
       final data = await _fetchHomeworkRows(
         supa: supa,
@@ -1205,13 +1284,16 @@ class HomeworkStore {
       );
       final List<HomeworkItem> list = [];
       for (final r in data) {
-        int _asInt(dynamic v) => (v is num) ? v.toInt() : int.tryParse('$v') ?? 0;
+        int _asInt(dynamic v) =>
+            (v is num) ? v.toInt() : int.tryParse('$v') ?? 0;
         int? _asIntOpt(dynamic v) {
           if (v == null) return null;
           if (v is num) return v.toInt();
           return int.tryParse('$v');
         }
-        DateTime? _parse(dynamic v) => (v == null) ? null : DateTime.tryParse(v as String)?.toLocal();
+
+        DateTime? _parse(dynamic v) =>
+            (v == null) ? null : DateTime.tryParse(v as String)?.toLocal();
         list.add(HomeworkItem(
           id: (r['id'] as String?) ?? const Uuid().v4(),
           title: (r['title'] as String?) ?? '',
@@ -1226,14 +1308,14 @@ class HomeworkStore {
           gradeLabel: (r['grade_label'] as String?)?.trim(),
           sourceUnitLevel: (r['source_unit_level'] as String?)?.trim(),
           sourceUnitPath: (r['source_unit_path'] as String?)?.trim(),
-          defaultSplitParts: (_asIntOpt(r['default_split_parts']) ?? 1)
-              .clamp(1, 4)
-              .toInt(),
+          defaultSplitParts:
+              (_asIntOpt(r['default_split_parts']) ?? 1).clamp(1, 4).toInt(),
           orderIndex: _asInt(r['order_index']),
           checkCount: _asInt(r['check_count']),
           createdAt: _parse(r['created_at']),
           updatedAt: _parse(r['updated_at']),
-          status: HomeworkStatus.values[(_asInt(r['status'])).clamp(0, HomeworkStatus.values.length - 1)],
+          status: HomeworkStatus.values[
+              (_asInt(r['status'])).clamp(0, HomeworkStatus.values.length - 1)],
           phase: (_asInt(r['phase'])).clamp(0, 4),
           accumulatedMs: _asInt(r['accumulated_ms']),
           runStart: _parse(r['run_start']),

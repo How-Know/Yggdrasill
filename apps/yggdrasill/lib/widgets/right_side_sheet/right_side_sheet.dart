@@ -39,6 +39,7 @@ enum RightSideSheetMode { none, answerKey, fileShortcut, pdfEdit, memo }
 
 class RightSideSheet extends StatefulWidget {
   final VoidCallback onClose;
+
   /// showDialog를 띄울 컨텍스트(우측 사이드시트는 Overlay 안에 있어 Navigator가 없을 수 있음)
   final BuildContext? dialogContext;
   const RightSideSheet({
@@ -55,18 +56,30 @@ class _RightSideSheetState extends State<RightSideSheet> {
   // 기본 탭: 이전 상태가 없다면 항상 "PDF 바로가기"부터 시작
   RightSideSheetMode _mode = RightSideSheetMode.answerKey;
   final List<_BookItem> _books = <_BookItem>[];
-  Map<String, Map<String, String>> _pdfPathByBookAndGrade = <String, Map<String, String>>{};
+  Map<String, Map<String, String>> _pdfPathByBookAndGrade =
+      <String, Map<String, String>>{};
   int _bookSeq = 0;
   String? _selectedBookId;
   int _answerKeyTabIndex = 0;
   Future<void>? _answerKeyLoadFuture;
   static const List<String> _answerKeyTabs = ['교재', '시험'];
-  String get _answerKeyCategory => _answerKeyTabIndex == 0 ? 'textbook' : 'exam';
+  String get _answerKeyCategory =>
+      _answerKeyTabIndex == 0 ? 'textbook' : 'exam';
   bool get _answerKeyReadOnly => true;
   static const List<String> _answerKeyGradeOrder = [
-    '초1', '초2', '초3', '초4', '초5', '초6',
-    '중1', '중2', '중3',
-    '고1', '고2', '고3', 'N수',
+    '초1',
+    '초2',
+    '초3',
+    '초4',
+    '초5',
+    '초6',
+    '중1',
+    '중2',
+    '중3',
+    '고1',
+    '고2',
+    '고3',
+    'N수',
   ];
 
   List<_GradeOption> _grades = <_GradeOption>[];
@@ -87,15 +100,19 @@ class _RightSideSheetState extends State<RightSideSheet> {
   String _memoFilterKey = _memoFilterAll;
 
   // pdf 편집(범위 입력은 시트, 미리보기는 다이얼로그) 상태
-  final TextEditingController _pdfEditInputCtrl = ImeAwareTextEditingController();
-  final TextEditingController _pdfEditRangesCtrl = ImeAwareTextEditingController();
-  final TextEditingController _pdfEditFileNameCtrl = ImeAwareTextEditingController();
+  final TextEditingController _pdfEditInputCtrl =
+      ImeAwareTextEditingController();
+  final TextEditingController _pdfEditRangesCtrl =
+      ImeAwareTextEditingController();
+  final TextEditingController _pdfEditFileNameCtrl =
+      ImeAwareTextEditingController();
   String? _pdfEditLastOutputPath;
   bool _pdfEditBusy = false;
 
   bool _looksLikeUuid(String s) {
     // uuid v4 뿐 아니라 일반 UUID 형식만 체크 (서버 컬럼이 uuid 타입)
-    final re = RegExp(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$');
+    final re = RegExp(
+        r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$');
     return re.hasMatch(s);
   }
 
@@ -155,7 +172,8 @@ class _RightSideSheetState extends State<RightSideSheet> {
   }
 
   List<_GradeOption> _buildGradeOptionsFromNames(Iterable<String> names) {
-    final unique = names.where((e) => e.trim().isNotEmpty).map((e) => e.trim()).toSet();
+    final unique =
+        names.where((e) => e.trim().isNotEmpty).map((e) => e.trim()).toSet();
     if (unique.isEmpty) return <_GradeOption>[];
     final orderIndex = <String, int>{};
     for (int i = 0; i < _answerKeyGradeOrder.length; i++) {
@@ -172,7 +190,9 @@ class _RightSideSheetState extends State<RightSideSheet> {
     }
     known.sort((a, b) => orderIndex[a]!.compareTo(orderIndex[b]!));
     unknown.sort();
-    return [...known, ...unknown].map((n) => _GradeOption(key: n, label: n)).toList();
+    return [...known, ...unknown]
+        .map((n) => _GradeOption(key: n, label: n))
+        .toList();
   }
 
   String _basenameWithoutExtension(String path) {
@@ -230,15 +250,18 @@ class _RightSideSheetState extends State<RightSideSheet> {
     final ranges = _pdfEditRangesCtrl.text.trim();
     var outName = _pdfEditFileNameCtrl.text.trim();
     if (inPath.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('원본 PDF를 먼저 선택하세요.')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('원본 PDF를 먼저 선택하세요.')));
       return;
     }
     if (!inPath.toLowerCase().endsWith('.pdf')) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('PDF 파일만 지원합니다.')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('PDF 파일만 지원합니다.')));
       return;
     }
     if (ranges.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('페이지 범위를 입력하세요.')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('페이지 범위를 입력하세요.')));
       return;
     }
     if (outName.isEmpty) {
@@ -262,7 +285,8 @@ class _RightSideSheetState extends State<RightSideSheet> {
       if (selected.isEmpty) {
         src.dispose();
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('유효한 페이지 범위가 없습니다.')));
+          ScaffoldMessenger.of(context)
+              .showSnackBar(const SnackBar(content: Text('유효한 페이지 범위가 없습니다.')));
         }
         return;
       }
@@ -296,7 +320,8 @@ class _RightSideSheetState extends State<RightSideSheet> {
       await File(outPath).writeAsBytes(outBytes, flush: true);
       if (!mounted) return;
       setState(() => _pdfEditLastOutputPath = outPath);
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('PDF 생성이 완료되었습니다.')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('PDF 생성이 완료되었습니다.')));
     } finally {
       if (mounted) setState(() => _pdfEditBusy = false);
     }
@@ -306,11 +331,13 @@ class _RightSideSheetState extends State<RightSideSheet> {
     final dlgCtx = widget.dialogContext ?? context;
     final inPath = _pdfEditInputCtrl.text.trim();
     if (inPath.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('원본 PDF를 먼저 선택하세요.')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('원본 PDF를 먼저 선택하세요.')));
       return;
     }
     if (!inPath.toLowerCase().endsWith('.pdf')) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('PDF 파일만 지원합니다.')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('PDF 파일만 지원합니다.')));
       return;
     }
     var outName = _pdfEditFileNameCtrl.text.trim();
@@ -346,7 +373,8 @@ class _RightSideSheetState extends State<RightSideSheet> {
     final category = _answerKeyCategory;
 
     try {
-      final rows = await DataManager.instance.loadResourceFilesForCategory(category);
+      final rows =
+          await DataManager.instance.loadResourceFilesForCategory(category);
       final nextBooks = <_BookItem>[];
       final nextPdfMap = <String, Map<String, String>>{};
       final gradeNames = <String>{};
@@ -380,7 +408,9 @@ class _RightSideSheetState extends State<RightSideSheet> {
       }
 
       if (!mounted || category != _answerKeyCategory) return;
-      final derivedGrades = _grades.isNotEmpty ? _grades : _buildGradeOptionsFromNames(gradeNames);
+      final derivedGrades = _grades.isNotEmpty
+          ? _grades
+          : _buildGradeOptionsFromNames(gradeNames);
       final updatedBooks = <_BookItem>[];
       for (final b in nextBooks) {
         final paths = nextPdfMap[b.id] ?? const <String, String>{};
@@ -401,7 +431,8 @@ class _RightSideSheetState extends State<RightSideSheet> {
           _gradesLoaded = true;
           _defaultGradeIndex = _defaultGradeIndex.clamp(0, _grades.length - 1);
         }
-        if (_selectedBookId != null && !updatedBooks.any((b) => b.id == _selectedBookId)) {
+        if (_selectedBookId != null &&
+            !updatedBooks.any((b) => b.id == _selectedBookId)) {
           _selectedBookId = null;
         }
       });
@@ -500,11 +531,16 @@ class _RightSideSheetState extends State<RightSideSheet> {
           ),
           title: const Text(
             'PDF 교체',
-            style: TextStyle(color: _rsText, fontSize: 18, fontWeight: FontWeight.w900),
+            style: TextStyle(
+                color: _rsText, fontSize: 18, fontWeight: FontWeight.w900),
           ),
           content: const Text(
             '이미 이 학년에 연결된 PDF가 있습니다.\n새 PDF로 교체할까요?',
-            style: TextStyle(color: _rsTextSub, fontSize: 13, fontWeight: FontWeight.w700, height: 1.4),
+            style: TextStyle(
+                color: _rsTextSub,
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                height: 1.4),
           ),
           actions: [
             TextButton(
@@ -517,9 +553,11 @@ class _RightSideSheetState extends State<RightSideSheet> {
               style: FilledButton.styleFrom(
                 backgroundColor: _rsAccent,
                 foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10)),
               ),
-              child: const Text('교체', style: TextStyle(fontWeight: FontWeight.w900)),
+              child: const Text('교체',
+                  style: TextStyle(fontWeight: FontWeight.w900)),
             ),
           ],
         );
@@ -576,7 +614,8 @@ class _RightSideSheetState extends State<RightSideSheet> {
     final path = file.path.trim();
     if (path.isEmpty || !path.toLowerCase().endsWith('.pdf')) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('PDF 파일만 지원합니다.')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('PDF 파일만 지원합니다.')));
       }
       return false;
     }
@@ -615,7 +654,8 @@ class _RightSideSheetState extends State<RightSideSheet> {
       await DataManager.instance.saveAnswerKeyBookPdf(row);
       if (!mounted) return false;
       setState(() {
-        final m = _pdfPathByBookAndGrade.putIfAbsent(book.id, () => <String, String>{});
+        final m = _pdfPathByBookAndGrade.putIfAbsent(
+            book.id, () => <String, String>{});
         m[grade.key] = path;
       });
       ScaffoldMessenger.of(context).showSnackBar(
@@ -677,7 +717,8 @@ class _RightSideSheetState extends State<RightSideSheet> {
     }
 
     final current = book.gradeIndex.clamp(0, _grades.length - 1);
-    final effective = linkedIndices.contains(current) ? current : linkedIndices.first;
+    final effective =
+        linkedIndices.contains(current) ? current : linkedIndices.first;
     final grade = _grades[effective];
     final path = paths[grade.key];
     if (path == null || path.trim().isEmpty) {
@@ -733,7 +774,8 @@ class _RightSideSheetState extends State<RightSideSheet> {
       ];
       await DataManager.instance.saveAnswerKeyGrades(rows);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('과정 목록이 저장되었습니다.')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('과정 목록이 저장되었습니다.')));
     } catch (e) {
       if (!mounted) return;
       final s = e.toString();
@@ -741,7 +783,8 @@ class _RightSideSheetState extends State<RightSideSheet> {
           (s.contains('PGRST205') || s.toLowerCase().contains('schema cache'));
       if (missingTable) {
         final localLikelySaved = !RuntimeFlags.serverOnly &&
-            (!TagPresetService.preferSupabaseRead || TagPresetService.dualWrite);
+            (!TagPresetService.preferSupabaseRead ||
+                TagPresetService.dualWrite);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
@@ -753,7 +796,8 @@ class _RightSideSheetState extends State<RightSideSheet> {
         );
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('과정 목록 저장에 실패했습니다.')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('과정 목록 저장에 실패했습니다.')));
     }
   }
 
@@ -804,7 +848,8 @@ class _RightSideSheetState extends State<RightSideSheet> {
     await DataManager.instance.saveAnswerKeyBookPdf(row);
     if (!mounted) return;
     setState(() {
-      final m = _pdfPathByBookAndGrade.putIfAbsent(book.id, () => <String, String>{});
+      final m =
+          _pdfPathByBookAndGrade.putIfAbsent(book.id, () => <String, String>{});
       m[grade.key] = file.path;
     });
   }
@@ -813,7 +858,8 @@ class _RightSideSheetState extends State<RightSideSheet> {
     required _BookItem book,
     required _GradeOption grade,
   }) async {
-    await DataManager.instance.deleteAnswerKeyBookPdf(bookId: book.id, gradeKey: grade.key);
+    await DataManager.instance
+        .deleteAnswerKeyBookPdf(bookId: book.id, gradeKey: grade.key);
     if (!mounted) return;
     setState(() {
       final m = _pdfPathByBookAndGrade[book.id];
@@ -826,11 +872,13 @@ class _RightSideSheetState extends State<RightSideSheet> {
   Future<void> _openBookPdfEditDialog(_BookItem book) async {
     if (_grades.isEmpty) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('과정이 없어 PDF 연결을 수정할 수 없습니다.')));
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('과정이 없어 PDF 연결을 수정할 수 없습니다.')));
       return;
     }
     final dlgCtx = widget.dialogContext ?? context;
-    final initial = Map<String, String>.from(_pdfPathByBookAndGrade[book.id] ?? const <String, String>{});
+    final initial = Map<String, String>.from(
+        _pdfPathByBookAndGrade[book.id] ?? const <String, String>{});
     await showDialog<void>(
       context: dlgCtx,
       useRootNavigator: true,
@@ -839,7 +887,8 @@ class _RightSideSheetState extends State<RightSideSheet> {
         grades: _grades,
         initialPaths: initial,
         basenameOf: _basename,
-        onPickAndSave: (grade, file) => _savePdfLinkForBook(book: book, grade: grade, file: file),
+        onPickAndSave: (grade, file) =>
+            _savePdfLinkForBook(book: book, grade: grade, file: file),
         onDetach: (grade) => _deletePdfLinkForBook(book: book, grade: grade),
       ),
     );
@@ -848,7 +897,8 @@ class _RightSideSheetState extends State<RightSideSheet> {
   Future<void> _onEditPdfsPressed() async {
     if (_books.isEmpty) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('수정할 책이 없습니다.')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('수정할 책이 없습니다.')));
       return;
     }
     final dlgCtx = widget.dialogContext ?? context;
@@ -860,7 +910,8 @@ class _RightSideSheetState extends State<RightSideSheet> {
   Future<void> _onEditBookPressed() async {
     if (_books.isEmpty) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('수정할 책이 없습니다.')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('수정할 책이 없습니다.')));
       return;
     }
     final dlgCtx = widget.dialogContext ?? context;
@@ -887,14 +938,16 @@ class _RightSideSheetState extends State<RightSideSheet> {
       await _saveAllBooks();
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('책 정보 저장에 실패했습니다.')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('책 정보 저장에 실패했습니다.')));
     }
   }
 
   Future<void> _onDeleteBookPressed() async {
     if (_books.isEmpty) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('삭제할 책이 없습니다.')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('삭제할 책이 없습니다.')));
       return;
     }
     final dlgCtx = widget.dialogContext ?? context;
@@ -913,11 +966,16 @@ class _RightSideSheetState extends State<RightSideSheet> {
           ),
           title: const Text(
             '책 삭제',
-            style: TextStyle(color: _rsText, fontSize: 18, fontWeight: FontWeight.w900),
+            style: TextStyle(
+                color: _rsText, fontSize: 18, fontWeight: FontWeight.w900),
           ),
           content: Text(
             '“${book.name}”을(를) 삭제할까요?\n연결된 PDF도 함께 삭제됩니다.',
-            style: const TextStyle(color: _rsTextSub, fontSize: 13, fontWeight: FontWeight.w700, height: 1.4),
+            style: const TextStyle(
+                color: _rsTextSub,
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                height: 1.4),
           ),
           actions: [
             TextButton(
@@ -930,9 +988,11 @@ class _RightSideSheetState extends State<RightSideSheet> {
               style: FilledButton.styleFrom(
                 backgroundColor: const Color(0xFFB74C4C),
                 foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10)),
               ),
-              child: const Text('삭제', style: TextStyle(fontWeight: FontWeight.w900)),
+              child: const Text('삭제',
+                  style: TextStyle(fontWeight: FontWeight.w900)),
             ),
           ],
         );
@@ -951,7 +1011,9 @@ class _RightSideSheetState extends State<RightSideSheet> {
     });
     // 남은 책 order_index 저장
     unawaited(() async {
-      try { await _saveAllBooks(); } catch (_) {}
+      try {
+        await _saveAllBooks();
+      } catch (_) {}
     }());
   }
 
@@ -976,7 +1038,8 @@ class _RightSideSheetState extends State<RightSideSheet> {
         if (!mounted) return;
         final s = e.toString();
         final missingTable = s.contains('answer_key_books') &&
-            (s.contains('PGRST205') || s.toLowerCase().contains('schema cache'));
+            (s.contains('PGRST205') ||
+                s.toLowerCase().contains('schema cache'));
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
@@ -1172,7 +1235,8 @@ class _RightSideSheetState extends State<RightSideSheet> {
         return FileShortcutTab(dialogContext: widget.dialogContext);
       case RightSideSheetMode.pdfEdit:
         final inputPath = _pdfEditInputCtrl.text.trim();
-        final hasPdf = inputPath.isNotEmpty && inputPath.toLowerCase().endsWith('.pdf');
+        final hasPdf =
+            inputPath.isNotEmpty && inputPath.toLowerCase().endsWith('.pdf');
         final hasRanges = _pdfEditRangesCtrl.text.trim().isNotEmpty;
         return Padding(
           padding: const EdgeInsets.fromLTRB(10, 12, 10, 12),
@@ -1181,7 +1245,8 @@ class _RightSideSheetState extends State<RightSideSheet> {
             children: [
               const Text(
                 'PDF 편집',
-                style: TextStyle(color: _rsText, fontSize: 16, fontWeight: FontWeight.w900),
+                style: TextStyle(
+                    color: _rsText, fontSize: 16, fontWeight: FontWeight.w900),
               ),
               const SizedBox(height: 12),
               Container(
@@ -1193,7 +1258,11 @@ class _RightSideSheetState extends State<RightSideSheet> {
                 ),
                 child: const Text(
                   '범위 입력(시트)에서 페이지를 지정하고, 필요하면 아래 “미리보기 선택”으로 검수/순서조정 후 생성하세요.',
-                  style: TextStyle(color: _rsTextSub, fontSize: 13, fontWeight: FontWeight.w700, height: 1.35),
+                  style: TextStyle(
+                      color: _rsTextSub,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      height: 1.35),
                 ),
               ),
               const SizedBox(height: 12),
@@ -1202,7 +1271,9 @@ class _RightSideSheetState extends State<RightSideSheet> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      const Text('입력 PDF', style: TextStyle(color: _rsTextSub, fontWeight: FontWeight.w800)),
+                      const Text('입력 PDF',
+                          style: TextStyle(
+                              color: _rsTextSub, fontWeight: FontWeight.w800)),
                       const SizedBox(height: 6),
                       TextField(
                         controller: _pdfEditInputCtrl,
@@ -1213,7 +1284,8 @@ class _RightSideSheetState extends State<RightSideSheet> {
                             _syncPdfEditDefaultFileName(inPath: v);
                           }
                         },
-                        style: const TextStyle(color: _rsText, fontWeight: FontWeight.w700),
+                        style: const TextStyle(
+                            color: _rsText, fontWeight: FontWeight.w700),
                         decoration: InputDecoration(
                           hintText: '원본 PDF 경로',
                           hintStyle: const TextStyle(color: _rsTextSub),
@@ -1223,7 +1295,8 @@ class _RightSideSheetState extends State<RightSideSheet> {
                           ),
                           focusedBorder: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(12),
-                            borderSide: const BorderSide(color: _rsAccent, width: 1.4),
+                            borderSide:
+                                const BorderSide(color: _rsAccent, width: 1.4),
                           ),
                           filled: true,
                           fillColor: _rsFieldBg,
@@ -1236,7 +1309,8 @@ class _RightSideSheetState extends State<RightSideSheet> {
                           if (detail.files.isEmpty) return;
                           final xf = detail.files.first;
                           final path = xf.path;
-                          if (path != null && path.toLowerCase().endsWith('.pdf')) {
+                          if (path != null &&
+                              path.toLowerCase().endsWith('.pdf')) {
                             setState(() {
                               _pdfEditInputCtrl.text = path;
                               _syncPdfEditDefaultFileName(inPath: path);
@@ -1253,7 +1327,8 @@ class _RightSideSheetState extends State<RightSideSheet> {
                           ),
                           child: const Text(
                             '여기로 PDF를 드래그하여 선택',
-                            style: TextStyle(color: _rsTextSub, fontWeight: FontWeight.w700),
+                            style: TextStyle(
+                                color: _rsTextSub, fontWeight: FontWeight.w700),
                           ),
                         ),
                       ),
@@ -1262,13 +1337,15 @@ class _RightSideSheetState extends State<RightSideSheet> {
                         children: [
                           Expanded(
                             child: OutlinedButton.icon(
-                              onPressed: _pdfEditBusy ? null : _pickPdfEditInput,
+                              onPressed:
+                                  _pdfEditBusy ? null : _pickPdfEditInput,
                               icon: const Icon(Icons.folder_open, size: 16),
                               label: const Text('찾기'),
                               style: OutlinedButton.styleFrom(
                                 foregroundColor: _rsTextSub,
                                 side: const BorderSide(color: _rsBorder),
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(10)),
                               ),
                             ),
                           ),
@@ -1278,7 +1355,8 @@ class _RightSideSheetState extends State<RightSideSheet> {
                         const SizedBox(height: 14),
                         const Text(
                           '페이지 범위 (예: 1-3,5,7-9)',
-                          style: TextStyle(color: _rsTextSub, fontWeight: FontWeight.w800),
+                          style: TextStyle(
+                              color: _rsTextSub, fontWeight: FontWeight.w800),
                         ),
                         const SizedBox(height: 6),
                         TextField(
@@ -1287,7 +1365,8 @@ class _RightSideSheetState extends State<RightSideSheet> {
                             if (_pdfEditBusy) return;
                             setState(() {});
                           },
-                          style: const TextStyle(color: _rsText, fontWeight: FontWeight.w700),
+                          style: const TextStyle(
+                              color: _rsText, fontWeight: FontWeight.w700),
                           decoration: InputDecoration(
                             hintText: '쉼표로 구분, 범위는 하이픈',
                             hintStyle: const TextStyle(color: _rsTextSub),
@@ -1297,7 +1376,8 @@ class _RightSideSheetState extends State<RightSideSheet> {
                             ),
                             focusedBorder: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(12),
-                              borderSide: const BorderSide(color: _rsAccent, width: 1.4),
+                              borderSide: const BorderSide(
+                                  color: _rsAccent, width: 1.4),
                             ),
                             filled: true,
                             fillColor: _rsFieldBg,
@@ -1306,11 +1386,15 @@ class _RightSideSheetState extends State<RightSideSheet> {
                       ],
                       if (hasPdf && hasRanges) ...[
                         const SizedBox(height: 14),
-                        const Text('파일명', style: TextStyle(color: _rsTextSub, fontWeight: FontWeight.w800)),
+                        const Text('파일명',
+                            style: TextStyle(
+                                color: _rsTextSub,
+                                fontWeight: FontWeight.w800)),
                         const SizedBox(height: 6),
                         TextField(
                           controller: _pdfEditFileNameCtrl,
-                          style: const TextStyle(color: _rsText, fontWeight: FontWeight.w700),
+                          style: const TextStyle(
+                              color: _rsText, fontWeight: FontWeight.w700),
                           decoration: InputDecoration(
                             hintText: '원본명_과정_본문.pdf',
                             hintStyle: const TextStyle(color: _rsTextSub),
@@ -1320,7 +1404,8 @@ class _RightSideSheetState extends State<RightSideSheet> {
                             ),
                             focusedBorder: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(12),
-                              borderSide: const BorderSide(color: _rsAccent, width: 1.4),
+                              borderSide: const BorderSide(
+                                  color: _rsAccent, width: 1.4),
                             ),
                             filled: true,
                             fillColor: _rsFieldBg,
@@ -1330,36 +1415,52 @@ class _RightSideSheetState extends State<RightSideSheet> {
                         SizedBox(
                           height: 48,
                           child: FilledButton.icon(
-                            onPressed: _pdfEditBusy ? null : _generatePdfFromRangesInSheet,
+                            onPressed: _pdfEditBusy
+                                ? null
+                                : _generatePdfFromRangesInSheet,
                             icon: _pdfEditBusy
-                                ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                                ? const SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                        strokeWidth: 2))
                                 : const Icon(Icons.save_outlined, size: 16),
                             label: const Text('범위로 생성'),
                             style: FilledButton.styleFrom(
                               backgroundColor: _rsAccent,
                               foregroundColor: Colors.white,
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                              shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(10)),
                             ),
                           ),
                         ),
                       ],
                       const SizedBox(height: 12),
-                      if (_pdfEditLastOutputPath != null && _pdfEditLastOutputPath!.trim().isNotEmpty)
+                      if (_pdfEditLastOutputPath != null &&
+                          _pdfEditLastOutputPath!.trim().isNotEmpty)
                         Container(
                           padding: const EdgeInsets.all(12),
                           decoration: BoxDecoration(
                             color: _rsFieldBg,
                             borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: _rsBorder.withOpacity(0.9)),
+                            border:
+                                Border.all(color: _rsBorder.withOpacity(0.9)),
                           ),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              const Text('마지막 생성', style: TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w900)),
+                              const Text('마지막 생성',
+                                  style: TextStyle(
+                                      color: _rsTextSub,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w900)),
                               const SizedBox(height: 6),
                               Text(
                                 _basename(_pdfEditLastOutputPath!),
-                                style: const TextStyle(color: _rsText, fontSize: 13, fontWeight: FontWeight.w800),
+                                style: const TextStyle(
+                                    color: _rsText,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w800),
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                               ),
@@ -1369,20 +1470,27 @@ class _RightSideSheetState extends State<RightSideSheet> {
                                   OutlinedButton(
                                     onPressed: () async {
                                       try {
-                                        await OpenFilex.open(_pdfEditLastOutputPath!);
+                                        await OpenFilex.open(
+                                            _pdfEditLastOutputPath!);
                                       } catch (_) {}
                                     },
                                     style: OutlinedButton.styleFrom(
                                       foregroundColor: Colors.white70,
-                                      side: BorderSide(color: _rsBorder.withOpacity(0.9)),
-                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                      side: BorderSide(
+                                          color: _rsBorder.withOpacity(0.9)),
+                                      shape: RoundedRectangleBorder(
+                                          borderRadius:
+                                              BorderRadius.circular(10)),
                                     ),
                                     child: const Text('열기'),
                                   ),
                                   const SizedBox(width: 8),
                                   Text(
                                     '과정: ${_currentGradeLabelForPdfEdit()}',
-                                    style: const TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w800),
+                                    style: const TextStyle(
+                                        color: _rsTextSub,
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w800),
                                   ),
                                 ],
                               ),
@@ -1398,19 +1506,23 @@ class _RightSideSheetState extends State<RightSideSheet> {
                 duration: const Duration(milliseconds: 140),
                 switchInCurve: Curves.easeOutCubic,
                 switchOutCurve: Curves.easeOutCubic,
-                transitionBuilder: (child, anim) => FadeTransition(opacity: anim, child: child),
+                transitionBuilder: (child, anim) =>
+                    FadeTransition(opacity: anim, child: child),
                 child: hasPdf
                     ? SizedBox(
                         key: const ValueKey('pdf_edit_preview_btn'),
                         height: 48,
                         child: OutlinedButton.icon(
-                          onPressed: _pdfEditBusy ? null : _openPdfPreviewSelectDialogFromSheet,
+                          onPressed: _pdfEditBusy
+                              ? null
+                              : _openPdfPreviewSelectDialogFromSheet,
                           icon: const Icon(Icons.preview_outlined, size: 16),
                           label: const Text('미리보기로 편집'),
                           style: OutlinedButton.styleFrom(
                             foregroundColor: _rsTextSub,
                             side: const BorderSide(color: _rsBorder),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(10)),
                           ),
                         ),
                       )
@@ -1430,7 +1542,8 @@ class _RightSideSheetState extends State<RightSideSheet> {
 
   Future<void> _onAddMemoPressed() async {
     final dlgCtx = widget.dialogContext ?? context;
-    final initialCat = (_memoFilterKey == MemoCategory.schedule || _memoFilterKey == MemoCategory.consult)
+    final initialCat = (_memoFilterKey == MemoCategory.schedule ||
+            _memoFilterKey == MemoCategory.consult)
         ? _memoFilterKey
         : MemoCategory.schedule;
     final result = await showDialog<MemoCreateResult>(
@@ -1473,7 +1586,8 @@ class _RightSideSheetState extends State<RightSideSheet> {
     final edited = await showDialog<MemoEditResult>(
       context: dlgCtx,
       useRootNavigator: true,
-      builder: (_) => MemoEditDialog(initial: item.original, initialScheduledAt: item.scheduledAt),
+      builder: (_) => MemoEditDialog(
+          initial: item.original, initialScheduledAt: item.scheduledAt),
     );
     if (edited == null) return;
     if (edited.action == MemoEditAction.delete) {
@@ -1513,7 +1627,8 @@ class _RightSideSheetState extends State<RightSideSheet> {
       );
     } catch (_) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('문의 노트 페이지를 열 수 없습니다.')));
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('문의 노트 페이지를 열 수 없습니다.')));
       }
     }
   }
@@ -1524,9 +1639,13 @@ class _TopIconBar extends StatelessWidget {
   final ValueChanged<RightSideSheetMode> onModeSelected;
   final VoidCallback onClose;
 
-  const _TopIconBar({required this.mode, required this.onModeSelected, required this.onClose});
+  const _TopIconBar(
+      {required this.mode,
+      required this.onModeSelected,
+      required this.onClose});
 
-  Color _colorFor(RightSideSheetMode m) => (mode == m) ? _rsAccent : Colors.white70;
+  Color _colorFor(RightSideSheetMode m) =>
+      (mode == m) ? _rsAccent : Colors.white70;
 
   @override
   Widget build(BuildContext context) {
@@ -1553,7 +1672,8 @@ class _TopIconBar extends StatelessWidget {
                 ),
                 IconButton(
                   tooltip: '파일 바로가기',
-                  onPressed: () => onModeSelected(RightSideSheetMode.fileShortcut),
+                  onPressed: () =>
+                      onModeSelected(RightSideSheetMode.fileShortcut),
                   icon: const Icon(Icons.folder_open_outlined),
                   color: _colorFor(RightSideSheetMode.fileShortcut),
                 ),
@@ -1596,10 +1716,12 @@ class _BottomAddBar extends StatelessWidget {
             style: FilledButton.styleFrom(
               backgroundColor: _rsAccent,
               foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10)),
             ),
             icon: const Icon(Icons.add, size: 18),
-            label: const Text('추가', style: TextStyle(fontWeight: FontWeight.w800)),
+            label:
+                const Text('추가', style: TextStyle(fontWeight: FontWeight.w800)),
           ),
         ),
       ),
@@ -1657,7 +1779,8 @@ class _MemoExplorer extends StatelessWidget {
         children: [
           const Text(
             '메모',
-            style: TextStyle(color: _rsText, fontSize: 16, fontWeight: FontWeight.w900),
+            style: TextStyle(
+                color: _rsText, fontSize: 16, fontWeight: FontWeight.w900),
           ),
           const SizedBox(height: 12),
           _ExplorerHeader(
@@ -1669,15 +1792,18 @@ class _MemoExplorer extends StatelessWidget {
                   onPressed: onAddMemo,
                   icon: const Icon(Icons.add, color: Colors.white70, size: 20),
                   padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+                  constraints:
+                      const BoxConstraints(minWidth: 44, minHeight: 44),
                 ),
                 const SizedBox(width: 8),
                 IconButton(
                   tooltip: '문의 노트 열기',
                   onPressed: onOpenConsult,
-                  icon: const Icon(Icons.support_agent_outlined, color: Colors.white70, size: 20),
+                  icon: const Icon(Icons.support_agent_outlined,
+                      color: Colors.white70, size: 20),
                   padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+                  constraints:
+                      const BoxConstraints(minWidth: 44, minHeight: 44),
                 ),
               ],
             ),
@@ -1702,9 +1828,12 @@ class _MemoExplorer extends StatelessWidget {
             child: ValueListenableBuilder<List<Memo>>(
               valueListenable: memosListenable,
               builder: (context, memos, _) {
-                var list = [...memos]..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+                var list = [...memos]
+                  ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
                 if (selectedFilterKey != _RightSideSheetState._memoFilterAll) {
-                  list = list.where((m) => m.categoryKey == selectedFilterKey).toList();
+                  list = list
+                      .where((m) => m.categoryKey == selectedFilterKey)
+                      .toList();
                 }
 
                 // 문의 탭에서는: 등록 문의(필기 노트) 목록만 제공 (문의 메모 리스트는 제거)
@@ -1715,7 +1844,11 @@ class _MemoExplorer extends StatelessWidget {
                       final notes = snap.data ?? const <ConsultNoteMeta>[];
                       if (notes.isEmpty) {
                         return const Center(
-                          child: Text('등록 문의 없음', style: TextStyle(color: _rsTextSub, fontSize: 13, fontWeight: FontWeight.w700)),
+                          child: Text('등록 문의 없음',
+                              style: TextStyle(
+                                  color: _rsTextSub,
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w700)),
                         );
                       }
 
@@ -1723,10 +1856,16 @@ class _MemoExplorer extends StatelessWidget {
                       if (notes.isNotEmpty) {
                         items.add(const Padding(
                           padding: EdgeInsets.fromLTRB(2, 6, 2, 8),
-                          child: Text('등록 문의', style: TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w900)),
+                          child: Text('등록 문의',
+                              style: TextStyle(
+                                  color: _rsTextSub,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w900)),
                         ));
-                        items.add(ValueListenableBuilder<List<ConsultTrialLessonSlot>>(
-                          valueListenable: ConsultTrialLessonService.instance.slotsNotifier,
+                        items.add(ValueListenableBuilder<
+                            List<ConsultTrialLessonSlot>>(
+                          valueListenable:
+                              ConsultTrialLessonService.instance.slotsNotifier,
                           builder: (context, trialSlots, _) {
                             final trialNoteIds = trialSlots
                                 .map((s) => s.sourceNoteId)
@@ -1743,12 +1882,19 @@ class _MemoExplorer extends StatelessWidget {
                               final dt = n.updatedAt.toLocal();
                               final hh = dt.hour.toString().padLeft(2, '0');
                               final mm = dt.minute.toString().padLeft(2, '0');
-                              final subtitle = '${dt.month}/${dt.day} $hh:$mm · 선 ${n.strokeCount}개';
+                              final subtitle =
+                                  '${dt.month}/${dt.day} $hh:$mm · 선 ${n.strokeCount}개';
 
-                              final bool hasDesired = n.desiredWeekday != null && n.desiredHour != null && n.desiredMinute != null;
+                              final bool hasDesired =
+                                  n.desiredWeekday != null &&
+                                      n.desiredHour != null &&
+                                      n.desiredMinute != null;
                               final bool hasTrial = trialNoteIds.contains(n.id);
-                              final bool hasArrived = arrivedNoteIds.contains(n.id);
-                              final int stage = (hasArrived && hasDesired) ? 3 : (hasTrial ? 2 : 1);
+                              final bool hasArrived =
+                                  arrivedNoteIds.contains(n.id);
+                              final int stage = (hasArrived && hasDesired)
+                                  ? 3
+                                  : (hasTrial ? 2 : 1);
 
                               children.add(_InquiryNoteCard(
                                 key: ValueKey('note:${n.id}'),
@@ -1756,9 +1902,11 @@ class _MemoExplorer extends StatelessWidget {
                                 subtitle: subtitle,
                                 stage: stage,
                                 onTap: () {
-                                  ConsultNoteController.instance.requestOpen(n.id);
+                                  ConsultNoteController.instance
+                                      .requestOpen(n.id);
                                   // 문의 노트 화면이 열려있지 않으면 먼저 열어준다(중복 push 방지)
-                                  if (!ConsultNoteController.instance.isScreenOpen) {
+                                  if (!ConsultNoteController
+                                      .instance.isScreenOpen) {
                                     onOpenConsult();
                                   } else {
                                     onCloseSheet();
@@ -1766,9 +1914,12 @@ class _MemoExplorer extends StatelessWidget {
                                 },
                                 onDelete: () {
                                   unawaited(() async {
-                                    await ConsultNoteService.instance.delete(n.id);
-                                    await ConsultInquiryDemandService.instance.removeForNote(n.id);
-                                    await ConsultTrialLessonService.instance.removeForNote(n.id);
+                                    await ConsultNoteService.instance
+                                        .delete(n.id);
+                                    await ConsultInquiryDemandService.instance
+                                        .removeForNote(n.id);
+                                    await ConsultTrialLessonService.instance
+                                        .removeForNote(n.id);
                                     // 동일 탭으로 setState 유도(노트 목록 갱신)
                                     onFilterChanged(selectedFilterKey);
                                   }());
@@ -1794,7 +1945,11 @@ class _MemoExplorer extends StatelessWidget {
 
                 if (list.isEmpty) {
                   return const Center(
-                    child: Text('메모 없음', style: TextStyle(color: _rsTextSub, fontSize: 13, fontWeight: FontWeight.w700)),
+                    child: Text('메모 없음',
+                        style: TextStyle(
+                            color: _rsTextSub,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700)),
                   );
                 }
 
@@ -1812,7 +1967,8 @@ class _MemoExplorer extends StatelessWidget {
                       categoryLabel: MemoCategory.labelOf(m.categoryKey),
                       text: _displayText(m),
                       onTap: () => onEditMemo(m),
-                      onDelete: () => unawaited(DataManager.instance.deleteMemo(m.id)),
+                      onDelete: () =>
+                          unawaited(DataManager.instance.deleteMemo(m.id)),
                     );
                   },
                 );
@@ -1850,6 +2006,7 @@ class _MemoCard extends StatefulWidget {
 class _InquiryNoteCard extends StatefulWidget {
   final String title;
   final String subtitle;
+
   /// 문의 노트 진행 단계:
   /// 1 = 상담/문의 생성
   /// 2 = 시범수업 완료
@@ -1871,14 +2028,16 @@ class _InquiryNoteCard extends StatefulWidget {
   State<_InquiryNoteCard> createState() => _InquiryNoteCardState();
 }
 
-class _InquiryNoteCardState extends State<_InquiryNoteCard> with SingleTickerProviderStateMixin {
+class _InquiryNoteCardState extends State<_InquiryNoteCard>
+    with SingleTickerProviderStateMixin {
   // 메모 카드와 동일한 슬라이드 삭제 UX
   // 단일 삭제 액션은 2버튼(140) 기준 "1버튼 분량"만 차지하도록 축소
   static const double _actionPaneWidth = 74;
   static const double _minCardHeight = 84;
   static const Duration _snapDuration = Duration(milliseconds: 160);
 
-  late final AnimationController _ctrl = AnimationController(vsync: this, duration: _snapDuration);
+  late final AnimationController _ctrl =
+      AnimationController(vsync: this, duration: _snapDuration);
 
   bool get _isOpen => _ctrl.value > 0.01;
 
@@ -1976,25 +2135,33 @@ class _InquiryNoteCardState extends State<_InquiryNoteCard> with SingleTickerPro
                           widget.title,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(color: _rsText, fontSize: 14, fontWeight: FontWeight.w900),
+                          style: const TextStyle(
+                              color: _rsText,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w900),
                         ),
                         const SizedBox(height: 4),
                         Text(
                           widget.subtitle,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w700),
+                          style: const TextStyle(
+                              color: _rsTextSub,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700),
                         ),
                       ],
                     ),
                   ),
                   const SizedBox(width: 10),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                     decoration: BoxDecoration(
                       color: stageColor(widget.stage).withOpacity(0.14),
                       borderRadius: BorderRadius.circular(999),
-                      border: Border.all(color: stageColor(widget.stage).withOpacity(0.28)),
+                      border: Border.all(
+                          color: stageColor(widget.stage).withOpacity(0.28)),
                     ),
                     child: Text(
                       stageLabel(widget.stage),
@@ -2048,7 +2215,8 @@ class _InquiryNoteCardState extends State<_InquiryNoteCard> with SingleTickerPro
                         hoverColor: Colors.white.withOpacity(0.04),
                         child: const SizedBox.expand(
                           child: Center(
-                            child: Icon(Icons.delete_outline_rounded, size: 18, color: Colors.white),
+                            child: Icon(Icons.delete_outline_rounded,
+                                size: 18, color: Colors.white),
                           ),
                         ),
                       ),
@@ -2059,7 +2227,8 @@ class _InquiryNoteCardState extends State<_InquiryNoteCard> with SingleTickerPro
                   animation: _ctrl,
                   builder: (context, child) {
                     final dx = -_actionPaneWidth * _ctrl.value;
-                    return Transform.translate(offset: Offset(dx, 0), child: child);
+                    return Transform.translate(
+                        offset: Offset(dx, 0), child: child);
                   },
                   child: frontCard(),
                 ),
@@ -2072,14 +2241,16 @@ class _InquiryNoteCardState extends State<_InquiryNoteCard> with SingleTickerPro
   }
 }
 
-class _MemoCardState extends State<_MemoCard> with SingleTickerProviderStateMixin {
+class _MemoCardState extends State<_MemoCard>
+    with SingleTickerProviderStateMixin {
   // 삭제 액션 패널 너비를 30% 축소 (108 -> 75.6)
   // 단일 삭제 액션은 2버튼(140) 기준 "1버튼 분량"만 차지하도록 축소
   static const double _actionPaneWidth = 74;
   static const double _minCardHeight = 96;
   static const Duration _snapDuration = Duration(milliseconds: 160);
 
-  late final AnimationController _ctrl = AnimationController(vsync: this, duration: _snapDuration);
+  late final AnimationController _ctrl =
+      AnimationController(vsync: this, duration: _snapDuration);
 
   bool get _isOpen => _ctrl.value > 0.01;
 
@@ -2158,11 +2329,15 @@ class _MemoCardState extends State<_MemoCard> with SingleTickerProviderStateMixi
                           children: [
                             Text(
                               widget.dateLabel,
-                              style: const TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w900),
+                              style: const TextStyle(
+                                  color: _rsTextSub,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w900),
                             ),
                             const SizedBox(width: 8),
                             Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 4),
                               decoration: BoxDecoration(
                                 color: _rsPanelBg,
                                 borderRadius: BorderRadius.circular(999),
@@ -2170,7 +2345,10 @@ class _MemoCardState extends State<_MemoCard> with SingleTickerProviderStateMixi
                               ),
                               child: Text(
                                 widget.categoryLabel,
-                                style: const TextStyle(color: _rsTextSub, fontSize: 11, fontWeight: FontWeight.w900),
+                                style: const TextStyle(
+                                    color: _rsTextSub,
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w900),
                               ),
                             ),
                             if (widget.scheduleLabel.isNotEmpty) ...[
@@ -2181,7 +2359,10 @@ class _MemoCardState extends State<_MemoCard> with SingleTickerProviderStateMixi
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                   softWrap: false,
-                                  style: const TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w700),
+                                  style: const TextStyle(
+                                      color: _rsTextSub,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w700),
                                 ),
                               ),
                             ],
@@ -2195,7 +2376,11 @@ class _MemoCardState extends State<_MemoCard> with SingleTickerProviderStateMixi
                     widget.text,
                     maxLines: 6,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: _rsText, fontSize: 14, fontWeight: FontWeight.w800, height: 1.3),
+                    style: const TextStyle(
+                        color: _rsText,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w800,
+                        height: 1.3),
                   ),
                 ],
               ),
@@ -2240,7 +2425,8 @@ class _MemoCardState extends State<_MemoCard> with SingleTickerProviderStateMixi
                         hoverColor: Colors.white.withOpacity(0.04),
                         child: const SizedBox.expand(
                           child: Center(
-                            child: Icon(Icons.delete_outline_rounded, size: 18, color: Colors.white),
+                            child: Icon(Icons.delete_outline_rounded,
+                                size: 18, color: Colors.white),
                           ),
                         ),
                       ),
@@ -2252,7 +2438,8 @@ class _MemoCardState extends State<_MemoCard> with SingleTickerProviderStateMixi
                   animation: _ctrl,
                   builder: (context, child) {
                     final dx = -_actionPaneWidth * _ctrl.value;
-                    return Transform.translate(offset: Offset(dx, 0), child: child);
+                    return Transform.translate(
+                        offset: Offset(dx, 0), child: child);
                   },
                   child: frontCard(),
                 ),
@@ -2270,7 +2457,8 @@ class _MemoFilterPill extends StatelessWidget {
   final bool selected;
   final VoidCallback onTap;
 
-  const _MemoFilterPill({required this.label, required this.selected, required this.onTap});
+  const _MemoFilterPill(
+      {required this.label, required this.selected, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -2313,7 +2501,8 @@ class _AnswerKeyPdfShortcutExplorer extends StatefulWidget {
   final VoidCallback onEditGrades;
   final VoidCallback onDeleteBook;
   final void Function(String bookId) onSelectBook;
-  final void Function({required String bookId, required int delta}) onBookGradeDelta;
+  final void Function({required String bookId, required int delta})
+      onBookGradeDelta;
   final void Function(_BookItem book) onOpenBook;
   final void Function(int oldIndex, int newIndex) onReorderBooks;
 
@@ -2334,10 +2523,12 @@ class _AnswerKeyPdfShortcutExplorer extends StatefulWidget {
   });
 
   @override
-  State<_AnswerKeyPdfShortcutExplorer> createState() => _AnswerKeyPdfShortcutExplorerState();
+  State<_AnswerKeyPdfShortcutExplorer> createState() =>
+      _AnswerKeyPdfShortcutExplorerState();
 }
 
-class _AnswerKeyPdfShortcutExplorerState extends State<_AnswerKeyPdfShortcutExplorer> {
+class _AnswerKeyPdfShortcutExplorerState
+    extends State<_AnswerKeyPdfShortcutExplorer> {
   final ScrollController _scrollCtrl = ScrollController();
 
   @override
@@ -2429,7 +2620,9 @@ class _ToolbarSegmentButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final enabled = onPressed != null;
     final iconColor = enabled ? Colors.white70 : Colors.white24;
-    final border = showRightDivider ? Border(right: BorderSide(color: _rsBorder.withOpacity(0.9))) : null;
+    final border = showRightDivider
+        ? Border(right: BorderSide(color: _rsBorder.withOpacity(0.9)))
+        : null;
 
     return Tooltip(
       message: tooltip,
@@ -2455,7 +2648,8 @@ class _BooksSection extends StatelessWidget {
   final List<_BookItem> books;
   final List<_GradeOption> grades;
   final Map<String, Map<String, String>> pdfPathByBookAndGrade;
-  final void Function({required String bookId, required int delta}) onBookGradeDelta;
+  final void Function({required String bookId, required int delta})
+      onBookGradeDelta;
   final void Function(_BookItem book) onOpenBook;
   final void Function(int oldIndex, int newIndex) onReorderBooks;
   final void Function(String bookId) onSelectBook;
@@ -2479,16 +2673,23 @@ class _BooksSection extends StatelessWidget {
       children: [
         Row(
           children: [
-            const Text('책', style: TextStyle(color: _rsText, fontSize: 15, fontWeight: FontWeight.w900)),
+            const Text('책',
+                style: TextStyle(
+                    color: _rsText, fontSize: 15, fontWeight: FontWeight.w900)),
             const SizedBox(width: 8),
-            Text('${books.length}권', style: const TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w800)),
+            Text('${books.length}권',
+                style: const TextStyle(
+                    color: _rsTextSub,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800)),
           ],
         ),
         const SizedBox(height: 8),
         if (books.isEmpty)
           const Text(
             '추가된 책이 없습니다.',
-            style: TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w700),
+            style: TextStyle(
+                color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w700),
           )
         else
           Expanded(
@@ -2504,7 +2705,8 @@ class _BooksSection extends StatelessWidget {
                   // 기본 ReorderableListView 드래그 피드백은 Material(흰 배경)이 잡혀
                   // 아이템의 padding/여백 부분이 흰색으로 보일 수 있어, 패널 배경색으로 고정.
                   // 또한 "살짝 들리는" 드래그 피드백을 주기 위해 scale/translate/elevation을 적용한다.
-                  final curved = CurvedAnimation(parent: animation, curve: Curves.easeOutCubic);
+                  final curved = CurvedAnimation(
+                      parent: animation, curve: Curves.easeOutCubic);
                   return AnimatedBuilder(
                     animation: curved,
                     builder: (context, _) {
@@ -2530,7 +2732,9 @@ class _BooksSection extends StatelessWidget {
                 },
                 itemBuilder: (context, index) {
                   final b = books[index];
-                  final gradeIdx = grades.isEmpty ? 0 : b.gradeIndex.clamp(0, grades.length - 1);
+                  final gradeIdx = grades.isEmpty
+                      ? 0
+                      : b.gradeIndex.clamp(0, grades.length - 1);
 
                   // 요청: 연결된 PDF가 있는 학년만 보이도록(순회/표시) "연결된 학년"을 먼저 산출
                   final paths = pdfPathByBookAndGrade[b.id];
@@ -2539,26 +2743,32 @@ class _BooksSection extends StatelessWidget {
                     for (int i = 0; i < grades.length; i++) {
                       final k = grades[i].key;
                       final p = paths[k];
-                      if (p != null && p.trim().isNotEmpty) linkedIndices.add(i);
+                      if (p != null && p.trim().isNotEmpty)
+                        linkedIndices.add(i);
                     }
                   }
 
                   final hasAnyLinked = linkedIndices.isNotEmpty;
                   final effectiveIdx = hasAnyLinked
-                      ? (linkedIndices.contains(gradeIdx) ? gradeIdx : linkedIndices.first)
+                      ? (linkedIndices.contains(gradeIdx)
+                          ? gradeIdx
+                          : linkedIndices.first)
                       : 0;
-                  final gradeLabel = hasAnyLinked ? grades[effectiveIdx].label : '-';
+                  final gradeLabel =
+                      hasAnyLinked ? grades[effectiveIdx].label : '-';
                   final linked = hasAnyLinked;
 
                   return ReorderableDelayedDragStartListener(
                     key: ValueKey(b.id),
                     index: index,
                     child: Padding(
-                      padding: EdgeInsets.only(bottom: (index == books.length - 1) ? 0 : 8),
+                      padding: EdgeInsets.only(
+                          bottom: (index == books.length - 1) ? 0 : 8),
                       child: _BookCard(
                         item: b,
                         gradeLabel: gradeLabel,
-                        onGradeDelta: (delta) => onBookGradeDelta(bookId: b.id, delta: delta),
+                        onGradeDelta: (delta) =>
+                            onBookGradeDelta(bookId: b.id, delta: delta),
                         linked: linked,
                         onOpen: () {
                           onSelectBook(b.id);
@@ -2596,17 +2806,43 @@ class _BookCard extends StatefulWidget {
 }
 
 class _BookCardState extends State<_BookCard> {
+  static const double _bookCardMinHeight = 104.0;
+  static const double _gradeSwipeDistanceThreshold = 30.0;
+  static const double _gradeSwipeVelocityThreshold = 240.0;
   double _gradeDragDx = 0.0;
+  bool _gradeDragTriggered = false;
+
+  void _resetGradeDrag() {
+    _gradeDragDx = 0.0;
+    _gradeDragTriggered = false;
+  }
+
+  void _triggerGradeDelta(int delta) {
+    _gradeDragDx = 0.0;
+    _gradeDragTriggered = true;
+    widget.onGradeDelta(delta);
+  }
+
+  void _handleGradeDragStart(DragStartDetails _) {
+    _resetGradeDrag();
+  }
 
   void _handleGradeDragUpdate(DragUpdateDetails d) {
+    if (_gradeDragTriggered) return;
     _gradeDragDx += d.delta.dx;
-    if (_gradeDragDx <= -48) {
-      _gradeDragDx = 0.0;
-      widget.onGradeDelta(-1);
-    } else if (_gradeDragDx >= 48) {
-      _gradeDragDx = 0.0;
-      widget.onGradeDelta(1);
+    if (_gradeDragDx <= -_gradeSwipeDistanceThreshold) {
+      _triggerGradeDelta(-1);
+    } else if (_gradeDragDx >= _gradeSwipeDistanceThreshold) {
+      _triggerGradeDelta(1);
     }
+  }
+
+  void _handleGradeDragEnd(DragEndDetails d) {
+    final v = d.primaryVelocity ?? 0.0;
+    if (!_gradeDragTriggered && v.abs() >= _gradeSwipeVelocityThreshold) {
+      _triggerGradeDelta(v < 0 ? -1 : 1);
+    }
+    _resetGradeDrag();
   }
 
   @override
@@ -2621,30 +2857,24 @@ class _BookCardState extends State<_BookCard> {
         // NOTE: ReorderableListView 내부에서 Tooltip(OverlayPortal)이 레이아웃 중 attach되며
         // "A _RenderLayoutBuilder was mutated" 에러가 발생하는 케이스가 있어,
         // 여기서는 Tooltip을 사용하지 않는다. (긴 과정명은 ellipsis로 처리)
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onHorizontalDragStart: (_) => _gradeDragDx = 0.0,
-          onHorizontalDragUpdate: _handleGradeDragUpdate,
-          onHorizontalDragEnd: (_) => _gradeDragDx = 0.0,
-          onHorizontalDragCancel: () => _gradeDragDx = 0.0,
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              color: bg,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: Colors.transparent),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              child: Align(
-                alignment: Alignment.centerRight,
-                child: Text(
-                  widget.gradeLabel,
-                  style: TextStyle(color: fg, fontSize: 13, fontWeight: FontWeight.w900),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  softWrap: false,
-                  textAlign: TextAlign.right,
-                ),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: bg,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: Colors.transparent),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: Text(
+                widget.gradeLabel,
+                style: TextStyle(
+                    color: fg, fontSize: 13, fontWeight: FontWeight.w900),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                softWrap: false,
+                textAlign: TextAlign.right,
               ),
             ),
           ),
@@ -2679,35 +2909,61 @@ class _BookCardState extends State<_BookCard> {
             splashFactory: NoSplash.splashFactory,
             highlightColor: Colors.white.withOpacity(0.05),
             hoverColor: Colors.white.withOpacity(0.03),
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
+            child: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onHorizontalDragStart: _handleGradeDragStart,
+              onHorizontalDragUpdate: _handleGradeDragUpdate,
+              onHorizontalDragEnd: _handleGradeDragEnd,
+              onHorizontalDragCancel: _resetGradeDrag,
+              child: ConstrainedBox(
+                constraints:
+                    const BoxConstraints(minHeight: _bookCardMinHeight),
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Expanded(
-                        child: Text(
-                          widget.item.name,
-                          style: const TextStyle(color: _rsText, fontSize: 16, fontWeight: FontWeight.w900),
-                          maxLines: 1,
-                          softWrap: false,
-                          overflow: TextOverflow.ellipsis,
-                        ),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    widget.item.name,
+                                    style: const TextStyle(
+                                      color: _rsText,
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w900,
+                                    ),
+                                    maxLines: 1,
+                                    softWrap: false,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                // 요구사항: 이름:과정라벨 = 1:1
+                                Expanded(child: buildGradeBadge()),
+                              ],
+                            ),
+                          ),
+                        ],
                       ),
-                      const SizedBox(width: 10),
-                      // 요구사항: 이름:과정라벨 = 1:1
-                      Expanded(child: buildGradeBadge()),
+                      const SizedBox(height: 4),
+                      Text(
+                        widget.item.description,
+                        style: const TextStyle(
+                          color: _rsTextSub,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          height: 1.25,
+                        ),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ],
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    widget.item.description,
-                    style: const TextStyle(color: _rsTextSub, fontSize: 13, fontWeight: FontWeight.w600, height: 1.25),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ],
+                ),
               ),
             ),
           ),
@@ -2733,7 +2989,11 @@ class _ExplorerTableHeader extends StatelessWidget {
           Icon(Icons.description_outlined, color: _rsTextSub, size: 16),
           SizedBox(width: 8),
           Expanded(
-            child: Text('이름', style: TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w800)),
+            child: Text('이름',
+                style: TextStyle(
+                    color: _rsTextSub,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800)),
           ),
         ],
       ),
@@ -2760,13 +3020,18 @@ class _EmptyState extends StatelessWidget {
           SizedBox(height: 10),
           Text(
             '연결된 정답 PDF가 없습니다.',
-            style: TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w800),
+            style: TextStyle(
+                color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w800),
             textAlign: TextAlign.center,
           ),
           SizedBox(height: 6),
           Text(
             '교재 탭에서 정답 링크를 등록하면 여기서 바로 열 수 있습니다.',
-            style: TextStyle(color: Colors.white38, fontSize: 11, fontWeight: FontWeight.w600, height: 1.3),
+            style: TextStyle(
+                color: Colors.white38,
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                height: 1.3),
             textAlign: TextAlign.center,
           ),
         ],
@@ -2807,12 +3072,16 @@ class _ExplorerRowState extends State<_ExplorerRow> {
           ),
           child: Row(
             children: [
-              const Icon(Icons.picture_as_pdf_outlined, color: Colors.white54, size: 18),
+              const Icon(Icons.picture_as_pdf_outlined,
+                  color: Colors.white54, size: 18),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
                   widget.item.name,
-                  style: const TextStyle(color: _rsText, fontSize: 12, fontWeight: FontWeight.w700),
+                  style: const TextStyle(
+                      color: _rsText,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700),
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
@@ -2835,9 +3104,15 @@ class _BookItem {
   final String name;
   final String description;
   final int gradeIndex;
-  const _BookItem({required this.id, required this.name, required this.description, required this.gradeIndex});
+  const _BookItem(
+      {required this.id,
+      required this.name,
+      required this.description,
+      required this.gradeIndex});
 
-  _BookItem copyWith({String? id, String? name, String? description, int? gradeIndex}) => _BookItem(
+  _BookItem copyWith(
+          {String? id, String? name, String? description, int? gradeIndex}) =>
+      _BookItem(
         id: id ?? this.id,
         name: name ?? this.name,
         description: description ?? this.description,
@@ -2876,7 +3151,8 @@ class _BookSelectDialog extends StatelessWidget {
       actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
       title: const Text(
         '책 선택',
-        style: TextStyle(color: _rsText, fontSize: 18, fontWeight: FontWeight.w900),
+        style: TextStyle(
+            color: _rsText, fontSize: 18, fontWeight: FontWeight.w900),
       ),
       content: SizedBox(
         width: 520,
@@ -2906,73 +3182,84 @@ class _BookSelectDialogBody extends StatefulWidget {
 class _BookSelectDialogBodyState extends State<_BookSelectDialogBody> {
   late final Map<String, int> _gradeIndexByBookId = <String, int>{
     for (int i = 0; i < widget.books.length; i++)
-      widget.books[i].id: (widget.grades.isEmpty ? 0 : widget.books[i].gradeIndex.clamp(0, widget.grades.length - 1)),
+      widget.books[i].id: (widget.grades.isEmpty
+          ? 0
+          : widget.books[i].gradeIndex.clamp(0, widget.grades.length - 1)),
   };
 
   @override
   Widget build(BuildContext context) {
     return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const Divider(height: 1, color: Color(0x22FFFFFF)),
-            const SizedBox(height: 12),
-            Expanded(
-              child: ListView.separated(
-                itemCount: widget.books.length,
-                separatorBuilder: (_, __) => const SizedBox(height: 8),
-                itemBuilder: (context, index) {
-                  final b = widget.books[index];
-                  final gradeIdx = _gradeIndexByBookId[b.id] ?? 0;
-                  final gradeLabel = widget.grades.isEmpty ? '-' : widget.grades[gradeIdx].label;
-                  return InkWell(
-                    onTap: () => Navigator.of(context).pop<_BookPickResult>(
-                      _BookPickResult(bookIndex: index, gradeIndex: gradeIdx),
-                    ),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Divider(height: 1, color: Color(0x22FFFFFF)),
+        const SizedBox(height: 12),
+        Expanded(
+          child: ListView.separated(
+            itemCount: widget.books.length,
+            separatorBuilder: (_, __) => const SizedBox(height: 8),
+            itemBuilder: (context, index) {
+              final b = widget.books[index];
+              final gradeIdx = _gradeIndexByBookId[b.id] ?? 0;
+              final gradeLabel =
+                  widget.grades.isEmpty ? '-' : widget.grades[gradeIdx].label;
+              return InkWell(
+                onTap: () => Navigator.of(context).pop<_BookPickResult>(
+                  _BookPickResult(bookIndex: index, gradeIndex: gradeIdx),
+                ),
+                borderRadius: BorderRadius.circular(12),
+                child: Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: _rsFieldBg,
                     borderRadius: BorderRadius.circular(12),
-                    child: Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: _rsFieldBg,
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: _rsBorder.withOpacity(0.9)),
-                      ),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  b.name,
-                                  style: const TextStyle(color: _rsText, fontSize: 14, fontWeight: FontWeight.w900),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  b.description,
-                                  style: const TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w600, height: 1.25),
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ],
+                    border: Border.all(color: _rsBorder.withOpacity(0.9)),
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              b.name,
+                              style: const TextStyle(
+                                  color: _rsText,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w900),
+                              overflow: TextOverflow.ellipsis,
                             ),
-                          ),
-                          const SizedBox(width: 12),
-                          _GradePickBadge(
-                            label: gradeLabel,
-                            grades: widget.grades,
-                            selectedIndex: gradeIdx,
-                            onSelected: (i) => setState(() => _gradeIndexByBookId[b.id] = i),
-                          ),
-                        ],
+                            const SizedBox(height: 4),
+                            Text(
+                              b.description,
+                              style: const TextStyle(
+                                  color: _rsTextSub,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  height: 1.25),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
-                  );
-                },
-              ),
-            ),
-          ],
-        );
+                      const SizedBox(width: 12),
+                      _GradePickBadge(
+                        label: gradeLabel,
+                        grades: widget.grades,
+                        selectedIndex: gradeIdx,
+                        onSelected: (i) =>
+                            setState(() => _gradeIndexByBookId[b.id] = i),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    );
   }
 }
 
@@ -2999,7 +3286,9 @@ class _GradePickBadge extends StatelessWidget {
         onSelected: onSelected,
         color: _rsPanelBg,
         elevation: 0,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: const BorderSide(color: _rsBorder)),
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+            side: const BorderSide(color: _rsBorder)),
         itemBuilder: (_) => [
           for (int i = 0; i < grades.length; i++)
             PopupMenuItem<int>(
@@ -3029,14 +3318,18 @@ class _GradePickBadge extends StatelessWidget {
                   Expanded(
                     child: Text(
                       label,
-                      style: const TextStyle(color: _rsTextSub, fontSize: 13, fontWeight: FontWeight.w900),
+                      style: const TextStyle(
+                          color: _rsTextSub,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w900),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       softWrap: false,
                     ),
                   ),
                   const SizedBox(width: 2),
-                  const Icon(Icons.keyboard_arrow_down, size: 16, color: _rsTextSub),
+                  const Icon(Icons.keyboard_arrow_down,
+                      size: 16, color: _rsTextSub),
                 ],
               ),
             ),
@@ -3058,10 +3351,12 @@ class _AnswerKeyGradesEditDialog extends StatefulWidget {
   const _AnswerKeyGradesEditDialog({required this.initial});
 
   @override
-  State<_AnswerKeyGradesEditDialog> createState() => _AnswerKeyGradesEditDialogState();
+  State<_AnswerKeyGradesEditDialog> createState() =>
+      _AnswerKeyGradesEditDialogState();
 }
 
-class _AnswerKeyGradesEditDialogState extends State<_AnswerKeyGradesEditDialog> {
+class _AnswerKeyGradesEditDialogState
+    extends State<_AnswerKeyGradesEditDialog> {
   final List<TextEditingController> _ctrls = <TextEditingController>[];
   final List<String> _keys = <String>[];
   final ScrollController _scrollCtrl = ScrollController();
@@ -3135,7 +3430,8 @@ class _AnswerKeyGradesEditDialogState extends State<_AnswerKeyGradesEditDialog> 
       actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
       title: const Text(
         '과정 편집',
-        style: TextStyle(color: _rsText, fontSize: 18, fontWeight: FontWeight.w900),
+        style: TextStyle(
+            color: _rsText, fontSize: 18, fontWeight: FontWeight.w900),
       ),
       content: SizedBox(
         width: 520,
@@ -3145,7 +3441,11 @@ class _AnswerKeyGradesEditDialogState extends State<_AnswerKeyGradesEditDialog> 
           children: [
             const Text(
               '여기에 과정명을 입력하세요. (예: 기본, 심화, 내신, 수능)\n빈 항목은 저장 시 제외됩니다.',
-              style: TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w700, height: 1.35),
+              style: TextStyle(
+                  color: _rsTextSub,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  height: 1.35),
             ),
             const SizedBox(height: 12),
             ConstrainedBox(
@@ -3171,7 +3471,8 @@ class _AnswerKeyGradesEditDialogState extends State<_AnswerKeyGradesEditDialog> 
                   itemBuilder: (context, index) {
                     return Container(
                       key: ValueKey(_keys[index]),
-                      margin: EdgeInsets.only(bottom: index == _keys.length - 1 ? 0 : 8),
+                      margin: EdgeInsets.only(
+                          bottom: index == _keys.length - 1 ? 0 : 8),
                       padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
                       decoration: BoxDecoration(
                         color: _rsFieldBg,
@@ -3182,13 +3483,15 @@ class _AnswerKeyGradesEditDialogState extends State<_AnswerKeyGradesEditDialog> 
                         children: [
                           ReorderableDragStartListener(
                             index: index,
-                            child: const Icon(Icons.drag_indicator, color: Colors.white24, size: 18),
+                            child: const Icon(Icons.drag_indicator,
+                                color: Colors.white24, size: 18),
                           ),
                           const SizedBox(width: 10),
                           Expanded(
                             child: TextField(
                               controller: _ctrls[index],
-                              style: const TextStyle(color: _rsText, fontWeight: FontWeight.w800),
+                              style: const TextStyle(
+                                  color: _rsText, fontWeight: FontWeight.w800),
                               decoration: const InputDecoration(
                                 isDense: true,
                                 border: InputBorder.none,
@@ -3200,9 +3503,11 @@ class _AnswerKeyGradesEditDialogState extends State<_AnswerKeyGradesEditDialog> 
                           IconButton(
                             tooltip: '삭제',
                             onPressed: () => _removeRow(index),
-                            icon: const Icon(Icons.close, color: Colors.white38, size: 18),
+                            icon: const Icon(Icons.close,
+                                color: Colors.white38, size: 18),
                             padding: EdgeInsets.zero,
-                            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                            constraints: const BoxConstraints(
+                                minWidth: 32, minHeight: 32),
                           ),
                         ],
                       ),
@@ -3235,9 +3540,11 @@ class _AnswerKeyGradesEditDialogState extends State<_AnswerKeyGradesEditDialog> 
           style: FilledButton.styleFrom(
             backgroundColor: _rsAccent,
             foregroundColor: Colors.white,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
           ),
-          child: const Text('저장', style: TextStyle(fontWeight: FontWeight.w900)),
+          child:
+              const Text('저장', style: TextStyle(fontWeight: FontWeight.w900)),
         ),
       ],
     );
@@ -3266,7 +3573,8 @@ class _BookPdfEditDialog extends StatefulWidget {
 }
 
 class _BookPdfEditDialogState extends State<_BookPdfEditDialog> {
-  late Map<String, String> _paths = Map<String, String>.from(widget.initialPaths);
+  late Map<String, String> _paths =
+      Map<String, String>.from(widget.initialPaths);
   bool _busy = false;
   final ScrollController _scrollCtrl = ScrollController();
 
@@ -3318,7 +3626,9 @@ class _BookPdfEditDialogState extends State<_BookPdfEditDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final maxH = (MediaQuery.of(context).size.height * 0.78).clamp(360.0, 620.0).toDouble();
+    final maxH = (MediaQuery.of(context).size.height * 0.78)
+        .clamp(360.0, 620.0)
+        .toDouble();
     final desiredH = 160.0 + (widget.grades.length * 116.0);
     final bodyHeight = desiredH.clamp(320.0, maxH).toDouble();
 
@@ -3334,7 +3644,11 @@ class _BookPdfEditDialogState extends State<_BookPdfEditDialog> {
         ),
         child: Text(
           label,
-          style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w900, height: 1.0),
+          style: TextStyle(
+              color: color,
+              fontSize: 12,
+              fontWeight: FontWeight.w900,
+              height: 1.0),
         ),
       );
     }
@@ -3351,11 +3665,14 @@ class _BookPdfEditDialogState extends State<_BookPdfEditDialog> {
       title: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('PDF 수정', style: TextStyle(color: _rsText, fontSize: 18, fontWeight: FontWeight.w900)),
+          const Text('PDF 수정',
+              style: TextStyle(
+                  color: _rsText, fontSize: 18, fontWeight: FontWeight.w900)),
           const SizedBox(height: 6),
           Text(
             widget.book.name,
-            style: const TextStyle(color: _rsTextSub, fontSize: 13, fontWeight: FontWeight.w800),
+            style: const TextStyle(
+                color: _rsTextSub, fontSize: 13, fontWeight: FontWeight.w800),
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
           ),
@@ -3381,7 +3698,8 @@ class _BookPdfEditDialogState extends State<_BookPdfEditDialog> {
               final outlinedStyle = OutlinedButton.styleFrom(
                 foregroundColor: Colors.white70,
                 side: BorderSide(color: _rsBorder.withOpacity(0.9)),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10)),
                 minimumSize: const Size(0, 36),
                 padding: const EdgeInsets.symmetric(horizontal: 12),
               );
@@ -3466,11 +3784,13 @@ class _BookPdfEditDialogState extends State<_BookPdfEditDialog> {
                         if (linked) ...[
                           const SizedBox(width: 8),
                           TextButton.icon(
-                            onPressed: (!_busy && linked) ? () => _detach(g) : null,
+                            onPressed:
+                                (!_busy && linked) ? () => _detach(g) : null,
                             style: TextButton.styleFrom(
                               foregroundColor: const Color(0xFFFFB4B4),
                               minimumSize: const Size(0, 36),
-                              padding: const EdgeInsets.symmetric(horizontal: 10),
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 10),
                             ),
                             icon: const Icon(Icons.link_off, size: 16),
                             label: const Text('해제'),
@@ -3520,7 +3840,8 @@ class _BookAddDialogState extends State<_BookAddDialog> {
       actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
       title: const Text(
         '책 추가',
-        style: TextStyle(color: _rsText, fontSize: 18, fontWeight: FontWeight.w900),
+        style: TextStyle(
+            color: _rsText, fontSize: 18, fontWeight: FontWeight.w900),
       ),
       content: SizedBox(
         width: 520,
@@ -3535,7 +3856,8 @@ class _BookAddDialogState extends State<_BookAddDialog> {
               style: const TextStyle(color: _rsText),
               decoration: InputDecoration(
                 labelText: '책 이름',
-                labelStyle: const TextStyle(color: _rsTextSub, fontWeight: FontWeight.w800),
+                labelStyle: const TextStyle(
+                    color: _rsTextSub, fontWeight: FontWeight.w800),
                 filled: true,
                 fillColor: _rsFieldBg,
                 enabledBorder: OutlineInputBorder(
@@ -3556,7 +3878,8 @@ class _BookAddDialogState extends State<_BookAddDialog> {
               style: const TextStyle(color: _rsText),
               decoration: InputDecoration(
                 labelText: '설명',
-                labelStyle: const TextStyle(color: _rsTextSub, fontWeight: FontWeight.w800),
+                labelStyle: const TextStyle(
+                    color: _rsTextSub, fontWeight: FontWeight.w800),
                 filled: true,
                 fillColor: _rsFieldBg,
                 enabledBorder: OutlineInputBorder(
@@ -3583,14 +3906,17 @@ class _BookAddDialogState extends State<_BookAddDialog> {
             final name = _nameCtrl.text.trim();
             final desc = _descCtrl.text.trim();
             if (name.isEmpty) return;
-            Navigator.of(context).pop<_BookItem>(_BookItem(id: '', name: name, description: desc, gradeIndex: 0));
+            Navigator.of(context).pop<_BookItem>(_BookItem(
+                id: '', name: name, description: desc, gradeIndex: 0));
           },
           style: FilledButton.styleFrom(
             backgroundColor: _rsAccent,
             foregroundColor: Colors.white,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
           ),
-          child: const Text('추가', style: TextStyle(fontWeight: FontWeight.w900)),
+          child:
+              const Text('추가', style: TextStyle(fontWeight: FontWeight.w900)),
         ),
       ],
     );
@@ -3611,7 +3937,8 @@ class _BookBulkEditDialogState extends State<_BookBulkEditDialog> {
     for (final b in widget.initial) ImeAwareTextEditingController(text: b.name),
   ];
   late final List<TextEditingController> _descCtrls = <TextEditingController>[
-    for (final b in widget.initial) ImeAwareTextEditingController(text: b.description),
+    for (final b in widget.initial)
+      ImeAwareTextEditingController(text: b.description),
   ];
   final ScrollController _scrollCtrl = ScrollController();
 
@@ -3633,7 +3960,8 @@ class _BookBulkEditDialogState extends State<_BookBulkEditDialog> {
       final name = _nameCtrls[i].text.trim();
       final desc = _descCtrls[i].text.trim();
       if (name.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('책 이름은 비워둘 수 없습니다.')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('책 이름은 비워둘 수 없습니다.')));
         return;
       }
       updated.add(widget.initial[i].copyWith(name: name, description: desc));
@@ -3643,7 +3971,8 @@ class _BookBulkEditDialogState extends State<_BookBulkEditDialog> {
 
   InputDecoration _fieldDeco(String label) => InputDecoration(
         labelText: label,
-        labelStyle: const TextStyle(color: _rsTextSub, fontWeight: FontWeight.w800),
+        labelStyle:
+            const TextStyle(color: _rsTextSub, fontWeight: FontWeight.w800),
         filled: true,
         fillColor: _rsFieldBg,
         enabledBorder: OutlineInputBorder(
@@ -3670,7 +3999,8 @@ class _BookBulkEditDialogState extends State<_BookBulkEditDialog> {
           child: Center(
             child: Text(
               '${index + 1}',
-              style: const TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w900),
+              style: const TextStyle(
+                  color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w900),
             ),
           ),
         ),
@@ -3691,7 +4021,8 @@ class _BookBulkEditDialogState extends State<_BookBulkEditDialog> {
       actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
       title: const Text(
         '책 수정',
-        style: TextStyle(color: _rsText, fontSize: 18, fontWeight: FontWeight.w900),
+        style: TextStyle(
+            color: _rsText, fontSize: 18, fontWeight: FontWeight.w900),
       ),
       content: SizedBox(
         width: 620 * 0.7,
@@ -3727,7 +4058,10 @@ class _BookBulkEditDialogState extends State<_BookBulkEditDialog> {
                               Expanded(
                                 child: Text(
                                   '이름 / 설명',
-                                  style: const TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w800),
+                                  style: const TextStyle(
+                                      color: _rsTextSub,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w800),
                                   overflow: TextOverflow.ellipsis,
                                 ),
                               ),
@@ -3736,23 +4070,31 @@ class _BookBulkEditDialogState extends State<_BookBulkEditDialog> {
                                     ? null
                                     : () {
                                         final b0 = widget.initial[index];
-                                        final name = _nameCtrls[index].text.trim();
-                                        final desc = _descCtrls[index].text.trim();
+                                        final name =
+                                            _nameCtrls[index].text.trim();
+                                        final desc =
+                                            _descCtrls[index].text.trim();
                                         final book = b0.copyWith(
-                                          name: name.isNotEmpty ? name : b0.name,
+                                          name:
+                                              name.isNotEmpty ? name : b0.name,
                                           description: desc,
                                         );
                                         unawaited(widget.onEditPdf!(book));
                                       },
-                                icon: const Icon(Icons.picture_as_pdf_outlined, size: 16),
+                                icon: const Icon(Icons.picture_as_pdf_outlined,
+                                    size: 16),
                                 label: const Text('PDF 수정'),
                                 style: OutlinedButton.styleFrom(
                                   foregroundColor: Colors.white70,
-                                  side: BorderSide(color: _rsBorder.withOpacity(0.9)),
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                  side: BorderSide(
+                                      color: _rsBorder.withOpacity(0.9)),
+                                  shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(10)),
                                   minimumSize: const Size(0, 32),
-                                  padding: const EdgeInsets.symmetric(horizontal: 10),
-                                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 10),
+                                  tapTargetSize:
+                                      MaterialTapTargetSize.shrinkWrap,
                                   visualDensity: VisualDensity.compact,
                                 ),
                               ),
@@ -3761,7 +4103,8 @@ class _BookBulkEditDialogState extends State<_BookBulkEditDialog> {
                           const SizedBox(height: 12),
                           TextField(
                             controller: _nameCtrls[index],
-                            style: const TextStyle(color: _rsText, fontWeight: FontWeight.w800),
+                            style: const TextStyle(
+                                color: _rsText, fontWeight: FontWeight.w800),
                             decoration: _fieldDeco('책 이름'),
                           ),
                           const SizedBox(height: 10),
@@ -3792,9 +4135,11 @@ class _BookBulkEditDialogState extends State<_BookBulkEditDialog> {
           style: FilledButton.styleFrom(
             backgroundColor: _rsAccent,
             foregroundColor: Colors.white,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
           ),
-          child: const Text('저장', style: TextStyle(fontWeight: FontWeight.w900)),
+          child:
+              const Text('저장', style: TextStyle(fontWeight: FontWeight.w900)),
         ),
       ],
     );
@@ -3887,9 +4232,13 @@ class _PdfAttachWizardDialogState extends State<_PdfAttachWizardDialog> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(title, style: const TextStyle(color: _rsText, fontSize: 18, fontWeight: FontWeight.w900)),
+        Text(title,
+            style: const TextStyle(
+                color: _rsText, fontSize: 18, fontWeight: FontWeight.w900)),
         const SizedBox(height: 6),
-        Text(subtitle, style: const TextStyle(color: _rsTextSub, fontSize: 13, fontWeight: FontWeight.w800)),
+        Text(subtitle,
+            style: const TextStyle(
+                color: _rsTextSub, fontSize: 13, fontWeight: FontWeight.w800)),
       ],
     );
   }
@@ -3907,7 +4256,8 @@ class _PdfAttachWizardDialogState extends State<_PdfAttachWizardDialog> {
     setState(() => _busy = true);
     try {
       for (final e in entries) {
-        final ok = await widget.onAttach(bookIndex: bi, gradeIndex: e.key, file: e.value);
+        final ok = await widget.onAttach(
+            bookIndex: bi, gradeIndex: e.key, file: e.value);
         if (!ok) return; // 사용자가 교체를 취소한 경우 등: 다이얼로그 유지
       }
       if (mounted) Navigator.of(context).pop();
@@ -3920,13 +4270,16 @@ class _PdfAttachWizardDialogState extends State<_PdfAttachWizardDialog> {
   Widget build(BuildContext context) {
     final books = widget.books;
     final grades = widget.grades;
-    final maxH = (MediaQuery.of(context).size.height * 0.78).clamp(380.0, 680.0).toDouble();
+    final maxH = (MediaQuery.of(context).size.height * 0.78)
+        .clamp(380.0, 680.0)
+        .toDouble();
 
     final int? selectedBookIndex = _bookIndex;
-    final _BookItem? selectedBook =
-        (selectedBookIndex != null && selectedBookIndex >= 0 && selectedBookIndex < books.length)
-            ? books[selectedBookIndex]
-            : null;
+    final _BookItem? selectedBook = (selectedBookIndex != null &&
+            selectedBookIndex >= 0 &&
+            selectedBookIndex < books.length)
+        ? books[selectedBookIndex]
+        : null;
 
     Widget bodyBookList() {
       return Scrollbar(
@@ -3965,7 +4318,10 @@ class _PdfAttachWizardDialogState extends State<_PdfAttachWizardDialog> {
                         children: [
                           Text(
                             b.name,
-                            style: const TextStyle(color: _rsText, fontSize: 14, fontWeight: FontWeight.w900),
+                            style: const TextStyle(
+                                color: _rsText,
+                                fontSize: 14,
+                                fontWeight: FontWeight.w900),
                             overflow: TextOverflow.ellipsis,
                           ),
                           const SizedBox(height: 4),
@@ -3984,7 +4340,8 @@ class _PdfAttachWizardDialogState extends State<_PdfAttachWizardDialog> {
                       ),
                     ),
                     const SizedBox(width: 10),
-                    const Icon(Icons.chevron_right, color: Colors.white24, size: 22),
+                    const Icon(Icons.chevron_right,
+                        color: Colors.white24, size: 22),
                   ],
                 ),
               ),
@@ -4014,16 +4371,27 @@ class _PdfAttachWizardDialogState extends State<_PdfAttachWizardDialog> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(b.name, style: const TextStyle(color: _rsText, fontSize: 14, fontWeight: FontWeight.w900)),
+                Text(b.name,
+                    style: const TextStyle(
+                        color: _rsText,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w900)),
                 const SizedBox(height: 6),
                 Text(
                   '변경 예정: ${_pendingByGradeIndex.length}개',
-                  style: const TextStyle(color: _rsTextSub, fontSize: 12, fontWeight: FontWeight.w800),
+                  style: const TextStyle(
+                      color: _rsTextSub,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w800),
                 ),
                 const SizedBox(height: 4),
                 const Text(
                   '각 과정 행의 “드롭/찾기”로 PDF를 지정한 뒤, 우측 아래 “저장”으로 한 번에 반영하세요.',
-                  style: TextStyle(color: Colors.white38, fontSize: 11, fontWeight: FontWeight.w700, height: 1.25),
+                  style: TextStyle(
+                      color: Colors.white38,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      height: 1.25),
                 ),
               ],
             ),
@@ -4041,9 +4409,11 @@ class _PdfAttachWizardDialogState extends State<_PdfAttachWizardDialog> {
                   final g = grades[index];
                   final existing = widget.pdfPathByBookAndGrade[b.id]?[g.key];
                   final linked = existing != null && existing.trim().isNotEmpty;
-                  final fileLabel = linked ? widget.basenameOf(existing!) : '미연결';
+                  final fileLabel =
+                      linked ? widget.basenameOf(existing!) : '미연결';
                   final pending = _pendingByGradeIndex[index];
-                  final hasPending = pending != null && pending.path.trim().isNotEmpty;
+                  final hasPending =
+                      pending != null && pending.path.trim().isNotEmpty;
 
                   return Container(
                     padding: const EdgeInsets.all(10),
@@ -4074,7 +4444,9 @@ class _PdfAttachWizardDialogState extends State<_PdfAttachWizardDialog> {
                                   Icon(
                                     Icons.picture_as_pdf_outlined,
                                     size: 16,
-                                    color: (linked || hasPending) ? _rsTextSub : Colors.white24,
+                                    color: (linked || hasPending)
+                                        ? _rsTextSub
+                                        : Colors.white24,
                                   ),
                                   const SizedBox(width: 6),
                                   Expanded(
@@ -4094,7 +4466,8 @@ class _PdfAttachWizardDialogState extends State<_PdfAttachWizardDialog> {
                                 const SizedBox(height: 6),
                                 Row(
                                   children: [
-                                    const Icon(Icons.arrow_right_alt, size: 16, color: _rsAccent),
+                                    const Icon(Icons.arrow_right_alt,
+                                        size: 16, color: _rsAccent),
                                     const SizedBox(width: 6),
                                     Expanded(
                                       child: Text(
@@ -4121,7 +4494,8 @@ class _PdfAttachWizardDialogState extends State<_PdfAttachWizardDialog> {
                               child: _dropButton(
                                 onDropped: (xf) async {
                                   if (_busy) return;
-                                  setState(() => _pendingByGradeIndex[index] = xf);
+                                  setState(
+                                      () => _pendingByGradeIndex[index] = xf);
                                 },
                               ),
                             ),
@@ -4137,7 +4511,8 @@ class _PdfAttachWizardDialogState extends State<_PdfAttachWizardDialog> {
                                         final xf = await _pickPdf();
                                         if (xf == null) return;
                                         if (!_isPdf(xf)) return;
-                                        setState(() => _pendingByGradeIndex[index] = xf);
+                                        setState(() =>
+                                            _pendingByGradeIndex[index] = xf);
                                       },
                               ),
                             ),
@@ -4155,8 +4530,11 @@ class _PdfAttachWizardDialogState extends State<_PdfAttachWizardDialog> {
     }
 
     final title = (_step == 0) ? 'PDF 연결' : 'PDF 연결';
-    final subtitle = (_step == 0) ? '1/2 · 책을 선택하세요' : '2/2 · 과정별 PDF를 지정하고 저장하세요';
-    final desiredH = (_step == 0) ? (220.0 + books.length * 78.0) : (260.0 + grades.length * 104.0);
+    final subtitle =
+        (_step == 0) ? '1/2 · 책을 선택하세요' : '2/2 · 과정별 PDF를 지정하고 저장하세요';
+    final desiredH = (_step == 0)
+        ? (220.0 + books.length * 78.0)
+        : (260.0 + grades.length * 104.0);
     final bodyHeight = desiredH.clamp(360.0, maxH).toDouble();
 
     return AlertDialog(
@@ -4191,14 +4569,18 @@ class _PdfAttachWizardDialogState extends State<_PdfAttachWizardDialog> {
         if (_step == 1) ...[
           const SizedBox(width: 8),
           FilledButton(
-            onPressed: (_busy || _pendingByGradeIndex.isEmpty) ? null : _savePending,
+            onPressed:
+                (_busy || _pendingByGradeIndex.isEmpty) ? null : _savePending,
             style: FilledButton.styleFrom(
               backgroundColor: _rsAccent,
               foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10)),
             ),
             child: Text(
-              _pendingByGradeIndex.isEmpty ? '저장' : '저장 (${_pendingByGradeIndex.length})',
+              _pendingByGradeIndex.isEmpty
+                  ? '저장'
+                  : '저장 (${_pendingByGradeIndex.length})',
               style: const TextStyle(fontWeight: FontWeight.w900),
             ),
           ),
@@ -4212,5 +4594,3 @@ class _PdfAttachWizardDialogState extends State<_PdfAttachWizardDialog> {
     );
   }
 }
-
-

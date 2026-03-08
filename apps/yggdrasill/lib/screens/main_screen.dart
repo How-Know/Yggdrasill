@@ -89,7 +89,6 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       <String, GlobalKey>{};
   late final ScrollController _attendedScrollCtrl;
   late final ScrollController _waitingScrollCtrl;
-  DateTime? _lastPlannedEnsureDay; // 날짜가 바뀔 때만 오늘 planned를 보강 생성
 
   // StudentScreen 관련 상태
   final GlobalKey<StudentScreenState> _studentScreenKey =
@@ -1148,32 +1147,76 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       _rotationAnimation.reverse();
     } else {
       _sideSheetDataDirty = true;
-      // ✅ planned가 없으면 사이드 시트가 비어보일 수 있으므로,
-      // 날짜가 바뀌어 처음 열 때 한 번만 planned 보강 생성(누락분만 추가됨).
-      final now = DateTime.now();
-      final today = DateTime(now.year, now.month, now.day);
-      if (_lastPlannedEnsureDay == null ||
-          _lastPlannedEnsureDay!.year != today.year ||
-          _lastPlannedEnsureDay!.month != today.month ||
-          _lastPlannedEnsureDay!.day != today.day) {
-        _lastPlannedEnsureDay = today;
-        if (_sideSheetDebug) {
-          debugPrint(
-            '[SIDE][toggle] open -> ensurePlanned(days=2) recordsLen=${DataManager.instance.attendanceRecords.length}',
-          );
-        }
-        unawaited(
-            DataManager.instance.ensurePlannedAttendanceForNextDays(days: 2));
-      } else {
-        if (_sideSheetDebug) {
-          debugPrint(
-              '[SIDE][toggle] open (ensure skipped - already ran today)');
-        }
+      // ✅ 사이드 시트가 planned 누락으로 비어 보이지 않도록
+      // 오늘 기준 2주(15일) 커버리지를 보장한다.
+      if (_sideSheetDebug) {
+        debugPrint(
+          '[SIDE][toggle] open -> ensureCoverage(days=15) recordsLen=${DataManager.instance.attendanceRecords.length}',
+        );
       }
+      unawaited(DataManager.instance.ensurePlannedCoverageForToday(days: 15));
       // 시범 수업(문의 노트) 슬롯도 사이드 시트에서 사용할 수 있도록 lazy-load
       unawaited(ConsultTrialLessonService.instance.load());
       _rotationAnimation.forward();
     }
+  }
+
+  Future<void> _restoreLeavedStudentToAttended(_LeavedDialogEntry entry) async {
+    final target = entry.target;
+    final classDateTime = target.classDateTime;
+    final existing = DataManager.instance
+        .getAttendanceRecord(target.student.id, classDateTime);
+    final resolvedArrival = existing?.arrivalTime ??
+        entry.arrival ??
+        _attendTimes[target.setId] ??
+        DateTime.now();
+
+    if (existing != null && existing.id != null) {
+      final updated = AttendanceRecord(
+        id: existing.id,
+        studentId: existing.studentId,
+        occurrenceId: existing.occurrenceId,
+        classDateTime: existing.classDateTime,
+        classEndTime: existing.classEndTime,
+        className: existing.className,
+        isPresent: true,
+        arrivalTime: resolvedArrival,
+        departureTime: null,
+        notes: existing.notes,
+        sessionTypeId: existing.sessionTypeId,
+        setId: existing.setId ?? target.setId,
+        snapshotId: existing.snapshotId,
+        batchSessionId: existing.batchSessionId,
+        cycle: existing.cycle,
+        sessionOrder: existing.sessionOrder,
+        isPlanned: existing.isPlanned,
+        createdAt: existing.createdAt,
+        updatedAt: DateTime.now(),
+        version: existing.version,
+      );
+      await DataManager.instance.updateAttendanceRecord(updated);
+    } else {
+      await DataManager.instance.saveOrUpdateAttendance(
+        studentId: target.student.id,
+        classDateTime: classDateTime,
+        classEndTime: classDateTime.add(target.duration),
+        className: target.classInfo?.name ?? '수업',
+        isPresent: true,
+        arrivalTime: resolvedArrival,
+        departureTime: null,
+        setId: target.setId,
+        sessionTypeId: target.classInfo?.id,
+      );
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _leavedSetIds.remove(target.setId);
+      _leaveTimes.remove(target.setId);
+      _attendedSetIds.add(target.setId);
+      _attendTimes[target.setId] = resolvedArrival;
+      _sideSheetDataDirty = true;
+    });
   }
 
   Future<void> _showLeavedStudentsDialog(
@@ -1204,6 +1247,9 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       context: context,
       barrierColor: Colors.black.withOpacity(0.55),
       builder: (dialogContext) {
+        final dialogEntries = List<_LeavedDialogEntry>.from(entries);
+        final Set<String> cancellingSetIds = <String>{};
+
         Widget buildHeader() {
           return SizedBox(
             height: 48,
@@ -1270,88 +1316,186 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                 color: const Color(0xFF0B1112),
                 borderRadius: BorderRadius.circular(12),
               ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  buildHeader(),
-                  const SizedBox(height: 14),
-                  SizedBox(
-                    height: listHeight,
-                    child: entries.isEmpty
-                        ? const Center(
-                            child: Text(
-                              '하원한 학생이 아직 없어요.',
-                              style: TextStyle(
-                                color: Color(0xFF9FB3B3),
-                                fontSize: 15,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          )
-                        : Scrollbar(
-                            thumbVisibility: true,
-                            child: ListView.separated(
-                              itemCount: entries.length,
-                              separatorBuilder: (_, __) =>
-                                  const SizedBox(height: 12),
-                              itemBuilder: (context, index) {
-                                final entry = entries[index];
-                                final arrivalText = entry.arrival != null
-                                    ? _formatTime(entry.arrival!)
-                                    : '--:--';
-                                final departureText = entry.departure != null
-                                    ? _formatTime(entry.departure!)
-                                    : '--:--';
-                                return Container(
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 16, vertical: 14),
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFF10171A),
-                                    borderRadius: BorderRadius.circular(16),
-                                    border: Border.all(
-                                        color: const Color(0xFF1B6B63)
-                                            .withOpacity(0.25)),
+              child: StatefulBuilder(
+                builder: (context, setDialogState) {
+                  return Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      buildHeader(),
+                      const SizedBox(height: 14),
+                      SizedBox(
+                        height: listHeight,
+                        child: dialogEntries.isEmpty
+                            ? const Center(
+                                child: Text(
+                                  '하원한 학생이 아직 없어요.',
+                                  style: TextStyle(
+                                    color: Color(0xFF9FB3B3),
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w500,
                                   ),
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        entry.target.student.name,
-                                        style: const TextStyle(
-                                          color: Color(0xFFEAF2F2),
-                                          fontSize: 17,
-                                          fontWeight: FontWeight.w700,
-                                        ),
+                                ),
+                              )
+                            : Scrollbar(
+                                thumbVisibility: true,
+                                child: ListView.separated(
+                                  itemCount: dialogEntries.length,
+                                  separatorBuilder: (_, __) =>
+                                      const SizedBox(height: 12),
+                                  itemBuilder: (context, index) {
+                                    final entry = dialogEntries[index];
+                                    final setId = entry.target.setId;
+                                    final bool isCancelling =
+                                        cancellingSetIds.contains(setId);
+                                    final arrivalText = entry.arrival != null
+                                        ? _formatTime(entry.arrival!)
+                                        : '--:--';
+                                    final departureText =
+                                        entry.departure != null
+                                            ? _formatTime(entry.departure!)
+                                            : '--:--';
+                                    return Container(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 16, vertical: 14),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFF10171A),
+                                        borderRadius: BorderRadius.circular(16),
+                                        border: Border.all(
+                                            color: const Color(0xFF1B6B63)
+                                                .withOpacity(0.25)),
                                       ),
-                                      if (entry.target.classInfo != null) ...[
-                                        const SizedBox(height: 4),
-                                        Text(
-                                          entry.target.classInfo!.name,
-                                          style: const TextStyle(
-                                            color: Color(0xFF7F8A8E),
-                                            fontSize: 13,
-                                          ),
-                                        ),
-                                      ],
-                                      const SizedBox(height: 10),
-                                      Wrap(
-                                        spacing: 8,
-                                        runSpacing: 8,
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
                                         children: [
-                                          buildTimeBadge('등원', arrivalText),
-                                          buildTimeBadge('하원', departureText),
+                                          Text(
+                                            entry.target.student.name,
+                                            style: const TextStyle(
+                                              color: Color(0xFFEAF2F2),
+                                              fontSize: 17,
+                                              fontWeight: FontWeight.w700,
+                                            ),
+                                          ),
+                                          if (entry.target.classInfo !=
+                                              null) ...[
+                                            const SizedBox(height: 4),
+                                            Text(
+                                              entry.target.classInfo!.name,
+                                              style: const TextStyle(
+                                                color: Color(0xFF7F8A8E),
+                                                fontSize: 13,
+                                              ),
+                                            ),
+                                          ],
+                                          const SizedBox(height: 10),
+                                          Wrap(
+                                            spacing: 8,
+                                            runSpacing: 8,
+                                            children: [
+                                              buildTimeBadge('등원', arrivalText),
+                                              buildTimeBadge(
+                                                  '하원', departureText),
+                                            ],
+                                          ),
+                                          const SizedBox(height: 10),
+                                          Align(
+                                            alignment: Alignment.centerRight,
+                                            child: TextButton.icon(
+                                              onPressed: isCancelling
+                                                  ? null
+                                                  : () async {
+                                                      setDialogState(() {
+                                                        cancellingSetIds
+                                                            .add(setId);
+                                                      });
+                                                      try {
+                                                        await _restoreLeavedStudentToAttended(
+                                                            entry);
+                                                        if (dialogContext
+                                                            .mounted) {
+                                                          setDialogState(() {
+                                                            dialogEntries
+                                                                .removeWhere(
+                                                              (e) =>
+                                                                  e.target.setId ==
+                                                                      setId &&
+                                                                  e.target.student
+                                                                          .id ==
+                                                                      entry
+                                                                          .target
+                                                                          .student
+                                                                          .id,
+                                                            );
+                                                          });
+                                                        }
+                                                        if (mounted) {
+                                                          _showFloatingSnackBar(
+                                                            this.context,
+                                                            '하원 취소 완료: 등원중으로 복구했어요.',
+                                                          );
+                                                        }
+                                                      } on StateError catch (e) {
+                                                        if (mounted) {
+                                                          final msg = e
+                                                                      .message ==
+                                                                  'CONFLICT_ATTENDANCE_VERSION'
+                                                              ? '다른 기기에서 먼저 수정되었습니다. 잠시 후 다시 시도해 주세요.'
+                                                              : '하원 취소에 실패했습니다. 다시 시도해 주세요.';
+                                                          _showFloatingSnackBar(
+                                                            this.context,
+                                                            msg,
+                                                          );
+                                                        }
+                                                      } catch (_) {
+                                                        if (mounted) {
+                                                          _showFloatingSnackBar(
+                                                            this.context,
+                                                            '하원 취소에 실패했습니다. 다시 시도해 주세요.',
+                                                          );
+                                                        }
+                                                      } finally {
+                                                        if (dialogContext
+                                                            .mounted) {
+                                                          setDialogState(() {
+                                                            cancellingSetIds
+                                                                .remove(setId);
+                                                          });
+                                                        }
+                                                      }
+                                                    },
+                                              icon: isCancelling
+                                                  ? const SizedBox(
+                                                      width: 14,
+                                                      height: 14,
+                                                      child:
+                                                          CircularProgressIndicator(
+                                                        strokeWidth: 2.0,
+                                                      ),
+                                                    )
+                                                  : const Icon(
+                                                      Icons.undo_rounded,
+                                                      size: 17,
+                                                    ),
+                                              label: Text(isCancelling
+                                                  ? '복구 중...'
+                                                  : '하원 취소'),
+                                              style: TextButton.styleFrom(
+                                                foregroundColor:
+                                                    const Color(0xFFEAF2F2),
+                                              ),
+                                            ),
+                                          ),
                                         ],
                                       ),
-                                    ],
-                                  ),
-                                );
-                              },
-                            ),
-                          ),
-                  ),
-                ],
+                                    );
+                                  },
+                                ),
+                              ),
+                      ),
+                    ],
+                  );
+                },
               ),
             ),
           ),

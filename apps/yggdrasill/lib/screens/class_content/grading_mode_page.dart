@@ -31,8 +31,10 @@ const EdgeInsets _kGradingPagePadding = EdgeInsets.fromLTRB(24, 0, 24, 24);
 class GradingModePage extends StatefulWidget {
   final List<String> attendingStudentIds;
   final Map<String, String> studentNamesById;
-  final Future<void> Function(String studentId, HomeworkItem hw)? onSubmittedCardTap;
-  final Future<void> Function(String studentId, HomeworkItem hw)? onHomeworkCardTap;
+  final Future<void> Function(String studentId, HomeworkItem hw)?
+      onSubmittedCardTap;
+  final Future<void> Function(String studentId, HomeworkItem hw)?
+      onHomeworkCardTap;
   final Map<({String studentId, String itemId}), bool> pendingConfirms;
   final void Function(String studentId, String itemId)? onTogglePending;
 
@@ -97,19 +99,24 @@ class _GradingModePageState extends State<GradingModePage> {
                                     cardLayout: cardLayout,
                                     onCardTap: widget.onSubmittedCardTap,
                                     canTapItem: (latest) => latest.phase == 3,
+                                  )
+                                else if (homeworkEntries.isNotEmpty)
+                                  _buildSubmittedEmptyPlaceholder(
+                                    cardLayout: cardLayout,
                                   ),
-                                if (submittedEntries.isNotEmpty &&
-                                    homeworkEntries.isNotEmpty) ...[
-                                  const SizedBox(height: _kGradingSectionGapTop),
-                                  const Divider(height: 1, color: Color(0xFF2A3A3A)),
-                                  const SizedBox(height: _kGradingSectionGapBottom),
-                                ],
                                 if (homeworkEntries.isNotEmpty) ...[
+                                  const SizedBox(
+                                      height: _kGradingSectionGapTop),
+                                  const Divider(
+                                      height: 1, color: Color(0xFF2A3A3A)),
+                                  const SizedBox(
+                                      height: _kGradingSectionGapBottom),
                                   _buildSectionHeader(
                                     title: '숙제 과제',
                                     count: homeworkEntries.length,
                                   ),
-                                  const SizedBox(height: _kGradingSectionHeaderGap),
+                                  const SizedBox(
+                                      height: _kGradingSectionHeaderGap),
                                   _buildEntryWrap(
                                     homeworkEntries,
                                     cardLayout: cardLayout,
@@ -137,8 +144,7 @@ class _GradingModePageState extends State<GradingModePage> {
     double fallbackViewportHeight, {
     required int submittedCount,
     required int homeworkCount,
-  }
-  ) {
+  }) {
     final viewportWidth =
         constraints.maxWidth.isFinite && constraints.maxWidth > 0
             ? constraints.maxWidth
@@ -192,8 +198,9 @@ class _GradingModePageState extends State<GradingModePage> {
   }
 
   _GradingCardLayout _layoutFromCardHeight(double cardHeight) {
-    final height =
-        cardHeight.clamp(_kGradingCardMinHeight, _kGradingCardMaxHeight).toDouble();
+    final height = cardHeight
+        .clamp(_kGradingCardMinHeight, _kGradingCardMaxHeight)
+        .toDouble();
     final width = (height * _kGradingCardAspectRatio)
         .clamp(_kGradingCardMinWidth, _kGradingCardMaxWidth)
         .toDouble();
@@ -220,9 +227,9 @@ class _GradingModePageState extends State<GradingModePage> {
     required double availableWidth,
   }) {
     if (itemCount <= 0) return 0;
-    final rawCols =
-        ((availableWidth + cardLayout.spacing) / (cardLayout.width + cardLayout.spacing))
-            .floor();
+    final rawCols = ((availableWidth + cardLayout.spacing) /
+            (cardLayout.width + cardLayout.spacing))
+        .floor();
     final cols = math.max(1, rawCols);
     final rows = (itemCount + cols - 1) ~/ cols;
     if (rows <= 0) return 0;
@@ -242,8 +249,15 @@ class _GradingModePageState extends State<GradingModePage> {
         cardLayout: cardLayout,
         availableWidth: availableWidth,
       );
+    } else if (homeworkCount > 0) {
+      // 제출 섹션이 비어도 상단 공간을 유지해 숙제 섹션 위치를 고정한다.
+      total += _estimateWrapHeight(
+        itemCount: 1,
+        cardLayout: cardLayout,
+        availableWidth: availableWidth,
+      );
     }
-    if (submittedCount > 0 && homeworkCount > 0) {
+    if (homeworkCount > 0) {
       total += _kGradingSectionGapTop + 1 + _kGradingSectionGapBottom;
       total += 24 + _kGradingSectionHeaderGap; // section header + gap
       total += _estimateWrapHeight(
@@ -309,6 +323,32 @@ class _GradingModePageState extends State<GradingModePage> {
     );
   }
 
+  Widget _buildSubmittedEmptyPlaceholder({
+    required _GradingCardLayout cardLayout,
+  }) {
+    return SizedBox(
+      width: double.infinity,
+      height: cardLayout.height,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: const Color(0xFF0F1718),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: const Color(0xFF2A3A3A)),
+        ),
+        child: const Center(
+          child: Text(
+            '활성 제출 과제가 없습니다.',
+            style: TextStyle(
+              color: Color(0xFF7F8C8C),
+              fontSize: 15,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildEntryWrap(
     List<_GradingCardEntry> entries, {
     required _GradingCardLayout cardLayout,
@@ -332,7 +372,11 @@ class _GradingModePageState extends State<GradingModePage> {
               isPendingConfirm: widget.pendingConfirms.containsKey(
                 (studentId: entry.studentId, itemId: entry.item.id),
               ),
-              isCompleteCheckbox: widget.pendingConfirms[(studentId: entry.studentId, itemId: entry.item.id)] == true,
+              isCompleteCheckbox: widget.pendingConfirms[(
+                    studentId: entry.studentId,
+                    itemId: entry.item.id
+                  )] ==
+                  true,
               coverPathFuture: _resolveCoverPath(
                 bookId: (entry.item.bookId ?? '').trim(),
                 gradeLabel: (entry.item.gradeLabel ?? '').trim(),
@@ -340,8 +384,8 @@ class _GradingModePageState extends State<GradingModePage> {
               onTap: onCardTap == null
                   ? null
                   : () async {
-                      final latest =
-                          HomeworkStore.instance.getById(entry.studentId, entry.item.id);
+                      final latest = HomeworkStore.instance
+                          .getById(entry.studentId, entry.item.id);
                       if (latest == null) return;
                       if (canTapItem != null && !canTapItem(latest)) return;
                       await onCardTap(entry.studentId, latest);
@@ -504,21 +548,19 @@ class _SubmittedHomeworkCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final hw = entry.item;
-    final line1 = _buildLine1(hw);
     final line2 = hw.title.trim().isEmpty ? '(제목 없음)' : hw.title.trim();
-    final line3 = _buildLine3(hw);
+    final bookStr = _extractBookName(hw).isEmpty ? '-' : _extractBookName(hw);
+    final courseStr =
+        _extractCourseName(hw).isEmpty ? '-' : _extractCourseName(hw);
+    final pageStr =
+        (hw.page ?? '').trim().isEmpty ? '-' : (hw.page ?? '').trim();
+    final countStr = hw.count == null ? '-' : hw.count.toString();
     final scale =
         (cardHeight / _kGradingBaseCardHeight).clamp(0.5, 1.15).toDouble();
     final radius = (14.0 * scale).clamp(10.0, 14.0).toDouble();
     final contentPadH = (16.0 * scale).clamp(8.0, 16.0).toDouble();
     final contentPadTop = (12.0 * scale).clamp(6.0, 12.0).toDouble();
     final contentPadBottom = (14.0 * scale).clamp(7.0, 14.0).toDouble();
-    final line1Size = (20.0 * scale).clamp(12.0, 20.0).toDouble();
-    final line2Size = (17.0 * scale).clamp(10.5, 17.0).toDouble();
-    final line3Size = (15.0 * scale).clamp(9.5, 15.0).toDouble();
-    final rowGap1 = (6.0 * scale).clamp(3.0, 6.0).toDouble();
-    final rowGap2 = (5.0 * scale).clamp(2.5, 5.0).toDouble();
-    final rowGap3 = (12.0 * scale).clamp(6.0, 12.0).toDouble();
     final line4 = _buildLine4MinutesSinceSubmitted(entry);
 
     final card = Container(
@@ -543,8 +585,8 @@ class _SubmittedHomeworkCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(radius),
         child: LayoutBuilder(
           builder: (context, constraints) {
-            final coverHeight =
-                (constraints.maxHeight - metaHeight).clamp(0.0, constraints.maxHeight);
+            final coverHeight = (constraints.maxHeight - metaHeight)
+                .clamp(0.0, constraints.maxHeight);
             return Stack(
               children: [
                 Column(
@@ -553,7 +595,10 @@ class _SubmittedHomeworkCard extends StatelessWidget {
                     SizedBox(
                       height: coverHeight,
                       width: double.infinity,
-                      child: _buildCoverArea(scale),
+                      child: _buildCoverArea(
+                        scale,
+                        line4: line4,
+                      ),
                     ),
                     Expanded(
                       child: Padding(
@@ -563,57 +608,86 @@ class _SubmittedHomeworkCard extends StatelessWidget {
                           contentPadH,
                           contentPadBottom,
                         ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              line1,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                color: kDlgText,
-                                fontSize: line1Size,
-                                fontWeight: FontWeight.w800,
-                                letterSpacing: -0.2,
+                        child: LayoutBuilder(
+                          builder: (context, _) {
+                            final metaScale = (metaHeight /
+                                    _kGradingBaseCardMetaHeight)
+                                .clamp(0.5, 1.2)
+                                .toDouble();
+                            final cellFontSize = (14.0 * metaScale)
+                                .clamp(9.0, 17.0)
+                                .toDouble();
+                            final line1FontSize =
+                                (cellFontSize * 2.0).clamp(18.0, 34.0).toDouble();
+                            final line23FontSize =
+                                (cellFontSize * 1.2).clamp(10.8, 20.4).toDouble();
+                            final line1Text = bookStr == '-' && courseStr == '-'
+                                ? '-'
+                                : (bookStr != '-' && courseStr != '-'
+                                    ? '$bookStr · $courseStr'
+                                    : (bookStr != '-' ? bookStr : courseStr));
+
+                            final cellStyle1 = TextStyle(
+                              color: kDlgText,
+                              fontSize: line1FontSize,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: -0.2,
+                            );
+                            final cellStyle2 = TextStyle(
+                              color: kDlgTextSub,
+                              fontSize: line23FontSize,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: -0.1,
+                            );
+                            final cellStyle3 = TextStyle(
+                              color: const Color(0xFF7F8C8C),
+                              fontSize: line23FontSize,
+                              fontWeight: FontWeight.w700,
+                            );
+                            return SizedBox.expand(
+                              child: Column(
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    line1Text,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: cellStyle1,
+                                  ),
+                                  Text(
+                                    line2,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: cellStyle2,
+                                  ),
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: Text(
+                                          'p.$pageStr',
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: cellStyle3,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: Text(
+                                          '${countStr}문항',
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          textAlign: TextAlign.right,
+                                          style: cellStyle3,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ],
                               ),
-                            ),
-                            SizedBox(height: rowGap1),
-                            Text(
-                              line2,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                color: kDlgTextSub,
-                                fontSize: line2Size,
-                                fontWeight: FontWeight.w700,
-                                letterSpacing: -0.1,
-                              ),
-                            ),
-                            SizedBox(height: rowGap2),
-                            Text(
-                              line3,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                color: Color(0xFF7F8C8C),
-                                fontSize: line3Size,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                            SizedBox(height: rowGap3),
-                            Center(
-                              child: Text(
-                                line4,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  color: const Color(0xFF7F8C8C),
-                                  fontSize: line1Size,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                            ),
-                          ],
+                            );
+                          },
                         ),
                       ),
                     ),
@@ -626,8 +700,12 @@ class _SubmittedHomeworkCard extends StatelessWidget {
                         color: const Color(0xCC0B1112),
                         child: Center(
                           child: Icon(
-                            isCompleteCheckbox ? Icons.check_circle : Icons.check_circle_outline,
-                            color: isCompleteCheckbox ? const Color(0xFF4CAF50) : const Color(0xFF1B6B63),
+                            isCompleteCheckbox
+                                ? Icons.check_circle
+                                : Icons.check_circle_outline,
+                            color: isCompleteCheckbox
+                                ? const Color(0xFF4CAF50)
+                                : const Color(0xFF1B6B63),
                             size: (67.0 * scale).clamp(38.0, 67.0),
                           ),
                         ),
@@ -654,7 +732,10 @@ class _SubmittedHomeworkCard extends StatelessWidget {
     );
   }
 
-  Widget _buildCoverArea(double scale) {
+  Widget _buildCoverArea(
+    double scale, {
+    required String line4,
+  }) {
     return FutureBuilder<String?>(
       future: coverPathFuture,
       builder: (context, snapshot) {
@@ -668,6 +749,8 @@ class _SubmittedHomeworkCard extends StatelessWidget {
             !hasImage && fallbackCoverColor.computeLuminance() > 0.6
                 ? Colors.black.withOpacity(0.82)
                 : Colors.white;
+        final overlayTimeGap = (6.0 * scale).clamp(3.0, 6.0).toDouble();
+        final overlayTimeSize = (overlayNameSize * 0.7).clamp(10.0, 29.0);
         return Stack(
           fit: StackFit.expand,
           children: [
@@ -699,27 +782,58 @@ class _SubmittedHomeworkCard extends StatelessWidget {
             IgnorePointer(
               child: Center(
                 child: Padding(
-                  padding: EdgeInsets.symmetric(horizontal: overlayHorizontalPad),
-                  child: Text(
-                    entry.studentName,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: overlayNameColor,
-                      fontSize: overlayNameSize,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: 0.3,
-                      shadows: [
-                        Shadow(
-                          color: hasImage
-                              ? Colors.black87
-                              : Colors.black.withOpacity(0.26),
-                          blurRadius: (8.0 * scale).clamp(4.0, 8.0).toDouble(),
-                          offset: Offset(0, (2.0 * scale).clamp(1.0, 2.0).toDouble()),
+                  padding:
+                      EdgeInsets.symmetric(horizontal: overlayHorizontalPad),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        entry.studentName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: overlayNameColor,
+                          fontSize: overlayNameSize,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 0.3,
+                          shadows: [
+                            Shadow(
+                              color: hasImage
+                                  ? Colors.black87
+                                  : Colors.black.withOpacity(0.26),
+                              blurRadius:
+                                  (8.0 * scale).clamp(4.0, 8.0).toDouble(),
+                              offset: Offset(
+                                  0, (2.0 * scale).clamp(1.0, 2.0).toDouble()),
+                            ),
+                          ],
+                        ),
+                      ),
+                      if (line4 != '-') ...[
+                        SizedBox(height: overlayTimeGap),
+                        Text(
+                          line4,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: overlayNameColor,
+                            fontSize: overlayTimeSize.toDouble(),
+                            fontWeight: FontWeight.w700,
+                            shadows: [
+                              Shadow(
+                                color: Colors.black.withOpacity(0.6),
+                                blurRadius:
+                                    (4.0 * scale).clamp(2.0, 4.0).toDouble(),
+                                offset: Offset(0,
+                                    (1.0 * scale).clamp(0.5, 1.0).toDouble()),
+                              ),
+                            ],
+                          ),
                         ),
                       ],
-                    ),
+                    ],
                   ),
                 ),
               ),
@@ -767,8 +881,8 @@ class _SubmittedHomeworkCard extends StatelessWidget {
       return fromContent.trim();
     }
 
-    final hasLinkedTextbook =
-        (hw.bookId ?? '').trim().isNotEmpty && (hw.gradeLabel ?? '').trim().isNotEmpty;
+    final hasLinkedTextbook = (hw.bookId ?? '').trim().isNotEmpty &&
+        (hw.gradeLabel ?? '').trim().isNotEmpty;
     if (hasLinkedTextbook) {
       final stripped = _stripUnitPrefix(hw.title.trim());
       if (stripped.isNotEmpty) {
@@ -792,9 +906,7 @@ class _SubmittedHomeworkCard extends StatelessWidget {
   }
 
   String _stripUnitPrefix(String raw) {
-    return raw
-        .replaceFirst(RegExp(r'^\s*\d+\.\d+\.\(\d+\)\s+'), '')
-        .trim();
+    return raw.replaceFirst(RegExp(r'^\s*\d+\.\d+\.\(\d+\)\s+'), '').trim();
   }
 
   String _normalizedTypeLabel(HomeworkItem hw) {

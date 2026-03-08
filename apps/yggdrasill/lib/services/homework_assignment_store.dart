@@ -113,9 +113,104 @@ class HomeworkAssignmentStore {
       HomeworkAssignmentStore._internal();
   static const String reservationNote = '__reserved_homework__';
   final ValueNotifier<int> revision = ValueNotifier<int>(0);
+  RealtimeChannel? _rtAssignments;
+  RealtimeChannel? _rtChecks;
+  String? _rtAcademyId;
 
   void _bump() {
     revision.value++;
+  }
+
+  void _ensureRealtimeForAcademy(String academyId) {
+    if (academyId.trim().isEmpty) return;
+    if (_rtAcademyId == academyId &&
+        _rtAssignments != null &&
+        _rtChecks != null) {
+      return;
+    }
+    try {
+      if (_rtAcademyId != academyId) {
+        _rtAssignments?.unsubscribe();
+        _rtChecks?.unsubscribe();
+        _rtAssignments = null;
+        _rtChecks = null;
+      }
+      _rtAssignments ??= Supabase.instance.client
+          .channel('public:homework_assignments:$academyId')
+        ..onPostgresChanges(
+          event: PostgresChangeEvent.insert,
+          schema: 'public',
+          table: 'homework_assignments',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'academy_id',
+            value: academyId,
+          ),
+          callback: (_) => _bump(),
+        )
+        ..onPostgresChanges(
+          event: PostgresChangeEvent.update,
+          schema: 'public',
+          table: 'homework_assignments',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'academy_id',
+            value: academyId,
+          ),
+          callback: (_) => _bump(),
+        )
+        ..onPostgresChanges(
+          event: PostgresChangeEvent.delete,
+          schema: 'public',
+          table: 'homework_assignments',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'academy_id',
+            value: academyId,
+          ),
+          callback: (_) => _bump(),
+        )
+        ..subscribe();
+      _rtChecks ??= Supabase.instance.client
+          .channel('public:homework_assignment_checks:$academyId')
+        ..onPostgresChanges(
+          event: PostgresChangeEvent.insert,
+          schema: 'public',
+          table: 'homework_assignment_checks',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'academy_id',
+            value: academyId,
+          ),
+          callback: (_) => _bump(),
+        )
+        ..onPostgresChanges(
+          event: PostgresChangeEvent.update,
+          schema: 'public',
+          table: 'homework_assignment_checks',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'academy_id',
+            value: academyId,
+          ),
+          callback: (_) => _bump(),
+        )
+        ..onPostgresChanges(
+          event: PostgresChangeEvent.delete,
+          schema: 'public',
+          table: 'homework_assignment_checks',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'academy_id',
+            value: academyId,
+          ),
+          callback: (_) => _bump(),
+        )
+        ..subscribe();
+      _rtAcademyId = academyId;
+    } catch (e, st) {
+      debugPrint('[HW_ASSIGN][realtime][ERROR] $e\n$st');
+    }
   }
 
   String? _dueDateIso(DateTime? dueDate) {
@@ -247,7 +342,9 @@ class HomeworkAssignmentStore {
       final mid = _asIntOpt(row['mid_order']);
       final small = _asIntOpt(row['small_order']);
       if (big == null || mid == null || small == null) continue;
-      tuplesByItem.putIfAbsent(itemId, () => <String>{}).add('$big.$mid.$small');
+      tuplesByItem
+          .putIfAbsent(itemId, () => <String>{})
+          .add('$big.$mid.$small');
     }
     final out = <String, String>{};
     for (final entry in tuplesByItem.entries) {
@@ -374,6 +471,7 @@ class HomeworkAssignmentStore {
     try {
       final academyId = await TenantService.instance.getActiveAcademyId() ??
           await TenantService.instance.ensureActiveAcademy();
+      _ensureRealtimeForAcademy(academyId);
       final supa = Supabase.instance.client;
       final rows = await supa
           .from('homework_assignments')
@@ -395,6 +493,7 @@ class HomeworkAssignmentStore {
     try {
       final academyId = await TenantService.instance.getActiveAcademyId() ??
           await TenantService.instance.ensureActiveAcademy();
+      _ensureRealtimeForAcademy(academyId);
       final supa = Supabase.instance.client;
       final rows = await supa
           .from('homework_assignments')
@@ -404,8 +503,7 @@ class HomeworkAssignmentStore {
           .eq('academy_id', academyId)
           .eq('student_id', studentId)
           .order('assigned_at', ascending: false);
-      final typedRows =
-          (rows as List<dynamic>).cast<Map<String, dynamic>>();
+      final typedRows = (rows as List<dynamic>).cast<Map<String, dynamic>>();
       if (typedRows.isEmpty) return <String>{};
 
       final itemIds = <String>{};
@@ -441,6 +539,7 @@ class HomeworkAssignmentStore {
     try {
       final academyId = await TenantService.instance.getActiveAcademyId() ??
           await TenantService.instance.ensureActiveAcademy();
+      _ensureRealtimeForAcademy(academyId);
       final supa = Supabase.instance.client;
       final rows = await supa
           .from('homework_assignments')
@@ -463,6 +562,7 @@ class HomeworkAssignmentStore {
     try {
       final academyId = await TenantService.instance.getActiveAcademyId() ??
           await TenantService.instance.ensureActiveAcademy();
+      _ensureRealtimeForAcademy(academyId);
       final supa = Supabase.instance.client;
       final rows = await supa
           .from('homework_assignments')
@@ -490,6 +590,7 @@ class HomeworkAssignmentStore {
     try {
       final academyId = await TenantService.instance.getActiveAcademyId() ??
           await TenantService.instance.ensureActiveAcademy();
+      _ensureRealtimeForAcademy(academyId);
       final supa = Supabase.instance.client;
       final rows = await supa
           .from('homework_assignments')
@@ -527,6 +628,7 @@ class HomeworkAssignmentStore {
     try {
       final academyId = await TenantService.instance.getActiveAcademyId() ??
           await TenantService.instance.ensureActiveAcademy();
+      _ensureRealtimeForAcademy(academyId);
       final supa = Supabase.instance.client;
       final rows = await supa
           .from('homework_assignments')
@@ -629,6 +731,7 @@ class HomeworkAssignmentStore {
   }) async {
     final academyId = await TenantService.instance.getActiveAcademyId() ??
         await TenantService.instance.ensureActiveAcademy();
+    _ensureRealtimeForAcademy(academyId);
     final supa = Supabase.instance.client;
     String? dueDateIso;
     try {
@@ -697,6 +800,7 @@ class HomeworkAssignmentStore {
     try {
       final academyId = await TenantService.instance.getActiveAcademyId() ??
           await TenantService.instance.ensureActiveAcademy();
+      _ensureRealtimeForAcademy(academyId);
       final supa = Supabase.instance.client;
       await supa.from('homework_assignment_checks').insert({
         'id': const Uuid().v4(),
@@ -740,6 +844,7 @@ class HomeworkAssignmentStore {
     try {
       final academyId = await TenantService.instance.getActiveAcademyId() ??
           await TenantService.instance.ensureActiveAcademy();
+      _ensureRealtimeForAcademy(academyId);
       final supa = Supabase.instance.client;
       final latest = await supa
           .from('homework_assignment_checks')
@@ -832,6 +937,7 @@ class HomeworkAssignmentStore {
     try {
       final academyId = await TenantService.instance.getActiveAcademyId() ??
           await TenantService.instance.ensureActiveAcademy();
+      _ensureRealtimeForAcademy(academyId);
       final supa = Supabase.instance.client;
       final rows = await supa
           .from('homework_assignments')
@@ -902,6 +1008,7 @@ class HomeworkAssignmentStore {
     try {
       final academyId = await TenantService.instance.getActiveAcademyId() ??
           await TenantService.instance.ensureActiveAcademy();
+      _ensureRealtimeForAcademy(academyId);
       final supa = Supabase.instance.client;
       final rows = await supa
           .from('homework_assignment_checks')
@@ -963,6 +1070,7 @@ class HomeworkAssignmentStore {
     try {
       final academyId = await TenantService.instance.getActiveAcademyId() ??
           await TenantService.instance.ensureActiveAcademy();
+      _ensureRealtimeForAcademy(academyId);
       final supa = Supabase.instance.client;
       final dueDateIso = _dueDateIso(dueDate);
 
@@ -1021,9 +1129,8 @@ class HomeworkAssignmentStore {
       } else {
         orderBaseQuery = orderBaseQuery.eq('due_date', dueDateIso);
       }
-      final existingOrderRows = await orderBaseQuery
-          .order('order_index', ascending: false)
-          .limit(1);
+      final existingOrderRows =
+          await orderBaseQuery.order('order_index', ascending: false).limit(1);
       int nextOrder = 0;
       if (existingOrderRows is List && existingOrderRows.isNotEmpty) {
         final row = existingOrderRows.first as Map<String, dynamic>;
@@ -1120,6 +1227,7 @@ class HomeworkAssignmentStore {
     try {
       final academyId = await TenantService.instance.getActiveAcademyId() ??
           await TenantService.instance.ensureActiveAcademy();
+      _ensureRealtimeForAcademy(academyId);
       final dueDateIso = _dueDateIso(dueDate);
       final rows = await _loadActiveRowsForDueGroup(
         academyId: academyId,
@@ -1176,6 +1284,7 @@ class HomeworkAssignmentStore {
     try {
       final academyId = await TenantService.instance.getActiveAcademyId() ??
           await TenantService.instance.ensureActiveAcademy();
+      _ensureRealtimeForAcademy(academyId);
       await _normalizeAssignedOrderForDueDateIso(
         academyId: academyId,
         studentId: studentId,
@@ -1195,6 +1304,7 @@ class HomeworkAssignmentStore {
     try {
       final academyId = await TenantService.instance.getActiveAcademyId() ??
           await TenantService.instance.ensureActiveAcademy();
+      _ensureRealtimeForAcademy(academyId);
       final supa = Supabase.instance.client;
       final rowsToClear = await supa
           .from('homework_assignments')
@@ -1204,7 +1314,8 @@ class HomeworkAssignmentStore {
           .eq('status', 'assigned')
           .inFilter('homework_item_id', itemIds);
       final affectedDueDates = <String?>{};
-      for (final row in (rowsToClear as List<dynamic>).cast<Map<String, dynamic>>()) {
+      for (final row
+          in (rowsToClear as List<dynamic>).cast<Map<String, dynamic>>()) {
         affectedDueDates.add((row['due_date'] as String?)?.trim());
       }
       await supa
