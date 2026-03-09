@@ -24,8 +24,10 @@ static uint32_t g_display_sleep_delay_ms = 30000; // 30초
 static uint32_t g_saver_entered_ms = 0;
 
 static screensaver_wake_cb_t g_wake_cb = NULL;
+static volatile bool g_touch_pressed = false;
 
 void screensaver_set_wake_callback(screensaver_wake_cb_t cb) { g_wake_cb = cb; }
+void screensaver_notify_touch(bool pressed) { g_touch_pressed = pressed; }
 
 static lv_obj_t* g_eye_l = NULL;
 static lv_obj_t* g_eye_r = NULL;
@@ -735,6 +737,11 @@ void screensaver_attach_activity(lv_obj_t* root) {
 
 void screensaver_poll(void) {
     uint32_t now = lv_tick_get();
+
+    if (!g_saver_scr && g_touch_pressed) {
+        g_last_activity_ms = now;
+    }
+
     if (!g_saver_scr && now - g_last_activity_ms > g_timeout_ms) {
         Serial.printf("[SCREENSAVER] Timeout reached. now=%lu, last=%lu, delta=%lu, threshold=%lu\n", 
                       now, g_last_activity_ms, now - g_last_activity_ms, g_timeout_ms);

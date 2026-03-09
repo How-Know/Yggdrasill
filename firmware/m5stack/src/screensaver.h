@@ -7,6 +7,7 @@ extern "C" {
 
 void screensaver_init(uint32_t timeout_ms);
 void screensaver_attach_activity(lv_obj_t* root);
+void screensaver_notify_touch(bool pressed);
 void screensaver_poll(void);
 void screensaver_blink_set(uint32_t blink_ms, uint32_t interval_ms);
 void screensaver_check_shake(void);

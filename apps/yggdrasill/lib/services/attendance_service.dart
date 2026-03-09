@@ -5271,6 +5271,8 @@ class AttendanceService {
 
   Future<void> fixMissingDeparturesForYesterdayKst() async {
     try {
+      // 종료 직전 최신 상태를 기준으로 보정하기 위해 서버 데이터를 다시 로드한다.
+      await loadAttendanceRecords();
       final int lessonMinutes = _d.getAcademySettings().lessonDuration;
       final DateTime nowKst =
           DateTime.now().toUtc().add(const Duration(hours: 9));

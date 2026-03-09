@@ -338,12 +338,27 @@ static void bottom_sheet_drag_cb(lv_event_t* e) {
   if (!s_bottom_sheet || !s_bottom_handle) return;
   if (is_entry_hub_visible()) return;
   lv_event_code_t code = lv_event_get_code(e);
+
+  // 자식 버튼(홈/설정/일시정지) 클릭 시 드래그 가로채기 방지
+  lv_obj_t* target = lv_event_get_target(e);
+  lv_obj_t* current = lv_event_get_current_target(e);
+  if (target != current && target != s_bottom_handle && target != s_bottom_sheet) {
+    // 자식 위젯 터치 → 드래그 무시, 진행 중이면 정리
+    if (s_sheet_dragging) {
+      s_sheet_dragging = false;
+      s_sheet_drag_moved = false;
+    }
+    return;
+  }
+
   lv_indev_t* indev = lv_event_get_indev(e);
   if (!indev) return;
   lv_point_t p;
   lv_indev_get_point(indev, &p);
 
   if (code == LV_EVENT_PRESSED) {
+    lv_anim_del(s_bottom_sheet, anim_set_sheet_y);
+    lv_anim_del(s_bottom_handle, anim_set_handle_y);
     lv_anim_del(s_bottom_sheet, (lv_anim_exec_xcb_t)lv_obj_set_y);
     lv_anim_del(s_bottom_handle, (lv_anim_exec_xcb_t)lv_obj_set_y);
     s_sheet_dragging = true;
@@ -1193,8 +1208,8 @@ static void build_homeworks_ui_internal() {
   screensaver_attach_activity(s_list);
 
   s_bottom_handle = lv_obj_create(s_stage);
-  lv_obj_set_size(s_bottom_handle, 80, 18);
-  lv_obj_set_pos(s_bottom_handle, 120, 220);
+  lv_obj_set_size(s_bottom_handle, 160, 30);
+  lv_obj_set_pos(s_bottom_handle, 80, 208);
   lv_obj_set_style_bg_opa(s_bottom_handle, LV_OPA_TRANSP, 0);
   lv_obj_set_style_border_width(s_bottom_handle, 0, 0);
   lv_obj_set_style_radius(s_bottom_handle, 8, 0);
@@ -1291,20 +1306,21 @@ static void build_homeworks_ui_internal() {
 
   // Floating snackbar (z-order above everything in s_stage)
   s_snackbar = lv_obj_create(s_stage);
-  lv_obj_set_height(s_snackbar, 32);
+  lv_obj_set_height(s_snackbar, 38);
   lv_obj_set_style_bg_color(s_snackbar, lv_color_hex(0x232326), 0);
   lv_obj_set_style_bg_opa(s_snackbar, LV_OPA_COVER, 0);
   lv_obj_set_style_border_color(s_snackbar, lv_color_hex(0x2A2A2A), 0);
   lv_obj_set_style_border_width(s_snackbar, 1, 0);
-  lv_obj_set_style_radius(s_snackbar, 15, 0);
-  lv_obj_set_style_pad_left(s_snackbar, 10, 0);
-  lv_obj_set_style_pad_right(s_snackbar, 12, 0);
+  lv_obj_set_style_radius(s_snackbar, 19, 0);
+  lv_obj_set_style_pad_left(s_snackbar, 14, 0);
+  lv_obj_set_style_pad_right(s_snackbar, 16, 0);
   lv_obj_set_style_pad_top(s_snackbar, 0, 0);
   lv_obj_set_style_pad_bottom(s_snackbar, 0, 0);
   lv_obj_set_scrollbar_mode(s_snackbar, LV_SCROLLBAR_MODE_OFF);
   lv_obj_clear_flag(s_snackbar, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_add_flag(s_snackbar, LV_OBJ_FLAG_CLICKABLE);
   lv_obj_add_flag(s_snackbar, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_set_ext_click_area(s_snackbar, 12);
   lv_obj_add_event_cb(s_snackbar, snackbar_clicked_cb, LV_EVENT_CLICKED, NULL);
 
   s_snackbar_dot = lv_obj_create(s_snackbar);
@@ -1323,7 +1339,7 @@ static void build_homeworks_ui_internal() {
   lv_obj_align(s_snackbar_lbl, LV_ALIGN_LEFT_MID, 12, 0);
 
   lv_obj_set_width(s_snackbar, LV_SIZE_CONTENT);
-  lv_obj_align(s_snackbar, LV_ALIGN_TOP_MID, 0, 4);
+  lv_obj_align(s_snackbar, LV_ALIGN_TOP_MID, 0, 2);
 
   s_snackbar_type = 0;
   s_first_p4_card_idx = -1;

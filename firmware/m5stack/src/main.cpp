@@ -484,6 +484,7 @@ void setup() {
 
 void loop() {
   M5.update();
+  screensaver_notify_touch(M5.Touch.getCount() > 0);
   // LVGL ticking
   static uint32_t lastTick = 0;
   uint32_t nowTick = millis();

@@ -77,6 +77,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   bool _sideSheetWasComplete = false;
   // 사이드 시트 데이터 캐시
   bool _sideSheetDataDirty = true;
+  DateTime _sideSheetAnchorDate =
+      DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
   List<_AttendanceTarget> _cachedWaiting = const [];
   List<_AttendanceTarget> _cachedAttended = const [];
   List<_AttendanceTarget> _cachedLeaved = const [];
@@ -124,33 +126,56 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   final GlobalKey _sideSheetKey = GlobalKey();
   Offset? _lastTagTapPosition;
 
-  // 오늘 등원해야 하는 학생(setId별) 리스트 추출
-  List<_AttendanceTarget> getTodayAttendanceTargets([
+  DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
+  bool _isSameDate(DateTime a, DateTime b) =>
+      a.year == b.year && a.month == b.month && a.day == b.day;
+
+  void _moveSideSheetToYesterday() {
+    final today = _dateOnly(DateTime.now());
+    final yesterday = today.subtract(const Duration(days: 1));
+    if (_isSameDate(_sideSheetAnchorDate, yesterday)) return;
+    setState(() {
+      _sideSheetAnchorDate = yesterday;
+      _sideSheetDataDirty = true;
+    });
+  }
+
+  void _moveSideSheetToToday() {
+    final today = _dateOnly(DateTime.now());
+    if (_isSameDate(_sideSheetAnchorDate, today)) return;
+    setState(() {
+      _sideSheetAnchorDate = today;
+      _sideSheetDataDirty = true;
+    });
+  }
+
+  // 기준 날짜의 등원 대상 학생(setId별) 리스트 추출
+  List<_AttendanceTarget> getAttendanceTargetsForDate(
+    DateTime anchorDate, [
     List<AttendanceRecord>? records,
     Map<String, AttendanceRecord>? outRecordBySet,
   ]) {
     final source = records ?? DataManager.instance.attendanceRecords;
+    final anchor = _dateOnly(anchorDate);
     if (_sideSheetDebug) {
-      final todayCount = source.where((r) {
-        final now = DateTime.now();
-        final a = DateTime(now.year, now.month, now.day);
+      final dayCount = source.where((r) {
         final dt = r.classDateTime;
-        return dt.year == a.year && dt.month == a.month && dt.day == a.day;
+        return dt.year == anchor.year &&
+            dt.month == anchor.month &&
+            dt.day == anchor.day;
       });
-      final presentCnt = todayCount.where((r) => r.isPresent).length;
-      final arrivedCnt = todayCount.where((r) => r.arrivalTime != null).length;
-      final plannedCnt = todayCount.where((r) => r.isPlanned).length;
+      final presentCnt = dayCount.where((r) => r.isPresent).length;
+      final arrivedCnt = dayCount.where((r) => r.arrivalTime != null).length;
+      final plannedCnt = dayCount.where((r) => r.isPlanned).length;
       debugPrint(
-          '[SIDE][records] today=${todayCount.length} present=$presentCnt arrival=$arrivedCnt planned=$plannedCnt');
+          '[SIDE][records] date=$anchor count=${dayCount.length} present=$presentCnt arrival=$arrivedCnt planned=$plannedCnt');
       final samplePresent =
-          todayCount.where((r) => r.isPresent || r.arrivalTime != null).take(5);
+          dayCount.where((r) => r.isPresent || r.arrivalTime != null).take(5);
       for (final r in samplePresent) {
         debugPrint(
             '[SIDE][records][sample-present] student=${r.studentId} setId=${r.setId} dt=${r.classDateTime} arr=${r.arrivalTime} dep=${r.departureTime} isPlanned=${r.isPlanned} id=${r.id}');
       }
     }
-    final now = DateTime.now();
-    final anchor = DateTime(now.year, now.month, now.day);
     String minuteKey(DateTime d) =>
         '${d.year}-${d.month}-${d.day}-${d.hour}-${d.minute}';
     final Set<String> hiddenOriginalPlannedKeys = <String>{};
@@ -325,7 +350,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
 
   void _recomputeSideSheetCache(List<AttendanceRecord> records) {
     final Map<String, AttendanceRecord> recordBySet = {};
-    final attendanceTargets = getTodayAttendanceTargets(records, recordBySet);
+    final attendanceTargets =
+        getAttendanceTargetsForDate(_sideSheetAnchorDate, records, recordBySet);
 
     final List<_AttendanceTarget> leaved = [];
     final List<_AttendanceTarget> attended = [];
@@ -1033,9 +1059,6 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     // 강제 마이그레이션 실행
     await DataManager.instance.forceMigration();
 
-    // 어제(KST) 미하원 자동 처리: 등원만 있고 하원이 없는 경우 등원+수업시간 후 하원으로 기록
-    await DataManager.instance.fixMissingDeparturesForYesterdayKst();
-
     // 태그 이벤트 DB → 메모리 적재
     await TagStore.instance.loadAllFromDb();
 
@@ -1146,6 +1169,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       _removeTooltip();
       _rotationAnimation.reverse();
     } else {
+      _sideSheetAnchorDate = _dateOnly(DateTime.now());
       _sideSheetDataDirty = true;
       // ✅ 사이드 시트가 planned 누락으로 비어 보이지 않도록
       // 오늘 기준 2주(15일) 커버리지를 보장한다.
@@ -1219,6 +1243,115 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     });
   }
 
+  Future<DateTime?> _pickAttendanceTimeForDate({
+    required BuildContext context,
+    required DateTime date,
+    required DateTime initial,
+    required String helpText,
+  }) async {
+    final picked = await showTimePicker(
+      context: context,
+      helpText: helpText,
+      initialTime: TimeOfDay.fromDateTime(initial),
+    );
+    if (picked == null) return null;
+    return DateTime(date.year, date.month, date.day, picked.hour, picked.minute);
+  }
+
+  Future<_LeavedDialogEntry?> _editLeavedDialogEntryTime({
+    required BuildContext context,
+    required _LeavedDialogEntry entry,
+    required bool isArrival,
+  }) async {
+    final target = entry.target;
+    final rec = DataManager.instance
+        .getAttendanceRecord(target.student.id, target.classDateTime);
+    if (rec == null || rec.id == null) {
+      if (mounted) {
+        _showFloatingSnackBar(this.context, '출석 기록을 찾지 못했어요.');
+      }
+      return null;
+    }
+
+    final baseDate = target.classDateTime;
+    final currentArrival = entry.arrival ?? rec.arrivalTime;
+    final currentDeparture = entry.departure ?? rec.departureTime;
+    final fallbackInitial = target.classDateTime;
+    final initial = isArrival
+        ? (currentArrival ?? fallbackInitial)
+        : (currentDeparture ??
+            currentArrival ??
+            fallbackInitial.add(target.duration));
+    final picked = await _pickAttendanceTimeForDate(
+      context: context,
+      date: baseDate,
+      initial: initial,
+      helpText: isArrival ? '등원 시간 수정' : '하원 시간 수정',
+    );
+    if (picked == null) return null;
+
+    final nextArrival = isArrival ? picked : currentArrival;
+    final nextDeparture = isArrival ? currentDeparture : picked;
+
+    if (nextArrival != null &&
+        nextDeparture != null &&
+        nextDeparture.isBefore(nextArrival)) {
+      if (mounted) {
+        _showFloatingSnackBar(this.context, '하원 시간은 등원 시간보다 이를 수 없어요.');
+      }
+      return null;
+    }
+
+    final updated = rec.copyWith(
+      isPresent: true,
+      arrivalTime: nextArrival,
+      departureTime: nextDeparture,
+      updatedAt: DateTime.now(),
+    );
+
+    try {
+      await DataManager.instance.updateAttendanceRecord(updated);
+    } on StateError catch (e) {
+      if (mounted) {
+        final msg = e.message == 'CONFLICT_ATTENDANCE_VERSION'
+            ? '다른 기기에서 먼저 수정되었습니다. 잠시 후 다시 시도해 주세요.'
+            : '시간 수정에 실패했습니다. 다시 시도해 주세요.';
+        _showFloatingSnackBar(this.context, msg);
+      }
+      return null;
+    } catch (_) {
+      if (mounted) {
+        _showFloatingSnackBar(this.context, '시간 수정에 실패했습니다. 다시 시도해 주세요.');
+      }
+      return null;
+    }
+
+    if (!mounted) return null;
+    setState(() {
+      if (nextArrival != null) {
+        _attendedSetIds.add(target.setId);
+        _attendTimes[target.setId] = nextArrival;
+      }
+      if (nextDeparture != null) {
+        _leavedSetIds.add(target.setId);
+        _leaveTimes[target.setId] = nextDeparture;
+      } else {
+        _leavedSetIds.remove(target.setId);
+        _leaveTimes.remove(target.setId);
+      }
+      _sideSheetDataDirty = true;
+    });
+    _showFloatingSnackBar(
+      this.context,
+      isArrival ? '등원 시간이 수정되었어요.' : '하원 시간이 수정되었어요.',
+    );
+    return _LeavedDialogEntry(
+      target: target,
+      arrival: nextArrival,
+      departure: nextDeparture,
+    );
+  }
+
   Future<void> _showLeavedStudentsDialog(
     List<_AttendanceTarget> leaved,
     Map<String, DateTime?> arrivalBySet,
@@ -1249,6 +1382,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       builder: (dialogContext) {
         final dialogEntries = List<_LeavedDialogEntry>.from(entries);
         final Set<String> cancellingSetIds = <String>{};
+        final Set<String> editingTimeKeys = <String>{};
 
         Widget buildHeader() {
           return SizedBox(
@@ -1284,20 +1418,51 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
           );
         }
 
-        Widget buildTimeBadge(String label, String value) {
-          return Container(
+        Widget buildTimeBadge({
+          required String label,
+          required String value,
+          required VoidCallback? onTap,
+          bool isBusy = false,
+        }) {
+          final badge = Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             decoration: BoxDecoration(
               color: const Color(0xFF1B6B63).withOpacity(0.18),
               borderRadius: BorderRadius.circular(999),
             ),
-            child: Text(
-              '$label $value',
-              style: const TextStyle(
-                color: Color(0xFFEAF2F2),
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-              ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  '$label $value',
+                  style: const TextStyle(
+                    color: Color(0xFFEAF2F2),
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                isBusy
+                    ? const SizedBox(
+                        width: 10,
+                        height: 10,
+                        child: CircularProgressIndicator(strokeWidth: 1.8),
+                      )
+                    : const Icon(
+                        Icons.edit_outlined,
+                        size: 13,
+                        color: Color(0xFFB6C9C9),
+                      ),
+              ],
+            ),
+          );
+          if (onTap == null || isBusy) return badge;
+          return Material(
+            color: Colors.transparent,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(999),
+              onTap: onTap,
+              child: badge,
             ),
           );
         }
@@ -1348,6 +1513,15 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                     final setId = entry.target.setId;
                                     final bool isCancelling =
                                         cancellingSetIds.contains(setId);
+                                    final String arrivalEditKey =
+                                        '$setId:arrival';
+                                    final String departureEditKey =
+                                        '$setId:departure';
+                                    final bool isEditingArrival =
+                                        editingTimeKeys.contains(arrivalEditKey);
+                                    final bool isEditingDeparture =
+                                        editingTimeKeys
+                                            .contains(departureEditKey);
                                     final arrivalText = entry.arrival != null
                                         ? _formatTime(entry.arrival!)
                                         : '--:--';
@@ -1369,122 +1543,244 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                         crossAxisAlignment:
                                             CrossAxisAlignment.start,
                                         children: [
-                                          Text(
-                                            entry.target.student.name,
-                                            style: const TextStyle(
-                                              color: Color(0xFFEAF2F2),
-                                              fontSize: 17,
-                                              fontWeight: FontWeight.w700,
-                                            ),
-                                          ),
-                                          if (entry.target.classInfo !=
-                                              null) ...[
-                                            const SizedBox(height: 4),
-                                            Text(
-                                              entry.target.classInfo!.name,
-                                              style: const TextStyle(
-                                                color: Color(0xFF7F8A8E),
-                                                fontSize: 13,
+                                          Row(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Expanded(
+                                                child: Column(
+                                                  crossAxisAlignment:
+                                                      CrossAxisAlignment.start,
+                                                  children: [
+                                                    Text(
+                                                      entry.target.student.name,
+                                                      style: const TextStyle(
+                                                        color:
+                                                            Color(0xFFEAF2F2),
+                                                        fontSize: 17,
+                                                        fontWeight:
+                                                            FontWeight.w700,
+                                                      ),
+                                                    ),
+                                                    if (entry.target.classInfo !=
+                                                        null) ...[
+                                                      const SizedBox(height: 4),
+                                                      Text(
+                                                        entry.target.classInfo!
+                                                            .name,
+                                                        style: const TextStyle(
+                                                          color:
+                                                              Color(0xFF7F8A8E),
+                                                          fontSize: 13,
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  ],
+                                                ),
                                               ),
-                                            ),
-                                          ],
+                                              const SizedBox(width: 10),
+                                              TextButton.icon(
+                                                onPressed: isCancelling
+                                                    ? null
+                                                    : () async {
+                                                        setDialogState(() {
+                                                          cancellingSetIds
+                                                              .add(setId);
+                                                        });
+                                                        try {
+                                                          await _restoreLeavedStudentToAttended(
+                                                              entry);
+                                                          if (dialogContext
+                                                              .mounted) {
+                                                            setDialogState(() {
+                                                              dialogEntries
+                                                                  .removeWhere(
+                                                                (e) =>
+                                                                    e.target
+                                                                        .setId ==
+                                                                        setId &&
+                                                                    e.target
+                                                                        .student
+                                                                        .id ==
+                                                                        entry
+                                                                            .target
+                                                                            .student
+                                                                            .id,
+                                                              );
+                                                            });
+                                                          }
+                                                          if (mounted) {
+                                                            _showFloatingSnackBar(
+                                                              this.context,
+                                                              '하원 취소 완료: 등원중으로 복구했어요.',
+                                                            );
+                                                          }
+                                                        } on StateError catch (e) {
+                                                          if (mounted) {
+                                                            final msg = e
+                                                                        .message ==
+                                                                    'CONFLICT_ATTENDANCE_VERSION'
+                                                                ? '다른 기기에서 먼저 수정되었습니다. 잠시 후 다시 시도해 주세요.'
+                                                                : '하원 취소에 실패했습니다. 다시 시도해 주세요.';
+                                                            _showFloatingSnackBar(
+                                                              this.context,
+                                                              msg,
+                                                            );
+                                                          }
+                                                        } catch (_) {
+                                                          if (mounted) {
+                                                            _showFloatingSnackBar(
+                                                              this.context,
+                                                              '하원 취소에 실패했습니다. 다시 시도해 주세요.',
+                                                            );
+                                                          }
+                                                        } finally {
+                                                          if (dialogContext
+                                                              .mounted) {
+                                                            setDialogState(() {
+                                                              cancellingSetIds
+                                                                  .remove(setId);
+                                                            });
+                                                          }
+                                                        }
+                                                      },
+                                                icon: isCancelling
+                                                    ? const SizedBox(
+                                                        width: 14,
+                                                        height: 14,
+                                                        child:
+                                                            CircularProgressIndicator(
+                                                          strokeWidth: 2.0,
+                                                        ),
+                                                      )
+                                                    : const Icon(
+                                                        Icons.undo_rounded,
+                                                        size: 17,
+                                                      ),
+                                                label: Text(isCancelling
+                                                    ? '복구 중...'
+                                                    : '하원 취소'),
+                                                style: TextButton.styleFrom(
+                                                  foregroundColor:
+                                                      const Color(0xFFEAF2F2),
+                                                ),
+                                              ),
+                                            ],
+                                          ),
                                           const SizedBox(height: 10),
                                           Wrap(
                                             spacing: 8,
                                             runSpacing: 8,
                                             children: [
-                                              buildTimeBadge('등원', arrivalText),
                                               buildTimeBadge(
-                                                  '하원', departureText),
-                                            ],
-                                          ),
-                                          const SizedBox(height: 10),
-                                          Align(
-                                            alignment: Alignment.centerRight,
-                                            child: TextButton.icon(
-                                              onPressed: isCancelling
-                                                  ? null
-                                                  : () async {
-                                                      setDialogState(() {
-                                                        cancellingSetIds
-                                                            .add(setId);
-                                                      });
-                                                      try {
-                                                        await _restoreLeavedStudentToAttended(
-                                                            entry);
-                                                        if (dialogContext
-                                                            .mounted) {
-                                                          setDialogState(() {
-                                                            dialogEntries
-                                                                .removeWhere(
+                                                label: '등원',
+                                                value: arrivalText,
+                                                isBusy: isEditingArrival,
+                                                onTap: (isCancelling ||
+                                                        isEditingDeparture)
+                                                    ? null
+                                                    : () async {
+                                                        setDialogState(() {
+                                                          editingTimeKeys
+                                                              .add(arrivalEditKey);
+                                                        });
+                                                        try {
+                                                          final updatedEntry =
+                                                              await _editLeavedDialogEntryTime(
+                                                            context:
+                                                                dialogContext,
+                                                            entry: entry,
+                                                            isArrival: true,
+                                                          );
+                                                          if (updatedEntry !=
+                                                                  null &&
+                                                              dialogContext
+                                                                  .mounted) {
+                                                            final idx =
+                                                                dialogEntries
+                                                                    .indexWhere(
                                                               (e) =>
                                                                   e.target.setId ==
                                                                       setId &&
                                                                   e.target.student
                                                                           .id ==
-                                                                      entry
-                                                                          .target
+                                                                      entry.target
                                                                           .student
                                                                           .id,
                                                             );
-                                                          });
+                                                            if (idx != -1) {
+                                                              setDialogState(() {
+                                                                dialogEntries[
+                                                                    idx] = updatedEntry;
+                                                              });
+                                                            }
+                                                          }
+                                                        } finally {
+                                                          if (dialogContext
+                                                              .mounted) {
+                                                            setDialogState(() {
+                                                              editingTimeKeys
+                                                                  .remove(arrivalEditKey);
+                                                            });
+                                                          }
                                                         }
-                                                        if (mounted) {
-                                                          _showFloatingSnackBar(
-                                                            this.context,
-                                                            '하원 취소 완료: 등원중으로 복구했어요.',
-                                                          );
-                                                        }
-                                                      } on StateError catch (e) {
-                                                        if (mounted) {
-                                                          final msg = e
-                                                                      .message ==
-                                                                  'CONFLICT_ATTENDANCE_VERSION'
-                                                              ? '다른 기기에서 먼저 수정되었습니다. 잠시 후 다시 시도해 주세요.'
-                                                              : '하원 취소에 실패했습니다. 다시 시도해 주세요.';
-                                                          _showFloatingSnackBar(
-                                                            this.context,
-                                                            msg,
-                                                          );
-                                                        }
-                                                      } catch (_) {
-                                                        if (mounted) {
-                                                          _showFloatingSnackBar(
-                                                            this.context,
-                                                            '하원 취소에 실패했습니다. 다시 시도해 주세요.',
-                                                          );
-                                                        }
-                                                      } finally {
-                                                        if (dialogContext
-                                                            .mounted) {
-                                                          setDialogState(() {
-                                                            cancellingSetIds
-                                                                .remove(setId);
-                                                          });
-                                                        }
-                                                      }
-                                                    },
-                                              icon: isCancelling
-                                                  ? const SizedBox(
-                                                      width: 14,
-                                                      height: 14,
-                                                      child:
-                                                          CircularProgressIndicator(
-                                                        strokeWidth: 2.0,
-                                                      ),
-                                                    )
-                                                  : const Icon(
-                                                      Icons.undo_rounded,
-                                                      size: 17,
-                                                    ),
-                                              label: Text(isCancelling
-                                                  ? '복구 중...'
-                                                  : '하원 취소'),
-                                              style: TextButton.styleFrom(
-                                                foregroundColor:
-                                                    const Color(0xFFEAF2F2),
+                                                      },
                                               ),
-                                            ),
+                                              buildTimeBadge(
+                                                label: '하원',
+                                                value: departureText,
+                                                isBusy: isEditingDeparture,
+                                                onTap: (isCancelling ||
+                                                        isEditingArrival)
+                                                    ? null
+                                                    : () async {
+                                                        setDialogState(() {
+                                                          editingTimeKeys.add(
+                                                              departureEditKey);
+                                                        });
+                                                        try {
+                                                          final updatedEntry =
+                                                              await _editLeavedDialogEntryTime(
+                                                            context:
+                                                                dialogContext,
+                                                            entry: entry,
+                                                            isArrival: false,
+                                                          );
+                                                          if (updatedEntry !=
+                                                                  null &&
+                                                              dialogContext
+                                                                  .mounted) {
+                                                            final idx =
+                                                                dialogEntries
+                                                                    .indexWhere(
+                                                              (e) =>
+                                                                  e.target.setId ==
+                                                                      setId &&
+                                                                  e.target.student
+                                                                          .id ==
+                                                                      entry.target
+                                                                          .student
+                                                                          .id,
+                                                            );
+                                                            if (idx != -1) {
+                                                              setDialogState(() {
+                                                                dialogEntries[
+                                                                    idx] = updatedEntry;
+                                                              });
+                                                            }
+                                                          }
+                                                        } finally {
+                                                          if (dialogContext
+                                                              .mounted) {
+                                                            setDialogState(() {
+                                                              editingTimeKeys.remove(
+                                                                  departureEditKey);
+                                                            });
+                                                          }
+                                                        }
+                                                      },
+                                              ),
+                                            ],
                                           ),
                                         ],
                                       ),
@@ -1682,17 +1978,13 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                       valueListenable:
                           ConsultTrialLessonService.instance.slotsNotifier,
                       builder: (context, trialSlots, _) {
-                        final now2 = DateTime.now();
-                        final todayDate =
-                            DateTime(now2.year, now2.month, now2.day);
-                        DateTime _dateOnly(DateTime d) =>
-                            DateTime(d.year, d.month, d.day);
+                        final targetDate = _dateOnly(_sideSheetAnchorDate);
 
                         final trialToday = trialSlots.where((s) {
                           final wk = _dateOnly(s.weekStart);
                           final slotDate =
                               _dateOnly(wk.add(Duration(days: s.dayIndex)));
-                          return slotDate == todayDate;
+                          return slotDate == targetDate;
                         }).toList();
 
                         final trialAttended = trialToday
@@ -1721,8 +2013,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                         final trialWaitingByTime = SplayTreeMap<DateTime,
                             List<ConsultTrialLessonSlot>>();
                         for (final s in trialWaiting) {
-                          final k = DateTime(todayDate.year, todayDate.month,
-                              todayDate.day, s.hour, s.minute);
+                          final k = DateTime(targetDate.year, targetDate.month,
+                              targetDate.day, s.hour, s.minute);
                           (trialWaitingByTime[k] ??= <ConsultTrialLessonSlot>[])
                               .add(s);
                         }
@@ -1746,11 +2038,17 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                       children: [
                                         Row(
                                           children: [
-                                            const _TodayDateLabel(),
+                                            _SideSheetDateHeader(
+                                              date: _sideSheetAnchorDate,
+                                              onMoveToYesterday:
+                                                  _moveSideSheetToYesterday,
+                                              onMoveToToday:
+                                                  _moveSideSheetToToday,
+                                            ),
                                             const Spacer(),
                                           ],
                                         ),
-                                        const SizedBox(height: 6),
+                                        const SizedBox(height: 14),
                                         Align(
                                           alignment: Alignment.center,
                                           child: Row(
@@ -2847,14 +3145,73 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   }
 }
 
-class _TodayDateLabel extends StatelessWidget {
-  const _TodayDateLabel();
+class _SideSheetDateHeader extends StatelessWidget {
+  final DateTime date;
+  final VoidCallback onMoveToYesterday;
+  final VoidCallback onMoveToToday;
+
+  const _SideSheetDateHeader({
+    required this.date,
+    required this.onMoveToYesterday,
+    required this.onMoveToToday,
+  });
+
   @override
   Widget build(BuildContext context) {
-    return Text(
-      _getTodayDateString(),
-      style: const TextStyle(
-          color: Colors.white, fontSize: 30, fontWeight: FontWeight.w800),
+    final today = DateTime.now();
+    final todayDate = DateTime(today.year, today.month, today.day);
+    final isToday = date.year == todayDate.year &&
+        date.month == todayDate.month &&
+        date.day == todayDate.day;
+    final yesterday = todayDate.subtract(const Duration(days: 1));
+    final isYesterday = date.year == yesterday.year &&
+        date.month == yesterday.month &&
+        date.day == yesterday.day;
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Tooltip(
+          message: isYesterday ? '이미 어제 날짜를 보고 있어요' : '어제로 이동',
+          child: IconButton(
+            onPressed: isYesterday ? null : onMoveToYesterday,
+            icon: Icon(
+              Icons.chevron_left_rounded,
+              color: isYesterday ? Colors.white24 : Colors.white70,
+              size: 30,
+            ),
+            visualDensity: VisualDensity.compact,
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 38, minHeight: 30),
+          ),
+        ),
+        const SizedBox(width: 6),
+        Text(
+          _getTodayDateString(date),
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 30,
+            fontWeight: FontWeight.w800,
+            height: 1.0,
+          ),
+        ),
+        if (!isToday) ...[
+          const SizedBox(width: 10),
+          TextButton(
+            onPressed: onMoveToToday,
+            style: TextButton.styleFrom(
+              foregroundColor: Colors.white70,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            child: const Text(
+              '오늘',
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+            ),
+          ),
+        ],
+      ],
     );
   }
 }
@@ -2937,14 +3294,14 @@ String _formatTime(DateTime dt) {
 }
 
 // 날짜/요일 포맷 함수 추가
-String _getTodayDateString() {
-  final now = DateTime.now();
+String _getTodayDateString([DateTime? date]) {
+  final now = date ?? DateTime.now();
   final week = ['월', '화', '수', '목', '금', '토', '일'];
   return '${now.year}.${now.month.toString().padLeft(2, '0')}.${now.day.toString().padLeft(2, '0')} (${week[now.weekday - 1]})';
 }
 
-String _getTodayDateShortString() {
-  final now = DateTime.now();
+String _getTodayDateShortString([DateTime? date]) {
+  final now = date ?? DateTime.now();
   final week = ['월', '화', '수', '목', '금', '토', '일'];
   return '${now.month.toString().padLeft(2, '0')}.${now.day.toString().padLeft(2, '0')} (${week[now.weekday - 1]})';
 }
@@ -3315,7 +3672,7 @@ extension on _MainScreenState {
                             children: [
                               Expanded(
                                 child: Text(
-                                  '${target.student.name} · ${_getTodayDateShortString()}',
+                                  '${target.student.name} · ${_getTodayDateShortString(_sideSheetAnchorDate)}',
                                   style: const TextStyle(
                                       color: Colors.white70,
                                       fontSize: 15,

@@ -538,11 +538,18 @@ class MyApp extends StatefulWidget {
   State<MyApp> createState() => _MyAppState();
 }
 
-class _MyAppState extends State<MyApp> {
+class _MyAppState extends State<MyApp> with WindowListener {
+  bool _windowCloseInProgress = false;
+  OverlayEntry? _closingOverlayEntry;
+
+  bool get _isDesktop =>
+      Platform.isWindows || Platform.isLinux || Platform.isMacOS;
+
   @override
   void initState() {
     super.initState();
     _scheduleStartupWindowState();
+    unawaited(_initWindowCloseHandler());
   }
 
   void _scheduleStartupWindowState() {
@@ -561,6 +568,106 @@ class _MyAppState extends State<MyApp> {
       startFullscreen: widget.startFullscreen,
       startMaximized: widget.startMaximized,
     ));
+  }
+
+  Future<void> _initWindowCloseHandler() async {
+    if (!_isDesktop) return;
+    try {
+      windowManager.addListener(this);
+      await windowManager.setPreventClose(true);
+    } catch (_) {
+      // ignore
+    }
+  }
+
+  void _showClosingOverlay() {
+    if (_closingOverlayEntry != null) return;
+    final overlay = rootNavigatorKey.currentState?.overlay;
+    if (overlay == null) return;
+    _closingOverlayEntry = OverlayEntry(
+      builder: (_) => Material(
+        color: Colors.transparent,
+        child: Stack(
+          children: [
+            ModalBarrier(
+              dismissible: false,
+              color: Colors.black.withOpacity(0.55),
+            ),
+            Center(
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 22, vertical: 16),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1F1F1F),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.white24),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2.2),
+                    ),
+                    SizedBox(width: 12),
+                    Text(
+                      '하원처리중입니다...',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+    overlay.insert(_closingOverlayEntry!);
+  }
+
+  void _hideClosingOverlay() {
+    _closingOverlayEntry?.remove();
+    _closingOverlayEntry = null;
+  }
+
+  @override
+  void onWindowClose() async {
+    if (!_isDesktop || _windowCloseInProgress) return;
+    _windowCloseInProgress = true;
+    _showClosingOverlay();
+    await Future<void>.delayed(const Duration(milliseconds: 16));
+    try {
+      await DataManager.instance.fixMissingDeparturesForYesterdayKst();
+    } catch (_) {
+      // 종료 전 정리 실패 시에도 종료는 진행
+    } finally {
+      _hideClosingOverlay();
+      try {
+        await windowManager.setPreventClose(false);
+      } catch (_) {}
+      await windowManager.close();
+    }
+  }
+
+  @override
+  void dispose() {
+    _hideClosingOverlay();
+    if (_isDesktop) {
+      try {
+        windowManager.removeListener(this);
+      } catch (_) {}
+      unawaited(() async {
+        try {
+          await windowManager.setPreventClose(false);
+        } catch (_) {}
+      }());
+    }
+    super.dispose();
   }
 
   @override
