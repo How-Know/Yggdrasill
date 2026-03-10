@@ -1033,6 +1033,12 @@ class HomeworkQuickAddProxyDialogState
         'startPage': s.startPage,
         'endPage': s.endPage,
         'pageCount': pageCount,
+        'pageCounts': s.pageCounts.isNotEmpty
+            ? Map<String, int>.fromEntries(
+                s.pageCounts.entries
+                    .map((e) => MapEntry(e.key.toString(), e.value)),
+              )
+            : null,
         'weight': 1.0,
         'sourceScope': 'direct_small',
       });

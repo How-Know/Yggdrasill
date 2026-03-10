@@ -5788,10 +5788,10 @@ class _GridFileCardState extends State<_GridFileCard> {
     _gradeDragDx += d.delta.dx;
     if (_gradeDragDx <= -48) {
       _gradeDragDx = 0.0;
-      onGradeDelta(-1);
+      onGradeDelta(1);
     } else if (_gradeDragDx >= 48) {
       _gradeDragDx = 0.0;
-      onGradeDelta(1);
+      onGradeDelta(-1);
     }
   }
 
@@ -5973,7 +5973,7 @@ class _GridFileCardState extends State<_GridFileCard> {
                                 final dx = signal.scrollDelta.dx;
                                 final dy = signal.scrollDelta.dy;
                                 if (dx != 0 && dx.abs() >= dy.abs()) {
-                                  handleGradeDelta(dx < 0 ? -1 : 1);
+                                  handleGradeDelta(dx < 0 ? 1 : -1);
                                 }
                               }
                             },

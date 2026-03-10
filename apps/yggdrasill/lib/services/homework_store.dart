@@ -496,6 +496,11 @@ class HomeworkStore {
           studentId: studentId,
           item: it,
         );
+        await _syncPageMappings(
+          academyId: academyId,
+          studentId: studentId,
+          item: it,
+        );
         return;
       }
       // Insert if not exists
@@ -511,6 +516,11 @@ class HomeworkStore {
         final row = (insRows.first as Map<String, dynamic>);
         it.version = (row['version'] as num?)?.toInt() ?? 1;
         await _syncUnitMappings(
+          academyId: academyId,
+          studentId: studentId,
+          item: it,
+        );
+        await _syncPageMappings(
           academyId: academyId,
           studentId: studentId,
           item: it,
@@ -604,6 +614,119 @@ class HomeworkStore {
       }
     } catch (e, st) {
       print('[HW][unitMappings][ERROR] $e\n$st');
+    }
+  }
+
+  Future<void> _syncPageMappings({
+    required String academyId,
+    required String studentId,
+    required HomeworkItem item,
+  }) async {
+    final mappings = item.unitMappings;
+    if (mappings == null) return;
+    final bookId = (item.bookId ?? '').trim();
+    final gradeLabel = (item.gradeLabel ?? '').trim();
+    if (bookId.isEmpty || gradeLabel.isEmpty) return;
+    final supa = Supabase.instance.client;
+    try {
+      await supa.from('homework_item_pages').delete().match({
+        'academy_id': academyId,
+        'homework_item_id': item.id,
+      });
+
+      int? asIntOpt(dynamic v) {
+        if (v == null) return null;
+        if (v is int) return v;
+        if (v is num) return v.toInt();
+        if (v is String) return int.tryParse(v);
+        return null;
+      }
+
+      final pageRows = <Map<String, dynamic>>[];
+      final seenPages = <int>{};
+
+      for (final raw in mappings) {
+        final m = Map<String, dynamic>.from(raw);
+        final pageCounts = m['pageCounts'];
+        final startPage = asIntOpt(m['startPage']);
+        final endPage = asIntOpt(m['endPage']);
+
+        if (pageCounts is Map && pageCounts.isNotEmpty) {
+          for (final entry in pageCounts.entries) {
+            final page = asIntOpt(entry.key);
+            final count = asIntOpt(entry.value) ?? 0;
+            if (page == null || page <= 0 || !seenPages.add(page)) continue;
+            pageRows.add({
+              'academy_id': academyId,
+              'homework_item_id': item.id,
+              'student_id': studentId,
+              'book_id': bookId,
+              'grade_label': gradeLabel,
+              'page_number': page,
+              'problem_count': count,
+            });
+          }
+        } else if (startPage != null && endPage != null && endPage >= startPage) {
+          for (int p = startPage; p <= endPage; p++) {
+            if (!seenPages.add(p)) continue;
+            pageRows.add({
+              'academy_id': academyId,
+              'homework_item_id': item.id,
+              'student_id': studentId,
+              'book_id': bookId,
+              'grade_label': gradeLabel,
+              'page_number': p,
+              'problem_count': 1,
+            });
+          }
+        }
+      }
+
+      if (pageRows.isNotEmpty) {
+        await supa.from('homework_item_pages').insert(pageRows);
+      }
+    } catch (e, st) {
+      print('[HW][pageMappings][ERROR] $e\n$st');
+    }
+  }
+
+  Future<void> _distributeStatsToPages(
+    String academyId,
+    HomeworkItem item,
+  ) async {
+    if (item.accumulatedMs <= 0 && item.checkCount <= 0) return;
+    final supa = Supabase.instance.client;
+    try {
+      final rows = await supa
+          .from('homework_item_pages')
+          .select('id,problem_count')
+          .eq('academy_id', academyId)
+          .eq('homework_item_id', item.id);
+      final pages = (rows as List<dynamic>).cast<Map<String, dynamic>>();
+      if (pages.isEmpty) return;
+
+      int totalWeight = 0;
+      for (final p in pages) {
+        totalWeight += ((p['problem_count'] as num?)?.toInt() ?? 0);
+      }
+      if (totalWeight <= 0) {
+        totalWeight = pages.length;
+        for (final p in pages) {
+          p['problem_count'] = 1;
+        }
+      }
+
+      for (final p in pages) {
+        final w = ((p['problem_count'] as num?)?.toInt() ?? 1);
+        final ratio = w / totalWeight;
+        await supa.from('homework_item_pages').update({
+          'allocated_ms': (item.accumulatedMs * ratio).round(),
+          'allocated_checks':
+              double.parse((item.checkCount * ratio).toStringAsFixed(4)),
+        }).eq('id', p['id'] as String);
+      }
+    } catch (e, st) {
+      print('[HW][distributePages][ERROR] $e\n$st');
     }
   }
 
@@ -858,10 +981,12 @@ class HomeworkStore {
         'p_item_id': id,
         'p_academy_id': academyId,
       });
-      unawaited(
-        _reloadStudent(studentId)
-            .then((_) => _normalizeActiveOrderIndices(studentId)),
-      );
+      await _reloadStudent(studentId);
+      unawaited(_normalizeActiveOrderIndices(studentId));
+      final completed = getById(studentId, id);
+      if (completed != null) {
+        unawaited(_distributeStatsToPages(academyId, completed));
+      }
     } catch (_) {}
   }
 

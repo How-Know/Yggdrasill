@@ -2831,16 +2831,16 @@ class _BookCardState extends State<_BookCard> {
     if (_gradeDragTriggered) return;
     _gradeDragDx += d.delta.dx;
     if (_gradeDragDx <= -_gradeSwipeDistanceThreshold) {
-      _triggerGradeDelta(-1);
-    } else if (_gradeDragDx >= _gradeSwipeDistanceThreshold) {
       _triggerGradeDelta(1);
+    } else if (_gradeDragDx >= _gradeSwipeDistanceThreshold) {
+      _triggerGradeDelta(-1);
     }
   }
 
   void _handleGradeDragEnd(DragEndDetails d) {
     final v = d.primaryVelocity ?? 0.0;
     if (!_gradeDragTriggered && v.abs() >= _gradeSwipeVelocityThreshold) {
-      _triggerGradeDelta(v < 0 ? -1 : 1);
+      _triggerGradeDelta(v < 0 ? 1 : -1);
     }
     _resetGradeDrag();
   }
@@ -2892,8 +2892,7 @@ class _BookCardState extends State<_BookCard> {
             final dy = signal.scrollDelta.dy;
             // 수직 스크롤은 리스트 스크롤에 맡기고, 가로 입력만 과정 변경으로 사용
             if (dx != 0 && dx.abs() >= dy.abs()) {
-              // 요청: 왼쪽(음수)=내려감(-1), 오른쪽(양수)=올라감(+1)
-              widget.onGradeDelta(dx < 0 ? -1 : 1);
+              widget.onGradeDelta(dx < 0 ? 1 : -1);
             }
           }
         },
