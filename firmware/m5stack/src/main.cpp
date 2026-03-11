@@ -5,6 +5,7 @@
 #include "esp_wifi.h"
 #include <lvgl.h>
 #include <LittleFS.h>
+#include <Preferences.h>
 #include "ui_port.h"
 #include "screensaver.h"
 #if LV_USE_TINY_TTF
@@ -36,8 +37,8 @@ static const char* WIFI_PASS = CFG_WIFI_PASSWORD;
 static const char* MQTT_HOST = CFG_MQTT_HOST;
 static const uint16_t MQTT_PORT = CFG_MQTT_PORT;
 static String academyId = CFG_ACADEMY_ID;
-String studentId = ""; // 바인딩 전에는 비워둠 (list_today 요청용)
-static String deviceId = CFG_DEVICE_ID;
+String studentId = "";
+static String deviceId;
 
 AsyncMqttClient mqtt;
 String ackFilterPrefix;
@@ -394,9 +395,32 @@ void fw_publish_list_today() {
 void setup() {
   auto cfg = M5.config(); M5.begin(cfg);
   M5.Display.setTextSize(2);
-  // 디스플레이 폰트는 LVGL이 담당하므로 기본 폰트 유지
   Serial.begin(115200);
-  // Initialize LVGL UI (aligned text rendering)
+
+  // NVS에서 device_id 로드 (OTA 후에도 유지)
+  {
+    Preferences prefs;
+    prefs.begin("m5cfg", false);
+#ifdef PROVISION_DEVICE_ID
+    // USB 업로드: CFG_DEVICE_ID로 NVS를 강제 갱신
+    deviceId = CFG_DEVICE_ID;
+    prefs.putString("device_id", deviceId);
+    Serial.printf("[NVS] device_id provisioned: %s\n", deviceId.c_str());
+#else
+    // OTA 업로드: NVS에서 읽기 (없으면 CFG_DEVICE_ID 폴백)
+    String stored = prefs.getString("device_id", "");
+    if (stored.length() > 0) {
+      deviceId = stored;
+      Serial.printf("[NVS] device_id loaded: %s\n", deviceId.c_str());
+    } else {
+      deviceId = CFG_DEVICE_ID;
+      prefs.putString("device_id", deviceId);
+      Serial.printf("[NVS] device_id fallback: %s\n", deviceId.c_str());
+    }
+#endif
+    prefs.end();
+  }
+
   initLvgl();
   // 영문 기본 폰트 사용 (한글 비표시 깨짐 방지). 한글 폰트는 추후 내장 폰트로 교체 예정
   M5.Display.setFont(&fonts::Font0);

@@ -49,7 +49,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
   bool _isGradingMode = false;
   bool _printPickMode = false;
   final Map<({String studentId, String itemId}), bool> _pendingConfirms = {};
-  // value: false = 확인(confirm, 사이클 계속), true = 완료(complete, 활성 과제 제거)
+  final Set<String> _expandedHomeworkIds = {};
   String? _expandedReservedStudentId;
 
   @override
@@ -469,6 +469,18 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                         onPrintPickTap: _handleHomeworkPrintPick,
                         onSlideDownComplete: (key) {
                           setState(() => _pendingConfirms[key] = true);
+                        },
+                        expandedHomeworkIds: _expandedHomeworkIds,
+                        onToggleExpand: (id) {
+                          setState(() {
+                            if (_expandedHomeworkIds.contains(id)) {
+                              _expandedHomeworkIds.remove(id);
+                            } else {
+                              _expandedHomeworkIds
+                                ..clear()
+                                ..add(id);
+                            }
+                          });
                         },
                       );
                     },
@@ -2586,8 +2598,10 @@ Future<void> _openHomeworkEditDialogForHome(
   HomeworkStore.instance.edit(studentId, updated);
 }
 
-const double _homeworkChipHeight = 154.0;
-const double _homeworkChipMaxSlide = _homeworkChipHeight * 0.58;
+const double _homeworkChipCollapsedHeight = 112.0;
+const double _homeworkChipExpandedHeight = 180.0;
+double _homeworkChipMaxSlideFor(double h) => h * 0.58;
+const double _homeworkChipMaxSlide = _homeworkChipCollapsedHeight * 0.58;
 const double _homeworkChipOuterLeftInset =
     (ClassContentScreen._studentColumnWidth -
             ClassContentScreen._studentColumnContentWidth) /
@@ -2613,6 +2627,8 @@ Widget _buildHomeworkChipsReactiveForStudent(
           required HomeworkItem hw})?
       onPrintPickTap,
   void Function(({String studentId, String itemId}) key)? onSlideDownComplete,
+  Set<String> expandedHomeworkIds = const {},
+  void Function(String id)? onToggleExpand,
 }) {
   return ValueListenableBuilder<int>(
     valueListenable: StudentFlowStore.instance.revision,
@@ -2712,6 +2728,8 @@ Widget _buildHomeworkChipsReactiveForStudent(
                                 printPickMode: printPickMode,
                                 onPrintPickTap: onPrintPickTap,
                                 onSlideDownComplete: onSlideDownComplete,
+                                expandedHomeworkIds: expandedHomeworkIds,
+                                onToggleExpand: onToggleExpand,
                               );
                               final assignedHomeworkSections =
                                   _buildAssignedHomeworkChipsForStudent(
@@ -3023,29 +3041,9 @@ Widget _buildHomeworkChipWithReorderHandle({
   required Widget chipVisual,
   required int index,
 }) {
-  return Stack(
-    clipBehavior: Clip.hardEdge,
-    children: [
-      chipVisual,
-      Positioned(
-        top: 6,
-        right: 24,
-        child: SizedBox(
-          width: 32,
-          height: 32,
-          child: Center(
-            child: ReorderableDragStartListener(
-              index: index,
-              child: const Icon(
-                Icons.drag_handle_rounded,
-                size: 20,
-                color: Color(0xFF8FA3A8),
-              ),
-            ),
-          ),
-        ),
-      ),
-    ],
+  return ReorderableDelayedDragStartListener(
+    index: index,
+    child: chipVisual,
   );
 }
 
@@ -3395,6 +3393,8 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
           required HomeworkItem hw})?
       onPrintPickTap,
   void Function(({String studentId, String itemId}) key)? onSlideDownComplete,
+  Set<String> expandedHomeworkIds = const {},
+  void Function(String id)? onToggleExpand,
 }) {
   final List<Widget> chips = [];
   final List<HomeworkItem> hwList = HomeworkStore.instance
@@ -3414,10 +3414,14 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
     final bool canSlideDown = isRunning || isSubmitted || slideDownIsEdit;
     final String downLabel =
         slideDownIsEdit ? '수정' : (isSubmitted ? '완료' : (isRunning ? '멈춤' : ''));
+    final bool isExpanded = isRunning || expandedHomeworkIds.contains(hw.id);
+    final double chipH = isExpanded
+        ? _homeworkChipExpandedHeight
+        : _homeworkChipCollapsedHeight;
     chips.add(
       _SlideableHomeworkChip(
         key: ValueKey('hw_chip_${hw.id}'),
-        maxSlide: _homeworkChipMaxSlide,
+        maxSlide: _homeworkChipMaxSlideFor(chipH),
         canSlideDown: canSlideDown,
         canSlideUp: true,
         downLabel: downLabel,
@@ -3427,9 +3431,9 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
             : (isSubmitted ? const Color(0xFF4CAF50) : const Color(0xFF9FB3B3)),
         upColor: const Color(0xFFE57373),
         onTap: () {
-          final item = HomeworkStore.instance.getById(studentId, hw.id);
-          if (item == null) return;
           if (printPickMode) {
+            final item = HomeworkStore.instance.getById(studentId, hw.id);
+            if (item == null) return;
             if (item.phase != 1) {
               _showHomeworkChipSnackBar(
                 context,
@@ -3455,39 +3459,7 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
             }
             return;
           }
-          final int phase = item.phase;
-          switch (phase) {
-            case 1: // 대기 → 수행
-              unawaited(HomeworkStore.instance.start(studentId, hw.id));
-              break;
-            case 2: // 수행 → 제출
-              unawaited(HomeworkStore.instance.submit(studentId, hw.id));
-              break;
-            case 3: // 제출 → 확인 대기
-              if (onPhase3Tap != null) {
-                unawaited(
-                  onPhase3Tap(
-                    context: context,
-                    studentId: studentId,
-                    hw: item,
-                  ),
-                );
-              } else {
-                unawaited(
-                  _handleSubmittedChipTapWithAnswerViewer(
-                    context: context,
-                    studentId: studentId,
-                    hw: item,
-                  ),
-                );
-              }
-              break;
-            case 4: // 확인 → 대기
-              unawaited(HomeworkStore.instance.waitPhase(studentId, hw.id));
-              break;
-            default:
-              unawaited(HomeworkStore.instance.start(studentId, hw.id));
-          }
+          onToggleExpand?.call(hw.id);
         },
         onLongPress: null,
         onSlideDown: () {
@@ -3626,17 +3598,40 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
         onDoubleTap: () {
           final item = HomeworkStore.instance.getById(studentId, hw.id);
           if (item == null) return;
-          final flow = flowNames[item.flowId ?? ''] ?? '';
-          final assignmentCountNow = assignmentCounts[item.id] ?? 0;
-          unawaited(
-            _showHomeworkChipDetailDialog(
-              context,
-              studentId,
-              item,
-              flow,
-              assignmentCountNow,
-            ),
-          );
+          if (printPickMode) return;
+          final int phase = item.phase;
+          switch (phase) {
+            case 1:
+              unawaited(HomeworkStore.instance.start(studentId, hw.id));
+              break;
+            case 2:
+              unawaited(HomeworkStore.instance.submit(studentId, hw.id));
+              break;
+            case 3:
+              if (onPhase3Tap != null) {
+                unawaited(
+                  onPhase3Tap(
+                    context: context,
+                    studentId: studentId,
+                    hw: item,
+                  ),
+                );
+              } else {
+                unawaited(
+                  _handleSubmittedChipTapWithAnswerViewer(
+                    context: context,
+                    studentId: studentId,
+                    hw: item,
+                  ),
+                );
+              }
+              break;
+            case 4:
+              unawaited(HomeworkStore.instance.waitPhase(studentId, hw.id));
+              break;
+            default:
+              unawaited(HomeworkStore.instance.start(studentId, hw.id));
+          }
         },
         child: _buildHomeworkChipWithReorderHandle(
           index: i,
@@ -3647,12 +3642,23 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
             flowNames[hw.flowId ?? ''] ?? '',
             assignmentCounts[hw.id] ?? 0,
             tick: tick,
+            isExpanded: isExpanded,
             cycleMeta: assignmentCycleMetaByItem[hw.id],
             isPendingConfirm: pendingConfirms.containsKey(
               (studentId: studentId, itemId: hw.id),
             ),
             isCompleteCheckbox:
                 pendingConfirms[(studentId: studentId, itemId: hw.id)] == true,
+            onInfoTap: () {
+              final item = HomeworkStore.instance.getById(studentId, hw.id);
+              if (item == null) return;
+              final flow = flowNames[item.flowId ?? ''] ?? '';
+              final cnt = assignmentCounts[item.id] ?? 0;
+              unawaited(
+                _showHomeworkChipDetailDialog(
+                    context, studentId, item, flow, cnt),
+              );
+            },
           ),
         ),
       ),
@@ -4391,6 +4397,28 @@ Future<void> _handleSubmittedChipTapWithAnswerViewer({
   }
 }
 
+Widget _buildFlowChip(String flowName) {
+  final bool isDefault = flowName == '현행';
+  return Container(
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+    decoration: BoxDecoration(
+      color: isDefault ? Colors.transparent : const Color(0xFF2A3030),
+      borderRadius: BorderRadius.circular(20),
+      border: isDefault
+          ? Border.all(color: const Color(0xFF4A5858), width: 1)
+          : null,
+    ),
+    child: Text(
+      flowName,
+      style: const TextStyle(
+        color: Color(0xFF9FB3B3),
+        fontSize: 14,
+        fontWeight: FontWeight.w600,
+      ),
+    ),
+  );
+}
+
 Widget _buildHomeworkChipVisual(
   BuildContext context,
   String studentId,
@@ -4399,13 +4427,15 @@ Widget _buildHomeworkChipVisual(
   int assignmentCount, {
   required double tick,
   bool isReservation = false,
+  bool isExpanded = false,
   HomeworkAssignmentCycleMeta? cycleMeta,
   bool isPendingConfirm = false,
   bool isCompleteCheckbox = false,
+  VoidCallback? onInfoTap,
 }) {
   final bool isRunning =
       HomeworkStore.instance.runningOf(studentId)?.id == hw.id;
-  final int phase = hw.phase; // 1:대기,2:수행,3:제출,4:확인
+  final int phase = hw.phase;
   final bool visualRunning = isReservation ? false : isRunning;
   final int visualPhase = isReservation ? 1 : phase;
   final TextStyle titleStyle = const TextStyle(
@@ -4434,14 +4464,9 @@ Widget _buildHomeworkChipVisual(
   );
   const double leftPad = 24;
   const double rightPad = 24;
-  const double chipHeight = _homeworkChipHeight;
-  const double borderWMax = 3.0; // 상태와 무관하게 최대 테두리 두께 기준으로 폭 고정
-  const double row1ShiftY = -3.0;
-  const double lowerRowsShiftY = 1.5;
-  const double row1ToRow2Gap = 8.0;
-  const double row2ToRow3Gap = 7.0;
-  const double row3ToRow4Gap = 6.0;
-  const double row4ToRow5Gap = 6.0;
+  final double chipHeight =
+      isExpanded ? _homeworkChipExpandedHeight : _homeworkChipCollapsedHeight;
+  const double borderWMax = 3.0;
 
   final String displayFlowName = flowName.isNotEmpty ? flowName : '플로우 미지정';
   final String page = (hw.page ?? '').trim();
@@ -4491,7 +4516,7 @@ Widget _buildHomeworkChipVisual(
       ? (courseName.isEmpty ? '-' : courseName)
       : (courseName.isEmpty ? bookName : '$bookName · $courseName');
   final int? countValue = hw.count;
-  int _resolveSplitCount(int total, int parts, int round) {
+  int resolveSplitCount(int total, int parts, int round) {
     if (parts <= 1) return total;
     final base = total ~/ parts;
     final remainder = total % parts;
@@ -4502,7 +4527,7 @@ Widget _buildHomeworkChipVisual(
     if (countValue == null) return '';
     final safeCount = countValue < 0 ? 0 : countValue;
     if (splitParts <= 1) return safeCount.toString();
-    return _resolveSplitCount(safeCount, splitParts, splitRound).toString();
+    return resolveSplitCount(safeCount, splitParts, splitRound).toString();
   }();
   final String line4Left =
       '페이지 p.${page.isNotEmpty ? page : '-'} · 문항 ${displayCount.isNotEmpty ? displayCount : '-'}문항';
@@ -4514,8 +4539,13 @@ Widget _buildHomeworkChipVisual(
   final String durationText = _formatDurationMs(totalMs);
   final String startedAtText =
       hw.firstStartedAt == null ? '-' : _formatShortTime(hw.firstStartedAt!);
-  final String line3 =
-      '시작 $startedAtText · 현재 ${runningMinutes}분 · 총 $durationText';
+
+  final String startDateText = hw.firstStartedAt != null
+      ? '${hw.firstStartedAt!.month.toString().padLeft(2, '0')}.${hw.firstStartedAt!.day.toString().padLeft(2, '0')}'
+      : (hw.createdAt != null
+          ? '${hw.createdAt!.month.toString().padLeft(2, '0')}.${hw.createdAt!.day.toString().padLeft(2, '0')}'
+          : '-');
+
   final String line5Left = '검사 ${hw.checkCount}회 · 숙제 ${homeworkCount}회';
   final String repeatCycleText = '${repeatIndex}회차';
   final String splitCycleText =
@@ -4524,6 +4554,7 @@ Widget _buildHomeworkChipVisual(
       ? repeatCycleText
       : '$repeatCycleText · $splitCycleText';
   final double fixedWidth = ClassContentScreen._studentColumnContentWidth;
+  final double maxRowW = fixedWidth - leftPad - rightPad - 4;
 
   final double phase4Pulse = 0.5 + 0.5 * math.sin(2 * math.pi * tick);
   final Border border = (visualPhase == 3)
@@ -4540,23 +4571,159 @@ Widget _buildHomeworkChipVisual(
                       Colors.white24,
                   width: borderWMax,
                 )
-              : Border.all(color: Colors.white24, width: borderWMax)));
+              : (visualPhase == 1
+                  ? Border.all(
+                      color: Colors.transparent, width: borderWMax)
+                  : Border.all(
+                      color: Colors.white24, width: borderWMax))));
+
+  final TextStyle bookNameStyle = TextStyle(
+    color: hw.color,
+    fontSize: 20,
+    fontWeight: FontWeight.w700,
+    height: 1.1,
+  );
+  const TextStyle courseNameStyle = TextStyle(
+    color: Color(0xFFEAF2F2),
+    fontSize: 20,
+    fontWeight: FontWeight.w700,
+    height: 1.1,
+  );
+
+  Widget row1 = ConstrainedBox(
+    constraints: BoxConstraints(maxWidth: maxRowW),
+    child: Row(
+      children: [
+        Expanded(
+          child: Text.rich(
+            TextSpan(
+              children: [
+                TextSpan(
+                  text: bookName.isNotEmpty && bookName != '-'
+                      ? bookName
+                      : (courseName.isEmpty ? '-' : ''),
+                  style: bookNameStyle,
+                ),
+                if (courseName.isNotEmpty &&
+                    bookName.isNotEmpty &&
+                    bookName != '-')
+                  TextSpan(
+                    text: ' · $courseName',
+                    style: courseNameStyle,
+                  )
+                else if (courseName.isNotEmpty &&
+                    (bookName.isEmpty || bookName == '-'))
+                  TextSpan(text: courseName, style: courseNameStyle),
+              ],
+            ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        const SizedBox(width: 10),
+        _buildFlowChip(displayFlowName),
+      ],
+    ),
+  );
+
+  Widget row2 = ConstrainedBox(
+    constraints: BoxConstraints(maxWidth: maxRowW),
+    child: Text(
+      titleText,
+      style: metaStyle,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+    ),
+  );
+
+  Widget collapsedRow3 = ConstrainedBox(
+    constraints: BoxConstraints(maxWidth: maxRowW),
+    child: Row(
+      children: [
+        Text(startDateText, style: statStyle),
+        const SizedBox(width: 8),
+        Text('진행 ${runningMinutes}분', style: statStyle),
+        const Spacer(),
+        Text('총 $durationText', style: statStyle),
+      ],
+    ),
+  );
+
+  final List<Widget> columnChildren;
+  if (isExpanded) {
+    final String expandedLine3 =
+        '시작 $startedAtText · 현재 ${runningMinutes}분 · 총 $durationText';
+    columnChildren = [
+      row1,
+      const SizedBox(height: 8),
+      row2,
+      const SizedBox(height: 7),
+      ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: maxRowW),
+        child: Text(
+          expandedLine3,
+          style: statStyle,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+      ),
+      const SizedBox(height: 6),
+      ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: maxRowW),
+        child: Text(
+          line4Left,
+          style: line4Style,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+      ),
+      const SizedBox(height: 6),
+      ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: maxRowW),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                line5Left,
+                style: line4Style,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            const SizedBox(width: 10),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 220),
+              child: Text(
+                line5Right,
+                style: line4Style,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.right,
+              ),
+            ),
+          ],
+        ),
+      ),
+    ];
+  } else {
+    columnChildren = [
+      row1,
+      const SizedBox(height: 8),
+      row2,
+      const SizedBox(height: 7),
+      collapsedRow3,
+    ];
+  }
 
   Widget chipInner = Container(
     height: chipHeight,
     padding: const EdgeInsets.fromLTRB(leftPad, 14, rightPad, 14),
     alignment: Alignment.centerLeft,
     decoration: BoxDecoration(
-      // 홈 메뉴 페이지 배경톤과 동일하게 맞춤
       color: kDlgBg,
       borderRadius: BorderRadius.circular(12),
       border: border,
       boxShadow: [
-        BoxShadow(
-          color: Colors.black.withOpacity(0.4),
-          blurRadius: 10,
-          offset: const Offset(0, 4),
-        ),
         if (!visualRunning && visualPhase == 4)
           BoxShadow(
             color: hw.color.withOpacity(0.08 + 0.14 * phase4Pulse),
@@ -4568,123 +4735,31 @@ Widget _buildHomeworkChipVisual(
     child: Stack(
       fit: StackFit.expand,
       children: [
-        Opacity(
-          opacity: 1.0,
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Transform.translate(
-                  offset: const Offset(0, row1ShiftY),
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                        maxWidth: fixedWidth - leftPad - rightPad - 4),
-                    child: Text(
-                      line2Left,
-                      style: titleStyle,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                ),
-                const SizedBox(height: row1ToRow2Gap),
-                Transform.translate(
-                  offset: const Offset(0, lowerRowsShiftY),
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                        maxWidth: fixedWidth - leftPad - rightPad - 4),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            titleText,
-                            style: metaStyle,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 180),
-                          child: Text(
-                            displayFlowName,
-                            style: metaStyle,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            textAlign: TextAlign.right,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(height: row2ToRow3Gap),
-                Transform.translate(
-                  offset: const Offset(0, lowerRowsShiftY),
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                        maxWidth: fixedWidth - leftPad - rightPad - 4),
-                    child: Text(
-                      line3,
-                      style: statStyle,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                ),
-                const SizedBox(height: row3ToRow4Gap),
-                Transform.translate(
-                  offset: const Offset(0, lowerRowsShiftY),
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                        maxWidth: fixedWidth - leftPad - rightPad - 4),
-                    child: Text(
-                      line4Left,
-                      style: line4Style,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      textAlign: TextAlign.left,
-                    ),
-                  ),
-                ),
-                const SizedBox(height: row4ToRow5Gap),
-                Transform.translate(
-                  offset: const Offset(0, lowerRowsShiftY),
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                        maxWidth: fixedWidth - leftPad - rightPad - 4),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            line5Left,
-                            style: line4Style,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            textAlign: TextAlign.left,
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 220),
-                          child: Text(
-                            line5Right,
-                            style: line4Style,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            textAlign: TextAlign.right,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-            ),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: columnChildren,
           ),
         ),
+        if (isExpanded && onInfoTap != null)
+          Positioned(
+            bottom: 0,
+            right: 0,
+            child: GestureDetector(
+              onTap: onInfoTap,
+              behavior: HitTestBehavior.opaque,
+              child: const Padding(
+                padding: EdgeInsets.all(4),
+                child: Icon(
+                  Icons.info_outline_rounded,
+                  size: 18,
+                  color: Color(0xFF748686),
+                ),
+              ),
+            ),
+          ),
       ],
     ),
   );
