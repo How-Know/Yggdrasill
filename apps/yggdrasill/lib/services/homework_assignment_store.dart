@@ -558,6 +558,30 @@ class HomeworkAssignmentStore {
     }
   }
 
+  Future<bool> hasActiveAssignmentForItem(
+    String studentId,
+    String homeworkItemId,
+  ) async {
+    final itemId = homeworkItemId.trim();
+    if (itemId.isEmpty) return false;
+    final activeIds = await loadActiveAssignedItemIds(studentId);
+    return activeIds.contains(itemId);
+  }
+
+  Future<bool> hasActiveAssignmentForAnyItems(
+    String studentId,
+    Iterable<String> homeworkItemIds,
+  ) async {
+    final targets =
+        homeworkItemIds.map((e) => e.trim()).where((e) => e.isNotEmpty).toSet();
+    if (targets.isEmpty) return false;
+    final activeIds = await loadActiveAssignedItemIds(studentId);
+    for (final id in targets) {
+      if (activeIds.contains(id)) return true;
+    }
+    return false;
+  }
+
   Future<Map<String, int>> loadAssignmentCounts(String studentId) async {
     try {
       final academyId = await TenantService.instance.getActiveAcademyId() ??

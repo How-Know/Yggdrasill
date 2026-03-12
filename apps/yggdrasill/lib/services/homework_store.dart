@@ -1,12 +1,6 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:supabase_flutter/supabase_flutter.dart'
-    show
-        RealtimeChannel,
-        PostgresChangeEvent,
-        PostgresChangeFilter,
-        PostgresChangeFilterType;
 import 'package:uuid/uuid.dart';
 import 'tenant_service.dart';
 import 'homework_assignment_store.dart';
@@ -22,6 +16,7 @@ class HomeworkItem {
   String? type;
   String? page;
   int? count;
+  String? memo;
   String? content;
   String? bookId;
   String? gradeLabel;
@@ -52,6 +47,7 @@ class HomeworkItem {
     this.type,
     this.page,
     this.count,
+    this.memo,
     this.content,
     this.bookId,
     this.gradeLabel,
@@ -76,15 +72,99 @@ class HomeworkItem {
   });
 }
 
+class HomeworkGroup {
+  final String id;
+  final String studentId;
+  String title;
+  String? flowId;
+  int orderIndex;
+  String status;
+  String? sourceHomeworkItemId;
+  DateTime? createdAt;
+  DateTime? updatedAt;
+  int version;
+  HomeworkGroup({
+    required this.id,
+    required this.studentId,
+    required this.title,
+    this.flowId,
+    this.orderIndex = 0,
+    this.status = 'active',
+    this.sourceHomeworkItemId,
+    this.createdAt,
+    this.updatedAt,
+    this.version = 1,
+  });
+}
+
+class HomeworkGroupItem {
+  final String id;
+  final String groupId;
+  final String studentId;
+  final String homeworkItemId;
+  int itemOrderIndex;
+  DateTime? createdAt;
+  DateTime? updatedAt;
+  int version;
+  HomeworkGroupItem({
+    required this.id,
+    required this.groupId,
+    required this.studentId,
+    required this.homeworkItemId,
+    this.itemOrderIndex = 0,
+    this.createdAt,
+    this.updatedAt,
+    this.version = 1,
+  });
+}
+
+class HomeworkSplitPartInput {
+  final String title;
+  final String page;
+  final int? count;
+  final String? type;
+  final String? memo;
+  final String? content;
+  const HomeworkSplitPartInput({
+    required this.title,
+    required this.page,
+    this.count,
+    this.type,
+    this.memo,
+    this.content,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'title': title.trim(),
+        'page': page.trim(),
+        if (count != null) 'count': count,
+        if (type != null && type!.trim().isNotEmpty) 'type': type!.trim(),
+        if (memo != null && memo!.trim().isNotEmpty) 'memo': memo!.trim(),
+        if (content != null && content!.trim().isNotEmpty)
+          'content': content!.trim(),
+      };
+}
+
 class HomeworkStore {
   HomeworkStore._internal();
   static final HomeworkStore instance = HomeworkStore._internal();
   static const String _homeworkItemSelectWithSplit =
-      'id,student_id,title,body,color,flow_id,type,page,count,content,book_id,grade_label,source_unit_level,source_unit_path,default_split_parts,order_index,check_count,status,phase,accumulated_ms,run_start,completed_at,first_started_at,submitted_at,confirmed_at,waiting_at,created_at,updated_at,version';
+      'id,student_id,title,body,color,flow_id,type,page,count,memo,content,book_id,grade_label,source_unit_level,source_unit_path,default_split_parts,order_index,check_count,status,phase,accumulated_ms,run_start,completed_at,first_started_at,submitted_at,confirmed_at,waiting_at,created_at,updated_at,version';
   static const String _homeworkItemSelectLegacy =
+      'id,student_id,title,body,color,flow_id,type,page,count,memo,content,book_id,grade_label,source_unit_level,source_unit_path,order_index,check_count,status,phase,accumulated_ms,run_start,completed_at,first_started_at,submitted_at,confirmed_at,waiting_at,created_at,updated_at,version';
+  static const String _homeworkItemSelectWithSplitNoMemo =
+      'id,student_id,title,body,color,flow_id,type,page,count,content,book_id,grade_label,source_unit_level,source_unit_path,default_split_parts,order_index,check_count,status,phase,accumulated_ms,run_start,completed_at,first_started_at,submitted_at,confirmed_at,waiting_at,created_at,updated_at,version';
+  static const String _homeworkItemSelectLegacyNoMemo =
       'id,student_id,title,body,color,flow_id,type,page,count,content,book_id,grade_label,source_unit_level,source_unit_path,order_index,check_count,status,phase,accumulated_ms,run_start,completed_at,first_started_at,submitted_at,confirmed_at,waiting_at,created_at,updated_at,version';
+  static const String _homeworkGroupSelect =
+      'id,student_id,title,flow_id,order_index,status,source_homework_item_id,created_at,updated_at,version';
+  static const String _homeworkGroupItemSelect =
+      'id,group_id,student_id,homework_item_id,item_order_index,created_at,updated_at,version';
 
   final Map<String, List<HomeworkItem>> _byStudentId = {};
+  final Map<String, List<HomeworkGroup>> _groupsByStudentId = {};
+  final Map<String, List<HomeworkGroupItem>> _groupItemsByGroupId = {};
+  final Map<String, String> _groupIdByItemId = {};
   final ValueNotifier<int> revision = ValueNotifier<int>(0);
   // 확인 단계 이후, 다음 '대기' 진입 시 자동 완료 처리할 항목 ID들
   final Set<String> _autoCompleteOnNextWaiting = <String>{};
@@ -96,6 +176,21 @@ class HomeworkStore {
     final message = error.toString().toLowerCase();
     return message.contains('default_split_parts') &&
         (message.contains('does not exist') || message.contains('42703'));
+  }
+
+  bool _isMissingMemoColumnError(Object error) {
+    final message = error.toString().toLowerCase();
+    return message.contains('memo') &&
+        (message.contains('does not exist') || message.contains('42703'));
+  }
+
+  bool _isMissingGroupTableError(Object error) {
+    final message = error.toString().toLowerCase();
+    if (message.contains('42p01') || message.contains('does not exist')) {
+      return message.contains('homework_groups') ||
+          message.contains('homework_group_items');
+    }
+    return false;
   }
 
   Future<List<Map<String, dynamic>>> _fetchHomeworkRows({
@@ -116,14 +211,313 @@ class HomeworkStore {
           .order('updated_at', ascending: false);
     }
 
-    try {
-      final data = await buildQuery(_homeworkItemSelectWithSplit);
-      return (data as List<dynamic>).cast<Map<String, dynamic>>();
-    } catch (e) {
-      if (!_isMissingDefaultSplitPartsError(e)) rethrow;
-      final data = await buildQuery(_homeworkItemSelectLegacy);
+    Future<List<Map<String, dynamic>>> runSelect(String columns) async {
+      final data = await buildQuery(columns);
       return (data as List<dynamic>).cast<Map<String, dynamic>>();
     }
+
+    try {
+      return await runSelect(_homeworkItemSelectWithSplit);
+    } catch (e) {
+      if (_isMissingDefaultSplitPartsError(e)) {
+        try {
+          return await runSelect(_homeworkItemSelectLegacy);
+        } catch (legacyError) {
+          if (_isMissingMemoColumnError(legacyError)) {
+            return await runSelect(_homeworkItemSelectLegacyNoMemo);
+          }
+          rethrow;
+        }
+      }
+      if (_isMissingMemoColumnError(e)) {
+        try {
+          return await runSelect(_homeworkItemSelectWithSplitNoMemo);
+        } catch (memoFallbackError) {
+          if (_isMissingDefaultSplitPartsError(memoFallbackError)) {
+            return await runSelect(_homeworkItemSelectLegacyNoMemo);
+          }
+          rethrow;
+        }
+      }
+      rethrow;
+    }
+  }
+
+  DateTime? _parseTsOpt(dynamic v) {
+    if (v == null) return null;
+    final s = (v is String) ? v : '$v';
+    if (s.trim().isEmpty) return null;
+    return DateTime.tryParse(s)?.toLocal();
+  }
+
+  int? _parseIntOpt(dynamic v) {
+    if (v == null) return null;
+    if (v is int) return v;
+    if (v is num) return v.toInt();
+    if (v is String) return int.tryParse(v.trim());
+    return int.tryParse('$v');
+  }
+
+  int _parseInt(dynamic v, {int fallback = 0}) {
+    return _parseIntOpt(v) ?? fallback;
+  }
+
+  HomeworkItem _parseHomeworkItemRow(Map<String, dynamic> r) {
+    return HomeworkItem(
+      id: (r['id'] as String?) ?? const Uuid().v4(),
+      title: (r['title'] as String?) ?? '',
+      body: (r['body'] as String?) ?? '',
+      color: Color(_parseInt(r['color'], fallback: 0xFF1976D2)),
+      flowId: r['flow_id'] as String?,
+      type: (r['type'] as String?)?.trim(),
+      page: (r['page'] as String?)?.trim(),
+      count: _parseIntOpt(r['count']),
+      memo: (r['memo'] as String?)?.trim(),
+      content: (r['content'] as String?)?.trim(),
+      bookId: (r['book_id'] as String?)?.trim(),
+      gradeLabel: (r['grade_label'] as String?)?.trim(),
+      sourceUnitLevel: (r['source_unit_level'] as String?)?.trim(),
+      sourceUnitPath: (r['source_unit_path'] as String?)?.trim(),
+      defaultSplitParts:
+          (_parseIntOpt(r['default_split_parts']) ?? 1).clamp(1, 4).toInt(),
+      orderIndex: _parseInt(r['order_index']),
+      checkCount: _parseInt(r['check_count']),
+      createdAt: _parseTsOpt(r['created_at']),
+      updatedAt: _parseTsOpt(r['updated_at']),
+      status: HomeworkStatus.values[
+          (_parseInt(r['status'])).clamp(0, HomeworkStatus.values.length - 1)],
+      phase: (_parseInt(r['phase'], fallback: 1)).clamp(0, 4),
+      accumulatedMs: _parseInt(r['accumulated_ms']),
+      runStart: _parseTsOpt(r['run_start']),
+      completedAt: _parseTsOpt(r['completed_at']),
+      firstStartedAt: _parseTsOpt(r['first_started_at']),
+      submittedAt: _parseTsOpt(r['submitted_at']),
+      confirmedAt: _parseTsOpt(r['confirmed_at']),
+      waitingAt: _parseTsOpt(r['waiting_at']),
+      version: _parseInt(r['version'], fallback: 1),
+    );
+  }
+
+  HomeworkGroup _parseHomeworkGroupRow(Map<String, dynamic> r) {
+    return HomeworkGroup(
+      id: (r['id'] as String?) ?? const Uuid().v4(),
+      studentId: (r['student_id'] as String?) ?? '',
+      title: ((r['title'] as String?) ?? '').trim(),
+      flowId: (r['flow_id'] as String?)?.trim(),
+      orderIndex: _parseInt(r['order_index']),
+      status: ((r['status'] as String?) ?? 'active').trim(),
+      sourceHomeworkItemId: (r['source_homework_item_id'] as String?)?.trim(),
+      createdAt: _parseTsOpt(r['created_at']),
+      updatedAt: _parseTsOpt(r['updated_at']),
+      version: _parseInt(r['version'], fallback: 1),
+    );
+  }
+
+  HomeworkGroupItem _parseHomeworkGroupItemRow(Map<String, dynamic> r) {
+    return HomeworkGroupItem(
+      id: (r['id'] as String?) ?? const Uuid().v4(),
+      groupId: (r['group_id'] as String?) ?? '',
+      studentId: (r['student_id'] as String?) ?? '',
+      homeworkItemId: (r['homework_item_id'] as String?) ?? '',
+      itemOrderIndex: _parseInt(r['item_order_index']),
+      createdAt: _parseTsOpt(r['created_at']),
+      updatedAt: _parseTsOpt(r['updated_at']),
+      version: _parseInt(r['version'], fallback: 1),
+    );
+  }
+
+  int _compareGroupByOrder(HomeworkGroup a, HomeworkGroup b) {
+    final orderCmp = a.orderIndex.compareTo(b.orderIndex);
+    if (orderCmp != 0) return orderCmp;
+    final aCreated = a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+    final bCreated = b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+    final createdCmp = aCreated.compareTo(bCreated);
+    if (createdCmp != 0) return createdCmp;
+    return a.id.compareTo(b.id);
+  }
+
+  int _compareGroupItemByOrder(HomeworkGroupItem a, HomeworkGroupItem b) {
+    final orderCmp = a.itemOrderIndex.compareTo(b.itemOrderIndex);
+    if (orderCmp != 0) return orderCmp;
+    final aCreated = a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+    final bCreated = b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+    final createdCmp = aCreated.compareTo(bCreated);
+    if (createdCmp != 0) return createdCmp;
+    return a.id.compareTo(b.id);
+  }
+
+  bool _isLegacyGroupId(String id) => id.startsWith('legacy_');
+
+  void _clearGroupCacheForStudent(String studentId) {
+    final existingGroups = _groupsByStudentId.remove(studentId) ?? const [];
+    final groupIds = existingGroups.map((g) => g.id).toSet();
+    for (final gid in groupIds) {
+      _groupItemsByGroupId.remove(gid);
+    }
+    _groupIdByItemId.removeWhere((_, gid) => groupIds.contains(gid));
+  }
+
+  void _applyFallbackGroupsForStudent(String studentId) {
+    final list = _byStudentId[studentId] ?? const <HomeworkItem>[];
+    if (list.isEmpty) return;
+    final groups = _groupsByStudentId.putIfAbsent(studentId, () => []);
+
+    final removedGroupIds = groups
+        .where((g) => _isLegacyGroupId(g.id))
+        .map((g) => g.id)
+        .toList(growable: false);
+    groups.removeWhere((g) => removedGroupIds.contains(g.id));
+    for (final gid in removedGroupIds) {
+      _groupItemsByGroupId.remove(gid);
+    }
+    _groupIdByItemId.removeWhere(
+        (itemId, gid) => _isLegacyGroupId(gid) || !_containsItemId(itemId));
+
+    for (final item in list) {
+      if (item.status == HomeworkStatus.completed) continue;
+      if (_groupIdByItemId.containsKey(item.id)) continue;
+      final gid = 'legacy_${item.id}';
+      groups.add(
+        HomeworkGroup(
+          id: gid,
+          studentId: studentId,
+          title: item.title,
+          flowId: item.flowId,
+          orderIndex: item.orderIndex,
+          sourceHomeworkItemId: item.id,
+          status: 'active',
+          createdAt: item.createdAt,
+          updatedAt: item.updatedAt,
+        ),
+      );
+      _groupItemsByGroupId[gid] = [
+        HomeworkGroupItem(
+          id: 'legacy_link_${item.id}',
+          groupId: gid,
+          studentId: studentId,
+          homeworkItemId: item.id,
+          itemOrderIndex: 0,
+          createdAt: item.createdAt,
+          updatedAt: item.updatedAt,
+        ),
+      ];
+      _groupIdByItemId[item.id] = gid;
+    }
+    groups.sort(_compareGroupByOrder);
+  }
+
+  bool _containsItemId(String itemId) {
+    for (final list in _byStudentId.values) {
+      if (list.any((e) => e.id == itemId)) return true;
+    }
+    return false;
+  }
+
+  Future<void> _reloadGroups({
+    required String academyId,
+    String? studentId,
+    bool bump = true,
+  }) async {
+    final sid = studentId?.trim() ?? '';
+    final targetStudent = sid.isEmpty ? null : sid;
+    final supa = Supabase.instance.client;
+    try {
+      dynamic groupQuery = supa
+          .from('homework_groups')
+          .select(_homeworkGroupSelect)
+          .eq('academy_id', academyId);
+      dynamic groupItemQuery = supa
+          .from('homework_group_items')
+          .select(_homeworkGroupItemSelect)
+          .eq('academy_id', academyId);
+      if (targetStudent != null) {
+        groupQuery = groupQuery.eq('student_id', targetStudent);
+        groupItemQuery = groupItemQuery.eq('student_id', targetStudent);
+      }
+      groupQuery = groupQuery
+          .order('order_index', ascending: true)
+          .order('updated_at', ascending: false);
+      groupItemQuery = groupItemQuery
+          .order('item_order_index', ascending: true)
+          .order('updated_at', ascending: false);
+      final groupRowsRaw = await groupQuery;
+      final groupItemRowsRaw = await groupItemQuery;
+      final groupRows =
+          (groupRowsRaw as List<dynamic>).cast<Map<String, dynamic>>();
+      final groupItemRows =
+          (groupItemRowsRaw as List<dynamic>).cast<Map<String, dynamic>>();
+
+      if (targetStudent != null) {
+        _clearGroupCacheForStudent(targetStudent);
+      } else {
+        _groupsByStudentId.clear();
+        _groupItemsByGroupId.clear();
+        _groupIdByItemId.clear();
+      }
+
+      final groupIds = <String>{};
+      for (final row in groupRows) {
+        final g = _parseHomeworkGroupRow(row);
+        if (g.studentId.isEmpty) continue;
+        _groupsByStudentId.putIfAbsent(g.studentId, () => []).add(g);
+        groupIds.add(g.id);
+      }
+      for (final groups in _groupsByStudentId.values) {
+        groups.sort(_compareGroupByOrder);
+      }
+
+      for (final row in groupItemRows) {
+        final gi = _parseHomeworkGroupItemRow(row);
+        if (gi.groupId.isEmpty ||
+            gi.studentId.isEmpty ||
+            gi.homeworkItemId.isEmpty ||
+            !groupIds.contains(gi.groupId)) {
+          continue;
+        }
+        _groupItemsByGroupId.putIfAbsent(gi.groupId, () => []).add(gi);
+        _groupIdByItemId[gi.homeworkItemId] = gi.groupId;
+      }
+      for (final links in _groupItemsByGroupId.values) {
+        links.sort(_compareGroupItemByOrder);
+      }
+
+      if (targetStudent != null) {
+        _applyFallbackGroupsForStudent(targetStudent);
+      } else {
+        for (final sid in _byStudentId.keys) {
+          _applyFallbackGroupsForStudent(sid);
+        }
+      }
+      if (bump) _bump();
+    } catch (e, st) {
+      if (!_isMissingGroupTableError(e)) {
+        // ignore: avoid_print
+        print('[HW][groups][ERROR] $e\n$st');
+      }
+      if (targetStudent != null) {
+        _clearGroupCacheForStudent(targetStudent);
+        _applyFallbackGroupsForStudent(targetStudent);
+      } else {
+        _groupsByStudentId.clear();
+        _groupItemsByGroupId.clear();
+        _groupIdByItemId.clear();
+        for (final sid in _byStudentId.keys) {
+          _applyFallbackGroupsForStudent(sid);
+        }
+      }
+      if (bump) _bump();
+    }
+  }
+
+  Future<void> _reloadGroupsForStudentByAcademy({
+    required String academyId,
+    required String studentId,
+  }) async {
+    if (studentId.trim().isEmpty) return;
+    await _reloadGroups(
+      academyId: academyId,
+      studentId: studentId,
+    );
   }
 
   int _compareByOrder(HomeworkItem a, HomeworkItem b) {
@@ -172,6 +566,66 @@ class HomeworkStore {
     return copied;
   }
 
+  List<HomeworkGroup> groups(
+    String studentId, {
+    bool includeArchived = false,
+  }) {
+    final groups = _groupsByStudentId[studentId] ?? const <HomeworkGroup>[];
+    final copied = List<HomeworkGroup>.from(groups);
+    copied.sort(_compareGroupByOrder);
+    if (includeArchived) return copied;
+    return copied.where((g) => g.status != 'archived').toList();
+  }
+
+  HomeworkGroup? groupById(String studentId, String groupId) {
+    final groups = _groupsByStudentId[studentId];
+    if (groups == null || groups.isEmpty) return null;
+    for (final g in groups) {
+      if (g.id == groupId) return g;
+    }
+    return null;
+  }
+
+  String? groupIdOfItem(String itemId) => _groupIdByItemId[itemId];
+
+  List<HomeworkGroupItem> groupLinks(String groupId) {
+    final links = _groupItemsByGroupId[groupId] ?? const <HomeworkGroupItem>[];
+    final copied = List<HomeworkGroupItem>.from(links);
+    copied.sort(_compareGroupItemByOrder);
+    return copied;
+  }
+
+  List<HomeworkItem> itemsInGroup(
+    String studentId,
+    String groupId, {
+    bool includeCompleted = false,
+  }) {
+    final list = _byStudentId[studentId] ?? const <HomeworkItem>[];
+    if (list.isEmpty) return const [];
+    final byId = <String, HomeworkItem>{for (final item in list) item.id: item};
+    final links = groupLinks(groupId);
+    final out = <HomeworkItem>[];
+    for (final link in links) {
+      final item = byId[link.homeworkItemId];
+      if (item == null) continue;
+      if (!includeCompleted && item.status == HomeworkStatus.completed)
+        continue;
+      out.add(item);
+    }
+    if (out.isNotEmpty) return out;
+    // fallback: group 매핑이 없는 레거시/이행 중 상태에서도 최소 1개 보장
+    final group = groupById(studentId, groupId);
+    final sourceItemId = group?.sourceHomeworkItemId?.trim() ?? '';
+    if (sourceItemId.isNotEmpty) {
+      final item = byId[sourceItemId];
+      if (item != null &&
+          (includeCompleted || item.status != HomeworkStatus.completed)) {
+        return [item];
+      }
+    }
+    return const [];
+  }
+
   Future<List<HomeworkItem>> itemsForStats(
     String studentId, {
     bool excludeAssigned = false,
@@ -199,61 +653,13 @@ class HomeworkStore {
       for (final r in data) {
         final sid = (r['student_id'] as String?) ?? '';
         if (sid.isEmpty) continue;
-        DateTime? parseTsOpt(dynamic v) {
-          if (v == null) return null;
-          final s = v as String?;
-          if (s == null || s.isEmpty) return null;
-          return DateTime.parse(s).toLocal();
-        }
-
-        int? parseInt(dynamic v) {
-          if (v == null) return null;
-          if (v is int) return v;
-          if (v is num) return v.toInt();
-          if (v is String) return int.tryParse(v);
-          return null;
-        }
-
-        final item = HomeworkItem(
-          id: (r['id'] as String?) ?? const Uuid().v4(),
-          title: (r['title'] as String?) ?? '',
-          body: (r['body'] as String?) ?? '',
-          color: Color(parseInt(r['color']) ?? 0xFF1976D2),
-          flowId: r['flow_id'] as String?,
-          type: (r['type'] as String?)?.trim(),
-          page: (r['page'] as String?)?.trim(),
-          count: parseInt(r['count']),
-          content: (r['content'] as String?)?.trim(),
-          bookId: (r['book_id'] as String?)?.trim(),
-          gradeLabel: (r['grade_label'] as String?)?.trim(),
-          sourceUnitLevel: (r['source_unit_level'] as String?)?.trim(),
-          sourceUnitPath: (r['source_unit_path'] as String?)?.trim(),
-          defaultSplitParts:
-              (parseInt(r['default_split_parts']) ?? 1).clamp(1, 4).toInt(),
-          orderIndex: parseInt(r['order_index']) ?? 0,
-          checkCount: parseInt(r['check_count']) ?? 0,
-          createdAt: parseTsOpt(r['created_at']),
-          updatedAt: parseTsOpt(r['updated_at']),
-          status: HomeworkStatus.values[((r['status'] as int?) ?? 0)
-              .clamp(0, HomeworkStatus.values.length - 1)],
-          phase: (parseInt(r['phase']) ?? 1).clamp(0, 4),
-          accumulatedMs: (r['accumulated_ms'] as int?) ??
-              (r['accumulated_ms'] is num
-                  ? (r['accumulated_ms'] as num).toInt()
-                  : 0),
-          runStart: parseTsOpt(r['run_start']),
-          completedAt: parseTsOpt(r['completed_at']),
-          firstStartedAt: parseTsOpt(r['first_started_at']),
-          submittedAt: parseTsOpt(r['submitted_at']),
-          confirmedAt: parseTsOpt(r['confirmed_at']),
-          waitingAt: parseTsOpt(r['waiting_at']),
-          version: parseInt(r['version']) ?? 1,
-        );
+        final item = _parseHomeworkItemRow(r);
         _byStudentId.putIfAbsent(sid, () => <HomeworkItem>[]).add(item);
       }
       for (final entry in _byStudentId.values) {
         _sortStudentList(entry);
       }
+      await _reloadGroups(academyId: academyId, bump: false);
       _loaded = true;
       _bump();
       _subscribeRealtime(academyId);
@@ -278,57 +684,9 @@ class HomeworkStore {
               value: academyId),
           callback: (payload) {
             final m = payload.newRecord;
-            if (m == null) return;
             final String sid = (m['student_id'] as String?) ?? '';
             if (sid.isEmpty) return;
-            HomeworkItem parse(Map<String, dynamic> r) {
-              int _asInt(dynamic v) =>
-                  (v is num) ? v.toInt() : int.tryParse('$v') ?? 0;
-              int? _asIntOpt(dynamic v) {
-                if (v == null) return null;
-                if (v is num) return v.toInt();
-                return int.tryParse('$v');
-              }
-
-              DateTime? _parse(dynamic v) => (v == null)
-                  ? null
-                  : DateTime.tryParse(v as String)?.toLocal();
-              return HomeworkItem(
-                id: (r['id'] as String?) ?? const Uuid().v4(),
-                title: (r['title'] as String?) ?? '',
-                body: (r['body'] as String?) ?? '',
-                color: Color(_asInt(r['color'])),
-                flowId: r['flow_id'] as String?,
-                type: (r['type'] as String?)?.trim(),
-                page: (r['page'] as String?)?.trim(),
-                count: _asIntOpt(r['count']),
-                content: (r['content'] as String?)?.trim(),
-                bookId: (r['book_id'] as String?)?.trim(),
-                gradeLabel: (r['grade_label'] as String?)?.trim(),
-                sourceUnitLevel: (r['source_unit_level'] as String?)?.trim(),
-                sourceUnitPath: (r['source_unit_path'] as String?)?.trim(),
-                defaultSplitParts: (_asIntOpt(r['default_split_parts']) ?? 1)
-                    .clamp(1, 4)
-                    .toInt(),
-                orderIndex: _asIntOpt(r['order_index']) ?? 0,
-                checkCount: _asIntOpt(r['check_count']) ?? 0,
-                createdAt: _parse(r['created_at']),
-                updatedAt: _parse(r['updated_at']),
-                status: HomeworkStatus.values[(_asInt(r['status']))
-                    .clamp(0, HomeworkStatus.values.length - 1)],
-                phase: (_asInt(r['phase'])).clamp(0, 4),
-                accumulatedMs: _asInt(r['accumulated_ms']),
-                runStart: _parse(r['run_start']),
-                completedAt: _parse(r['completed_at']),
-                firstStartedAt: _parse(r['first_started_at']),
-                submittedAt: _parse(r['submitted_at']),
-                confirmedAt: _parse(r['confirmed_at']),
-                waitingAt: _parse(r['waiting_at']),
-                version: _asInt(r['version']),
-              );
-            }
-
-            final it = parse(m);
+            final it = _parseHomeworkItemRow(m);
             final list = _byStudentId.putIfAbsent(sid, () => <HomeworkItem>[]);
             final idx = list.indexWhere((e) => e.id == it.id);
             if (idx == -1) {
@@ -337,6 +695,7 @@ class HomeworkStore {
               list[idx] = it;
             }
             _sortStudentList(list);
+            _applyFallbackGroupsForStudent(sid);
             // '확인→대기' 진입 시 자동 완료 플래그가 있으면 즉시 완료 처리
             _maybeAutoCompleteOnWaiting(sid, it);
             _bump();
@@ -352,68 +711,21 @@ class HomeworkStore {
               value: academyId),
           callback: (payload) {
             final m = payload.newRecord;
-            if (m == null) return;
             final String sid = (m['student_id'] as String?) ?? '';
             if (sid.isEmpty) return;
-            int _asInt(dynamic v) =>
-                (v is num) ? v.toInt() : int.tryParse('$v') ?? 0;
-            int? _asIntOpt(dynamic v) {
-              if (v == null) return null;
-              if (v is num) return v.toInt();
-              return int.tryParse('$v');
-            }
-
-            DateTime? _parse(dynamic v) =>
-                (v == null) ? null : DateTime.tryParse(v as String)?.toLocal();
-            final updated = HomeworkItem(
-              id: (m['id'] as String?) ?? const Uuid().v4(),
-              title: (m['title'] as String?) ?? '',
-              body: (m['body'] as String?) ?? '',
-              color: Color(_asInt(m['color'])),
-              flowId: m['flow_id'] as String?,
-              type: (m['type'] as String?)?.trim(),
-              page: (m['page'] as String?)?.trim(),
-              count: m['count'] is num
-                  ? (m['count'] as num).toInt()
-                  : int.tryParse('${m['count']}'),
-              content: (m['content'] as String?)?.trim(),
-              bookId: (m['book_id'] as String?)?.trim(),
-              gradeLabel: (m['grade_label'] as String?)?.trim(),
-              sourceUnitLevel: (m['source_unit_level'] as String?)?.trim(),
-              sourceUnitPath: (m['source_unit_path'] as String?)?.trim(),
-              defaultSplitParts: (_asIntOpt(m['default_split_parts']) ?? 1)
-                  .clamp(1, 4)
-                  .toInt(),
-              orderIndex: m['order_index'] is num
-                  ? (m['order_index'] as num).toInt()
-                  : int.tryParse('${m['order_index']}') ?? 0,
-              checkCount: m['check_count'] is num
-                  ? (m['check_count'] as num).toInt()
-                  : int.tryParse('${m['check_count']}') ?? 0,
-              createdAt: _parse(m['created_at']),
-              updatedAt: _parse(m['updated_at']),
-              status: HomeworkStatus.values[(_asInt(m['status']))
-                  .clamp(0, HomeworkStatus.values.length - 1)],
-              phase: (_asInt(m['phase'])).clamp(0, 4),
-              accumulatedMs: _asInt(m['accumulated_ms']),
-              runStart: _parse(m['run_start']),
-              completedAt: _parse(m['completed_at']),
-              firstStartedAt: _parse(m['first_started_at']),
-              submittedAt: _parse(m['submitted_at']),
-              confirmedAt: _parse(m['confirmed_at']),
-              waitingAt: _parse(m['waiting_at']),
-              version: _asInt(m['version']),
-            );
+            final updated = _parseHomeworkItemRow(m);
             final list = _byStudentId.putIfAbsent(sid, () => <HomeworkItem>[]);
             final idx = list.indexWhere((e) => e.id == updated.id);
             if (idx == -1) {
               list.add(updated);
               _sortStudentList(list);
+              _applyFallbackGroupsForStudent(sid);
               _maybeAutoCompleteOnWaiting(sid, updated);
               _bump();
             } else {
               list[idx] = updated;
               _sortStudentList(list);
+              _applyFallbackGroupsForStudent(sid);
               // '확인→대기' 진입 시 자동 완료 플래그가 있으면 즉시 완료 처리
               _maybeAutoCompleteOnWaiting(sid, updated);
               _bump();
@@ -430,7 +742,6 @@ class HomeworkStore {
               value: academyId),
           callback: (payload) {
             final old = payload.oldRecord;
-            if (old == null) return;
             final String id = (old['id'] as String?) ?? '';
             if (id.isEmpty) return;
             for (final entry in _byStudentId.entries) {
@@ -438,14 +749,119 @@ class HomeworkStore {
               entry.value.removeWhere((e) => e.id == id);
               final bool removed = entry.value.length < before;
               if (removed) {
+                final sid = entry.key;
+                final gid = _groupIdByItemId.remove(id);
+                if (gid != null && _isLegacyGroupId(gid)) {
+                  _groupItemsByGroupId.remove(gid);
+                  final groups = _groupsByStudentId[sid];
+                  groups?.removeWhere((g) => g.id == gid);
+                } else if (gid != null) {
+                  _groupItemsByGroupId[gid]?.removeWhere(
+                    (link) => link.homeworkItemId == id,
+                  );
+                }
+                _applyFallbackGroupsForStudent(sid);
                 _bump();
                 break;
               }
             }
           },
         )
+        ..onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'homework_groups',
+          filter: PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'academy_id',
+              value: academyId),
+          callback: (payload) {
+            String sid = (payload.newRecord['student_id'] as String?) ?? '';
+            if (sid.isEmpty) {
+              sid = (payload.oldRecord['student_id'] as String?) ?? '';
+            }
+            if (sid.isEmpty) return;
+            unawaited(_reloadGroupsForStudentByAcademy(
+              academyId: academyId,
+              studentId: sid,
+            ));
+          },
+        )
+        ..onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'homework_group_items',
+          filter: PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'academy_id',
+              value: academyId),
+          callback: (payload) {
+            String sid = (payload.newRecord['student_id'] as String?) ?? '';
+            if (sid.isEmpty) {
+              sid = (payload.oldRecord['student_id'] as String?) ?? '';
+            }
+            if (sid.isEmpty) return;
+            unawaited(_reloadGroupsForStudentByAcademy(
+              academyId: academyId,
+              studentId: sid,
+            ));
+          },
+        )
         ..subscribe();
     } catch (_) {}
+  }
+
+  Future<void> _ensureGroupForItem({
+    required String academyId,
+    required String studentId,
+    required HomeworkItem item,
+  }) async {
+    if (item.status == HomeworkStatus.completed) return;
+    final existingGroupId = _groupIdByItemId[item.id];
+    if (existingGroupId != null && !_isLegacyGroupId(existingGroupId)) return;
+    try {
+      final supa = Supabase.instance.client;
+      await supa.from('homework_groups').upsert({
+        'academy_id': academyId,
+        'student_id': studentId,
+        'title': item.title.trim().isEmpty ? '과제 그룹' : item.title.trim(),
+        'flow_id': item.flowId,
+        'order_index': item.orderIndex,
+        'status': 'active',
+        'source_homework_item_id': item.id,
+      }, onConflict: 'academy_id,source_homework_item_id');
+
+      final groupRows = await supa
+          .from('homework_groups')
+          .select('id')
+          .eq('academy_id', academyId)
+          .eq('source_homework_item_id', item.id)
+          .limit(1);
+      final typedGroupRows =
+          (groupRows as List<dynamic>).cast<Map<String, dynamic>>();
+      final groupId = typedGroupRows.isNotEmpty
+          ? (typedGroupRows.first['id'] as String? ?? '')
+          : '';
+      if (groupId.isEmpty) return;
+
+      await supa.from('homework_group_items').upsert({
+        'academy_id': academyId,
+        'group_id': groupId,
+        'student_id': studentId,
+        'homework_item_id': item.id,
+        'item_order_index': 0,
+      }, onConflict: 'academy_id,homework_item_id');
+
+      await _reloadGroups(
+        academyId: academyId,
+        studentId: studentId,
+        bump: false,
+      );
+    } catch (e) {
+      if (_isMissingGroupTableError(e)) {
+        _applyFallbackGroupsForStudent(studentId);
+      }
+    }
   }
 
   Future<void> _upsertItem(String studentId, HomeworkItem it) async {
@@ -463,6 +879,7 @@ class HomeworkStore {
         'type': it.type,
         'page': it.page,
         'count': it.count,
+        if (it.memo != null) 'memo': it.memo,
         'content': it.content,
         'book_id': it.bookId,
         'grade_label': it.gradeLabel,
@@ -488,8 +905,10 @@ class HomeworkStore {
           .eq('id', it.id)
           .eq('version', it.version)
           .select('version');
-      if (updatedRows is List && updatedRows.isNotEmpty) {
-        final row = (updatedRows.first as Map<String, dynamic>);
+      final typedUpdatedRows =
+          (updatedRows as List<dynamic>).cast<Map<String, dynamic>>();
+      if (typedUpdatedRows.isNotEmpty) {
+        final row = typedUpdatedRows.first;
         it.version = (row['version'] as num?)?.toInt() ?? (it.version + 1);
         await _syncUnitMappings(
           academyId: academyId,
@@ -497,6 +916,11 @@ class HomeworkStore {
           item: it,
         );
         await _syncPageMappings(
+          academyId: academyId,
+          studentId: studentId,
+          item: it,
+        );
+        await _ensureGroupForItem(
           academyId: academyId,
           studentId: studentId,
           item: it,
@@ -512,8 +936,10 @@ class HomeworkStore {
       };
       final insRows =
           await supa.from('homework_items').insert(insertRow).select('version');
-      if (insRows is List && insRows.isNotEmpty) {
-        final row = (insRows.first as Map<String, dynamic>);
+      final typedInsertRows =
+          (insRows as List<dynamic>).cast<Map<String, dynamic>>();
+      if (typedInsertRows.isNotEmpty) {
+        final row = typedInsertRows.first;
         it.version = (row['version'] as num?)?.toInt() ?? 1;
         await _syncUnitMappings(
           academyId: academyId,
@@ -521,6 +947,11 @@ class HomeworkStore {
           item: it,
         );
         await _syncPageMappings(
+          academyId: academyId,
+          studentId: studentId,
+          item: it,
+        );
+        await _ensureGroupForItem(
           academyId: academyId,
           studentId: studentId,
           item: it,
@@ -617,13 +1048,99 @@ class HomeworkStore {
     }
   }
 
+  List<int> _parsePagesFromRawPageText(String rawPageText) {
+    final raw = rawPageText.trim();
+    if (raw.isEmpty) return const <int>[];
+    var normalized = raw
+        .replaceAll(RegExp(r'p\.', caseSensitive: false), '')
+        .replaceAll('페이지', '')
+        .replaceAll('쪽', '')
+        .replaceAll('~', '-')
+        .replaceAll('–', '-')
+        .replaceAll('—', '-');
+    normalized = normalized.replaceAll(RegExp(r'[^0-9,\-]+'), ',');
+    normalized = normalized.replaceAll(RegExp(r',+'), ',');
+    normalized = normalized.replaceAll(RegExp(r'^,+|,+$'), '');
+    if (normalized.isEmpty) return const <int>[];
+    final pages = <int>{};
+    final tokens = normalized.split(',');
+    for (final token in tokens) {
+      final t = token.trim();
+      if (t.isEmpty) continue;
+      if (t.contains('-')) {
+        final parts = t.split('-');
+        if (parts.length != 2) continue;
+        final start = int.tryParse(parts[0]);
+        final end = int.tryParse(parts[1]);
+        if (start == null || end == null) continue;
+        var a = start;
+        var b = end;
+        if (a > b) {
+          final temp = a;
+          a = b;
+          b = temp;
+        }
+        for (int p = a; p <= b; p++) {
+          if (p > 0) pages.add(p);
+        }
+        continue;
+      }
+      final page = int.tryParse(t);
+      if (page == null || page <= 0) continue;
+      pages.add(page);
+    }
+    final out = pages.toList()..sort();
+    return out;
+  }
+
+  List<Map<String, dynamic>> _buildManualPageRows({
+    required String academyId,
+    required String studentId,
+    required HomeworkItem item,
+    required String bookId,
+    required String gradeLabel,
+  }) {
+    final pages = _parsePagesFromRawPageText(item.page ?? '');
+    if (pages.isEmpty) return const <Map<String, dynamic>>[];
+    final int totalCount = item.count ?? 0;
+    final int n = pages.length;
+    final rows = <Map<String, dynamic>>[];
+    if (totalCount > 0 && totalCount >= n) {
+      final base = totalCount ~/ n;
+      final rem = totalCount % n;
+      for (int i = 0; i < n; i++) {
+        rows.add({
+          'academy_id': academyId,
+          'homework_item_id': item.id,
+          'student_id': studentId,
+          'book_id': bookId,
+          'grade_label': gradeLabel,
+          'page_number': pages[i],
+          'problem_count': base + (i < rem ? 1 : 0),
+        });
+      }
+      return rows;
+    }
+    for (final page in pages) {
+      rows.add({
+        'academy_id': academyId,
+        'homework_item_id': item.id,
+        'student_id': studentId,
+        'book_id': bookId,
+        'grade_label': gradeLabel,
+        'page_number': page,
+        'problem_count': 1,
+      });
+    }
+    return rows;
+  }
+
   Future<void> _syncPageMappings({
     required String academyId,
     required String studentId,
     required HomeworkItem item,
   }) async {
-    final mappings = item.unitMappings;
-    if (mappings == null) return;
+    final mappings = item.unitMappings ?? const <Map<String, dynamic>>[];
     final bookId = (item.bookId ?? '').trim();
     final gradeLabel = (item.gradeLabel ?? '').trim();
     if (bookId.isEmpty || gradeLabel.isEmpty) return;
@@ -666,7 +1183,9 @@ class HomeworkStore {
               'problem_count': count,
             });
           }
-        } else if (startPage != null && endPage != null && endPage >= startPage) {
+        } else if (startPage != null &&
+            endPage != null &&
+            endPage >= startPage) {
           for (int p = startPage; p <= endPage; p++) {
             if (!seenPages.add(p)) continue;
             pageRows.add({
@@ -680,6 +1199,18 @@ class HomeworkStore {
             });
           }
         }
+      }
+
+      if (pageRows.isEmpty) {
+        pageRows.addAll(
+          _buildManualPageRows(
+            academyId: academyId,
+            studentId: studentId,
+            item: item,
+            bookId: bookId,
+            gradeLabel: gradeLabel,
+          ),
+        );
       }
 
       if (pageRows.isNotEmpty) {
@@ -739,6 +1270,7 @@ class HomeworkStore {
     String? type,
     String? page,
     int? count,
+    String? memo,
     String? content,
     String? bookId,
     String? gradeLabel,
@@ -758,6 +1290,7 @@ class HomeworkStore {
       type: type,
       page: page,
       count: count,
+      memo: memo,
       content: content,
       bookId: bookId,
       gradeLabel: gradeLabel,
@@ -778,6 +1311,7 @@ class HomeworkStore {
     final list = _byStudentId.putIfAbsent(studentId, () => <HomeworkItem>[]);
     list.add(item);
     _sortStudentList(list);
+    _applyFallbackGroupsForStudent(studentId);
     _bump();
     unawaited(_upsertItem(studentId, item));
     return item;
@@ -789,6 +1323,7 @@ class HomeworkStore {
     final idx = list.indexWhere((e) => e.id == updated.id);
     if (idx != -1) {
       list[idx] = updated;
+      _applyFallbackGroupsForStudent(studentId);
       _bump();
       unawaited(_upsertItem(studentId, updated));
     }
@@ -798,6 +1333,15 @@ class HomeworkStore {
     final list = _byStudentId[studentId];
     if (list == null) return;
     list.removeWhere((e) => e.id == id);
+    final gid = _groupIdByItemId.remove(id);
+    if (gid != null) {
+      _groupItemsByGroupId[gid]?.removeWhere((e) => e.homeworkItemId == id);
+      if (_isLegacyGroupId(gid)) {
+        _groupItemsByGroupId.remove(gid);
+        _groupsByStudentId[studentId]?.removeWhere((g) => g.id == gid);
+      }
+    }
+    _applyFallbackGroupsForStudent(studentId);
     _sortStudentList(list);
     _bump();
     unawaited(() async {
@@ -842,10 +1386,56 @@ class HomeworkStore {
     }
     if (changed.isEmpty) return;
     _sortStudentList(list);
+    _applyFallbackGroupsForStudent(studentId);
     _bump();
     for (final item in changed) {
       await _upsertItem(studentId, item);
     }
+  }
+
+  Future<void> reorderGroups(
+    String studentId,
+    List<String> orderedGroupIds,
+  ) async {
+    final groups = _groupsByStudentId[studentId];
+    if (groups == null || groups.isEmpty) return;
+    final byId = <String, HomeworkGroup>{for (final g in groups) g.id: g};
+    final used = <String>{};
+    final reordered = <HomeworkGroup>[];
+    for (final gid in orderedGroupIds) {
+      final g = byId[gid];
+      if (g == null || !used.add(gid)) continue;
+      reordered.add(g);
+    }
+    final remaining = groups.where((g) => !used.contains(g.id)).toList()
+      ..sort(_compareGroupByOrder);
+    reordered.addAll(remaining);
+
+    final changed = <HomeworkGroup>[];
+    for (int i = 0; i < reordered.length; i++) {
+      final g = reordered[i];
+      if (g.orderIndex != i) {
+        g.orderIndex = i;
+        changed.add(g);
+      }
+    }
+    if (changed.isEmpty) return;
+    _groupsByStudentId[studentId] = reordered;
+    _bump();
+
+    try {
+      final academyId = (await TenantService.instance.getActiveAcademyId()) ??
+          await TenantService.instance.ensureActiveAcademy();
+      final supa = Supabase.instance.client;
+      for (final g in changed) {
+        if (_isLegacyGroupId(g.id)) continue;
+        await supa
+            .from('homework_groups')
+            .update({'order_index': g.orderIndex})
+            .eq('academy_id', academyId)
+            .eq('id', g.id);
+      }
+    } catch (_) {}
   }
 
   Future<void> moveToBottom(String studentId, String id) async {
@@ -869,6 +1459,7 @@ class HomeworkStore {
     }
     if (changed.isEmpty) return;
     _sortStudentList(list);
+    _applyFallbackGroupsForStudent(studentId);
     _bump();
     for (final item in changed) {
       await _upsertItem(studentId, item);
@@ -911,6 +1502,7 @@ class HomeworkStore {
     if (!changed) return;
 
     _sortStudentList(list);
+    _applyFallbackGroupsForStudent(studentId);
     _bump();
     await _upsertItem(studentId, item);
   }
@@ -1140,6 +1732,7 @@ class HomeworkStore {
     String? type,
     String? page,
     int? count,
+    String? memo,
     String? content,
     int? defaultSplitParts,
   }) {
@@ -1153,6 +1746,7 @@ class HomeworkStore {
         type: type,
         page: page,
         count: count,
+        memo: memo,
         content: content ?? body,
         defaultSplitParts: defaultSplitParts ?? 1,
       );
@@ -1167,6 +1761,7 @@ class HomeworkStore {
         type: type,
         page: page,
         count: count,
+        memo: memo,
         content: content ?? body,
         defaultSplitParts: defaultSplitParts ?? 1,
       );
@@ -1181,6 +1776,7 @@ class HomeworkStore {
       type: type ?? src.type,
       page: page ?? src.page,
       count: count ?? src.count,
+      memo: memo ?? src.memo,
       content: content ?? src.content ?? body,
       bookId: src.bookId,
       gradeLabel: src.gradeLabel,
@@ -1392,6 +1988,342 @@ class HomeworkStore {
     );
   }
 
+  List<String> _stringListFromDynamic(dynamic raw) {
+    if (raw is List) {
+      return raw
+          .map((e) => '$e'.trim())
+          .where((e) => e.isNotEmpty)
+          .toList(growable: false);
+    }
+    return const <String>[];
+  }
+
+  Future<bool> _hasActiveAssignmentForAny(
+    String studentId,
+    Iterable<String> itemIds,
+  ) async {
+    final idSet =
+        itemIds.map((e) => e.trim()).where((e) => e.isNotEmpty).toSet();
+    if (idSet.isEmpty) return false;
+    return HomeworkAssignmentStore.instance.hasActiveAssignmentForAnyItems(
+      studentId,
+      idSet,
+    );
+  }
+
+  Future<int> bulkTransitionGroup(
+    String studentId,
+    String groupId,
+  ) async {
+    if (groupId.trim().isEmpty) return 0;
+    try {
+      final academyId = (await TenantService.instance.getActiveAcademyId()) ??
+          await TenantService.instance.ensureActiveAcademy();
+      final raw = await Supabase.instance.client.rpc(
+        'homework_group_bulk_transition',
+        params: {
+          'p_group_id': groupId,
+          'p_academy_id': academyId,
+        },
+      );
+      await _reloadStudent(studentId);
+      return _parseInt(raw);
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  Future<List<String>> splitWaitingItemInGroup({
+    required String studentId,
+    required String groupId,
+    required String sourceItemId,
+    required List<HomeworkSplitPartInput> parts,
+  }) async {
+    final cleanedGroupId = groupId.trim();
+    final cleanedSourceId = sourceItemId.trim();
+    if (cleanedGroupId.isEmpty || cleanedSourceId.isEmpty || parts.isEmpty) {
+      return const <String>[];
+    }
+    if (await _hasActiveAssignmentForAny(studentId, [cleanedSourceId])) {
+      throw StateError('ASSIGNMENT_EXISTS_FOR_SPLIT_ITEM');
+    }
+    try {
+      final academyId = (await TenantService.instance.getActiveAcademyId()) ??
+          await TenantService.instance.ensureActiveAcademy();
+      final payload = parts
+          .map((part) => part.toJson())
+          .where((part) => (part['page'] as String? ?? '').trim().isNotEmpty)
+          .toList(growable: false);
+      if (payload.isEmpty) return const <String>[];
+      final raw = await Supabase.instance.client.rpc(
+        'homework_group_split_waiting',
+        params: {
+          'p_group_id': cleanedGroupId,
+          'p_source_item_id': cleanedSourceId,
+          'p_parts': payload,
+          'p_academy_id': academyId,
+        },
+      );
+      final result = (raw is Map<String, dynamic>) ? raw : <String, dynamic>{};
+      final createdIds = _stringListFromDynamic(result['created_item_ids']);
+      await _reloadStudent(studentId);
+      for (int i = 0; i < createdIds.length && i < payload.length; i++) {
+        final memo = (payload[i]['memo'] as String?)?.trim() ?? '';
+        if (memo.isEmpty) continue;
+        final item = getById(studentId, createdIds[i]);
+        if (item == null || (item.memo ?? '').trim() == memo) continue;
+        item.memo = memo;
+        item.updatedAt = DateTime.now();
+        await _upsertItem(studentId, item);
+      }
+      for (final id in createdIds) {
+        final item = getById(studentId, id);
+        if (item == null) continue;
+        await _syncPageMappings(
+          academyId: academyId,
+          studentId: studentId,
+          item: item,
+        );
+      }
+      await _normalizeActiveOrderIndices(studentId);
+      return createdIds;
+    } catch (e) {
+      throw StateError(e.toString());
+    }
+  }
+
+  Future<String?> mergeWaitingItemsInGroup({
+    required String studentId,
+    required String groupId,
+    required List<String> itemIds,
+    required String mergedTitle,
+    required String mergedPage,
+    int? mergedCount,
+    String? mergedType,
+    String? mergedMemo,
+    String? mergedContent,
+  }) async {
+    final cleanedGroupId = groupId.trim();
+    final cleanedIds = itemIds
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    if (cleanedGroupId.isEmpty || cleanedIds.length < 2) return null;
+    if (await _hasActiveAssignmentForAny(studentId, cleanedIds)) {
+      throw StateError('ASSIGNMENT_EXISTS_FOR_MERGE_ITEMS');
+    }
+    try {
+      final academyId = (await TenantService.instance.getActiveAcademyId()) ??
+          await TenantService.instance.ensureActiveAcademy();
+      final mergedPayload = <String, dynamic>{
+        'title': mergedTitle.trim(),
+        'page': mergedPage.trim(),
+        if (mergedCount != null) 'count': mergedCount,
+        if (mergedType != null && mergedType.trim().isNotEmpty)
+          'type': mergedType.trim(),
+        if (mergedMemo != null && mergedMemo.trim().isNotEmpty)
+          'memo': mergedMemo.trim(),
+        if (mergedContent != null && mergedContent.trim().isNotEmpty)
+          'content': mergedContent.trim(),
+      };
+      final raw = await Supabase.instance.client.rpc(
+        'homework_group_merge_waiting',
+        params: {
+          'p_group_id': cleanedGroupId,
+          'p_item_ids': cleanedIds,
+          'p_merged_payload': mergedPayload,
+          'p_academy_id': academyId,
+        },
+      );
+      final result = (raw is Map<String, dynamic>) ? raw : <String, dynamic>{};
+      final mergedId = (result['merged_item_id'] as String?)?.trim();
+      await _reloadStudent(studentId);
+      final normalizedMergedMemo = (mergedMemo ?? '').trim();
+      if (mergedId != null && mergedId.isNotEmpty) {
+        final mergedItem = getById(studentId, mergedId);
+        if (mergedItem != null) {
+          if (normalizedMergedMemo.isNotEmpty &&
+              (mergedItem.memo ?? '').trim() != normalizedMergedMemo) {
+            mergedItem.memo = normalizedMergedMemo;
+            mergedItem.updatedAt = DateTime.now();
+            await _upsertItem(studentId, mergedItem);
+          }
+          await _syncPageMappings(
+            academyId: academyId,
+            studentId: studentId,
+            item: mergedItem,
+          );
+        }
+      }
+      await _normalizeActiveOrderIndices(studentId);
+      return (mergedId == null || mergedId.isEmpty) ? null : mergedId;
+    } catch (e) {
+      throw StateError(e.toString());
+    }
+  }
+
+  Future<String?> addWaitingItemToGroup({
+    required String studentId,
+    required String groupId,
+    required String title,
+    String? body,
+    String? page,
+    int? count,
+    String? type,
+    String? memo,
+    String? content,
+    String? templateItemId,
+  }) async {
+    final cleanedGroupId = groupId.trim();
+    if (cleanedGroupId.isEmpty) return null;
+
+    HomeworkItem? template;
+    final cleanedTemplateId = (templateItemId ?? '').trim();
+    if (cleanedTemplateId.isNotEmpty) {
+      template = getById(studentId, cleanedTemplateId);
+    }
+    template ??= () {
+      final children =
+          itemsInGroup(studentId, cleanedGroupId, includeCompleted: true);
+      return children.isEmpty ? null : children.first;
+    }();
+
+    final group = groupById(studentId, cleanedGroupId);
+    final now = DateTime.now();
+    final resolvedTitle = title.trim().isNotEmpty
+        ? title.trim()
+        : ((template?.title ?? '').trim().isNotEmpty
+            ? template!.title.trim()
+            : '과제');
+    final resolvedBody = (body ?? '').trim().isNotEmpty
+        ? body!.trim()
+        : ((template?.body ?? '').trim().isNotEmpty
+            ? template!.body.trim()
+            : resolvedTitle);
+    final resolvedPage = (page ?? '').trim();
+    final resolvedType = (type ?? '').trim();
+    final resolvedMemo = (memo ?? '').trim();
+    final resolvedContent = (content ?? '').trim();
+    final int? resolvedCount = (count != null && count > 0) ? count : null;
+
+    final item = HomeworkItem(
+      id: const Uuid().v4(),
+      title: resolvedTitle,
+      body: resolvedBody,
+      color: template?.color ?? const Color(0xFF1976D2),
+      flowId: template?.flowId ?? group?.flowId,
+      type: resolvedType.isEmpty ? template?.type : resolvedType,
+      page: resolvedPage.isEmpty ? template?.page : resolvedPage,
+      count: resolvedCount,
+      memo: resolvedMemo.isEmpty ? template?.memo : resolvedMemo,
+      content: resolvedContent.isEmpty ? template?.content : resolvedContent,
+      bookId: template?.bookId,
+      gradeLabel: template?.gradeLabel,
+      sourceUnitLevel: template?.sourceUnitLevel,
+      sourceUnitPath: template?.sourceUnitPath,
+      unitMappings: null,
+      defaultSplitParts: (template?.defaultSplitParts ?? 1).clamp(1, 4).toInt(),
+      checkCount: 0,
+      orderIndex: _nextActiveOrderIndex(studentId),
+      createdAt: now,
+      updatedAt: now,
+      status: HomeworkStatus.inProgress,
+      phase: 1,
+      accumulatedMs: 0,
+      runStart: null,
+      completedAt: null,
+      firstStartedAt: null,
+      submittedAt: null,
+      confirmedAt: null,
+      waitingAt: now,
+      version: 1,
+    );
+
+    final list = _byStudentId.putIfAbsent(studentId, () => <HomeworkItem>[]);
+    list.add(item);
+    _sortStudentList(list);
+    _bump();
+
+    try {
+      final academyId = (await TenantService.instance.getActiveAcademyId()) ??
+          await TenantService.instance.ensureActiveAcademy();
+      final supa = Supabase.instance.client;
+      final base = {
+        'student_id': studentId,
+        'title': item.title,
+        'body': item.body,
+        'color': item.color.value,
+        'flow_id': item.flowId,
+        'type': item.type,
+        'page': item.page,
+        'count': item.count,
+        if (item.memo != null) 'memo': item.memo,
+        'content': item.content,
+        'book_id': item.bookId,
+        'grade_label': item.gradeLabel,
+        'source_unit_level': item.sourceUnitLevel,
+        'source_unit_path': item.sourceUnitPath,
+        'default_split_parts': item.defaultSplitParts.clamp(1, 4).toInt(),
+        'order_index': item.orderIndex,
+        'check_count': item.checkCount,
+        'status': item.status.index,
+        'phase': item.phase,
+        'accumulated_ms': item.accumulatedMs,
+        'run_start': item.runStart?.toUtc().toIso8601String(),
+        'completed_at': item.completedAt?.toUtc().toIso8601String(),
+        'first_started_at': item.firstStartedAt?.toUtc().toIso8601String(),
+        'submitted_at': item.submittedAt?.toUtc().toIso8601String(),
+        'confirmed_at': item.confirmedAt?.toUtc().toIso8601String(),
+        'waiting_at': item.waitingAt?.toUtc().toIso8601String(),
+      };
+
+      final insRows = await supa.from('homework_items').insert({
+        'id': item.id,
+        'academy_id': academyId,
+        ...base,
+        'version': item.version,
+      }).select('version');
+      final typedInsertRows =
+          (insRows as List<dynamic>).cast<Map<String, dynamic>>();
+      if (typedInsertRows.isNotEmpty) {
+        item.version = (typedInsertRows.first['version'] as num?)?.toInt() ?? 1;
+      }
+
+      final links = groupLinks(cleanedGroupId);
+      var nextItemOrder = 0;
+      for (final link in links) {
+        if (link.itemOrderIndex >= nextItemOrder) {
+          nextItemOrder = link.itemOrderIndex + 1;
+        }
+      }
+      await supa.from('homework_group_items').upsert({
+        'academy_id': academyId,
+        'group_id': cleanedGroupId,
+        'student_id': studentId,
+        'homework_item_id': item.id,
+        'item_order_index': nextItemOrder,
+      }, onConflict: 'academy_id,homework_item_id');
+
+      await _syncUnitMappings(
+        academyId: academyId,
+        studentId: studentId,
+        item: item,
+      );
+      await _syncPageMappings(
+        academyId: academyId,
+        studentId: studentId,
+        item: item,
+      );
+      await _reloadStudent(studentId);
+      return item.id;
+    } catch (e, st) {
+      print('[HW][addWaitingItemToGroup][ERROR] $e\n$st');
+      await _reloadStudent(studentId);
+      return null;
+    }
+  }
+
   void _bump() {
     revision.value++;
   }
@@ -1409,51 +2341,15 @@ class HomeworkStore {
       );
       final List<HomeworkItem> list = [];
       for (final r in data) {
-        int _asInt(dynamic v) =>
-            (v is num) ? v.toInt() : int.tryParse('$v') ?? 0;
-        int? _asIntOpt(dynamic v) {
-          if (v == null) return null;
-          if (v is num) return v.toInt();
-          return int.tryParse('$v');
-        }
-
-        DateTime? _parse(dynamic v) =>
-            (v == null) ? null : DateTime.tryParse(v as String)?.toLocal();
-        list.add(HomeworkItem(
-          id: (r['id'] as String?) ?? const Uuid().v4(),
-          title: (r['title'] as String?) ?? '',
-          body: (r['body'] as String?) ?? '',
-          color: Color(_asInt(r['color'])),
-          flowId: r['flow_id'] as String?,
-          type: (r['type'] as String?)?.trim(),
-          page: (r['page'] as String?)?.trim(),
-          count: _asInt(r['count']),
-          content: (r['content'] as String?)?.trim(),
-          bookId: (r['book_id'] as String?)?.trim(),
-          gradeLabel: (r['grade_label'] as String?)?.trim(),
-          sourceUnitLevel: (r['source_unit_level'] as String?)?.trim(),
-          sourceUnitPath: (r['source_unit_path'] as String?)?.trim(),
-          defaultSplitParts:
-              (_asIntOpt(r['default_split_parts']) ?? 1).clamp(1, 4).toInt(),
-          orderIndex: _asInt(r['order_index']),
-          checkCount: _asInt(r['check_count']),
-          createdAt: _parse(r['created_at']),
-          updatedAt: _parse(r['updated_at']),
-          status: HomeworkStatus.values[
-              (_asInt(r['status'])).clamp(0, HomeworkStatus.values.length - 1)],
-          phase: (_asInt(r['phase'])).clamp(0, 4),
-          accumulatedMs: _asInt(r['accumulated_ms']),
-          runStart: _parse(r['run_start']),
-          completedAt: _parse(r['completed_at']),
-          firstStartedAt: _parse(r['first_started_at']),
-          submittedAt: _parse(r['submitted_at']),
-          confirmedAt: _parse(r['confirmed_at']),
-          waitingAt: _parse(r['waiting_at']),
-          version: _asInt(r['version']),
-        ));
+        list.add(_parseHomeworkItemRow(r));
       }
       _sortStudentList(list);
       _byStudentId[studentId] = list;
+      await _reloadGroups(
+        academyId: academyId,
+        studentId: studentId,
+        bump: false,
+      );
       _bump();
     } catch (_) {}
   }
