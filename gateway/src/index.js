@@ -82,12 +82,12 @@ async function publishHomeworksToBoundDevices(academy_id, student_id, source = '
   }
   if (!binds || binds.length === 0) return;
 
-  const { data: items, error } = await supa.rpc('m5_list_homeworks', {
+  const { data: groups, error } = await supa.rpc('m5_list_homework_groups', {
     p_academy_id: academy_id,
     p_student_id: student_id
   });
   if (error) {
-    console.error('[gateway] realtime list_homeworks error', { source, error });
+    console.error('[gateway] realtime list_homework_groups error', { source, error });
     return;
   }
 
@@ -95,7 +95,7 @@ async function publishHomeworksToBoundDevices(academy_id, student_id, source = '
     const device_id = b.device_id;
     client.publish(
       `academies/${academy_id}/devices/${device_id}/homeworks`,
-      JSON.stringify({ items: items || [] }),
+      JSON.stringify({ groups: groups || [] }),
       { qos: 1, retain: false }
     );
   }
@@ -134,6 +134,34 @@ client.on('message', async (topic, payload) => {
       complete: 'homework_complete',
       pause_all: 'homework_pause_all'
     };
+    if (action === 'group_transition') {
+      const group_id = (msg.group_id || '').toString().trim();
+      if (!group_id) {
+        console.error('[gateway] group_transition missing group_id', { academy_id, student_id });
+        client.publish(
+          `academies/${academy_id}/ack/${idempotency_key}`,
+          JSON.stringify({ ok: false, action, error: 'missing_group_id' }),
+          { qos: 1, retain: false }
+        );
+        return;
+      }
+      const from_phase = msg.from_phase ? Number(msg.from_phase) : null;
+      const { data, error } = await supa.rpc('homework_group_bulk_transition', {
+        p_group_id: group_id,
+        p_academy_id: academy_id,
+        p_from_phase: from_phase
+      });
+      if (error) console.error('[gateway] group_transition rpc error', error);
+      client.publish(
+        `academies/${academy_id}/ack/${idempotency_key}`,
+        JSON.stringify({ ok: !error, action, changed: data ?? 0 }),
+        { qos: 1, retain: false }
+      );
+      if (!error) {
+        await publishHomeworksToBoundDevices(academy_id, student_id, 'group_transition');
+      }
+      return;
+    }
     const rpc = rpcMap[action];
     if (!rpc) return;
 
@@ -144,11 +172,11 @@ client.on('message', async (topic, payload) => {
     const { error } = await supa.rpc(rpc, params);
     if (error) console.error('[gateway] rpc error', error);
 
-    // Realtime subscription handles pushing updated list to devices (no optimistic refresh to avoid double-send)
-
-      // Optional: publish ack
-      client.publish(`academies/${academy_id}/ack/${idempotency_key}`, JSON.stringify({ ok: !error, action }), { qos: 1, retain: false });
-      return;
+    client.publish(`academies/${academy_id}/ack/${idempotency_key}`, JSON.stringify({ ok: !error, action }), { qos: 1, retain: false });
+    if (!error) {
+      await publishHomeworksToBoundDevices(academy_id, student_id, action);
+    }
+    return;
     }
 
     // presence handler: academies/{academy_id}/devices/{device_id}/presence
@@ -176,9 +204,9 @@ client.on('message', async (topic, payload) => {
         const { error: arrivalErr } = await supa.rpc('m5_record_arrival', { p_academy_id: academy_id, p_student_id: student_id });
         if (arrivalErr) console.error('[gateway] record_arrival error', arrivalErr);
         // after bind, ensure attendance and list homeworks
-        const { data: items, error: lerr } = await supa.rpc('m5_list_homeworks', { p_academy_id: academy_id, p_student_id: student_id });
-        if (lerr) console.error('[gateway] list_homeworks error', lerr);
-        client.publish(`academies/${academy_id}/devices/${device_id}/homeworks`, JSON.stringify({ items: items || [] }), { qos: 1, retain: false });
+        const { data: groups, error: lerr } = await supa.rpc('m5_list_homework_groups', { p_academy_id: academy_id, p_student_id: student_id });
+        if (lerr) console.error('[gateway] list_homework_groups error', lerr);
+        client.publish(`academies/${academy_id}/devices/${device_id}/homeworks`, JSON.stringify({ groups: groups || [] }), { qos: 1, retain: false });
         client.publish(`academies/${academy_id}/devices/${device_id}/ack`, JSON.stringify({ ok: !error && !lerr, action: 'bind', error: error?.message || lerr?.message, student_id }), { qos: 1, retain: false });
         return;
       }
@@ -219,10 +247,10 @@ client.on('message', async (topic, payload) => {
       }
       if (action === 'list_homeworks') {
         const student_id = msg.student_id;
-        const { data: items, error } = await supa.rpc('m5_list_homeworks', { p_academy_id: academy_id, p_student_id: student_id });
-        if (error) { console.error('[gateway] list_homeworks error', error); return; }
-        client.publish(`academies/${academy_id}/devices/${device_id}/homeworks`, JSON.stringify({ items: items || [] }), { qos: 1, retain: false });
-        client.publish(`academies/${academy_id}/devices/${device_id}/ack`, JSON.stringify({ ok: true, action: 'list_homeworks', count: (items||[]).length }), { qos: 1, retain: false });
+        const { data: groups, error } = await supa.rpc('m5_list_homework_groups', { p_academy_id: academy_id, p_student_id: student_id });
+        if (error) { console.error('[gateway] list_homework_groups error', error); return; }
+        client.publish(`academies/${academy_id}/devices/${device_id}/homeworks`, JSON.stringify({ groups: groups || [] }), { qos: 1, retain: false });
+        client.publish(`academies/${academy_id}/devices/${device_id}/ack`, JSON.stringify({ ok: true, action: 'list_homeworks', count: (groups||[]).length }), { qos: 1, retain: false });
         return;
       }
       if (action === 'student_info') {

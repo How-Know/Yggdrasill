@@ -53,6 +53,11 @@ static int mqttHostIndex = 0;
 static char willPayloadBuf[128];
 static char willTopicBuf[128];
 
+// Deferred homework update (MQTT callback -> main loop)
+static portMUX_TYPE g_hw_mux = portMUX_INITIALIZER_UNLOCKED;
+static volatile bool g_hw_pending = false;
+static String g_hw_pending_json;
+
 // LVGL objects
 static lv_disp_draw_buf_t g_lv_draw_buf;
 static lv_color_t* g_lv_buf1 = nullptr;
@@ -239,11 +244,10 @@ void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties 
     hw_acc.concat(String(payload).substring(0, (int)len));
     hw_received += len;
     if (total && hw_received < total) { return; }
-    DynamicJsonDocument doc(hw_expected + 2048);
-    DeserializationError err = deserializeJson(doc, hw_acc.c_str(), hw_acc.length());
-    if (err) { Serial.print("[HW] parse err: "); Serial.println(err.c_str()); hw_acc.remove(0); return; }
-    JsonArray arr = doc["items"].as<JsonArray>();
-    ui_port_update_homeworks(arr);
+    portENTER_CRITICAL(&g_hw_mux);
+    g_hw_pending_json = hw_acc;
+    g_hw_pending = true;
+    portEXIT_CRITICAL(&g_hw_mux);
     hw_acc.remove(0);
   }
   if (t == updateTopic) {
@@ -358,6 +362,25 @@ void fw_publish_homework_action(const char* action, const char* itemId) {
   doc["updated_by"] = studentId;
   String payload; serializeJson(doc, payload);
   String topic = String("academies/") + academyId + "/students/" + studentId + "/homework/" + itemId + "/command";
+  mqtt.publish(topic.c_str(), 1, false, payload.c_str());
+}
+
+void fw_publish_group_transition(const char* groupId, int from_phase) {
+  if (!groupId || !*groupId || !studentId.length()) return;
+  DynamicJsonDocument doc(256);
+  doc["action"] = "group_transition";
+  doc["academy_id"] = academyId;
+  doc["student_id"] = studentId;
+  doc["item_id"] = "GROUP";
+  doc["group_id"] = groupId;
+  if (from_phase > 0) doc["from_phase"] = from_phase;
+  doc["idempotency_key"] = String((uint32_t)esp_random(), HEX);
+  doc["at"] = "";
+  doc["updated_by"] = studentId;
+  String payload;
+  serializeJson(doc, payload);
+  String topic =
+      String("academies/") + academyId + "/students/" + studentId + "/homework/GROUP/command";
   mqtt.publish(topic.c_str(), 1, false, payload.c_str());
 }
 
@@ -514,6 +537,24 @@ void loop() {
   uint32_t nowTick = millis();
   lv_tick_inc(nowTick - lastTick);
   lastTick = nowTick;
+
+  if (g_hw_pending) {
+    String json_copy;
+    portENTER_CRITICAL(&g_hw_mux);
+    json_copy = g_hw_pending_json;
+    g_hw_pending_json.remove(0);
+    g_hw_pending = false;
+    portEXIT_CRITICAL(&g_hw_mux);
+    if (json_copy.length() > 0) {
+      DynamicJsonDocument doc(json_copy.length() + 4096);
+      DeserializationError err = deserializeJson(doc, json_copy.c_str(), json_copy.length());
+      if (!err) {
+        JsonArray arr = doc["groups"].as<JsonArray>();
+        ui_port_update_homeworks(arr);
+      }
+    }
+  }
+
   lv_timer_handler();
   screensaver_poll();
   screensaver_check_shake();

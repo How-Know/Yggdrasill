@@ -43,6 +43,8 @@ class HomeworkQuickAddProxyDialogState
   late final TextEditingController _rangeContent;
   late final TextEditingController _page;
   late final TextEditingController _count;
+  late final TextEditingController _memo;
+  late final TextEditingController _groupTitle;
   late Color _color;
   String _type = '프린트';
   late String _flowId;
@@ -63,6 +65,8 @@ class HomeworkQuickAddProxyDialogState
   int _rangeAiRequestId = 0;
   String _selectedLinkedTextbookType = '';
   int _selectedSplitParts = 1;
+  final List<_DraftGroupItem> _draftGroupItems = <_DraftGroupItem>[];
+  int _draftGroupItemSeq = 0;
   String? _expandedBigKey;
   String? _expandedMidKey;
 
@@ -84,6 +88,11 @@ class HomeworkQuickAddProxyDialogState
     _rangeContent = ImeAwareTextEditingController(text: '');
     _page = ImeAwareTextEditingController(text: '');
     _count = ImeAwareTextEditingController(text: '');
+    _memo = ImeAwareTextEditingController(text: '');
+    final initialGroupTitle = (widget.initialTitle ?? '').trim();
+    _groupTitle = ImeAwareTextEditingController(
+      text: initialGroupTitle.isEmpty ? '그룹 과제' : initialGroupTitle,
+    );
     _color = _colorForType(_type);
     final initial = widget.initialFlowId;
     if (initial != null && widget.flows.any((f) => f.id == initial)) {
@@ -111,6 +120,8 @@ class HomeworkQuickAddProxyDialogState
     _rangeContent.dispose();
     _page.dispose();
     _count.dispose();
+    _memo.dispose();
+    _groupTitle.dispose();
     super.dispose();
   }
 
@@ -162,13 +173,6 @@ class HomeworkQuickAddProxyDialogState
     final bookName = (_selectedLinkedBook?.bookName ?? '').trim();
     if (bookName.contains('문제집')) return '문제집';
     return '교재';
-  }
-
-  String _composeBody() {
-    final content = _content.text.trim();
-    final page = _page.text.trim();
-    final count = _count.text.trim();
-    return _composeBodyValues(page: page, count: count, content: content);
   }
 
   String _composeBodyValues({
@@ -1186,7 +1190,7 @@ class HomeworkQuickAddProxyDialogState
           '과제명만 입력해도 저장됩니다.',
           style: TextStyle(color: kDlgTextSub, fontSize: 12),
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 14),
         _buildManualPageInputs(),
       ],
     );
@@ -1206,10 +1210,10 @@ class HomeworkQuickAddProxyDialogState
         onTap: onTap,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 160),
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
           decoration: BoxDecoration(
             color: bgColor,
-            borderRadius: BorderRadius.circular(18),
+            borderRadius: BorderRadius.circular(20),
             border: Border.all(color: borderColor, width: selected ? 1.4 : 1.0),
           ),
           child: Text(
@@ -1217,7 +1221,7 @@ class HomeworkQuickAddProxyDialogState
             style: TextStyle(
               color: selected ? kDlgText : kDlgTextSub,
               fontWeight: selected ? FontWeight.w700 : FontWeight.w600,
-              fontSize: 12.8,
+              fontSize: 13.8,
             ),
           ),
         ),
@@ -1306,12 +1310,471 @@ class HomeworkQuickAddProxyDialogState
         ),
         const SizedBox(height: 12),
         TextField(
+          controller: _memo,
+          minLines: 2,
+          maxLines: 4,
+          style: const TextStyle(color: kDlgText),
+          decoration: _inputDecoration('메모', hint: '예: 홀수 번호만 풀기'),
+        ),
+        const SizedBox(height: 12),
+        TextField(
           controller: _content,
           minLines: 2,
           maxLines: 4,
           style: const TextStyle(color: kDlgText),
           decoration: _inputDecoration('내용', hint: '필요한 추가 내용을 적어주세요'),
         ),
+      ],
+    );
+  }
+
+  void _showDialogSnackBar(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  _DraftGroupItem? _buildDraftGroupItemFromInput() {
+    final selectedBook = _selectedLinkedBook;
+    final useRangeDraft = selectedBook != null && !_manualPageMode;
+    final title = useRangeDraft ? _rangeTitle.text.trim() : _title.text.trim();
+    if (title.isEmpty) return null;
+    final page = useRangeDraft ? _rangeAutoPage.trim() : _page.text.trim();
+    final count = useRangeDraft ? _rangeAutoCount.trim() : _count.text.trim();
+    final content =
+        useRangeDraft ? _rangeContent.text.trim() : _content.text.trim();
+    final memo = _memo.text.trim();
+    final type = useRangeDraft ? _effectiveLinkedHomeworkType() : _type;
+    final color = useRangeDraft ? _colorForType(type) : _color;
+    return _DraftGroupItem(
+      key: 'draft_${_draftGroupItemSeq++}',
+      type: type,
+      title: title,
+      page: page,
+      count: count,
+      memo: memo,
+      content: content,
+      body: _composeBodyValues(page: page, count: count, content: content),
+      color: color,
+      splitParts: _selectedSplitParts.clamp(1, 4).toInt(),
+    );
+  }
+
+  void _addDraftGroupItemFromInput() {
+    final selectedBook = _selectedLinkedBook;
+    final useRangeDraft = selectedBook != null && !_manualPageMode;
+    final item = _buildDraftGroupItemFromInput();
+    if (item == null) {
+      _showDialogSnackBar('과제명을 입력하세요.');
+      return;
+    }
+    setState(() {
+      _draftGroupItems.add(item);
+    });
+    if (!useRangeDraft) {
+      _title.clear();
+      _page.clear();
+      _count.clear();
+      _content.clear();
+    }
+    _memo.clear();
+  }
+
+  void _reorderDraftGroupItems(int oldIndex, int newIndex) {
+    setState(() {
+      if (newIndex > oldIndex) newIndex -= 1;
+      final moved = _draftGroupItems.removeAt(oldIndex);
+      _draftGroupItems.insert(newIndex, moved);
+    });
+  }
+
+  Future<void> _editDraftGroupItem(int index) async {
+    if (index < 0 || index >= _draftGroupItems.length) return;
+    final source = _draftGroupItems[index];
+    final titleController = ImeAwareTextEditingController(text: source.title);
+    final pageController = ImeAwareTextEditingController(text: source.page);
+    final countController = ImeAwareTextEditingController(text: source.count);
+    final memoController = ImeAwareTextEditingController(text: source.memo);
+    final contentController =
+        ImeAwareTextEditingController(text: source.content);
+    var type = source.type;
+    var splitParts = source.splitParts;
+
+    final submitted = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) {
+          return AlertDialog(
+            backgroundColor: kDlgBg,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
+            ),
+            title: const Text(
+              '하위과제 편집',
+              style: TextStyle(color: kDlgText, fontWeight: FontWeight.w900),
+            ),
+            content: SizedBox(
+              width: 500,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    DropdownButtonFormField<String>(
+                      value: type,
+                      items: const [
+                        DropdownMenuItem(value: '프린트', child: Text('프린트')),
+                        DropdownMenuItem(value: '교재', child: Text('교재')),
+                        DropdownMenuItem(value: '문제집', child: Text('문제집')),
+                        DropdownMenuItem(value: '학습', child: Text('학습')),
+                        DropdownMenuItem(value: '테스트', child: Text('테스트')),
+                      ],
+                      onChanged: (v) => setDialogState(() {
+                        type = v ?? '프린트';
+                      }),
+                      decoration: _inputDecoration('과제 유형'),
+                      dropdownColor: kDlgPanelBg,
+                      style: const TextStyle(
+                        color: kDlgText,
+                        fontWeight: FontWeight.w600,
+                      ),
+                      iconEnabledColor: kDlgTextSub,
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: titleController,
+                      style: const TextStyle(
+                        color: kDlgText,
+                        fontWeight: FontWeight.w600,
+                      ),
+                      decoration: _inputDecoration('과제명'),
+                    ),
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: pageController,
+                            keyboardType: TextInputType.text,
+                            inputFormatters: [
+                              FilteringTextInputFormatter.allow(
+                                RegExp(r'[0-9\-~,/ ]'),
+                              ),
+                            ],
+                            style: const TextStyle(
+                              color: kDlgText,
+                              fontWeight: FontWeight.w600,
+                            ),
+                            decoration:
+                                _inputDecoration('페이지', hint: '예: 10-12'),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: TextField(
+                            controller: countController,
+                            keyboardType: TextInputType.number,
+                            inputFormatters: [
+                              FilteringTextInputFormatter.digitsOnly,
+                            ],
+                            style: const TextStyle(
+                              color: kDlgText,
+                              fontWeight: FontWeight.w600,
+                            ),
+                            decoration: _inputDecoration('문항수', hint: '예: 12'),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: memoController,
+                      minLines: 2,
+                      maxLines: 4,
+                      style: const TextStyle(color: kDlgText),
+                      decoration: _inputDecoration('메모'),
+                    ),
+                    const SizedBox(height: 10),
+                    DropdownButtonFormField<int>(
+                      value: splitParts,
+                      items: const [
+                        DropdownMenuItem<int>(value: 1, child: Text('분할 없음')),
+                        DropdownMenuItem<int>(value: 2, child: Text('1/2')),
+                        DropdownMenuItem<int>(value: 3, child: Text('1/3')),
+                        DropdownMenuItem<int>(value: 4, child: Text('1/4')),
+                      ],
+                      onChanged: (v) => setDialogState(() {
+                        splitParts = (v ?? 1).clamp(1, 4).toInt();
+                      }),
+                      decoration: _inputDecoration('분할'),
+                      dropdownColor: kDlgPanelBg,
+                      style: const TextStyle(
+                        color: kDlgText,
+                        fontWeight: FontWeight.w600,
+                      ),
+                      iconEnabledColor: kDlgTextSub,
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: contentController,
+                      minLines: 2,
+                      maxLines: 4,
+                      style: const TextStyle(color: kDlgText),
+                      decoration: _inputDecoration('내용'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(false),
+                style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
+                child: const Text('취소'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(dialogContext).pop(true),
+                style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
+                child: const Text('저장'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+
+    if (submitted != true) return;
+    final title = titleController.text.trim();
+    if (title.isEmpty) {
+      _showDialogSnackBar('과제명을 입력하세요.');
+      return;
+    }
+    final page = pageController.text.trim();
+    final count = countController.text.trim();
+    final memo = memoController.text.trim();
+    final content = contentController.text.trim();
+    final updated = source.copyWith(
+      type: type,
+      title: title,
+      page: page,
+      count: count,
+      memo: memo,
+      content: content,
+      body: _composeBodyValues(page: page, count: count, content: content),
+      color: _colorForType(type),
+      splitParts: splitParts.clamp(1, 4).toInt(),
+    );
+    setState(() {
+      _draftGroupItems[index] = updated;
+    });
+  }
+
+  Widget _buildFlowSelectorDropdown({required bool enabled}) {
+    final selectedValue =
+        widget.flows.any((f) => f.id == _flowId) ? _flowId : null;
+    return Opacity(
+      opacity: enabled ? 1.0 : 0.58,
+      child: DropdownButtonFormField<String>(
+        value: selectedValue,
+        items: widget.flows
+            .map(
+              (flow) => DropdownMenuItem<String>(
+                value: flow.id,
+                child: Text(flow.name),
+              ),
+            )
+            .toList(growable: false),
+        onChanged: enabled
+            ? (v) async {
+                final nextId = (v ?? '').trim();
+                if (nextId.isEmpty || nextId == _flowId) return;
+                setState(() {
+                  _flowId = nextId;
+                  _selectedLinkedBookKey = null;
+                  _manualPageMode = false;
+                  _units = const <_BigUnitSelectionNode>[];
+                });
+                await _handleFlowChanged(forceNoBookSelection: true);
+              }
+            : null,
+        decoration: _inputDecoration(enabled ? '플로우 선택' : '플로우 선택 (교재 선택 중)'),
+        dropdownColor: kDlgPanelBg,
+        style: const TextStyle(color: kDlgText, fontWeight: FontWeight.w600),
+        iconEnabledColor: kDlgTextSub,
+      ),
+    );
+  }
+
+  Widget _buildDraftGroupItemList() {
+    if (_draftGroupItems.isEmpty) {
+      return _buildNoticeCard('하위 과제가 없습니다. 왼쪽에서 입력 후 `하위과제 추가`를 눌러주세요.');
+    }
+    return ReorderableListView.builder(
+      buildDefaultDragHandles: false,
+      itemCount: _draftGroupItems.length,
+      onReorder: _reorderDraftGroupItems,
+      itemBuilder: (context, index) {
+        final item = _draftGroupItems[index];
+        final title = item.title.trim().isEmpty ? '(제목 없음)' : item.title.trim();
+        final page = item.page.trim();
+        final count = item.count.trim();
+        final memo = item.memo.trim();
+        final content = item.content.trim();
+        return Container(
+          key: ValueKey('draft_group_item_${item.key}'),
+          margin: const EdgeInsets.only(bottom: 8),
+          padding: const EdgeInsets.fromLTRB(10, 8, 8, 8),
+          decoration: BoxDecoration(
+            color: kDlgPanelBg,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: kDlgBorder),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              ReorderableDragStartListener(
+                index: index,
+                child: const Padding(
+                  padding: EdgeInsets.only(top: 4),
+                  child:
+                      Icon(Icons.drag_indicator, color: kDlgTextSub, size: 18),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            title,
+                            style: const TextStyle(
+                              color: kDlgText,
+                              fontWeight: FontWeight.w700,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        if (page.isNotEmpty)
+                          Text(
+                            'p.$page',
+                            style: const TextStyle(
+                              color: kDlgTextSub,
+                              fontSize: 12.3,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      '${item.type} · ${count.isEmpty ? '-문항' : '${count}문항'} · 분할 ${item.splitParts == 1 ? '없음' : '1/${item.splitParts}'}',
+                      style: const TextStyle(
+                        color: kDlgTextSub,
+                        fontSize: 12.1,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    if (memo.isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        '메모: $memo',
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: kDlgTextSub,
+                          fontSize: 12.2,
+                          height: 1.25,
+                        ),
+                      ),
+                    ],
+                    if (content.isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        content,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: kDlgTextSub,
+                          fontSize: 12.2,
+                          height: 1.25,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              IconButton(
+                tooltip: '편집',
+                onPressed: () => _editDraftGroupItem(index),
+                icon: const Icon(Icons.edit_outlined,
+                    color: kDlgTextSub, size: 19),
+              ),
+              IconButton(
+                tooltip: '삭제',
+                onPressed: () {
+                  setState(() {
+                    _draftGroupItems.removeAt(index);
+                  });
+                },
+                icon: const Icon(
+                  Icons.delete_outline_rounded,
+                  color: Color(0xFFE57373),
+                  size: 19,
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildFlowGroupPanel() {
+    final flowName = _flowNameById(_flowId).trim();
+    final displayFlow = flowName.isEmpty ? '플로우 미선택' : flowName;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const YggDialogSectionHeader(
+          icon: Icons.folder_open_rounded,
+          title: '그룹 과제 정보',
+        ),
+        const SizedBox(height: 8),
+        TextField(
+          controller: _groupTitle,
+          style: const TextStyle(color: kDlgText, fontWeight: FontWeight.w700),
+          decoration: _inputDecoration('그룹 제목', hint: '예: 3월 1주차 과제'),
+        ),
+        const SizedBox(height: 8),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+          decoration: BoxDecoration(
+            color: kDlgPanelBg,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: kDlgBorder),
+          ),
+          child: Text(
+            '플로우: $displayFlow  ·  하위 과제 ${_draftGroupItems.length}개',
+            style: const TextStyle(
+              color: kDlgTextSub,
+              fontSize: 12.6,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        const Divider(height: 1, thickness: 1, color: kDlgBorder),
+        const SizedBox(height: 10),
+        const YggDialogSectionHeader(
+          icon: Icons.list_alt_rounded,
+          title: '하위 그룹과제 리스트',
+        ),
+        const SizedBox(height: 8),
+        Expanded(child: _buildDraftGroupItemList()),
       ],
     );
   }
@@ -1374,6 +1837,18 @@ class HomeworkQuickAddProxyDialogState
           decoration: _inputDecoration(
             '과제명',
             hint: hasSelection ? '자동 생성된 과제명을 수정할 수 있어요' : '범위를 선택하면 자동 생성됩니다',
+          ),
+        ),
+        const SizedBox(height: 8),
+        TextField(
+          controller: _memo,
+          enabled: hasSelection,
+          minLines: 2,
+          maxLines: 4,
+          style: const TextStyle(color: kDlgText),
+          decoration: _inputDecoration(
+            '메모',
+            hint: hasSelection ? '예: 홀수 번호만 풀기' : '범위를 선택하면 입력할 수 있어요',
           ),
         ),
         const SizedBox(height: 8),
@@ -1460,6 +1935,18 @@ class HomeworkQuickAddProxyDialogState
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildAddChildButton() {
+    return Align(
+      alignment: Alignment.centerRight,
+      child: FilledButton.icon(
+        onPressed: _addDraftGroupItemFromInput,
+        style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
+        icon: const Icon(Icons.add),
+        label: const Text('하위과제 추가'),
+      ),
     );
   }
 
@@ -1712,36 +2199,28 @@ class HomeworkQuickAddProxyDialogState
 
   Future<void> _submit({String action = 'add'}) async {
     if (_flowId.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('플로우를 선택하세요.')),
-      );
+      _showDialogSnackBar('플로우를 선택하세요.');
       return;
     }
 
-    final hasLinkedTextbooks = _linkedTextbooks.isNotEmpty;
-    final selectedBook = _selectedLinkedBook;
-    if (!hasLinkedTextbooks || selectedBook == null) {
-      final title = _title.text.trim();
-      if (title.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('과제명을 입력하세요.')),
-        );
-        return;
-      }
-      final countRaw = _count.text.trim();
+    if (_draftGroupItems.isNotEmpty) {
+      final groupTitle =
+          _groupTitle.text.trim().isEmpty ? '그룹 과제' : _groupTitle.text.trim();
       Navigator.pop(context, {
         'studentId': widget.studentId,
+        'groupMode': true,
+        'groupTitle': groupTitle,
         'flowId': _flowId,
         'action': action,
-        'type': _type,
-        'title': title,
-        'page': _page.text.trim(),
-        'count': countRaw,
-        'content': _content.text.trim(),
-        'body': _composeBody(),
-        'color': _color,
-        'splitParts': _selectedSplitParts,
+        'items':
+            _draftGroupItems.map((e) => e.toJson()).toList(growable: false),
       });
+      return;
+    }
+
+    final selectedBook = _selectedLinkedBook;
+    if (selectedBook == null) {
+      _showDialogSnackBar('하위 과제를 1개 이상 추가하세요.');
       return;
     }
 
@@ -1752,9 +2231,7 @@ class HomeworkQuickAddProxyDialogState
       var content = _content.text.trim();
       final inputTitle = _title.text.trim();
       if (page.isEmpty && content.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('페이지 또는 내용을 입력하세요.')),
-        );
+        _showDialogSnackBar('페이지 또는 내용을 입력하세요.');
         return;
       }
       final title = inputTitle.isEmpty ? '교재 과제' : inputTitle;
@@ -1768,6 +2245,7 @@ class HomeworkQuickAddProxyDialogState
         'title': title,
         'page': page,
         'count': count,
+        'memo': _memo.text.trim(),
         'content': content,
         'body': _composeBodyValues(
           page: page,
@@ -1787,9 +2265,7 @@ class HomeworkQuickAddProxyDialogState
 
     final mergedTask = _buildMergedRangeTask(selectedBook);
     if (mergedTask == null || mergedTask.unitMappings.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('대/중/소단원을 1개 이상 선택하세요.')),
-      );
+      _showDialogSnackBar('대/중/소단원을 1개 이상 선택하세요.');
       return;
     }
 
@@ -1814,9 +2290,7 @@ class HomeworkQuickAddProxyDialogState
       }
     }
     if (title.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('과제명을 입력하세요.')),
-      );
+      _showDialogSnackBar('과제명을 입력하세요.');
       return;
     }
 
@@ -1829,6 +2303,7 @@ class HomeworkQuickAddProxyDialogState
       'title': title,
       'page': mergedTask.page,
       'count': mergedTask.count,
+      'memo': _memo.text.trim(),
       'content': content,
       'body': _composeBodyValues(
         page: mergedTask.page,
@@ -1858,41 +2333,27 @@ class HomeworkQuickAddProxyDialogState
         ),
       );
     }
+    if (_allLinkedTextbooks.isEmpty) {
+      return _buildNoticeCard('연결된 교재가 없습니다. 플로우 선택 상태로 하위 과제를 추가하세요.');
+    }
     return Wrap(
-      spacing: 8,
-      runSpacing: 8,
+      spacing: 10,
+      runSpacing: 10,
       children: [
-        for (final flow in widget.flows)
-          _buildPickerChip(
-            label: flow.name,
-            selected: _flowId == flow.id && _selectedLinkedBookKey == null,
-            onTap: () async {
-              if (_flowId == flow.id && _selectedLinkedBookKey == null) return;
-              setState(() {
-                _flowId = flow.id;
-                _selectedLinkedBookKey = null;
-              });
-              await _handleFlowChanged(forceNoBookSelection: true);
-            },
-          ),
-        _buildPickerChip(
-          label: '교재 선택 안함',
-          selected: _selectedLinkedBookKey == null,
-          onTap: () async {
-            if (_selectedLinkedBookKey == null) return;
-            setState(() {
-              _selectedLinkedBookKey = null;
-              _units = const <_BigUnitSelectionNode>[];
-            });
-            await _handleFlowChanged(forceNoBookSelection: true);
-          },
-        ),
         for (final link in _allLinkedTextbooks)
           _buildPickerChip(
             label: '${link.bookName} · ${link.gradeLabel}',
             selected: _selectedLinkedBookKey == link.key,
             onTap: () async {
-              if (_selectedLinkedBookKey == link.key) return;
+              if (_selectedLinkedBookKey == link.key) {
+                setState(() {
+                  _selectedLinkedBookKey = null;
+                  _manualPageMode = false;
+                  _units = const <_BigUnitSelectionNode>[];
+                });
+                await _handleFlowChanged(forceNoBookSelection: true);
+                return;
+              }
               setState(() {
                 _flowId = link.flowId;
                 _selectedLinkedBookKey = link.key;
@@ -2007,28 +2468,91 @@ class HomeworkQuickAddProxyDialogState
   @override
   Widget build(BuildContext context) {
     final selectedBook = _selectedLinkedBook;
-    final waitingSelectedBook = _loadingFlowTextbooks &&
-        _selectedLinkedBookKey != null &&
-        selectedBook == null;
-    final showRangePanel = _selectedLinkedBookKey != null;
-    final double targetDialogWidth = showRangePanel ? 980 : 500;
-    final int pickerChipCount =
-        widget.flows.length + _allLinkedTextbooks.length + 1;
+    final hasBookSelection = _selectedLinkedBookKey != null;
+    final showThreeColumn = hasBookSelection;
+    final waitingSelectedBook =
+        _loadingFlowTextbooks && hasBookSelection && selectedBook == null;
+    final double targetDialogWidth = showThreeColumn ? 1420 : 1040;
+    final int pickerChipCount = (_allLinkedTextbooks.length + 1).clamp(1, 200);
     final int estimatedPickerRows =
-        ((pickerChipCount / (showRangePanel ? 5 : 4)).ceil().clamp(1, 8))
+        ((pickerChipCount / (showThreeColumn ? 5 : 4)).ceil().clamp(1, 8))
             .toInt();
-    double targetDialogHeight = showRangePanel ? 700 : 620;
+    double targetDialogHeight = showThreeColumn ? 780 : 740;
     targetDialogHeight += (estimatedPickerRows - 2) * 24;
     if (_manualPageMode) {
-      targetDialogHeight -= 46;
+      targetDialogHeight -= 32;
     }
-    if (targetDialogHeight < (showRangePanel ? 660 : 580)) {
-      targetDialogHeight = showRangePanel ? 660 : 580;
+    if (targetDialogHeight < (showThreeColumn ? 720 : 680)) {
+      targetDialogHeight = showThreeColumn ? 720 : 680;
     }
     final double maxDialogHeight = MediaQuery.of(context).size.height * 0.9;
     if (targetDialogHeight > maxDialogHeight) {
       targetDialogHeight = maxDialogHeight;
     }
+    final Widget inputPanel = Expanded(
+      flex: showThreeColumn ? 11 : 12,
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const YggDialogSectionHeader(
+              icon: Icons.task_alt,
+              title: '과제 정보',
+            ),
+            const SizedBox(height: 8),
+            _buildFlowSelectorDropdown(enabled: !hasBookSelection),
+            const SizedBox(height: 12),
+            _buildFlowBookPicker(),
+            const SizedBox(height: 20),
+            const Divider(height: 1, thickness: 1, color: kDlgBorder),
+            const SizedBox(height: 24),
+            _buildRightDetailPanel(
+              waitingSelectedBook: waitingSelectedBook,
+              selectedBook: selectedBook,
+            ),
+            const SizedBox(height: 10),
+            const Divider(height: 1, thickness: 1, color: kDlgBorder),
+            const SizedBox(height: 8),
+            const YggDialogSectionHeader(
+              icon: Icons.tune_rounded,
+              title: '출제 기본 옵션',
+            ),
+            const SizedBox(height: 6),
+            _buildAssignmentOptions(),
+            const SizedBox(height: 12),
+            _buildAddChildButton(),
+          ],
+        ),
+      ),
+    );
+    final Widget groupPanel = Expanded(
+      flex: 11,
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: kDlgPanelBg,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: kDlgBorder),
+        ),
+        child: _buildFlowGroupPanel(),
+      ),
+    );
+    final Widget rangePanel = Expanded(
+      flex: 10,
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: kDlgPanelBg,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: kDlgBorder),
+        ),
+        child: _buildRangeSelectionPanel(
+          selectedBook: selectedBook,
+          waitingSelectedBook: waitingSelectedBook,
+        ),
+      ),
+    );
     return AlertDialog(
       backgroundColor: kDlgBg,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
@@ -2042,61 +2566,16 @@ class HomeworkQuickAddProxyDialogState
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Expanded(
-              flex: 12,
-              child: Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: kDlgPanelBg,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: kDlgBorder),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const YggDialogSectionHeader(
-                      icon: Icons.task_alt,
-                      title: '과제 정보',
-                    ),
-                    const SizedBox(height: 8),
-                    _buildFlowBookPicker(),
-                    const SizedBox(height: 10),
-                    const Divider(height: 1, thickness: 1, color: kDlgBorder),
-                    const SizedBox(height: 12),
-                    _buildRightDetailPanel(
-                      waitingSelectedBook: waitingSelectedBook,
-                      selectedBook: selectedBook,
-                    ),
-                    const SizedBox(height: 10),
-                    const Divider(height: 1, thickness: 1, color: kDlgBorder),
-                    const SizedBox(height: 8),
-                    const YggDialogSectionHeader(
-                      icon: Icons.tune_rounded,
-                      title: '출제 기본 옵션',
-                    ),
-                    const SizedBox(height: 6),
-                    _buildAssignmentOptions(),
-                  ],
-                ),
-              ),
-            ),
-            if (showRangePanel) ...[
+            if (showThreeColumn) ...[
+              rangePanel,
               const SizedBox(width: 12),
-              Expanded(
-                flex: 11,
-                child: Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: kDlgPanelBg,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: kDlgBorder),
-                  ),
-                  child: _buildRangeSelectionPanel(
-                    selectedBook: selectedBook,
-                    waitingSelectedBook: waitingSelectedBook,
-                  ),
-                ),
-              ),
+              inputPanel,
+              const SizedBox(width: 12),
+              groupPanel,
+            ] else ...[
+              inputPanel,
+              const SizedBox(width: 12),
+              groupPanel,
             ],
           ],
         ),
@@ -2118,10 +2597,75 @@ class HomeworkQuickAddProxyDialogState
         FilledButton(
           onPressed: () => _submit(action: 'add'),
           style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
-          child: const Text('추가'),
+          child: const Text('과제 내기'),
         ),
       ],
     );
+  }
+}
+
+class _DraftGroupItem {
+  final String key;
+  final String type;
+  final String title;
+  final String page;
+  final String count;
+  final String memo;
+  final String content;
+  final String body;
+  final Color color;
+  final int splitParts;
+
+  const _DraftGroupItem({
+    required this.key,
+    required this.type,
+    required this.title,
+    required this.page,
+    required this.count,
+    required this.memo,
+    required this.content,
+    required this.body,
+    required this.color,
+    required this.splitParts,
+  });
+
+  _DraftGroupItem copyWith({
+    String? type,
+    String? title,
+    String? page,
+    String? count,
+    String? memo,
+    String? content,
+    String? body,
+    Color? color,
+    int? splitParts,
+  }) {
+    return _DraftGroupItem(
+      key: key,
+      type: type ?? this.type,
+      title: title ?? this.title,
+      page: page ?? this.page,
+      count: count ?? this.count,
+      memo: memo ?? this.memo,
+      content: content ?? this.content,
+      body: body ?? this.body,
+      color: color ?? this.color,
+      splitParts: splitParts ?? this.splitParts,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'type': type,
+      'title': title,
+      'page': page,
+      'count': count,
+      'memo': memo,
+      'content': content,
+      'body': body,
+      'color': color,
+      'splitParts': splitParts.clamp(1, 4).toInt(),
+    };
   }
 }
 

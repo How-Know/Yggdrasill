@@ -37,6 +37,7 @@ declare
   v_student_id uuid;
   v_total integer := 0;
   v_rows integer := 0;
+  v_just_started uuid[] := array[]::uuid[];
 begin
   select g.student_id
     into v_student_id
@@ -49,6 +50,7 @@ begin
     return 0;
   end if;
 
+  -- phase 1 -> 2: collect IDs to exclude from next step
   with updated as (
     update public.homework_items h
        set phase = 2,
@@ -70,12 +72,15 @@ begin
        )
     returning h.id
   )
-  insert into public.homework_item_phase_events(academy_id, item_id, phase, actor_user_id, note)
-  select p_academy_id, u.id, 2::smallint, auth.uid(), 'group_bulk_transition'
-    from updated u;
-  get diagnostics v_rows = row_count;
-  v_total := v_total + v_rows;
+  select array_agg(u.id) into v_just_started from updated u;
+  if v_just_started is null then v_just_started := array[]::uuid[]; end if;
 
+  insert into public.homework_item_phase_events(academy_id, item_id, phase, actor_user_id, note)
+  select p_academy_id, uid, 2::smallint, auth.uid(), 'group_bulk_transition'
+    from unnest(v_just_started) as uid;
+  v_total := v_total + coalesce(array_length(v_just_started, 1), 0);
+
+  -- phase 2 -> 3: exclude items that were just transitioned from phase 1
   with updated as (
     update public.homework_items h
        set accumulated_ms = coalesce(h.accumulated_ms, 0)
@@ -94,6 +99,7 @@ begin
        and h.completed_at is null
        and coalesce(h.status, 0) <> 1
        and h.phase = 2
+       and h.id <> all(v_just_started)
        and exists (
          select 1
            from public.homework_group_items gi

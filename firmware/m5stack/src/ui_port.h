@@ -33,6 +33,7 @@ void fw_publish_bind(const char* studentId);
 void fw_publish_unbind();
 void fw_publish_student_info(const char* studentId);
 void fw_publish_homework_action(const char* action, const char* itemId);
+void fw_publish_group_transition(const char* groupId, int from_phase = 0);
 void fw_publish_pause_all();
 void fw_publish_check_update();
 void fw_publish_list_today();

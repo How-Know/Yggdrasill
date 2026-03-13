@@ -1255,7 +1255,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       initialTime: TimeOfDay.fromDateTime(initial),
     );
     if (picked == null) return null;
-    return DateTime(date.year, date.month, date.day, picked.hour, picked.minute);
+    return DateTime(
+        date.year, date.month, date.day, picked.hour, picked.minute);
   }
 
   Future<_LeavedDialogEntry?> _editLeavedDialogEntryTime({
@@ -1518,7 +1519,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                     final String departureEditKey =
                                         '$setId:departure';
                                     final bool isEditingArrival =
-                                        editingTimeKeys.contains(arrivalEditKey);
+                                        editingTimeKeys
+                                            .contains(arrivalEditKey);
                                     final bool isEditingDeparture =
                                         editingTimeKeys
                                             .contains(departureEditKey);
@@ -1562,7 +1564,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                             FontWeight.w700,
                                                       ),
                                                     ),
-                                                    if (entry.target.classInfo !=
+                                                    if (entry
+                                                            .target.classInfo !=
                                                         null) ...[
                                                       const SizedBox(height: 4),
                                                       Text(
@@ -1596,12 +1599,10 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                               dialogEntries
                                                                   .removeWhere(
                                                                 (e) =>
-                                                                    e.target
-                                                                        .setId ==
+                                                                    e.target.setId ==
                                                                         setId &&
-                                                                    e.target
-                                                                        .student
-                                                                        .id ==
+                                                                    e.target.student
+                                                                            .id ==
                                                                         entry
                                                                             .target
                                                                             .student
@@ -1639,7 +1640,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                               .mounted) {
                                                             setDialogState(() {
                                                               cancellingSetIds
-                                                                  .remove(setId);
+                                                                  .remove(
+                                                                      setId);
                                                             });
                                                           }
                                                         }
@@ -1681,8 +1683,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                     ? null
                                                     : () async {
                                                         setDialogState(() {
-                                                          editingTimeKeys
-                                                              .add(arrivalEditKey);
+                                                          editingTimeKeys.add(
+                                                              arrivalEditKey);
                                                         });
                                                         try {
                                                           final updatedEntry =
@@ -1704,14 +1706,17 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                                       setId &&
                                                                   e.target.student
                                                                           .id ==
-                                                                      entry.target
+                                                                      entry
+                                                                          .target
                                                                           .student
                                                                           .id,
                                                             );
                                                             if (idx != -1) {
-                                                              setDialogState(() {
+                                                              setDialogState(
+                                                                  () {
                                                                 dialogEntries[
-                                                                    idx] = updatedEntry;
+                                                                        idx] =
+                                                                    updatedEntry;
                                                               });
                                                             }
                                                           }
@@ -1720,7 +1725,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                               .mounted) {
                                                             setDialogState(() {
                                                               editingTimeKeys
-                                                                  .remove(arrivalEditKey);
+                                                                  .remove(
+                                                                      arrivalEditKey);
                                                             });
                                                           }
                                                         }
@@ -1758,14 +1764,17 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                                       setId &&
                                                                   e.target.student
                                                                           .id ==
-                                                                      entry.target
+                                                                      entry
+                                                                          .target
                                                                           .student
                                                                           .id,
                                                             );
                                                             if (idx != -1) {
-                                                              setDialogState(() {
+                                                              setDialogState(
+                                                                  () {
                                                                 dialogEntries[
-                                                                    idx] = updatedEntry;
+                                                                        idx] =
+                                                                    updatedEntry;
                                                               });
                                                             }
                                                           }
@@ -1773,8 +1782,9 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                           if (dialogContext
                                                               .mounted) {
                                                             setDialogState(() {
-                                                              editingTimeKeys.remove(
-                                                                  departureEditKey);
+                                                              editingTimeKeys
+                                                                  .remove(
+                                                                      departureEditKey);
                                                             });
                                                           }
                                                         }
@@ -3525,6 +3535,59 @@ extension on _MainScreenState {
           result['studentId'] == target.student.id) {
         final action = (result['action'] as String?)?.trim() ?? 'add';
         final isReserve = action == 'reserve';
+        final groupMode = result['groupMode'] == true;
+        if (groupMode) {
+          final rawItems = result['items'];
+          final entries = <Map<String, dynamic>>[];
+          if (rawItems is List) {
+            for (final e in rawItems) {
+              if (e is Map<String, dynamic>) {
+                entries.add(Map<String, dynamic>.from(e));
+              } else if (e is Map) {
+                entries.add(Map<String, dynamic>.from(e));
+              }
+            }
+          }
+          if (entries.isEmpty) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('하위 과제를 1개 이상 추가하세요.')),
+            );
+            return;
+          }
+          final createdItems =
+              await HomeworkStore.instance.createGroupWithWaitingItems(
+            studentId: target.student.id,
+            groupTitle: (result['groupTitle'] as String?)?.trim() ?? '',
+            flowId: (result['flowId'] as String?)?.trim(),
+            items: entries,
+          );
+          if (createdItems.isEmpty) {
+            if (!context.mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('그룹 과제 생성에 실패했어요.')),
+            );
+            return;
+          }
+          if (isReserve) {
+            await HomeworkAssignmentStore.instance.recordAssignments(
+              target.student.id,
+              createdItems,
+              note: HomeworkAssignmentStore.reservationNote,
+              splitPartsByItem: <String, int>{
+                for (final hw in createdItems)
+                  hw.id: hw.defaultSplitParts.clamp(1, 4).toInt(),
+              },
+            );
+          }
+          if (!context.mounted) return;
+          final childCount = createdItems.length;
+          final msg = isReserve
+              ? '그룹 예약 과제(하위 ${childCount}개)를 추가했어요.'
+              : '그룹 과제(하위 ${childCount}개)를 추가했어요.';
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text(msg)));
+          return;
+        }
         final flowId = result['flowId'] as String?;
         final dynamic multiRaw = result['items'];
         final entries = <Map<String, dynamic>>[];

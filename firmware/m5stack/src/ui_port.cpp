@@ -6,6 +6,7 @@
 #include <cstring>
 #include "ota_update.h"
 #include "version.h"
+#include <esp_task_wdt.h>
 
 // main.cpp에 정의된 전역 변수 (바인딩 추적용)
 extern String studentId;
@@ -97,6 +98,32 @@ struct HwCacheEntry { char id[64]; int phase; int acc; };
 static HwCacheEntry s_hw_cache[16];
 static uint8_t s_hw_cache_cnt = 0;
 
+// 그룹 과제 children 메모리 저장 (상세 페이지용)
+struct HwChildEntry { char item_id[40]; char title[32]; char page[16]; int16_t count; int16_t check_count; int8_t phase; int32_t accumulated; };
+struct HwGroupData {
+  char group_id[40];
+  char group_title[40];
+  char book_name[64];
+  char page_summary[32];
+  int8_t phase; int32_t accumulated; int16_t check_count; int16_t total_count;
+  uint32_t color;
+  int64_t run_start_epoch;
+  HwChildEntry children[8];
+  uint8_t child_cnt;
+};
+static HwGroupData s_groups[6];
+static uint8_t s_group_cnt = 0;
+
+// 상세 페이지
+static lv_obj_t* s_hw_detail_screen = nullptr;
+static lv_obj_t* s_hw_detail_session_lbl = nullptr;
+static lv_obj_t* s_hw_detail_total_lbl = nullptr;
+static lv_obj_t* s_hw_detail_play_lbl = nullptr;
+static int s_detail_group_idx = -1;
+static bool s_detail_playing = false;
+static lv_timer_t* s_detail_timer = nullptr;
+static uint32_t s_detail_timer_epoch = 0;
+
 // Phase 2 실시간 시간 & Phase 4 깜빡임: 글로벌 단일 타이머로 관리
 struct Phase2Entry { lv_obj_t* lbl; uint32_t base_acc; uint32_t start_tick; };
 static Phase2Entry s_p2_entries[8];
@@ -116,6 +143,9 @@ static const lv_opa_t BREATH_LUT[] = {
 };
 #define BREATH_STEPS (sizeof(BREATH_LUT)/sizeof(BREATH_LUT[0]))
 
+static void fmt_time_static(int secs, char* buf, size_t sz);
+static void fmt_time_hms(int secs, char* buf, size_t sz);
+
 static void hw_global_timer_cb(lv_timer_t* timer) {
   uint32_t epoch = (uint32_t)(uintptr_t)timer->user_data;
   if (epoch != s_hw_timer_epoch) { lv_timer_del(timer); return; }
@@ -128,10 +158,7 @@ static void hw_global_timer_cb(lv_timer_t* timer) {
       if (!s_p2_entries[i].lbl || !lv_obj_is_valid(s_p2_entries[i].lbl)) continue;
       uint32_t elapsed = (lv_tick_get() - s_p2_entries[i].start_tick) / 1000;
       uint32_t total = s_p2_entries[i].base_acc + elapsed;
-      int h = total / 3600, m = (total % 3600) / 60;
-      char buf[32];
-      if (h > 0) snprintf(buf, sizeof(buf), "%dh %dm", h, m);
-      else snprintf(buf, sizeof(buf), "%dm", m);
+      char buf[32]; fmt_time_static(total, buf, sizeof(buf));
       lv_label_set_text(s_p2_entries[i].lbl, buf);
     }
   }
@@ -1966,64 +1993,57 @@ static void fmt_time_static(int secs, char* buf, size_t sz) {
   else snprintf(buf, sz, "%dm", m);
 }
 
-static lv_obj_t* create_hw_card(lv_obj_t* parent, const char* book_name, int phase,
-    const char* page, int count, int check_count, int accumulated,
-    uint32_t srv_color, const char* itemId) {
+static void fmt_time_hms(int secs, char* buf, size_t sz) {
+  int h = secs / 3600; int m = (secs % 3600) / 60; int s = secs % 60;
+  if (h > 0) snprintf(buf, sz, "%dh %dm %ds", h, m, s);
+  else if (m > 0) snprintf(buf, sz, "%dm %ds", m, s);
+  else snprintf(buf, sz, "%ds", s);
+}
+
+static void show_homework_detail_page(int group_idx);
+static void close_homework_detail_page(void);
+
+static lv_obj_t* create_hw_card(lv_obj_t* parent, int group_idx) {
   extern const lv_font_t kakao_kr_16;
+  if (group_idx < 0 || group_idx >= s_group_cnt) return nullptr;
+  HwGroupData& g = s_groups[group_idx];
+  int phase = g.phase;
+  static const uint32_t srv_color = 0x33A373;
+
   lv_obj_t* card = lv_obj_create(parent);
   lv_obj_set_width(card, lv_pct(100));
-  lv_obj_set_height(card, 92);
+  lv_obj_set_height(card, 96);
   lv_obj_set_style_radius(card, 20, 0);
   lv_obj_set_style_bg_color(card, lv_color_hex(0x1A1A1A), 0);
   lv_obj_set_style_border_color(card, lv_color_hex(0x2C2C2C), 0);
   lv_obj_set_style_border_width(card, 1, 0);
-  lv_obj_set_style_pad_top(card, 12, 0);
-  lv_obj_set_style_pad_bottom(card, 12, 0);
+  lv_obj_set_style_pad_top(card, 10, 0);
+  lv_obj_set_style_pad_bottom(card, 10, 0);
   lv_obj_set_style_pad_left(card, 14, 0);
   lv_obj_set_style_pad_right(card, 14, 0);
   lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
 
+  // 1열 좌: 교재명+과정
   lv_obj_t* title_lbl = lv_label_create(card);
   if (s_global_font) lv_obj_set_style_text_font(title_lbl, s_global_font, 0);
   lv_obj_set_style_text_color(title_lbl, lv_color_hex(0xE6E6E6), 0);
-  lv_label_set_text(title_lbl, book_name);
+  lv_label_set_text(title_lbl, g.book_name);
   lv_label_set_long_mode(title_lbl, LV_LABEL_LONG_DOT);
-  lv_obj_set_width(title_lbl, lv_pct(65));
-  lv_obj_align(title_lbl, LV_ALIGN_TOP_LEFT, 0, 0);
+  lv_obj_set_width(title_lbl, lv_pct(60));
+  lv_obj_align(title_lbl, LV_ALIGN_TOP_LEFT, 0, 3);
   lv_obj_add_flag(title_lbl, LV_OBJ_FLAG_EVENT_BUBBLE);
 
-  char page_count_buf[64] = {0};
-  if (*page && count > 0) snprintf(page_count_buf, sizeof(page_count_buf), "p.%s · %d%s", page, count, u8"문항");
-  else if (*page) snprintf(page_count_buf, sizeof(page_count_buf), "p.%s", page);
-  else if (count > 0) snprintf(page_count_buf, sizeof(page_count_buf), "%d%s", count, u8"문항");
-
+  // 1열 우: phase별 상태
   if (phase == 1) {
+    char try_buf[32];
+    snprintf(try_buf, sizeof(try_buf), u8"%d번째 시도", g.check_count + 1);
     lv_obj_t* hint = lv_label_create(card);
     lv_obj_set_style_text_font(hint, &kakao_kr_16, 0);
-    lv_obj_set_style_text_color(hint, lv_color_hex(0x1FA95B), 0);
-    lv_label_set_text(hint, u8"시작 >");
-    lv_obj_align(hint, LV_ALIGN_TOP_RIGHT, 0, 4);
+    lv_obj_set_style_text_color(hint, lv_color_hex(0x33A373), 0);
+    lv_label_set_text(hint, try_buf);
+    lv_obj_align(hint, LV_ALIGN_TOP_RIGHT, 0, 5);
     lv_obj_add_flag(hint, LV_OBJ_FLAG_EVENT_BUBBLE);
-    if (page_count_buf[0]) {
-      lv_obj_t* pc_lbl = lv_label_create(card);
-      lv_obj_set_style_text_font(pc_lbl, &kakao_kr_16, 0);
-      lv_obj_set_style_text_color(pc_lbl, lv_color_hex(0x909090), 0);
-      lv_label_set_text(pc_lbl, page_count_buf);
-      lv_label_set_long_mode(pc_lbl, LV_LABEL_LONG_DOT);
-      lv_obj_set_width(pc_lbl, lv_pct(60));
-      lv_obj_align(pc_lbl, LV_ALIGN_TOP_LEFT, 0, 32);
-      lv_obj_add_flag(pc_lbl, LV_OBJ_FLAG_EVENT_BUBBLE);
-    }
-    if (check_count > 0) {
-      char chk_buf[32]; snprintf(chk_buf, sizeof(chk_buf), u8"검사 %d회", check_count);
-      lv_obj_t* chk_lbl = lv_label_create(card);
-      lv_obj_set_style_text_font(chk_lbl, &kakao_kr_16, 0);
-      lv_obj_set_style_text_color(chk_lbl, lv_color_hex(0x707070), 0);
-      lv_label_set_text(chk_lbl, chk_buf);
-      lv_obj_align(chk_lbl, LV_ALIGN_TOP_RIGHT, 0, 32);
-      lv_obj_add_flag(chk_lbl, LV_OBJ_FLAG_EVENT_BUBBLE);
-    }
   } else if (phase == 2) {
     lv_obj_set_style_outline_color(card, lv_color_hex(srv_color), 0);
     lv_obj_set_style_outline_width(card, 2, 0);
@@ -2031,44 +2051,23 @@ static lv_obj_t* create_hw_card(lv_obj_t* parent, const char* book_name, int pha
     lv_obj_set_style_shadow_width(card, 10, 0);
     lv_obj_set_style_shadow_color(card, lv_color_hex(srv_color), 0);
     lv_obj_set_style_shadow_opa(card, LV_OPA_20, 0);
-    char p2_buf[80] = {0};
-    if (*page && count > 0) snprintf(p2_buf, sizeof(p2_buf), "p.%s · %d%s", page, count, u8"문항");
-    else if (*page) snprintf(p2_buf, sizeof(p2_buf), "p.%s", page);
-    else if (count > 0) snprintf(p2_buf, sizeof(p2_buf), "%d%s", count, u8"문항");
-    if (p2_buf[0]) {
-      lv_obj_t* pc = lv_label_create(card);
-      lv_obj_set_style_text_font(pc, &kakao_kr_16, 0);
-      lv_obj_set_style_text_color(pc, lv_color_hex(0x909090), 0);
-      lv_label_set_text(pc, p2_buf);
-      lv_label_set_long_mode(pc, LV_LABEL_LONG_DOT);
-      lv_obj_set_width(pc, lv_pct(55));
-      lv_obj_align(pc, LV_ALIGN_TOP_LEFT, 0, 32);
-      lv_obj_add_flag(pc, LV_OBJ_FLAG_EVENT_BUBBLE);
-    }
     lv_obj_t* time_lbl = lv_label_create(card);
     lv_obj_set_style_text_font(time_lbl, &kakao_kr_16, 0);
     lv_obj_set_style_text_color(time_lbl, lv_color_hex(srv_color), 0);
-    lv_obj_align(time_lbl, LV_ALIGN_TOP_RIGHT, 0, 32);
+    lv_obj_align(time_lbl, LV_ALIGN_TOP_RIGHT, 0, 5);
     lv_obj_add_flag(time_lbl, LV_OBJ_FLAG_EVENT_BUBBLE);
-    char tb[32]; fmt_time_static(accumulated, tb, sizeof(tb));
+    char tb[32]; fmt_time_static(g.accumulated, tb, sizeof(tb));
     lv_label_set_text(time_lbl, tb);
-    if (s_p2_cnt < 8) { s_p2_entries[s_p2_cnt] = {time_lbl, (uint32_t)accumulated, lv_tick_get()}; s_p2_cnt++; }
+    if (s_p2_cnt < 8) { s_p2_entries[s_p2_cnt] = {time_lbl, (uint32_t)g.accumulated, lv_tick_get()}; s_p2_cnt++; }
   } else if (phase == 3) {
+    char chk_buf[32];
+    snprintf(chk_buf, sizeof(chk_buf), u8"%d번째 검사", g.check_count + 1);
     lv_obj_t* wh = lv_label_create(card);
     lv_obj_set_style_text_font(wh, &kakao_kr_16, 0);
     lv_obj_set_style_text_color(wh, lv_color_hex(srv_color), 0);
-    lv_label_set_text(wh, u8"채점중..");
-    lv_obj_align(wh, LV_ALIGN_TOP_RIGHT, 0, 4);
+    lv_label_set_text(wh, chk_buf);
+    lv_obj_align(wh, LV_ALIGN_TOP_RIGHT, 0, 5);
     lv_obj_add_flag(wh, LV_OBJ_FLAG_EVENT_BUBBLE);
-    if (accumulated > 0) {
-      char tb[32]; fmt_time_static(accumulated, tb, sizeof(tb));
-      lv_obj_t* tl = lv_label_create(card);
-      lv_obj_set_style_text_font(tl, &kakao_kr_16, 0);
-      lv_obj_set_style_text_color(tl, lv_color_hex(0x808080), 0);
-      lv_label_set_text(tl, tb);
-      lv_obj_align(tl, LV_ALIGN_TOP_LEFT, 0, 32);
-      lv_obj_add_flag(tl, LV_OBJ_FLAG_EVENT_BUBBLE);
-    }
   } else if (phase == 4) {
     lv_obj_set_style_bg_color(card, lv_color_hex(0x202020), 0);
     lv_obj_set_style_outline_color(card, lv_color_hex(srv_color), 0);
@@ -2081,39 +2080,79 @@ static lv_obj_t* create_hw_card(lv_obj_t* parent, const char* book_name, int pha
     lv_obj_set_style_text_font(h4, &kakao_kr_16, 0);
     lv_obj_set_style_text_color(h4, lv_color_hex(srv_color), 0);
     lv_label_set_text(h4, u8"확인 >");
-    lv_obj_align(h4, LV_ALIGN_TOP_RIGHT, 0, 4);
+    lv_obj_align(h4, LV_ALIGN_TOP_RIGHT, 0, 5);
     lv_obj_add_flag(h4, LV_OBJ_FLAG_EVENT_BUBBLE);
-    if (*page) {
-      lv_obj_t* pg = lv_label_create(card);
-      lv_obj_set_style_text_font(pg, &kakao_kr_16, 0);
-      lv_obj_set_style_text_color(pg, lv_color_hex(0x808080), 0);
-      lv_label_set_text(pg, page);
-      lv_obj_align(pg, LV_ALIGN_TOP_LEFT, 0, 32);
-      lv_obj_add_flag(pg, LV_OBJ_FLAG_EVENT_BUBBLE);
+  }
+
+  // 2열 좌: 페이지·문항
+  if (phase == 3) {
+    lv_obj_t* pc_lbl = lv_label_create(card);
+    lv_obj_set_style_text_font(pc_lbl, &kakao_kr_16, 0);
+    lv_obj_set_style_text_color(pc_lbl, lv_color_hex(0x909090), 0);
+    lv_label_set_text(pc_lbl, g.group_title);
+    lv_label_set_long_mode(pc_lbl, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(pc_lbl, lv_pct(55));
+    lv_obj_align(pc_lbl, LV_ALIGN_TOP_LEFT, 0, 36);
+    lv_obj_add_flag(pc_lbl, LV_OBJ_FLAG_EVENT_BUBBLE);
+    if (g.accumulated > 0) {
+      char tb[32]; fmt_time_hms(g.accumulated, tb, sizeof(tb));
+      lv_obj_t* tl = lv_label_create(card);
+      lv_obj_set_style_text_font(tl, &kakao_kr_16, 0);
+      lv_obj_set_style_text_color(tl, lv_color_hex(0x808080), 0);
+      lv_label_set_text(tl, tb);
+      lv_obj_align(tl, LV_ALIGN_TOP_RIGHT, 0, 36);
+      lv_obj_add_flag(tl, LV_OBJ_FLAG_EVENT_BUBBLE);
+    }
+  } else {
+    char page_count_buf[64] = {0};
+    const char* page = g.page_summary;
+    int count = g.total_count;
+    if (*page && count > 0) snprintf(page_count_buf, sizeof(page_count_buf), "p.%s · %d%s", page, count, u8"문항");
+    else if (*page) snprintf(page_count_buf, sizeof(page_count_buf), "p.%s", page);
+    else if (count > 0) snprintf(page_count_buf, sizeof(page_count_buf), "%d%s", count, u8"문항");
+    if (page_count_buf[0]) {
+      lv_obj_t* pc_lbl = lv_label_create(card);
+      lv_obj_set_style_text_font(pc_lbl, &kakao_kr_16, 0);
+      lv_obj_set_style_text_color(pc_lbl, lv_color_hex(0x909090), 0);
+      lv_label_set_text(pc_lbl, page_count_buf);
+      lv_label_set_long_mode(pc_lbl, LV_LABEL_LONG_DOT);
+      lv_obj_set_width(pc_lbl, lv_pct(100));
+      lv_obj_align(pc_lbl, LV_ALIGN_TOP_LEFT, 0, 36);
+      lv_obj_add_flag(pc_lbl, LV_OBJ_FLAG_EVENT_BUBBLE);
     }
   }
 
-  if (itemId && *itemId) {
-    struct HwData { char id[64]; int phase; };
-    HwData* d = (HwData*)malloc(sizeof(HwData));
-    if (d) {
-      strncpy(d->id, itemId, sizeof(d->id)-1); d->id[sizeof(d->id)-1] = '\0';
-      d->phase = phase;
-      lv_obj_add_event_cb(card, [](lv_event_t* e){
-        uint32_t now = millis();
-        if (now - s_last_card_click_ms < CARD_CLICK_DEBOUNCE_MS) return;
-        s_last_card_click_ms = now;
-        HwData* dd = (HwData*)lv_event_get_user_data(e);
-        const char* act = nullptr;
-        if (dd->phase == 1) act = "start";
-        else if (dd->phase == 2) act = "submit";
-        else if (dd->phase == 4) act = "wait";
-        if (act) fw_publish_homework_action(act, dd->id);
-      }, LV_EVENT_CLICKED, d);
-      lv_obj_add_event_cb(card, [](lv_event_t* e){
-        if (lv_event_get_code(e) == LV_EVENT_DELETE) { void* ud = lv_event_get_user_data(e); if (ud) free(ud); }
-      }, LV_EVENT_DELETE, d);
-    }
+  // 클릭 핸들러
+  struct HwCardData { int group_idx; char group_id[40]; int phase; };
+  HwCardData* d = (HwCardData*)malloc(sizeof(HwCardData));
+  if (d) {
+    d->group_idx = group_idx;
+    strncpy(d->group_id, g.group_id, sizeof(d->group_id)-1);
+    d->group_id[sizeof(d->group_id)-1] = '\0';
+    d->phase = phase;
+    lv_obj_add_event_cb(card, [](lv_event_t* e){
+      uint32_t now = millis();
+      if (now - s_last_card_click_ms < CARD_CLICK_DEBOUNCE_MS) return;
+      s_last_card_click_ms = now;
+      HwCardData* dd = (HwCardData*)lv_event_get_user_data(e);
+      if (dd->phase == 1) {
+        fw_publish_group_transition(dd->group_id, 1);
+        show_homework_detail_page(dd->group_idx);
+        s_detail_playing = true;
+        if (s_hw_detail_play_lbl && lv_obj_is_valid(s_hw_detail_play_lbl))
+          lv_label_set_text(s_hw_detail_play_lbl, "||");
+      } else if (dd->phase == 2) {
+        show_homework_detail_page(dd->group_idx);
+        s_detail_playing = true;
+        if (s_hw_detail_play_lbl && lv_obj_is_valid(s_hw_detail_play_lbl))
+          lv_label_set_text(s_hw_detail_play_lbl, "||");
+      } else if (dd->phase == 4) {
+        fw_publish_group_transition(dd->group_id, 4);
+      }
+    }, LV_EVENT_CLICKED, d);
+    lv_obj_add_event_cb(card, [](lv_event_t* e){
+      if (lv_event_get_code(e) == LV_EVENT_DELETE) { void* ud = lv_event_get_user_data(e); if (ud) free(ud); }
+    }, LV_EVENT_DELETE, d);
   }
   return card;
 }
@@ -2126,124 +2165,111 @@ static void restart_hw_timer() {
   }
 }
 
-void ui_port_update_homeworks(const JsonArray& items) {
-  // Serial.printf("[HW] update items=%d\n", (int)items.size());
+static void parse_groups_from_json(const JsonArray& groups) {
+  s_group_cnt = 0;
+  for (JsonObject grp : groups) {
+    if (s_group_cnt >= 6) break;
+    HwGroupData& g = s_groups[s_group_cnt];
+    const char* gid = grp["group_id"] | "";
+    strncpy(g.group_id, gid, sizeof(g.group_id)-1); g.group_id[sizeof(g.group_id)-1] = '\0';
+    const char* gt = grp["group_title"] | u8"과제 그룹";
+    strncpy(g.group_title, gt, sizeof(g.group_title)-1); g.group_title[sizeof(g.group_title)-1] = '\0';
+    const char* ps = grp["page_summary"] | "";
+    strncpy(g.page_summary, ps, sizeof(g.page_summary)-1); g.page_summary[sizeof(g.page_summary)-1] = '\0';
+    g.phase = grp.containsKey("phase") ? (int)grp["phase"] : 1;
+    g.accumulated = grp.containsKey("accumulated") ? (int)grp["accumulated"] : 0;
+    g.check_count = grp.containsKey("check_count") ? (int)grp["check_count"] : 0;
+    g.total_count = grp.containsKey("total_count") ? (int)grp["total_count"] : 0;
+    g.color = 0x1E88E5;
+    if (grp.containsKey("color")) { double v = grp["color"]; if (v > 0) g.color = ((uint32_t)v) & 0xFFFFFFu; }
+    g.run_start_epoch = 0;
+    if (grp.containsKey("run_start") && !grp["run_start"].isNull()) {
+      const char* rs = grp["run_start"] | "";
+      if (*rs) {
+        struct tm tm_val = {};
+        if (strptime(rs, "%Y-%m-%dT%H:%M:%S", &tm_val)) {
+          g.run_start_epoch = mktime(&tm_val);
+        }
+      }
+    }
+    const char* content = grp["content"] | "";
+    const char* hw_type = grp["type"] | "";
+    const char* book_id = grp["book_id"] | "";
+    const char* grade_label = grp["grade_label"] | "";
+    extract_book_name(content, gt, book_id, grade_label, hw_type, g.book_name, sizeof(g.book_name));
+    if (!g.book_name[0]) strncpy(g.book_name, gt, sizeof(g.book_name)-1);
+
+    // children
+    g.child_cnt = 0;
+    if (grp.containsKey("children")) {
+      JsonArray ch = grp["children"].as<JsonArray>();
+      for (JsonObject c : ch) {
+        if (g.child_cnt >= 8) break;
+        HwChildEntry& ce = g.children[g.child_cnt];
+        const char* cid = c["item_id"] | "";
+        strncpy(ce.item_id, cid, sizeof(ce.item_id)-1); ce.item_id[sizeof(ce.item_id)-1] = '\0';
+        const char* ct = c["title"] | "";
+        strncpy(ce.title, ct, sizeof(ce.title)-1); ce.title[sizeof(ce.title)-1] = '\0';
+        const char* cp = c["page"] | "";
+        strncpy(ce.page, cp, sizeof(ce.page)-1); ce.page[sizeof(ce.page)-1] = '\0';
+        ce.count = c.containsKey("count") ? (int)c["count"] : 0;
+        ce.check_count = c.containsKey("check_count") ? (int)c["check_count"] : 0;
+        ce.phase = c.containsKey("phase") ? (int)c["phase"] : 1;
+        ce.accumulated = c.containsKey("accumulated") ? (int)c["accumulated"] : 0;
+        g.child_cnt++;
+      }
+    }
+    s_group_cnt++;
+  }
+}
+
+static volatile bool s_hw_updating = false;
+
+void ui_port_update_homeworks(const JsonArray& groups) {
+  if (s_hw_updating) return;
   uint32_t now = millis();
-  if (now - s_last_homework_update_ms < HOMEWORK_UPDATE_DEBOUNCE_MS) {
-    // debounced
-    return;
-  }
+  if (now - s_last_homework_update_ms < HOMEWORK_UPDATE_DEBOUNCE_MS) return;
   s_last_homework_update_ms = now;
+  s_hw_updating = true;
 
-  if (!s_homeworks_mode) {
-    build_homeworks_ui_internal();
-  }
-  if (!s_list || !lv_obj_is_valid(s_list)) { Serial.println("[HW] ERROR: s_list invalid"); return; }
+  if (!s_homeworks_mode) build_homeworks_ui_internal();
+  if (!s_list || !lv_obj_is_valid(s_list)) { s_hw_updating = false; Serial.println("[HW] ERROR: s_list invalid"); return; }
 
-  // Build new cache from incoming data (phase 1~4 only: skip reserved/completed)
+  parse_groups_from_json(groups);
+
   HwCacheEntry new_cache[16];
   uint8_t new_cnt = 0;
-  for (JsonObject it : items) {
-    if (new_cnt >= 16) break;
-    int ph = it.containsKey("phase") ? (int)it["phase"] : 1;
-    if (ph < 1 || ph > 4) continue;
-    const char* iid = it.containsKey("item_id") ? (const char*)it["item_id"] : "";
-    int acc = it.containsKey("accumulated") ? (int)it["accumulated"] : 0;
-    strncpy(new_cache[new_cnt].id, iid, 63); new_cache[new_cnt].id[63] = '\0';
-    new_cache[new_cnt].phase = ph;
-    new_cache[new_cnt].acc = acc;
+  for (uint8_t i = 0; i < s_group_cnt && new_cnt < 16; i++) {
+    strncpy(new_cache[new_cnt].id, s_groups[i].group_id, 63); new_cache[new_cnt].id[63] = '\0';
+    new_cache[new_cnt].phase = s_groups[i].phase;
+    new_cache[new_cnt].acc = (int)s_groups[i].accumulated;
     new_cnt++;
   }
 
-  // Diff: find which indices changed
   bool need_full = (new_cnt != s_hw_cache_cnt);
-  uint8_t changed[16]; uint8_t changed_cnt = 0;
   if (!need_full) {
     for (uint8_t i = 0; i < new_cnt; i++) {
-      if (strcmp(new_cache[i].id, s_hw_cache[i].id) != 0) { need_full = true; break; }
-      if (new_cache[i].phase != s_hw_cache[i].phase) {
-        if (changed_cnt < 16) changed[changed_cnt++] = i;
+      if (strcmp(new_cache[i].id, s_hw_cache[i].id) != 0 || new_cache[i].phase != s_hw_cache[i].phase) {
+        need_full = true; break;
       }
     }
   }
+  if (!need_full) { s_hw_updating = false; return; }
 
-  if (!need_full && changed_cnt == 0) {
-    // no changes
-    return;
-  }
-
-  // Invalidate old timer
   s_hw_timer_epoch++;
+  if (s_hw_global_timer) { lv_timer_del(s_hw_global_timer); s_hw_global_timer = nullptr; }
   s_p2_cnt = 0; s_p4_cnt = 0; s_p4_breath_step = 0;
-  s_hw_global_timer = nullptr;
   g_should_vibrate_phase4 = false;
 
-  if (need_full) {
-    // full rebuild
-    lv_obj_add_flag(s_list, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_clean(s_list);
-
-    for (JsonObject it : items) {
-      int phase = it.containsKey("phase") ? (int)it["phase"] : 1;
-      if (phase < 1 || phase > 4) continue;
-      const char* title = it["title"] | it["name"] | u8"과제";
-      const char* itemId = it.containsKey("item_id") ? (const char*)it["item_id"] : "";
-      const char* page = it["page"] | "";
-      int count = it.containsKey("count") ? (int)it["count"] : 0;
-      int check_count = it.containsKey("check_count") ? (int)it["check_count"] : 0;
-      int accumulated = it.containsKey("accumulated") ? (int)it["accumulated"] : 0;
-      const char* content = it["content"] | "";
-      const char* hw_type = it["type"] | "";
-      const char* book_id = it["book_id"] | "";
-      const char* grade_label = it["grade_label"] | "";
-      uint32_t srv_color = 0x1E88E5;
-      if (it.containsKey("color")) { double v = it["color"]; if (v > 0) srv_color = ((uint32_t)v) & 0xFFFFFFu; }
-      char bn[128]; extract_book_name(content, title, book_id, grade_label, hw_type, bn, sizeof(bn));
-      if (!bn[0]) strncpy(bn, title, sizeof(bn)-1);
-      create_hw_card(s_list, bn, phase, page, count, check_count, accumulated, srv_color, itemId);
-      yield();
-    }
-    lv_obj_clear_flag(s_list, LV_OBJ_FLAG_HIDDEN);
-  } else {
-    // partial update
-    uint8_t idx = 0;
-    uint8_t ci = 0;
-    for (JsonObject it : items) {
-      int phase = it.containsKey("phase") ? (int)it["phase"] : 1;
-      if (phase < 1 || phase > 4) continue;
-      bool is_changed = (ci < changed_cnt && changed[ci] == idx);
-      if (is_changed) ci++;
-
-      const char* title = it["title"] | it["name"] | u8"과제";
-      const char* itemId = it.containsKey("item_id") ? (const char*)it["item_id"] : "";
-      const char* page = it["page"] | "";
-      int count = it.containsKey("count") ? (int)it["count"] : 0;
-      int check_count = it.containsKey("check_count") ? (int)it["check_count"] : 0;
-      int accumulated = it.containsKey("accumulated") ? (int)it["accumulated"] : 0;
-      const char* content = it["content"] | "";
-      const char* hw_type = it["type"] | "";
-      const char* book_id = it["book_id"] | "";
-      const char* grade_label = it["grade_label"] | "";
-      uint32_t srv_color = 0x1E88E5;
-      if (it.containsKey("color")) { double v = it["color"]; if (v > 0) srv_color = ((uint32_t)v) & 0xFFFFFFu; }
-
-      if (is_changed) {
-        lv_obj_t* old_card = lv_obj_get_child(s_list, idx);
-        if (old_card && lv_obj_is_valid(old_card)) lv_obj_del(old_card);
-        char bn[128]; extract_book_name(content, title, book_id, grade_label, hw_type, bn, sizeof(bn));
-        if (!bn[0]) strncpy(bn, title, sizeof(bn)-1);
-        lv_obj_t* nc = create_hw_card(s_list, bn, phase, page, count, check_count, accumulated, srv_color, itemId);
-        lv_obj_move_to_index(nc, idx);
-      } else {
-        lv_obj_t* card = lv_obj_get_child(s_list, idx);
-        if (phase == 4 && card && lv_obj_is_valid(card) && s_p4_cnt < 8) {
-          s_p4_cards[s_p4_cnt] = card; s_p4_colors[s_p4_cnt] = srv_color; s_p4_cnt++;
-          g_should_vibrate_phase4 = true;
-        }
-      }
-      idx++;
-    }
+  lv_obj_add_flag(s_list, LV_OBJ_FLAG_HIDDEN);
+  esp_task_wdt_reset();
+  lv_obj_clean(s_list);
+  esp_task_wdt_reset();
+  for (uint8_t i = 0; i < s_group_cnt; i++) {
+    create_hw_card(s_list, i);
+    if (i % 2 == 1) esp_task_wdt_reset();
   }
+  lv_obj_clear_flag(s_list, LV_OBJ_FLAG_HIDDEN);
 
   memcpy(s_hw_cache, new_cache, sizeof(HwCacheEntry) * new_cnt);
   s_hw_cache_cnt = new_cnt;
@@ -2266,6 +2292,338 @@ void ui_port_update_homeworks(const JsonArray& items) {
   } else {
     hide_snackbar();
   }
+
+  // 상세 페이지가 열려있으면 데이터 갱신
+  if (s_hw_detail_screen && lv_obj_is_valid(s_hw_detail_screen) && s_detail_group_idx >= 0) {
+    if (s_detail_group_idx >= s_group_cnt) {
+      close_homework_detail_page();
+    } else {
+      HwGroupData& dg = s_groups[s_detail_group_idx];
+      bool was_playing = s_detail_playing;
+      s_detail_playing = (dg.phase == 2 && dg.run_start_epoch > 0);
+      if (was_playing != s_detail_playing && s_hw_detail_play_lbl && lv_obj_is_valid(s_hw_detail_play_lbl)) {
+        lv_label_set_text(s_hw_detail_play_lbl, s_detail_playing ? "||" : ">");
+      }
+      if (dg.phase == 3) {
+        close_homework_detail_page();
+      }
+    }
+  }
+  s_hw_updating = false;
+}
+
+// ========== 수행 상세 페이지 (음악 앱 스타일) ==========
+
+static void detail_timer_cb(lv_timer_t* timer) {
+  uint32_t epoch = (uint32_t)(uintptr_t)timer->user_data;
+  if (epoch != s_detail_timer_epoch) { lv_timer_del(timer); return; }
+  if (s_detail_group_idx < 0 || s_detail_group_idx >= s_group_cnt) return;
+  HwGroupData& g = s_groups[s_detail_group_idx];
+
+  time_t now_epoch;
+  time(&now_epoch);
+  int session_sec = 0;
+  if (g.run_start_epoch > 0 && now_epoch > g.run_start_epoch) {
+    session_sec = (int)(now_epoch - g.run_start_epoch);
+  }
+  int total_sec = (int)g.accumulated + session_sec;
+
+  if (s_hw_detail_session_lbl && lv_obj_is_valid(s_hw_detail_session_lbl)) {
+    char buf[32];
+    int tm = total_sec / 60; int ts = total_sec % 60;
+    snprintf(buf, sizeof(buf), "%d:%02d", tm, ts);
+    lv_label_set_text(s_hw_detail_session_lbl, buf);
+  }
+  if (s_hw_detail_total_lbl && lv_obj_is_valid(s_hw_detail_total_lbl)) {
+    char buf[32]; fmt_time_hms(total_sec, buf, sizeof(buf));
+    lv_label_set_text(s_hw_detail_total_lbl, buf);
+  }
+}
+
+static void close_homework_detail_page(void) {
+  s_detail_timer_epoch++;
+  if (s_detail_timer) { lv_timer_del(s_detail_timer); s_detail_timer = nullptr; }
+  if (s_hw_detail_screen && lv_obj_is_valid(s_hw_detail_screen)) {
+    lv_obj_del(s_hw_detail_screen);
+  }
+  s_hw_detail_screen = nullptr;
+  s_hw_detail_session_lbl = nullptr;
+  s_hw_detail_total_lbl = nullptr;
+  s_hw_detail_play_lbl = nullptr;
+  s_detail_group_idx = -1;
+}
+
+static void show_homework_detail_page(int group_idx) {
+  extern const lv_font_t kakao_kr_16;
+  if (group_idx < 0 || group_idx >= s_group_cnt) return;
+  if (!s_stage || !lv_obj_is_valid(s_stage)) return;
+
+  close_homework_detail_page();
+  s_detail_group_idx = group_idx;
+  HwGroupData& g = s_groups[group_idx];
+  s_detail_playing = (g.phase == 2 && g.run_start_epoch > 0);
+
+  s_hw_detail_screen = lv_obj_create(s_stage);
+  lv_obj_set_size(s_hw_detail_screen, 320, 240);
+  lv_obj_set_pos(s_hw_detail_screen, 0, 0);
+  lv_obj_set_style_bg_color(s_hw_detail_screen, lv_color_hex(0x0B1112), 0);
+  lv_obj_set_style_bg_opa(s_hw_detail_screen, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(s_hw_detail_screen, 0, 0);
+  lv_obj_set_style_radius(s_hw_detail_screen, 0, 0);
+  lv_obj_set_style_pad_all(s_hw_detail_screen, 0, 0);
+  lv_obj_set_scrollbar_mode(s_hw_detail_screen, LV_SCROLLBAR_MODE_OFF);
+  lv_obj_set_scroll_dir(s_hw_detail_screen, LV_DIR_VER);
+  lv_obj_set_style_pad_row(s_hw_detail_screen, 0, 0);
+  lv_obj_set_flex_flow(s_hw_detail_screen, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_flex_align(s_hw_detail_screen, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  screensaver_attach_activity(s_hw_detail_screen);
+
+  // -- 뒤로가기 헤더 (36px) --
+  lv_obj_t* header = lv_obj_create(s_hw_detail_screen);
+  lv_obj_set_size(header, 320, 36);
+  lv_obj_set_style_bg_opa(header, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(header, 0, 0);
+  lv_obj_set_style_pad_all(header, 0, 0);
+  lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t* back_btn = lv_btn_create(header);
+  lv_obj_set_size(back_btn, 36, 36);
+  lv_obj_set_pos(back_btn, 4, 0);
+  lv_obj_set_style_radius(back_btn, 10, 0);
+  lv_obj_set_style_bg_color(back_btn, lv_color_hex(0x1E1E1E), 0);
+  lv_obj_set_style_border_width(back_btn, 0, 0);
+  lv_obj_set_style_shadow_width(back_btn, 0, 0);
+  lv_obj_t* back_lbl = lv_label_create(back_btn);
+  lv_obj_set_style_text_font(back_lbl, &kakao_kr_16, 0);
+  lv_obj_set_style_text_color(back_lbl, lv_color_hex(0xE6E6E6), 0);
+  lv_label_set_text(back_lbl, "<");
+  lv_obj_center(back_lbl);
+  lv_obj_add_event_cb(back_btn, [](lv_event_t* e){ (void)e; close_homework_detail_page(); }, LV_EVENT_CLICKED, NULL);
+
+  // -- 1열: 교재명+과정 (가운데, 큰 글자) --
+  lv_obj_t* row1 = lv_label_create(s_hw_detail_screen);
+  if (s_global_font) lv_obj_set_style_text_font(row1, s_global_font, 0);
+  lv_obj_set_style_text_color(row1, lv_color_hex(0xF0F0F0), 0);
+  lv_obj_set_style_text_align(row1, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_set_width(row1, 300);
+  lv_label_set_long_mode(row1, LV_LABEL_LONG_DOT);
+  lv_label_set_text(row1, g.book_name);
+  lv_obj_set_style_pad_top(row1, 6, 0);
+
+  // -- 2열: 그룹 과제명 (가운데) --
+  lv_obj_t* row2 = lv_label_create(s_hw_detail_screen);
+  lv_obj_set_style_text_font(row2, &kakao_kr_16, 0);
+  lv_obj_set_style_text_color(row2, lv_color_hex(0xB0B0B0), 0);
+  lv_obj_set_style_text_align(row2, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_set_width(row2, 300);
+  lv_label_set_long_mode(row2, LV_LABEL_LONG_DOT);
+  lv_label_set_text(row2, g.group_title);
+  lv_obj_set_style_pad_top(row2, 10, 0);
+
+  // -- 3열: 페이지 (가운데) --
+  if (g.page_summary[0]) {
+    char pg_buf[80];
+    snprintf(pg_buf, sizeof(pg_buf), "p.%s", g.page_summary);
+    lv_obj_t* row3 = lv_label_create(s_hw_detail_screen);
+    lv_obj_set_style_text_font(row3, &kakao_kr_16, 0);
+    lv_obj_set_style_text_color(row3, lv_color_hex(0x808080), 0);
+    lv_obj_set_style_text_align(row3, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(row3, 300);
+    lv_label_set_text(row3, pg_buf);
+    lv_obj_set_style_pad_top(row3, 2, 0);
+  }
+
+  // -- 4열: 현재 진행시간 / 총 진행시간 --
+  lv_obj_t* time_row = lv_obj_create(s_hw_detail_screen);
+  lv_obj_set_size(time_row, 300, 28);
+  lv_obj_set_style_bg_opa(time_row, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(time_row, 0, 0);
+  lv_obj_set_style_pad_all(time_row, 0, 0);
+  lv_obj_clear_flag(time_row, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_style_pad_top(time_row, 8, 0);
+
+  s_hw_detail_session_lbl = lv_label_create(time_row);
+  lv_obj_set_style_text_font(s_hw_detail_session_lbl, &kakao_kr_16, 0);
+  lv_obj_set_style_text_color(s_hw_detail_session_lbl, lv_color_hex(0x33A373), 0);
+  {
+    int init_total = (int)g.accumulated;
+    if (g.run_start_epoch > 0) {
+      time_t now_e; time(&now_e);
+      if (now_e > g.run_start_epoch) init_total += (int)(now_e - g.run_start_epoch);
+    }
+    char sb[32]; int im = init_total / 60; int is2 = init_total % 60;
+    snprintf(sb, sizeof(sb), "%d:%02d", im, is2);
+    lv_label_set_text(s_hw_detail_session_lbl, sb);
+  }
+  lv_obj_align(s_hw_detail_session_lbl, LV_ALIGN_LEFT_MID, 10, 0);
+
+  s_hw_detail_total_lbl = lv_label_create(time_row);
+  lv_obj_set_style_text_font(s_hw_detail_total_lbl, &kakao_kr_16, 0);
+  lv_obj_set_style_text_color(s_hw_detail_total_lbl, lv_color_hex(0x808080), 0);
+  char total_buf[32]; fmt_time_hms((int)g.accumulated, total_buf, sizeof(total_buf));
+  lv_label_set_text(s_hw_detail_total_lbl, total_buf);
+  lv_obj_align(s_hw_detail_total_lbl, LV_ALIGN_RIGHT_MID, -10, 0);
+
+  // -- 5열: 3개 버튼 --
+  lv_obj_t* btn_row = lv_obj_create(s_hw_detail_screen);
+  lv_obj_set_size(btn_row, 300, 72);
+  lv_obj_set_style_bg_opa(btn_row, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(btn_row, 0, 0);
+  lv_obj_set_style_pad_all(btn_row, 0, 0);
+  lv_obj_clear_flag(btn_row, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_style_pad_top(btn_row, 4, 0);
+
+  auto make_circle_btn = [&](lv_obj_t* parent, const char* text, lv_coord_t x, uint32_t bg_color) -> lv_obj_t* {
+    lv_obj_t* btn = lv_btn_create(parent);
+    lv_obj_set_size(btn, 60, 60);
+    lv_obj_set_pos(btn, x, 8);
+    lv_obj_set_style_radius(btn, 30, 0);
+    lv_obj_set_style_bg_color(btn, lv_color_hex(bg_color), 0);
+    lv_obj_set_style_border_width(btn, 0, 0);
+    lv_obj_set_style_shadow_width(btn, 0, 0);
+    lv_obj_t* lbl = lv_label_create(btn);
+    lv_obj_set_style_text_font(lbl, &kakao_kr_16, 0);
+    lv_obj_set_style_text_color(lbl, lv_color_hex(0xE6E6E6), 0);
+    lv_label_set_text(lbl, text);
+    lv_obj_center(lbl);
+    return btn;
+  };
+
+  // L (리스트) 버튼
+  lv_obj_t* list_btn = make_circle_btn(btn_row, "L", 30, 0x2A2A2A);
+  lv_obj_t* list_section = nullptr;
+
+  // 재생/멈춤 버튼
+  lv_obj_t* play_btn = make_circle_btn(btn_row, s_detail_playing ? "||" : ">", 120, 0x33A373);
+  s_hw_detail_play_lbl = lv_obj_get_child(play_btn, 0);
+
+  struct DetailCtx { int group_idx; };
+  DetailCtx* ctx = (DetailCtx*)malloc(sizeof(DetailCtx));
+  if (ctx) {
+    ctx->group_idx = group_idx;
+    lv_obj_add_event_cb(play_btn, [](lv_event_t* e){
+      DetailCtx* c = (DetailCtx*)lv_event_get_user_data(e);
+      if (c->group_idx < 0 || c->group_idx >= s_group_cnt) return;
+      HwGroupData& grp = s_groups[c->group_idx];
+      if (s_detail_playing) {
+        fw_publish_pause_all();
+        s_detail_playing = false;
+      } else {
+        fw_publish_group_transition(grp.group_id, 1);
+        s_detail_playing = true;
+      }
+      if (s_hw_detail_play_lbl && lv_obj_is_valid(s_hw_detail_play_lbl)) {
+        lv_label_set_text(s_hw_detail_play_lbl, s_detail_playing ? "||" : ">");
+      }
+    }, LV_EVENT_CLICKED, ctx);
+    lv_obj_add_event_cb(play_btn, [](lv_event_t* e){
+      if (lv_event_get_code(e) == LV_EVENT_DELETE) { void* ud = lv_event_get_user_data(e); if (ud) free(ud); }
+    }, LV_EVENT_DELETE, ctx);
+  }
+
+  // 완료 버튼
+  lv_obj_t* done_btn = make_circle_btn(btn_row, "O", 210, 0x2A2A2A);
+  struct DoneCtx { int group_idx; };
+  DoneCtx* dctx = (DoneCtx*)malloc(sizeof(DoneCtx));
+  if (dctx) {
+    dctx->group_idx = group_idx;
+    lv_obj_add_event_cb(done_btn, [](lv_event_t* e){
+      DoneCtx* c = (DoneCtx*)lv_event_get_user_data(e);
+      if (c->group_idx < 0 || c->group_idx >= s_group_cnt) return;
+      HwGroupData& grp = s_groups[c->group_idx];
+      fw_publish_group_transition(grp.group_id, 99);
+      close_homework_detail_page();
+    }, LV_EVENT_CLICKED, dctx);
+    lv_obj_add_event_cb(done_btn, [](lv_event_t* e){
+      if (lv_event_get_code(e) == LV_EVENT_DELETE) { void* ud = lv_event_get_user_data(e); if (ud) free(ud); }
+    }, LV_EVENT_DELETE, dctx);
+  }
+
+  // -- 하위 과제 리스트 (스크롤 영역) --
+  lv_obj_t* child_list_container = lv_obj_create(s_hw_detail_screen);
+  lv_obj_set_size(child_list_container, 300, LV_SIZE_CONTENT);
+  lv_obj_set_style_bg_opa(child_list_container, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(child_list_container, 0, 0);
+  lv_obj_set_style_pad_all(child_list_container, 0, 0);
+  lv_obj_set_style_pad_top(child_list_container, 12, 0);
+  lv_obj_set_style_pad_row(child_list_container, 4, 0);
+  lv_obj_set_flex_flow(child_list_container, LV_FLEX_FLOW_COLUMN);
+  lv_obj_clear_flag(child_list_container, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(child_list_container, LV_OBJ_FLAG_HIDDEN);
+  list_section = child_list_container;
+
+  // 구분선
+  lv_obj_t* divider = lv_obj_create(child_list_container);
+  lv_obj_set_size(divider, 280, 1);
+  lv_obj_set_style_bg_color(divider, lv_color_hex(0x333333), 0);
+  lv_obj_set_style_bg_opa(divider, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(divider, 0, 0);
+
+  for (uint8_t i = 0; i < g.child_cnt; i++) {
+    HwChildEntry& ce = g.children[i];
+    lv_obj_t* row = lv_obj_create(child_list_container);
+    lv_obj_set_size(row, 290, 28);
+    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(row, 0, 0);
+    lv_obj_set_style_pad_all(row, 0, 0);
+    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+
+    // phase dot
+    uint32_t dot_color = 0x555555;
+    if (ce.phase == 2) dot_color = 0x33A373;
+    else if (ce.phase == 3) dot_color = 0xFFA000;
+    else if (ce.phase == 4) dot_color = 0xFF5252;
+    lv_obj_t* dot = lv_obj_create(row);
+    lv_obj_set_size(dot, 6, 6);
+    lv_obj_set_style_radius(dot, 3, 0);
+    lv_obj_set_style_bg_color(dot, lv_color_hex(dot_color), 0);
+    lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(dot, 0, 0);
+    lv_obj_align(dot, LV_ALIGN_LEFT_MID, 4, 0);
+
+    char child_text[96];
+    if (ce.page[0]) {
+      snprintf(child_text, sizeof(child_text), "%d. %s  p.%s", i + 1, ce.title[0] ? ce.title : u8"과제", ce.page);
+    } else {
+      snprintf(child_text, sizeof(child_text), "%d. %s", i + 1, ce.title[0] ? ce.title : u8"과제");
+    }
+    lv_obj_t* child_lbl = lv_label_create(row);
+    lv_obj_set_style_text_font(child_lbl, &kakao_kr_16, 0);
+    lv_obj_set_style_text_color(child_lbl, lv_color_hex(0xC0C0C0), 0);
+    lv_label_set_text(child_lbl, child_text);
+    lv_label_set_long_mode(child_lbl, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(child_lbl, 260);
+    lv_obj_align(child_lbl, LV_ALIGN_LEFT_MID, 16, 0);
+  }
+
+  // L 버튼 클릭 → 하위 리스트 토글
+  lv_obj_add_event_cb(list_btn, [](lv_event_t* e){
+    lv_obj_t* section = (lv_obj_t*)lv_event_get_user_data(e);
+    if (!section || !lv_obj_is_valid(section)) return;
+    if (lv_obj_has_flag(section, LV_OBJ_FLAG_HIDDEN)) {
+      lv_obj_clear_flag(section, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_scroll_to_view(section, LV_ANIM_ON);
+    } else {
+      lv_obj_add_flag(section, LV_OBJ_FLAG_HIDDEN);
+    }
+  }, LV_EVENT_CLICKED, child_list_container);
+
+  // 슬라이드 인 애니메이션
+  lv_obj_set_x(s_hw_detail_screen, 320);
+  lv_anim_t a;
+  lv_anim_init(&a);
+  lv_anim_set_var(&a, s_hw_detail_screen);
+  lv_anim_set_values(&a, 320, 0);
+  lv_anim_set_time(&a, 220);
+  lv_anim_set_exec_cb(&a, (lv_anim_exec_xcb_t)lv_obj_set_x);
+  lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+  lv_anim_start(&a);
+
+  // 타이머 시작
+  s_detail_timer_epoch++;
+  s_detail_timer = lv_timer_create(detail_timer_cb, 1000, (void*)(uintptr_t)s_detail_timer_epoch);
+  lv_timer_set_repeat_count(s_detail_timer, -1);
+  detail_timer_cb(s_detail_timer);
 }
 
 void ui_port_update_student_info(const JsonObject& info) {

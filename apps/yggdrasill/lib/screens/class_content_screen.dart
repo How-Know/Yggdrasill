@@ -714,6 +714,59 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       if (item['studentId'] == studentId) {
         final action = (item['action'] as String?)?.trim() ?? 'add';
         final isReserve = action == 'reserve';
+        final groupMode = item['groupMode'] == true;
+        if (groupMode) {
+          final rawItems = item['items'];
+          final entries = <Map<String, dynamic>>[];
+          if (rawItems is List) {
+            for (final e in rawItems) {
+              if (e is Map<String, dynamic>) {
+                entries.add(Map<String, dynamic>.from(e));
+              } else if (e is Map) {
+                entries.add(Map<String, dynamic>.from(e));
+              }
+            }
+          }
+          if (entries.isEmpty) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('하위 과제를 1개 이상 추가하세요.')),
+            );
+            return;
+          }
+          final createdItems =
+              await HomeworkStore.instance.createGroupWithWaitingItems(
+            studentId: studentId,
+            groupTitle: (item['groupTitle'] as String?)?.trim() ?? '',
+            flowId: (item['flowId'] as String?)?.trim(),
+            items: entries,
+          );
+          if (createdItems.isEmpty) {
+            if (!context.mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('그룹 과제 생성에 실패했어요.')),
+            );
+            return;
+          }
+          if (isReserve) {
+            await HomeworkAssignmentStore.instance.recordAssignments(
+              studentId,
+              createdItems,
+              note: HomeworkAssignmentStore.reservationNote,
+              splitPartsByItem: <String, int>{
+                for (final hw in createdItems)
+                  hw.id: hw.defaultSplitParts.clamp(1, 4).toInt(),
+              },
+            );
+          }
+          if (!context.mounted) return;
+          final childCount = createdItems.length;
+          final msg = isReserve
+              ? '그룹 예약 과제(하위 ${childCount}개)를 추가했어요.'
+              : '그룹 과제(하위 ${childCount}개)를 추가했어요.';
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text(msg)));
+          return;
+        }
         final flowId = item['flowId'] as String?;
         final dynamic multiRaw = item['items'];
         final entries = <Map<String, dynamic>>[];
@@ -3066,20 +3119,15 @@ Future<void> _mergeGroupChildrenByDrag({
 
 const double _homeworkChipCollapsedHeight = 136.0;
 const double _homeworkChipExpandedHeight = 210.0;
-const int _homeworkGroupChildPreviewMaxLines = 6;
 double _homeworkGroupExpandedHeightForChildCount(int childCount) {
-  final visible = math.min(childCount, _homeworkGroupChildPreviewMaxLines);
-  final hasChildren = childCount > 0;
-  final hasExtra = childCount > _homeworkGroupChildPreviewMaxLines;
-  double extra = 0;
-  if (hasChildren) {
-    extra += 56; // divider + 헤더(+ 버튼)
-    extra += visible * 52; // child 2줄 + 디바이더 간격
-  }
-  if (hasExtra) {
-    extra += 22; // "외 n개" line
-  }
-  return _homeworkChipExpandedHeight + extra;
+  if (childCount <= 0) return _homeworkChipExpandedHeight;
+  // 상단 정보와 하위 리스트를 충분히 분리하고,
+  // 하위 과제 수에 비례해 카드 높이가 늘어나도록 계산한다.
+  const double groupSectionHeaderHeight = 72;
+  const double perChildRowHeight = 58;
+  return _homeworkChipExpandedHeight +
+      groupSectionHeaderHeight +
+      (childCount * perChildRowHeight);
 }
 
 double _homeworkChipMaxSlideFor(double h) => h * 0.58;
@@ -4045,20 +4093,73 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
     );
     final bool groupPendingComplete = groupPendingSelected &&
         submittedKeys.any((key) => pendingConfirms[key] == true);
+    final bool groupIsRunning = hasRunningChild;
+    final bool groupIsSubmitted = submittedKeys.isNotEmpty;
+    final bool groupIsWaiting = summary.phase == 1;
+    final bool groupIsConfirmed = summary.phase == 4;
+    final bool groupSlideDownIsEdit = groupIsWaiting || groupIsConfirmed;
+    final bool groupCanSlideDown =
+        groupIsRunning || groupIsSubmitted || groupSlideDownIsEdit;
+    final String groupDownLabel = groupSlideDownIsEdit
+        ? '수정'
+        : (groupIsSubmitted ? '완료' : (groupIsRunning ? '멈춤' : ''));
+    HomeworkItem? runningChildForSlide;
+    if (groupIsRunning) {
+      for (final child in children) {
+        if (child.runStart != null || child.phase == 2) {
+          runningChildForSlide = child;
+          break;
+        }
+      }
+    }
 
     final groupCard = _SlideableHomeworkChip(
       key: ValueKey('hw_group_chip_${group.id}'),
       maxSlide: _homeworkChipMaxSlideFor(chipH),
-      canSlideDown: false,
-      canSlideUp: false,
-      downLabel: '',
-      upLabel: '',
-      downColor: kDlgAccent,
+      canSlideDown: !printPickMode && groupCanSlideDown,
+      canSlideUp: !printPickMode,
+      downLabel: groupDownLabel,
+      upLabel: '취소',
+      downColor: groupSlideDownIsEdit
+          ? kDlgAccent
+          : (groupIsSubmitted
+              ? const Color(0xFF4CAF50)
+              : const Color(0xFF9FB3B3)),
       upColor: const Color(0xFFE57373),
       onTap: () => onToggleExpand?.call(group.id),
       onLongPress: null,
-      onSlideDown: () {},
-      onSlideUp: () async {},
+      onSlideDown: () {
+        if (printPickMode) return;
+        if (groupSlideDownIsEdit) {
+          unawaited(
+            _showHomeworkGroupActionDialog(
+              context: context,
+              studentId: studentId,
+              group: group,
+            ),
+          );
+          return;
+        }
+        if (groupIsRunning && runningChildForSlide != null) {
+          unawaited(
+            HomeworkStore.instance.pause(studentId, runningChildForSlide.id),
+          );
+          return;
+        }
+        if (groupIsSubmitted) {
+          for (final key in submittedKeys) {
+            onSlideDownComplete?.call(key);
+          }
+        }
+      },
+      onSlideUp: () async {
+        if (printPickMode) return;
+        await _showHomeworkGroupSlideCancelDialog(
+          context: context,
+          studentId: studentId,
+          children: children,
+        );
+      },
       onDoubleTap: () {
         if (printPickMode) return;
         final submittedChildren = children
@@ -4838,6 +4939,146 @@ Future<void> _showHomeworkGroupActionDialog({
       );
     },
   );
+}
+
+Future<void> _showHomeworkGroupSlideCancelDialog({
+  required BuildContext context,
+  required String studentId,
+  required List<HomeworkItem> children,
+}) async {
+  if (children.isEmpty) return;
+  final choice = await showDialog<String>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      backgroundColor: kDlgBg,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      title: const Text(
+        '과제 취소',
+        style: TextStyle(color: kDlgText, fontWeight: FontWeight.w900),
+      ),
+      content: const SizedBox(
+        width: 420,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            YggDialogSectionHeader(
+              icon: Icons.cancel_outlined,
+              title: '처리 방식',
+            ),
+            Text(
+              '완전 취소 또는 포기를 선택하세요.',
+              style: TextStyle(color: kDlgTextSub),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(ctx).pop(null),
+          style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
+          child: const Text('닫기'),
+        ),
+        OutlinedButton(
+          onPressed: () => Navigator.of(ctx).pop('remove'),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: const Color(0xFFE57373),
+            side: const BorderSide(color: Color(0xFFE57373)),
+          ),
+          child: const Text('카드 삭제'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(ctx).pop('abandon'),
+          style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
+          child: const Text('포기'),
+        ),
+      ],
+    ),
+  );
+  if (!context.mounted || choice == null) return;
+  if (choice == 'remove') {
+    for (final child in children) {
+      HomeworkStore.instance.remove(studentId, child.id);
+    }
+    if (!context.mounted) return;
+    _showHomeworkChipSnackBar(context, '그룹 과제 ${children.length}개를 삭제했어요.');
+    return;
+  }
+  if (choice == 'abandon') {
+    final reason = await showDialog<String>(
+      context: context,
+      builder: (ctx) {
+        final controller = ImeAwareTextEditingController();
+        return AlertDialog(
+          backgroundColor: kDlgBg,
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Text(
+            '포기 사유',
+            style: TextStyle(color: kDlgText, fontWeight: FontWeight.w900),
+          ),
+          content: SizedBox(
+            width: 420,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const YggDialogSectionHeader(
+                  icon: Icons.edit_note,
+                  title: '사유 입력',
+                ),
+                TextField(
+                  controller: controller,
+                  minLines: 2,
+                  maxLines: 4,
+                  style: const TextStyle(color: kDlgText),
+                  decoration: InputDecoration(
+                    hintText: '포기 사유를 입력하세요.',
+                    hintStyle: const TextStyle(color: Color(0xFF6E7E7E)),
+                    filled: true,
+                    fillColor: kDlgFieldBg,
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: const BorderSide(color: kDlgBorder),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide:
+                          const BorderSide(color: kDlgAccent, width: 1.4),
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 12,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(null),
+              style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
+              child: const Text('취소'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(controller.text.trim()),
+              style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
+              child: const Text('저장'),
+            ),
+          ],
+        );
+      },
+    );
+    if (!context.mounted) return;
+    if (reason != null && reason.trim().isNotEmpty) {
+      for (final child in children) {
+        unawaited(HomeworkStore.instance.abandon(studentId, child.id, reason));
+      }
+      _showHomeworkChipSnackBar(
+          context, '그룹 과제 ${children.length}개를 포기 처리했어요.');
+    }
+  }
 }
 
 bool _hasDirectHomeworkTextbookLink(HomeworkItem hw) {
@@ -5781,9 +6022,7 @@ Widget _buildHomeworkChipVisual(
   if (isExpanded) {
     final String expandedLine3 =
         '시작 $startedAtText · 진행 ${progressMinutes}분 · 총 $durationText';
-    final visibleGroupChildren = hasGroupChildren
-        ? math.min(groupChildren.length, _homeworkGroupChildPreviewMaxLines)
-        : 0;
+    final visibleGroupChildren = hasGroupChildren ? groupChildren.length : 0;
 
     String groupChildLabel(HomeworkItem child) {
       final title = child.title.trim();
@@ -5990,13 +6229,13 @@ Widget _buildHomeworkChipVisual(
         ),
       ),
       if (hasGroupChildren) ...[
-        const SizedBox(height: 8),
+        const SizedBox(height: 16),
         Container(
           width: maxRowW,
           height: 1,
           color: const Color(0x334D5A5A),
         ),
-        const SizedBox(height: 6),
+        const SizedBox(height: 12),
         ConstrainedBox(
           constraints: BoxConstraints(maxWidth: maxRowW),
           child: Row(
@@ -6034,29 +6273,20 @@ Widget _buildHomeworkChipVisual(
             ],
           ),
         ),
-        const SizedBox(height: 4),
+        const SizedBox(height: 12),
         for (int i = 0; i < visibleGroupChildren; i++) ...[
           buildGroupChildRow(groupChildren[i], i),
           if (i != visibleGroupChildren - 1) ...[
-            const SizedBox(height: 4),
+            const SizedBox(height: 8),
             Container(
               width: maxRowW,
               height: 1,
               color: const Color(0x223A4545),
             ),
+            const SizedBox(height: 8),
           ],
-          const SizedBox(height: 6),
+          const SizedBox(height: 8),
         ],
-        if (groupChildren.length > visibleGroupChildren)
-          ConstrainedBox(
-            constraints: BoxConstraints(maxWidth: maxRowW),
-            child: Text(
-              '외 ${groupChildren.length - visibleGroupChildren}개',
-              style: groupChildIndexStyle,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
       ],
       if (onInfoTap != null) ...[
         const SizedBox(height: 4),

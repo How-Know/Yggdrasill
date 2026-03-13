@@ -4,10 +4,12 @@
   "type": "object",
   "additionalProperties": false,
   "properties": {
-    "action": {"type": "string", "enum": ["start", "pause", "submit", "confirm", "wait", "complete", "pause_all"]},
+    "action": {"type": "string", "enum": ["start", "pause", "submit", "confirm", "wait", "complete", "pause_all", "group_transition"]},
     "academy_id": {"type": "string", "format": "uuid"},
     "student_id": {"type": "string", "minLength": 1},
     "item_id": {"type": "string", "minLength": 1},
+    "group_id": {"type": "string", "minLength": 1},
+    "from_phase": {"type": "integer", "minimum": 1, "maximum": 99},
     "idempotency_key": {"type": "string", "format": "uuid"},
     "at": {"type": "string", "format": "date-time"},
     "updated_by": {"type": "string"}

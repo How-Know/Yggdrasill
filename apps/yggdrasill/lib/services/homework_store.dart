@@ -171,6 +171,11 @@ class HomeworkStore {
   // 간단 영속화 캐시 (앱 시작 시 한번 로드, 변경 시 저장)
   bool _loaded = false;
   RealtimeChannel? _rt;
+  String? _rtAcademyId;
+  final Map<String, Timer> _rtReloadDebounce = {};
+  Timer? _rtFallbackPollTimer;
+  DateTime? _rtPollCursorUtc;
+  bool _rtPollInFlight = false;
 
   bool _isMissingDefaultSplitPartsError(Object error) {
     final message = error.toString().toLowerCase();
@@ -559,6 +564,18 @@ class HomeworkStore {
     return maxOrder + 1;
   }
 
+  int _nextGroupOrderIndex(String studentId) {
+    final list = _groupsByStudentId[studentId] ?? const <HomeworkGroup>[];
+    var maxOrder = -1;
+    for (final group in list) {
+      if (group.status == 'archived') continue;
+      if (group.orderIndex > maxOrder) {
+        maxOrder = group.orderIndex;
+      }
+    }
+    return maxOrder + 1;
+  }
+
   List<HomeworkItem> items(String studentId) {
     final list = _byStudentId[studentId] ?? const <HomeworkItem>[];
     final copied = List<HomeworkItem>.from(list);
@@ -639,7 +656,16 @@ class HomeworkStore {
   }
 
   Future<void> loadAll() async {
-    if (_loaded) return;
+    if (_loaded) {
+      try {
+        final String academyId =
+            (await TenantService.instance.getActiveAcademyId()) ??
+                await TenantService.instance.ensureActiveAcademy();
+        _subscribeRealtime(academyId);
+        _startRealtimeFallbackPoll(academyId);
+      } catch (_) {}
+      return;
+    }
     try {
       final String academyId =
           (await TenantService.instance.getActiveAcademyId()) ??
@@ -663,72 +689,185 @@ class HomeworkStore {
       _loaded = true;
       _bump();
       _subscribeRealtime(academyId);
+      _startRealtimeFallbackPoll(academyId);
     } catch (e, st) {
       // ignore: avoid_print
       print('[HW][loadAll][ERROR] $e\n$st');
     }
   }
 
+  DateTime _nowUtc() => DateTime.now().toUtc();
+
+  DateTime? _parseUtcOpt(dynamic v) {
+    if (v == null) return null;
+    final s = (v is String) ? v : '$v';
+    final parsed = DateTime.tryParse(s);
+    return parsed?.toUtc();
+  }
+
+  void _startRealtimeFallbackPoll(String academyId) {
+    final targetAcademyId = academyId.trim();
+    if (targetAcademyId.isEmpty) return;
+    _rtFallbackPollTimer?.cancel();
+    // 최근 2초 window부터 시작해 경계 타이밍 업데이트 유실을 줄인다.
+    _rtPollCursorUtc = _nowUtc().subtract(const Duration(seconds: 2));
+    _rtFallbackPollTimer = Timer.periodic(
+      const Duration(milliseconds: 1200),
+      (_) => unawaited(_pollRecentHomeworkUpdates(targetAcademyId)),
+    );
+  }
+
+  Future<void> _pollRecentHomeworkUpdates(String academyId) async {
+    if (_rtPollInFlight) return;
+    _rtPollInFlight = true;
+    try {
+      final since =
+          _rtPollCursorUtc ?? _nowUtc().subtract(const Duration(seconds: 2));
+      final rowsRaw = await Supabase.instance.client
+          .from('homework_items')
+          .select('id,student_id,updated_at')
+          .eq('academy_id', academyId)
+          .gt('updated_at', since.toIso8601String())
+          .order('updated_at', ascending: true)
+          .limit(300);
+      final rows = (rowsRaw as List<dynamic>).cast<Map<String, dynamic>>();
+      if (rows.isEmpty) return;
+
+      final changedStudentIds = <String>{};
+      DateTime maxUpdated = since;
+      for (final row in rows) {
+        final sid = _strOpt(row['student_id']);
+        if (sid.isNotEmpty) changedStudentIds.add(sid);
+        final ts = _parseUtcOpt(row['updated_at']);
+        if (ts != null && ts.isAfter(maxUpdated)) {
+          maxUpdated = ts;
+        }
+      }
+      _rtPollCursorUtc = maxUpdated.add(const Duration(milliseconds: 1));
+      for (final sid in changedStudentIds) {
+        _scheduleRealtimeReload(sid);
+      }
+      if (changedStudentIds.isNotEmpty) {
+        debugPrint(
+          '[HW][poll] changed students=${changedStudentIds.length} since=${since.toIso8601String()}',
+        );
+      }
+    } catch (e, st) {
+      debugPrint('[HW][poll] error: $e\n$st');
+    } finally {
+      _rtPollInFlight = false;
+    }
+  }
+
+  Map<String, dynamic> _safePayloadRecord(dynamic raw) {
+    if (raw is Map<String, dynamic>) return raw;
+    if (raw is Map) {
+      return raw.map((k, v) => MapEntry('$k', v));
+    }
+    return const <String, dynamic>{};
+  }
+
+  String _strOpt(dynamic v) {
+    if (v == null) return '';
+    if (v is String) return v.trim();
+    final s = '$v'.trim();
+    if (s.toLowerCase() == 'null') return '';
+    return s;
+  }
+
+  bool _payloadMatchesAcademy(dynamic payload, String academyId) {
+    final target = academyId.trim();
+    if (target.isEmpty) return true;
+    final newRec = _safePayloadRecord(payload.newRecord);
+    final oldRec = _safePayloadRecord(payload.oldRecord);
+    final newAcademy = _strOpt(newRec['academy_id']);
+    final oldAcademy = _strOpt(oldRec['academy_id']);
+    if (newAcademy.isEmpty && oldAcademy.isEmpty) return true;
+    return newAcademy == target || oldAcademy == target;
+  }
+
+  String _resolveStudentIdFromPayload(dynamic payload) {
+    final newRec = _safePayloadRecord(payload.newRecord);
+    final oldRec = _safePayloadRecord(payload.oldRecord);
+    var sid = _strOpt(newRec['student_id']);
+    if (sid.isEmpty) sid = _strOpt(oldRec['student_id']);
+    if (sid.isNotEmpty) return sid;
+
+    final itemId = _strOpt(newRec['id']).isNotEmpty
+        ? _strOpt(newRec['id'])
+        : _strOpt(oldRec['id']);
+    if (itemId.isEmpty) return '';
+    for (final entry in _byStudentId.entries) {
+      if (entry.value.any((e) => e.id == itemId)) {
+        return entry.key;
+      }
+    }
+    return '';
+  }
+
+  void _scheduleRealtimeReload(String studentId) {
+    final sid = studentId.trim();
+    if (sid.isEmpty) return;
+    _rtReloadDebounce[sid]?.cancel();
+    _rtReloadDebounce[sid] = Timer(const Duration(milliseconds: 120), () {
+      _rtReloadDebounce.remove(sid);
+      unawaited(_reloadStudent(sid));
+    });
+  }
+
   void _subscribeRealtime(String academyId) {
     try {
-      if (_rt != null) return;
+      final targetAcademyId = academyId.trim();
+      if (targetAcademyId.isEmpty) return;
+      if (_rt != null && _rtAcademyId == targetAcademyId) return;
+      if (_rt != null) {
+        final prev = _rt!;
+        _rt = null;
+        _rtAcademyId = null;
+        unawaited(prev.unsubscribe());
+      }
+      final channelName =
+          'public:homework_items:$targetAcademyId:${DateTime.now().millisecondsSinceEpoch}';
       _rt = Supabase.instance.client
-          .channel('public:homework_items:' + academyId)
+          .channel(channelName)
         ..onPostgresChanges(
           event: PostgresChangeEvent.insert,
           schema: 'public',
           table: 'homework_items',
-          filter: PostgresChangeFilter(
-              type: PostgresChangeFilterType.eq,
-              column: 'academy_id',
-              value: academyId),
           callback: (payload) {
-            final m = payload.newRecord;
-            final String sid = (m['student_id'] as String?) ?? '';
-            if (sid.isEmpty) return;
-            final it = _parseHomeworkItemRow(m);
-            final list = _byStudentId.putIfAbsent(sid, () => <HomeworkItem>[]);
-            final idx = list.indexWhere((e) => e.id == it.id);
-            if (idx == -1) {
-              list.add(it);
-            } else {
-              list[idx] = it;
+            try {
+              if (!_payloadMatchesAcademy(payload, targetAcademyId)) return;
+              final sid = _resolveStudentIdFromPayload(payload);
+              if (sid.isEmpty) {
+                debugPrint('[HW][rt][INSERT] skip: student_id empty');
+                return;
+              }
+              _scheduleRealtimeReload(sid);
+              debugPrint('[HW][rt][INSERT] student=$sid');
+            } catch (e, st) {
+              debugPrint('[HW][rt][INSERT] error: $e\n$st');
             }
-            _sortStudentList(list);
-            _applyFallbackGroupsForStudent(sid);
-            // '확인→대기' 진입 시 자동 완료 플래그가 있으면 즉시 완료 처리
-            _maybeAutoCompleteOnWaiting(sid, it);
-            _bump();
           },
         )
         ..onPostgresChanges(
           event: PostgresChangeEvent.update,
           schema: 'public',
           table: 'homework_items',
-          filter: PostgresChangeFilter(
-              type: PostgresChangeFilterType.eq,
-              column: 'academy_id',
-              value: academyId),
           callback: (payload) {
-            final m = payload.newRecord;
-            final String sid = (m['student_id'] as String?) ?? '';
-            if (sid.isEmpty) return;
-            final updated = _parseHomeworkItemRow(m);
-            final list = _byStudentId.putIfAbsent(sid, () => <HomeworkItem>[]);
-            final idx = list.indexWhere((e) => e.id == updated.id);
-            if (idx == -1) {
-              list.add(updated);
-              _sortStudentList(list);
-              _applyFallbackGroupsForStudent(sid);
-              _maybeAutoCompleteOnWaiting(sid, updated);
-              _bump();
-            } else {
-              list[idx] = updated;
-              _sortStudentList(list);
-              _applyFallbackGroupsForStudent(sid);
-              // '확인→대기' 진입 시 자동 완료 플래그가 있으면 즉시 완료 처리
-              _maybeAutoCompleteOnWaiting(sid, updated);
-              _bump();
+            try {
+              if (!_payloadMatchesAcademy(payload, targetAcademyId)) return;
+              final sid = _resolveStudentIdFromPayload(payload);
+              if (sid.isEmpty) {
+                final keys =
+                    _safePayloadRecord(payload.newRecord).keys.toList();
+                debugPrint(
+                    '[HW][rt][UPDATE] skip: student_id empty, keys=$keys');
+                return;
+              }
+              _scheduleRealtimeReload(sid);
+              debugPrint('[HW][rt][UPDATE] student=$sid');
+            } catch (e, st) {
+              debugPrint('[HW][rt][UPDATE] error: $e\n$st');
             }
           },
         )
@@ -736,53 +875,27 @@ class HomeworkStore {
           event: PostgresChangeEvent.delete,
           schema: 'public',
           table: 'homework_items',
-          filter: PostgresChangeFilter(
-              type: PostgresChangeFilterType.eq,
-              column: 'academy_id',
-              value: academyId),
           callback: (payload) {
-            final old = payload.oldRecord;
-            final String id = (old['id'] as String?) ?? '';
-            if (id.isEmpty) return;
-            for (final entry in _byStudentId.entries) {
-              final int before = entry.value.length;
-              entry.value.removeWhere((e) => e.id == id);
-              final bool removed = entry.value.length < before;
-              if (removed) {
-                final sid = entry.key;
-                final gid = _groupIdByItemId.remove(id);
-                if (gid != null && _isLegacyGroupId(gid)) {
-                  _groupItemsByGroupId.remove(gid);
-                  final groups = _groupsByStudentId[sid];
-                  groups?.removeWhere((g) => g.id == gid);
-                } else if (gid != null) {
-                  _groupItemsByGroupId[gid]?.removeWhere(
-                    (link) => link.homeworkItemId == id,
-                  );
-                }
-                _applyFallbackGroupsForStudent(sid);
-                _bump();
-                break;
-              }
-            }
+            if (!_payloadMatchesAcademy(payload, targetAcademyId)) return;
+            final sid = _resolveStudentIdFromPayload(payload);
+            if (sid.isEmpty) return;
+            _scheduleRealtimeReload(sid);
+            debugPrint('[HW][rt][DELETE] student=$sid');
           },
         )
         ..onPostgresChanges(
           event: PostgresChangeEvent.all,
           schema: 'public',
           table: 'homework_groups',
-          filter: PostgresChangeFilter(
-              type: PostgresChangeFilterType.eq,
-              column: 'academy_id',
-              value: academyId),
           callback: (payload) {
+            if (!_payloadMatchesAcademy(payload, targetAcademyId)) return;
             String sid = (payload.newRecord['student_id'] as String?) ?? '';
             if (sid.isEmpty) {
               sid = (payload.oldRecord['student_id'] as String?) ?? '';
             }
             if (sid.isEmpty) return;
             unawaited(_reloadGroupsForStudentByAcademy(
-              academyId: academyId,
+              academyId: targetAcademyId,
               studentId: sid,
             ));
           },
@@ -791,24 +904,27 @@ class HomeworkStore {
           event: PostgresChangeEvent.all,
           schema: 'public',
           table: 'homework_group_items',
-          filter: PostgresChangeFilter(
-              type: PostgresChangeFilterType.eq,
-              column: 'academy_id',
-              value: academyId),
           callback: (payload) {
+            if (!_payloadMatchesAcademy(payload, targetAcademyId)) return;
             String sid = (payload.newRecord['student_id'] as String?) ?? '';
             if (sid.isEmpty) {
               sid = (payload.oldRecord['student_id'] as String?) ?? '';
             }
             if (sid.isEmpty) return;
             unawaited(_reloadGroupsForStudentByAcademy(
-              academyId: academyId,
+              academyId: targetAcademyId,
               studentId: sid,
             ));
           },
         )
-        ..subscribe();
-    } catch (_) {}
+        ..subscribe((status, [error]) {
+          debugPrint('[HW][rt] status=$status error=$error');
+        });
+      _rtAcademyId = targetAcademyId;
+      debugPrint('[HW][rt] subscribed: $channelName');
+    } catch (e, st) {
+      debugPrint('[HW][rt] subscribe failed: $e\n$st');
+    }
   }
 
   Future<void> _ensureGroupForItem({
@@ -2174,6 +2290,9 @@ class HomeworkStore {
     String? memo,
     String? content,
     String? templateItemId,
+    String? flowId,
+    Color? color,
+    int? defaultSplitParts,
   }) async {
     final cleanedGroupId = groupId.trim();
     if (cleanedGroupId.isEmpty) return null;
@@ -2205,14 +2324,22 @@ class HomeworkStore {
     final resolvedType = (type ?? '').trim();
     final resolvedMemo = (memo ?? '').trim();
     final resolvedContent = (content ?? '').trim();
+    final resolvedFlowId = (flowId ?? '').trim();
     final int? resolvedCount = (count != null && count > 0) ? count : null;
+    final resolvedColor = color ?? template?.color ?? const Color(0xFF1976D2);
+    final resolvedSplitParts =
+        (defaultSplitParts ?? template?.defaultSplitParts ?? 1)
+            .clamp(1, 4)
+            .toInt();
 
     final item = HomeworkItem(
       id: const Uuid().v4(),
       title: resolvedTitle,
       body: resolvedBody,
-      color: template?.color ?? const Color(0xFF1976D2),
-      flowId: template?.flowId ?? group?.flowId,
+      color: resolvedColor,
+      flowId: resolvedFlowId.isNotEmpty
+          ? resolvedFlowId
+          : (template?.flowId ?? group?.flowId),
       type: resolvedType.isEmpty ? template?.type : resolvedType,
       page: resolvedPage.isEmpty ? template?.page : resolvedPage,
       count: resolvedCount,
@@ -2223,7 +2350,7 @@ class HomeworkStore {
       sourceUnitLevel: template?.sourceUnitLevel,
       sourceUnitPath: template?.sourceUnitPath,
       unitMappings: null,
-      defaultSplitParts: (template?.defaultSplitParts ?? 1).clamp(1, 4).toInt(),
+      defaultSplitParts: resolvedSplitParts,
       checkCount: 0,
       orderIndex: _nextActiveOrderIndex(studentId),
       createdAt: now,
@@ -2321,6 +2448,141 @@ class HomeworkStore {
       print('[HW][addWaitingItemToGroup][ERROR] $e\n$st');
       await _reloadStudent(studentId);
       return null;
+    }
+  }
+
+  Future<List<HomeworkItem>> createGroupWithWaitingItems({
+    required String studentId,
+    required String groupTitle,
+    String? flowId,
+    required List<Map<String, dynamic>> items,
+  }) async {
+    if (items.isEmpty) return const <HomeworkItem>[];
+    String asText(dynamic value) => (value as String?)?.trim() ?? '';
+    int? asPositiveInt(dynamic value) {
+      if (value is int) return value > 0 ? value : null;
+      if (value is num) {
+        final parsed = value.toInt();
+        return parsed > 0 ? parsed : null;
+      }
+      if (value is String) {
+        final parsed = int.tryParse(value.trim());
+        return (parsed != null && parsed > 0) ? parsed : null;
+      }
+      return null;
+    }
+
+    Color? asColor(dynamic value) {
+      if (value is Color) return value;
+      if (value is int) return Color(value);
+      if (value is num) return Color(value.toInt());
+      return null;
+    }
+
+    int asSplitParts(dynamic value) {
+      final parsed = asPositiveInt(value) ?? 1;
+      return parsed.clamp(1, 4).toInt();
+    }
+
+    final normalized = <Map<String, dynamic>>[];
+    for (final raw in items) {
+      final entry = Map<String, dynamic>.from(raw);
+      final titleRaw = asText(entry['title']);
+      final page = asText(entry['page']);
+      final countText = asText(entry['count']);
+      final content = asText(entry['content']);
+      final title = titleRaw.isEmpty ? '과제' : titleRaw;
+      var body = asText(entry['body']);
+      if (body.isEmpty) {
+        final parts = <String>[];
+        if (page.isNotEmpty) parts.add('p.$page');
+        if (countText.isNotEmpty) parts.add('${countText}문항');
+        if (parts.isEmpty) {
+          body = content.isEmpty ? title : content;
+        } else {
+          body = content.isEmpty
+              ? parts.join(' / ')
+              : '${parts.join(' / ')}\n$content';
+        }
+      }
+      normalized.add({
+        ...entry,
+        'title': title,
+        'body': body,
+      });
+    }
+    if (normalized.isEmpty) return const <HomeworkItem>[];
+
+    final cleanedFlowId = (flowId ?? '').trim();
+    final cleanedGroupTitle =
+        groupTitle.trim().isEmpty ? '그룹 과제' : groupTitle.trim();
+    final now = DateTime.now();
+    final groupId = const Uuid().v4();
+    final group = HomeworkGroup(
+      id: groupId,
+      studentId: studentId,
+      title: cleanedGroupTitle,
+      flowId: cleanedFlowId.isEmpty ? null : cleanedFlowId,
+      orderIndex: _nextGroupOrderIndex(studentId),
+      status: 'active',
+      sourceHomeworkItemId: null,
+      createdAt: now,
+      updatedAt: now,
+      version: 1,
+    );
+    final studentGroups =
+        _groupsByStudentId.putIfAbsent(studentId, () => <HomeworkGroup>[]);
+    studentGroups.add(group);
+    studentGroups.sort(_compareGroupByOrder);
+    _bump();
+
+    try {
+      final academyId = (await TenantService.instance.getActiveAcademyId()) ??
+          await TenantService.instance.ensureActiveAcademy();
+      final supa = Supabase.instance.client;
+      await supa.from('homework_groups').insert({
+        'id': groupId,
+        'academy_id': academyId,
+        'student_id': studentId,
+        'title': cleanedGroupTitle,
+        'flow_id': cleanedFlowId.isEmpty ? null : cleanedFlowId,
+        'order_index': group.orderIndex,
+        'status': 'active',
+        'version': 1,
+      });
+
+      final createdIds = <String>[];
+      for (final entry in normalized) {
+        final createdId = await addWaitingItemToGroup(
+          studentId: studentId,
+          groupId: groupId,
+          title: asText(entry['title']),
+          body: asText(entry['body']),
+          page: asText(entry['page']),
+          count: asPositiveInt(entry['count']),
+          type: asText(entry['type']),
+          memo: asText(entry['memo']),
+          content: asText(entry['content']),
+          flowId: cleanedFlowId.isEmpty ? null : cleanedFlowId,
+          color: asColor(entry['color']),
+          defaultSplitParts: asSplitParts(entry['splitParts']),
+        );
+        if (createdId != null && createdId.isNotEmpty) {
+          createdIds.add(createdId);
+        }
+      }
+
+      await _reloadStudent(studentId);
+      final createdItems = <HomeworkItem>[];
+      for (final id in createdIds) {
+        final item = getById(studentId, id);
+        if (item != null) createdItems.add(item);
+      }
+      return createdItems;
+    } catch (e, st) {
+      print('[HW][createGroupWithWaitingItems][ERROR] $e\n$st');
+      await _reloadStudent(studentId);
+      return const <HomeworkItem>[];
     }
   }
 
