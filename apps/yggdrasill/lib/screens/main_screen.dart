@@ -3421,6 +3421,7 @@ extension on _MainScreenState {
       status: item.status,
       phase: item.phase,
       accumulatedMs: item.accumulatedMs,
+      cycleBaseAccumulatedMs: item.cycleBaseAccumulatedMs,
       runStart: item.runStart,
       completedAt: item.completedAt,
       firstStartedAt: item.firstStartedAt,

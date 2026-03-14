@@ -31,6 +31,12 @@ class HomeworkItem {
   HomeworkStatus status;
   int phase; // 0: 종료, 1: 대기, 2: 수행, 3: 제출, 4: 확인
   int accumulatedMs; // 누적 시간(ms)
+  int? _cycleBaseAccumulatedMs; // hot-reload/legacy 안전용 nullable backing
+  int get cycleBaseAccumulatedMs => _cycleBaseAccumulatedMs ?? 0;
+  set cycleBaseAccumulatedMs(int? value) {
+    _cycleBaseAccumulatedMs = value ?? 0;
+  }
+
   DateTime? runStart; // 진행 중이면 시작 시각
   DateTime? completedAt;
   DateTime? firstStartedAt; // 처음 시작한 시간
@@ -62,6 +68,7 @@ class HomeworkItem {
     this.status = HomeworkStatus.inProgress,
     this.phase = 1,
     this.accumulatedMs = 0,
+    int? cycleBaseAccumulatedMs = 0,
     this.runStart,
     this.completedAt,
     this.firstStartedAt,
@@ -69,7 +76,7 @@ class HomeworkItem {
     this.confirmedAt,
     this.waitingAt,
     this.version = 1,
-  });
+  }) : _cycleBaseAccumulatedMs = (cycleBaseAccumulatedMs ?? 0);
 }
 
 class HomeworkGroup {
@@ -80,6 +87,7 @@ class HomeworkGroup {
   int orderIndex;
   String status;
   String? sourceHomeworkItemId;
+  DateTime? cycleStartedAt; // 현재 사이클에서 처음 수행 진입한 시각
   DateTime? createdAt;
   DateTime? updatedAt;
   int version;
@@ -91,6 +99,7 @@ class HomeworkGroup {
     this.orderIndex = 0,
     this.status = 'active',
     this.sourceHomeworkItemId,
+    this.cycleStartedAt,
     this.createdAt,
     this.updatedAt,
     this.version = 1,
@@ -149,14 +158,24 @@ class HomeworkStore {
   HomeworkStore._internal();
   static final HomeworkStore instance = HomeworkStore._internal();
   static const String _homeworkItemSelectWithSplit =
-      'id,student_id,title,body,color,flow_id,type,page,count,memo,content,book_id,grade_label,source_unit_level,source_unit_path,default_split_parts,order_index,check_count,status,phase,accumulated_ms,run_start,completed_at,first_started_at,submitted_at,confirmed_at,waiting_at,created_at,updated_at,version';
+      'id,student_id,title,body,color,flow_id,type,page,count,memo,content,book_id,grade_label,source_unit_level,source_unit_path,default_split_parts,order_index,check_count,status,phase,accumulated_ms,cycle_base_accumulated_ms,run_start,completed_at,first_started_at,submitted_at,confirmed_at,waiting_at,created_at,updated_at,version';
   static const String _homeworkItemSelectLegacy =
-      'id,student_id,title,body,color,flow_id,type,page,count,memo,content,book_id,grade_label,source_unit_level,source_unit_path,order_index,check_count,status,phase,accumulated_ms,run_start,completed_at,first_started_at,submitted_at,confirmed_at,waiting_at,created_at,updated_at,version';
+      'id,student_id,title,body,color,flow_id,type,page,count,memo,content,book_id,grade_label,source_unit_level,source_unit_path,order_index,check_count,status,phase,accumulated_ms,cycle_base_accumulated_ms,run_start,completed_at,first_started_at,submitted_at,confirmed_at,waiting_at,created_at,updated_at,version';
   static const String _homeworkItemSelectWithSplitNoMemo =
-      'id,student_id,title,body,color,flow_id,type,page,count,content,book_id,grade_label,source_unit_level,source_unit_path,default_split_parts,order_index,check_count,status,phase,accumulated_ms,run_start,completed_at,first_started_at,submitted_at,confirmed_at,waiting_at,created_at,updated_at,version';
+      'id,student_id,title,body,color,flow_id,type,page,count,content,book_id,grade_label,source_unit_level,source_unit_path,default_split_parts,order_index,check_count,status,phase,accumulated_ms,cycle_base_accumulated_ms,run_start,completed_at,first_started_at,submitted_at,confirmed_at,waiting_at,created_at,updated_at,version';
   static const String _homeworkItemSelectLegacyNoMemo =
+      'id,student_id,title,body,color,flow_id,type,page,count,content,book_id,grade_label,source_unit_level,source_unit_path,order_index,check_count,status,phase,accumulated_ms,cycle_base_accumulated_ms,run_start,completed_at,first_started_at,submitted_at,confirmed_at,waiting_at,created_at,updated_at,version';
+  static const String _homeworkItemSelectWithSplitNoCycleBase =
+      'id,student_id,title,body,color,flow_id,type,page,count,memo,content,book_id,grade_label,source_unit_level,source_unit_path,default_split_parts,order_index,check_count,status,phase,accumulated_ms,run_start,completed_at,first_started_at,submitted_at,confirmed_at,waiting_at,created_at,updated_at,version';
+  static const String _homeworkItemSelectLegacyNoCycleBase =
+      'id,student_id,title,body,color,flow_id,type,page,count,memo,content,book_id,grade_label,source_unit_level,source_unit_path,order_index,check_count,status,phase,accumulated_ms,run_start,completed_at,first_started_at,submitted_at,confirmed_at,waiting_at,created_at,updated_at,version';
+  static const String _homeworkItemSelectWithSplitNoMemoNoCycleBase =
+      'id,student_id,title,body,color,flow_id,type,page,count,content,book_id,grade_label,source_unit_level,source_unit_path,default_split_parts,order_index,check_count,status,phase,accumulated_ms,run_start,completed_at,first_started_at,submitted_at,confirmed_at,waiting_at,created_at,updated_at,version';
+  static const String _homeworkItemSelectLegacyNoMemoNoCycleBase =
       'id,student_id,title,body,color,flow_id,type,page,count,content,book_id,grade_label,source_unit_level,source_unit_path,order_index,check_count,status,phase,accumulated_ms,run_start,completed_at,first_started_at,submitted_at,confirmed_at,waiting_at,created_at,updated_at,version';
   static const String _homeworkGroupSelect =
+      'id,student_id,title,flow_id,order_index,status,source_homework_item_id,cycle_started_at,created_at,updated_at,version';
+  static const String _homeworkGroupSelectNoCycleStarted =
       'id,student_id,title,flow_id,order_index,status,source_homework_item_id,created_at,updated_at,version';
   static const String _homeworkGroupItemSelect =
       'id,group_id,student_id,homework_item_id,item_order_index,created_at,updated_at,version';
@@ -186,6 +205,18 @@ class HomeworkStore {
   bool _isMissingMemoColumnError(Object error) {
     final message = error.toString().toLowerCase();
     return message.contains('memo') &&
+        (message.contains('does not exist') || message.contains('42703'));
+  }
+
+  bool _isMissingCycleBaseColumnError(Object error) {
+    final message = error.toString().toLowerCase();
+    return message.contains('cycle_base_accumulated_ms') &&
+        (message.contains('does not exist') || message.contains('42703'));
+  }
+
+  bool _isMissingGroupCycleStartedColumnError(Object error) {
+    final message = error.toString().toLowerCase();
+    return message.contains('cycle_started_at') &&
         (message.contains('does not exist') || message.contains('42703'));
   }
 
@@ -221,25 +252,54 @@ class HomeworkStore {
       return (data as List<dynamic>).cast<Map<String, dynamic>>();
     }
 
+    Future<List<Map<String, dynamic>>> runSelectWithCycleFallback({
+      required String withCycleBase,
+      required String withoutCycleBase,
+    }) async {
+      try {
+        return await runSelect(withCycleBase);
+      } catch (e) {
+        if (_isMissingCycleBaseColumnError(e)) {
+          return await runSelect(withoutCycleBase);
+        }
+        rethrow;
+      }
+    }
+
     try {
-      return await runSelect(_homeworkItemSelectWithSplit);
+      return await runSelectWithCycleFallback(
+        withCycleBase: _homeworkItemSelectWithSplit,
+        withoutCycleBase: _homeworkItemSelectWithSplitNoCycleBase,
+      );
     } catch (e) {
       if (_isMissingDefaultSplitPartsError(e)) {
         try {
-          return await runSelect(_homeworkItemSelectLegacy);
+          return await runSelectWithCycleFallback(
+            withCycleBase: _homeworkItemSelectLegacy,
+            withoutCycleBase: _homeworkItemSelectLegacyNoCycleBase,
+          );
         } catch (legacyError) {
           if (_isMissingMemoColumnError(legacyError)) {
-            return await runSelect(_homeworkItemSelectLegacyNoMemo);
+            return await runSelectWithCycleFallback(
+              withCycleBase: _homeworkItemSelectLegacyNoMemo,
+              withoutCycleBase: _homeworkItemSelectLegacyNoMemoNoCycleBase,
+            );
           }
           rethrow;
         }
       }
       if (_isMissingMemoColumnError(e)) {
         try {
-          return await runSelect(_homeworkItemSelectWithSplitNoMemo);
+          return await runSelectWithCycleFallback(
+            withCycleBase: _homeworkItemSelectWithSplitNoMemo,
+            withoutCycleBase: _homeworkItemSelectWithSplitNoMemoNoCycleBase,
+          );
         } catch (memoFallbackError) {
           if (_isMissingDefaultSplitPartsError(memoFallbackError)) {
-            return await runSelect(_homeworkItemSelectLegacyNoMemo);
+            return await runSelectWithCycleFallback(
+              withCycleBase: _homeworkItemSelectLegacyNoMemo,
+              withoutCycleBase: _homeworkItemSelectLegacyNoMemoNoCycleBase,
+            );
           }
           rethrow;
         }
@@ -293,6 +353,7 @@ class HomeworkStore {
           (_parseInt(r['status'])).clamp(0, HomeworkStatus.values.length - 1)],
       phase: (_parseInt(r['phase'], fallback: 1)).clamp(0, 4),
       accumulatedMs: _parseInt(r['accumulated_ms']),
+      cycleBaseAccumulatedMs: _parseInt(r['cycle_base_accumulated_ms']),
       runStart: _parseTsOpt(r['run_start']),
       completedAt: _parseTsOpt(r['completed_at']),
       firstStartedAt: _parseTsOpt(r['first_started_at']),
@@ -312,6 +373,7 @@ class HomeworkStore {
       orderIndex: _parseInt(r['order_index']),
       status: ((r['status'] as String?) ?? 'active').trim(),
       sourceHomeworkItemId: (r['source_homework_item_id'] as String?)?.trim(),
+      cycleStartedAt: _parseTsOpt(r['cycle_started_at']),
       createdAt: _parseTsOpt(r['created_at']),
       updatedAt: _parseTsOpt(r['updated_at']),
       version: _parseInt(r['version'], fallback: 1),
@@ -427,28 +489,45 @@ class HomeworkStore {
     final targetStudent = sid.isEmpty ? null : sid;
     final supa = Supabase.instance.client;
     try {
-      dynamic groupQuery = supa
-          .from('homework_groups')
-          .select(_homeworkGroupSelect)
-          .eq('academy_id', academyId);
+      Future<List<Map<String, dynamic>>> runGroupQuery(
+        String selectColumns,
+      ) async {
+        dynamic query = supa
+            .from('homework_groups')
+            .select(selectColumns)
+            .eq('academy_id', academyId);
+        if (targetStudent != null) {
+          query = query.eq('student_id', targetStudent);
+        }
+        query = query
+            .order('order_index', ascending: true)
+            .order('updated_at', ascending: false);
+        final rowsRaw = await query;
+        return (rowsRaw as List<dynamic>).cast<Map<String, dynamic>>();
+      }
+
       dynamic groupItemQuery = supa
           .from('homework_group_items')
           .select(_homeworkGroupItemSelect)
           .eq('academy_id', academyId);
       if (targetStudent != null) {
-        groupQuery = groupQuery.eq('student_id', targetStudent);
         groupItemQuery = groupItemQuery.eq('student_id', targetStudent);
       }
-      groupQuery = groupQuery
-          .order('order_index', ascending: true)
-          .order('updated_at', ascending: false);
       groupItemQuery = groupItemQuery
           .order('item_order_index', ascending: true)
           .order('updated_at', ascending: false);
-      final groupRowsRaw = await groupQuery;
+
+      List<Map<String, dynamic>> groupRows;
+      try {
+        groupRows = await runGroupQuery(_homeworkGroupSelect);
+      } catch (e) {
+        if (_isMissingGroupCycleStartedColumnError(e)) {
+          groupRows = await runGroupQuery(_homeworkGroupSelectNoCycleStarted);
+        } else {
+          rethrow;
+        }
+      }
       final groupItemRowsRaw = await groupItemQuery;
-      final groupRows =
-          (groupRowsRaw as List<dynamic>).cast<Map<String, dynamic>>();
       final groupItemRows =
           (groupItemRowsRaw as List<dynamic>).cast<Map<String, dynamic>>();
 
@@ -828,8 +907,7 @@ class HomeworkStore {
       }
       final channelName =
           'public:homework_items:$targetAcademyId:${DateTime.now().millisecondsSinceEpoch}';
-      _rt = Supabase.instance.client
-          .channel(channelName)
+      _rt = Supabase.instance.client.channel(channelName)
         ..onPostgresChanges(
           event: PostgresChangeEvent.insert,
           schema: 'public',
@@ -2127,22 +2205,137 @@ class HomeworkStore {
     );
   }
 
-  Future<int> bulkTransitionGroup(
-    String studentId,
-    String groupId,
-  ) async {
-    if (groupId.trim().isEmpty) return 0;
+  Future<void> _applyGroupCycleDistributionByCount({
+    required String studentId,
+    required List<String> childIds,
+    required Map<String, int> cycleBaseById,
+    required Map<String, int> weightById,
+    required int cycleDeltaMs,
+  }) async {
+    if (cycleDeltaMs <= 0 || childIds.isEmpty) return;
+    final rows = <HomeworkItem>[];
+    for (final id in childIds) {
+      final item = getById(studentId, id);
+      if (item == null || item.status == HomeworkStatus.completed) continue;
+      rows.add(item);
+    }
+    if (rows.isEmpty) return;
+
+    final weights = <String, int>{};
+    int totalWeight = 0;
+    for (final item in rows) {
+      final fallbackWeight =
+          (item.count != null && item.count! > 0) ? item.count! : 1;
+      final weight = (weightById[item.id] ?? fallbackWeight);
+      final safeWeight = weight > 0 ? weight : 1;
+      weights[item.id] = safeWeight;
+      totalWeight += safeWeight;
+    }
+    if (totalWeight <= 0) return;
+
+    final allocated = <String, int>{};
+    int allocatedSum = 0;
+    for (final item in rows) {
+      final w = weights[item.id] ?? 1;
+      final ms = (cycleDeltaMs * w) ~/ totalWeight;
+      allocated[item.id] = ms;
+      allocatedSum += ms;
+    }
+    int remainder = cycleDeltaMs - allocatedSum;
+    if (remainder > 0) {
+      final ordered = rows.toList(growable: false)
+        ..sort((a, b) {
+          final byWeight = (weights[b.id] ?? 1).compareTo(weights[a.id] ?? 1);
+          if (byWeight != 0) return byWeight;
+          return a.id.compareTo(b.id);
+        });
+      int idx = 0;
+      while (remainder > 0 && ordered.isNotEmpty) {
+        final item = ordered[idx % ordered.length];
+        allocated[item.id] = (allocated[item.id] ?? 0) + 1;
+        remainder -= 1;
+        idx += 1;
+      }
+    }
+
+    final now = DateTime.now();
+    bool changed = false;
+    for (final item in rows) {
+      final base = cycleBaseById[item.id] ?? item.cycleBaseAccumulatedMs;
+      final targetAccumulated = base + (allocated[item.id] ?? 0);
+      if (item.accumulatedMs == targetAccumulated) continue;
+      item.accumulatedMs = targetAccumulated;
+      item.updatedAt = now;
+      changed = true;
+    }
+    if (!changed) return;
+    _bump();
+    for (final item in rows) {
+      await _upsertItem(studentId, item);
+    }
+  }
+
+  Future<int> bulkTransitionGroup(String studentId, String groupId,
+      {int? fromPhase}) async {
+    final cleanedGroupId = groupId.trim();
+    if (cleanedGroupId.isEmpty) return 0;
+    final normalizedFromPhase = fromPhase;
+    final now = DateTime.now();
+    final beforeChildren = (normalizedFromPhase == 4)
+        ? itemsInGroup(studentId, cleanedGroupId, includeCompleted: true)
+            .where((e) => e.status != HomeworkStatus.completed)
+            .toList(growable: false)
+        : const <HomeworkItem>[];
+    final beforeIds = <String>[
+      for (final child in beforeChildren) child.id,
+    ];
+    final beforeCycleBaseById = <String, int>{
+      for (final child in beforeChildren)
+        child.id: (child.cycleBaseAccumulatedMs <= 0 &&
+                child.phase == 1 &&
+                child.accumulatedMs > 0)
+            ? child.accumulatedMs
+            : child.cycleBaseAccumulatedMs,
+    };
+    final beforeWeightById = <String, int>{
+      for (final child in beforeChildren)
+        child.id: (child.count != null && child.count! > 0) ? child.count! : 1,
+    };
+    int groupCycleDeltaMs = 0;
+    for (final child in beforeChildren) {
+      final childRunningMs = child.runStart != null
+          ? now.difference(child.runStart!).inMilliseconds
+          : 0;
+      final childCurrent = child.accumulatedMs + childRunningMs;
+      final base = beforeCycleBaseById[child.id] ?? 0;
+      final delta = childCurrent - base;
+      if (delta > groupCycleDeltaMs) {
+        groupCycleDeltaMs = delta;
+      }
+    }
     try {
       final academyId = (await TenantService.instance.getActiveAcademyId()) ??
           await TenantService.instance.ensureActiveAcademy();
       final raw = await Supabase.instance.client.rpc(
         'homework_group_bulk_transition',
         params: {
-          'p_group_id': groupId,
+          'p_group_id': cleanedGroupId,
           'p_academy_id': academyId,
+          'p_from_phase': normalizedFromPhase,
         },
       );
       await _reloadStudent(studentId);
+      if (normalizedFromPhase == 4 &&
+          groupCycleDeltaMs > 0 &&
+          beforeIds.isNotEmpty) {
+        await _applyGroupCycleDistributionByCount(
+          studentId: studentId,
+          childIds: beforeIds,
+          cycleBaseById: beforeCycleBaseById,
+          weightById: beforeWeightById,
+          cycleDeltaMs: groupCycleDeltaMs,
+        );
+      }
       return _parseInt(raw);
     } catch (_) {
       return 0;

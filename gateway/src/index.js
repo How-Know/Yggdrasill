@@ -332,6 +332,68 @@ try {
   console.warn('[gateway] realtime homework_assignments subscribe failed', e);
 }
 
+// Realtime: listen homework_groups changes (order/title/status) and push to bound devices
+try {
+  try { supa.realtime.setAuth?.(SUPABASE_SERVICE); } catch (_) {}
+  const groupChannel = supa
+    .channel('public:homework_groups')
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'homework_groups' },
+      async (payload) => {
+        try {
+          const rec = payload?.new ?? payload?.old ?? payload?.record ?? {};
+          const academy_id = rec.academy_id;
+          const student_id = rec.student_id;
+          await publishHomeworksToBoundDevices(academy_id, student_id, 'homework_groups');
+        } catch (e) {
+          console.error('[gateway] realtime homework_groups handler error', e);
+        }
+      }
+    )
+    .subscribe((status) => console.log('[gateway][rt] homework_groups', status));
+  console.log('[gateway] realtime: homework_groups subscribed init');
+} catch (e) {
+  console.warn('[gateway] realtime homework_groups subscribe failed', e);
+}
+
+// Realtime: listen homework_group_items changes (child order/membership) and push updates
+try {
+  try { supa.realtime.setAuth?.(SUPABASE_SERVICE); } catch (_) {}
+  const groupItemsChannel = supa
+    .channel('public:homework_group_items')
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'homework_group_items' },
+      async (payload) => {
+        try {
+          const rec = payload?.new ?? payload?.old ?? payload?.record ?? {};
+          let academy_id = rec.academy_id;
+          let student_id = rec.student_id;
+          if ((!academy_id || !student_id) && rec.group_id) {
+            const { data: g } = await supa
+              .from('homework_groups')
+              .select('academy_id,student_id')
+              .eq('id', rec.group_id)
+              .limit(1)
+              .maybeSingle();
+            if (g) {
+              academy_id = academy_id || g.academy_id;
+              student_id = student_id || g.student_id;
+            }
+          }
+          await publishHomeworksToBoundDevices(academy_id, student_id, 'homework_group_items');
+        } catch (e) {
+          console.error('[gateway] realtime homework_group_items handler error', e);
+        }
+      }
+    )
+    .subscribe((status) => console.log('[gateway][rt] homework_group_items', status));
+  console.log('[gateway] realtime: homework_group_items subscribed init');
+} catch (e) {
+  console.warn('[gateway] realtime homework_group_items subscribe failed', e);
+}
+
 // Realtime: listen m5_device_bindings changes → notify device on unbind
 try {
   try { supa.realtime.setAuth?.(SUPABASE_SERVICE); } catch (_) {}

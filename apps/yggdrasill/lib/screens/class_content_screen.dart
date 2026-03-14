@@ -2660,6 +2660,7 @@ Future<void> _openHomeworkEditDialogForHome(
     status: item.status,
     phase: item.phase,
     accumulatedMs: item.accumulatedMs,
+    cycleBaseAccumulatedMs: item.cycleBaseAccumulatedMs,
     runStart: item.runStart,
     completedAt: item.completedAt,
     firstStartedAt: item.firstStartedAt,
@@ -2705,6 +2706,7 @@ HomeworkItem _copyHomeworkItemForInlineEdit(
     status: source.status,
     phase: source.phase,
     accumulatedMs: source.accumulatedMs,
+    cycleBaseAccumulatedMs: source.cycleBaseAccumulatedMs,
     runStart: source.runStart,
     completedAt: source.completedAt,
     firstStartedAt: source.firstStartedAt,
@@ -3137,6 +3139,10 @@ const double _homeworkChipOuterLeftInset =
             ClassContentScreen._studentColumnContentWidth) /
         2;
 const String _homeworkPrintTempPrefix = 'hw_print_';
+// 그룹 사이클 내(휴식 포함) 진행시간 누적 보장을 위한 기준값 스냅샷 캐시
+final Map<String, String> _groupCycleIdentityByGroupId = <String, String>{};
+final Map<String, Map<String, int>> _groupChildCycleBaseByGroupId =
+    <String, Map<String, int>>{};
 
 // ------------------------
 // 오른쪽 패널: 슬라이드시트와 동일한 과제 칩 렌더링
@@ -3953,14 +3959,26 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
     List<HomeworkItem> children,
   ) {
     final first = children.first;
+    final String cycleIdentity =
+        group.cycleStartedAt?.toUtc().toIso8601String() ?? '__idle__';
+    final String? previousCycleIdentity =
+        _groupCycleIdentityByGroupId[group.id];
+    if (previousCycleIdentity != cycleIdentity) {
+      _groupCycleIdentityByGroupId[group.id] = cycleIdentity;
+      _groupChildCycleBaseByGroupId[group.id] = <String, int>{};
+    }
+    final Map<String, int> childCycleBaseCache = _groupChildCycleBaseByGroupId
+        .putIfAbsent(group.id, () => <String, int>{});
+    final Set<String> currentChildIds = <String>{};
+
     HomeworkItem? runningChild;
     bool hasSubmitted = false;
     bool hasConfirmed = false;
     int maxPhase = 1;
-    int totalMs = 0;
-    int totalChecks = 0;
+    int groupCycleBaseMs = 0;
+    int groupCycleProgressMs = 0;
+    int groupCheckCount = 0;
     int totalCount = 0;
-    DateTime? earliestStarted;
     DateTime? latestUpdated;
     DateTime? latestSubmitted;
     DateTime? latestConfirmed;
@@ -3974,20 +3992,36 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
       if (child.phase == 3) hasSubmitted = true;
       if (child.phase == 4) hasConfirmed = true;
       if (child.phase > maxPhase) maxPhase = child.phase;
-      totalMs += child.accumulatedMs;
-      if (child.runStart != null) {
-        totalMs += DateTime.now().difference(child.runStart!).inMilliseconds;
+      final int childRunningMs = child.runStart != null
+          ? DateTime.now().difference(child.runStart!).inMilliseconds
+          : 0;
+      final int childTotalMs = child.accumulatedMs + childRunningMs;
+      int rawChildCycleBaseMs = child.cycleBaseAccumulatedMs;
+      if (rawChildCycleBaseMs <= 0 &&
+          child.phase == 1 &&
+          child.accumulatedMs > 0) {
+        // 마이그레이션 미적용/과거 데이터에서도 대기 기준점은 안전하게 유지한다.
+        rawChildCycleBaseMs = child.accumulatedMs;
       }
-      totalChecks += child.checkCount;
+      currentChildIds.add(child.id);
+      final int childCycleBaseMs = childCycleBaseCache.putIfAbsent(
+        child.id,
+        () =>
+            rawChildCycleBaseMs > 0 ? rawChildCycleBaseMs : child.accumulatedMs,
+      );
+      groupCycleBaseMs += childCycleBaseMs;
+      final int childCycleProgressMs =
+          math.max(0, childTotalMs - childCycleBaseMs);
+      if (childCycleProgressMs > groupCycleProgressMs) {
+        groupCycleProgressMs = childCycleProgressMs;
+      }
+      if (child.checkCount > groupCheckCount) {
+        groupCheckCount = child.checkCount;
+      }
       final childCount = child.count;
       if (childCount != null && childCount > 0) totalCount += childCount;
       final p = (child.page ?? '').trim();
       if (p.isNotEmpty && pages.length < 4) pages.add(p);
-      final started = child.firstStartedAt;
-      if (started != null &&
-          (earliestStarted == null || started.isBefore(earliestStarted))) {
-        earliestStarted = started;
-      }
       final updated = child.updatedAt;
       if (updated != null &&
           (latestUpdated == null || updated.isAfter(latestUpdated))) {
@@ -4009,6 +4043,8 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
         latestWaiting = waiting;
       }
     }
+    childCycleBaseCache
+        .removeWhere((childId, _) => !currentChildIds.contains(childId));
 
     int phase = 1;
     if (runningChild != null) {
@@ -4025,6 +4061,9 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
       if (pages.length <= 3) return pages.join(', ');
       return '${pages.take(3).join(', ')}, ...';
     }();
+    final DateTime? groupCycleStartedAt =
+        group.cycleStartedAt ?? runningChild?.runStart;
+    final int groupTotalMs = groupCycleBaseMs + groupCycleProgressMs;
     return HomeworkItem(
       id: (runningChild ?? first).id,
       title: group.title.trim().isEmpty ? first.title : group.title.trim(),
@@ -4041,17 +4080,18 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
       sourceUnitLevel: first.sourceUnitLevel,
       sourceUnitPath: first.sourceUnitPath,
       defaultSplitParts: first.defaultSplitParts,
-      checkCount: totalChecks,
+      checkCount: groupCheckCount,
       orderIndex: group.orderIndex,
       createdAt: first.createdAt,
       updatedAt: latestUpdated ?? first.updatedAt,
       status: HomeworkStatus.inProgress,
       phase: phase,
-      accumulatedMs: totalMs,
-      // 그룹 진행시간은 하위 과제 전체를 합산해 단일 값으로 표현한다.
+      accumulatedMs: groupTotalMs,
+      cycleBaseAccumulatedMs: groupCycleBaseMs,
+      // baseline(합산) + 이번 사이클 진행(delta 1회) 형태로 그룹 타이머를 표현한다.
       runStart: null,
       completedAt: null,
-      firstStartedAt: earliestStarted,
+      firstStartedAt: groupCycleStartedAt,
       submittedAt: latestSubmitted,
       confirmedAt: latestConfirmed,
       waitingAt: latestWaiting,
@@ -4172,8 +4212,11 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
           onGroupSubmittedDoubleTap?.call(studentId, submittedChildren);
           return;
         }
-        unawaited(
-            HomeworkStore.instance.bulkTransitionGroup(studentId, group.id));
+        unawaited(HomeworkStore.instance.bulkTransitionGroup(
+          studentId,
+          group.id,
+          fromPhase: summary.phase,
+        ));
       },
       child: _buildHomeworkChipWithReorderHandle(
         index: i,
@@ -4920,8 +4963,17 @@ Future<void> _showHomeworkGroupActionDialog({
                 : () {
                     Navigator.of(dialogContext).pop();
                     unawaited(() async {
-                      final changed = await HomeworkStore.instance
-                          .bulkTransitionGroup(studentId, group.id);
+                      final int? fromPhase = runningCount > 0
+                          ? 2
+                          : (waitingCount > 0
+                              ? 1
+                              : (confirmedCount > 0 ? 4 : null));
+                      final changed =
+                          await HomeworkStore.instance.bulkTransitionGroup(
+                        studentId,
+                        group.id,
+                        fromPhase: fromPhase,
+                      );
                       if (!context.mounted) return;
                       _showHomeworkChipSnackBar(
                         context,
@@ -5912,7 +5964,12 @@ Widget _buildHomeworkChipVisual(
       ? DateTime.now().difference(hw.runStart!).inMilliseconds
       : 0;
   final int totalMs = hw.accumulatedMs + runningMs;
-  final int progressMs = visualPhase == 1 ? 0 : totalMs;
+  final int cycleBaseMs = hw.cycleBaseAccumulatedMs;
+  final int cycleProgressMs = math.max(0, totalMs - cycleBaseMs);
+  final bool isPausedWaiting =
+      visualPhase == 1 && cycleProgressMs > 0 && hw.firstStartedAt != null;
+  final int progressMs =
+      (visualPhase == 1 && !isPausedWaiting) ? 0 : cycleProgressMs;
   final int progressMinutes = progressMs <= 0 ? 0 : (progressMs ~/ 60000);
   final String durationText = _formatDurationMs(totalMs);
   final String startedAtText =

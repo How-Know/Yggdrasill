@@ -117,9 +117,10 @@ static void initLvgl() {
   lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
   lv_obj_set_style_radius(scr, 0, 0);
 
-  // 내장 카카오 비트맵 폰트 22px 선언 및 전역 적용
-  extern const lv_font_t kakao_kr_22; // src/fonts/kakao_kr_22.c
-  ui_port_set_global_font(&kakao_kr_22);
+  // 내장 카카오 비트맵 폰트 16px 전역 적용
+  // (상세 교재명은 ui_port.cpp에서 kakao_kr_24를 개별 적용)
+  extern const lv_font_t kakao_kr_16; // src/fonts/kakao_kr_16.c
+  ui_port_set_global_font(&kakao_kr_16);
 
   // Touch input device
   lv_indev_drv_init(&g_lv_indev_drv);
