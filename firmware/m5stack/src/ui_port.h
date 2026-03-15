@@ -37,5 +37,6 @@ void fw_publish_group_transition(const char* groupId, int from_phase = 0);
 void fw_publish_pause_all();
 void fw_publish_check_update();
 void fw_publish_list_today();
+void fw_publish_list_homeworks(const char* studentIdArg);
 
 

@@ -955,10 +955,7 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
                   children: [
                     _buildUpcomingPaymentCard(upcoming),
                     const SizedBox(height: 16),
-                    _buildPaymentHistoryList(
-                      upcomingRecord: upcoming,
-                      maxHeight: 420,
-                    ),
+                    _buildPaymentHistoryList(maxHeight: 420),
                   ],
                 ),
               ),
@@ -1115,64 +1112,26 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
     );
   }
 
-  Widget _buildPaymentHistoryList({
-    required PaymentRecord upcomingRecord,
-    double? maxHeight,
-  }) {
+  Widget _buildPaymentHistoryList({double? maxHeight}) {
     final studentId = widget.studentWithInfo.student.id;
-    final registrationDate = widget.studentWithInfo.basicInfo.registrationDate;
-    if (registrationDate == null) {
-      return const Center(
-          child:
-              Text('등록일 정보가 없습니다.', style: TextStyle(color: Colors.white60)));
-    }
+    final entries = DataManager.instance
+        .getPaymentRecordsForStudent(studentId)
+      ..sort((a, b) => b.cycle.compareTo(a.cycle));
 
-    final now = DateTime.now();
-    final currentMonth = DateTime(now.year, now.month);
-    final List<DateTime> months = [];
-    DateTime probe = DateTime(registrationDate.year, registrationDate.month);
-    while (
-        !probe.isAfter(DateTime(currentMonth.year, currentMonth.month + 3))) {
-      months.add(probe);
-      probe = DateTime(probe.year, probe.month + 1);
+    if (entries.isEmpty) {
+      return Container(
+        decoration: BoxDecoration(
+          color: const Color(0xFF151C21),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: const Color(0xFF223131)),
+        ),
+        child: const Center(
+          child: Text('납부 기록이 없습니다.', style: TextStyle(color: Colors.white60)),
+        ),
+      );
     }
-    // 최신순 정렬
-    months.sort((a, b) => b.compareTo(a));
 
     final DateTime today = DateTime.now();
-    final DateTime upcomingDueDate = upcomingRecord.dueDate;
-    final int upcomingCycle = upcomingRecord.cycle;
-    final List<_PaymentEntry> pastEntries = [];
-    _PaymentEntry? upcomingEntry;
-
-    final sortedMonths = List<DateTime>.from(months)
-      ..sort((a, b) => a.compareTo(b));
-    for (final month in sortedMonths) {
-      final paymentDate =
-          _getActualPaymentDateForMonth(studentId, registrationDate, month);
-      final cycle = _calculateCycleNumber(registrationDate, paymentDate);
-      final record = DataManager.instance.getPaymentRecord(studentId, cycle);
-      final entry = _PaymentEntry(
-        cycle: cycle,
-        dueDate: paymentDate,
-        record: record,
-      );
-      if (cycle == upcomingCycle) {
-        upcomingEntry = entry;
-        continue;
-      }
-      if (paymentDate.isAfter(upcomingDueDate)) {
-        // 다음 달 예정일 이후의 기록은 숨김
-        continue;
-      }
-      pastEntries.add(entry);
-    }
-
-    pastEntries.sort((a, b) => b.dueDate.compareTo(a.dueDate));
-    final entries = [
-      if (upcomingEntry != null) upcomingEntry,
-      ...pastEntries,
-    ];
 
     final TextStyle labelStyle = const TextStyle(
         color: Colors.white, fontSize: 17, fontWeight: FontWeight.w600);
@@ -1187,9 +1146,9 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
       separatorBuilder: (_, __) =>
           const Divider(color: Color(0xFF223131), height: 1),
       itemBuilder: (context, index) {
-        final entry = entries[index];
-        final bool isPaid = entry.record?.paidDate != null;
-        final bool isUpcoming = entry.dueDate.isAfter(today);
+        final record = entries[index];
+        final bool isPaid = record.paidDate != null;
+        final bool isUpcoming = !isPaid && record.dueDate.isAfter(today);
         String statusText;
         Color statusColor;
         if (isPaid) {
@@ -1203,27 +1162,51 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
           statusColor = const Color(0xFFE57373);
         }
 
-        return InkWell(
-          onTap: () => _showPaymentDatePicker(
-            entry.record ??
-                PaymentRecord(
-                    studentId: studentId,
-                    cycle: entry.cycle,
-                    dueDate: entry.dueDate),
-            markAsPaid: true,
-          ),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-            child: Row(
-              children: [
-                Text('${entry.cycle}회차', style: labelStyle),
-                const SizedBox(width: 20),
-                Text(
-                  DateFormat('yyyy.MM.dd').format(entry.dueDate),
-                  style: dateStyle,
+        final canEditDueDate = !isPaid;
+
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+          child: Row(
+            children: [
+              Text('${record.cycle}회차', style: labelStyle),
+              const SizedBox(width: 20),
+              InkWell(
+                onTap: canEditDueDate
+                    ? () => _showPaymentDatePicker(
+                          record,
+                          markAsPaid: false,
+                        )
+                    : null,
+                borderRadius: BorderRadius.circular(8),
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                  child: Text(
+                    DateFormat('yyyy.MM.dd').format(record.dueDate),
+                    style: dateStyle.copyWith(
+                      color:
+                          canEditDueDate ? const Color(0xFF90CAF9) : Colors.white70,
+                      fontWeight:
+                          canEditDueDate ? FontWeight.w700 : FontWeight.w400,
+                      decoration: canEditDueDate
+                          ? TextDecoration.underline
+                          : TextDecoration.none,
+                      decorationColor:
+                          canEditDueDate ? const Color(0xFF90CAF9) : null,
+                    ),
+                  ),
                 ),
-                const Spacer(),
-                Container(
+              ),
+              const Spacer(),
+              InkWell(
+                onTap: isPaid
+                    ? null
+                    : () => _showPaymentDatePicker(
+                          record,
+                          markAsPaid: true,
+                        ),
+                borderRadius: BorderRadius.circular(8),
+                child: Container(
                   padding:
                       const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                   decoration: BoxDecoration(
@@ -1239,8 +1222,8 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
                         fontWeight: FontWeight.w700),
                   ),
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
         );
       },
@@ -1301,14 +1284,15 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
       String studentId, DateTime registrationDate, DateTime month) {
     final DateTime regDate = DateTime(
         registrationDate.year, registrationDate.month, registrationDate.day);
-    final DateTime dueDate =
-        _getActualPaymentDateForMonth(studentId, regDate, month);
-    if (dueDate.isBefore(regDate)) {
+    final DateTime monthAnchor = DateTime(month.year, month.month, 1);
+    final int cycle = _calculateCycleNumber(regDate, monthAnchor);
+    if (cycle <= 0) {
       return const _MonthlyDotInfo(
           color: Color(0xFF3C4747), caption: '미등록', dimmed: true);
     }
-    final int cycle = _calculateCycleNumber(regDate, dueDate);
-    if (cycle <= 0) {
+    final DateTime dueDate =
+        _getActualPaymentDateForMonth(studentId, regDate, month);
+    if (dueDate.isBefore(regDate)) {
       return const _MonthlyDotInfo(
           color: Color(0xFF3C4747), caption: '미등록', dimmed: true);
     }
@@ -1420,9 +1404,13 @@ class _StudentCourseDetailScreenState extends State<StudentCourseDetailScreen> {
     // registrationDate는 날짜만 사용 (시간 비교 오차 방지)
     final regDate = DateTime(
         registrationDate.year, registrationDate.month, registrationDate.day);
+    final monthAnchor = DateTime(targetMonth.year, targetMonth.month, 1);
+    final cycle = _calculateCycleNumber(regDate, monthAnchor);
+    final int daysInMonth =
+        DateUtils.getDaysInMonth(targetMonth.year, targetMonth.month);
+    final int dueDay = regDate.day > daysInMonth ? daysInMonth : regDate.day;
     final defaultDate =
-        DateTime(targetMonth.year, targetMonth.month, regDate.day);
-    final cycle = _calculateCycleNumber(regDate, defaultDate);
+        DateTime(targetMonth.year, targetMonth.month, dueDay);
     final record = DataManager.instance.getPaymentRecord(studentId, cycle);
     if (record != null) return record.dueDate;
     return defaultDate;
@@ -1446,18 +1434,6 @@ class _MonthlyDotInfo {
     required this.color,
     required this.caption,
     this.dimmed = false,
-  });
-}
-
-class _PaymentEntry {
-  final int cycle;
-  final DateTime dueDate;
-  final PaymentRecord? record;
-
-  _PaymentEntry({
-    required this.cycle,
-    required this.dueDate,
-    required this.record,
   });
 }
 

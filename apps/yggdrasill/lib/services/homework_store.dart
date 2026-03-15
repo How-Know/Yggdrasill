@@ -1621,15 +1621,66 @@ class HomeworkStore {
       final academyId = (await TenantService.instance.getActiveAcademyId()) ??
           await TenantService.instance.ensureActiveAcademy();
       final supa = Supabase.instance.client;
+      final changedIds = <String>[];
+      final touchItemIds = <String>{};
       for (final g in changed) {
         if (_isLegacyGroupId(g.id)) continue;
+        changedIds.add(g.id);
         await supa
             .from('homework_groups')
             .update({'order_index': g.orderIndex})
             .eq('academy_id', academyId)
             .eq('id', g.id);
+        final links = _groupItemsByGroupId[g.id];
+        if (links != null && links.isNotEmpty) {
+          final itemId = links.first.homeworkItemId.trim();
+          if (itemId.isNotEmpty) touchItemIds.add(itemId);
+        }
       }
-    } catch (_) {}
+      // Fallback bridge: if homework_groups realtime is delayed/missing,
+      // touch representative homework_items so gateway's existing items realtime
+      // still pushes the latest order to M5 immediately.
+      if (touchItemIds.isNotEmpty) {
+        try {
+          await supa
+              .from('homework_items')
+              .update({
+                'updated_at': DateTime.now().toUtc().toIso8601String(),
+              })
+              .eq('academy_id', academyId)
+              .eq('student_id', studentId)
+              .inFilter('id', touchItemIds.toList());
+        } catch (e, st) {
+          debugPrint('[HW][groups][reorder][touch-items][ERROR] $e\n$st');
+        }
+      }
+      if (changedIds.isNotEmpty) {
+        try {
+          final verifyRaw = await supa
+              .from('homework_groups')
+              .select('id,order_index')
+              .eq('academy_id', academyId)
+              .eq('student_id', studentId)
+              .inFilter('id', changedIds);
+          final verifyRows =
+              (verifyRaw as List<dynamic>).cast<Map<String, dynamic>>();
+          final byId = <String, int>{
+            for (final row in verifyRows)
+              (row['id'] as String? ?? ''): _parseInt(row['order_index']),
+          };
+          final mismatched = changed.where((g) => byId[g.id] != g.orderIndex);
+          if (mismatched.isNotEmpty) {
+            debugPrint(
+              '[HW][groups][reorder] server mismatch student=$studentId ids=${mismatched.map((e) => e.id).toList()}',
+            );
+          }
+        } catch (e, st) {
+          debugPrint('[HW][groups][reorder][verify][ERROR] $e\n$st');
+        }
+      }
+    } catch (e, st) {
+      debugPrint('[HW][groups][reorder][ERROR] $e\n$st');
+    }
   }
 
   Future<void> moveToBottom(String studentId, String id) async {
