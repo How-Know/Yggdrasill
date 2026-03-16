@@ -67,6 +67,7 @@ class HomeworkQuickAddProxyDialogState
   int _selectedSplitParts = 1;
   final List<_DraftGroupItem> _draftGroupItems = <_DraftGroupItem>[];
   int _draftGroupItemSeq = 0;
+  int _groupTitleAiRequestId = 0;
   String? _expandedBigKey;
   String? _expandedMidKey;
 
@@ -707,12 +708,13 @@ class HomeworkQuickAddProxyDialogState
     var text = raw.trim();
     if (text.isEmpty) return '';
     text = text.replaceAll(RegExp(r'\s+'), ' ');
-    text = text.replaceAll(RegExp(r'^\d+(?:[.\-]\d+)*\s*'), '');
-    text = text.replaceAll(RegExp(r'^[\[\(]?\d+[\]\)]\s*'), '');
+    // 제목 앞쪽의 번호/기호 프리픽스(예: 1.1.(7), [3], 2-)를 제거한다.
+    text = text.replaceAll(RegExp(r'^[\d\.\-\(\)\[\]\s]+'), '');
     text = text.replaceAll(RegExp(r'^(대단원|중단원|소단원)\s*'), '');
     text = text.replaceAll(RegExp(r'\s*(대단원|중단원|소단원)$'), '');
-    text = text.replaceAll(RegExp(r'^\W+'), '');
-    text = text.replaceAll(RegExp(r'\W+$'), '');
+    // \W 는 한글도 비단어로 취급될 수 있어 사용하지 않는다.
+    text = text.replaceAll(RegExp(r'^[,./|·:;~`_\\-]+'), '');
+    text = text.replaceAll(RegExp(r'[,./|·:;~`_\\-]+$'), '');
     return text.trim();
   }
 
@@ -784,6 +786,12 @@ class HomeworkQuickAddProxyDialogState
       '복습',
       '단원',
       '수',
+      '하위',
+      '과제',
+      '제목',
+      '공통',
+      '수학',
+      '키워드',
     };
     final out = <String>[];
     final seen = <String>{};
@@ -815,7 +823,7 @@ class HomeworkQuickAddProxyDialogState
 
   String _composeSummaryTitleFromConcepts(
     List<String> conceptKeywords, {
-    int maxChars = 20,
+    int maxChars = 25,
   }) {
     final cleaned = <String>[];
     final seen = <String>{};
@@ -824,34 +832,23 @@ class HomeworkQuickAddProxyDialogState
       if (keyword.isEmpty || _isGenericConceptLabel(keyword)) continue;
       if (seen.add(keyword)) cleaned.add(keyword);
     }
-    if (cleaned.isEmpty) return '개념 정리';
+    if (cleaned.isEmpty) return '수학 개념';
 
     final items = cleaned.take(4).toList(growable: false);
-    final candidates = <String>[];
-    if (items.isNotEmpty) {
-      candidates.add('${items.first} 정리');
+    if (items.length == 1) {
+      return _truncateTitle(items.first, maxChars);
     }
-    if (items.length >= 2) {
-      candidates.add('${items[0]}와 ${items[1]} 정리');
-      candidates.add('${items[0]}, ${items[1]} 정리');
+    if (items.length == 2) {
+      final twoJoined = '${items[0]}와 ${items[1]}';
+      return _truncateTitle(twoJoined, maxChars);
     }
-    if (items.length >= 3) {
-      candidates.add('${items[0]}, ${items[1]}, ${items[2]} 정리');
-      candidates.add('${items[0]} · ${items[1]} · ${items[2]} 정리');
+    String joined = items.first;
+    for (int i = 1; i < items.length; i++) {
+      final candidate = '$joined, ${items[i]}';
+      if (candidate.length > maxChars) break;
+      joined = candidate;
     }
-    if (items.length >= 4) {
-      candidates.add('${items[0]}, ${items[1]} 외 ${items.length - 2}개 개념 정리');
-    }
-
-    String best = '';
-    for (final candidate in candidates) {
-      final normalized = _truncateTitle(candidate, maxChars);
-      if (normalized.length > best.length && normalized.length <= maxChars) {
-        best = normalized;
-      }
-    }
-    if (best.isNotEmpty && best != '개념 정리') return best;
-    return _truncateTitle('${items.first} 정리', maxChars);
+    return _truncateTitle(joined, maxChars);
   }
 
   String _fallbackGroupTitle({
@@ -861,7 +858,7 @@ class HomeworkQuickAddProxyDialogState
     if (conceptKeywords.isNotEmpty) {
       final compact = _composeSummaryTitleFromConcepts(
         conceptKeywords,
-        maxChars: 20,
+        maxChars: 25,
       );
       if (compact.isNotEmpty) return compact;
     }
@@ -872,11 +869,28 @@ class HomeworkQuickAddProxyDialogState
       }
       final compact = _composeSummaryTitleFromConcepts(
         mergedKeywords,
-        maxChars: 20,
+        maxChars: 25,
       );
       if (compact.isNotEmpty) return compact;
     }
-    return '개념 정리';
+    return '수학 개념';
+  }
+
+  String _sanitizeAiGroupTitle(String raw, {int maxChars = 25}) {
+    var text = raw.replaceAll('\n', ' ').replaceAll('\r', ' ').trim();
+    text = text.replaceAll(RegExp(r'^[-*•\d\.\)\]]+\s*'), '');
+    text = text.replaceAll(RegExp("^[\\\"'“”‘’`]+"), '');
+    text = text.replaceAll(RegExp("[\\\"'“”‘’`]+\$"), '');
+    text = text.replaceAll(RegExp(r'\s+'), ' ').trim();
+    return _truncateTitle(text, maxChars);
+  }
+
+  bool _isGenericGroupTitle(String text) {
+    final normalized = text.replaceAll(RegExp(r'\s+'), '');
+    return normalized.isEmpty ||
+        normalized == '개념정리' ||
+        normalized == '수학개념' ||
+        normalized == '그룹과제';
   }
 
   Future<void> _generateGroupTitleByAi() async {
@@ -898,11 +912,32 @@ class HomeworkQuickAddProxyDialogState
         }
       }
     }
-    final title = _fallbackGroupTitle(
+    final fallbackTitle = _fallbackGroupTitle(
       conceptKeywords: conceptKeywords,
       itemTitles: itemTitles,
     );
-    _setControllerText(_groupTitle, _truncateTitle(title, 20));
+    final requestId = ++_groupTitleAiRequestId;
+    try {
+      final aiInput = StringBuffer()
+        ..writeln('하위 과제 제목들을 하나의 그룹 과제 제목으로 자연스럽게 요약해줘.')
+        ..writeln('- 최대 25자')
+        ..writeln('- 두 개 개념이면 "와" 사용')
+        ..writeln('- 세 개 이상 개념이면 ","로 연결')
+        ..writeln('- 불필요한 수식어는 제거하고 핵심 수학 개념 위주')
+        ..writeln('하위 과제 제목:')
+        ..writeln(itemTitles.map((e) => '- $e').join('\n'));
+      final aiSummary = await AiSummaryService.summarize(
+        aiInput.toString(),
+        maxChars: 25,
+      );
+      if (!mounted || requestId != _groupTitleAiRequestId) return;
+      final aiTitle = _sanitizeAiGroupTitle(aiSummary, maxChars: 25);
+      final chosen = _isGenericGroupTitle(aiTitle) ? fallbackTitle : aiTitle;
+      _setControllerText(_groupTitle, _truncateTitle(chosen, 25));
+    } catch (_) {
+      if (!mounted || requestId != _groupTitleAiRequestId) return;
+      _setControllerText(_groupTitle, _truncateTitle(fallbackTitle, 25));
+    }
   }
 
   bool _isCompletedForIssuedLock(HomeworkItem hw) {

@@ -14,6 +14,7 @@ import '../services/student_flow_store.dart';
 import '../services/homework_assignment_store.dart';
 import '../services/print_routing_service.dart';
 import '../models/attendance_record.dart';
+import '../models/student_flow.dart';
 import 'learning/homework_quick_add_proxy_dialog.dart';
 import '../services/tag_preset_service.dart';
 import '../services/tag_store.dart';
@@ -48,9 +49,16 @@ class _ClassContentScreenState extends State<ClassContentScreen>
   DateTime _now = DateTime.now();
   bool _isGradingMode = false;
   bool _printPickMode = false;
+  bool _favoritePanelOpen = false;
+  bool _favoritePanelLoading = false;
+  String _favoriteBookFilter = '';
+  String _favoriteGradeFilter = '';
+  String? _favoriteDropHoverStudentId;
   final Map<({String studentId, String itemId}), bool> _pendingConfirms = {};
   final Set<String> _expandedHomeworkIds = {};
   String? _expandedReservedStudentId;
+  List<HomeworkRecentTemplate> _favoriteTemplates = const [];
+  Map<String, String> _favoriteBookNameById = const <String, String>{};
 
   @override
   void initState() {
@@ -148,6 +156,35 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                   height: 44,
                                   child: OutlinedButton(
                                     onPressed: () => unawaited(
+                                      _toggleFavoritePanel(),
+                                    ),
+                                    style: OutlinedButton.styleFrom(
+                                      foregroundColor: _favoritePanelOpen
+                                          ? Colors.white
+                                          : Colors.white70,
+                                      side: BorderSide(
+                                        color: _favoritePanelOpen
+                                            ? kDlgAccent
+                                            : Colors.white24,
+                                      ),
+                                      shape: const StadiumBorder(),
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 16,
+                                        vertical: 16,
+                                      ),
+                                      backgroundColor: _favoritePanelOpen
+                                          ? const Color(0xFF132822)
+                                          : Colors.transparent,
+                                    ),
+                                    child: const Icon(Icons.star_rounded,
+                                        size: 20),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                SizedBox(
+                                  height: 44,
+                                  child: OutlinedButton(
+                                    onPressed: () => unawaited(
                                       _openHeaderHomeworkPrintFlow(
                                         attendingStudents: list,
                                       ),
@@ -219,6 +256,10 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                   onChanged: (value) {
                                     setState(() {
                                       _isGradingMode = value;
+                                      if (value) {
+                                        _favoritePanelOpen = false;
+                                        _favoriteDropHoverStudentId = null;
+                                      }
                                       if (!value) {
                                         _pendingConfirms.clear();
                                       }
@@ -275,6 +316,8 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                     },
                   ),
                   const SizedBox(height: 16),
+                  _buildFavoriteTemplatePanel(),
+                  if (_favoritePanelOpen) const SizedBox(height: 10),
                   const Divider(color: Color(0xFF223131), height: 24),
                   const SizedBox(height: 24),
                   Expanded(
@@ -283,25 +326,71 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                             attendingStudentIds: attendingStudentIds,
                             studentNamesById: studentNamesById,
                             pendingConfirms: _pendingConfirms,
-                            onSubmittedCardTap: (studentId, hw) {
-                              return _handleSubmittedChipTapForPending(
-                                context: context,
-                                studentId: studentId,
-                                hw: hw,
-                              );
+                            onSubmittedCardTap:
+                                (studentId, group, summary, children) async {
+                              final submittedChildren = children
+                                  .where(
+                                    (e) =>
+                                        e.status != HomeworkStatus.completed &&
+                                        e.phase == 3 &&
+                                        e.completedAt == null,
+                                  )
+                                  .toList(growable: false);
+                              if (submittedChildren.isEmpty) return;
+                              if (submittedChildren.length == 1) {
+                                return _handleSubmittedChipTapForPending(
+                                  context: context,
+                                  studentId: studentId,
+                                  hw: submittedChildren.first,
+                                );
+                              }
+                              setState(() {
+                                final keys = submittedChildren
+                                    .map(
+                                      (e) => (
+                                        studentId: studentId,
+                                        itemId: e.id,
+                                      ),
+                                    )
+                                    .toList(growable: false);
+                                final allSelected = keys.isNotEmpty &&
+                                    keys.every(_pendingConfirms.containsKey);
+                                if (allSelected) {
+                                  for (final key in keys) {
+                                    _pendingConfirms.remove(key);
+                                  }
+                                } else {
+                                  for (final key in keys) {
+                                    _pendingConfirms.putIfAbsent(
+                                      key,
+                                      () => false,
+                                    );
+                                  }
+                                }
+                              });
                             },
-                            onHomeworkCardTap: (studentId, hw) {
+                            onHomeworkCardTap:
+                                (studentId, group, summary, children) {
                               if (_printPickMode) {
                                 return _handleHomeworkPrintPick(
                                   context: context,
                                   studentId: studentId,
-                                  hw: hw,
+                                  hw: summary,
                                 );
                               }
-                              return _runHomeworkCheckDialogOnly(
+                              if (group == null && children.length == 1) {
+                                return _runHomeworkCheckDialogOnly(
+                                  context: context,
+                                  studentId: studentId,
+                                  hw: children.first,
+                                );
+                              }
+                              return _runHomeworkCheckDialogForGroup(
                                 context: context,
                                 studentId: studentId,
-                                hw: hw,
+                                group: group,
+                                summary: summary,
+                                children: children,
                               );
                             },
                             onTogglePending: (studentId, itemId) {
@@ -352,7 +441,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
   Widget _buildStudentColumn(BuildContext context, _AttendingStudent student) {
     final isReservedExpanded = _expandedReservedStudentId == student.id;
     const panelWidth = ClassContentScreen._studentColumnContentWidth;
-    return AnimatedContainer(
+    final column = AnimatedContainer(
       duration: const Duration(milliseconds: 220),
       curve: Curves.easeInOutCubic,
       width: ClassContentScreen._studentColumnWidth +
@@ -587,6 +676,47 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         ],
       ),
     );
+    if (_isGradingMode) return column;
+    return DragTarget<HomeworkRecentTemplate>(
+      onWillAcceptWithDetails: (details) {
+        if (!_favoritePanelOpen) return false;
+        return details.data.parts.isNotEmpty;
+      },
+      onMove: (_) {
+        if (_favoriteDropHoverStudentId == student.id) return;
+        setState(() => _favoriteDropHoverStudentId = student.id);
+      },
+      onLeave: (_) {
+        if (_favoriteDropHoverStudentId != student.id) return;
+        setState(() => _favoriteDropHoverStudentId = null);
+      },
+      onAcceptWithDetails: (details) {
+        setState(() => _favoriteDropHoverStudentId = null);
+        unawaited(
+          _handleFavoriteTemplateDrop(
+            context: context,
+            student: student,
+            template: details.data,
+          ),
+        );
+      },
+      builder: (context, candidateData, rejectedData) {
+        final highlight = candidateData.isNotEmpty ||
+            _favoriteDropHoverStudentId == student.id;
+        return AnimatedContainer(
+          duration: const Duration(milliseconds: 140),
+          curve: Curves.easeOutCubic,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            border: highlight
+                ? Border.all(color: kDlgAccent.withOpacity(0.85), width: 1.4)
+                : null,
+            color: highlight ? const Color(0x221B6B63) : Colors.transparent,
+          ),
+          child: column,
+        );
+      },
+    );
   }
 
   Widget _buildReservedHomeworkSlidePanel({
@@ -694,6 +824,765 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       }
     }
     return bestSet;
+  }
+
+  Future<void> _toggleFavoritePanel() async {
+    if (_favoritePanelOpen) {
+      setState(() {
+        _favoritePanelOpen = false;
+        _favoriteDropHoverStudentId = null;
+      });
+      return;
+    }
+    setState(() => _favoritePanelOpen = true);
+    await _refreshFavoriteTemplates();
+  }
+
+  Future<void> _refreshFavoriteTemplates() async {
+    if (_favoritePanelLoading) return;
+    if (mounted) {
+      setState(() => _favoritePanelLoading = true);
+    }
+    try {
+      final templates =
+          await HomeworkStore.instance.loadRecentTemplates(limit: 120);
+      Map<String, String> bookNameById = _favoriteBookNameById;
+      final requiredBookIds = templates
+          .map((e) => e.primaryBookId)
+          .where((id) => id.trim().isNotEmpty)
+          .toSet();
+      final missingBookIds = requiredBookIds
+          .where((id) => !bookNameById.containsKey(id))
+          .toList(growable: false);
+      if (bookNameById.isEmpty || missingBookIds.isNotEmpty) {
+        final rows = await DataManager.instance.loadTextbooksWithMetadata();
+        final merged = <String, String>{...bookNameById};
+        for (final row in rows) {
+          final id = '${row['book_id'] ?? ''}'.trim();
+          if (id.isEmpty) continue;
+          final name = '${row['book_name'] ?? ''}'.trim();
+          if (name.isEmpty) continue;
+          merged[id] = name;
+        }
+        bookNameById = merged;
+      }
+      if (!mounted) return;
+      final hasBookFilter = _favoriteBookFilter.isNotEmpty &&
+          templates.any((t) => t.primaryBookId == _favoriteBookFilter);
+      final hasGradeFilter = _favoriteGradeFilter.isNotEmpty &&
+          templates.any((t) => t.primaryGradeLabel == _favoriteGradeFilter);
+      setState(() {
+        _favoriteTemplates = templates;
+        _favoriteBookNameById = bookNameById;
+        if (!hasBookFilter) _favoriteBookFilter = '';
+        if (!hasGradeFilter) _favoriteGradeFilter = '';
+      });
+    } catch (_) {
+      if (!mounted) return;
+      _showHomeworkChipSnackBar(context, '즐겨찾기 과제 목록을 불러오지 못했습니다.');
+    } finally {
+      if (mounted) {
+        setState(() => _favoritePanelLoading = false);
+      }
+    }
+  }
+
+  List<HomeworkRecentTemplate> _filteredFavoriteTemplates() {
+    final out = <HomeworkRecentTemplate>[];
+    for (final template in _favoriteTemplates) {
+      if (_favoriteBookFilter.isNotEmpty &&
+          template.primaryBookId != _favoriteBookFilter) {
+        continue;
+      }
+      if (_favoriteGradeFilter.isNotEmpty &&
+          template.primaryGradeLabel != _favoriteGradeFilter) {
+        continue;
+      }
+      out.add(template);
+    }
+    return out;
+  }
+
+  String _favoriteBookName(String bookId) {
+    final key = bookId.trim();
+    if (key.isEmpty) return '교재 없음';
+    final named = (_favoriteBookNameById[key] ?? '').trim();
+    if (named.isNotEmpty) return named;
+    return key;
+  }
+
+  Widget _buildFavoriteTemplatePanel() {
+    final targetHeight =
+        (MediaQuery.of(context).size.height * 0.33).clamp(220.0, 480.0);
+    final filteredTemplates = _filteredFavoriteTemplates();
+    final bookIds = _favoriteTemplates
+        .map((e) => e.primaryBookId)
+        .where((id) => id.trim().isNotEmpty)
+        .toSet()
+        .toList()
+      ..sort((a, b) => _favoriteBookName(a).compareTo(_favoriteBookName(b)));
+    final gradeLabels = _favoriteTemplates
+        .map((e) => e.primaryGradeLabel)
+        .where((e) => e.trim().isNotEmpty)
+        .toSet()
+        .toList()
+      ..sort();
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeInOutCubic,
+      height: _favoritePanelOpen ? targetHeight.toDouble() : 0,
+      child: ClipRect(
+        child: IgnorePointer(
+          ignoring: !_favoritePanelOpen,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: const Color(0xFF151A1C),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: const Color(0xFF2A3A3A)),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(
+                        Icons.star_rounded,
+                        size: 18,
+                        color: kDlgAccent,
+                      ),
+                      const SizedBox(width: 8),
+                      const Text(
+                        '최근 과제 즐겨찾기',
+                        style: TextStyle(
+                          color: kDlgText,
+                          fontWeight: FontWeight.w900,
+                          fontSize: 15,
+                        ),
+                      ),
+                      const Spacer(),
+                      SizedBox(
+                        width: 34,
+                        height: 34,
+                        child: IconButton(
+                          onPressed: _favoritePanelLoading
+                              ? null
+                              : () => unawaited(_refreshFavoriteTemplates()),
+                          icon: const Icon(
+                            Icons.refresh_rounded,
+                            size: 18,
+                            color: kDlgTextSub,
+                          ),
+                          tooltip: '새로고침',
+                          padding: EdgeInsets.zero,
+                          splashRadius: 18,
+                          visualDensity: VisualDensity.compact,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: [
+                        _buildFavoriteFilterChip(
+                          label: '전체 교재',
+                          selected: _favoriteBookFilter.isEmpty,
+                          onTap: () => setState(() => _favoriteBookFilter = ''),
+                        ),
+                        for (final bookId in bookIds)
+                          _buildFavoriteFilterChip(
+                            label: _favoriteBookName(bookId),
+                            selected: _favoriteBookFilter == bookId,
+                            onTap: () =>
+                                setState(() => _favoriteBookFilter = bookId),
+                          ),
+                        const SizedBox(width: 12),
+                        _buildFavoriteFilterChip(
+                          label: '전체 학년',
+                          selected: _favoriteGradeFilter.isEmpty,
+                          onTap: () =>
+                              setState(() => _favoriteGradeFilter = ''),
+                        ),
+                        for (final grade in gradeLabels)
+                          _buildFavoriteFilterChip(
+                            label: grade,
+                            selected: _favoriteGradeFilter == grade,
+                            onTap: () =>
+                                setState(() => _favoriteGradeFilter = grade),
+                          ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Expanded(
+                    child: _favoritePanelLoading
+                        ? const Center(
+                            child: SizedBox(
+                              width: 22,
+                              height: 22,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                valueColor: AlwaysStoppedAnimation<Color>(
+                                  kDlgAccent,
+                                ),
+                              ),
+                            ),
+                          )
+                        : filteredTemplates.isEmpty
+                            ? const Center(
+                                child: Text(
+                                  '표시할 최근 과제가 없습니다.',
+                                  style: TextStyle(
+                                    color: kDlgTextSub,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              )
+                            : ListView.separated(
+                                scrollDirection: Axis.horizontal,
+                                itemCount: filteredTemplates.length,
+                                separatorBuilder: (_, __) =>
+                                    const SizedBox(width: 10),
+                                itemBuilder: (context, index) {
+                                  final template = filteredTemplates[index];
+                                  return _buildFavoriteTemplateCard(template);
+                                },
+                              ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFavoriteFilterChip({
+    required String label,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(right: 8),
+      child: ChoiceChip(
+        label: Text(label),
+        selected: selected,
+        onSelected: (_) => onTap(),
+        selectedColor: const Color(0xFF245A52),
+        backgroundColor: const Color(0xFF1A2427),
+        side:
+            BorderSide(color: selected ? kDlgAccent : const Color(0xFF2A3A3A)),
+        labelStyle: TextStyle(
+          color: selected ? const Color(0xFFEAF2F2) : kDlgTextSub,
+          fontSize: 12.5,
+          fontWeight: FontWeight.w700,
+        ),
+        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        visualDensity: const VisualDensity(horizontal: -2, vertical: -2),
+      ),
+    );
+  }
+
+  Widget _buildFavoriteTemplateCard(HomeworkRecentTemplate template) {
+    final title = template.title.trim().isEmpty ? '(제목 없음)' : template.title;
+    final bookId = template.primaryBookId;
+    final grade = template.primaryGradeLabel;
+    final bookText = bookId.isEmpty ? '교재 없음' : _favoriteBookName(bookId);
+    final gradeText = grade.isEmpty ? '학년 미지정' : grade;
+    final subtitle =
+        template.isGroup ? '그룹 과제 · 하위 ${template.partCount}개' : '단일 과제';
+    final card = Container(
+      width: 250,
+      padding: const EdgeInsets.fromLTRB(12, 11, 12, 11),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1A2427),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFF2E4046)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: kDlgText,
+              fontSize: 14.5,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            subtitle,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: kDlgTextSub,
+              fontSize: 12.5,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '$bookText · $gradeText',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: Color(0xFF8FA2A7),
+              fontSize: 12.5,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const Spacer(),
+          const Text(
+            '길게 눌러 학생 카드로 드래그',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: Color(0xFF6B7B7F),
+              fontSize: 11.5,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+    return LongPressDraggable<HomeworkRecentTemplate>(
+      data: template,
+      feedback: Material(
+        color: Colors.transparent,
+        child: Opacity(opacity: 0.92, child: card),
+      ),
+      childWhenDragging: Opacity(opacity: 0.35, child: card),
+      child: card,
+    );
+  }
+
+  Future<void> _handleFavoriteTemplateDrop({
+    required BuildContext context,
+    required _AttendingStudent student,
+    required HomeworkRecentTemplate template,
+  }) async {
+    if (template.parts.isEmpty) return;
+    final studentId = student.id;
+    var resolvedFlowId = (template.flowId ?? '').trim();
+    final bookId = template.primaryBookId;
+    final gradeLabel = template.primaryGradeLabel;
+    if (bookId.isNotEmpty && gradeLabel.isNotEmpty) {
+      final linkStatus = await _checkFavoriteTemplateLinkStatus(
+        studentId: studentId,
+        templateFlowId: resolvedFlowId,
+        bookId: bookId,
+        gradeLabel: gradeLabel,
+      );
+      if (!context.mounted) return;
+      if (!linkStatus.linked) {
+        final bookName = _favoriteBookName(bookId);
+        final shouldLink = await _confirmFavoriteTemplateLink(
+          context: context,
+          bookName: bookName,
+          gradeLabel: gradeLabel,
+        );
+        if (!context.mounted || !shouldLink) return;
+        final linkedFlowId = await _linkFavoriteTemplateBookToFlow(
+          context: context,
+          studentId: studentId,
+          bookId: bookId,
+          gradeLabel: gradeLabel,
+          bookName: bookName,
+          preferredFlowId: resolvedFlowId,
+        );
+        if (!context.mounted || linkedFlowId == null) return;
+        resolvedFlowId = linkedFlowId;
+      } else {
+        final linkedFlowId = linkStatus.flowId.trim();
+        if (linkedFlowId.isNotEmpty) {
+          resolvedFlowId = linkedFlowId;
+        }
+      }
+    }
+
+    final mode = await _askFavoriteIssueMode(
+      context: context,
+      template: template,
+      studentName: student.name,
+    );
+    if (!context.mounted || mode == null) return;
+    final createdCount = await _issueFavoriteTemplateToStudent(
+      studentId: studentId,
+      template: template,
+      forceFlowId: resolvedFlowId,
+      mode: mode,
+    );
+    if (!context.mounted) return;
+    if (createdCount <= 0) {
+      _showHomeworkChipSnackBar(context, '즐겨찾기 과제 출제에 실패했습니다.');
+      return;
+    }
+    final modeLabel = mode == _FavoriteIssueMode.reserve ? '예약 과제' : '즉시 과제';
+    _showHomeworkChipSnackBar(
+      context,
+      '${student.name}에게 $modeLabel ${createdCount}개를 추가했어요.',
+    );
+    if (_favoritePanelOpen) {
+      unawaited(_refreshFavoriteTemplates());
+    }
+  }
+
+  Future<_FavoriteTemplateLinkStatus> _checkFavoriteTemplateLinkStatus({
+    required String studentId,
+    required String templateFlowId,
+    required String bookId,
+    required String gradeLabel,
+  }) async {
+    bool hasMatch(List<Map<String, dynamic>> rows) {
+      for (final row in rows) {
+        final rowBookId = '${row['book_id'] ?? ''}'.trim();
+        final rowGrade = '${row['grade_label'] ?? ''}'.trim();
+        if (rowBookId == bookId && rowGrade == gradeLabel) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    final flowId = templateFlowId.trim();
+    if (flowId.isNotEmpty) {
+      try {
+        final rows = await DataManager.instance.loadFlowTextbookLinks(flowId);
+        if (hasMatch(rows)) {
+          return _FavoriteTemplateLinkStatus(linked: true, flowId: flowId);
+        }
+      } catch (_) {}
+    }
+
+    final flows = await StudentFlowStore.instance.loadForStudent(studentId);
+    final enabledFlows = flows.where((f) => f.enabled).toList(growable: false);
+    for (final flow in enabledFlows) {
+      try {
+        final rows = await DataManager.instance.loadFlowTextbookLinks(flow.id);
+        if (hasMatch(rows)) {
+          return _FavoriteTemplateLinkStatus(linked: true, flowId: flow.id);
+        }
+      } catch (_) {}
+    }
+    return const _FavoriteTemplateLinkStatus(linked: false, flowId: '');
+  }
+
+  Future<bool> _confirmFavoriteTemplateLink({
+    required BuildContext context,
+    required String bookName,
+    required String gradeLabel,
+  }) async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          backgroundColor: kDlgBg,
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Text(
+            '교재 연결 필요',
+            style: TextStyle(color: kDlgText, fontWeight: FontWeight.w900),
+          ),
+          content: Text(
+            '$bookName ($gradeLabel)이(가) 연결되지 않았습니다.\n연결 후 과제를 낼까요?',
+            style: const TextStyle(color: kDlgTextSub, height: 1.35),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
+              child: const Text('취소'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
+              child: const Text('연결'),
+            ),
+          ],
+        );
+      },
+    );
+    return result == true;
+  }
+
+  Future<String?> _linkFavoriteTemplateBookToFlow({
+    required BuildContext context,
+    required String studentId,
+    required String bookId,
+    required String gradeLabel,
+    required String bookName,
+    required String preferredFlowId,
+  }) async {
+    final enabledFlows =
+        await ensureEnabledFlowsForHomework(context, studentId);
+    if (!context.mounted) return null;
+    if (enabledFlows.isEmpty) {
+      _showHomeworkChipSnackBar(context, '활성 플로우가 없어 교재를 연결할 수 없습니다.');
+      return null;
+    }
+    final selectedFlow = await _pickFavoriteFlowForLink(
+      context: context,
+      enabledFlows: enabledFlows,
+      preferredFlowId: preferredFlowId,
+    );
+    if (!context.mounted || selectedFlow == null) return null;
+
+    final rows =
+        await DataManager.instance.loadFlowTextbookLinks(selectedFlow.id);
+    if (!context.mounted) return null;
+    final merged = <Map<String, dynamic>>[];
+    final seen = <String>{};
+    for (final row in rows) {
+      final existingBookId = '${row['book_id'] ?? ''}'.trim();
+      final existingGrade = '${row['grade_label'] ?? ''}'.trim();
+      if (existingBookId.isEmpty || existingGrade.isEmpty) continue;
+      final key = '$existingBookId|$existingGrade';
+      if (!seen.add(key)) continue;
+      merged.add({
+        'book_id': existingBookId,
+        'grade_label': existingGrade,
+        'book_name': '${row['book_name'] ?? ''}'.trim(),
+      });
+    }
+    final droppedKey = '$bookId|$gradeLabel';
+    if (seen.add(droppedKey)) {
+      merged.add({
+        'book_id': bookId,
+        'grade_label': gradeLabel,
+        'book_name': bookName,
+      });
+      await DataManager.instance.saveFlowTextbookLinks(selectedFlow.id, merged);
+    }
+    if (!context.mounted) return null;
+    _showHomeworkChipSnackBar(
+      context,
+      '${bookName.isEmpty ? '선택한 교재' : bookName}를 ${selectedFlow.name} 플로우에 연결했어요.',
+    );
+    return selectedFlow.id;
+  }
+
+  Future<StudentFlow?> _pickFavoriteFlowForLink({
+    required BuildContext context,
+    required List<StudentFlow> enabledFlows,
+    required String preferredFlowId,
+  }) async {
+    if (enabledFlows.isEmpty) return null;
+    StudentFlow selected = enabledFlows.first;
+    final preferred = preferredFlowId.trim();
+    if (preferred.isNotEmpty) {
+      final matched = enabledFlows.where((f) => f.id == preferred);
+      if (matched.isNotEmpty) selected = matched.first;
+    }
+    if (enabledFlows.length == 1) return selected;
+    return showDialog<StudentFlow>(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setLocalState) {
+            return AlertDialog(
+              backgroundColor: kDlgBg,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              title: const Text(
+                '플로우 선택',
+                style: TextStyle(color: kDlgText, fontWeight: FontWeight.w900),
+              ),
+              content: SizedBox(
+                width: 440,
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: enabledFlows.length,
+                  separatorBuilder: (_, __) =>
+                      const Divider(color: kDlgBorder, height: 1),
+                  itemBuilder: (ctx, i) {
+                    final flow = enabledFlows[i];
+                    return RadioListTile<String>(
+                      value: flow.id,
+                      groupValue: selected.id,
+                      onChanged: (v) {
+                        if (v == null) return;
+                        setLocalState(() => selected = flow);
+                      },
+                      activeColor: kDlgAccent,
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 2),
+                      title: Text(
+                        flow.name,
+                        style: const TextStyle(
+                          color: kDlgText,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(null),
+                  style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
+                  child: const Text('취소'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.of(ctx).pop(selected),
+                  style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
+                  child: const Text('선택'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<_FavoriteIssueMode?> _askFavoriteIssueMode({
+    required BuildContext context,
+    required HomeworkRecentTemplate template,
+    required String studentName,
+  }) async {
+    final result = await showDialog<_FavoriteIssueMode>(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          backgroundColor: kDlgBg,
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Text(
+            '출제 방식 선택',
+            style: TextStyle(color: kDlgText, fontWeight: FontWeight.w900),
+          ),
+          content: Text(
+            '$studentName에게 "${template.title.trim().isEmpty ? '(제목 없음)' : template.title.trim()}"를 어떤 방식으로 낼까요?',
+            style: const TextStyle(color: kDlgTextSub, height: 1.35),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(null),
+              style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
+              child: const Text('취소'),
+            ),
+            OutlinedButton(
+              onPressed: () =>
+                  Navigator.of(ctx).pop(_FavoriteIssueMode.reserve),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: kDlgText,
+                side: const BorderSide(color: kDlgBorder),
+              ),
+              child: const Text('예약 과제'),
+            ),
+            FilledButton(
+              onPressed: () =>
+                  Navigator.of(ctx).pop(_FavoriteIssueMode.immediate),
+              style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
+              child: const Text('바로 내기'),
+            ),
+          ],
+        );
+      },
+    );
+    return result;
+  }
+
+  Future<int> _issueFavoriteTemplateToStudent({
+    required String studentId,
+    required HomeworkRecentTemplate template,
+    required String forceFlowId,
+    required _FavoriteIssueMode mode,
+  }) async {
+    final normalizedFlowId = forceFlowId.trim().isNotEmpty
+        ? forceFlowId.trim()
+        : (template.flowId ?? '').trim();
+    final splitMap = <String, int>{};
+    final createdItems = <HomeworkItem>[];
+
+    if (template.isGroup || template.parts.length > 1) {
+      final rows = <Map<String, dynamic>>[];
+      for (final part in template.parts) {
+        rows.add({
+          'title': part.title,
+          'body': part.body,
+          'color': part.color,
+          'type': part.type,
+          'page': part.page,
+          'count': part.count,
+          'memo': part.memo,
+          'content': part.content,
+          'bookId': part.bookId,
+          'gradeLabel': part.gradeLabel,
+          'sourceUnitLevel': part.sourceUnitLevel,
+          'sourceUnitPath': part.sourceUnitPath,
+          'unitMappings': part.unitMappings == null
+              ? null
+              : List<Map<String, dynamic>>.from(
+                  part.unitMappings!.map((e) => Map<String, dynamic>.from(e)),
+                ),
+          'splitParts': part.defaultSplitParts.clamp(1, 4).toInt(),
+        });
+      }
+      final generated =
+          await HomeworkStore.instance.createGroupWithWaitingItems(
+        studentId: studentId,
+        groupTitle:
+            template.title.trim().isEmpty ? '그룹 과제' : template.title.trim(),
+        flowId: normalizedFlowId.isEmpty ? null : normalizedFlowId,
+        items: rows,
+      );
+      createdItems.addAll(generated);
+      for (final item in generated) {
+        splitMap[item.id] = item.defaultSplitParts.clamp(1, 4).toInt();
+      }
+    } else {
+      final part = template.parts.first;
+      final fallbackFlowId = (part.flowId ?? '').trim();
+      final created = HomeworkStore.instance.add(
+        studentId,
+        title: part.title,
+        body: part.body,
+        color: part.color,
+        flowId: normalizedFlowId.isEmpty ? fallbackFlowId : normalizedFlowId,
+        type: part.type,
+        page: part.page,
+        count: part.count,
+        memo: part.memo,
+        content: part.content,
+        bookId: part.bookId,
+        gradeLabel: part.gradeLabel,
+        sourceUnitLevel: part.sourceUnitLevel,
+        sourceUnitPath: part.sourceUnitPath,
+        unitMappings: part.unitMappings == null
+            ? null
+            : List<Map<String, dynamic>>.from(
+                part.unitMappings!.map((e) => Map<String, dynamic>.from(e)),
+              ),
+        defaultSplitParts: part.defaultSplitParts.clamp(1, 4).toInt(),
+      );
+      createdItems.add(created);
+      splitMap[created.id] = created.defaultSplitParts.clamp(1, 4).toInt();
+    }
+
+    if (createdItems.isEmpty) return 0;
+    if (mode == _FavoriteIssueMode.reserve) {
+      await HomeworkAssignmentStore.instance.recordAssignments(
+        studentId,
+        createdItems,
+        note: HomeworkAssignmentStore.reservationNote,
+        splitPartsByItem: splitMap,
+      );
+    } else {
+      HomeworkStore.instance.markItemsAsHomework(
+        studentId,
+        createdItems.map((e) => e.id).toList(growable: false),
+      );
+    }
+    return createdItems.length;
   }
 
   Future<void> _onAddHomework(BuildContext context, String studentId) async {
@@ -1428,6 +2317,18 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       _showHomeworkChipSnackBar(context, '${pending.length}건의 과제를 일괄 처리했어요.');
     }
   }
+}
+
+enum _FavoriteIssueMode { reserve, immediate }
+
+class _FavoriteTemplateLinkStatus {
+  final bool linked;
+  final String flowId;
+
+  const _FavoriteTemplateLinkStatus({
+    required this.linked,
+    required this.flowId,
+  });
 }
 
 Future<String?> _openRecordNoteDialogGlobal(BuildContext context) async {
@@ -2224,6 +3125,120 @@ Future<void> _runHomeworkCheckDialogOnly({
   _showHomeworkChipSnackBar(context, '숙제 검사 완료 — 제출 상태로 이동했어요.');
 }
 
+Future<void> _runHomeworkCheckDialogForGroup({
+  required BuildContext context,
+  required String studentId,
+  required HomeworkGroup? group,
+  required HomeworkItem summary,
+  required List<HomeworkItem> children,
+}) async {
+  final targetChildren = children
+      .where((e) => e.status != HomeworkStatus.completed)
+      .toList(growable: false);
+  if (targetChildren.isEmpty) return;
+
+  final targets =
+      <({HomeworkItem item, _HomeworkCheckTarget target, int min})>[];
+  DateTime? earliestAssignedAt;
+  DateTime? earliestDueDate;
+  String? issueType;
+  String? issueNote;
+
+  for (final child in targetChildren) {
+    final target = await _resolveHomeworkCheckTarget(
+      studentId,
+      child.id,
+      includeHistory: false,
+    );
+    if (!context.mounted) return;
+    if (target == null) {
+      _showHomeworkChipSnackBar(context, '일부 하위 과제의 숙제 할당 정보를 찾지 못했습니다.');
+      return;
+    }
+
+    final checks = await HomeworkAssignmentStore.instance
+        .loadChecksForItem(studentId, child.id);
+    checks.sort((a, b) => a.checkedAt.compareTo(b.checkedAt));
+    final previousProgress = checks.isEmpty ? 0 : checks.last.progress;
+    final minProgress =
+        math.max(previousProgress, target.progress).clamp(0, 150);
+
+    earliestAssignedAt = earliestAssignedAt == null ||
+            target.assignedAt.isBefore(earliestAssignedAt)
+        ? target.assignedAt
+        : earliestAssignedAt;
+    earliestDueDate = _mergeHomeworkDueDate(
+      earliestDueDate,
+      target.dueDate == null ? null : _dateOnly(target.dueDate!),
+    );
+    issueType ??= target.issueType;
+    issueNote ??= target.issueNote;
+    targets.add((item: child, target: target, min: minProgress));
+  }
+
+  if (targets.isEmpty || !context.mounted) return;
+  final globalMinProgress =
+      targets.fold<int>(0, (maxSoFar, e) => math.max(maxSoFar, e.min));
+  final dialogTarget = _HomeworkCheckTarget(
+    assignmentId: targets.first.target.assignmentId,
+    assignedAt: earliestAssignedAt ?? DateTime.now(),
+    dueDate: earliestDueDate,
+    progress: globalMinProgress,
+    issueType: issueType,
+    issueNote: issueNote,
+  );
+
+  final draft = await _showHomeworkItemCheckDialog(
+    context: context,
+    hw: summary,
+    target: dialogTarget,
+    minProgress: globalMinProgress,
+  );
+  if (!context.mounted || draft == null) return;
+
+  final savedItemIds = <String>[];
+  for (final entry in targets) {
+    final saved = await HomeworkAssignmentStore.instance.saveAssignmentCheck(
+      assignmentId: entry.target.assignmentId,
+      studentId: studentId,
+      homeworkItemId: entry.item.id,
+      progress: draft.progress,
+      issueType: draft.issueType,
+      issueNote: draft.issueNote,
+      markCompleted: false,
+    );
+    if (!saved) continue;
+    savedItemIds.add(entry.item.id);
+  }
+
+  if (savedItemIds.isEmpty) {
+    if (!context.mounted) return;
+    _showHomeworkChipSnackBar(context, '그룹 숙제 검사 저장에 실패했습니다.');
+    return;
+  }
+
+  for (final itemId in savedItemIds) {
+    await HomeworkStore.instance.placeItemAtActiveTail(
+      studentId,
+      itemId,
+      activateFromHomework: true,
+    );
+    await HomeworkStore.instance.submit(studentId, itemId);
+  }
+  await HomeworkAssignmentStore.instance
+      .clearActiveAssignmentsForItems(studentId, savedItemIds);
+  if (!context.mounted) return;
+  final groupTitle = (group?.title ?? '').trim();
+  final summaryTitle = summary.title.trim();
+  final prefix = groupTitle.isNotEmpty
+      ? groupTitle
+      : (summaryTitle.isNotEmpty ? summaryTitle : '그룹 숙제');
+  _showHomeworkChipSnackBar(
+    context,
+    '$prefix 검사 완료 — 하위 ${savedItemIds.length}개 과제를 제출 상태로 이동했어요.',
+  );
+}
+
 String _formatDateTime(DateTime dt) {
   String two(int v) => v.toString().padLeft(2, '0');
   return '${two(dt.month)}.${two(dt.day)} ${two(dt.hour)}:${two(dt.minute)}';
@@ -2249,8 +3264,6 @@ final Set<String> _flowLoadingStudentIds = <String>{};
 final Map<String, int> _assignmentRevisionByStudent = {};
 final Map<String, int> _reservedTitleRevisionByStudent = {};
 final Map<String, Future<Map<String, int>>> _assignmentCountsFutureByStudent =
-    {};
-final Map<String, Future<Set<String>>> _activeAssignedItemIdsFutureByStudent =
     {};
 final Map<String, Future<List<HomeworkAssignmentDetail>>>
     _activeAssignmentsFutureByStudent = {};
@@ -3133,7 +4146,6 @@ double _homeworkGroupExpandedHeightForChildCount(int childCount) {
 }
 
 double _homeworkChipMaxSlideFor(double h) => h * 0.58;
-const double _homeworkChipMaxSlide = _homeworkChipCollapsedHeight * 0.58;
 const double _homeworkChipOuterLeftInset =
     (ClassContentScreen._studentColumnWidth -
             ClassContentScreen._studentColumnContentWidth) /
@@ -3181,9 +4193,6 @@ Widget _buildHomeworkChipsReactiveForStudent(
             _assignmentCountsFutureByStudent[studentId] =
                 HomeworkAssignmentStore.instance
                     .loadAssignmentCounts(studentId);
-            _activeAssignedItemIdsFutureByStudent[studentId] =
-                HomeworkAssignmentStore.instance
-                    .loadActiveAssignedItemIds(studentId);
             _activeAssignmentsFutureByStudent[studentId] =
                 HomeworkAssignmentStore.instance
                     .loadActiveAssignments(studentId);
@@ -3196,12 +4205,6 @@ Widget _buildHomeworkChipsReactiveForStudent(
             studentId,
             () => HomeworkAssignmentStore.instance
                 .loadAssignmentCounts(studentId),
-          );
-          final activeAssignedFuture =
-              _activeAssignedItemIdsFutureByStudent.putIfAbsent(
-            studentId,
-            () => HomeworkAssignmentStore.instance
-                .loadActiveAssignedItemIds(studentId),
           );
           final activeAssignmentsFuture =
               _activeAssignmentsFutureByStudent.putIfAbsent(
@@ -3219,99 +4222,87 @@ Widget _buildHomeworkChipsReactiveForStudent(
             future: assignmentCountsFuture,
             builder: (context, snapshot) {
               final assignmentCounts = snapshot.data ?? const <String, int>{};
-              return FutureBuilder<Set<String>>(
-                future: activeAssignedFuture,
-                builder: (context, activeSnapshot) {
-                  if (activeSnapshot.connectionState != ConnectionState.done &&
-                      !activeSnapshot.hasData) {
-                    return const SizedBox.shrink();
+              return FutureBuilder<List<HomeworkAssignmentDetail>>(
+                future: activeAssignmentsFuture,
+                builder: (context, assignmentsSnapshot) {
+                  final activeAssignments = assignmentsSnapshot.data ??
+                      const <HomeworkAssignmentDetail>[];
+                  final hiddenItemIds = <String>{};
+                  final assignmentDueByGroupId = <String, DateTime?>{};
+                  final assignmentDueByItemId = <String, DateTime?>{};
+                  for (final assignment in activeAssignments) {
+                    final hwId = assignment.homeworkItemId.trim();
+                    if (hwId.isEmpty) continue;
+                    if (_isReservationAssignment(assignment)) {
+                      hiddenItemIds.add(hwId);
+                      continue;
+                    }
+                    final dueDate = assignment.dueDate;
+                    final dueDateOnly =
+                        dueDate == null ? null : _dateOnly(dueDate);
+                    final assignmentGroupId = (assignment.groupId ?? '').trim();
+                    if (assignmentGroupId.isNotEmpty) {
+                      assignmentDueByGroupId[assignmentGroupId] =
+                          _mergeHomeworkDueDate(
+                        assignmentDueByGroupId[assignmentGroupId],
+                        dueDateOnly,
+                      );
+                    }
+                    assignmentDueByItemId[hwId] = _mergeHomeworkDueDate(
+                      assignmentDueByItemId[hwId],
+                      dueDateOnly,
+                    );
                   }
-                  return FutureBuilder<List<HomeworkAssignmentDetail>>(
-                    future: activeAssignmentsFuture,
-                    builder: (context, assignmentsSnapshot) {
-                      final activeAssignments = assignmentsSnapshot.data ??
-                          const <HomeworkAssignmentDetail>[];
-                      final hiddenAssignedIds = <String>{};
-                      for (final assignment in activeAssignments) {
-                        final hwId = assignment.homeworkItemId.trim();
-                        if (hwId.isEmpty) continue;
-                        if (_isReservationAssignment(assignment)) {
-                          hiddenAssignedIds.add(hwId);
-                          continue;
-                        }
-                        hiddenAssignedIds.add(hwId);
-                      }
-                      return FutureBuilder<
-                          Map<String, HomeworkAssignmentCycleMeta>>(
-                        future: assignmentCycleMetaFuture,
-                        builder: (context, cycleSnapshot) {
-                          final assignmentCycleMetaByItem =
-                              cycleSnapshot.data ??
-                                  const <String, HomeworkAssignmentCycleMeta>{};
-                          return ValueListenableBuilder<int>(
-                            valueListenable: HomeworkStore.instance.revision,
-                            builder: (context, _rev, _) {
-                              final chips = _buildHomeworkChipsOnceForStudent(
-                                context,
-                                studentId,
-                                tick,
-                                flowNames,
-                                assignmentCounts,
-                                hiddenAssignedIds,
-                                assignmentCycleMetaByItem,
-                                pendingConfirms: pendingConfirms,
-                                onPhase3Tap: onPhase3Tap,
-                                onGroupSubmittedDoubleTap:
-                                    onGroupSubmittedDoubleTap,
-                                printPickMode: printPickMode,
-                                onPrintPickTap: onPrintPickTap,
-                                onSlideDownComplete: onSlideDownComplete,
-                                expandedHomeworkIds: expandedHomeworkIds,
-                                onToggleExpand: onToggleExpand,
-                              );
-                              final assignedHomeworkSections =
-                                  _buildAssignedHomeworkChipsForStudent(
-                                context,
-                                studentId,
-                                tick,
-                                flowNames,
-                                assignmentCounts,
-                                activeAssignments,
-                                assignmentCycleMetaByItem,
-                                pendingConfirms: pendingConfirms,
-                              );
-                              final columnChildren = <Widget>[];
-                              for (final chip in chips) {
-                                if (columnChildren.isNotEmpty) {
-                                  columnChildren
-                                      .add(const SizedBox(height: 17));
-                                }
-                                columnChildren.add(chip);
-                              }
-                              if (assignedHomeworkSections.isNotEmpty) {
-                                if (columnChildren.isNotEmpty) {
-                                  columnChildren
-                                      .add(const SizedBox(height: 30));
-                                }
-                                columnChildren.addAll(assignedHomeworkSections);
-                              }
-                              if (columnChildren.isEmpty) {
-                                return const SizedBox.shrink();
-                              }
-                              return SingleChildScrollView(
-                                physics: const BouncingScrollPhysics(),
-                                child: Padding(
-                                  padding: const EdgeInsets.only(
-                                    left: _homeworkChipOuterLeftInset,
-                                  ),
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: columnChildren,
-                                  ),
-                                ),
-                              );
-                            },
+                  return FutureBuilder<
+                      Map<String, HomeworkAssignmentCycleMeta>>(
+                    future: assignmentCycleMetaFuture,
+                    builder: (context, cycleSnapshot) {
+                      final assignmentCycleMetaByItem = cycleSnapshot.data ??
+                          const <String, HomeworkAssignmentCycleMeta>{};
+                      return ValueListenableBuilder<int>(
+                        valueListenable: HomeworkStore.instance.revision,
+                        builder: (context, _rev, _) {
+                          final chips = _buildHomeworkChipsOnceForStudent(
+                            context,
+                            studentId,
+                            tick,
+                            flowNames,
+                            assignmentCounts,
+                            hiddenItemIds,
+                            assignmentCycleMetaByItem,
+                            assignmentDueByGroupId: assignmentDueByGroupId,
+                            assignmentDueByItemId: assignmentDueByItemId,
+                            pendingConfirms: pendingConfirms,
+                            onPhase3Tap: onPhase3Tap,
+                            onGroupSubmittedDoubleTap:
+                                onGroupSubmittedDoubleTap,
+                            printPickMode: printPickMode,
+                            onPrintPickTap: onPrintPickTap,
+                            onSlideDownComplete: onSlideDownComplete,
+                            expandedHomeworkIds: expandedHomeworkIds,
+                            onToggleExpand: onToggleExpand,
+                          );
+                          final columnChildren = <Widget>[];
+                          for (final chip in chips) {
+                            if (columnChildren.isNotEmpty) {
+                              columnChildren.add(const SizedBox(height: 17));
+                            }
+                            columnChildren.add(chip);
+                          }
+                          if (columnChildren.isEmpty) {
+                            return const SizedBox.shrink();
+                          }
+                          return SingleChildScrollView(
+                            physics: const BouncingScrollPhysics(),
+                            child: Padding(
+                              padding: const EdgeInsets.only(
+                                left: _homeworkChipOuterLeftInset,
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: columnChildren,
+                              ),
+                            ),
                           );
                         },
                       );
@@ -3512,55 +4503,14 @@ Future<void> _activateReservedHomeworkChip({
   _showHomeworkChipSnackBar(context, '예약 과제를 대기 상태로 전환했어요.');
 }
 
-String _formatHomeworkDueSectionLabel(DateTime? dueDate) {
-  if (dueDate == null) return '검사일 미정';
-  return '검사 ${_formatDateWithWeekdayShort(dueDate)}';
+String _formatHomeworkDueChipLabel(DateTime dueDate) {
+  return '${dueDate.month}월 ${dueDate.day}일까지';
 }
 
-Widget _buildHomeworkChipGroupDivider({
-  required String title,
-  String? subtitle,
-  bool prominent = false,
-}) {
-  final sectionTitle = title.trim();
-  final sectionSubtitle = subtitle?.trim() ?? '';
-  final lineColor = kDlgAccent;
-  final titleColor = kDlgAccent;
-  return SizedBox(
-    width: ClassContentScreen._studentColumnContentWidth,
-    child: Padding(
-      padding: EdgeInsets.symmetric(vertical: prominent ? 6 : 4),
-      child: Row(
-        children: [
-          Expanded(child: Container(height: 1, color: lineColor)),
-          const SizedBox(width: 10),
-          Text(
-            sectionTitle,
-            style: TextStyle(
-              color: titleColor,
-              fontSize: 18,
-              fontWeight: FontWeight.w800,
-              height: 1.1,
-            ),
-          ),
-          if (sectionSubtitle.isNotEmpty) ...[
-            const SizedBox(width: 6),
-            Text(
-              sectionSubtitle,
-              style: const TextStyle(
-                color: Color(0xFF9FE3C6),
-                fontSize: 11.5,
-                fontWeight: FontWeight.w700,
-                height: 1.1,
-              ),
-            ),
-          ],
-          const SizedBox(width: 10),
-          Expanded(child: Container(height: 1, color: lineColor)),
-        ],
-      ),
-    ),
-  );
+DateTime? _mergeHomeworkDueDate(DateTime? current, DateTime? candidate) {
+  if (current == null) return candidate;
+  if (candidate == null) return current;
+  return candidate.isBefore(current) ? candidate : current;
 }
 
 Widget _buildHomeworkReorderableItem({
@@ -3751,175 +4701,16 @@ List<MapEntry<HomeworkAssignmentDetail, HomeworkItem>>
   return reservedPairs;
 }
 
-List<Widget> _buildAssignedHomeworkChipsForStudent(
-  BuildContext context,
-  String studentId,
-  double tick,
-  Map<String, String> flowNames,
-  Map<String, int> assignmentCounts,
-  List<HomeworkAssignmentDetail> activeAssignments,
-  Map<String, HomeworkAssignmentCycleMeta> assignmentCycleMetaByItem, {
-  Map<({String studentId, String itemId}), bool> pendingConfirms = const {},
-}) {
-  final assigned = activeAssignments
-      .where((a) => a.homeworkItemId.trim().isNotEmpty)
-      .where((a) => !_isReservationAssignment(a))
-      .toList()
-    ..sort((a, b) {
-      final ad = a.dueDate == null ? null : _dateOnly(a.dueDate!);
-      final bd = b.dueDate == null ? null : _dateOnly(b.dueDate!);
-      if (ad == null && bd != null) return 1;
-      if (ad != null && bd == null) return -1;
-      if (ad != null && bd != null) {
-        final dueCmp = ad.compareTo(bd);
-        if (dueCmp != 0) return dueCmp;
-      }
-      final orderCmp = a.orderIndex.compareTo(b.orderIndex);
-      if (orderCmp != 0) return orderCmp;
-      return a.assignedAt.compareTo(b.assignedAt);
-    });
-
-  final assignedPairs = <MapEntry<HomeworkAssignmentDetail, HomeworkItem>>[];
-  for (final a in assigned) {
-    final hw = HomeworkStore.instance.getById(studentId, a.homeworkItemId);
-    if (hw == null || hw.status == HomeworkStatus.completed) continue;
-    assignedPairs.add(MapEntry(a, hw));
-  }
-
-  if (assignedPairs.isEmpty) return const <Widget>[];
-
-  final grouped =
-      <DateTime?, List<MapEntry<HomeworkAssignmentDetail, HomeworkItem>>>{};
-  for (final pair in assignedPairs) {
-    final dueDate = pair.key.dueDate;
-    final key = dueDate == null ? null : _dateOnly(dueDate);
-    grouped
-        .putIfAbsent(
-            key, () => <MapEntry<HomeworkAssignmentDetail, HomeworkItem>>[])
-        .add(pair);
-  }
-  final orderedKeys = grouped.keys.toList()
-    ..sort((a, b) {
-      if (a == null && b != null) return 1;
-      if (a != null && b == null) return -1;
-      if (a == null && b == null) return 0;
-      return a!.compareTo(b!);
-    });
-
-  final out = <Widget>[];
-
-  for (int groupIdx = 0; groupIdx < orderedKeys.length; groupIdx++) {
-    final key = orderedKeys[groupIdx];
-    final pairs = grouped[key]!;
-    final sectionPrefix = groupIdx == 0 ? '숙제' : '다음 숙제';
-    final dueLabel = _formatHomeworkDueSectionLabel(key);
-    out.add(
-      _buildHomeworkChipGroupDivider(
-        title: '$sectionPrefix ($dueLabel)',
-        prominent: true,
-      ),
-    );
-    out.add(const SizedBox(height: 12));
-
-    final groupChips = <Widget>[];
-    final groupAssignmentIds = <String>[];
-    for (int i = 0; i < pairs.length; i++) {
-      final a = pairs[i].key;
-      final hw = pairs[i].value;
-      final isReservation = _isReservationAssignment(a);
-      groupAssignmentIds.add(a.id);
-      groupChips.add(
-        _SlideableHomeworkChip(
-          key: ValueKey('hw_assigned_${a.id}_${hw.id}'),
-          maxSlide: _homeworkChipMaxSlide,
-          canSlideDown: false,
-          canSlideUp: false,
-          downLabel: '',
-          upLabel: '',
-          downColor: const Color(0xFF9FB3B3),
-          upColor: const Color(0xFFE57373),
-          onTap: () {
-            final item = HomeworkStore.instance.getById(studentId, hw.id);
-            if (item == null) return;
-            unawaited(
-              _runHomeworkCheckDialogOnly(
-                context: context,
-                studentId: studentId,
-                hw: item,
-              ),
-            );
-          },
-          onSlideDown: () {},
-          onSlideUp: () async {},
-          child: _buildHomeworkChipWithReorderHandle(
-            index: i,
-            chipVisual: _buildHomeworkChipVisual(
-              context,
-              studentId,
-              hw,
-              flowNames[hw.flowId ?? ''] ?? '',
-              assignmentCounts[hw.id] ?? 0,
-              tick: tick,
-              isReservation: isReservation,
-              cycleMeta: assignmentCycleMetaByItem[hw.id],
-              isPendingConfirm: pendingConfirms.containsKey(
-                (studentId: studentId, itemId: hw.id),
-              ),
-              isCompleteCheckbox:
-                  pendingConfirms[(studentId: studentId, itemId: hw.id)] ==
-                      true,
-            ),
-          ),
-        ),
-      );
-    }
-    out.add(
-      ReorderableListView.builder(
-        shrinkWrap: true,
-        physics: const NeverScrollableScrollPhysics(),
-        itemCount: groupChips.length,
-        buildDefaultDragHandles: false,
-        proxyDecorator: (child, _, __) =>
-            Material(color: Colors.transparent, child: child),
-        onReorder: (oldIndex, newIndex) {
-          if (newIndex > oldIndex) newIndex -= 1;
-          final reorderedAssignmentIds = List<String>.from(groupAssignmentIds);
-          final movedId = reorderedAssignmentIds.removeAt(oldIndex);
-          reorderedAssignmentIds.insert(newIndex, movedId);
-          unawaited(
-            HomeworkAssignmentStore.instance.reorderAssignedInDueGroup(
-              studentId: studentId,
-              dueDate: key,
-              orderedAssignmentIds: reorderedAssignmentIds,
-            ),
-          );
-        },
-        itemBuilder: (context, index) {
-          return _buildHomeworkReorderableItem(
-            itemKey: 'assigned_group_${groupIdx}_${groupAssignmentIds[index]}',
-            chip: groupChips[index],
-            showBottomGap: index != groupChips.length - 1,
-          );
-        },
-      ),
-    );
-
-    if (groupIdx != orderedKeys.length - 1) {
-      out.add(const SizedBox(height: 10));
-    }
-  }
-
-  return out;
-}
-
 List<Widget> _buildHomeworkChipsOnceForStudent(
   BuildContext context,
   String studentId,
   double tick,
   Map<String, String> flowNames,
   Map<String, int> assignmentCounts,
-  Set<String> activeAssignedItemIds,
+  Set<String> hiddenItemIds,
   Map<String, HomeworkAssignmentCycleMeta> assignmentCycleMetaByItem, {
+  Map<String, DateTime?> assignmentDueByGroupId = const {},
+  Map<String, DateTime?> assignmentDueByItemId = const {},
   Map<({String studentId, String itemId}), bool> pendingConfirms = const {},
   Future<void> Function(
           {required BuildContext context,
@@ -3945,7 +4736,7 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
     final children = HomeworkStore.instance
         .itemsInGroup(studentId, group.id)
         .where((e) => e.status != HomeworkStatus.completed)
-        .where((e) => !activeAssignedItemIds.contains(e.id))
+        .where((e) => !hiddenItemIds.contains(e.id))
         .toList();
     if (children.isEmpty) continue;
     displayedGroups.add((group: group, children: children));
@@ -4112,6 +4903,16 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
         children.any((e) => e.runStart != null || e.phase == 2);
     final bool groupExpanded =
         hasRunningChild || expandedHomeworkIds.contains(group.id);
+    DateTime? dueDate = assignmentDueByGroupId[group.id];
+    bool hasHomeworkAssignment = assignmentDueByGroupId.containsKey(group.id);
+    for (final child in children) {
+      if (assignmentDueByItemId.containsKey(child.id)) {
+        hasHomeworkAssignment = true;
+      }
+      dueDate = _mergeHomeworkDueDate(dueDate, assignmentDueByItemId[child.id]);
+    }
+    final dueLabel =
+        dueDate == null ? null : _formatHomeworkDueChipLabel(dueDate);
     final double chipH = groupExpanded
         ? _homeworkGroupExpandedHeightForChildCount(children.length)
         : _homeworkChipCollapsedHeight;
@@ -4166,7 +4967,22 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
               ? const Color(0xFF4CAF50)
               : const Color(0xFF9FB3B3)),
       upColor: const Color(0xFFE57373),
-      onTap: () => onToggleExpand?.call(group.id),
+      onTap: () {
+        if (printPickMode) return;
+        if (hasHomeworkAssignment) {
+          unawaited(
+            _runHomeworkCheckDialogForGroup(
+              context: context,
+              studentId: studentId,
+              group: group,
+              summary: summary,
+              children: children,
+            ),
+          );
+          return;
+        }
+        onToggleExpand?.call(group.id);
+      },
       onLongPress: null,
       onSlideDown: () {
         if (printPickMode) return;
@@ -4228,6 +5044,8 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
           groupFlowName,
           groupAssignmentCount,
           tick: tick,
+          dueLabel: dueLabel,
+          isHomeworkDue: hasHomeworkAssignment,
           isExpanded: groupExpanded,
           groupChildren: children,
           chipHeightOverride: chipH,
@@ -5794,21 +6612,42 @@ Future<void> _handleSubmittedChipTapWithAnswerViewer({
   }
 }
 
-Widget _buildFlowChip(String flowName) {
-  final bool isDefault = flowName == '현행';
+Widget _buildFlowChip(
+  String flowName, {
+  String? dueLabel,
+  bool isHomeworkDue = false,
+}) {
+  final normalizedFlowName = flowName.trim();
+  final normalizedDueLabel = (dueLabel ?? '').trim();
+  final chipText = isHomeworkDue
+      ? (normalizedDueLabel.isEmpty ? '검사일 미정' : normalizedDueLabel)
+      : (normalizedDueLabel.isEmpty
+          ? (normalizedFlowName.isEmpty ? '플로우 미지정' : normalizedFlowName)
+          : (normalizedFlowName.isEmpty
+              ? normalizedDueLabel
+              : '$normalizedFlowName · $normalizedDueLabel'));
+  final bool isDefault = normalizedFlowName == '현행' && !isHomeworkDue;
+  final Color backgroundColor = isHomeworkDue
+      ? const Color(0x1F4FBF97)
+      : (isDefault ? Colors.transparent : const Color(0xFF2A3030));
+  final Border? border = isHomeworkDue
+      ? Border.all(color: kDlgAccent, width: 1.05)
+      : (isDefault
+          ? Border.all(color: const Color(0xFF4A5858), width: 1)
+          : null);
+  final Color textColor =
+      isHomeworkDue ? const Color(0xFF9FE3C6) : const Color(0xFF9FB3B3);
   return Container(
     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
     decoration: BoxDecoration(
-      color: isDefault ? Colors.transparent : const Color(0xFF2A3030),
+      color: backgroundColor,
       borderRadius: BorderRadius.circular(20),
-      border: isDefault
-          ? Border.all(color: const Color(0xFF4A5858), width: 1)
-          : null,
+      border: border,
     ),
     child: Text(
-      flowName,
-      style: const TextStyle(
-        color: Color(0xFF9FB3B3),
+      chipText,
+      style: TextStyle(
+        color: textColor,
         fontSize: 14,
         fontWeight: FontWeight.w600,
       ),
@@ -5823,6 +6662,8 @@ Widget _buildHomeworkChipVisual(
   String flowName,
   int assignmentCount, {
   required double tick,
+  String? dueLabel,
+  bool isHomeworkDue = false,
   bool isReservation = false,
   bool isExpanded = false,
   List<HomeworkItem> groupChildren = const <HomeworkItem>[],
@@ -6027,7 +6868,11 @@ Widget _buildHomeworkChipVisual(
           ),
         ),
         const SizedBox(width: 10),
-        _buildFlowChip(displayFlowName),
+        _buildFlowChip(
+          displayFlowName,
+          dueLabel: dueLabel,
+          isHomeworkDue: isHomeworkDue,
+        ),
       ],
     ),
   );

@@ -154,6 +154,86 @@ class HomeworkSplitPartInput {
       };
 }
 
+class HomeworkRecentTemplatePart {
+  final String sourceItemId;
+  final String title;
+  final String body;
+  final Color color;
+  final String? flowId;
+  final String? type;
+  final String? page;
+  final int? count;
+  final String? memo;
+  final String? content;
+  final String? bookId;
+  final String? gradeLabel;
+  final String? sourceUnitLevel;
+  final String? sourceUnitPath;
+  final List<Map<String, dynamic>>? unitMappings;
+  final int defaultSplitParts;
+  final DateTime createdAt;
+
+  const HomeworkRecentTemplatePart({
+    required this.sourceItemId,
+    required this.title,
+    required this.body,
+    required this.color,
+    this.flowId,
+    this.type,
+    this.page,
+    this.count,
+    this.memo,
+    this.content,
+    this.bookId,
+    this.gradeLabel,
+    this.sourceUnitLevel,
+    this.sourceUnitPath,
+    this.unitMappings,
+    this.defaultSplitParts = 1,
+    required this.createdAt,
+  });
+}
+
+class HomeworkRecentTemplate {
+  final String templateId;
+  final bool isGroup;
+  final String sourceStudentId;
+  final String? sourceGroupId;
+  final String title;
+  final String? flowId;
+  final List<HomeworkRecentTemplatePart> parts;
+  final DateTime createdAt;
+
+  const HomeworkRecentTemplate({
+    required this.templateId,
+    required this.isGroup,
+    required this.sourceStudentId,
+    required this.sourceGroupId,
+    required this.title,
+    required this.flowId,
+    required this.parts,
+    required this.createdAt,
+  });
+
+  int get partCount => parts.length;
+
+  String get primaryBookId {
+    for (final part in parts) {
+      final value = (part.bookId ?? '').trim();
+      if (value.isNotEmpty) return value;
+    }
+    return '';
+  }
+
+  String get primaryGradeLabel {
+    for (final part in parts) {
+      final value = (part.gradeLabel ?? '').trim();
+      if (value.isNotEmpty) return value;
+    }
+    return '';
+  }
+}
+
 class HomeworkStore {
   HomeworkStore._internal();
   static final HomeworkStore instance = HomeworkStore._internal();
@@ -732,6 +812,116 @@ class HomeworkStore {
         await HomeworkAssignmentStore.instance.loadAssignedItemIds(studentId);
     if (assignedIds.isEmpty) return list;
     return list.where((e) => !assignedIds.contains(e.id)).toList();
+  }
+
+  HomeworkRecentTemplatePart _toRecentTemplatePart(HomeworkItem item) {
+    return HomeworkRecentTemplatePart(
+      sourceItemId: item.id,
+      title: item.title.trim().isEmpty ? '(제목 없음)' : item.title.trim(),
+      body: item.body,
+      color: item.color,
+      flowId: item.flowId,
+      type: item.type,
+      page: item.page,
+      count: item.count,
+      memo: item.memo,
+      content: item.content,
+      bookId: item.bookId,
+      gradeLabel: item.gradeLabel,
+      sourceUnitLevel: item.sourceUnitLevel,
+      sourceUnitPath: item.sourceUnitPath,
+      unitMappings: item.unitMappings == null
+          ? null
+          : List<Map<String, dynamic>>.from(
+              item.unitMappings!.map((e) => Map<String, dynamic>.from(e)),
+            ),
+      defaultSplitParts: item.defaultSplitParts.clamp(1, 4).toInt(),
+      createdAt: item.createdAt ??
+          item.updatedAt ??
+          DateTime.fromMillisecondsSinceEpoch(0),
+    );
+  }
+
+  DateTime _latestDate(DateTime? a, DateTime? b) {
+    if (a == null) return b ?? DateTime.fromMillisecondsSinceEpoch(0);
+    if (b == null) return a;
+    return b.isAfter(a) ? b : a;
+  }
+
+  Future<List<HomeworkRecentTemplate>> loadRecentTemplates({
+    int limit = 60,
+  }) async {
+    await loadAll();
+
+    final templates = <HomeworkRecentTemplate>[];
+    final groupedItemIds = <String>{};
+
+    for (final entry in _groupsByStudentId.entries) {
+      final studentId = entry.key;
+      final groups = entry.value;
+      for (final group in groups) {
+        if (group.status == 'archived') continue;
+        final children = itemsInGroup(
+          studentId,
+          group.id,
+          includeCompleted: true,
+        );
+        if (children.isEmpty) continue;
+        groupedItemIds.addAll(children.map((e) => e.id));
+        final parts =
+            children.map(_toRecentTemplatePart).toList(growable: false);
+        DateTime sortTime =
+            group.createdAt ?? group.updatedAt ?? parts.first.createdAt;
+        for (final part in parts) {
+          sortTime = _latestDate(sortTime, part.createdAt);
+        }
+        final firstFlowId = (children.first.flowId ?? '').trim();
+        final groupFlowId = (group.flowId ?? '').trim();
+        templates.add(
+          HomeworkRecentTemplate(
+            templateId: 'group:${group.id}',
+            isGroup: true,
+            sourceStudentId: studentId,
+            sourceGroupId: group.id,
+            title: group.title.trim().isEmpty ? '그룹 과제' : group.title.trim(),
+            flowId: groupFlowId.isNotEmpty ? groupFlowId : firstFlowId,
+            parts: parts,
+            createdAt: sortTime,
+          ),
+        );
+      }
+    }
+
+    for (final entry in _byStudentId.entries) {
+      final studentId = entry.key;
+      final items = entry.value;
+      for (final item in items) {
+        if (groupedItemIds.contains(item.id)) continue;
+        final part = _toRecentTemplatePart(item);
+        templates.add(
+          HomeworkRecentTemplate(
+            templateId: 'item:${item.id}',
+            isGroup: false,
+            sourceStudentId: studentId,
+            sourceGroupId: null,
+            title: part.title,
+            flowId: (item.flowId ?? '').trim(),
+            parts: <HomeworkRecentTemplatePart>[part],
+            createdAt: part.createdAt,
+          ),
+        );
+      }
+    }
+
+    templates.sort((a, b) {
+      final dateCmp = b.createdAt.compareTo(a.createdAt);
+      if (dateCmp != 0) return dateCmp;
+      return a.templateId.compareTo(b.templateId);
+    });
+    if (limit > 0 && templates.length > limit) {
+      return templates.sublist(0, limit);
+    }
+    return templates;
   }
 
   Future<void> loadAll() async {
@@ -2039,6 +2229,28 @@ class HomeworkStore {
     return created;
   }
 
+  Map<String, HomeworkAssignmentGroupMeta> _buildAssignmentGroupMetaByItem(
+    String studentId,
+    Iterable<HomeworkItem> items,
+  ) {
+    final out = <String, HomeworkAssignmentGroupMeta>{};
+    for (final item in items) {
+      final itemId = item.id.trim();
+      if (itemId.isEmpty) continue;
+      final groupId = (_groupIdByItemId[itemId] ?? '').trim();
+      if (groupId.isEmpty || _isLegacyGroupId(groupId)) continue;
+      final group = groupById(studentId, groupId);
+      final groupTitle = (group?.title ?? '').trim();
+      final fallbackTitle =
+          item.title.trim().isNotEmpty ? item.title.trim() : '그룹 과제';
+      out[itemId] = HomeworkAssignmentGroupMeta(
+        groupId: groupId,
+        groupTitleSnapshot: groupTitle.isEmpty ? fallbackTitle : groupTitle,
+      );
+    }
+    return out;
+  }
+
   // 하원 시 미완료 과제들을 숙제로 표시
   void markIncompleteAsHomework(String studentId) {
     final list = _byStudentId[studentId];
@@ -2080,10 +2292,13 @@ class HomeworkStore {
           for (final item in toAssign)
             item.id: item.defaultSplitParts.clamp(1, 4).toInt(),
         };
+        final groupMetaByItem =
+            _buildAssignmentGroupMetaByItem(studentId, toAssign);
         unawaited(HomeworkAssignmentStore.instance.recordAssignments(
           studentId,
           toAssign,
           splitPartsByItem: splitPartsByItem,
+          groupMetaByItemId: groupMetaByItem,
         ));
       }
     }
@@ -2160,12 +2375,15 @@ class HomeworkStore {
       }
     }
     if (toAssign.isNotEmpty) {
+      final groupMetaByItem =
+          _buildAssignmentGroupMetaByItem(studentId, toAssign);
       unawaited(HomeworkAssignmentStore.instance.recordAssignments(
         studentId,
         toAssign,
         dueDate: dueDate,
         splitParts: splitParts,
         splitPartsByItem: splitPartsByItem,
+        groupMetaByItemId: groupMetaByItem,
       ));
     }
   }

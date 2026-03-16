@@ -8,6 +8,8 @@ import 'homework_store.dart';
 class HomeworkAssignmentDetail {
   final String id;
   final String homeworkItemId;
+  final String? groupId;
+  final String? groupTitleSnapshot;
   final DateTime assignedAt;
   final DateTime? dueDate;
   final int orderIndex;
@@ -29,6 +31,8 @@ class HomeworkAssignmentDetail {
   const HomeworkAssignmentDetail({
     required this.id,
     required this.homeworkItemId,
+    required this.groupId,
+    required this.groupTitleSnapshot,
     required this.assignedAt,
     required this.dueDate,
     required this.orderIndex,
@@ -46,6 +50,16 @@ class HomeworkAssignmentDetail {
     required this.repeatIndex,
     required this.splitParts,
     required this.splitRound,
+  });
+}
+
+class HomeworkAssignmentGroupMeta {
+  final String groupId;
+  final String groupTitleSnapshot;
+
+  const HomeworkAssignmentGroupMeta({
+    required this.groupId,
+    required this.groupTitleSnapshot,
   });
 }
 
@@ -255,6 +269,52 @@ class HomeworkAssignmentStore {
 
   String _asTrimmed(dynamic value) {
     return (value ?? '').toString().trim();
+  }
+
+  bool _isMissingAssignmentGroupColumnsError(Object error) {
+    final msg = error.toString().toLowerCase();
+    if (!msg.contains('column')) return false;
+    return msg.contains('homework_assignments.group_id') ||
+        msg.contains('homework_assignments.group_title_snapshot') ||
+        msg.contains('group_id') ||
+        msg.contains('group_title_snapshot');
+  }
+
+  Future<Map<String, HomeworkAssignmentGroupMeta>> _loadGroupMetaByItemIds({
+    required String academyId,
+    required Iterable<String> itemIds,
+  }) async {
+    final ids = itemIds.map((e) => e.trim()).where((e) => e.isNotEmpty).toSet();
+    if (ids.isEmpty) return <String, HomeworkAssignmentGroupMeta>{};
+    final supa = Supabase.instance.client;
+    final rows = await supa
+        .from('homework_group_items')
+        .select('homework_item_id,group_id,homework_groups(title)')
+        .eq('academy_id', academyId)
+        .inFilter('homework_item_id', ids.toList());
+    final out = <String, HomeworkAssignmentGroupMeta>{};
+    for (final raw in (rows as List<dynamic>)) {
+      if (raw is! Map) continue;
+      final row = Map<String, dynamic>.from(raw);
+      final itemId = _asTrimmed(row['homework_item_id']);
+      final groupId = _asTrimmed(row['group_id']);
+      if (itemId.isEmpty || groupId.isEmpty) continue;
+      String title = '';
+      final groupRaw = row['homework_groups'];
+      if (groupRaw is Map) {
+        title = _asTrimmed(groupRaw['title']);
+      } else if (groupRaw is List && groupRaw.isNotEmpty) {
+        final first = groupRaw.first;
+        if (first is Map) {
+          title = _asTrimmed(first['title']);
+        }
+      }
+      out[itemId] = HomeworkAssignmentGroupMeta(
+        groupId: groupId,
+        groupTitleSnapshot: title.isEmpty ? '그룹 과제' : title,
+      );
+    }
+    return out;
   }
 
   void _addPageRange(Set<int> out, int? a, int? b) {
@@ -654,16 +714,34 @@ class HomeworkAssignmentStore {
           await TenantService.instance.ensureActiveAcademy();
       _ensureRealtimeForAcademy(academyId);
       final supa = Supabase.instance.client;
-      final rows = await supa
-          .from('homework_assignments')
-          .select(
-              'id,homework_item_id,assigned_at,due_date,order_index,status,note,progress,issue_type,issue_note,repeat_index,split_parts,split_round,homework_items(id,title,type,page,count,content,flow_id)')
-          .eq('academy_id', academyId)
-          .eq('student_id', studentId)
-          .eq('status', 'assigned')
-          .order('due_date', ascending: true)
-          .order('order_index', ascending: true)
-          .order('assigned_at', ascending: false);
+      Future<List<dynamic>> runSelect(String selectClause) async {
+        final rows = await supa
+            .from('homework_assignments')
+            .select(selectClause)
+            .eq('academy_id', academyId)
+            .eq('student_id', studentId)
+            .eq('status', 'assigned')
+            .order('due_date', ascending: true)
+            .order('order_index', ascending: true)
+            .order('assigned_at', ascending: false);
+        return rows as List<dynamic>;
+      }
+
+      const selectWithGroup =
+          'id,homework_item_id,group_id,group_title_snapshot,assigned_at,due_date,order_index,status,note,progress,issue_type,issue_note,repeat_index,split_parts,split_round,homework_items(id,title,type,page,count,content,flow_id)';
+      const selectLegacy =
+          'id,homework_item_id,assigned_at,due_date,order_index,status,note,progress,issue_type,issue_note,repeat_index,split_parts,split_round,homework_items(id,title,type,page,count,content,flow_id)';
+
+      late final List<dynamic> rows;
+      try {
+        rows = await runSelect(selectWithGroup);
+      } catch (e) {
+        if (_isMissingAssignmentGroupColumnsError(e)) {
+          rows = await runSelect(selectLegacy);
+        } else {
+          rethrow;
+        }
+      }
       final List<HomeworkAssignmentDetail> list = [];
       DateTime? parseTs(dynamic v) {
         if (v == null) return null;
@@ -680,13 +758,18 @@ class HomeworkAssignmentStore {
         return 0;
       }
 
-      for (final r in (rows as List<dynamic>).cast<Map<String, dynamic>>()) {
+      for (final r in rows.cast<Map<String, dynamic>>()) {
         final hw = r['homework_items'] as Map<String, dynamic>?;
+        final groupId = _asTrimmed(r['group_id']);
+        final groupTitleSnapshot = _asTrimmed(r['group_title_snapshot']);
         final splitParts = _normalizeSplitParts(r['split_parts']);
         list.add(
           HomeworkAssignmentDetail(
             id: (r['id'] as String?) ?? '',
             homeworkItemId: (r['homework_item_id'] as String?) ?? '',
+            groupId: groupId.isEmpty ? null : groupId,
+            groupTitleSnapshot:
+                groupTitleSnapshot.isEmpty ? null : groupTitleSnapshot,
             assignedAt: parseTs(r['assigned_at']) ?? DateTime.now(),
             dueDate: parseTs(r['due_date']),
             orderIndex: parseInt(r['order_index']),
@@ -1089,6 +1172,7 @@ class HomeworkAssignmentStore {
     String? note,
     int splitParts = 1,
     Map<String, int>? splitPartsByItem,
+    Map<String, HomeworkAssignmentGroupMeta>? groupMetaByItemId,
   }) async {
     if (items.isEmpty) return;
     try {
@@ -1097,6 +1181,33 @@ class HomeworkAssignmentStore {
       _ensureRealtimeForAcademy(academyId);
       final supa = Supabase.instance.client;
       final dueDateIso = _dueDateIso(dueDate);
+      final resolvedGroupMetaByItem = <String, HomeworkAssignmentGroupMeta>{};
+      if (groupMetaByItemId != null && groupMetaByItemId.isNotEmpty) {
+        for (final entry in groupMetaByItemId.entries) {
+          final itemId = entry.key.trim();
+          final groupId = entry.value.groupId.trim();
+          final title = entry.value.groupTitleSnapshot.trim();
+          if (itemId.isEmpty || groupId.isEmpty) continue;
+          resolvedGroupMetaByItem[itemId] = HomeworkAssignmentGroupMeta(
+            groupId: groupId,
+            groupTitleSnapshot: title.isEmpty ? '그룹 과제' : title,
+          );
+        }
+      }
+      final unresolvedItemIds = items
+          .map((e) => e.id.trim())
+          .where((e) => e.isNotEmpty && !resolvedGroupMetaByItem.containsKey(e))
+          .toSet();
+      if (unresolvedItemIds.isNotEmpty) {
+        try {
+          resolvedGroupMetaByItem.addAll(
+            await _loadGroupMetaByItemIds(
+              academyId: academyId,
+              itemIds: unresolvedItemIds,
+            ),
+          );
+        } catch (_) {}
+      }
 
       final existingRows = await supa
           .from('homework_assignments')
@@ -1203,11 +1314,18 @@ class HomeworkAssignmentStore {
           carriedOverIds.add(lastId);
           affectedDueDates.add((last?['due_date'] as String?)?.trim());
         }
+        final groupMeta = resolvedGroupMetaByItem[item.id];
+        final titleSnapshot = groupMeta?.groupTitleSnapshot.trim() ?? '';
+        final fallbackTitle =
+            item.title.trim().isEmpty ? '그룹 과제' : item.title.trim();
         rows.add({
           'id': const Uuid().v4(),
           'academy_id': academyId,
           'student_id': studentId,
           'homework_item_id': item.id,
+          'group_id': groupMeta?.groupId,
+          'group_title_snapshot':
+              titleSnapshot.isEmpty ? fallbackTitle : titleSnapshot,
           'assigned_at': now.toUtc().toIso8601String(),
           'due_date': dueDateIso,
           'order_index': nextOrder++,
@@ -1227,7 +1345,18 @@ class HomeworkAssignmentStore {
             .update({'status': 'carried_over'}).inFilter('id', carriedOverIds);
       }
 
-      await supa.from('homework_assignments').insert(rows);
+      try {
+        await supa.from('homework_assignments').insert(rows);
+      } catch (e) {
+        if (!_isMissingAssignmentGroupColumnsError(e)) rethrow;
+        final fallbackRows = rows.map((row) {
+          final copy = Map<String, dynamic>.from(row);
+          copy.remove('group_id');
+          copy.remove('group_title_snapshot');
+          return copy;
+        }).toList(growable: false);
+        await supa.from('homework_assignments').insert(fallbackRows);
+      }
       for (final due in affectedDueDates) {
         await _normalizeAssignedOrderForDueDateIso(
           academyId: academyId,

@@ -28,13 +28,18 @@ const double _kGradingSectionGapBottom = 18.0;
 const double _kGradingSectionHeaderGap = 12.0;
 const EdgeInsets _kGradingPagePadding = EdgeInsets.fromLTRB(24, 0, 24, 24);
 
+typedef GradingGroupTapCallback = Future<void> Function(
+  String studentId,
+  HomeworkGroup? group,
+  HomeworkItem summary,
+  List<HomeworkItem> children,
+);
+
 class GradingModePage extends StatefulWidget {
   final List<String> attendingStudentIds;
   final Map<String, String> studentNamesById;
-  final Future<void> Function(String studentId, HomeworkItem hw)?
-      onSubmittedCardTap;
-  final Future<void> Function(String studentId, HomeworkItem hw)?
-      onHomeworkCardTap;
+  final GradingGroupTapCallback? onSubmittedCardTap;
+  final GradingGroupTapCallback? onHomeworkCardTap;
   final Map<({String studentId, String itemId}), bool> pendingConfirms;
   final void Function(String studentId, String itemId)? onTogglePending;
 
@@ -55,9 +60,9 @@ class GradingModePage extends StatefulWidget {
 class _GradingModePageState extends State<GradingModePage> {
   final Map<String, Future<String?>> _coverPathFutureByKey =
       <String, Future<String?>>{};
-  Future<Map<String, Set<String>>>? _activeAssignedItemIdsFuture;
-  int _activeAssignedItemIdsRevision = -1;
-  String _activeAssignedStudentsKey = '';
+  Future<Map<String, List<HomeworkAssignmentDetail>>>? _activeAssignmentsFuture;
+  int _activeAssignmentsRevision = -1;
+  String _activeAssignmentsStudentsKey = '';
 
   @override
   Widget build(BuildContext context) {
@@ -67,12 +72,15 @@ class _GradingModePageState extends State<GradingModePage> {
         return ValueListenableBuilder<int>(
           valueListenable: HomeworkAssignmentStore.instance.revision,
           builder: (context, assignmentRevision, __) {
-            return FutureBuilder<Map<String, Set<String>>>(
-              future: _activeAssignedItemIdsForAttending(assignmentRevision),
+            return FutureBuilder<Map<String, List<HomeworkAssignmentDetail>>>(
+              future: _activeAssignmentsForAttending(assignmentRevision),
               builder: (context, assignmentSnapshot) {
-                final submittedEntries = _buildSubmittedEntries();
+                final activeAssignmentsByStudent = assignmentSnapshot.data ??
+                    const <String, List<HomeworkAssignmentDetail>>{};
+                final submittedEntries =
+                    _buildSubmittedEntries(activeAssignmentsByStudent);
                 final homeworkEntries = _buildHomeworkEntries(
-                  assignmentSnapshot.data ?? const <String, Set<String>>{},
+                  activeAssignmentsByStudent,
                 );
                 if (submittedEntries.isEmpty && homeworkEntries.isEmpty) {
                   return const _GradingEmptyState();
@@ -98,7 +106,8 @@ class _GradingModePageState extends State<GradingModePage> {
                                     submittedEntries,
                                     cardLayout: cardLayout,
                                     onCardTap: widget.onSubmittedCardTap,
-                                    canTapItem: (latest) => latest.phase == 3,
+                                    canTapEntry: (entry) =>
+                                        entry.hasSubmittedChild,
                                   )
                                 else if (homeworkEntries.isNotEmpty)
                                   _buildSubmittedEmptyPlaceholder(
@@ -269,37 +278,34 @@ class _GradingModePageState extends State<GradingModePage> {
     return total;
   }
 
-  Future<Map<String, Set<String>>> _activeAssignedItemIdsForAttending(
+  Future<Map<String, List<HomeworkAssignmentDetail>>>
+      _activeAssignmentsForAttending(
     int assignmentRevision,
   ) {
     final studentsKey = widget.attendingStudentIds.join('|');
-    if (_activeAssignedItemIdsFuture == null ||
-        _activeAssignedItemIdsRevision != assignmentRevision ||
-        _activeAssignedStudentsKey != studentsKey) {
-      _activeAssignedItemIdsRevision = assignmentRevision;
-      _activeAssignedStudentsKey = studentsKey;
-      _activeAssignedItemIdsFuture =
-          _loadActiveAssignedItemIdsMap(widget.attendingStudentIds);
+    if (_activeAssignmentsFuture == null ||
+        _activeAssignmentsRevision != assignmentRevision ||
+        _activeAssignmentsStudentsKey != studentsKey) {
+      _activeAssignmentsRevision = assignmentRevision;
+      _activeAssignmentsStudentsKey = studentsKey;
+      _activeAssignmentsFuture =
+          _loadActiveAssignmentsMap(widget.attendingStudentIds);
     }
-    return _activeAssignedItemIdsFuture!;
+    return _activeAssignmentsFuture!;
   }
 
-  Future<Map<String, Set<String>>> _loadActiveAssignedItemIdsMap(
+  Future<Map<String, List<HomeworkAssignmentDetail>>> _loadActiveAssignmentsMap(
     List<String> studentIds,
   ) async {
-    final out = <String, Set<String>>{};
+    final out = <String, List<HomeworkAssignmentDetail>>{};
     for (final studentId in studentIds) {
       final assignments = await HomeworkAssignmentStore.instance
           .loadActiveAssignments(studentId);
-      final ids = assignments
-          .where((assignment) {
-            final note = (assignment.note ?? '').trim();
-            return note != HomeworkAssignmentStore.reservationNote;
-          })
-          .map((assignment) => assignment.homeworkItemId.trim())
-          .where((id) => id.isNotEmpty)
-          .toSet();
-      out[studentId] = ids;
+      final filtered = assignments.where((assignment) {
+        final note = (assignment.note ?? '').trim();
+        return note != HomeworkAssignmentStore.reservationNote;
+      }).toList(growable: false);
+      out[studentId] = filtered;
     }
     return out;
   }
@@ -350,10 +356,10 @@ class _GradingModePageState extends State<GradingModePage> {
   }
 
   Widget _buildEntryWrap(
-    List<_GradingCardEntry> entries, {
+    List<_GradingGroupEntry> entries, {
     required _GradingCardLayout cardLayout,
-    Future<void> Function(String studentId, HomeworkItem hw)? onCardTap,
-    bool Function(HomeworkItem latest)? canTapItem,
+    GradingGroupTapCallback? onCardTap,
+    bool Function(_GradingGroupEntry entry)? canTapEntry,
   }) {
     return Wrap(
       alignment: WrapAlignment.start,
@@ -369,26 +375,22 @@ class _GradingModePageState extends State<GradingModePage> {
               entry: entry,
               cardHeight: cardLayout.height,
               metaHeight: cardLayout.metaHeight,
-              isPendingConfirm: widget.pendingConfirms.containsKey(
-                (studentId: entry.studentId, itemId: entry.item.id),
-              ),
-              isCompleteCheckbox: widget.pendingConfirms[(
-                    studentId: entry.studentId,
-                    itemId: entry.item.id
-                  )] ==
-                  true,
+              isPendingConfirm: _isEntryPending(entry),
+              isCompleteCheckbox: _isEntryPendingComplete(entry),
               coverPathFuture: _resolveCoverPath(
-                bookId: (entry.item.bookId ?? '').trim(),
-                gradeLabel: (entry.item.gradeLabel ?? '').trim(),
+                bookId: (entry.summary.bookId ?? '').trim(),
+                gradeLabel: (entry.summary.gradeLabel ?? '').trim(),
               ),
               onTap: onCardTap == null
                   ? null
                   : () async {
-                      final latest = HomeworkStore.instance
-                          .getById(entry.studentId, entry.item.id);
-                      if (latest == null) return;
-                      if (canTapItem != null && !canTapItem(latest)) return;
-                      await onCardTap(entry.studentId, latest);
+                      if (canTapEntry != null && !canTapEntry(entry)) return;
+                      await onCardTap(
+                        entry.studentId,
+                        entry.group,
+                        entry.summary,
+                        entry.children,
+                      );
                     },
             ),
           ),
@@ -396,71 +398,358 @@ class _GradingModePageState extends State<GradingModePage> {
     );
   }
 
-  List<_GradingCardEntry> _buildSubmittedEntries() {
-    final out = <_GradingCardEntry>[];
+  List<_GradingGroupEntry> _buildSubmittedEntries(
+    Map<String, List<HomeworkAssignmentDetail>> activeAssignmentsByStudent,
+  ) {
+    final out = <_GradingGroupEntry>[];
     for (final studentId in widget.attendingStudentIds) {
       final studentName = widget.studentNamesById[studentId] ?? '학생';
-      final submitted = HomeworkStore.instance
-          .items(studentId)
-          .where(
-            (hw) => hw.status != HomeworkStatus.completed && hw.phase == 3,
-          )
-          .toList();
-      for (final hw in submitted) {
-        out.add(
-          _GradingCardEntry(
-            studentId: studentId,
-            studentName: studentName,
-            item: hw,
-          ),
-        );
-      }
+      out.addAll(
+        _buildEntriesForStudent(
+          studentId: studentId,
+          studentName: studentName,
+          assignments: activeAssignmentsByStudent[studentId] ?? const [],
+          section: _GradingSection.submitted,
+        ),
+      );
     }
     out.sort((a, b) {
       final t = a.submittedTime.compareTo(b.submittedTime);
       if (t != 0) return t;
       final nameCmp = a.studentName.compareTo(b.studentName);
       if (nameCmp != 0) return nameCmp;
-      return a.item.id.compareTo(b.item.id);
+      return a.summary.id.compareTo(b.summary.id);
     });
     return out;
   }
 
-  List<_GradingCardEntry> _buildHomeworkEntries(
-    Map<String, Set<String>> activeAssignedItemIdsByStudent,
+  List<_GradingGroupEntry> _buildHomeworkEntries(
+    Map<String, List<HomeworkAssignmentDetail>> activeAssignmentsByStudent,
   ) {
-    final out = <_GradingCardEntry>[];
+    final out = <_GradingGroupEntry>[];
     for (final studentId in widget.attendingStudentIds) {
       final studentName = widget.studentNamesById[studentId] ?? '학생';
-      final activeAssignedItemIds =
-          activeAssignedItemIdsByStudent[studentId] ?? const <String>{};
-      final homework = HomeworkStore.instance
-          .items(studentId)
-          .where(
-            (hw) =>
-                hw.status != HomeworkStatus.completed &&
-                activeAssignedItemIds.contains(hw.id) &&
-                hw.phase != 0,
-          )
-          .toList();
-      for (final hw in homework) {
-        out.add(
-          _GradingCardEntry(
-            studentId: studentId,
-            studentName: studentName,
-            item: hw,
-          ),
-        );
-      }
+      out.addAll(
+        _buildEntriesForStudent(
+          studentId: studentId,
+          studentName: studentName,
+          assignments: activeAssignmentsByStudent[studentId] ?? const [],
+          section: _GradingSection.homework,
+        ),
+      );
     }
     out.sort((a, b) {
+      final ad = a.dueDate;
+      final bd = b.dueDate;
+      if (ad == null && bd != null) return 1;
+      if (ad != null && bd == null) return -1;
+      if (ad != null && bd != null) {
+        final dueCmp = ad.compareTo(bd);
+        if (dueCmp != 0) return dueCmp;
+      }
       final t = a.homeworkTime.compareTo(b.homeworkTime);
       if (t != 0) return t;
       final nameCmp = a.studentName.compareTo(b.studentName);
       if (nameCmp != 0) return nameCmp;
-      return a.item.id.compareTo(b.item.id);
+      return a.summary.id.compareTo(b.summary.id);
     });
     return out;
+  }
+
+  bool _isSubmittedVisible(HomeworkItem item) {
+    return item.status != HomeworkStatus.completed &&
+        item.completedAt == null &&
+        item.phase == 3;
+  }
+
+  DateTime _submittedSortTimeOfItem(HomeworkItem item) {
+    return item.submittedAt ??
+        item.updatedAt ??
+        item.createdAt ??
+        DateTime.fromMillisecondsSinceEpoch(0);
+  }
+
+  DateTime _homeworkSortTimeOfItem(HomeworkItem item) {
+    return item.waitingAt ??
+        item.updatedAt ??
+        item.createdAt ??
+        DateTime.fromMillisecondsSinceEpoch(0);
+  }
+
+  DateTime _submittedSortTimeOfChildren(List<HomeworkItem> children) {
+    DateTime? earliest;
+    for (final child in children) {
+      if (!_isSubmittedVisible(child)) continue;
+      final ts = _submittedSortTimeOfItem(child);
+      if (earliest == null || ts.isBefore(earliest)) {
+        earliest = ts;
+      }
+    }
+    return earliest ?? DateTime.fromMillisecondsSinceEpoch(0);
+  }
+
+  DateTime _homeworkSortTimeOfChildren(List<HomeworkItem> children) {
+    DateTime? earliest;
+    for (final child in children) {
+      final ts = _homeworkSortTimeOfItem(child);
+      if (earliest == null || ts.isBefore(earliest)) {
+        earliest = ts;
+      }
+    }
+    return earliest ?? DateTime.fromMillisecondsSinceEpoch(0);
+  }
+
+  DateTime? _dateOnly(DateTime? dt) {
+    if (dt == null) return null;
+    return DateTime(dt.year, dt.month, dt.day);
+  }
+
+  DateTime? _mergeDueDate(DateTime? current, DateTime? candidate) {
+    if (current == null) return candidate;
+    if (candidate == null) return current;
+    return candidate.isBefore(current) ? candidate : current;
+  }
+
+  DateTime? _latestDate(DateTime? current, DateTime? candidate) {
+    if (current == null) return candidate;
+    if (candidate == null) return current;
+    return candidate.isAfter(current) ? candidate : current;
+  }
+
+  List<({String studentId, String itemId})> _entryPendingKeys(
+    _GradingGroupEntry entry,
+  ) {
+    final out = <({String studentId, String itemId})>[];
+    for (final child in entry.children) {
+      if (!_isSubmittedVisible(child)) continue;
+      out.add((studentId: entry.studentId, itemId: child.id));
+    }
+    return out;
+  }
+
+  bool _isEntryPending(_GradingGroupEntry entry) {
+    final keys = _entryPendingKeys(entry);
+    if (keys.isEmpty) return false;
+    return keys.any(widget.pendingConfirms.containsKey);
+  }
+
+  bool _isEntryPendingComplete(_GradingGroupEntry entry) {
+    final keys = _entryPendingKeys(entry);
+    if (keys.isEmpty) return false;
+    return keys.any((key) => widget.pendingConfirms[key] == true);
+  }
+
+  List<_GradingGroupEntry> _buildEntriesForStudent({
+    required String studentId,
+    required String studentName,
+    required List<HomeworkAssignmentDetail> assignments,
+    required _GradingSection section,
+  }) {
+    final out = <_GradingGroupEntry>[];
+    final assignmentByItemId = <String, List<HomeworkAssignmentDetail>>{};
+    for (final assignment in assignments) {
+      final itemId = assignment.homeworkItemId.trim();
+      if (itemId.isEmpty) continue;
+      assignmentByItemId
+          .putIfAbsent(itemId, () => <HomeworkAssignmentDetail>[])
+          .add(assignment);
+    }
+
+    final coveredItemIds = <String>{};
+    final groups = HomeworkStore.instance.groups(studentId);
+    for (final group in groups) {
+      final children = HomeworkStore.instance
+          .itemsInGroup(studentId, group.id)
+          .where((e) => e.status != HomeworkStatus.completed)
+          .toList(growable: false);
+      if (children.isEmpty) continue;
+      coveredItemIds.addAll(children.map((e) => e.id));
+
+      final submittedChildren =
+          children.where(_isSubmittedVisible).toList(growable: false);
+      final assignedChildren = children
+          .where(
+            (child) =>
+                assignmentByItemId.containsKey(child.id) && child.phase != 0,
+          )
+          .toList(growable: false);
+      final hasSubmitted = submittedChildren.isNotEmpty;
+      final hasHomeworkAssignment = assignedChildren.isNotEmpty;
+
+      final include = section == _GradingSection.submitted
+          ? hasSubmitted
+          : (!hasSubmitted && hasHomeworkAssignment);
+      if (!include) continue;
+
+      DateTime? dueDate;
+      String groupTitleSnapshot = '';
+      for (final child in assignedChildren) {
+        final childAssignments = assignmentByItemId[child.id] ?? const [];
+        for (final assignment in childAssignments) {
+          dueDate = _mergeDueDate(dueDate, _dateOnly(assignment.dueDate));
+          if (groupTitleSnapshot.isEmpty) {
+            final snapshot = (assignment.groupTitleSnapshot ?? '').trim();
+            if (snapshot.isNotEmpty) groupTitleSnapshot = snapshot;
+          }
+        }
+      }
+
+      final summary = _buildGroupSummaryItem(
+        group: group,
+        children: children,
+        titleSnapshot: groupTitleSnapshot,
+      );
+      final displayTitle = groupTitleSnapshot.isNotEmpty
+          ? groupTitleSnapshot
+          : (group.title.trim().isNotEmpty
+              ? group.title.trim()
+              : summary.title);
+      out.add(
+        _GradingGroupEntry(
+          studentId: studentId,
+          studentName: studentName,
+          group: group,
+          summary: summary,
+          children: children,
+          displayTitle: displayTitle.trim().isEmpty ? '그룹 과제' : displayTitle,
+          dueDate: dueDate,
+          submittedTime: _submittedSortTimeOfChildren(children),
+          homeworkTime: _homeworkSortTimeOfChildren(children),
+        ),
+      );
+    }
+
+    final looseItems = HomeworkStore.instance
+        .items(studentId)
+        .where((e) => e.status != HomeworkStatus.completed)
+        .where((e) => !coveredItemIds.contains(e.id))
+        .toList(growable: false);
+    for (final item in looseItems) {
+      final hasSubmitted = _isSubmittedVisible(item);
+      final hasHomeworkAssignment =
+          assignmentByItemId.containsKey(item.id) && item.phase != 0;
+      final include = section == _GradingSection.submitted
+          ? hasSubmitted
+          : (!hasSubmitted && hasHomeworkAssignment);
+      if (!include) continue;
+
+      DateTime? dueDate;
+      String titleSnapshot = '';
+      for (final assignment in assignmentByItemId[item.id] ?? const []) {
+        dueDate = _mergeDueDate(dueDate, _dateOnly(assignment.dueDate));
+        if (titleSnapshot.isEmpty) {
+          final snapshot = (assignment.groupTitleSnapshot ?? '').trim();
+          if (snapshot.isNotEmpty) titleSnapshot = snapshot;
+        }
+      }
+      final displayTitle =
+          titleSnapshot.isNotEmpty ? titleSnapshot : item.title.trim();
+      out.add(
+        _GradingGroupEntry(
+          studentId: studentId,
+          studentName: studentName,
+          group: null,
+          summary: item,
+          children: <HomeworkItem>[item],
+          displayTitle: displayTitle.isEmpty ? '(제목 없음)' : displayTitle,
+          dueDate: dueDate,
+          submittedTime: _submittedSortTimeOfItem(item),
+          homeworkTime: _homeworkSortTimeOfItem(item),
+        ),
+      );
+    }
+
+    return out;
+  }
+
+  HomeworkItem _buildGroupSummaryItem({
+    required HomeworkGroup group,
+    required List<HomeworkItem> children,
+    required String titleSnapshot,
+  }) {
+    final first = children.first;
+    HomeworkItem? runningChild;
+    bool hasSubmitted = false;
+    bool hasConfirmed = false;
+    int maxPhase = 1;
+    int totalCount = 0;
+    int maxCheckCount = 0;
+    int totalAccumulatedMs = 0;
+    int totalCycleBaseMs = 0;
+    DateTime? latestUpdated;
+    DateTime? latestSubmitted;
+    DateTime? latestConfirmed;
+    DateTime? latestWaiting;
+    final pages = <String>[];
+
+    for (final child in children) {
+      if (runningChild == null &&
+          (child.runStart != null || child.phase == 2)) {
+        runningChild = child;
+      }
+      if (_isSubmittedVisible(child)) hasSubmitted = true;
+      if (child.phase == 4) hasConfirmed = true;
+      if (child.phase > maxPhase) maxPhase = child.phase;
+      final count = child.count ?? 0;
+      if (count > 0) totalCount += count;
+      if (child.checkCount > maxCheckCount) maxCheckCount = child.checkCount;
+      totalAccumulatedMs += child.accumulatedMs;
+      totalCycleBaseMs += child.cycleBaseAccumulatedMs;
+      final page = (child.page ?? '').trim();
+      if (page.isNotEmpty && pages.length < 4) pages.add(page);
+      latestUpdated = _latestDate(latestUpdated, child.updatedAt);
+      latestSubmitted = _latestDate(latestSubmitted, child.submittedAt);
+      latestConfirmed = _latestDate(latestConfirmed, child.confirmedAt);
+      latestWaiting = _latestDate(latestWaiting, child.waitingAt);
+    }
+
+    final phase = runningChild != null
+        ? 2
+        : (hasSubmitted ? 3 : (hasConfirmed ? 4 : maxPhase.clamp(1, 4)));
+    final title = titleSnapshot.isNotEmpty
+        ? titleSnapshot
+        : (group.title.trim().isNotEmpty ? group.title.trim() : first.title);
+    final pageSummary = () {
+      if (pages.isEmpty) return (first.page ?? '').trim();
+      if (pages.length <= 3) return pages.join(', ');
+      return '${pages.take(3).join(', ')}, ...';
+    }();
+
+    return HomeworkItem(
+      id: (runningChild ?? first).id,
+      title: title.trim().isEmpty ? '(제목 없음)' : title.trim(),
+      body: first.body,
+      color: first.color,
+      flowId: group.flowId ?? first.flowId,
+      type: '${children.length}개 과제',
+      page: pageSummary.isEmpty ? null : pageSummary,
+      count: totalCount > 0 ? totalCount : first.count,
+      memo: first.memo,
+      content: first.content,
+      bookId: first.bookId,
+      gradeLabel: first.gradeLabel,
+      sourceUnitLevel: first.sourceUnitLevel,
+      sourceUnitPath: first.sourceUnitPath,
+      unitMappings: first.unitMappings,
+      defaultSplitParts: first.defaultSplitParts,
+      checkCount: maxCheckCount,
+      orderIndex: group.orderIndex,
+      createdAt: first.createdAt,
+      updatedAt: latestUpdated ?? first.updatedAt,
+      status: HomeworkStatus.inProgress,
+      phase: phase,
+      accumulatedMs: totalAccumulatedMs,
+      cycleBaseAccumulatedMs: totalCycleBaseMs,
+      runStart: runningChild?.runStart,
+      completedAt: null,
+      firstStartedAt: group.cycleStartedAt ??
+          runningChild?.runStart ??
+          first.firstStartedAt,
+      submittedAt: latestSubmitted,
+      confirmedAt: latestConfirmed,
+      waitingAt: latestWaiting,
+      version: first.version,
+    );
   }
 
   Future<String?> _resolveCoverPath({
@@ -488,28 +777,33 @@ class _GradingModePageState extends State<GradingModePage> {
   }
 }
 
-class _GradingCardEntry {
+enum _GradingSection { submitted, homework }
+
+class _GradingGroupEntry {
   final String studentId;
   final String studentName;
-  final HomeworkItem item;
+  final HomeworkGroup? group;
+  final HomeworkItem summary;
+  final List<HomeworkItem> children;
+  final String displayTitle;
+  final DateTime? dueDate;
+  final DateTime submittedTime;
+  final DateTime homeworkTime;
 
-  const _GradingCardEntry({
+  const _GradingGroupEntry({
     required this.studentId,
     required this.studentName,
-    required this.item,
+    required this.group,
+    required this.summary,
+    required this.children,
+    required this.displayTitle,
+    required this.dueDate,
+    required this.submittedTime,
+    required this.homeworkTime,
   });
 
-  DateTime get submittedTime =>
-      item.submittedAt ??
-      item.updatedAt ??
-      item.createdAt ??
-      DateTime.fromMillisecondsSinceEpoch(0);
-
-  DateTime get homeworkTime =>
-      item.waitingAt ??
-      item.updatedAt ??
-      item.createdAt ??
-      DateTime.fromMillisecondsSinceEpoch(0);
+  bool get hasSubmittedChild => children.any(
+      (child) => child.phase == 3 && child.status != HomeworkStatus.completed);
 }
 
 class _GradingCardLayout {
@@ -527,7 +821,7 @@ class _GradingCardLayout {
 }
 
 class _SubmittedHomeworkCard extends StatelessWidget {
-  final _GradingCardEntry entry;
+  final _GradingGroupEntry entry;
   final double cardHeight;
   final double metaHeight;
   final Future<String?> coverPathFuture;
@@ -547,8 +841,10 @@ class _SubmittedHomeworkCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final hw = entry.item;
-    final line2 = hw.title.trim().isEmpty ? '(제목 없음)' : hw.title.trim();
+    final hw = entry.summary;
+    final line2 = entry.displayTitle.trim().isEmpty
+        ? '(제목 없음)'
+        : entry.displayTitle.trim();
     final bookStr = _extractBookName(hw).isEmpty ? '-' : _extractBookName(hw);
     final courseStr =
         _extractCourseName(hw).isEmpty ? '-' : _extractCourseName(hw);
@@ -562,6 +858,7 @@ class _SubmittedHomeworkCard extends StatelessWidget {
     final contentPadTop = (12.0 * scale).clamp(6.0, 12.0).toDouble();
     final contentPadBottom = (14.0 * scale).clamp(7.0, 14.0).toDouble();
     final line4 = _buildLine4MinutesSinceSubmitted(entry);
+    final childCountText = '하위 ${entry.children.length}개';
 
     final card = Container(
       decoration: BoxDecoration(
@@ -610,17 +907,18 @@ class _SubmittedHomeworkCard extends StatelessWidget {
                         ),
                         child: LayoutBuilder(
                           builder: (context, _) {
-                            final metaScale = (metaHeight /
-                                    _kGradingBaseCardMetaHeight)
-                                .clamp(0.5, 1.2)
+                            final metaScale =
+                                (metaHeight / _kGradingBaseCardMetaHeight)
+                                    .clamp(0.5, 1.2)
+                                    .toDouble();
+                            final cellFontSize =
+                                (14.0 * metaScale).clamp(9.0, 17.0).toDouble();
+                            final line1FontSize = (cellFontSize * 2.0)
+                                .clamp(18.0, 34.0)
                                 .toDouble();
-                            final cellFontSize = (14.0 * metaScale)
-                                .clamp(9.0, 17.0)
+                            final line23FontSize = (cellFontSize * 1.2)
+                                .clamp(10.8, 20.4)
                                 .toDouble();
-                            final line1FontSize =
-                                (cellFontSize * 2.0).clamp(18.0, 34.0).toDouble();
-                            final line23FontSize =
-                                (cellFontSize * 1.2).clamp(10.8, 20.4).toDouble();
                             final line1Text = bookStr == '-' && courseStr == '-'
                                 ? '-'
                                 : (bookStr != '-' && courseStr != '-'
@@ -666,7 +964,7 @@ class _SubmittedHomeworkCard extends StatelessWidget {
                                     children: [
                                       Expanded(
                                         child: Text(
-                                          'p.$pageStr',
+                                          childCountText,
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
                                           style: cellStyle3,
@@ -675,7 +973,7 @@ class _SubmittedHomeworkCard extends StatelessWidget {
                                       const SizedBox(width: 8),
                                       Expanded(
                                         child: Text(
-                                          '${countStr}문항',
+                                          'p.$pageStr · ${countStr}문항',
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
                                           textAlign: TextAlign.right,
@@ -739,7 +1037,7 @@ class _SubmittedHomeworkCard extends StatelessWidget {
     return FutureBuilder<String?>(
       future: coverPathFuture,
       builder: (context, snapshot) {
-        final hw = entry.item;
+        final hw = entry.summary;
         final provider = _coverImageProvider(snapshot.data ?? '');
         final hasImage = provider != null;
         final fallbackCoverColor = _coverColorForType(hw);
@@ -844,25 +1142,8 @@ class _SubmittedHomeworkCard extends StatelessWidget {
     );
   }
 
-  String _buildLine1(HomeworkItem hw) {
-    final book = _extractBookName(hw);
-    final course = _extractCourseName(hw);
-    if (book.isNotEmpty && course.isNotEmpty) return '$book · $course';
-    if (book.isNotEmpty) return book;
-    if (course.isNotEmpty) return course;
-    return '-';
-  }
-
-  String _buildLine3(HomeworkItem hw) {
-    final page = (hw.page ?? '').trim();
-    final count = hw.count == null ? '' : hw.count.toString();
-    final pageText = page.isEmpty ? '-' : page;
-    final countText = count.isEmpty ? '-' : count;
-    return '페이지 p.$pageText · 문항 ${countText}문항';
-  }
-
-  String _buildLine4MinutesSinceSubmitted(_GradingCardEntry entry) {
-    if (entry.item.phase != 3) return '-';
+  String _buildLine4MinutesSinceSubmitted(_GradingGroupEntry entry) {
+    if (!entry.hasSubmittedChild) return '-';
     final submitted = entry.submittedTime;
     final totalMinutes = DateTime.now().difference(submitted).inMinutes;
     if (totalMinutes < 0) return '0분';
