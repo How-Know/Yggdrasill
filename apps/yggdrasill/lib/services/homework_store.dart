@@ -2751,6 +2751,11 @@ class HomeworkStore {
     String? type,
     String? memo,
     String? content,
+    String? bookId,
+    String? gradeLabel,
+    String? sourceUnitLevel,
+    String? sourceUnitPath,
+    List<Map<String, dynamic>>? unitMappings,
     String? templateItemId,
     String? flowId,
     Color? color,
@@ -2786,6 +2791,16 @@ class HomeworkStore {
     final resolvedType = (type ?? '').trim();
     final resolvedMemo = (memo ?? '').trim();
     final resolvedContent = (content ?? '').trim();
+    final resolvedBookId = (bookId ?? '').trim();
+    final resolvedGradeLabel = (gradeLabel ?? '').trim();
+    final resolvedSourceUnitLevel = (sourceUnitLevel ?? '').trim();
+    final resolvedSourceUnitPath = (sourceUnitPath ?? '').trim();
+    final resolvedUnitMappings = unitMappings == null
+        ? null
+        : List<Map<String, dynamic>>.from(
+            unitMappings.map((e) => Map<String, dynamic>.from(e)),
+          );
+    final templateUnitMappings = template?.unitMappings;
     final resolvedFlowId = (flowId ?? '').trim();
     final int? resolvedCount = (count != null && count > 0) ? count : null;
     final resolvedColor = color ?? template?.color ?? const Color(0xFF1976D2);
@@ -2807,11 +2822,22 @@ class HomeworkStore {
       count: resolvedCount,
       memo: resolvedMemo.isEmpty ? template?.memo : resolvedMemo,
       content: resolvedContent.isEmpty ? template?.content : resolvedContent,
-      bookId: template?.bookId,
-      gradeLabel: template?.gradeLabel,
-      sourceUnitLevel: template?.sourceUnitLevel,
-      sourceUnitPath: template?.sourceUnitPath,
-      unitMappings: null,
+      bookId: resolvedBookId.isEmpty ? template?.bookId : resolvedBookId,
+      gradeLabel: resolvedGradeLabel.isEmpty
+          ? template?.gradeLabel
+          : resolvedGradeLabel,
+      sourceUnitLevel: resolvedSourceUnitLevel.isEmpty
+          ? template?.sourceUnitLevel
+          : resolvedSourceUnitLevel,
+      sourceUnitPath: resolvedSourceUnitPath.isEmpty
+          ? template?.sourceUnitPath
+          : resolvedSourceUnitPath,
+      unitMappings: resolvedUnitMappings ??
+          (templateUnitMappings == null
+              ? null
+              : List<Map<String, dynamic>>.from(
+                  templateUnitMappings.map((e) => Map<String, dynamic>.from(e)),
+                )),
       defaultSplitParts: resolvedSplitParts,
       checkCount: 0,
       orderIndex: _nextActiveOrderIndex(studentId),
@@ -2921,6 +2947,24 @@ class HomeworkStore {
   }) async {
     if (items.isEmpty) return const <HomeworkItem>[];
     String asText(dynamic value) => (value as String?)?.trim() ?? '';
+    String? asNullableText(dynamic value) {
+      final v = asText(value);
+      return v.isEmpty ? null : v;
+    }
+
+    List<Map<String, dynamic>>? asUnitMappings(dynamic value) {
+      if (value is! List) return null;
+      final out = <Map<String, dynamic>>[];
+      for (final row in value) {
+        if (row is Map<String, dynamic>) {
+          out.add(Map<String, dynamic>.from(row));
+        } else if (row is Map) {
+          out.add(Map<String, dynamic>.from(row));
+        }
+      }
+      return out;
+    }
+
     int? asPositiveInt(dynamic value) {
       if (value is int) return value > 0 ? value : null;
       if (value is num) {
@@ -3010,6 +3054,8 @@ class HomeworkStore {
         'flow_id': cleanedFlowId.isEmpty ? null : cleanedFlowId,
         'order_index': group.orderIndex,
         'status': 'active',
+        'created_at': now.toUtc().toIso8601String(),
+        'updated_at': now.toUtc().toIso8601String(),
         'version': 1,
       });
 
@@ -3025,6 +3071,11 @@ class HomeworkStore {
           type: asText(entry['type']),
           memo: asText(entry['memo']),
           content: asText(entry['content']),
+          bookId: asNullableText(entry['bookId']),
+          gradeLabel: asNullableText(entry['gradeLabel']),
+          sourceUnitLevel: asNullableText(entry['sourceUnitLevel']),
+          sourceUnitPath: asNullableText(entry['sourceUnitPath']),
+          unitMappings: asUnitMappings(entry['unitMappings']),
           flowId: cleanedFlowId.isEmpty ? null : cleanedFlowId,
           color: asColor(entry['color']),
           defaultSplitParts: asSplitParts(entry['splitParts']),

@@ -2584,11 +2584,6 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                 final now = DateTime.now();
                 final hasHomeworkItems =
                     HomeworkStore.instance.items(t.student.id).isNotEmpty;
-                final allPendingItemIds = HomeworkStore.instance
-                    .items(t.student.id)
-                    .where((e) => e.status != HomeworkStatus.completed)
-                    .map((e) => e.id)
-                    .toList();
                 final HomeworkAssignSelection? selection = hasHomeworkItems
                     ? await showHomeworkAssignDialog(
                         context,
@@ -2625,19 +2620,30 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                     sessionTypeId: t.classInfo?.id,
                   );
                   // 하원 시 숙제 선택 다이얼로그
-                  if (selection != null && selection.itemIds.isNotEmpty) {
+                  if (selection.itemIds.isNotEmpty) {
+                    final selectedItemIds = selection.itemIds
+                        .map((e) => e.trim())
+                        .where((e) => e.isNotEmpty)
+                        .toSet()
+                        .toList(growable: false);
                     HomeworkStore.instance.markItemsAsHomework(
                       t.student.id,
-                      selection.itemIds,
+                      selectedItemIds,
                       dueDate: selection.dueDate,
                       cloneCompletedItems: true,
                     );
                   }
-                  final selectedIds =
-                      selection?.itemIds.toSet() ?? const <String>{};
-                  final unselectedIds = allPendingItemIds
+                  final selectedIds = selection.itemIds
+                      .map((e) => e.trim())
+                      .where((e) => e.isNotEmpty)
+                      .toSet();
+                  final selectableIds = selection.selectableItemIds
+                      .map((e) => e.trim())
+                      .where((e) => e.isNotEmpty)
+                      .toSet();
+                  final unselectedIds = selectableIds
                       .where((id) => !selectedIds.contains(id))
-                      .toList();
+                      .toList(growable: false);
                   if (unselectedIds.isNotEmpty) {
                     HomeworkStore.instance.restoreItemsToWaiting(
                       t.student.id,

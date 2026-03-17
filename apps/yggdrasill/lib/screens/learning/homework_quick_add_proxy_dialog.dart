@@ -1040,10 +1040,12 @@ class HomeworkQuickAddProxyDialogState
           final key =
               _smallKey(big.orderIndex, mid.orderIndex, small.orderIndex);
           final summary = issuedSummaryBySmallKey[key];
-          final locked = acknowledgedSmallKeys.contains(key);
-          small.locked = locked;
+          final acknowledged = acknowledgedSmallKeys.contains(key);
+          // 완료 인정 이력은 표시만 하고 재출제는 허용한다.
+          small.locked = false;
           small.finishedAt = summary?.latestFinishedAt;
-          small.completedCount = summary?.completedCount ?? 0;
+          small.completedCount =
+              (summary?.completedCount ?? 0) + (acknowledged ? 1 : 0);
           small.selected = false;
           small.explicitSelected = false;
         }
@@ -1683,6 +1685,8 @@ class HomeworkQuickAddProxyDialogState
   _DraftGroupItem? _buildDraftGroupItemFromInput() {
     final selectedBook = _selectedLinkedBook;
     final useRangeDraft = selectedBook != null && !_manualPageMode;
+    final rangeTask =
+        useRangeDraft ? _buildMergedRangeTask(selectedBook) : null;
     final title = useRangeDraft ? _rangeTitle.text.trim() : _title.text.trim();
     if (title.isEmpty) return null;
     final page = useRangeDraft ? _rangeAutoPage.trim() : _page.text.trim();
@@ -1692,6 +1696,18 @@ class HomeworkQuickAddProxyDialogState
     final memo = _memo.text.trim();
     final type = useRangeDraft ? _effectiveLinkedHomeworkType() : _type;
     final color = useRangeDraft ? _colorForType(type) : _color;
+    final unitMappings = selectedBook == null
+        ? const <Map<String, dynamic>>[]
+        : List<Map<String, dynamic>>.from(
+            (rangeTask?.unitMappings ?? _rangeAutoUnitMappings)
+                .map((e) => Map<String, dynamic>.from(e)),
+          );
+    final sourceUnitLevel = selectedBook == null
+        ? null
+        : (useRangeDraft ? (rangeTask?.sourceUnitLevel ?? 'merged') : 'manual');
+    final sourceUnitPath = selectedBook == null
+        ? null
+        : (useRangeDraft ? rangeTask?.sourceUnitPath : null);
     return _DraftGroupItem(
       key: 'draft_${_draftGroupItemSeq++}',
       type: type,
@@ -1704,6 +1720,11 @@ class HomeworkQuickAddProxyDialogState
       color: color,
       splitParts: _selectedSplitParts.clamp(1, 4).toInt(),
       linkedBookKey: _bookIdentity(selectedBook),
+      bookId: selectedBook?.bookId ?? '',
+      gradeLabel: selectedBook?.gradeLabel ?? '',
+      sourceUnitLevel: sourceUnitLevel,
+      sourceUnitPath: sourceUnitPath,
+      unitMappings: unitMappings,
     );
   }
 
@@ -2509,15 +2530,12 @@ class HomeworkQuickAddProxyDialogState
                                   : '${small.name} (p.$page)';
                               final countText =
                                   count.isEmpty ? '-문항' : '${count}문항';
-                              final blocked =
-                                  small.locked || small.draftBlocked;
+                              final blocked = small.draftBlocked;
                               final doneText = small.draftBlocked
                                   ? '추가됨'
-                                  : (small.locked
-                                      ? '완료 인정'
-                                      : (small.completedCount > 0
-                                          ? '완료 ${small.completedCount}회'
-                                          : countText));
+                                  : (small.completedCount > 0
+                                      ? '완료 ${small.completedCount}회'
+                                      : countText);
                               return Padding(
                                 padding: const EdgeInsets.fromLTRB(4, 3, 4, 3),
                                 child: InkWell(
@@ -3070,6 +3088,11 @@ class _DraftGroupItem {
   final String key;
   final String type;
   final String? linkedBookKey;
+  final String bookId;
+  final String gradeLabel;
+  final String? sourceUnitLevel;
+  final String? sourceUnitPath;
+  final List<Map<String, dynamic>> unitMappings;
   final String title;
   final String page;
   final String count;
@@ -3083,6 +3106,11 @@ class _DraftGroupItem {
     required this.key,
     required this.type,
     this.linkedBookKey,
+    this.bookId = '',
+    this.gradeLabel = '',
+    this.sourceUnitLevel,
+    this.sourceUnitPath,
+    this.unitMappings = const <Map<String, dynamic>>[],
     required this.title,
     required this.page,
     required this.count,
@@ -3096,6 +3124,11 @@ class _DraftGroupItem {
   _DraftGroupItem copyWith({
     String? type,
     String? linkedBookKey,
+    String? bookId,
+    String? gradeLabel,
+    String? sourceUnitLevel,
+    String? sourceUnitPath,
+    List<Map<String, dynamic>>? unitMappings,
     String? title,
     String? page,
     String? count,
@@ -3109,6 +3142,11 @@ class _DraftGroupItem {
       key: key,
       type: type ?? this.type,
       linkedBookKey: linkedBookKey ?? this.linkedBookKey,
+      bookId: bookId ?? this.bookId,
+      gradeLabel: gradeLabel ?? this.gradeLabel,
+      sourceUnitLevel: sourceUnitLevel ?? this.sourceUnitLevel,
+      sourceUnitPath: sourceUnitPath ?? this.sourceUnitPath,
+      unitMappings: unitMappings ?? this.unitMappings,
       title: title ?? this.title,
       page: page ?? this.page,
       count: count ?? this.count,
@@ -3131,6 +3169,16 @@ class _DraftGroupItem {
       'body': body,
       'color': color,
       'splitParts': splitParts.clamp(1, 4).toInt(),
+      if (bookId.trim().isNotEmpty) 'bookId': bookId.trim(),
+      if (gradeLabel.trim().isNotEmpty) 'gradeLabel': gradeLabel.trim(),
+      if (sourceUnitLevel != null && sourceUnitLevel!.trim().isNotEmpty)
+        'sourceUnitLevel': sourceUnitLevel!.trim(),
+      if (sourceUnitPath != null && sourceUnitPath!.trim().isNotEmpty)
+        'sourceUnitPath': sourceUnitPath!.trim(),
+      if (unitMappings.isNotEmpty)
+        'unitMappings': List<Map<String, dynamic>>.from(
+          unitMappings.map((e) => Map<String, dynamic>.from(e)),
+        ),
     };
   }
 }

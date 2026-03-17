@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:uuid/uuid.dart';
 
@@ -413,6 +414,74 @@ class HomeworkAssignmentStore {
       out[entry.key] = list.join(';');
     }
     return out;
+  }
+
+  Set<String> _unitSmallKeysFromMappings(List<Map<String, dynamic>>? mappings) {
+    if (mappings == null || mappings.isEmpty) return <String>{};
+    final keys = <String>{};
+    for (final raw in mappings) {
+      final m = Map<String, dynamic>.from(raw);
+      final big = _asIntOpt(m['bigOrder'] ?? m['big_order']);
+      final mid = _asIntOpt(m['midOrder'] ?? m['mid_order']);
+      final small = _asIntOpt(m['smallOrder'] ?? m['small_order']);
+      if (big == null || mid == null || small == null) continue;
+      keys.add('$big|$mid|$small');
+    }
+    return keys;
+  }
+
+  bool _hasStringOverlap(Set<String> a, Set<String> b) {
+    if (a.isEmpty || b.isEmpty) return false;
+    final small = a.length <= b.length ? a : b;
+    final large = identical(small, a) ? b : a;
+    for (final v in small) {
+      if (large.contains(v)) return true;
+    }
+    return false;
+  }
+
+  String _ackPrefsKeyForItem({
+    required String studentId,
+    required HomeworkItem item,
+  }) {
+    final flowId = (item.flowId ?? '').trim();
+    final bookId = (item.bookId ?? '').trim();
+    final gradeLabel = (item.gradeLabel ?? '').trim();
+    if (flowId.isEmpty || bookId.isEmpty || gradeLabel.isEmpty) return '';
+    final bookKey = '$bookId|$gradeLabel';
+    return 'flow_textbook_ack_units_v1:$studentId|$flowId|$bookKey';
+  }
+
+  Future<Map<String, int>> _loadAcknowledgedRepeatSeedByItem(
+    String studentId,
+    List<HomeworkItem> items,
+  ) async {
+    if (items.isEmpty) return const <String, int>{};
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final ackKeysByPref = <String, Set<String>>{};
+      final out = <String, int>{};
+      for (final item in items) {
+        final itemId = item.id.trim();
+        if (itemId.isEmpty) continue;
+        final prefKey = _ackPrefsKeyForItem(studentId: studentId, item: item);
+        if (prefKey.isEmpty) continue;
+        final acknowledged = ackKeysByPref.putIfAbsent(prefKey, () {
+          final values = prefs.getStringList(prefKey) ?? const <String>[];
+          return values.map((e) => e.trim()).where((e) => e.isNotEmpty).toSet();
+        });
+        if (acknowledged.isEmpty) continue;
+        final unitKeys = _unitSmallKeysFromMappings(item.unitMappings);
+        if (unitKeys.isEmpty) continue;
+        if (_hasStringOverlap(unitKeys, acknowledged)) {
+          // 인정 진도를 1회차 완료로 간주해 첫 재출제 시 2회차부터 시작한다.
+          out[itemId] = 1;
+        }
+      }
+      return out;
+    } catch (_) {
+      return const <String, int>{};
+    }
   }
 
   String _composeCycleKey({
@@ -1271,6 +1340,8 @@ class HomeworkAssignmentStore {
         final row = existingOrderRows.first as Map<String, dynamic>;
         nextOrder = _asInt(row['order_index']) + 1;
       }
+      final acknowledgedRepeatSeedByItem =
+          await _loadAcknowledgedRepeatSeedByItem(studentId, items);
       final affectedDueDates = <String?>{dueDateIso};
       for (final item in items) {
         final int requestedSplitParts =
@@ -1306,7 +1377,7 @@ class HomeworkAssignmentStore {
             }
           }
         } else {
-          repeatIndex = 1;
+          repeatIndex = 1 + (acknowledgedRepeatSeedByItem[item.id] ?? 0);
           nextSplitParts = nextSplitParts < 1 ? 1 : nextSplitParts;
           nextSplitRound = 1;
         }

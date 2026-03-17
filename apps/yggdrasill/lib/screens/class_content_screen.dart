@@ -53,7 +53,6 @@ class _ClassContentScreenState extends State<ClassContentScreen>
   bool _favoritePanelLoading = false;
   String _favoriteBookFilter = '';
   String _favoriteGradeFilter = '';
-  String? _favoriteDropHoverStudentId;
   final Map<({String studentId, String itemId}), bool> _pendingConfirms = {};
   final Set<String> _expandedHomeworkIds = {};
   String? _expandedReservedStudentId;
@@ -258,7 +257,6 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                       _isGradingMode = value;
                                       if (value) {
                                         _favoritePanelOpen = false;
-                                        _favoriteDropHoverStudentId = null;
                                       }
                                       if (!value) {
                                         _pendingConfirms.clear();
@@ -337,37 +335,35 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                   )
                                   .toList(growable: false);
                               if (submittedChildren.isEmpty) return;
+                              final pendingKeys = submittedChildren
+                                  .map(
+                                    (e) => (
+                                      studentId: studentId,
+                                      itemId: e.id,
+                                    ),
+                                  )
+                                  .toList(growable: false);
                               if (submittedChildren.length == 1) {
                                 return _handleSubmittedChipTapForPending(
                                   context: context,
                                   studentId: studentId,
                                   hw: submittedChildren.first,
+                                  targetKeys: pendingKeys,
                                 );
                               }
-                              setState(() {
-                                final keys = submittedChildren
-                                    .map(
-                                      (e) => (
-                                        studentId: studentId,
-                                        itemId: e.id,
-                                      ),
-                                    )
-                                    .toList(growable: false);
-                                final allSelected = keys.isNotEmpty &&
-                                    keys.every(_pendingConfirms.containsKey);
-                                if (allSelected) {
-                                  for (final key in keys) {
-                                    _pendingConfirms.remove(key);
-                                  }
-                                } else {
-                                  for (final key in keys) {
-                                    _pendingConfirms.putIfAbsent(
-                                      key,
-                                      () => false,
-                                    );
-                                  }
+                              HomeworkItem answerSeed = submittedChildren.first;
+                              for (final child in submittedChildren) {
+                                if (_hasDirectHomeworkTextbookLink(child)) {
+                                  answerSeed = child;
+                                  break;
                                 }
-                              });
+                              }
+                              return _handleSubmittedChipTapForPending(
+                                context: context,
+                                studentId: studentId,
+                                hw: answerSeed,
+                                targetKeys: pendingKeys,
+                              );
                             },
                             onHomeworkCardTap:
                                 (studentId, group, summary, children) {
@@ -682,16 +678,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         if (!_favoritePanelOpen) return false;
         return details.data.parts.isNotEmpty;
       },
-      onMove: (_) {
-        if (_favoriteDropHoverStudentId == student.id) return;
-        setState(() => _favoriteDropHoverStudentId = student.id);
-      },
-      onLeave: (_) {
-        if (_favoriteDropHoverStudentId != student.id) return;
-        setState(() => _favoriteDropHoverStudentId = null);
-      },
       onAcceptWithDetails: (details) {
-        setState(() => _favoriteDropHoverStudentId = null);
         unawaited(
           _handleFavoriteTemplateDrop(
             context: context,
@@ -701,8 +688,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         );
       },
       builder: (context, candidateData, rejectedData) {
-        final highlight = candidateData.isNotEmpty ||
-            _favoriteDropHoverStudentId == student.id;
+        final highlight = candidateData.isNotEmpty;
         return AnimatedContainer(
           duration: const Duration(milliseconds: 140),
           curve: Curves.easeOutCubic,
@@ -830,7 +816,6 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     if (_favoritePanelOpen) {
       setState(() {
         _favoritePanelOpen = false;
-        _favoriteDropHoverStudentId = null;
       });
       return;
     }
@@ -1068,26 +1053,54 @@ class _ClassContentScreenState extends State<ClassContentScreen>
   }) {
     return Padding(
       padding: const EdgeInsets.only(right: 8),
-      child: ChoiceChip(
-        label: Text(label),
-        selected: selected,
-        onSelected: (_) => onTap(),
-        selectedColor: const Color(0xFF245A52),
-        backgroundColor: const Color(0xFF1A2427),
-        side:
-            BorderSide(color: selected ? kDlgAccent : const Color(0xFF2A3A3A)),
-        labelStyle: TextStyle(
-          color: selected ? const Color(0xFFEAF2F2) : kDlgTextSub,
-          fontSize: 12.5,
-          fontWeight: FontWeight.w700,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(999),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 140),
+            curve: Curves.easeOutCubic,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+            decoration: BoxDecoration(
+              color:
+                  selected ? const Color(0x1F4FBF97) : const Color(0xFF202629),
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(
+                color: selected
+                    ? const Color(0xFF4FBF97)
+                    : const Color(0xFF3E5757),
+                width: selected ? 1.1 : 1.0,
+              ),
+            ),
+            child: Text(
+              label,
+              style: TextStyle(
+                color: selected
+                    ? const Color(0xFF9FE3C6)
+                    : const Color(0xFF9FB3B3),
+                fontSize: 12.5,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
         ),
-        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-        visualDensity: const VisualDensity(horizontal: -2, vertical: -2),
       ),
     );
   }
 
-  Widget _buildFavoriteTemplateCard(HomeworkRecentTemplate template) {
+  String _favoriteTemplatePartLine(HomeworkRecentTemplatePart part) {
+    final title = part.title.trim().isEmpty ? '(제목 없음)' : part.title.trim();
+    final rawPage = (part.page ?? '').trim();
+    final pageText = rawPage.isEmpty ? 'p.-' : 'p.$rawPage';
+    final countText =
+        (part.count == null || part.count! <= 0) ? '문항 미지정' : '${part.count}문항';
+    return '$title · $pageText · $countText';
+  }
+
+  Widget _buildFavoriteTemplateCardSurface(HomeworkRecentTemplate template) {
+    const cardWidth = 320.0;
+    const cardHeight = 214.0;
     final title = template.title.trim().isEmpty ? '(제목 없음)' : template.title;
     final bookId = template.primaryBookId;
     final grade = template.primaryGradeLabel;
@@ -1095,71 +1108,144 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     final gradeText = grade.isEmpty ? '학년 미지정' : grade;
     final subtitle =
         template.isGroup ? '그룹 과제 · 하위 ${template.partCount}개' : '단일 과제';
-    final card = Container(
-      width: 250,
-      padding: const EdgeInsets.fromLTRB(12, 11, 12, 11),
-      decoration: BoxDecoration(
-        color: const Color(0xFF1A2427),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFF2E4046)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            title,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              color: kDlgText,
-              fontSize: 14.5,
-              fontWeight: FontWeight.w800,
+    final previewLimit = template.isGroup ? 4 : 3;
+    final previewParts =
+        template.parts.take(previewLimit).toList(growable: false);
+    final moreCount = template.parts.length - previewParts.length;
+
+    return SizedBox(
+      width: cardWidth,
+      height: cardHeight,
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        alignment: Alignment.topLeft,
+        child: SizedBox(
+          width: cardWidth,
+          height: cardHeight,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: const Color(0xFF15171C),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: const Color(0xFF3E5757)),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 11, 12, 11),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: kDlgText,
+                      fontSize: 14.5,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 5),
+                  Text(
+                    '$bookText · $gradeText',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Color(0xFF9FB3B3),
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    subtitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: kDlgTextSub,
+                      fontSize: 12.2,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Expanded(
+                    child: Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.fromLTRB(8, 7, 8, 7),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF202629),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: const Color(0xFF3E5757)),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          for (int i = 0; i < previewParts.length; i++) ...[
+                            if (i > 0) const SizedBox(height: 4),
+                            Text(
+                              '${i + 1}. ${_favoriteTemplatePartLine(previewParts[i])}',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: Color(0xFFCAD2C5),
+                                fontSize: 12.2,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                          if (moreCount > 0) ...[
+                            const SizedBox(height: 4),
+                            Text(
+                              '+ $moreCount개 더',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: Color(0xFF7F8C8C),
+                                fontSize: 11.8,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    '카드를 드래그해 학생 카드로 드롭',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: Color(0xFF6B7B7F),
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
-          const SizedBox(height: 6),
-          Text(
-            subtitle,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              color: kDlgTextSub,
-              fontSize: 12.5,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            '$bookText · $gradeText',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              color: Color(0xFF8FA2A7),
-              fontSize: 12.5,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          const Spacer(),
-          const Text(
-            '길게 눌러 학생 카드로 드래그',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              color: Color(0xFF6B7B7F),
-              fontSize: 11.5,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        ],
+        ),
       ),
     );
-    return LongPressDraggable<HomeworkRecentTemplate>(
+  }
+
+  Widget _buildFavoriteTemplateCard(HomeworkRecentTemplate template) {
+    final card = _buildFavoriteTemplateCardSurface(template);
+    return Draggable<HomeworkRecentTemplate>(
       data: template,
+      maxSimultaneousDrags: 1,
+      dragAnchorStrategy: pointerDragAnchorStrategy,
       feedback: Material(
         color: Colors.transparent,
-        child: Opacity(opacity: 0.92, child: card),
+        child: Opacity(
+          opacity: 0.94,
+          child: _buildFavoriteTemplateCardSurface(template),
+        ),
       ),
       childWhenDragging: Opacity(opacity: 0.35, child: card),
-      child: card,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.grab,
+        child: card,
+      ),
     );
   }
 
@@ -1903,11 +1989,6 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     final now = DateTime.now();
     final studentId = student.id;
     final hasHomeworkItems = HomeworkStore.instance.items(studentId).isNotEmpty;
-    final allPendingItemIds = HomeworkStore.instance
-        .items(studentId)
-        .where((e) => e.status != HomeworkStatus.completed)
-        .map((e) => e.id)
-        .toList();
     final HomeworkAssignSelection? selection = hasHomeworkItems
         ? await showHomeworkAssignDialog(
             context,
@@ -1939,16 +2020,29 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         batchSessionId: record.batchSessionId,
       );
       if (selection.itemIds.isNotEmpty) {
+        final selectedItemIds = selection.itemIds
+            .map((e) => e.trim())
+            .where((e) => e.isNotEmpty)
+            .toSet()
+            .toList(growable: false);
         HomeworkStore.instance.markItemsAsHomework(
           studentId,
-          selection.itemIds,
+          selectedItemIds,
           dueDate: selection.dueDate,
           cloneCompletedItems: true,
         );
       }
-      final selectedIds = selection.itemIds.toSet();
-      final unselectedIds =
-          allPendingItemIds.where((id) => !selectedIds.contains(id)).toList();
+      final selectedIds = selection.itemIds
+          .map((e) => e.trim())
+          .where((e) => e.isNotEmpty)
+          .toSet();
+      final selectableIds = selection.selectableItemIds
+          .map((e) => e.trim())
+          .where((e) => e.isNotEmpty)
+          .toSet();
+      final unselectedIds = selectableIds
+          .where((id) => !selectedIds.contains(id))
+          .toList(growable: false);
       if (unselectedIds.isNotEmpty) {
         HomeworkStore.instance.restoreItemsToWaiting(
           studentId,
@@ -2047,24 +2141,37 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     required BuildContext context,
     required String studentId,
     required HomeworkItem hw,
+    List<({String studentId, String itemId})>? targetKeys,
   }) async {
-    final key = (studentId: studentId, itemId: hw.id);
-    if (_pendingConfirms.containsKey(key)) {
-      setState(() => _pendingConfirms.remove(key));
+    final keys = (targetKeys == null || targetKeys.isEmpty)
+        ? <({String studentId, String itemId})>[
+            (studentId: studentId, itemId: hw.id),
+          ]
+        : targetKeys;
+    if (keys.isEmpty) return;
+    final allSelected = keys.every(_pendingConfirms.containsKey);
+    if (allSelected) {
+      setState(() {
+        for (final key in keys) {
+          _pendingConfirms.remove(key);
+        }
+      });
       return;
     }
 
-    if (!_hasDirectHomeworkTextbookLink(hw)) {
-      setState(() => _pendingConfirms[key] = false);
-      return;
-    }
-    final resolved =
-        await _resolveHomeworkPdfLinks(hw, allowFlowFallback: false);
+    final resolved = await _resolveHomeworkPdfLinks(
+      hw,
+      allowFlowFallback: true,
+    );
     if (!context.mounted) return;
 
     final answerRaw = resolved.answerPathRaw;
     if (answerRaw.isEmpty) {
-      setState(() => _pendingConfirms[key] = false);
+      setState(() {
+        for (final key in keys) {
+          _pendingConfirms[key] = false;
+        }
+      });
       return;
     }
     final answerIsUrl = _isWebUrl(answerRaw);
@@ -2072,12 +2179,20 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         answerIsUrl ? answerRaw.trim() : _toLocalFilePath(answerRaw);
     if (answerPath.isEmpty ||
         (!answerIsUrl && !answerPath.toLowerCase().endsWith('.pdf'))) {
-      setState(() => _pendingConfirms[key] = false);
+      setState(() {
+        for (final key in keys) {
+          _pendingConfirms[key] = false;
+        }
+      });
       return;
     }
     if (!answerIsUrl && !await File(answerPath).exists()) {
       if (!context.mounted) return;
-      setState(() => _pendingConfirms[key] = false);
+      setState(() {
+        for (final key in keys) {
+          _pendingConfirms[key] = false;
+        }
+      });
       return;
     }
 
@@ -2104,9 +2219,17 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     );
     if (!context.mounted) return;
     if (action == HomeworkAnswerViewerAction.complete) {
-      setState(() => _pendingConfirms[key] = true);
+      setState(() {
+        for (final key in keys) {
+          _pendingConfirms[key] = true;
+        }
+      });
     } else if (action == HomeworkAnswerViewerAction.confirm) {
-      setState(() => _pendingConfirms[key] = false);
+      setState(() {
+        for (final key in keys) {
+          _pendingConfirms[key] = false;
+        }
+      });
     }
   }
 
@@ -2241,7 +2364,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
 
       final isComplete = entry.value;
 
-      if (hw.phase == 3 && isComplete) {
+      if (isComplete) {
         final target = await _resolveHomeworkCheckTarget(
           key.studentId,
           key.itemId,
@@ -2255,13 +2378,27 @@ class _ClassContentScreenState extends State<ClassContentScreen>
             progress: target.progress,
             issueType: null,
             issueNote: null,
-            markCompleted: false,
+            markCompleted: true,
           );
         }
-        await HomeworkStore.instance
-            .confirm(key.studentId, key.itemId, recordAssignmentCheck: false);
+        if (hw.phase == 3) {
+          await HomeworkStore.instance.confirm(
+            key.studentId,
+            key.itemId,
+            recordAssignmentCheck: false,
+          );
+        }
         HomeworkStore.instance.markAutoCompleteOnNextWaiting(key.itemId);
-      } else if (hw.phase == 3 && !isComplete) {
+        final latest = HomeworkStore.instance.getById(
+          key.studentId,
+          key.itemId,
+        );
+        if (latest != null && latest.phase == 1) {
+          await HomeworkStore.instance.complete(key.studentId, key.itemId);
+        } else {
+          await HomeworkStore.instance.waitPhase(key.studentId, key.itemId);
+        }
+      } else if (hw.phase == 3) {
         final target = await _resolveHomeworkCheckTarget(
           key.studentId,
           key.itemId,
@@ -3010,14 +3147,21 @@ Future<void> _runHomeworkCheckAndConfirm({
   );
   if (!context.mounted) return;
   if (target == null) {
-    if (markAutoCompleteOnNextWaiting) {
-      HomeworkStore.instance.markAutoCompleteOnNextWaiting(hw.id);
-    }
     await HomeworkStore.instance.confirm(
       studentId,
       hw.id,
       recordAssignmentCheck: false,
     );
+    if (markAutoCompleteOnNextWaiting) {
+      HomeworkStore.instance.markAutoCompleteOnNextWaiting(hw.id);
+      final latestAfterConfirm =
+          HomeworkStore.instance.getById(studentId, hw.id);
+      if (latestAfterConfirm != null && latestAfterConfirm.phase == 1) {
+        await HomeworkStore.instance.complete(studentId, hw.id);
+      } else {
+        await HomeworkStore.instance.waitPhase(studentId, hw.id);
+      }
+    }
     return;
   }
 
@@ -3051,14 +3195,20 @@ Future<void> _runHomeworkCheckAndConfirm({
     return;
   }
 
-  if (markAutoCompleteOnNextWaiting) {
-    HomeworkStore.instance.markAutoCompleteOnNextWaiting(hw.id);
-  }
   await HomeworkStore.instance.confirm(
     studentId,
     hw.id,
     recordAssignmentCheck: false,
   );
+  if (markAutoCompleteOnNextWaiting) {
+    HomeworkStore.instance.markAutoCompleteOnNextWaiting(hw.id);
+    final latestAfterConfirm = HomeworkStore.instance.getById(studentId, hw.id);
+    if (latestAfterConfirm != null && latestAfterConfirm.phase == 1) {
+      await HomeworkStore.instance.complete(studentId, hw.id);
+    } else {
+      await HomeworkStore.instance.waitPhase(studentId, hw.id);
+    }
+  }
 }
 
 Future<void> _runHomeworkCheckDialogOnly({
@@ -6528,15 +6678,7 @@ Future<void> _handleSubmittedChipTapWithAnswerViewer({
   required String studentId,
   required HomeworkItem hw,
 }) async {
-  if (!_hasDirectHomeworkTextbookLink(hw)) {
-    await _runHomeworkCheckAndConfirm(
-      context: context,
-      studentId: studentId,
-      hw: hw,
-    );
-    return;
-  }
-  final resolved = await _resolveHomeworkPdfLinks(hw, allowFlowFallback: false);
+  final resolved = await _resolveHomeworkPdfLinks(hw, allowFlowFallback: true);
   if (!context.mounted) return;
 
   final answerRaw = resolved.answerPathRaw;

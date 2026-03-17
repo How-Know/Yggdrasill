@@ -377,10 +377,14 @@ class _GradingModePageState extends State<GradingModePage> {
               metaHeight: cardLayout.metaHeight,
               isPendingConfirm: _isEntryPending(entry),
               isCompleteCheckbox: _isEntryPendingComplete(entry),
-              coverPathFuture: _resolveCoverPath(
-                bookId: (entry.summary.bookId ?? '').trim(),
-                gradeLabel: (entry.summary.gradeLabel ?? '').trim(),
-              ),
+              coverPathFuture: (() {
+                final coverSource = _resolveEntryCoverSource(entry);
+                return _resolveCoverPath(
+                  bookId: coverSource.bookId,
+                  gradeLabel: coverSource.gradeLabel,
+                  flowId: (entry.summary.flowId ?? '').trim(),
+                );
+              })(),
               onTap: onCardTap == null
                   ? null
                   : () async {
@@ -396,6 +400,22 @@ class _GradingModePageState extends State<GradingModePage> {
           ),
       ],
     );
+  }
+
+  ({String bookId, String gradeLabel}) _resolveEntryCoverSource(
+    _GradingGroupEntry entry,
+  ) {
+    final summaryBookId = (entry.summary.bookId ?? '').trim();
+    final summaryGrade = (entry.summary.gradeLabel ?? '').trim();
+    if (summaryBookId.isNotEmpty) {
+      return (bookId: summaryBookId, gradeLabel: summaryGrade);
+    }
+    for (final child in entry.children) {
+      final bookId = (child.bookId ?? '').trim();
+      if (bookId.isEmpty) continue;
+      return (bookId: bookId, gradeLabel: (child.gradeLabel ?? '').trim());
+    }
+    return (bookId: '', gradeLabel: summaryGrade);
   }
 
   List<_GradingGroupEntry> _buildSubmittedEntries(
@@ -668,6 +688,10 @@ class _GradingModePageState extends State<GradingModePage> {
     required String titleSnapshot,
   }) {
     final first = children.first;
+    final displaySeed = children.firstWhere(
+      (child) => (child.bookId ?? '').trim().isNotEmpty,
+      orElse: () => first,
+    );
     HomeworkItem? runningChild;
     bool hasSubmitted = false;
     bool hasConfirmed = false;
@@ -718,20 +742,20 @@ class _GradingModePageState extends State<GradingModePage> {
     return HomeworkItem(
       id: (runningChild ?? first).id,
       title: title.trim().isEmpty ? '(제목 없음)' : title.trim(),
-      body: first.body,
+      body: displaySeed.body,
       color: first.color,
       flowId: group.flowId ?? first.flowId,
       type: '${children.length}개 과제',
       page: pageSummary.isEmpty ? null : pageSummary,
       count: totalCount > 0 ? totalCount : first.count,
-      memo: first.memo,
-      content: first.content,
-      bookId: first.bookId,
-      gradeLabel: first.gradeLabel,
-      sourceUnitLevel: first.sourceUnitLevel,
-      sourceUnitPath: first.sourceUnitPath,
-      unitMappings: first.unitMappings,
-      defaultSplitParts: first.defaultSplitParts,
+      memo: displaySeed.memo,
+      content: displaySeed.content,
+      bookId: displaySeed.bookId,
+      gradeLabel: displaySeed.gradeLabel,
+      sourceUnitLevel: displaySeed.sourceUnitLevel,
+      sourceUnitPath: displaySeed.sourceUnitPath,
+      unitMappings: displaySeed.unitMappings,
+      defaultSplitParts: displaySeed.defaultSplitParts,
       checkCount: maxCheckCount,
       orderIndex: group.orderIndex,
       createdAt: first.createdAt,
@@ -755,15 +779,49 @@ class _GradingModePageState extends State<GradingModePage> {
   Future<String?> _resolveCoverPath({
     required String bookId,
     required String gradeLabel,
+    String flowId = '',
   }) {
-    if (bookId.isEmpty) return Future<String?>.value(null);
-    final key = '$bookId|$gradeLabel';
+    final cleanedBookId = bookId.trim();
+    final cleanedGradeLabel = gradeLabel.trim();
+    final cleanedFlowId = flowId.trim();
+    if (cleanedBookId.isEmpty && cleanedFlowId.isEmpty) {
+      return Future<String?>.value(null);
+    }
+    final key = '$cleanedBookId|$cleanedGradeLabel|$cleanedFlowId';
     return _coverPathFutureByKey.putIfAbsent(key, () async {
+      var resolvedBookId = cleanedBookId;
+      var resolvedGradeLabel = cleanedGradeLabel;
+      if (resolvedBookId.isEmpty && cleanedFlowId.isNotEmpty) {
+        try {
+          final rows = await DataManager.instance.loadFlowTextbookLinks(
+            cleanedFlowId,
+          );
+          if (rows.isNotEmpty) {
+            Map<String, dynamic>? matched;
+            if (resolvedGradeLabel.isNotEmpty) {
+              for (final row in rows) {
+                final rowGrade = '${row['grade_label'] ?? ''}'.trim();
+                if (rowGrade == resolvedGradeLabel) {
+                  matched = row;
+                  break;
+                }
+              }
+            }
+            final selected = matched ?? rows.first;
+            resolvedBookId = '${selected['book_id'] ?? ''}'.trim();
+            if (resolvedGradeLabel.isEmpty) {
+              resolvedGradeLabel = '${selected['grade_label'] ?? ''}'.trim();
+            }
+          }
+        } catch (_) {}
+      }
+      if (resolvedBookId.isEmpty) return null;
       try {
-        final links = await DataManager.instance.loadResourceFileLinks(bookId);
+        final links =
+            await DataManager.instance.loadResourceFileLinks(resolvedBookId);
         if (links.isEmpty) return null;
-        if (gradeLabel.isNotEmpty) {
-          final byGrade = (links['$gradeLabel#cover'] ?? '').trim();
+        if (resolvedGradeLabel.isNotEmpty) {
+          final byGrade = (links['$resolvedGradeLabel#cover'] ?? '').trim();
           if (byGrade.isNotEmpty) return byGrade;
         }
         for (final e in links.entries) {

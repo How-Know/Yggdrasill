@@ -106,6 +106,13 @@ class ResourceService {
           row[k] = local[k];
         }
       }
+      // 서버 folder_id(parent_id alias)가 비어 있는 경우,
+      // 로컬 parent_id로 보정해서 폴더 매칭이 끊기지 않도록 한다.
+      final serverParent = (row['parent_id'] as String?)?.trim() ?? '';
+      final localParent = (local['parent_id'] as String?)?.trim() ?? '';
+      if (serverParent.isEmpty && localParent.isNotEmpty) {
+        row['parent_id'] = localParent;
+      }
     }
     return serverRows;
   }
@@ -118,17 +125,41 @@ class ResourceService {
     final orders = await _loadOrderOverrides(category);
     if (orders.isEmpty) return rows;
     final orderByKey = <String, int>{};
+    final parentsByFileId = <String, Set<String>>{};
     for (final o in orders) {
       final fileId = (o['file_id'] as String?) ?? '';
       if (fileId.isEmpty) continue;
-      final parent = (o['parent_id'] as String?) ?? '';
+      final parent = ((o['parent_id'] as String?) ?? '').trim();
       final order = (o['order_index'] as int?) ?? 0;
       orderByKey['$fileId|$parent'] = order;
+      if (parent.isNotEmpty) {
+        final set = parentsByFileId.putIfAbsent(fileId, () => <String>{});
+        set.add(parent);
+      }
     }
+
+    var repairedParentFromOrders = 0;
     for (final row in rows) {
       final fileId = (row['id'] as String?) ?? '';
       if (fileId.isEmpty) continue;
-      final parent = (row['parent_id'] as String?) ?? '';
+      final currentParent = ((row['parent_id'] as String?) ?? '').trim();
+      if (currentParent.isNotEmpty) continue;
+      final candidates = parentsByFileId[fileId];
+      if (candidates != null && candidates.length == 1) {
+        row['parent_id'] = candidates.first;
+        repairedParentFromOrders++;
+      }
+    }
+
+    if (repairedParentFromOrders > 0) {
+      print(
+          '[RES][filesByCat] repaired missing parent_id via order table: $repairedParentFromOrders');
+    }
+
+    for (final row in rows) {
+      final fileId = (row['id'] as String?) ?? '';
+      if (fileId.isEmpty) continue;
+      final parent = ((row['parent_id'] as String?) ?? '').trim();
       final key = '$fileId|$parent';
       if (orderByKey.containsKey(key)) {
         row['order_index'] = orderByKey[key];
@@ -169,6 +200,86 @@ class ResourceService {
   }
 
   // ======== RESOURCES (FOLDERS/FILES) ========
+  Future<List<Map<String, dynamic>>> _loadRemoteFoldersInScope({
+    required SupabaseClient supa,
+    required String academyId,
+    String? category,
+  }) async {
+    if (category == null) {
+      final data = await supa
+          .from('resource_folders')
+          .select('id,category')
+          .eq('academy_id', academyId);
+      return (data as List).cast<Map<String, dynamic>>();
+    }
+
+    if (category == 'textbook') {
+      // textbook scope includes legacy null/empty category rows.
+      final data = await supa
+          .from('resource_folders')
+          .select('id,category')
+          .eq('academy_id', academyId);
+      return (data as List).cast<Map<String, dynamic>>().where((r) {
+        final c = (r['category'] as String?)?.trim();
+        return c == null || c.isEmpty || c == 'textbook';
+      }).toList();
+    }
+
+    final data = await supa
+        .from('resource_folders')
+        .select('id')
+        .match({'academy_id': academyId, 'category': category});
+    return (data as List).cast<Map<String, dynamic>>();
+  }
+
+  Future<void> _syncRemoteResourceFolders({
+    required SupabaseClient supa,
+    required String academyId,
+    required List<Map<String, dynamic>> rows,
+    String? category,
+  }) async {
+    final existingRows = await _loadRemoteFoldersInScope(
+      supa: supa,
+      academyId: academyId,
+      category: category,
+    );
+    final existingIds = existingRows
+        .map((r) => (r['id'] as String?) ?? '')
+        .where((id) => id.isNotEmpty)
+        .toSet();
+
+    final up = <Map<String, dynamic>>[];
+    for (final raw in rows) {
+      final r = Map<String, dynamic>.from(raw);
+      final id = (r['id'] as String?) ?? '';
+      if (id.isEmpty) continue;
+      up.add({
+        'id': id,
+        'academy_id': academyId,
+        'name': r['name'],
+        'parent_id': r['parent_id'],
+        'order_index': r['order_index'],
+        'category': category ?? r['category'],
+      });
+    }
+
+    if (up.isNotEmpty) {
+      await supa.from('resource_folders').upsert(up, onConflict: 'id');
+    }
+
+    final newIds = up
+        .map((r) => (r['id'] as String?) ?? '')
+        .where((id) => id.isNotEmpty)
+        .toSet();
+    final staleIds = existingIds.difference(newIds);
+    for (final id in staleIds) {
+      await supa.from('resource_folders').delete().match({
+        'academy_id': academyId,
+        'id': id,
+      });
+    }
+  }
+
   Future<void> saveResourceFolders(List<Map<String, dynamic>> rows) async {
     await AcademyDbService.instance.saveResourceFolders(rows);
     if (TagPresetService.dualWrite) {
@@ -177,20 +288,11 @@ class ResourceService {
             await TenantService.instance.getActiveAcademyId() ??
                 await TenantService.instance.ensureActiveAcademy();
         final supa = Supabase.instance.client;
-        await supa.from('resource_folders').delete().eq('academy_id', academyId);
-        if (rows.isNotEmpty) {
-          final up = rows
-              .map((r) => {
-                    'id': r['id'],
-                    'academy_id': academyId,
-                    'name': r['name'],
-                    'parent_id': r['parent_id'],
-                    'order_index': r['order_index'],
-                    'category': r['category'],
-                  })
-              .toList();
-          await supa.from('resource_folders').insert(up);
-        }
+        await _syncRemoteResourceFolders(
+          supa: supa,
+          academyId: academyId,
+          rows: rows,
+        );
       } catch (_) {}
     }
   }
@@ -206,24 +308,12 @@ class ResourceService {
             await TenantService.instance.getActiveAcademyId() ??
                 await TenantService.instance.ensureActiveAcademy();
         final supa = Supabase.instance.client;
-        await supa.from('resource_folders').delete().match({
-          'academy_id': academyId,
-          'category': category,
-        });
-        if (rows.isNotEmpty) {
-          final up = rows.map((raw) {
-            final r = Map<String, dynamic>.from(raw);
-            return {
-              'id': r['id'],
-              'academy_id': academyId,
-              'name': r['name'],
-              'parent_id': r['parent_id'],
-              'order_index': r['order_index'],
-              'category': category,
-            };
-          }).toList();
-          await supa.from('resource_folders').insert(up);
-        }
+        await _syncRemoteResourceFolders(
+          supa: supa,
+          academyId: academyId,
+          rows: rows,
+          category: category,
+        );
       } catch (_) {}
     }
   }
