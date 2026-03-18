@@ -2605,6 +2605,16 @@ class HomeworkStore {
           cycleDeltaMs: groupCycleDeltaMs,
         );
       }
+      if (normalizedFromPhase == 4) {
+        final afterChildren = itemsInGroup(
+          studentId,
+          cleanedGroupId,
+          includeCompleted: true,
+        );
+        for (final child in afterChildren) {
+          _maybeAutoCompleteOnWaiting(studentId, child);
+        }
+      }
       return _parseInt(raw);
     } catch (_) {
       return 0;

@@ -10,6 +10,13 @@ enum PrintRoutingChannel {
   todoSheet,
 }
 
+enum PrintDuplexMode {
+  systemDefault,
+  oneSided,
+  twoSidedLongEdge,
+  twoSidedShortEdge,
+}
+
 class PrintRoutingService {
   PrintRoutingService._internal();
   static final PrintRoutingService instance = PrintRoutingService._internal();
@@ -38,6 +45,120 @@ class PrintRoutingService {
         (value ?? '').toString().replaceAll(RegExp(r'[\r\n]+'), ' ').trim();
     if (raw.length <= max) return raw;
     return '${raw.substring(0, max)}...';
+  }
+
+  String _duplexModeLabel(PrintDuplexMode mode) {
+    switch (mode) {
+      case PrintDuplexMode.systemDefault:
+        return 'systemDefault';
+      case PrintDuplexMode.oneSided:
+        return 'oneSided';
+      case PrintDuplexMode.twoSidedLongEdge:
+        return 'twoSidedLongEdge';
+      case PrintDuplexMode.twoSidedShortEdge:
+        return 'twoSidedShortEdge';
+    }
+  }
+
+  String? _windowsDuplexToken(PrintDuplexMode mode) {
+    switch (mode) {
+      case PrintDuplexMode.systemDefault:
+        return null;
+      case PrintDuplexMode.oneSided:
+        return 'OneSided';
+      case PrintDuplexMode.twoSidedLongEdge:
+        return 'TwoSidedLongEdge';
+      case PrintDuplexMode.twoSidedShortEdge:
+        return 'TwoSidedShortEdge';
+    }
+  }
+
+  PrintDuplexMode _parseWindowsDuplexMode(String raw) {
+    final normalized = raw.trim().toLowerCase();
+    if (normalized.contains('twosidedshortedge')) {
+      return PrintDuplexMode.twoSidedShortEdge;
+    }
+    if (normalized.contains('twosidedlongedge')) {
+      return PrintDuplexMode.twoSidedLongEdge;
+    }
+    if (normalized.contains('onesided')) {
+      return PrintDuplexMode.oneSided;
+    }
+    return PrintDuplexMode.systemDefault;
+  }
+
+  Future<PrintDuplexMode?> _loadWindowsPrinterDuplexMode(
+      String printerName) async {
+    if (!Platform.isWindows) return null;
+    final escapedName = printerName.replaceAll("'", "''");
+    try {
+      final result = await Process.run(
+        'powershell',
+        <String>[
+          '-NoProfile',
+          '-Command',
+          "\$cfg = Get-PrintConfiguration -PrinterName '$escapedName' -ErrorAction SilentlyContinue; if (\$null -ne \$cfg) { Write-Output \"\$(\$cfg.DuplexingMode)\" }",
+        ],
+      );
+      if (result.exitCode != 0) return null;
+      final line = (result.stdout?.toString() ?? '')
+          .split(RegExp(r'[\r\n]+'))
+          .map((e) => e.trim())
+          .firstWhere(
+            (e) => e.isNotEmpty,
+            orElse: () => '',
+          );
+      if (line.isEmpty) return null;
+      return _parseWindowsDuplexMode(line);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<bool> _setWindowsPrinterDuplexMode({
+    required String printerName,
+    required PrintDuplexMode mode,
+    required String debugSource,
+  }) async {
+    if (!Platform.isWindows) return false;
+    final token = _windowsDuplexToken(mode);
+    if (token == null) return false;
+    final escapedName = printerName.replaceAll("'", "''");
+    try {
+      final result = await Process.run(
+        'powershell',
+        <String>[
+          '-NoProfile',
+          '-Command',
+          "Set-PrintConfiguration -PrinterName '$escapedName' -DuplexingMode $token -ErrorAction Stop",
+        ],
+        runInShell: true,
+      );
+      _printLog(
+        debugSource,
+        'Set duplex mode=$token exit=${result.exitCode} stdout="${_compact(result.stdout)}" stderr="${_compact(result.stderr)}"',
+      );
+      return result.exitCode == 0;
+    } catch (e) {
+      _printLog(debugSource, 'Set duplex mode failed: ${_compact(e)}');
+      return false;
+    }
+  }
+
+  Future<void> _restoreWindowsPrinterDuplexLater({
+    required String printerName,
+    required PrintDuplexMode mode,
+    required String debugSource,
+    Duration delay = const Duration(seconds: 12),
+  }) async {
+    await Future<void>.delayed(delay);
+    final token = _windowsDuplexToken(mode);
+    if (token == null) return;
+    await _setWindowsPrinterDuplexMode(
+      printerName: printerName,
+      mode: mode,
+      debugSource: '$debugSource.restore',
+    );
   }
 
   String? _resolveAcrobatExecutablePath() {
@@ -206,6 +327,7 @@ class PrintRoutingService {
   Future<void> printFile({
     required String path,
     required PrintRoutingChannel channel,
+    PrintDuplexMode duplexMode = PrintDuplexMode.systemDefault,
     String debugSource = 'unknown',
   }) async {
     final target = path.trim();
@@ -218,12 +340,13 @@ class PrintRoutingService {
     final exists = await File(target).exists();
     _printLog(
       debugSource,
-      'printFile request channel=$channel exists=$exists printer="${configuredPrinter ?? ''}" path="$target"',
+      'printFile request channel=$channel exists=$exists duplex=${_duplexModeLabel(duplexMode)} printer="${configuredPrinter ?? ''}" path="$target"',
     );
     await _printWithRouting(
       target: target,
       printerName: configuredPrinter,
       channel: channel,
+      duplexMode: duplexMode,
       debugSource: debugSource,
     );
   }
@@ -232,6 +355,7 @@ class PrintRoutingService {
     required String target,
     required String? printerName,
     required PrintRoutingChannel channel,
+    required PrintDuplexMode duplexMode,
     required String debugSource,
   }) async {
     try {
@@ -240,36 +364,70 @@ class PrintRoutingService {
         final normalizedPrinter = (printerName ?? '').trim();
         _printLog(
           debugSource,
-          'Windows route start channel=$channel printer="${normalizedPrinter.isEmpty ? '(none)' : normalizedPrinter}"',
+          'Windows route start channel=$channel duplex=${_duplexModeLabel(duplexMode)} printer="${normalizedPrinter.isEmpty ? '(none)' : normalizedPrinter}"',
         );
-        if (normalizedPrinter.isNotEmpty) {
-          final directAcrobatPrinted = await _tryDirectAcrobatPrintTo(
-            target: target,
-            printerName: normalizedPrinter,
-            debugSource: debugSource,
-          );
-          if (directAcrobatPrinted) {
-            _printLog(debugSource, 'Printed via direct Acrobat /t route.');
-            return;
+        bool shouldRestoreDuplex = false;
+        PrintDuplexMode? restoreDuplexMode;
+        try {
+          if (normalizedPrinter.isNotEmpty &&
+              duplexMode != PrintDuplexMode.systemDefault) {
+            restoreDuplexMode =
+                await _loadWindowsPrinterDuplexMode(normalizedPrinter);
+            if (restoreDuplexMode != null && restoreDuplexMode != duplexMode) {
+              final applied = await _setWindowsPrinterDuplexMode(
+                printerName: normalizedPrinter,
+                mode: duplexMode,
+                debugSource: '$debugSource.duplex',
+              );
+              shouldRestoreDuplex = applied;
+            } else {
+              _printLog(
+                '$debugSource.duplex',
+                'Skip duplex override: current=${_duplexModeLabel(restoreDuplexMode ?? PrintDuplexMode.systemDefault)} requested=${_duplexModeLabel(duplexMode)}',
+              );
+            }
           }
 
-          final qPrinter = _psSingleQuoted(normalizedPrinter);
-          final printTo = await Process.run(
-            'powershell',
-            <String>[
-              '-NoProfile',
-              '-Command',
-              'Start-Process -FilePath $qPath -Verb PrintTo -ArgumentList $qPrinter',
-            ],
-            runInShell: true,
-          );
-          _printLog(
-            debugSource,
-            'PrintTo exit=${printTo.exitCode} stdout="${_compact(printTo.stdout)}" stderr="${_compact(printTo.stderr)}"',
-          );
-          if (printTo.exitCode == 0) {
-            _printLog(debugSource, 'Printed via PowerShell PrintTo route.');
-            return;
+          if (normalizedPrinter.isNotEmpty) {
+            final directAcrobatPrinted = await _tryDirectAcrobatPrintTo(
+              target: target,
+              printerName: normalizedPrinter,
+              debugSource: debugSource,
+            );
+            if (directAcrobatPrinted) {
+              _printLog(debugSource, 'Printed via direct Acrobat /t route.');
+              return;
+            }
+
+            final qPrinter = _psSingleQuoted(normalizedPrinter);
+            final printTo = await Process.run(
+              'powershell',
+              <String>[
+                '-NoProfile',
+                '-Command',
+                'Start-Process -FilePath $qPath -Verb PrintTo -ArgumentList $qPrinter',
+              ],
+              runInShell: true,
+            );
+            _printLog(
+              debugSource,
+              'PrintTo exit=${printTo.exitCode} stdout="${_compact(printTo.stdout)}" stderr="${_compact(printTo.stderr)}"',
+            );
+            if (printTo.exitCode == 0) {
+              _printLog(debugSource, 'Printed via PowerShell PrintTo route.');
+              return;
+            }
+          }
+        } finally {
+          if (normalizedPrinter.isNotEmpty &&
+              shouldRestoreDuplex &&
+              restoreDuplexMode != null &&
+              _windowsDuplexToken(restoreDuplexMode) != null) {
+            unawaited(_restoreWindowsPrinterDuplexLater(
+              printerName: normalizedPrinter,
+              mode: restoreDuplexMode,
+              debugSource: debugSource,
+            ));
           }
         }
 

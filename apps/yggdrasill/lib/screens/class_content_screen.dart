@@ -368,6 +368,15 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                             onHomeworkCardTap:
                                 (studentId, group, summary, children) {
                               if (_printPickMode) {
+                                if (group != null) {
+                                  return _handleHomeworkGroupPrintPick(
+                                    context: context,
+                                    studentId: studentId,
+                                    group: group,
+                                    summary: summary,
+                                    children: children,
+                                  );
+                                }
                                 return _handleHomeworkPrintPick(
                                   context: context,
                                   studentId: studentId,
@@ -430,6 +439,72 @@ class _ClassContentScreenState extends State<ClassContentScreen>
             },
           ),
         ),
+        if (_printPickMode)
+          Positioned(
+            top: 86,
+            left: 0,
+            right: 0,
+            child: Center(
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: _homePrintPickPanelBg,
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                      color: _homePrintPickAccent.withValues(alpha: 0.8)),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.35),
+                      blurRadius: 10,
+                      offset: const Offset(0, 6),
+                    ),
+                  ],
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(
+                      Icons.print,
+                      size: 16,
+                      color: _homePrintPickAccent,
+                    ),
+                    const SizedBox(width: 6),
+                    const Text(
+                      '인쇄할 과제를 고르세요',
+                      style: TextStyle(
+                        color: _homePrintPickText,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    InkWell(
+                      onTap: () {
+                        if (mounted) setState(() => _printPickMode = false);
+                      },
+                      borderRadius: BorderRadius.circular(999),
+                      child: Container(
+                        width: 20,
+                        height: 20,
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.25),
+                          shape: BoxShape.circle,
+                          border: Border.all(color: _homePrintPickBorder),
+                        ),
+                        alignment: Alignment.center,
+                        child: const Icon(
+                          Icons.close,
+                          size: 12,
+                          color: _homePrintPickTextSub,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
       ],
     );
   }
@@ -570,6 +645,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                         },
                         printPickMode: _printPickMode,
                         onPrintPickTap: _handleHomeworkPrintPick,
+                        onGroupPrintPickTap: _handleHomeworkGroupPrintPick,
                         onSlideDownComplete: (key) {
                           setState(() => _pendingConfirms[key] = true);
                         },
@@ -2345,6 +2421,66 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     );
   }
 
+  Future<void> _handleHomeworkGroupPrintPick({
+    required BuildContext context,
+    required String studentId,
+    required HomeworkGroup group,
+    required HomeworkItem summary,
+    required List<HomeworkItem> children,
+  }) async {
+    if (!_printPickMode) return;
+    final latestChildren = children
+        .map((e) => HomeworkStore.instance.getById(studentId, e.id) ?? e)
+        .toList(growable: false);
+    final waitingChildren = latestChildren
+        .where((e) => e.status != HomeworkStatus.completed && e.phase == 1)
+        .toList(growable: false);
+    if (waitingChildren.isEmpty) {
+      _showHomeworkChipSnackBar(context, '인쇄 가능한 대기 하위 과제가 없습니다.');
+      return;
+    }
+
+    if (mounted) {
+      setState(() => _printPickMode = false);
+    }
+
+    final printableById = <String, bool>{
+      for (final child in waitingChildren)
+        child.id: _hasDirectHomeworkTextbookLink(child),
+    };
+    final initialSelectedById = <String, bool>{
+      for (final child in waitingChildren)
+        child.id: printableById[child.id] ?? false,
+    };
+    final defaultPrintableChildren = waitingChildren
+        .where((e) => printableById[e.id] ?? false)
+        .toList(growable: false);
+    if (defaultPrintableChildren.isEmpty) {
+      _showHomeworkChipSnackBar(context, '인쇄할 하위 과제를 선택하세요.');
+      return;
+    }
+
+    final seed = defaultPrintableChildren.first;
+    final mergedPage = _mergeGroupPageText(defaultPrintableChildren);
+    final mergedTitle = summary.title.trim().isNotEmpty
+        ? summary.title.trim()
+        : (group.title.trim().isNotEmpty
+            ? group.title.trim()
+            : seed.title.trim());
+    final printRange = mergedPage.isEmpty ? (seed.page ?? '') : mergedPage;
+    final dialogTitle = mergedTitle.isEmpty ? '(제목 없음)' : mergedTitle;
+
+    await _handleWaitingChipLongPressPrint(
+      context: context,
+      hw: seed,
+      initialRangeOverride: printRange,
+      dialogTitleOverride: dialogTitle,
+      selectableGroupChildren: waitingChildren,
+      groupChildPrintableById: printableById,
+      groupInitialSelectionById: initialSelectedById,
+    );
+  }
+
   Future<void> _executeBatchConfirm(BuildContext context) async {
     if (_pendingConfirms.isEmpty) return;
     final pending =
@@ -2378,7 +2514,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
             progress: target.progress,
             issueType: null,
             issueNote: null,
-            markCompleted: true,
+            markCompleted: false,
           );
         }
         if (hw.phase == 3) {
@@ -2389,15 +2525,6 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           );
         }
         HomeworkStore.instance.markAutoCompleteOnNextWaiting(key.itemId);
-        final latest = HomeworkStore.instance.getById(
-          key.studentId,
-          key.itemId,
-        );
-        if (latest != null && latest.phase == 1) {
-          await HomeworkStore.instance.complete(key.studentId, key.itemId);
-        } else {
-          await HomeworkStore.instance.waitPhase(key.studentId, key.itemId);
-        }
       } else if (hw.phase == 3) {
         final target = await _resolveHomeworkCheckTarget(
           key.studentId,
@@ -3147,21 +3274,14 @@ Future<void> _runHomeworkCheckAndConfirm({
   );
   if (!context.mounted) return;
   if (target == null) {
+    if (markAutoCompleteOnNextWaiting) {
+      HomeworkStore.instance.markAutoCompleteOnNextWaiting(hw.id);
+    }
     await HomeworkStore.instance.confirm(
       studentId,
       hw.id,
       recordAssignmentCheck: false,
     );
-    if (markAutoCompleteOnNextWaiting) {
-      HomeworkStore.instance.markAutoCompleteOnNextWaiting(hw.id);
-      final latestAfterConfirm =
-          HomeworkStore.instance.getById(studentId, hw.id);
-      if (latestAfterConfirm != null && latestAfterConfirm.phase == 1) {
-        await HomeworkStore.instance.complete(studentId, hw.id);
-      } else {
-        await HomeworkStore.instance.waitPhase(studentId, hw.id);
-      }
-    }
     return;
   }
 
@@ -3187,7 +3307,7 @@ Future<void> _runHomeworkCheckAndConfirm({
     progress: draft.progress,
     issueType: draft.issueType,
     issueNote: draft.issueNote,
-    markCompleted: true,
+    markCompleted: false,
   );
   if (!context.mounted) return;
   if (!saved) {
@@ -3195,20 +3315,14 @@ Future<void> _runHomeworkCheckAndConfirm({
     return;
   }
 
+  if (markAutoCompleteOnNextWaiting) {
+    HomeworkStore.instance.markAutoCompleteOnNextWaiting(hw.id);
+  }
   await HomeworkStore.instance.confirm(
     studentId,
     hw.id,
     recordAssignmentCheck: false,
   );
-  if (markAutoCompleteOnNextWaiting) {
-    HomeworkStore.instance.markAutoCompleteOnNextWaiting(hw.id);
-    final latestAfterConfirm = HomeworkStore.instance.getById(studentId, hw.id);
-    if (latestAfterConfirm != null && latestAfterConfirm.phase == 1) {
-      await HomeworkStore.instance.complete(studentId, hw.id);
-    } else {
-      await HomeworkStore.instance.waitPhase(studentId, hw.id);
-    }
-  }
 }
 
 Future<void> _runHomeworkCheckDialogOnly({
@@ -4300,6 +4414,11 @@ const double _homeworkChipOuterLeftInset =
     (ClassContentScreen._studentColumnWidth -
             ClassContentScreen._studentColumnContentWidth) /
         2;
+const Color _homePrintPickPanelBg = Color(0xFF10171A);
+const Color _homePrintPickBorder = Color(0xFF223131);
+const Color _homePrintPickText = Color(0xFFEAF2F2);
+const Color _homePrintPickTextSub = Color(0xFF9FB3B3);
+const Color _homePrintPickAccent = Color(0xFF33A373);
 const String _homeworkPrintTempPrefix = 'hw_print_';
 // 그룹 사이클 내(휴식 포함) 진행시간 누적 보장을 위한 기준값 스냅샷 캐시
 final Map<String, String> _groupCycleIdentityByGroupId = <String, String>{};
@@ -4326,6 +4445,13 @@ Widget _buildHomeworkChipsReactiveForStudent(
           required String studentId,
           required HomeworkItem hw})?
       onPrintPickTap,
+  Future<void> Function({
+    required BuildContext context,
+    required String studentId,
+    required HomeworkGroup group,
+    required HomeworkItem summary,
+    required List<HomeworkItem> children,
+  })? onGroupPrintPickTap,
   void Function(({String studentId, String itemId}) key)? onSlideDownComplete,
   Set<String> expandedHomeworkIds = const {},
   void Function(String id)? onToggleExpand,
@@ -4428,6 +4554,7 @@ Widget _buildHomeworkChipsReactiveForStudent(
                                 onGroupSubmittedDoubleTap,
                             printPickMode: printPickMode,
                             onPrintPickTap: onPrintPickTap,
+                            onGroupPrintPickTap: onGroupPrintPickTap,
                             onSlideDownComplete: onSlideDownComplete,
                             expandedHomeworkIds: expandedHomeworkIds,
                             onToggleExpand: onToggleExpand,
@@ -4875,6 +5002,13 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
           required String studentId,
           required HomeworkItem hw})?
       onPrintPickTap,
+  Future<void> Function({
+    required BuildContext context,
+    required String studentId,
+    required HomeworkGroup group,
+    required HomeworkItem summary,
+    required List<HomeworkItem> children,
+  })? onGroupPrintPickTap,
   void Function(({String studentId, String itemId}) key)? onSlideDownComplete,
   Set<String> expandedHomeworkIds = const {},
   void Function(String id)? onToggleExpand,
@@ -5118,7 +5252,31 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
               : const Color(0xFF9FB3B3)),
       upColor: const Color(0xFFE57373),
       onTap: () {
-        if (printPickMode) return;
+        if (printPickMode) {
+          if (onGroupPrintPickTap != null) {
+            unawaited(
+              onGroupPrintPickTap(
+                context: context,
+                studentId: studentId,
+                group: group,
+                summary: summary,
+                children: children,
+              ),
+            );
+            return;
+          }
+          if (onPrintPickTap != null) {
+            unawaited(
+              onPrintPickTap(
+                context: context,
+                studentId: studentId,
+                hw: summary,
+              ),
+            );
+            return;
+          }
+          return;
+        }
         if (hasHomeworkAssignment) {
           unawaited(
             _runHomeworkCheckDialogForGroup(
@@ -5294,6 +5452,16 @@ class _ResolvedHomeworkPdfLinks {
     required this.bodyPathRaw,
     required this.answerPathRaw,
     required this.solutionPathRaw,
+  });
+}
+
+class _HomeworkPrintConfirmResult {
+  final String pageRange;
+  final List<String> selectedChildIds;
+
+  const _HomeworkPrintConfirmResult({
+    required this.pageRange,
+    this.selectedChildIds = const <String>[],
   });
 }
 
@@ -6377,20 +6545,48 @@ Future<_ResolvedHomeworkPdfLinks> _resolveHomeworkPdfLinks(
   }
 }
 
-Future<String?> _showHomeworkPrintConfirmDialog({
+Future<_HomeworkPrintConfirmResult?> _showHomeworkPrintConfirmDialog({
   required BuildContext context,
   required HomeworkItem hw,
   required String filePath,
   required bool isPdf,
   required String initialRange,
+  String? dialogTitle,
+  List<HomeworkItem> selectableChildren = const <HomeworkItem>[],
+  Map<String, bool> childPrintableById = const <String, bool>{},
+  Map<String, bool> initialChildSelectionById = const <String, bool>{},
 }) async {
   final controller = ImeAwareTextEditingController(text: initialRange);
   bool printWhole = initialRange.isEmpty || !isPdf;
-  final result = await showDialog<String>(
+  final resolvedTitle = (dialogTitle ?? hw.title).trim();
+  final hasChildChecklist = selectableChildren.isNotEmpty;
+  final selectedChildById = <String, bool>{
+    for (final child in selectableChildren)
+      child.id: (childPrintableById[child.id] ?? true) &&
+          (initialChildSelectionById[child.id] ??
+              (childPrintableById[child.id] ?? true)),
+  };
+  String mergedRangeFromSelection() {
+    if (!hasChildChecklist || !isPdf) return '';
+    final picked = selectableChildren
+        .where((child) => selectedChildById[child.id] ?? false)
+        .toList(growable: false);
+    if (picked.isEmpty) return '';
+    return _normalizePageRangeForPrint(_mergeGroupPageText(picked));
+  }
+
+  final result = await showDialog<_HomeworkPrintConfirmResult>(
     context: context,
     builder: (ctx) {
       return StatefulBuilder(
         builder: (ctx, setLocalState) {
+          final selectedChildIds = hasChildChecklist
+              ? selectableChildren
+                  .where((child) => selectedChildById[child.id] ?? false)
+                  .map((child) => child.id)
+                  .toList(growable: false)
+              : const <String>[];
+          final canSubmit = !hasChildChecklist || selectedChildIds.isNotEmpty;
           return AlertDialog(
             backgroundColor: kDlgBg,
             shape:
@@ -6400,82 +6596,180 @@ Future<String?> _showHomeworkPrintConfirmDialog({
               style: TextStyle(color: kDlgText, fontWeight: FontWeight.w900),
             ),
             content: SizedBox(
-              width: 440,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const YggDialogSectionHeader(
-                    icon: Icons.print_rounded,
-                    title: '출력 정보',
-                  ),
-                  Text(
-                    hw.title.trim().isEmpty ? '(제목 없음)' : hw.title.trim(),
-                    style: const TextStyle(
-                      color: kDlgText,
-                      fontWeight: FontWeight.w800,
+              width: hasChildChecklist ? 540 : 440,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (hasChildChecklist) ...[
+                      const YggDialogSectionHeader(
+                        icon: Icons.checklist_rounded,
+                        title: '하위 과제 선택',
+                      ),
+                      const Text(
+                        '체크한 하위 과제 페이지만 인쇄 범위에 반영됩니다.',
+                        style: TextStyle(color: kDlgTextSub, fontSize: 12.5),
+                      ),
+                      const SizedBox(height: 10),
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxHeight: 260),
+                        child: ListView.separated(
+                          shrinkWrap: true,
+                          itemCount: selectableChildren.length,
+                          separatorBuilder: (_, __) =>
+                              const SizedBox(height: 8),
+                          itemBuilder: (ctx, idx) {
+                            final child = selectableChildren[idx];
+                            final canPrint =
+                                childPrintableById[child.id] ?? true;
+                            final pageText = (child.page ?? '').trim();
+                            final countText =
+                                (child.count != null && child.count! > 0)
+                                    ? '${child.count}문항'
+                                    : '-';
+                            final subtitle = [
+                              if (pageText.isNotEmpty) 'p.$pageText',
+                              countText,
+                              if (!canPrint) '교재 링크 없음',
+                            ].join(' · ');
+                            return Container(
+                              decoration: BoxDecoration(
+                                color: kDlgPanelBg,
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(color: kDlgBorder),
+                              ),
+                              child: CheckboxListTile(
+                                value: selectedChildById[child.id] ?? false,
+                                onChanged: canPrint
+                                    ? (v) => setLocalState(() {
+                                          selectedChildById[child.id] =
+                                              v ?? false;
+                                          if (isPdf && !printWhole) {
+                                            final merged =
+                                                mergedRangeFromSelection();
+                                            if (merged.isNotEmpty ||
+                                                controller.text
+                                                    .trim()
+                                                    .isEmpty) {
+                                              controller.text = merged;
+                                            }
+                                          }
+                                        })
+                                    : null,
+                                contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 2,
+                                ),
+                                activeColor: kDlgAccent,
+                                checkColor: Colors.white,
+                                controlAffinity:
+                                    ListTileControlAffinity.leading,
+                                title: Text(
+                                  child.title.trim().isEmpty
+                                      ? '(제목 없음)'
+                                      : child.title.trim(),
+                                  style: TextStyle(
+                                    color: canPrint ? kDlgText : kDlgTextSub,
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 13.5,
+                                  ),
+                                ),
+                                subtitle: Text(
+                                  subtitle,
+                                  style: TextStyle(
+                                    color: canPrint
+                                        ? kDlgTextSub
+                                        : const Color(0xFF6E7E7E),
+                                    fontSize: 12,
+                                  ),
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                    ],
+                    const YggDialogSectionHeader(
+                      icon: Icons.print_rounded,
+                      title: '출력 정보',
                     ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    p.basename(filePath),
-                    style: const TextStyle(color: kDlgTextSub, fontSize: 12.5),
-                  ),
-                  const SizedBox(height: 14),
-                  if (!isPdf)
-                    const Text(
-                      'PDF가 아니어서 전체 인쇄로 진행됩니다.',
-                      style: TextStyle(color: kDlgTextSub),
-                    )
-                  else ...[
-                    CheckboxListTile(
-                      value: printWhole,
-                      onChanged: (v) {
-                        setLocalState(() {
-                          printWhole = v ?? false;
-                        });
-                      },
-                      contentPadding: EdgeInsets.zero,
-                      controlAffinity: ListTileControlAffinity.leading,
-                      activeColor: kDlgAccent,
-                      title: const Text(
-                        '전체 인쇄',
-                        style: TextStyle(
-                            color: kDlgText, fontWeight: FontWeight.w700),
+                    Text(
+                      resolvedTitle.isEmpty ? '(제목 없음)' : resolvedTitle,
+                      style: const TextStyle(
+                        color: kDlgText,
+                        fontWeight: FontWeight.w800,
                       ),
                     ),
-                    const SizedBox(height: 8),
-                    TextField(
-                      controller: controller,
-                      enabled: !printWhole,
-                      style: const TextStyle(color: kDlgText),
-                      cursorColor: kDlgAccent,
-                      decoration: InputDecoration(
-                        hintText: '페이지 범위 (예: 10-15, 20)',
-                        hintStyle: const TextStyle(color: kDlgTextSub),
-                        filled: true,
-                        fillColor: kDlgFieldBg,
-                        enabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(10),
-                          borderSide: const BorderSide(color: kDlgBorder),
-                        ),
-                        focusedBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(10),
-                          borderSide:
-                              const BorderSide(color: kDlgAccent, width: 1.4),
-                        ),
-                        disabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(10),
-                          borderSide: const BorderSide(color: kDlgBorder),
-                        ),
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 12,
+                    const SizedBox(height: 6),
+                    Text(
+                      p.basename(filePath),
+                      style:
+                          const TextStyle(color: kDlgTextSub, fontSize: 12.5),
+                    ),
+                    const SizedBox(height: 14),
+                    if (!isPdf)
+                      const Text(
+                        'PDF가 아니어서 전체 인쇄로 진행됩니다.',
+                        style: TextStyle(color: kDlgTextSub),
+                      )
+                    else ...[
+                      CheckboxListTile(
+                        value: printWhole,
+                        onChanged: (v) {
+                          setLocalState(() {
+                            printWhole = v ?? false;
+                            if (!printWhole && hasChildChecklist) {
+                              final merged = mergedRangeFromSelection();
+                              if (merged.isNotEmpty) {
+                                controller.text = merged;
+                              }
+                            }
+                          });
+                        },
+                        contentPadding: EdgeInsets.zero,
+                        controlAffinity: ListTileControlAffinity.leading,
+                        activeColor: kDlgAccent,
+                        title: const Text(
+                          '전체 인쇄',
+                          style: TextStyle(
+                              color: kDlgText, fontWeight: FontWeight.w700),
                         ),
                       ),
-                    ),
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: controller,
+                        enabled: !printWhole,
+                        style: const TextStyle(color: kDlgText),
+                        cursorColor: kDlgAccent,
+                        decoration: InputDecoration(
+                          hintText: '페이지 범위 (예: 10-15, 20)',
+                          hintStyle: const TextStyle(color: kDlgTextSub),
+                          filled: true,
+                          fillColor: kDlgFieldBg,
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(10),
+                            borderSide: const BorderSide(color: kDlgBorder),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(10),
+                            borderSide:
+                                const BorderSide(color: kDlgAccent, width: 1.4),
+                          ),
+                          disabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(10),
+                            borderSide: const BorderSide(color: kDlgBorder),
+                          ),
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 12,
+                          ),
+                        ),
+                      ),
+                    ],
                   ],
-                ],
+                ),
               ),
             ),
             actions: [
@@ -6485,9 +6779,16 @@ Future<String?> _showHomeworkPrintConfirmDialog({
                 child: const Text('취소'),
               ),
               FilledButton(
-                onPressed: () => Navigator.of(ctx).pop(
-                  (isPdf && !printWhole) ? controller.text.trim() : '',
-                ),
+                onPressed: canSubmit
+                    ? () => Navigator.of(ctx).pop(
+                          _HomeworkPrintConfirmResult(
+                            pageRange: (isPdf && !printWhole)
+                                ? controller.text.trim()
+                                : '',
+                            selectedChildIds: selectedChildIds,
+                          ),
+                        )
+                    : null,
                 style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
                 child: const Text('인쇄'),
               ),
@@ -6586,6 +6887,11 @@ Future<void> _runWithPrintProgressDialog(
 Future<void> _handleWaitingChipLongPressPrint({
   required BuildContext context,
   required HomeworkItem hw,
+  String? initialRangeOverride,
+  String? dialogTitleOverride,
+  List<HomeworkItem> selectableGroupChildren = const <HomeworkItem>[],
+  Map<String, bool> groupChildPrintableById = const <String, bool>{},
+  Map<String, bool> groupInitialSelectionById = const <String, bool>{},
 }) async {
   if (hw.phase != 1) return;
   if (!_hasDirectHomeworkTextbookLink(hw)) {
@@ -6623,16 +6929,29 @@ Future<void> _handleWaitingChipLongPressPrint({
           gradeLabel: resolved.gradeLabel,
         )
       : 0;
-  final initialRange = isPdf ? _normalizePageRangeForPrint(hw.page ?? '') : '';
-  final selectedRange = await _showHomeworkPrintConfirmDialog(
+  final initialRangeRaw =
+      initialRangeOverride ?? (isPdf ? (hw.page ?? '') : '');
+  final initialRange =
+      isPdf ? _normalizePageRangeForPrint(initialRangeRaw) : '';
+  final confirmResult = await _showHomeworkPrintConfirmDialog(
     context: context,
     hw: hw,
     filePath: bodyPath,
     isPdf: isPdf,
     initialRange: initialRange,
+    dialogTitle: dialogTitleOverride,
+    selectableChildren: selectableGroupChildren,
+    childPrintableById: groupChildPrintableById,
+    initialChildSelectionById: groupInitialSelectionById,
   );
-  if (!context.mounted || selectedRange == null) return;
+  if (!context.mounted || confirmResult == null) return;
+  if (selectableGroupChildren.isNotEmpty &&
+      confirmResult.selectedChildIds.isEmpty) {
+    _showHomeworkChipSnackBar(context, '인쇄할 하위 과제를 선택하세요.');
+    return;
+  }
 
+  final selectedRange = confirmResult.pageRange;
   String pathToPrint = bodyPath;
   final rangeDisplay = _normalizePageRangeForPrint(selectedRange);
   final rangeRaw = _shiftNormalizedPageRangeForPdf(rangeDisplay, pageOffset);

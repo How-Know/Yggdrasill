@@ -138,6 +138,9 @@ struct ChildCheckCtx {
   char item_id[40];
   lv_obj_t* box;
   lv_obj_t* mark;
+  lv_coord_t press_x;
+  lv_coord_t press_y;
+  bool dragged;
 };
 
 // 상세 페이지
@@ -217,6 +220,25 @@ static bool s_rest_mode = false;
 static bool s_phase4_alarm_muted = false;
 static uint8_t s_prev_p4_count = 0;
 static uint32_t s_snackbar_click_enable_after_ms = 0;
+static uint32_t s_tap_suppress_until_ms = 0;
+static const uint32_t SCROLL_TAP_SUPPRESS_MS = 180;
+static const lv_coord_t TAP_MOVE_SLOP_PX = 8;
+
+static inline void suppress_tap_temporarily(uint32_t ms = SCROLL_TAP_SUPPRESS_MS) {
+  uint32_t until = millis() + ms;
+  if ((int32_t)(until - s_tap_suppress_until_ms) > 0) s_tap_suppress_until_ms = until;
+}
+
+static inline bool is_tap_suppressed(void) {
+  return millis() < s_tap_suppress_until_ms;
+}
+
+static void list_scroll_activity_cb(lv_event_t* e) {
+  lv_event_code_t code = lv_event_get_code(e);
+  if (code == LV_EVENT_SCROLL_BEGIN || code == LV_EVENT_SCROLL_END) {
+    suppress_tap_temporarily();
+  }
+}
 
 static void show_volume_popup(void);
 static void close_volume_popup(void);
@@ -354,9 +376,38 @@ static void apply_child_check_visual(lv_obj_t* box, lv_obj_t* mark, bool checked
 }
 
 static void child_check_toggle_cb(lv_event_t* e) {
-  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
   ChildCheckCtx* c = (ChildCheckCtx*)lv_event_get_user_data(e);
   if (!c) return;
+  lv_event_code_t code = lv_event_get_code(e);
+  if (code == LV_EVENT_PRESSED) {
+    c->dragged = false;
+    lv_indev_t* indev = lv_event_get_indev(e);
+    if (indev) {
+      lv_point_t p;
+      lv_indev_get_point(indev, &p);
+      c->press_x = p.x;
+      c->press_y = p.y;
+    }
+    return;
+  }
+  if (code == LV_EVENT_PRESSING) {
+    if (c->dragged) return;
+    lv_indev_t* indev = lv_event_get_indev(e);
+    if (!indev) return;
+    lv_point_t p;
+    lv_indev_get_point(indev, &p);
+    lv_coord_t dx = p.x - c->press_x;
+    lv_coord_t dy = p.y - c->press_y;
+    if (dx < 0) dx = -dx;
+    if (dy < 0) dy = -dy;
+    if (dx > TAP_MOVE_SLOP_PX || dy > TAP_MOVE_SLOP_PX) {
+      c->dragged = true;
+      suppress_tap_temporarily();
+    }
+    return;
+  }
+  if (code != LV_EVENT_CLICKED) return;
+  if (c->dragged || is_tap_suppressed()) return;
   bool next = !get_child_check_cached(c->item_id);
   set_child_check_cached(c->item_id, next);
   apply_child_check_visual(c->box, c->mark, next);
@@ -376,6 +427,11 @@ static void attach_child_check_toggle(lv_obj_t* target, const char* item_id, lv_
   cctx->item_id[sizeof(cctx->item_id) - 1] = '\0';
   cctx->box = box;
   cctx->mark = mark;
+  cctx->press_x = 0;
+  cctx->press_y = 0;
+  cctx->dragged = false;
+  lv_obj_add_event_cb(target, child_check_toggle_cb, LV_EVENT_PRESSED, cctx);
+  lv_obj_add_event_cb(target, child_check_toggle_cb, LV_EVENT_PRESSING, cctx);
   lv_obj_add_event_cb(target, child_check_toggle_cb, LV_EVENT_CLICKED, cctx);
   lv_obj_add_event_cb(target, child_check_ctx_delete_cb, LV_EVENT_DELETE, cctx);
 }
@@ -394,6 +450,7 @@ static void anim_set_bg_gray(void* obj, int32_t v) {
 
 static void refresh_list_cb(lv_event_t* e) {
   if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  if (is_tap_suppressed()) return;
   uint32_t now = millis();
   if (now - s_last_refresh_ms < 800) return;
   s_last_refresh_ms = now;
@@ -1299,6 +1356,11 @@ static void build_student_list_ui() {
   lv_obj_set_style_pad_row(s_list, 8, 0);
   lv_obj_set_scroll_dir(s_list, LV_DIR_VER);
   lv_obj_set_scrollbar_mode(s_list, LV_SCROLLBAR_MODE_OFF);
+  lv_obj_add_flag(s_list, LV_OBJ_FLAG_SCROLL_ELASTIC);
+  lv_obj_add_flag(s_list, LV_OBJ_FLAG_SCROLL_MOMENTUM);
+  lv_obj_set_style_anim_time(s_list, 180, 0);
+  lv_obj_add_event_cb(s_list, list_scroll_activity_cb, LV_EVENT_SCROLL_BEGIN, NULL);
+  lv_obj_add_event_cb(s_list, list_scroll_activity_cb, LV_EVENT_SCROLL_END, NULL);
   // 리스트 스크롤 이벤트를 화면보호기에 직접 부착
   lv_obj_add_flag(s_list, LV_OBJ_FLAG_EVENT_BUBBLE);
   // 스크롤 감지를 위한 직접 훅 (버블만으로는 부족할 수 있음)
@@ -1362,6 +1424,11 @@ static void build_homeworks_ui_internal() {
   lv_obj_set_style_pad_row(s_list, 12, 0);
   lv_obj_set_scroll_dir(s_list, LV_DIR_VER);
   lv_obj_set_scrollbar_mode(s_list, LV_SCROLLBAR_MODE_ACTIVE);
+  lv_obj_add_flag(s_list, LV_OBJ_FLAG_SCROLL_ELASTIC);
+  lv_obj_add_flag(s_list, LV_OBJ_FLAG_SCROLL_MOMENTUM);
+  lv_obj_set_style_anim_time(s_list, 180, 0);
+  lv_obj_add_event_cb(s_list, list_scroll_activity_cb, LV_EVENT_SCROLL_BEGIN, NULL);
+  lv_obj_add_event_cb(s_list, list_scroll_activity_cb, LV_EVENT_SCROLL_END, NULL);
   lv_obj_add_flag(s_list, LV_OBJ_FLAG_EVENT_BUBBLE);
   screensaver_attach_activity(s_list);
 
@@ -2005,6 +2072,7 @@ void ui_port_update_students(const JsonArray& students) {
         lv_obj_add_event_cb(card, [](lv_event_t* e){
           StudentBindData* data = (StudentBindData*)lv_event_get_user_data(e);
           if (!data) return;
+          if (is_tap_suppressed()) return;
           show_bind_confirm_popup(data->sid, data->name);
         }, LV_EVENT_CLICKED, bind_data);
         lv_obj_add_event_cb(card, [](lv_event_t* e){
@@ -2349,18 +2417,57 @@ static lv_obj_t* create_hw_card(lv_obj_t* parent, int group_idx) {
   }
 
   // 클릭 핸들러
-  struct HwCardData { int group_idx; char group_id[40]; int phase; };
+  struct HwCardData {
+    int group_idx;
+    char group_id[40];
+    int phase;
+    lv_coord_t press_x;
+    lv_coord_t press_y;
+    bool dragged;
+  };
   HwCardData* d = (HwCardData*)malloc(sizeof(HwCardData));
   if (d) {
     d->group_idx = group_idx;
     strncpy(d->group_id, g.group_id, sizeof(d->group_id)-1);
     d->group_id[sizeof(d->group_id)-1] = '\0';
     d->phase = phase;
+    d->press_x = 0;
+    d->press_y = 0;
+    d->dragged = false;
     lv_obj_add_event_cb(card, [](lv_event_t* e){
+      HwCardData* dd = (HwCardData*)lv_event_get_user_data(e);
+      if (!dd) return;
+      dd->dragged = false;
+      lv_indev_t* indev = lv_event_get_indev(e);
+      if (indev) {
+        lv_point_t p;
+        lv_indev_get_point(indev, &p);
+        dd->press_x = p.x;
+        dd->press_y = p.y;
+      }
+    }, LV_EVENT_PRESSED, d);
+    lv_obj_add_event_cb(card, [](lv_event_t* e){
+      HwCardData* dd = (HwCardData*)lv_event_get_user_data(e);
+      if (!dd || dd->dragged) return;
+      lv_indev_t* indev = lv_event_get_indev(e);
+      if (!indev) return;
+      lv_point_t p;
+      lv_indev_get_point(indev, &p);
+      lv_coord_t dx = p.x - dd->press_x;
+      lv_coord_t dy = p.y - dd->press_y;
+      if (dx < 0) dx = -dx;
+      if (dy < 0) dy = -dy;
+      if (dx > TAP_MOVE_SLOP_PX || dy > TAP_MOVE_SLOP_PX) {
+        dd->dragged = true;
+        suppress_tap_temporarily();
+      }
+    }, LV_EVENT_PRESSING, d);
+    lv_obj_add_event_cb(card, [](lv_event_t* e){
+      HwCardData* dd = (HwCardData*)lv_event_get_user_data(e);
+      if (!dd || dd->dragged || is_tap_suppressed()) return;
       uint32_t now = millis();
       if (now - s_last_card_click_ms < CARD_CLICK_DEBOUNCE_MS) return;
       s_last_card_click_ms = now;
-      HwCardData* dd = (HwCardData*)lv_event_get_user_data(e);
       if (dd->phase == 1) {
         fw_publish_group_transition(dd->group_id, 1);
         show_homework_detail_page(dd->group_idx);
@@ -2717,6 +2824,11 @@ static void show_homework_child_list_page(int group_idx) {
   lv_obj_set_style_pad_row(list, 6, 0);
   lv_obj_set_scroll_dir(list, LV_DIR_VER);
   lv_obj_set_scrollbar_mode(list, LV_SCROLLBAR_MODE_ACTIVE);
+  lv_obj_add_flag(list, LV_OBJ_FLAG_SCROLL_ELASTIC);
+  lv_obj_add_flag(list, LV_OBJ_FLAG_SCROLL_MOMENTUM);
+  lv_obj_set_style_anim_time(list, 180, 0);
+  lv_obj_add_event_cb(list, list_scroll_activity_cb, LV_EVENT_SCROLL_BEGIN, NULL);
+  lv_obj_add_event_cb(list, list_scroll_activity_cb, LV_EVENT_SCROLL_END, NULL);
   lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_flex_align(list, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
 
