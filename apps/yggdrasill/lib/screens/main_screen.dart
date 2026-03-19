@@ -39,6 +39,7 @@ import '../widgets/dialog_tokens.dart';
 import '../widgets/dark_panel_route.dart';
 import '../widgets/flow_setup_dialog.dart';
 import '../widgets/homework_assign_dialog.dart';
+import '../widgets/left_side_sheet/favorite_templates_panel.dart';
 import '../widgets/textbook_flow_link_action.dart';
 import 'student/student_profile_page.dart';
 import '../app_overlays.dart';
@@ -51,18 +52,17 @@ class MainScreen extends StatefulWidget {
   State<MainScreen> createState() => _MainScreenState();
 }
 
-enum _SideSheetBottomView {
-  waiting,
-  allStudents,
-}
+enum _SideSheetBottomView { waiting, allStudents, favoriteTemplates }
 
 class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   // 디버그 로그 스위치 (사이드 시트 출석 분류)
   // ✅ 기본 OFF: 사이드 시트/출석 쪽 대량 로그는 UI 스레드를 막아 렉을 유발할 수 있음(특히 Windows).
   // 필요 시 실행 옵션으로만 활성화:
   // flutter run ... --dart-define=YG_SIDE_SHEET_DEBUG=true
-  static const bool _sideSheetDebug =
-      bool.fromEnvironment('YG_SIDE_SHEET_DEBUG', defaultValue: false);
+  static const bool _sideSheetDebug = bool.fromEnvironment(
+    'YG_SIDE_SHEET_DEBUG',
+    defaultValue: false,
+  );
   int _selectedIndex = 0; // 0~5 (5는 설정)
   bool _isSideSheetOpen = false;
   late AnimationController _rotationAnimation;
@@ -77,8 +77,11 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   bool _sideSheetWasComplete = false;
   // 사이드 시트 데이터 캐시
   bool _sideSheetDataDirty = true;
-  DateTime _sideSheetAnchorDate =
-      DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
+  DateTime _sideSheetAnchorDate = DateTime(
+    DateTime.now().year,
+    DateTime.now().month,
+    DateTime.now().day,
+  );
   List<_AttendanceTarget> _cachedWaiting = const [];
   List<_AttendanceTarget> _cachedAttended = const [];
   List<_AttendanceTarget> _cachedLeaved = const [];
@@ -168,12 +171,14 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       final arrivedCnt = dayCount.where((r) => r.arrivalTime != null).length;
       final plannedCnt = dayCount.where((r) => r.isPlanned).length;
       debugPrint(
-          '[SIDE][records] date=$anchor count=${dayCount.length} present=$presentCnt arrival=$arrivedCnt planned=$plannedCnt');
+        '[SIDE][records] date=$anchor count=${dayCount.length} present=$presentCnt arrival=$arrivedCnt planned=$plannedCnt',
+      );
       final samplePresent =
           dayCount.where((r) => r.isPresent || r.arrivalTime != null).take(5);
       for (final r in samplePresent) {
         debugPrint(
-            '[SIDE][records][sample-present] student=${r.studentId} setId=${r.setId} dt=${r.classDateTime} arr=${r.arrivalTime} dep=${r.departureTime} isPlanned=${r.isPlanned} id=${r.id}');
+          '[SIDE][records][sample-present] student=${r.studentId} setId=${r.setId} dt=${r.classDateTime} arr=${r.arrivalTime} dep=${r.departureTime} isPlanned=${r.isPlanned} id=${r.id}',
+        );
       }
     }
     String minuteKey(DateTime d) =>
@@ -235,7 +240,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       if (effectiveSetId.isEmpty) {
         if (_sideSheetDebug) {
           debugPrint(
-              '[SIDE][skip] setId null student=${r.studentId} dt=$dt recId=${r.id}');
+            '[SIDE][skip] setId null student=${r.studentId} dt=$dt recId=${r.id}',
+          );
         }
         continue;
       }
@@ -279,23 +285,27 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     for (final entry in earliestBySet.entries) {
       final r = entry.value;
       final dt = r.classDateTime;
-      final studentInfo = DataManager.instance.students
-          .firstWhereOrNull((s) => s.student.id == r.studentId);
+      final studentInfo = DataManager.instance.students.firstWhereOrNull(
+        (s) => s.student.id == r.studentId,
+      );
       if (studentInfo == null) continue;
       ClassInfo? classInfo;
       if (r.sessionTypeId != null) {
-        classInfo = DataManager.instance.classes
-            .firstWhereOrNull((c) => c.id == r.sessionTypeId);
+        classInfo = DataManager.instance.classes.firstWhereOrNull(
+          (c) => c.id == r.sessionTypeId,
+        );
       }
       final duration = r.classEndTime.difference(r.classDateTime);
-      targets.add(_AttendanceTarget(
-        setId: entry.key,
-        student: studentInfo.student,
-        classInfo: classInfo,
-        classDateTime: dt,
-        duration: duration,
-        overrideType: null,
-      ));
+      targets.add(
+        _AttendanceTarget(
+          setId: entry.key,
+          student: studentInfo.student,
+          classInfo: classInfo,
+          classDateTime: dt,
+          duration: duration,
+          overrideType: null,
+        ),
+      );
     }
     targets.sort((a, b) => a.startTime.compareTo(b.startTime));
     return targets;
@@ -304,8 +314,11 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   String? _resolveSetIdFromTime(String studentId, DateTime classDateTime) {
     final blocks = DataManager.instance.studentTimeBlocks;
     final dayIdx = classDateTime.weekday - 1;
-    final targetDate =
-        DateTime(classDateTime.year, classDateTime.month, classDateTime.day);
+    final targetDate = DateTime(
+      classDateTime.year,
+      classDateTime.month,
+      classDateTime.day,
+    );
 
     bool isActiveOnDate(StudentTimeBlock b) {
       final sd = DateTime(b.startDate.year, b.startDate.month, b.startDate.day);
@@ -317,14 +330,16 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     }
 
     final candidates = blocks
-        .where((b) =>
-            b.studentId == studentId &&
-            b.dayIndex == dayIdx &&
-            b.startHour == classDateTime.hour &&
-            b.startMinute == classDateTime.minute &&
-            isActiveOnDate(b) &&
-            b.setId != null &&
-            b.setId!.isNotEmpty)
+        .where(
+          (b) =>
+              b.studentId == studentId &&
+              b.dayIndex == dayIdx &&
+              b.startHour == classDateTime.hour &&
+              b.startMinute == classDateTime.minute &&
+              isActiveOnDate(b) &&
+              b.setId != null &&
+              b.setId!.isNotEmpty,
+        )
         .toList();
     if (candidates.isEmpty) return null;
 
@@ -344,14 +359,18 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         anim = _rotationAnimation.status.toString();
       } catch (_) {}
       debugPrint(
-          '[SIDE][dirty] t=${now.toIso8601String()} len=$len anim=$anim');
+        '[SIDE][dirty] t=${now.toIso8601String()} len=$len anim=$anim',
+      );
     }
   }
 
   void _recomputeSideSheetCache(List<AttendanceRecord> records) {
     final Map<String, AttendanceRecord> recordBySet = {};
-    final attendanceTargets =
-        getAttendanceTargetsForDate(_sideSheetAnchorDate, records, recordBySet);
+    final attendanceTargets = getAttendanceTargetsForDate(
+      _sideSheetAnchorDate,
+      records,
+      recordBySet,
+    );
 
     final List<_AttendanceTarget> leaved = [];
     final List<_AttendanceTarget> attended = [];
@@ -418,12 +437,21 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   final List<_ClassTag> _availableClassTags = [
     const _ClassTag(name: '졸음', color: Color(0xFF7E57C2), icon: Icons.bedtime),
     const _ClassTag(
-        name: '스마트폰', color: Color(0xFFF57C00), icon: Icons.phone_iphone),
+      name: '스마트폰',
+      color: Color(0xFFF57C00),
+      icon: Icons.phone_iphone,
+    ),
     const _ClassTag(
-        name: '떠듬', color: Color(0xFFEF5350), icon: Icons.record_voice_over),
+      name: '떠듬',
+      color: Color(0xFFEF5350),
+      icon: Icons.record_voice_over,
+    ),
     const _ClassTag(name: '딴짓', color: Color(0xFF90A4AE), icon: Icons.gesture),
     const _ClassTag(
-        name: '기록', color: Color(0xFF1976D2), icon: Icons.edit_note),
+      name: '기록',
+      color: Color(0xFF1976D2),
+      icon: Icons.edit_note,
+    ),
   ];
 
   // OverlayEntry 툴팁 상태
@@ -514,9 +542,9 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('행동 부여에 실패했어요: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('행동 부여에 실패했어요: $e')));
     } finally {
       activeBehaviorCardDragPayload.value = null;
       _syncSideSheetHoverState(false);
@@ -623,15 +651,13 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   }
 
   Future<void> _openStudentProfile(StudentWithInfo info) async {
-    final flows =
-        await StudentFlowStore.instance.loadForStudent(info.student.id);
+    final flows = await StudentFlowStore.instance.loadForStudent(
+      info.student.id,
+    );
     if (!mounted) return;
     Navigator.of(context).push(
       DarkPanelRoute(
-        child: StudentProfilePage(
-          studentWithInfo: info,
-          flows: flows,
-        ),
+        child: StudentProfilePage(studentWithInfo: info, flows: flows),
       ),
     );
   }
@@ -748,17 +774,28 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
 
   void _toggleSideSheetBottomView() {
     setState(() {
-      if (_sideSheetBottomView == _SideSheetBottomView.waiting) {
+      if (_sideSheetBottomView != _SideSheetBottomView.allStudents) {
         _sideSheetBottomView = _SideSheetBottomView.allStudents;
         if (_allStudentsExpandedByGrade.isEmpty) {
-          final grouped =
-              _groupStudentsByGradeForSideSheet(DataManager.instance.students);
+          final grouped = _groupStudentsByGradeForSideSheet(
+            DataManager.instance.students,
+          );
           if (grouped.isNotEmpty) {
             _allStudentsExpandedByGrade[grouped.keys.first] = true;
           }
         }
       } else {
         _sideSheetBottomView = _SideSheetBottomView.waiting;
+      }
+    });
+  }
+
+  void _toggleFavoriteTemplatesSideSheetView() {
+    setState(() {
+      if (_sideSheetBottomView == _SideSheetBottomView.favoriteTemplates) {
+        _sideSheetBottomView = _SideSheetBottomView.waiting;
+      } else {
+        _sideSheetBottomView = _SideSheetBottomView.favoriteTemplates;
       }
     });
   }
@@ -786,9 +823,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     });
   }
 
-  Widget _buildAllStudentsBottomPanel({
-    required double containerWidth,
-  }) {
+  Widget _buildAllStudentsBottomPanel({required double containerWidth}) {
     final scale = ((containerWidth / 420.0).clamp(0.78, 1.0));
     return Expanded(
       child: Padding(
@@ -835,6 +870,17 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               ),
             );
           },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFavoriteTemplatesBottomPanel({required double containerWidth}) {
+    return Expanded(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(24, 8, 24, 14),
+        child: FavoriteTemplatesPanel(
+          containerWidth: containerWidth,
         ),
       ),
     );
@@ -893,17 +939,10 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
             ),
           ),
           if (isExpanded) ...[
-            const Divider(
-              height: 1,
-              thickness: 1,
-              color: Color(0xFF223131),
-            ),
+            const Divider(height: 1, thickness: 1, color: Color(0xFF223131)),
             const SizedBox(height: 6),
             for (int i = 0; i < students.length; i++) ...[
-              _buildAllStudentsStudentRow(
-                students[i],
-                scale: scale,
-              ),
+              _buildAllStudentsStudentRow(students[i], scale: scale),
             ],
             const SizedBox(height: 6),
           ],
@@ -971,8 +1010,11 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               message: '학생정보 상세내역',
               child: IconButton(
                 onPressed: () => unawaited(_openStudentProfile(info)),
-                icon: const Icon(Icons.badge_outlined,
-                    size: 22, color: Colors.white70),
+                icon: const Icon(
+                  Icons.badge_outlined,
+                  size: 22,
+                  color: Colors.white70,
+                ),
                 padding: EdgeInsets.zero,
                 constraints: const BoxConstraints(minWidth: 42, minHeight: 42),
                 splashRadius: 22,
@@ -985,8 +1027,11 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               child: IconButton(
                 onPressed: () =>
                     unawaited(StudentTimeInfoDialog.show(context, info)),
-                icon: const Icon(Icons.schedule_outlined,
-                    size: 22, color: Colors.white70),
+                icon: const Icon(
+                  Icons.schedule_outlined,
+                  size: 22,
+                  color: Colors.white70,
+                ),
                 padding: EdgeInsets.zero,
                 constraints: const BoxConstraints(minWidth: 42, minHeight: 42),
                 splashRadius: 22,
@@ -1012,35 +1057,29 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         (_selectedIndex == 0 || _selectedIndex == 1);
     blockRightSideSheetOpen.value = false;
     // 출석 데이터 변경 시 사이드 시트 캐시 무효화
-    DataManager.instance.attendanceRecordsNotifier
-        .addListener(_markSideSheetDirty);
+    DataManager.instance.attendanceRecordsNotifier.addListener(
+      _markSideSheetDirty,
+    );
     _rotationAnimation = AnimationController(
       duration: const Duration(milliseconds: 240),
       vsync: this,
     );
     // 진단 로그 제거됨
     _sideSheetAnimation = Tween<double>(begin: 0, end: 1).animate(
-      CurvedAnimation(
-        parent: _rotationAnimation,
-        curve: Curves.easeInOutCubic,
-      ),
+      CurvedAnimation(parent: _rotationAnimation, curve: Curves.easeInOutCubic),
     );
     _fabController = AnimationController(
       duration: const Duration(milliseconds: 300),
       vsync: this,
     );
-    _fabScaleAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(
-        parent: _fabController,
-        curve: Curves.easeOut,
-      ),
-    );
-    _fabOpacityAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(
-        parent: _fabController,
-        curve: Curves.easeInOut,
-      ),
-    );
+    _fabScaleAnimation = Tween<double>(
+      begin: 0.0,
+      end: 1.0,
+    ).animate(CurvedAnimation(parent: _fabController, curve: Curves.easeOut));
+    _fabOpacityAnimation = Tween<double>(
+      begin: 0.0,
+      end: 1.0,
+    ).animate(CurvedAnimation(parent: _fabController, curve: Curves.easeInOut));
     // UI 전용 애니메이션 틱(회전·깜빡임 공통)
     _uiAnimController = AnimationController(
       duration: const Duration(milliseconds: 1800),
@@ -1079,14 +1118,20 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     final todayStart = DateTime(today.year, today.month, today.day);
     final todayEnd = todayStart.add(const Duration(days: 1));
 
-    final todayAttendanceRecords =
-        DataManager.instance.attendanceRecords.where((record) {
-      final recordDate = DateTime(record.classDateTime.year,
-          record.classDateTime.month, record.classDateTime.day);
-      return recordDate.isAfter(todayStart.subtract(const Duration(days: 1))) &&
-          recordDate.isBefore(todayEnd) &&
-          record.isPresent;
-    }).toList();
+    final todayAttendanceRecords = DataManager.instance.attendanceRecords.where(
+      (record) {
+        final recordDate = DateTime(
+          record.classDateTime.year,
+          record.classDateTime.month,
+          record.classDateTime.day,
+        );
+        return recordDate.isAfter(
+              todayStart.subtract(const Duration(days: 1)),
+            ) &&
+            recordDate.isBefore(todayEnd) &&
+            record.isPresent;
+      },
+    ).toList();
 
     // 오늘의 등원/하원 상태 복원
     for (final record in todayAttendanceRecords) {
@@ -1148,8 +1193,9 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     _classTagBarrierTimer?.cancel();
     _attendedTapTimer?.cancel();
     _classTagBarrierActive.dispose();
-    DataManager.instance.attendanceRecordsNotifier
-        .removeListener(_markSideSheetDirty);
+    DataManager.instance.attendanceRecordsNotifier.removeListener(
+      _markSideSheetDirty,
+    );
     _rotationAnimation.dispose();
     _fabController.dispose();
     _searchController.dispose();
@@ -1188,8 +1234,10 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   Future<void> _restoreLeavedStudentToAttended(_LeavedDialogEntry entry) async {
     final target = entry.target;
     final classDateTime = target.classDateTime;
-    final existing = DataManager.instance
-        .getAttendanceRecord(target.student.id, classDateTime);
+    final existing = DataManager.instance.getAttendanceRecord(
+      target.student.id,
+      classDateTime,
+    );
     final resolvedArrival = existing?.arrivalTime ??
         entry.arrival ??
         _attendTimes[target.setId] ??
@@ -1256,7 +1304,12 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     );
     if (picked == null) return null;
     return DateTime(
-        date.year, date.month, date.day, picked.hour, picked.minute);
+      date.year,
+      date.month,
+      date.day,
+      picked.hour,
+      picked.minute,
+    );
   }
 
   Future<_LeavedDialogEntry?> _editLeavedDialogEntryTime({
@@ -1265,8 +1318,10 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     required bool isArrival,
   }) async {
     final target = entry.target;
-    final rec = DataManager.instance
-        .getAttendanceRecord(target.student.id, target.classDateTime);
+    final rec = DataManager.instance.getAttendanceRecord(
+      target.student.id,
+      target.classDateTime,
+    );
     if (rec == null || rec.id == null) {
       if (mounted) {
         _showFloatingSnackBar(this.context, '출석 기록을 찾지 못했어요.');
@@ -1359,11 +1414,13 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     Map<String, DateTime?> departureBySet,
   ) async {
     final entries = leaved
-        .map((target) => _LeavedDialogEntry(
-              target: target,
-              arrival: arrivalBySet[target.setId],
-              departure: departureBySet[target.setId],
-            ))
+        .map(
+          (target) => _LeavedDialogEntry(
+            target: target,
+            arrival: arrivalBySet[target.setId],
+            departure: departureBySet[target.setId],
+          ),
+        )
         .toList()
       ..sort((a, b) {
         final DateTime aKey =
@@ -1400,8 +1457,11 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                   ),
                   child: IconButton(
                     tooltip: '닫기',
-                    icon: const Icon(Icons.arrow_back,
-                        color: Colors.white70, size: 20),
+                    icon: const Icon(
+                      Icons.arrow_back,
+                      color: Colors.white70,
+                      size: 20,
+                    ),
                     padding: EdgeInsets.zero,
                     onPressed: () => Navigator.of(dialogContext).pop(),
                   ),
@@ -1471,8 +1531,9 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         return Dialog(
           backgroundColor: const Color(0xFF0B1112),
           insetPadding: const EdgeInsets.all(24),
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 560),
             child: Container(
@@ -1519,11 +1580,13 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                     final String departureEditKey =
                                         '$setId:departure';
                                     final bool isEditingArrival =
-                                        editingTimeKeys
-                                            .contains(arrivalEditKey);
+                                        editingTimeKeys.contains(
+                                      arrivalEditKey,
+                                    );
                                     final bool isEditingDeparture =
-                                        editingTimeKeys
-                                            .contains(departureEditKey);
+                                        editingTimeKeys.contains(
+                                      departureEditKey,
+                                    );
                                     final arrivalText = entry.arrival != null
                                         ? _formatTime(entry.arrival!)
                                         : '--:--';
@@ -1533,13 +1596,17 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                             : '--:--';
                                     return Container(
                                       padding: const EdgeInsets.symmetric(
-                                          horizontal: 16, vertical: 14),
+                                        horizontal: 16,
+                                        vertical: 14,
+                                      ),
                                       decoration: BoxDecoration(
                                         color: const Color(0xFF10171A),
                                         borderRadius: BorderRadius.circular(16),
                                         border: Border.all(
-                                            color: const Color(0xFF1B6B63)
-                                                .withOpacity(0.25)),
+                                          color: const Color(
+                                            0xFF1B6B63,
+                                          ).withOpacity(0.25),
+                                        ),
                                       ),
                                       child: Column(
                                         crossAxisAlignment:
@@ -1557,8 +1624,9 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                     Text(
                                                       entry.target.student.name,
                                                       style: const TextStyle(
-                                                        color:
-                                                            Color(0xFFEAF2F2),
+                                                        color: Color(
+                                                          0xFFEAF2F2,
+                                                        ),
                                                         fontSize: 17,
                                                         fontWeight:
                                                             FontWeight.w700,
@@ -1572,8 +1640,9 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                         entry.target.classInfo!
                                                             .name,
                                                         style: const TextStyle(
-                                                          color:
-                                                              Color(0xFF7F8A8E),
+                                                          color: Color(
+                                                            0xFF7F8A8E,
+                                                          ),
                                                           fontSize: 13,
                                                         ),
                                                       ),
@@ -1587,12 +1656,14 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                     ? null
                                                     : () async {
                                                         setDialogState(() {
-                                                          cancellingSetIds
-                                                              .add(setId);
+                                                          cancellingSetIds.add(
+                                                            setId,
+                                                          );
                                                         });
                                                         try {
                                                           await _restoreLeavedStudentToAttended(
-                                                              entry);
+                                                            entry,
+                                                          );
                                                           if (dialogContext
                                                               .mounted) {
                                                             setDialogState(() {
@@ -1641,7 +1712,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                             setDialogState(() {
                                                               cancellingSetIds
                                                                   .remove(
-                                                                      setId);
+                                                                setId,
+                                                              );
                                                             });
                                                           }
                                                         }
@@ -1659,12 +1731,15 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                         Icons.undo_rounded,
                                                         size: 17,
                                                       ),
-                                                label: Text(isCancelling
-                                                    ? '복구 중...'
-                                                    : '하원 취소'),
+                                                label: Text(
+                                                  isCancelling
+                                                      ? '복구 중...'
+                                                      : '하원 취소',
+                                                ),
                                                 style: TextButton.styleFrom(
-                                                  foregroundColor:
-                                                      const Color(0xFFEAF2F2),
+                                                  foregroundColor: const Color(
+                                                    0xFFEAF2F2,
+                                                  ),
                                                 ),
                                               ),
                                             ],
@@ -1684,7 +1759,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                     : () async {
                                                         setDialogState(() {
                                                           editingTimeKeys.add(
-                                                              arrivalEditKey);
+                                                            arrivalEditKey,
+                                                          );
                                                         });
                                                         try {
                                                           final updatedEntry =
@@ -1726,7 +1802,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                             setDialogState(() {
                                                               editingTimeKeys
                                                                   .remove(
-                                                                      arrivalEditKey);
+                                                                arrivalEditKey,
+                                                              );
                                                             });
                                                           }
                                                         }
@@ -1742,7 +1819,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                     : () async {
                                                         setDialogState(() {
                                                           editingTimeKeys.add(
-                                                              departureEditKey);
+                                                            departureEditKey,
+                                                          );
                                                         });
                                                         try {
                                                           final updatedEntry =
@@ -1784,7 +1862,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                             setDialogState(() {
                                                               editingTimeKeys
                                                                   .remove(
-                                                                      departureEditKey);
+                                                                departureEditKey,
+                                                              );
                                                             });
                                                           }
                                                         }
@@ -1818,13 +1897,10 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         return Dialog(
           backgroundColor: const Color(0xFF1F1F1F),
           insetPadding: const EdgeInsets.fromLTRB(42, 42, 42, 32),
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          child: const SizedBox(
-            width: 770,
-            height: 760,
-            child: MakeupView(),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
           ),
+          child: const SizedBox(width: 770, height: 760, child: MakeupView()),
         );
       },
     );
@@ -1901,10 +1977,12 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                 _sideSheetWasComplete = isComplete;
               }
               // 카드 리스트를 한 줄로 묶어서 ... 처리할 수 있도록 helper
-              Widget _ellipsisWrap(List<Widget> cards,
-                  {int maxLines = 2,
-                  double spacing = 8,
-                  double runSpacing = 8}) {
+              Widget _ellipsisWrap(
+                List<Widget> cards, {
+                int maxLines = 2,
+                double spacing = 8,
+                double runSpacing = 8,
+              }) {
                 // 한 줄에 최대 3개 카드만 보이게 제한 (예시)
                 const int maxPerLine = 3;
                 List<Widget> lines = [];
@@ -1913,15 +1991,21 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                   int end = (i + maxPerLine < cards.length)
                       ? i + maxPerLine
                       : cards.length;
-                  lines.add(Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: cards.sublist(i, end),
-                  ));
+                  lines.add(
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: cards.sublist(i, end),
+                    ),
+                  );
                   i = end;
                 }
                 if (i < cards.length) {
-                  lines.add(const Text('...',
-                      style: TextStyle(color: Colors.white54, fontSize: 18)));
+                  lines.add(
+                    const Text(
+                      '...',
+                      style: TextStyle(color: Colors.white54, fontSize: 18),
+                    ),
+                  );
                 }
                 return Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -1970,12 +2054,14 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                     if (_sideSheetDataDirty) {
                       if (_sideSheetDebug) {
                         debugPrint(
-                            '[SIDE][recompute-start] recordsLen=${_records.length}');
+                          '[SIDE][recompute-start] recordsLen=${_records.length}',
+                        );
                       }
                       _recomputeSideSheetCache(_records);
                       if (_sideSheetDebug) {
                         debugPrint(
-                            '[SIDE][recompute] waiting=${_cachedWaiting.length}, attended=${_cachedAttended.length}, leaved=${_cachedLeaved.length}');
+                          '[SIDE][recompute] waiting=${_cachedWaiting.length}, attended=${_cachedAttended.length}, leaved=${_cachedLeaved.length}',
+                        );
                       }
                     }
                     final attended = _cachedAttended;
@@ -1992,15 +2078,18 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
 
                         final trialToday = trialSlots.where((s) {
                           final wk = _dateOnly(s.weekStart);
-                          final slotDate =
-                              _dateOnly(wk.add(Duration(days: s.dayIndex)));
+                          final slotDate = _dateOnly(
+                            wk.add(Duration(days: s.dayIndex)),
+                          );
                           return slotDate == targetDate;
                         }).toList();
 
                         final trialAttended = trialToday
-                            .where((s) =>
-                                s.arrivalTime != null &&
-                                s.departureTime == null)
+                            .where(
+                              (s) =>
+                                  s.arrivalTime != null &&
+                                  s.departureTime == null,
+                            )
                             .toList()
                           ..sort((a, b) {
                             final ta = a.hour * 60 + a.minute;
@@ -2023,8 +2112,13 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                         final trialWaitingByTime = SplayTreeMap<DateTime,
                             List<ConsultTrialLessonSlot>>();
                         for (final s in trialWaiting) {
-                          final k = DateTime(targetDate.year, targetDate.month,
-                              targetDate.day, s.hour, s.minute);
+                          final k = DateTime(
+                            targetDate.year,
+                            targetDate.month,
+                            targetDate.day,
+                            s.hour,
+                            s.minute,
+                          );
                           (trialWaitingByTime[k] ??= <ConsultTrialLessonSlot>[])
                               .add(s);
                         }
@@ -2042,7 +2136,11 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                 children: [
                                   Padding(
                                     padding: const EdgeInsets.fromLTRB(
-                                        24, 8, 24, 12),
+                                      24,
+                                      8,
+                                      24,
+                                      12,
+                                    ),
                                     child: Column(
                                       mainAxisSize: MainAxisSize.min,
                                       children: [
@@ -2067,29 +2165,31 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                               Tooltip(
                                                 message: _sideSheetBottomView ==
                                                         _SideSheetBottomView
-                                                            .waiting
-                                                    ? '모든 학생 리스트 보기'
-                                                    : '출석 페이지 보기',
+                                                            .allStudents
+                                                    ? '출석 페이지 보기'
+                                                    : '모든 학생 리스트 보기',
                                                 child: IconButton(
                                                   icon: Icon(
                                                     _sideSheetBottomView ==
                                                             _SideSheetBottomView
-                                                                .waiting
-                                                        ? Icons.groups_outlined
-                                                        : Icons.groups,
+                                                                .allStudents
+                                                        ? Icons.groups
+                                                        : Icons.groups_outlined,
                                                     color: _sideSheetBottomView ==
                                                             _SideSheetBottomView
-                                                                .waiting
-                                                        ? Colors.white70
-                                                        : const Color(
-                                                            0xFF33A373),
+                                                                .allStudents
+                                                        ? const Color(
+                                                            0xFF33A373,
+                                                          )
+                                                        : Colors.white70,
                                                     size: 22,
                                                   ),
                                                   padding: EdgeInsets.zero,
                                                   constraints:
                                                       const BoxConstraints(
-                                                          minWidth: 44,
-                                                          minHeight: 44),
+                                                    minWidth: 44,
+                                                    minHeight: 44,
+                                                  ),
                                                   onPressed:
                                                       _toggleSideSheetBottomView,
                                                 ),
@@ -2099,14 +2199,16 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                 message: '보강 관리',
                                                 child: IconButton(
                                                   icon: const Icon(
-                                                      Icons.event_repeat,
-                                                      color: Colors.white70,
-                                                      size: 22),
+                                                    Icons.event_repeat,
+                                                    color: Colors.white70,
+                                                    size: 22,
+                                                  ),
                                                   padding: EdgeInsets.zero,
                                                   constraints:
                                                       const BoxConstraints(
-                                                          minWidth: 44,
-                                                          minHeight: 44),
+                                                    minWidth: 44,
+                                                    minHeight: 44,
+                                                  ),
                                                   onPressed:
                                                       _showMakeupManagementDialog,
                                                 ),
@@ -2116,19 +2218,22 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                 message: '수업 타임라인',
                                                 child: IconButton(
                                                   icon: const Icon(
-                                                      Icons.timeline,
-                                                      color: Colors.white70,
-                                                      size: 22),
+                                                    Icons.timeline,
+                                                    color: Colors.white70,
+                                                    size: 22,
+                                                  ),
                                                   padding: EdgeInsets.zero,
                                                   constraints:
                                                       const BoxConstraints(
-                                                          minWidth: 44,
-                                                          minHeight: 44),
+                                                    minWidth: 44,
+                                                    minHeight: 44,
+                                                  ),
                                                   onPressed: () async {
                                                     await showDialog(
-                                                        context: context,
-                                                        builder: (_) =>
-                                                            const ClassContentEventsDialog());
+                                                      context: context,
+                                                      builder: (_) =>
+                                                          const ClassContentEventsDialog(),
+                                                    );
                                                   },
                                                 ),
                                               ),
@@ -2137,20 +2242,51 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                 message: '하원 리스트',
                                                 child: IconButton(
                                                   icon: const Icon(
-                                                      Icons.featured_play_list,
-                                                      color: Colors.white70,
-                                                      size: 22),
+                                                    Icons.featured_play_list,
+                                                    color: Colors.white70,
+                                                    size: 22,
+                                                  ),
                                                   padding: EdgeInsets.zero,
                                                   constraints:
                                                       const BoxConstraints(
-                                                          minWidth: 44,
-                                                          minHeight: 44),
+                                                    minWidth: 44,
+                                                    minHeight: 44,
+                                                  ),
                                                   onPressed: () async {
                                                     await _showLeavedStudentsDialog(
-                                                        leaved,
-                                                        arrivalBySet,
-                                                        departureBySet);
+                                                      leaved,
+                                                      arrivalBySet,
+                                                      departureBySet,
+                                                    );
                                                   },
+                                                ),
+                                              ),
+                                              const SizedBox(width: 10),
+                                              Tooltip(
+                                                message: _sideSheetBottomView ==
+                                                        _SideSheetBottomView
+                                                            .favoriteTemplates
+                                                    ? '즐겨찾기 닫기'
+                                                    : '즐겨찾기',
+                                                child: IconButton(
+                                                  icon: Icon(
+                                                    Icons.star_rounded,
+                                                    color: _sideSheetBottomView ==
+                                                            _SideSheetBottomView
+                                                                .favoriteTemplates
+                                                        ? const Color(
+                                                            0xFF33A373)
+                                                        : Colors.white70,
+                                                    size: 22,
+                                                  ),
+                                                  padding: EdgeInsets.zero,
+                                                  constraints:
+                                                      const BoxConstraints(
+                                                    minWidth: 44,
+                                                    minHeight: 44,
+                                                  ),
+                                                  onPressed:
+                                                      _toggleFavoriteTemplatesSideSheetView,
                                                 ),
                                               ),
                                             ],
@@ -2160,28 +2296,35 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                     ),
                                   ),
                                   const Padding(
-                                    padding:
-                                        EdgeInsets.symmetric(horizontal: 24.0),
+                                    padding: EdgeInsets.symmetric(
+                                      horizontal: 24.0,
+                                    ),
                                     child: Divider(
-                                        height: 1,
-                                        thickness: 1,
-                                        color: Color(0xFF223131)),
+                                      height: 1,
+                                      thickness: 1,
+                                      color: Color(0xFF223131),
+                                    ),
                                   ),
                                   if (_sideSheetBottomView ==
                                       _SideSheetBottomView.waiting) ...[
                                     // 출석 박스
                                     Padding(
                                       padding: const EdgeInsets.symmetric(
-                                          horizontal: 24.0),
+                                        horizontal: 24.0,
+                                      ),
                                       child: Container(
                                         // 헤더(날짜+버튼)와의 간격을 절반으로 축소
                                         margin: const EdgeInsets.only(
-                                            top: 0, bottom: 0),
+                                          top: 0,
+                                          bottom: 0,
+                                        ),
                                         width: double.infinity,
                                         constraints: BoxConstraints(
                                           minHeight: _cardActualHeight *
-                                              ((containerWidth / 420.0)
-                                                  .clamp(0.78, 1.0)),
+                                              ((containerWidth / 420.0).clamp(
+                                                0.78,
+                                                1.0,
+                                              )),
                                           maxHeight: _cardActualHeight *
                                                   ((containerWidth / 420.0)
                                                       .clamp(0.78, 1.0)) *
@@ -2193,7 +2336,11 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                         ),
                                         // 내부 여백: 왼쪽/상단은 0으로(요청), 나머지는 유지
                                         padding: const EdgeInsets.fromLTRB(
-                                            0, 22.0, 16.0, 24.0),
+                                          0,
+                                          22.0,
+                                          16.0,
+                                          24.0,
+                                        ),
                                         child: Scrollbar(
                                           controller: _attendedScrollCtrl,
                                           thumbVisibility: true,
@@ -2209,12 +2356,14 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                   const Center(
                                                     child: Padding(
                                                       padding: EdgeInsets.only(
-                                                          left: 14.0),
+                                                        left: 14.0,
+                                                      ),
                                                       child: Text(
                                                         '출석',
                                                         style: TextStyle(
-                                                          color:
-                                                              Color(0xFF9FB3B3),
+                                                          color: Color(
+                                                            0xFF9FB3B3,
+                                                          ),
                                                           fontSize: 22,
                                                           fontWeight:
                                                               FontWeight.bold,
@@ -2235,12 +2384,15 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                           attended[i],
                                                           status: 'attended',
                                                           key: ValueKey(
-                                                              'attended_${attended[i].setId}'),
+                                                            'attended_${attended[i].setId}',
+                                                          ),
                                                           scale:
                                                               ((containerWidth /
                                                                       420.0)
-                                                                  .clamp(0.78,
-                                                                      1.0)),
+                                                                  .clamp(
+                                                            0.78,
+                                                            1.0,
+                                                          )),
                                                           arrival: arrivalBySet[
                                                               attended[i]
                                                                   .setId],
@@ -2252,13 +2404,15 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                         if (i !=
                                                             attended.length - 1)
                                                           SizedBox(
-                                                              height: 8 *
-                                                                  ((containerWidth /
-                                                                          420.0)
-                                                                      .clamp(
-                                                                          0.78,
-                                                                          1.0))),
-                                                      ]
+                                                            height: 8 *
+                                                                ((containerWidth /
+                                                                        420.0)
+                                                                    .clamp(
+                                                                  0.78,
+                                                                  1.0,
+                                                                )),
+                                                          ),
+                                                      ],
                                                     ],
                                                   ),
                                                 if (trialAttended
@@ -2272,20 +2426,27 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                       trialAttended[i],
                                                       status: 'attended',
                                                       key: ValueKey(
-                                                          'trial_attended_${trialAttended[i].id}'),
+                                                        'trial_attended_${trialAttended[i].id}',
+                                                      ),
                                                       scale: ((containerWidth /
                                                               420.0)
-                                                          .clamp(0.78, 1.0)),
+                                                          .clamp(
+                                                        0.78,
+                                                        1.0,
+                                                      )),
                                                     ),
                                                     if (i !=
                                                         trialAttended.length -
                                                             1)
                                                       SizedBox(
-                                                          height: 8 *
-                                                              ((containerWidth /
-                                                                      420.0)
-                                                                  .clamp(0.78,
-                                                                      1.0))),
+                                                        height: 8 *
+                                                            ((containerWidth /
+                                                                    420.0)
+                                                                .clamp(
+                                                              0.78,
+                                                              1.0,
+                                                            )),
+                                                      ),
                                                   ],
                                                 ],
                                               ],
@@ -2297,11 +2458,13 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                     // 출석(등원한) 영역과 등원 예정 영역 구분선
                                     const Padding(
                                       padding: EdgeInsets.symmetric(
-                                          horizontal: 24.0),
+                                        horizontal: 24.0,
+                                      ),
                                       child: Divider(
-                                          height: 1,
-                                          thickness: 1,
-                                          color: Color(0xFF223131)),
+                                        height: 1,
+                                        thickness: 1,
+                                        color: Color(0xFF223131),
+                                      ),
                                     ),
                                     // 출석 전 학생 리스트
                                     if (waitingByTime.isNotEmpty ||
@@ -2309,10 +2472,11 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                       Expanded(
                                         child: Padding(
                                           padding: const EdgeInsets.only(
-                                              top: 8,
-                                              left: 24.0,
-                                              right: 24.0,
-                                              bottom: 24.0),
+                                            top: 8,
+                                            left: 24.0,
+                                            right: 24.0,
+                                            bottom: 24.0,
+                                          ),
                                           child: Scrollbar(
                                             controller: _waitingScrollCtrl,
                                             thumbVisibility: true,
@@ -2324,22 +2488,23 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                   ...waitingByTime.keys,
                                                   ...trialWaitingByTime.keys,
                                                 }.toList()
-                                                  ..sort((a, b) =>
-                                                      a.compareTo(b)))) ...[
+                                                  ..sort(
+                                                    (a, b) => a.compareTo(b),
+                                                  ))) ...[
                                                   Padding(
                                                     padding:
                                                         const EdgeInsets.only(
-                                                            bottom: 4.0),
+                                                      bottom: 4.0,
+                                                    ),
                                                     child: Center(
                                                       child: Text(
                                                         _formatTime(t),
                                                         style: const TextStyle(
-                                                            color:
-                                                                Colors.white54,
-                                                            fontSize: 14,
-                                                            fontWeight:
-                                                                FontWeight
-                                                                    .bold),
+                                                          color: Colors.white54,
+                                                          fontSize: 14,
+                                                          fontWeight:
+                                                              FontWeight.bold,
+                                                        ),
                                                       ),
                                                     ),
                                                   ),
@@ -2351,12 +2516,16 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                           ((containerWidth /
                                                                   420.0)
                                                               .clamp(
-                                                                  0.78, 1.0)),
+                                                            0.78,
+                                                            1.0,
+                                                          )),
                                                       runSpacing: _cardSpacing *
                                                           ((containerWidth /
                                                                   420.0)
                                                               .clamp(
-                                                                  0.78, 1.0)),
+                                                            0.78,
+                                                            1.0,
+                                                          )),
                                                       children: [
                                                         for (final w
                                                             in (waitingByTime[
@@ -2366,12 +2535,15 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                             w,
                                                             status: 'waiting',
                                                             key: ValueKey(
-                                                                'waiting_${w.setId}'),
+                                                              'waiting_${w.setId}',
+                                                            ),
                                                             scale:
                                                                 ((containerWidth /
                                                                         420.0)
-                                                                    .clamp(0.78,
-                                                                        1.0)),
+                                                                    .clamp(
+                                                              0.78,
+                                                              1.0,
+                                                            )),
                                                             arrival:
                                                                 arrivalBySet[
                                                                     w.setId],
@@ -2387,12 +2559,15 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                             s,
                                                             status: 'waiting',
                                                             key: ValueKey(
-                                                                'trial_waiting_${s.id}'),
+                                                              'trial_waiting_${s.id}',
+                                                            ),
                                                             scale:
                                                                 ((containerWidth /
                                                                         420.0)
-                                                                    .clamp(0.78,
-                                                                        1.0)),
+                                                                    .clamp(
+                                                              0.78,
+                                                              1.0,
+                                                            )),
                                                           ),
                                                       ],
                                                     ),
@@ -2410,6 +2585,11 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                     _buildAllStudentsBottomPanel(
                                       containerWidth: containerWidth,
                                     ),
+                                  if (_sideSheetBottomView ==
+                                      _SideSheetBottomView.favoriteTemplates)
+                                    _buildFavoriteTemplatesBottomPanel(
+                                      containerWidth: containerWidth,
+                                    ),
                                 ],
                               ),
                               // 커버 생략
@@ -2424,13 +2604,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               );
             },
           ),
-          Container(
-            width: 1,
-            color: const Color(0xFF4A4A4A),
-          ),
-          Expanded(
-            child: _buildContent(),
-          ),
+          Container(width: 1, color: const Color(0xFF4A4A4A)),
+          Expanded(child: _buildContent()),
         ],
       ),
       floatingActionButton: ValueListenableBuilder<bool>(
@@ -2455,12 +2630,14 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   }
 
   // 출석/하원 카드 위젯 (툴팁은 외부에서 처리)
-  Widget _buildAttendanceCard(_AttendanceTarget t,
-      {required String status,
-      Key? key,
-      double scale = 1.0,
-      DateTime? arrival,
-      DateTime? departure}) {
+  Widget _buildAttendanceCard(
+    _AttendanceTarget t, {
+    required String status,
+    Key? key,
+    double scale = 1.0,
+    DateTime? arrival,
+    DateTime? departure,
+  }) {
     Color borderColor;
     Color textColor = Colors.white70;
     Widget nameWidget;
@@ -2590,10 +2767,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                         t.student.id,
                         anchorTime: t.classDateTime,
                       )
-                    : const HomeworkAssignSelection(
-                        itemIds: [],
-                        dueDate: null,
-                      );
+                    : const HomeworkAssignSelection(itemIds: [], dueDate: null);
                 if (selection == null) {
                   return false;
                 }
@@ -2604,8 +2778,10 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                 });
                 try {
                   final classDateTime = t.classDateTime;
-                  final existing = DataManager.instance
-                      .getAttendanceRecord(t.student.id, classDateTime);
+                  final existing = DataManager.instance.getAttendanceRecord(
+                    t.student.id,
+                    classDateTime,
+                  );
                   final DateTime arrival2 =
                       existing?.arrivalTime ?? _attendTimes[t.setId] ?? now;
                   await DataManager.instance.saveOrUpdateAttendance(
@@ -2705,8 +2881,10 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                   });
                   try {
                     final classDateTime = t.classDateTime;
-                    final existing = DataManager.instance
-                        .getAttendanceRecord(t.student.id, classDateTime);
+                    final existing = DataManager.instance.getAttendanceRecord(
+                      t.student.id,
+                      classDateTime,
+                    );
                     if (existing?.id != null) {
                       await DataManager.instance.deleteAttendanceRecord(
                         existing!.id!,
@@ -2749,9 +2927,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
             ),
           ),
           const SizedBox(width: 10),
-          Expanded(
-            child: _buildHomeworkChipsReactive(t),
-          ),
+          Expanded(child: _buildHomeworkChipsReactive(t)),
         ],
       );
     } else {
@@ -2784,8 +2960,10 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                 sessionTypeId: t.classInfo?.id,
               );
             } else if (status == 'attended') {
-              final existing = DataManager.instance
-                  .getAttendanceRecord(t.student.id, classDateTime);
+              final existing = DataManager.instance.getAttendanceRecord(
+                t.student.id,
+                classDateTime,
+              );
               if (existing != null) {
                 // departureTime이 기록되면 출석으로 간주(isPresent=true)하여
                 // arrival/departure는 있는데 isPresent=false로 남는 비정합을 방지한다.
@@ -2796,8 +2974,11 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                 try {
                   await DataManager.instance.updateAttendanceRecord(updated);
                 } catch (e) {
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                      content: Text('다른 기기에서 먼저 수정되었습니다. 새로고침 후 다시 시도하세요.')));
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('다른 기기에서 먼저 수정되었습니다. 새로고침 후 다시 시도하세요.'),
+                    ),
+                  );
                 }
               }
             }
@@ -2847,13 +3028,21 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
           GestureDetector(
             onTap: () {
               // 하원 처리
-              unawaited(ConsultTrialLessonService.instance
-                  .setLeaved(slotId: s.id, leaved: true));
+              unawaited(
+                ConsultTrialLessonService.instance.setLeaved(
+                  slotId: s.id,
+                  leaved: true,
+                ),
+              );
             },
             onSecondaryTap: () {
               // 실수 취소: 등원/하원 기록 제거
-              unawaited(ConsultTrialLessonService.instance
-                  .setArrived(slotId: s.id, arrived: false));
+              unawaited(
+                ConsultTrialLessonService.instance.setArrived(
+                  slotId: s.id,
+                  arrived: false,
+                ),
+              );
             },
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 200),
@@ -2867,8 +3056,11 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(s.title,
-                      style: nameStyle, overflow: TextOverflow.ellipsis),
+                  Text(
+                    s.title,
+                    style: nameStyle,
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ],
               ),
             ),
@@ -2883,8 +3075,12 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     return GestureDetector(
       key: key,
       onTap: () {
-        unawaited(ConsultTrialLessonService.instance
-            .setArrived(slotId: s.id, arrived: true));
+        unawaited(
+          ConsultTrialLessonService.instance.setArrived(
+            slotId: s.id,
+            arrived: true,
+          ),
+        );
       },
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
@@ -2895,11 +3091,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
           border: Border.all(color: trialGreen, width: 2),
           borderRadius: BorderRadius.circular(25),
         ),
-        child: Text(
-          s.title,
-          style: nameStyle,
-          overflow: TextOverflow.ellipsis,
-        ),
+        child: Text(s.title, style: nameStyle, overflow: TextOverflow.ellipsis),
       ),
     );
   }
@@ -2923,11 +3115,20 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         return FutureBuilder<List<HomeworkAssignmentDetail>>(
           future: assignmentsFuture,
           builder: (context, snapshot) {
-            final hiddenAssignedItemIds =
-                (snapshot.data ?? const <HomeworkAssignmentDetail>[])
-                    .map((a) => a.homeworkItemId.trim())
-                    .where((id) => id.isNotEmpty)
-                    .toSet();
+            final assignments =
+                snapshot.data ?? const <HomeworkAssignmentDetail>[];
+            final hiddenAssignedItemIds = assignments
+                .where(_isReservationAssignment)
+                .map((a) => a.homeworkItemId.trim())
+                .where((id) => id.isNotEmpty)
+                .toSet();
+            final Map<String, String> groupTitleById = <String, String>{};
+            for (final assignment in assignments) {
+              final groupId = (assignment.groupId ?? '').trim();
+              final groupTitle = (assignment.groupTitleSnapshot ?? '').trim();
+              if (groupId.isEmpty || groupTitle.isEmpty) continue;
+              groupTitleById.putIfAbsent(groupId, () => groupTitle);
+            }
             return ValueListenableBuilder<int>(
               valueListenable: HomeworkStore.instance.revision,
               builder: (context, _rev, _) {
@@ -2937,6 +3138,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                     return _buildHomeworkChipsScroller(
                       t,
                       hiddenItemIds: hiddenAssignedItemIds,
+                      groupTitleById: groupTitleById,
                     );
                   },
                 );
@@ -2948,12 +3150,22 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     );
   }
 
+  bool _isReservationAssignment(HomeworkAssignmentDetail assignment) {
+    final note = (assignment.note ?? '').trim();
+    return note == HomeworkAssignmentStore.reservationNote;
+  }
+
   // 가로 스크롤러: 칩이 넘치면 스크롤, 줄바꿈 금지
   Widget _buildHomeworkChipsScroller(
     _AttendanceTarget t, {
     Set<String> hiddenItemIds = const <String>{},
+    Map<String, String> groupTitleById = const <String, String>{},
   }) {
-    final chips = _buildHomeworkChipsOnce(t, hiddenItemIds: hiddenItemIds);
+    final chips = _buildHomeworkChipsOnce(
+      t,
+      hiddenItemIds: hiddenItemIds,
+      groupTitleById: groupTitleById,
+    );
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       physics: const BouncingScrollPhysics(),
@@ -2978,184 +3190,130 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   List<Widget> _buildHomeworkChipsOnce(
     _AttendanceTarget t, {
     Set<String> hiddenItemIds = const <String>{},
+    Map<String, String> groupTitleById = const <String, String>{},
   }) {
+    final studentId = t.student.id;
+    final groups = HomeworkStore.instance.groups(studentId);
     final List<Widget> chips = [];
-    final List<HomeworkItem> baseList = List<HomeworkItem>.from(
-      HomeworkStore.instance
-          .items(t.student.id)
-          .where((e) => e.status != HomeworkStatus.completed)
-          // 숙제 상태라도 active assignment가 해제된 항목은 현재 과제로 복귀한 것으로 본다.
-          .where(
-            (e) =>
-                e.status != HomeworkStatus.homework ||
-                !hiddenItemIds.contains(e.id),
-          )
-          .where((e) => !hiddenItemIds.contains(e.id)),
-    );
-    final Map<String, int> originalIndexById = <String, int>{
-      for (int i = 0; i < baseList.length; i++) baseList[i].id: i,
-    };
-    int phaseRank(HomeworkItem item) {
-      final bool isRunning = item.runStart != null || item.phase == 2;
-      if (isRunning) return 0; // 수행
-      if (item.phase == 4) return 1; // 확인
-      if (item.phase == 3) return 2; // 제출
-      return 3; // 대기(및 기타)
-    }
+    const Color statusAccent = Color(0xFF33A373);
+    void addGroupTitleChip(
+      String rawTitle, {
+      int visualPhase = 1, // 1:대기 2:수행 3:제출 4:확인
+    }) {
+      final chipTitle = _chipDisplayTitle(rawTitle);
+      if (chipTitle.trim().isEmpty) return;
 
-    final List<HomeworkItem> hwList = List<HomeworkItem>.from(baseList)
-      ..sort((a, b) {
-        final byPhase = phaseRank(a).compareTo(phaseRank(b));
-        if (byPhase != 0) return byPhase;
-        final ai = originalIndexById[a.id] ?? 1 << 30;
-        final bi = originalIndexById[b.id] ?? 1 << 30;
-        return ai.compareTo(bi);
-      });
-
-    for (final hw in hwList) {
-      final chipTitle = _chipDisplayTitle(hw.title);
       if (chips.isNotEmpty) chips.add(const SizedBox(width: 8));
       chips.add(
-        MouseRegion(
-          onEnter: (e) {
-            final overlay =
-                Overlay.of(context).context.findRenderObject() as RenderBox;
-            final offset = overlay.globalToLocal(e.position);
-            _showTooltip(offset, hw.body.isEmpty ? '(내용 없음)' : hw.body);
-          },
-          onExit: (_) => _removeTooltip(),
-          child: GestureDetector(
-            onTap: () async {
-              _activeStudentId = t.student.id;
-              _activeItemId = hw.id;
-              await _openHomeworkEditDialog(t.student.id, hw.id);
-              if (mounted) setState(() {});
-            },
-            onLongPress: () async {
-              // 활성화 지정 후 이어가기 다이얼로그 표시
-              _activeStudentId = t.student.id;
-              _activeItemId = hw.id;
-              final enabledFlows =
-                  await ensureEnabledFlowsForHomework(context, t.student.id);
-              if (enabledFlows.isEmpty) return;
-              final res = await showDialog<Map<String, dynamic>?>(
-                context: context,
-                builder: (_) => HomeworkContinueDialog(
-                    studentId: t.student.id, title: hw.title, color: hw.color),
-              );
-              if (res != null && (res['body'] as String).isNotEmpty) {
-                final flowId = hw.flowId ?? enabledFlows.first.id;
-                HomeworkStore.instance.continueAdd(
-                  t.student.id,
-                  hw.id,
-                  body: res['body'] as String,
-                  flowId: flowId,
-                );
-                setState(() {});
-              }
-            },
-            onSecondaryTap: () {
-              // 활성화 지정 후 완료 처리
-              _activeStudentId = t.student.id;
-              _activeItemId = hw.id;
-              unawaited(HomeworkStore.instance.complete(t.student.id, hw.id));
-              setState(() {});
-            },
-            child: Builder(builder: (context) {
-              final bool isRunning =
-                  (HomeworkStore.instance.runningOf(t.student.id)?.id == hw.id);
-              final style = const TextStyle(
-                color: Color(0xFFEAF2F2),
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
-                height: 1.1,
-              );
-              // 긴 제목도 잘리지 않도록 실제 텍스트 폭을 모두 반영
-              final painter = TextPainter(
-                text: TextSpan(text: chipTitle, style: style),
-                maxLines: 1,
-                textDirection: TextDirection.ltr,
-                textScaleFactor: MediaQuery.of(context).textScaleFactor,
-              )..layout(minWidth: 0, maxWidth: double.infinity);
-              final double textScale = MediaQuery.of(context).textScaleFactor;
-              // 폰트 14 기준: 텍스트 영역을 더 확보하기 위해 패딩 축소
-              const double leftPad = 14;
-              const double rightPad = 16;
-              // 활성화/비활성 상관없이 칩의 총 너비를 일정하게 유지하기 위해
-              // 최대 테두리 두께(2px)를 기준으로 계산한다.
-              const double borderWMax = 2.0;
-              final double borderW = isRunning ? 2.0 : 1.0; // 실제 그릴 두께
-              // 측정값 그대로 사용 + 소폭 여유치(6px)로 조기 ellipsis 방지
-              final double width =
-                  painter.width + leftPad + rightPad + borderWMax * 2 + 6.0;
-              if (!_chipDebugLogged.contains(hw.id)) {
-                _chipDebugLogged.add(hw.id);
-                debugPrint('[CHIP][measure] id=' +
-                    hw.id +
-                    ' title="' +
-                    chipTitle +
-                    '" w=' +
-                    painter.width.toStringAsFixed(1) +
-                    ' scale=' +
-                    textScale.toStringAsFixed(2) +
-                    ' finalW=' +
-                    width.toStringAsFixed(1));
-              }
-              // 폰트 사이즈 증가를 고려하되, 지나친 최소폭은 줄임표를 유발하므로 완화
-              final double minChipWidth = 70.0;
-              // UI 전용 칩 상태
-              final _UiPhase phase = _getUiPhase(t.student.id, hw.id);
-              final double tick = _uiAnimController.value; // 0..1
-
-              final textChild = Text(
+        Builder(
+          builder: (context) {
+            final tick = _uiAnimController.value;
+            final phase4Pulse = 0.5 + 0.5 * math.sin(2 * math.pi * tick);
+            const style = TextStyle(
+              color: Color(0xFFEAF2F2),
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              height: 1.1,
+            );
+            final painter = TextPainter(
+              text: TextSpan(text: chipTitle, style: style),
+              maxLines: 1,
+              textDirection: TextDirection.ltr,
+              textScaleFactor: MediaQuery.of(context).textScaleFactor,
+            )..layout(minWidth: 0, maxWidth: double.infinity);
+            const double leftPad = 14;
+            const double rightPad = 16;
+            final double width = painter.width + leftPad + rightPad + 2 + 6.0;
+            final Border border = switch (visualPhase) {
+              2 => Border.all(color: statusAccent.withOpacity(0.9), width: 2),
+              3 => Border.all(color: Colors.transparent, width: 2),
+              4 => Border.all(
+                  color: Color.lerp(
+                        Colors.white24,
+                        statusAccent.withOpacity(0.9),
+                        phase4Pulse,
+                      ) ??
+                      Colors.white24,
+                  width: 2,
+                ),
+              _ => Border.all(color: Colors.white24, width: 1),
+            };
+            Widget chipInner = Container(
+              height: 40,
+              padding: const EdgeInsets.fromLTRB(leftPad, 0, rightPad, 0),
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: Colors.transparent,
+                borderRadius: BorderRadius.circular(6),
+                border: border,
+              ),
+              child: Text(
                 chipTitle,
                 style: style,
                 textAlign: TextAlign.center,
                 maxLines: 1,
                 softWrap: false,
                 overflow: TextOverflow.ellipsis,
-              );
-
-              Widget chipInner = Container(
-                height: 40,
-                padding: const EdgeInsets.fromLTRB(leftPad, 0, rightPad, 0),
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: Colors.transparent,
-                  borderRadius: BorderRadius.circular(6),
-                  border: isRunning
-                      ? Border.all(color: hw.color.withOpacity(0.9), width: 2)
-                      : (phase == _UiPhase.submitted
-                          ? null
-                          : Border.all(color: Colors.white24, width: borderW)),
-                ),
-                child: textChild,
-              );
-
-              if (!isRunning && phase == _UiPhase.submitted) {
-                // 크기 변화 없이 회전 보더만 그리기: CustomPaint의 foregroundPainter 사용
-                chipInner = RepaintBoundary(
-                  child: CustomPaint(
-                    // repaint를 애니메이션 컨트롤러에 직접 바인딩해 프레임마다 리페인트
-                    foregroundPainter: _RotatingBorderPainter(
-                      baseColor: hw.color,
-                      tick: tick,
-                      strokeWidth: 2.0,
-                      cornerRadius: 6.0,
-                    ),
-                    child: chipInner,
+              ),
+            );
+            if (visualPhase == 3) {
+              chipInner = RepaintBoundary(
+                child: CustomPaint(
+                  foregroundPainter: _RotatingBorderPainter(
+                    baseColor: statusAccent,
+                    tick: tick,
+                    strokeWidth: 2.0,
+                    cornerRadius: 6.0,
                   ),
-                );
-              }
-
-              return SizedBox(
-                width: width.clamp(minChipWidth, 560.0),
-                child: chipInner,
+                  child: chipInner,
+                ),
               );
-            }),
-          ),
+            }
+
+            return Tooltip(
+              message: chipTitle,
+              child:
+                  SizedBox(width: width.clamp(70.0, 560.0), child: chipInner),
+            );
+          },
         ),
       );
+    }
+
+    for (final group in groups) {
+      final children = HomeworkStore.instance
+          .itemsInGroup(studentId, group.id)
+          .where((e) => e.status != HomeworkStatus.completed)
+          .where((e) => !hiddenItemIds.contains(e.id))
+          .toList();
+      if (children.isEmpty) continue;
+      final bool hasRunningChild =
+          children.any((e) => e.runStart != null || e.phase == 2);
+      final bool hasSubmittedChild = children.any((e) => e.phase == 3);
+      final bool hasConfirmedChild = children.any((e) => e.phase == 4);
+      final int groupPhase = hasRunningChild
+          ? 2
+          : (hasSubmittedChild ? 3 : (hasConfirmedChild ? 4 : 1));
+
+      final fromAssignment = (groupTitleById[group.id] ?? '').trim();
+      final fromGroup = group.title.trim();
+      final rawTitle = fromAssignment.isNotEmpty
+          ? fromAssignment
+          : (fromGroup.isNotEmpty ? fromGroup : '그룹 과제');
+      addGroupTitleChip(rawTitle, visualPhase: groupPhase);
+    }
+
+    // 그룹 메타가 아직 동기화되지 않은 경우에도, 할당 스냅샷의 그룹명으로 칩을 복원한다.
+    if (chips.isEmpty && groupTitleById.isNotEmpty) {
+      final seenTitles = <String>{};
+      final entries = groupTitleById.entries.toList()
+        ..sort((a, b) => a.key.compareTo(b.key));
+      for (final entry in entries) {
+        final title = entry.value.trim();
+        if (title.isEmpty) continue;
+        if (!seenTitles.add(title)) continue;
+        addGroupTitleChip(title);
+      }
     }
     return chips;
   }
@@ -3265,8 +3423,11 @@ class _LeavedDialogEntry {
   final DateTime? arrival;
   final DateTime? departure;
 
-  const _LeavedDialogEntry(
-      {required this.target, this.arrival, this.departure});
+  const _LeavedDialogEntry({
+    required this.target,
+    this.arrival,
+    this.departure,
+  });
 }
 
 // OverlayEntry 툴팁을 띄우는 호버 영역 위젯
@@ -3276,12 +3437,13 @@ class _TooltipHoverArea extends StatefulWidget {
   final Color textColor;
   final void Function(BuildContext, Offset, String) showTooltip;
   final VoidCallback hideTooltip;
-  const _TooltipHoverArea(
-      {required this.main,
-      required this.tooltip,
-      required this.showTooltip,
-      required this.hideTooltip,
-      required this.textColor});
+  const _TooltipHoverArea({
+    required this.main,
+    required this.tooltip,
+    required this.showTooltip,
+    required this.hideTooltip,
+    required this.textColor,
+  });
   @override
   State<_TooltipHoverArea> createState() => _TooltipHoverAreaState();
 }
@@ -3299,7 +3461,10 @@ class _TooltipHoverAreaState extends State<_TooltipHoverArea> {
       child: Text(
         widget.main,
         style: TextStyle(
-            color: widget.textColor, fontSize: 16, fontWeight: FontWeight.w500),
+          color: widget.textColor,
+          fontSize: 16,
+          fontWeight: FontWeight.w500,
+        ),
       ),
     );
   }
@@ -3327,8 +3492,11 @@ class _ClassTag {
   final String name;
   final Color color;
   final IconData icon;
-  const _ClassTag(
-      {required this.name, required this.color, required this.icon});
+  const _ClassTag({
+    required this.name,
+    required this.color,
+    required this.icon,
+  });
 }
 
 // UI 전용 칩 상태 정의
@@ -3440,12 +3608,16 @@ extension on _MainScreenState {
   }
 
   // 임시 A/B 버튼 핸들러 제거됨
-  Future<void> _openClassTagDialog(_AttendanceTarget target,
-      {Offset? anchor}) async {
+  Future<void> _openClassTagDialog(
+    _AttendanceTarget target, {
+    Offset? anchor,
+  }) async {
     final List<_ClassTagEvent> initialApplied = List<_ClassTagEvent>.from(
-        _classTagEventsBySetId[target.setId] ?? const []);
-    List<_ClassTagEvent> workingApplied =
-        List<_ClassTagEvent>.from(initialApplied);
+      _classTagEventsBySetId[target.setId] ?? const [],
+    );
+    List<_ClassTagEvent> workingApplied = List<_ClassTagEvent>.from(
+      initialApplied,
+    );
     // 프리셋에서 즉시 로드하여 사용 가능한 태그 구성
     final presets = await TagPresetService.instance.loadPresets();
     final recordPreset = presets.firstWhereOrNull((p) => p.name.trim() == '기록');
@@ -3461,20 +3633,26 @@ extension on _MainScreenState {
 
     void _applyWorkingTags() {
       setState(() {
-        _classTagEventsBySetId[target.setId] =
-            List<_ClassTagEvent>.from(workingApplied);
+        _classTagEventsBySetId[target.setId] = List<_ClassTagEvent>.from(
+          workingApplied,
+        );
       });
       final events = workingApplied
-          .map((e) => TagEvent(
-                tagName: e.tag.name,
-                colorValue: e.tag.color.value,
-                iconCodePoint: e.tag.icon.codePoint,
-                timestamp: e.timestamp,
-                note: e.note,
-              ))
+          .map(
+            (e) => TagEvent(
+              tagName: e.tag.name,
+              colorValue: e.tag.color.value,
+              iconCodePoint: e.tag.icon.codePoint,
+              timestamp: e.timestamp,
+              note: e.note,
+            ),
+          )
           .toList();
-      TagStore.instance
-          .setEventsForSet(target.setId, target.student.id, events);
+      TagStore.instance.setEventsForSet(
+        target.setId,
+        target.student.id,
+        events,
+      );
     }
 
     Future<void> _handleTagPressed(
@@ -3487,15 +3665,16 @@ extension on _MainScreenState {
         workingApplied.add(_ClassTagEvent(tag: tag, timestamp: now));
       });
       TagStore.instance.appendEvent(
-          target.setId,
-          target.student.id,
-          TagEvent(
-            tagName: tag.name,
-            colorValue: tag.color.value,
-            iconCodePoint: tag.icon.codePoint,
-            timestamp: now,
-            note: null,
-          ));
+        target.setId,
+        target.student.id,
+        TagEvent(
+          tagName: tag.name,
+          colorValue: tag.color.value,
+          iconCodePoint: tag.icon.codePoint,
+          timestamp: now,
+          note: null,
+        ),
+      );
       _applyWorkingTags();
       _removeClassTagOverlay();
     }
@@ -3507,26 +3686,30 @@ extension on _MainScreenState {
       if (note == null || note.trim().isEmpty) return;
       final trimmed = note.trim();
       final now = DateTime.now();
-      workingApplied
-          .add(_ClassTagEvent(tag: recordTag, timestamp: now, note: trimmed));
+      workingApplied.add(
+        _ClassTagEvent(tag: recordTag, timestamp: now, note: trimmed),
+      );
       TagStore.instance.appendEvent(
-          target.setId,
-          target.student.id,
-          TagEvent(
-            tagName: recordTag.name,
-            colorValue: recordTag.color.value,
-            iconCodePoint: recordTag.icon.codePoint,
-            timestamp: now,
-            note: trimmed,
-          ));
+        target.setId,
+        target.student.id,
+        TagEvent(
+          tagName: recordTag.name,
+          colorValue: recordTag.color.value,
+          iconCodePoint: recordTag.icon.codePoint,
+          timestamp: now,
+          note: trimmed,
+        ),
+      );
       _applyWorkingTags();
     }
 
     Future<void> _handleHomeworkPressed() async {
       _removeClassTagOverlay();
       await Future<void>.delayed(Duration.zero);
-      final enabledFlows =
-          await ensureEnabledFlowsForHomework(context, target.student.id);
+      final enabledFlows = await ensureEnabledFlowsForHomework(
+        context,
+        target.student.id,
+      );
       if (enabledFlows.isEmpty) return;
       final result = await showDialog<dynamic>(
         context: context,
@@ -3570,9 +3753,9 @@ extension on _MainScreenState {
           );
           if (createdItems.isEmpty) {
             if (!context.mounted) return;
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('그룹 과제 생성에 실패했어요.')),
-            );
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(const SnackBar(content: Text('그룹 과제 생성에 실패했어요.')));
             return;
           }
           if (isReserve) {
@@ -3591,8 +3774,9 @@ extension on _MainScreenState {
           final msg = isReserve
               ? '그룹 예약 과제(하위 ${childCount}개)를 추가했어요.'
               : '그룹 과제(하위 ${childCount}개)를 추가했어요.';
-          ScaffoldMessenger.of(context)
-              .showSnackBar(SnackBar(content: Text(msg)));
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text(msg)));
           return;
         }
         final flowId = result['flowId'] as String?;
@@ -3617,8 +3801,9 @@ extension on _MainScreenState {
 
         for (final entry in entries) {
           final countStr = (entry['count'] as String?)?.trim();
-          final splitParts =
-              _parseSplitParts(entry['splitParts'] ?? result['splitParts']);
+          final splitParts = _parseSplitParts(
+            entry['splitParts'] ?? result['splitParts'],
+          );
           final created = HomeworkStore.instance.add(
             result['studentId'],
             title: (entry['title'] as String?) ?? '',
@@ -3637,9 +3822,9 @@ extension on _MainScreenState {
             sourceUnitPath: (entry['sourceUnitPath'] as String?)?.trim(),
             unitMappings: (entry['unitMappings'] is List)
                 ? List<Map<String, dynamic>>.from(
-                    (entry['unitMappings'] as List)
-                        .whereType<Map>()
-                        .map((e) => Map<String, dynamic>.from(e)),
+                    (entry['unitMappings'] as List).whereType<Map>().map(
+                          (e) => Map<String, dynamic>.from(e),
+                        ),
                   )
                 : null,
             defaultSplitParts: splitParts,
@@ -3664,9 +3849,9 @@ extension on _MainScreenState {
             : (entries.length > 1
                 ? '과제를 ${entries.length}개 추가했어요.'
                 : '과제를 추가했어요.');
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(msg)),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(msg)));
       }
     }
 
@@ -3744,18 +3929,24 @@ extension on _MainScreenState {
                                 child: Text(
                                   '${target.student.name} · ${_getTodayDateShortString(_sideSheetAnchorDate)}',
                                   style: const TextStyle(
-                                      color: Colors.white70,
-                                      fontSize: 15,
-                                      fontWeight: FontWeight.w600),
+                                    color: Colors.white70,
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w600,
+                                  ),
                                 ),
                               ),
                               IconButton(
                                 onPressed: _removeClassTagOverlay,
-                                icon: const Icon(Icons.close,
-                                    color: Colors.white54, size: 18),
+                                icon: const Icon(
+                                  Icons.close,
+                                  color: Colors.white54,
+                                  size: 18,
+                                ),
                                 padding: EdgeInsets.zero,
                                 constraints: const BoxConstraints(
-                                    minWidth: 28, minHeight: 28),
+                                  minWidth: 28,
+                                  minHeight: 28,
+                                ),
                               ),
                             ],
                           ),
@@ -3765,19 +3956,28 @@ extension on _MainScreenState {
                             height: 45.2,
                             child: OutlinedButton.icon(
                               onPressed: _handleHomeworkPressed,
-                              icon: const Icon(Icons.playlist_add,
-                                  size: 16, color: Color(0xFF9FB3B3)),
-                              label: const Text('과제',
-                                  style: TextStyle(
-                                      color: Color(0xFF9FB3B3),
-                                      fontWeight: FontWeight.w700)),
+                              icon: const Icon(
+                                Icons.playlist_add,
+                                size: 16,
+                                color: Color(0xFF9FB3B3),
+                              ),
+                              label: const Text(
+                                '과제',
+                                style: TextStyle(
+                                  color: Color(0xFF9FB3B3),
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
                               style: OutlinedButton.styleFrom(
                                 foregroundColor: const Color(0xFF9FB3B3),
                                 side: const BorderSide(
-                                    color: Color(0xFF4D5A5A), width: 1.2),
+                                  color: Color(0xFF4D5A5A),
+                                  width: 1.2,
+                                ),
                                 backgroundColor: Colors.transparent,
-                                padding:
-                                    const EdgeInsets.symmetric(horizontal: 12),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                ),
                                 minimumSize: const Size.fromHeight(45.2),
                                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                                 shape: const StadiumBorder(),
@@ -3790,16 +3990,23 @@ extension on _MainScreenState {
                             height: 45.2,
                             child: FilledButton.icon(
                               onPressed: _handleRecordPressed,
-                              icon: const Icon(Icons.edit_note,
-                                  size: 16, color: Colors.white),
-                              label: const Text('기록',
-                                  style: TextStyle(
-                                      color: Colors.white,
-                                      fontWeight: FontWeight.w700)),
+                              icon: const Icon(
+                                Icons.edit_note,
+                                size: 16,
+                                color: Colors.white,
+                              ),
+                              label: const Text(
+                                '기록',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
                               style: FilledButton.styleFrom(
                                 backgroundColor: const Color(0xFF33A373),
-                                padding:
-                                    const EdgeInsets.symmetric(horizontal: 12),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                ),
                                 minimumSize: const Size.fromHeight(45.2),
                                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                                 shape: const StadiumBorder(),
@@ -3820,79 +4027,105 @@ extension on _MainScreenState {
                                   children: [
                                     Icon(tag.icon, color: tag.color, size: 16),
                                     const SizedBox(width: 6),
-                                    Text(tag.name,
-                                        style: const TextStyle(
-                                            color: Colors.white)),
+                                    Text(
+                                      tag.name,
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                      ),
+                                    ),
                                   ],
                                 ),
                                 shape: const StadiumBorder(
                                   side: BorderSide(
-                                      color: Color(0xFF3A3F44), width: 1.0),
+                                    color: Color(0xFF3A3F44),
+                                    width: 1.0,
+                                  ),
                                 ),
                               );
                             }).toList(),
                           ),
                           const SizedBox(height: 10),
                           const Divider(
-                              color: Color(0xFF223131),
-                              height: 12,
-                              thickness: 1),
+                            color: Color(0xFF223131),
+                            height: 12,
+                            thickness: 1,
+                          ),
                           const SizedBox(height: 8),
                           if (workingApplied.isEmpty)
-                            const Text('아직 추가된 태그가 없습니다.',
-                                style: TextStyle(color: Colors.white38))
+                            const Text(
+                              '아직 추가된 태그가 없습니다.',
+                              style: TextStyle(color: Colors.white38),
+                            )
                           else
                             Column(
                               children: [
                                 for (int i = workingApplied.length - 1;
                                     i >= 0;
                                     i--) ...[
-                                  Builder(builder: (context) {
-                                    final e = workingApplied[i];
-                                    return Container(
-                                      margin: const EdgeInsets.only(bottom: 8),
-                                      padding: const EdgeInsets.symmetric(
-                                          horizontal: 10, vertical: 8),
-                                      decoration: BoxDecoration(
-                                        color: const Color(0xFF22262C),
-                                        borderRadius: BorderRadius.circular(8),
-                                        border: Border.all(
+                                  Builder(
+                                    builder: (context) {
+                                      final e = workingApplied[i];
+                                      return Container(
+                                        margin: const EdgeInsets.only(
+                                          bottom: 8,
+                                        ),
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 10,
+                                          vertical: 8,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFF22262C),
+                                          borderRadius: BorderRadius.circular(
+                                            8,
+                                          ),
+                                          border: Border.all(
                                             color: const Color(0xFF3A3F44),
-                                            width: 1),
-                                      ),
-                                      child: Row(
-                                        children: [
-                                          Icon(e.tag.icon,
-                                              color: e.tag.color, size: 16),
-                                          const SizedBox(width: 8),
-                                          Expanded(
-                                            child: Text(
-                                              e.note != null &&
-                                                      e.note!.isNotEmpty
-                                                  ? '${e.tag.name} · ${e.note}'
-                                                  : e.tag.name,
-                                              style: const TextStyle(
-                                                  color: Colors.white70),
-                                              overflow: TextOverflow.ellipsis,
+                                            width: 1,
+                                          ),
+                                        ),
+                                        child: Row(
+                                          children: [
+                                            Icon(
+                                              e.tag.icon,
+                                              color: e.tag.color,
+                                              size: 16,
                                             ),
-                                          ),
-                                          const SizedBox(width: 6),
-                                          Text(_formatTime(e.timestamp),
+                                            const SizedBox(width: 8),
+                                            Expanded(
+                                              child: Text(
+                                                e.note != null &&
+                                                        e.note!.isNotEmpty
+                                                    ? '${e.tag.name} · ${e.note}'
+                                                    : e.tag.name,
+                                                style: const TextStyle(
+                                                  color: Colors.white70,
+                                                ),
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                            ),
+                                            const SizedBox(width: 6),
+                                            Text(
+                                              _formatTime(e.timestamp),
                                               style: const TextStyle(
-                                                  color: Colors.white54,
-                                                  fontSize: 12)),
-                                          const SizedBox(width: 6),
-                                          InkWell(
-                                            onTap: () =>
-                                                _removeAppliedAt(setLocal, i),
-                                            child: const Icon(Icons.close,
                                                 color: Colors.white54,
-                                                size: 14),
-                                          ),
-                                        ],
-                                      ),
-                                    );
-                                  }),
+                                                fontSize: 12,
+                                              ),
+                                            ),
+                                            const SizedBox(width: 6),
+                                            InkWell(
+                                              onTap: () =>
+                                                  _removeAppliedAt(setLocal, i),
+                                              child: const Icon(
+                                                Icons.close,
+                                                color: Colors.white54,
+                                                size: 14,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      );
+                                    },
+                                  ),
                                 ],
                               ],
                             ),
@@ -3961,9 +4194,12 @@ extension on _MainScreenState {
             return AlertDialog(
               backgroundColor: const Color(0xFF0B1112),
               shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12)),
-              title: const Text('새 태그 만들기',
-                  style: TextStyle(color: Colors.white, fontSize: 20)),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              title: const Text(
+                '새 태그 만들기',
+                style: TextStyle(color: Colors.white, fontSize: 20),
+              ),
               content: SizedBox(
                 width: 520,
                 child: SingleChildScrollView(
@@ -3981,11 +4217,14 @@ extension on _MainScreenState {
                           filled: true,
                           fillColor: Color(0xFF2A2A2A),
                           border: OutlineInputBorder(
-                              borderSide: BorderSide(color: Colors.white24)),
+                            borderSide: BorderSide(color: Colors.white24),
+                          ),
                           enabledBorder: OutlineInputBorder(
-                              borderSide: BorderSide(color: Colors.white24)),
+                            borderSide: BorderSide(color: Colors.white24),
+                          ),
                           focusedBorder: OutlineInputBorder(
-                              borderSide: BorderSide(color: Color(0xFF1976D2))),
+                            borderSide: BorderSide(color: Color(0xFF1976D2)),
+                          ),
                         ),
                         style: const TextStyle(color: Colors.white),
                       ),
@@ -4006,18 +4245,21 @@ extension on _MainScreenState {
                                   color: c,
                                   shape: BoxShape.circle,
                                   border: Border.all(
-                                      color: c == selectedColor
-                                          ? Colors.white
-                                          : Colors.white24,
-                                      width: c == selectedColor ? 2 : 1),
+                                    color: c == selectedColor
+                                        ? Colors.white
+                                        : Colors.white24,
+                                    width: c == selectedColor ? 2 : 1,
+                                  ),
                                 ),
                               ),
                             ),
                         ],
                       ),
                       const SizedBox(height: 16),
-                      const Text('아이콘',
-                          style: TextStyle(color: Colors.white70)),
+                      const Text(
+                        '아이콘',
+                        style: TextStyle(color: Colors.white70),
+                      ),
                       const SizedBox(height: 8),
                       Wrap(
                         spacing: 8,
@@ -4033,15 +4275,18 @@ extension on _MainScreenState {
                                   color: const Color(0xFF2A2A2A),
                                   borderRadius: BorderRadius.circular(8),
                                   border: Border.all(
-                                      color: ic == selectedIcon
-                                          ? Colors.white
-                                          : Colors.white24),
-                                ),
-                                child: Icon(ic,
                                     color: ic == selectedIcon
                                         ? Colors.white
-                                        : Colors.white70,
-                                    size: 20),
+                                        : Colors.white24,
+                                  ),
+                                ),
+                                child: Icon(
+                                  ic,
+                                  color: ic == selectedIcon
+                                      ? Colors.white
+                                      : Colors.white70,
+                                  size: 20,
+                                ),
                               ),
                             ),
                         ],
@@ -4053,8 +4298,10 @@ extension on _MainScreenState {
               actions: [
                 TextButton(
                   onPressed: () => Navigator.of(ctx).pop(null),
-                  child:
-                      const Text('취소', style: TextStyle(color: Colors.white70)),
+                  child: const Text(
+                    '취소',
+                    style: TextStyle(color: Colors.white70),
+                  ),
                 ),
                 ElevatedButton(
                   onPressed: () {
@@ -4063,12 +4310,18 @@ extension on _MainScreenState {
                       Navigator.of(ctx).pop(null);
                       return;
                     }
-                    Navigator.of(ctx).pop(_ClassTag(
-                        name: name, color: selectedColor, icon: selectedIcon));
+                    Navigator.of(ctx).pop(
+                      _ClassTag(
+                        name: name,
+                        color: selectedColor,
+                        icon: selectedIcon,
+                      ),
+                    );
                   },
                   style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF1976D2),
-                      foregroundColor: Colors.white),
+                    backgroundColor: const Color(0xFF1976D2),
+                    foregroundColor: Colors.white,
+                  ),
                   child: const Text('추가'),
                 ),
               ],
@@ -4146,9 +4399,14 @@ class _RecordNoteDialogState extends State<_RecordNoteDialog> {
       titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
       contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
       actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
-      title: const Text('기록 입력',
-          style: TextStyle(
-              color: kDlgText, fontSize: 20, fontWeight: FontWeight.w900)),
+      title: const Text(
+        '기록 입력',
+        style: TextStyle(
+          color: kDlgText,
+          fontSize: 20,
+          fontWeight: FontWeight.w900,
+        ),
+      ),
       content: SizedBox(
         width: 520,
         child: TextField(
@@ -4181,7 +4439,9 @@ class _RecordNoteDialogState extends State<_RecordNoteDialog> {
         ElevatedButton(
           onPressed: _handleSave,
           style: ElevatedButton.styleFrom(
-              backgroundColor: kDlgAccent, foregroundColor: Colors.white),
+            backgroundColor: kDlgAccent,
+            foregroundColor: Colors.white,
+          ),
           child: const Text('저장'),
         ),
       ],
@@ -4195,17 +4455,20 @@ class _RotatingBorderPainter extends CustomPainter {
   final double tick; // 0..1
   final double strokeWidth;
   final double cornerRadius;
-  _RotatingBorderPainter(
-      {required this.baseColor,
-      required this.tick,
-      this.strokeWidth = 2.0,
-      this.cornerRadius = 8.0})
-      : super();
+  _RotatingBorderPainter({
+    required this.baseColor,
+    required this.tick,
+    this.strokeWidth = 2.0,
+    this.cornerRadius = 8.0,
+  }) : super();
   @override
   void paint(Canvas canvas, Size size) {
     final rect = Offset.zero & size;
     final rrect = RRect.fromRectXY(
-        rect.deflate(strokeWidth / 2), cornerRadius, cornerRadius);
+      rect.deflate(strokeWidth / 2),
+      cornerRadius,
+      cornerRadius,
+    );
     // 원형(라운드) 경로를 따라 그라디언트 스트로크를 회전
     final sweepShader = SweepGradient(
       startAngle: 0.0,

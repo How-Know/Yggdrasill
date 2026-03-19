@@ -49,15 +49,9 @@ class _ClassContentScreenState extends State<ClassContentScreen>
   DateTime _now = DateTime.now();
   bool _isGradingMode = false;
   bool _printPickMode = false;
-  bool _favoritePanelOpen = false;
-  bool _favoritePanelLoading = false;
-  String _favoriteBookFilter = '';
-  String _favoriteGradeFilter = '';
   final Map<({String studentId, String itemId}), bool> _pendingConfirms = {};
   final Set<String> _expandedHomeworkIds = {};
   String? _expandedReservedStudentId;
-  List<HomeworkRecentTemplate> _favoriteTemplates = const [];
-  Map<String, String> _favoriteBookNameById = const <String, String>{};
 
   @override
   void initState() {
@@ -155,35 +149,6 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                   height: 44,
                                   child: OutlinedButton(
                                     onPressed: () => unawaited(
-                                      _toggleFavoritePanel(),
-                                    ),
-                                    style: OutlinedButton.styleFrom(
-                                      foregroundColor: _favoritePanelOpen
-                                          ? Colors.white
-                                          : Colors.white70,
-                                      side: BorderSide(
-                                        color: _favoritePanelOpen
-                                            ? kDlgAccent
-                                            : Colors.white24,
-                                      ),
-                                      shape: const StadiumBorder(),
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 16,
-                                        vertical: 16,
-                                      ),
-                                      backgroundColor: _favoritePanelOpen
-                                          ? const Color(0xFF132822)
-                                          : Colors.transparent,
-                                    ),
-                                    child: const Icon(Icons.star_rounded,
-                                        size: 20),
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                SizedBox(
-                                  height: 44,
-                                  child: OutlinedButton(
-                                    onPressed: () => unawaited(
                                       _openHeaderHomeworkPrintFlow(
                                         attendingStudents: list,
                                       ),
@@ -255,9 +220,6 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                   onChanged: (value) {
                                     setState(() {
                                       _isGradingMode = value;
-                                      if (value) {
-                                        _favoritePanelOpen = false;
-                                      }
                                       if (!value) {
                                         _pendingConfirms.clear();
                                       }
@@ -314,8 +276,6 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                     },
                   ),
                   const SizedBox(height: 16),
-                  _buildFavoriteTemplatePanel(),
-                  if (_favoritePanelOpen) const SizedBox(height: 10),
                   const Divider(color: Color(0xFF223131), height: 24),
                   const SizedBox(height: 24),
                   Expanded(
@@ -751,7 +711,6 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     if (_isGradingMode) return column;
     return DragTarget<HomeworkRecentTemplate>(
       onWillAcceptWithDetails: (details) {
-        if (!_favoritePanelOpen) return false;
         return details.data.parts.isNotEmpty;
       },
       onAcceptWithDetails: (details) {
@@ -888,443 +847,6 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     return bestSet;
   }
 
-  Future<void> _toggleFavoritePanel() async {
-    if (_favoritePanelOpen) {
-      setState(() {
-        _favoritePanelOpen = false;
-      });
-      return;
-    }
-    setState(() => _favoritePanelOpen = true);
-    await _refreshFavoriteTemplates();
-  }
-
-  Future<void> _refreshFavoriteTemplates() async {
-    if (_favoritePanelLoading) return;
-    if (mounted) {
-      setState(() => _favoritePanelLoading = true);
-    }
-    try {
-      final templates =
-          await HomeworkStore.instance.loadRecentTemplates(limit: 120);
-      Map<String, String> bookNameById = _favoriteBookNameById;
-      final requiredBookIds = templates
-          .map((e) => e.primaryBookId)
-          .where((id) => id.trim().isNotEmpty)
-          .toSet();
-      final missingBookIds = requiredBookIds
-          .where((id) => !bookNameById.containsKey(id))
-          .toList(growable: false);
-      if (bookNameById.isEmpty || missingBookIds.isNotEmpty) {
-        final rows = await DataManager.instance.loadTextbooksWithMetadata();
-        final merged = <String, String>{...bookNameById};
-        for (final row in rows) {
-          final id = '${row['book_id'] ?? ''}'.trim();
-          if (id.isEmpty) continue;
-          final name = '${row['book_name'] ?? ''}'.trim();
-          if (name.isEmpty) continue;
-          merged[id] = name;
-        }
-        bookNameById = merged;
-      }
-      if (!mounted) return;
-      final hasBookFilter = _favoriteBookFilter.isNotEmpty &&
-          templates.any((t) => t.primaryBookId == _favoriteBookFilter);
-      final hasGradeFilter = _favoriteGradeFilter.isNotEmpty &&
-          templates.any((t) => t.primaryGradeLabel == _favoriteGradeFilter);
-      setState(() {
-        _favoriteTemplates = templates;
-        _favoriteBookNameById = bookNameById;
-        if (!hasBookFilter) _favoriteBookFilter = '';
-        if (!hasGradeFilter) _favoriteGradeFilter = '';
-      });
-    } catch (_) {
-      if (!mounted) return;
-      _showHomeworkChipSnackBar(context, '즐겨찾기 과제 목록을 불러오지 못했습니다.');
-    } finally {
-      if (mounted) {
-        setState(() => _favoritePanelLoading = false);
-      }
-    }
-  }
-
-  List<HomeworkRecentTemplate> _filteredFavoriteTemplates() {
-    final out = <HomeworkRecentTemplate>[];
-    for (final template in _favoriteTemplates) {
-      if (_favoriteBookFilter.isNotEmpty &&
-          template.primaryBookId != _favoriteBookFilter) {
-        continue;
-      }
-      if (_favoriteGradeFilter.isNotEmpty &&
-          template.primaryGradeLabel != _favoriteGradeFilter) {
-        continue;
-      }
-      out.add(template);
-    }
-    return out;
-  }
-
-  String _favoriteBookName(String bookId) {
-    final key = bookId.trim();
-    if (key.isEmpty) return '교재 없음';
-    final named = (_favoriteBookNameById[key] ?? '').trim();
-    if (named.isNotEmpty) return named;
-    return key;
-  }
-
-  Widget _buildFavoriteTemplatePanel() {
-    final targetHeight =
-        (MediaQuery.of(context).size.height * 0.33).clamp(220.0, 480.0);
-    final filteredTemplates = _filteredFavoriteTemplates();
-    final bookIds = _favoriteTemplates
-        .map((e) => e.primaryBookId)
-        .where((id) => id.trim().isNotEmpty)
-        .toSet()
-        .toList()
-      ..sort((a, b) => _favoriteBookName(a).compareTo(_favoriteBookName(b)));
-    final gradeLabels = _favoriteTemplates
-        .map((e) => e.primaryGradeLabel)
-        .where((e) => e.trim().isNotEmpty)
-        .toSet()
-        .toList()
-      ..sort();
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 220),
-      curve: Curves.easeInOutCubic,
-      height: _favoritePanelOpen ? targetHeight.toDouble() : 0,
-      child: ClipRect(
-        child: IgnorePointer(
-          ignoring: !_favoritePanelOpen,
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              color: const Color(0xFF151A1C),
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: const Color(0xFF2A3A3A)),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      const Icon(
-                        Icons.star_rounded,
-                        size: 18,
-                        color: kDlgAccent,
-                      ),
-                      const SizedBox(width: 8),
-                      const Text(
-                        '최근 과제 즐겨찾기',
-                        style: TextStyle(
-                          color: kDlgText,
-                          fontWeight: FontWeight.w900,
-                          fontSize: 15,
-                        ),
-                      ),
-                      const Spacer(),
-                      SizedBox(
-                        width: 34,
-                        height: 34,
-                        child: IconButton(
-                          onPressed: _favoritePanelLoading
-                              ? null
-                              : () => unawaited(_refreshFavoriteTemplates()),
-                          icon: const Icon(
-                            Icons.refresh_rounded,
-                            size: 18,
-                            color: kDlgTextSub,
-                          ),
-                          tooltip: '새로고침',
-                          padding: EdgeInsets.zero,
-                          splashRadius: 18,
-                          visualDensity: VisualDensity.compact,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: Row(
-                      children: [
-                        _buildFavoriteFilterChip(
-                          label: '전체 교재',
-                          selected: _favoriteBookFilter.isEmpty,
-                          onTap: () => setState(() => _favoriteBookFilter = ''),
-                        ),
-                        for (final bookId in bookIds)
-                          _buildFavoriteFilterChip(
-                            label: _favoriteBookName(bookId),
-                            selected: _favoriteBookFilter == bookId,
-                            onTap: () =>
-                                setState(() => _favoriteBookFilter = bookId),
-                          ),
-                        const SizedBox(width: 12),
-                        _buildFavoriteFilterChip(
-                          label: '전체 학년',
-                          selected: _favoriteGradeFilter.isEmpty,
-                          onTap: () =>
-                              setState(() => _favoriteGradeFilter = ''),
-                        ),
-                        for (final grade in gradeLabels)
-                          _buildFavoriteFilterChip(
-                            label: grade,
-                            selected: _favoriteGradeFilter == grade,
-                            onTap: () =>
-                                setState(() => _favoriteGradeFilter = grade),
-                          ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  Expanded(
-                    child: _favoritePanelLoading
-                        ? const Center(
-                            child: SizedBox(
-                              width: 22,
-                              height: 22,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                valueColor: AlwaysStoppedAnimation<Color>(
-                                  kDlgAccent,
-                                ),
-                              ),
-                            ),
-                          )
-                        : filteredTemplates.isEmpty
-                            ? const Center(
-                                child: Text(
-                                  '표시할 최근 과제가 없습니다.',
-                                  style: TextStyle(
-                                    color: kDlgTextSub,
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                              )
-                            : ListView.separated(
-                                scrollDirection: Axis.horizontal,
-                                itemCount: filteredTemplates.length,
-                                separatorBuilder: (_, __) =>
-                                    const SizedBox(width: 10),
-                                itemBuilder: (context, index) {
-                                  final template = filteredTemplates[index];
-                                  return _buildFavoriteTemplateCard(template);
-                                },
-                              ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildFavoriteFilterChip({
-    required String label,
-    required bool selected,
-    required VoidCallback onTap,
-  }) {
-    return Padding(
-      padding: const EdgeInsets.only(right: 8),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(999),
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 140),
-            curve: Curves.easeOutCubic,
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-            decoration: BoxDecoration(
-              color:
-                  selected ? const Color(0x1F4FBF97) : const Color(0xFF202629),
-              borderRadius: BorderRadius.circular(999),
-              border: Border.all(
-                color: selected
-                    ? const Color(0xFF4FBF97)
-                    : const Color(0xFF3E5757),
-                width: selected ? 1.1 : 1.0,
-              ),
-            ),
-            child: Text(
-              label,
-              style: TextStyle(
-                color: selected
-                    ? const Color(0xFF9FE3C6)
-                    : const Color(0xFF9FB3B3),
-                fontSize: 12.5,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  String _favoriteTemplatePartLine(HomeworkRecentTemplatePart part) {
-    final title = part.title.trim().isEmpty ? '(제목 없음)' : part.title.trim();
-    final rawPage = (part.page ?? '').trim();
-    final pageText = rawPage.isEmpty ? 'p.-' : 'p.$rawPage';
-    final countText =
-        (part.count == null || part.count! <= 0) ? '문항 미지정' : '${part.count}문항';
-    return '$title · $pageText · $countText';
-  }
-
-  Widget _buildFavoriteTemplateCardSurface(HomeworkRecentTemplate template) {
-    const cardWidth = 320.0;
-    const cardHeight = 214.0;
-    final title = template.title.trim().isEmpty ? '(제목 없음)' : template.title;
-    final bookId = template.primaryBookId;
-    final grade = template.primaryGradeLabel;
-    final bookText = bookId.isEmpty ? '교재 없음' : _favoriteBookName(bookId);
-    final gradeText = grade.isEmpty ? '학년 미지정' : grade;
-    final subtitle =
-        template.isGroup ? '그룹 과제 · 하위 ${template.partCount}개' : '단일 과제';
-    final previewLimit = template.isGroup ? 4 : 3;
-    final previewParts =
-        template.parts.take(previewLimit).toList(growable: false);
-    final moreCount = template.parts.length - previewParts.length;
-
-    return SizedBox(
-      width: cardWidth,
-      height: cardHeight,
-      child: FittedBox(
-        fit: BoxFit.scaleDown,
-        alignment: Alignment.topLeft,
-        child: SizedBox(
-          width: cardWidth,
-          height: cardHeight,
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              color: const Color(0xFF15171C),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: const Color(0xFF3E5757)),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(12, 11, 12, 11),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: kDlgText,
-                      fontSize: 14.5,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                  const SizedBox(height: 5),
-                  Text(
-                    '$bookText · $gradeText',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Color(0xFF9FB3B3),
-                      fontSize: 12.5,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    subtitle,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: kDlgTextSub,
-                      fontSize: 12.2,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Expanded(
-                    child: Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.fromLTRB(8, 7, 8, 7),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF202629),
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: const Color(0xFF3E5757)),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          for (int i = 0; i < previewParts.length; i++) ...[
-                            if (i > 0) const SizedBox(height: 4),
-                            Text(
-                              '${i + 1}. ${_favoriteTemplatePartLine(previewParts[i])}',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                color: Color(0xFFCAD2C5),
-                                fontSize: 12.2,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ],
-                          if (moreCount > 0) ...[
-                            const SizedBox(height: 4),
-                            Text(
-                              '+ $moreCount개 더',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                color: Color(0xFF7F8C8C),
-                                fontSize: 11.8,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                          ],
-                        ],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  const Text(
-                    '카드를 드래그해 학생 카드로 드롭',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: Color(0xFF6B7B7F),
-                      fontSize: 11.5,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildFavoriteTemplateCard(HomeworkRecentTemplate template) {
-    final card = _buildFavoriteTemplateCardSurface(template);
-    return Draggable<HomeworkRecentTemplate>(
-      data: template,
-      maxSimultaneousDrags: 1,
-      dragAnchorStrategy: pointerDragAnchorStrategy,
-      feedback: Material(
-        color: Colors.transparent,
-        child: Opacity(
-          opacity: 0.94,
-          child: _buildFavoriteTemplateCardSurface(template),
-        ),
-      ),
-      childWhenDragging: Opacity(opacity: 0.35, child: card),
-      child: MouseRegion(
-        cursor: SystemMouseCursors.grab,
-        child: card,
-      ),
-    );
-  }
-
   Future<void> _handleFavoriteTemplateDrop({
     required BuildContext context,
     required _AttendingStudent student,
@@ -1344,7 +866,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       );
       if (!context.mounted) return;
       if (!linkStatus.linked) {
-        final bookName = _favoriteBookName(bookId);
+        final bookName = bookId.trim().isEmpty ? '교재 없음' : bookId;
         final shouldLink = await _confirmFavoriteTemplateLink(
           context: context,
           bookName: bookName,
@@ -1391,9 +913,6 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       context,
       '${student.name}에게 $modeLabel ${createdCount}개를 추가했어요.',
     );
-    if (_favoritePanelOpen) {
-      unawaited(_refreshFavoriteTemplates());
-    }
   }
 
   Future<_FavoriteTemplateLinkStatus> _checkFavoriteTemplateLinkStatus({
@@ -5324,24 +4843,7 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
           children: children,
         );
       },
-      onDoubleTap: () {
-        if (printPickMode) return;
-        final submittedChildren = children
-            .where((e) =>
-                e.status != HomeworkStatus.completed &&
-                e.completedAt == null &&
-                e.phase == 3)
-            .toList(growable: false);
-        if (submittedChildren.isNotEmpty) {
-          onGroupSubmittedDoubleTap?.call(studentId, submittedChildren);
-          return;
-        }
-        unawaited(HomeworkStore.instance.bulkTransitionGroup(
-          studentId,
-          group.id,
-          fromPhase: summary.phase,
-        ));
-      },
+      onDoubleTap: null,
       child: _buildHomeworkChipWithReorderHandle(
         index: i,
         enableReorderDrag: !groupExpanded,
@@ -6049,7 +5551,7 @@ Future<void> _showHomeworkGroupActionDialog({
               ),
               const SizedBox(height: 12),
               const Text(
-                '그룹 카드 더블탭으로도 일괄 상태전환이 가능합니다.',
+                '그룹 카드는 좌우 슬라이드로 상태를 일괄 전환할 수 있습니다.',
                 style: TextStyle(color: Color(0xFF9FE3C6), fontSize: 12),
               ),
             ],

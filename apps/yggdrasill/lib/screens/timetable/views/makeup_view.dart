@@ -63,7 +63,11 @@ class _MakeupViewState extends State<MakeupView> {
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: IconButton(
-                    icon: const Icon(Icons.arrow_back, color: Colors.white70, size: 20),
+                    icon: const Icon(
+                      Icons.arrow_back,
+                      color: Colors.white70,
+                      size: 20,
+                    ),
                     onPressed: () => Navigator.of(context).maybePop(),
                     tooltip: '닫기',
                     padding: EdgeInsets.zero,
@@ -95,9 +99,12 @@ class _MakeupViewState extends State<MakeupView> {
       builder: (context, _) {
         final overrides = DataManager.instance.sessionOverridesNotifier.value;
         // 보강(reason: makeup)만 대상으로 함
-        final makeups = overrides.where((o) => o.reason == OverrideReason.makeup).toList();
+        final makeups =
+            overrides.where((o) => o.reason == OverrideReason.makeup).toList();
 
-        final Widget body = _segmentIndex == 0 ? _buildScheduledList(makeups) : _buildDeletedList(makeups);
+        final Widget body = _segmentIndex == 0
+            ? _buildScheduledList(makeups)
+            : _buildDeletedList(makeups);
         // 전체 영역을 채워 hit-test 누락을 방지
         return SizedBox.expand(child: body);
       },
@@ -157,7 +164,9 @@ class _MakeupViewState extends State<MakeupView> {
                           child: AnimatedDefaultTextStyle(
                             duration: const Duration(milliseconds: 180),
                             style: TextStyle(
-                              color: selected ? Colors.white : const Color(0xFF7E8A8A),
+                              color: selected
+                                  ? Colors.white
+                                  : const Color(0xFF7E8A8A),
                               fontWeight: FontWeight.w600,
                               fontSize: 13,
                             ),
@@ -179,8 +188,13 @@ class _MakeupViewState extends State<MakeupView> {
   Widget _buildScheduledList(List<SessionOverride> makeups) {
     DateTime monthStart = _selectedMonthStart;
     final nowForFilter = DateTime.now();
-    final bool isThisMonth = monthStart.year == nowForFilter.year && monthStart.month == nowForFilter.month;
-    final DateTime monthEnd = DateTime(monthStart.year, monthStart.month + 1, 1);
+    final bool isThisMonth = monthStart.year == nowForFilter.year &&
+        monthStart.month == nowForFilter.month;
+    final DateTime monthEnd = DateTime(
+      monthStart.year,
+      monthStart.month + 1,
+      1,
+    );
 
     final rows = makeups.where((o) {
       final dt = o.replacementClassDateTime;
@@ -193,9 +207,13 @@ class _MakeupViewState extends State<MakeupView> {
       }
     }).toList()
       ..sort((a, b) {
-        final aTime = a.replacementClassDateTime ?? DateTime.fromMillisecondsSinceEpoch(0);
-        final bTime = b.replacementClassDateTime ?? DateTime.fromMillisecondsSinceEpoch(0);
-        return aTime.compareTo(bTime);
+        final aTime = a.replacementClassDateTime ??
+            DateTime.fromMillisecondsSinceEpoch(0);
+        final bTime = b.replacementClassDateTime ??
+            DateTime.fromMillisecondsSinceEpoch(0);
+        final byDate = bTime.compareTo(aTime);
+        if (byDate != 0) return byDate;
+        return b.updatedAt.compareTo(a.updatedAt);
       });
 
     return Column(
@@ -207,10 +225,18 @@ class _MakeupViewState extends State<MakeupView> {
               child: _MonthToolbar(
                 monthStart: monthStart,
                 onPrev: () => setState(() {
-                  _selectedMonthStart = DateTime(monthStart.year, monthStart.month - 1, 1);
+                  _selectedMonthStart = DateTime(
+                    monthStart.year,
+                    monthStart.month - 1,
+                    1,
+                  );
                 }),
                 onNext: () => setState(() {
-                  _selectedMonthStart = DateTime(monthStart.year, monthStart.month + 1, 1);
+                  _selectedMonthStart = DateTime(
+                    monthStart.year,
+                    monthStart.month + 1,
+                    1,
+                  );
                 }),
                 onPickMonth: (picked) => setState(() {
                   _selectedMonthStart = DateTime(picked.year, picked.month, 1);
@@ -222,12 +248,20 @@ class _MakeupViewState extends State<MakeupView> {
             ElevatedButton.icon(
               onPressed: _onAddMakeupPressed,
               icon: const Icon(Icons.add, size: 18),
-              label: const Text('추가 수업', style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.w600)),
+              label: const Text(
+                '추가 수업',
+                style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.w600),
+              ),
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFF1B6B63),
                 foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 10,
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
                 minimumSize: const Size(0, 40),
               ),
             ),
@@ -237,7 +271,10 @@ class _MakeupViewState extends State<MakeupView> {
         Expanded(
           child: rows.isEmpty
               ? const Center(
-                  child: Text('항목이 없습니다', style: TextStyle(color: Colors.white38, fontSize: 16)),
+                  child: Text(
+                    '항목이 없습니다',
+                    style: TextStyle(color: Colors.white38, fontSize: 16),
+                  ),
                 )
               : ListView.separated(
                   itemCount: rows.length,
@@ -245,8 +282,15 @@ class _MakeupViewState extends State<MakeupView> {
                   itemBuilder: (context, index) {
                     final item = rows[index];
                     final rep = item.replacementClassDateTime;
-                    final record = rep == null ? null : DataManager.instance.getAttendanceRecord(item.studentId, rep);
-                    final isCompleted = record != null && record.arrivalTime != null && record.departureTime != null;
+                    final record = rep == null
+                        ? null
+                        : DataManager.instance.getAttendanceRecord(
+                            item.studentId,
+                            rep,
+                          );
+                    final isCompleted = record != null &&
+                        record.arrivalTime != null &&
+                        record.departureTime != null;
                     return Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -259,7 +303,9 @@ class _MakeupViewState extends State<MakeupView> {
                         const SizedBox(width: 16),
                         SizedBox(
                           width: 96,
-                          child: isCompleted ? _CompletedTile(item: item) : const SizedBox.shrink(),
+                          child: isCompleted
+                              ? _CompletedTile(item: item)
+                              : const SizedBox.shrink(),
                         ),
                       ],
                     );
@@ -271,14 +317,19 @@ class _MakeupViewState extends State<MakeupView> {
   }
 
   Widget _buildDeletedList(List<SessionOverride> makeups) {
-    final canceled = makeups
-        .where((o) => o.status == OverrideStatus.canceled)
-        .toList()
-      ..sort((a, b) {
-        final aTime = a.replacementClassDateTime ?? a.originalClassDateTime ?? DateTime.fromMillisecondsSinceEpoch(0);
-        final bTime = b.replacementClassDateTime ?? b.originalClassDateTime ?? DateTime.fromMillisecondsSinceEpoch(0);
-        return aTime.compareTo(bTime);
-      });
+    final canceled =
+        makeups.where((o) => o.status == OverrideStatus.canceled).toList()
+          ..sort((a, b) {
+            final aTime = a.replacementClassDateTime ??
+                a.originalClassDateTime ??
+                DateTime.fromMillisecondsSinceEpoch(0);
+            final bTime = b.replacementClassDateTime ??
+                b.originalClassDateTime ??
+                DateTime.fromMillisecondsSinceEpoch(0);
+            final byDate = bTime.compareTo(aTime);
+            if (byDate != 0) return byDate;
+            return b.updatedAt.compareTo(a.updatedAt);
+          });
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -289,10 +340,18 @@ class _MakeupViewState extends State<MakeupView> {
               child: _MonthToolbar(
                 monthStart: _selectedMonthStart,
                 onPrev: () => setState(() {
-                  _selectedMonthStart = DateTime(_selectedMonthStart.year, _selectedMonthStart.month - 1, 1);
+                  _selectedMonthStart = DateTime(
+                    _selectedMonthStart.year,
+                    _selectedMonthStart.month - 1,
+                    1,
+                  );
                 }),
                 onNext: () => setState(() {
-                  _selectedMonthStart = DateTime(_selectedMonthStart.year, _selectedMonthStart.month + 1, 1);
+                  _selectedMonthStart = DateTime(
+                    _selectedMonthStart.year,
+                    _selectedMonthStart.month + 1,
+                    1,
+                  );
                 }),
                 onPickMonth: (picked) => setState(() {
                   _selectedMonthStart = DateTime(picked.year, picked.month, 1);
@@ -304,12 +363,20 @@ class _MakeupViewState extends State<MakeupView> {
             ElevatedButton.icon(
               onPressed: _onAddMakeupPressed,
               icon: const Icon(Icons.add, size: 18),
-              label: const Text('추가 수업', style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.w600)),
+              label: const Text(
+                '추가 수업',
+                style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.w600),
+              ),
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFF1B6B63),
                 foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 10,
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
                 minimumSize: const Size(0, 40),
               ),
             ),
@@ -319,7 +386,10 @@ class _MakeupViewState extends State<MakeupView> {
         Expanded(
           child: canceled.isEmpty
               ? const Center(
-                  child: Text('삭제된 항목이 없습니다', style: TextStyle(color: Colors.white38, fontSize: 16)),
+                  child: Text(
+                    '삭제된 항목이 없습니다',
+                    style: TextStyle(color: Colors.white38, fontSize: 16),
+                  ),
                 )
               : ListView.separated(
                   itemCount: canceled.length,
@@ -353,7 +423,8 @@ class _MonthToolbar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final yearMonth = '${monthStart.year}.${monthStart.month.toString().padLeft(2, '0')}';
+    final yearMonth =
+        '${monthStart.year}.${monthStart.month.toString().padLeft(2, '0')}';
 
     final baseTextStyle = TextStyle(
       color: const Color(0xFFEAF2F2),
@@ -400,7 +471,9 @@ class _MonthToolbar extends StatelessWidget {
               lastDate: DateTime(2100),
               builder: (context, child) => Theme(
                 data: Theme.of(context).copyWith(
-                  colorScheme: const ColorScheme.dark(primary: Color(0xFF1976D2)),
+                  colorScheme: const ColorScheme.dark(
+                    primary: Color(0xFF1976D2),
+                  ),
                   dialogBackgroundColor: const Color(0xFF1F1F1F),
                 ),
                 child: child!,
@@ -424,13 +497,15 @@ class _PlannedTile extends StatelessWidget {
   final SessionOverride item;
   const _PlannedTile({required this.number, required this.item});
 
-  String _fmt(DateTime d) => '${d.month.toString().padLeft(2, '0')}.${d.day.toString().padLeft(2, '0')} ${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
+  String _fmt(DateTime d) =>
+      '${d.month.toString().padLeft(2, '0')}.${d.day.toString().padLeft(2, '0')} ${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
 
   @override
   Widget build(BuildContext context) {
     final repl = item.replacementClassDateTime;
     final orig = item.originalClassDateTime;
-    final duration = item.durationMinutes ?? DataManager.instance.academySettings.lessonDuration;
+    final duration = item.durationMinutes ??
+        DataManager.instance.academySettings.lessonDuration;
     final makeupText = repl != null ? _fmt(repl) : '-';
     final origText = orig != null ? _fmt(orig) : '-';
     return Container(
@@ -448,8 +523,18 @@ class _PlannedTile extends StatelessWidget {
             children: [
               Expanded(
                 child: Text(
-                  DataManager.instance.students.firstWhere((s) => s.student.id == item.studentId, orElse: () => DataManager.instance.students.first).student.name,
-                  style: const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.w600),
+                  DataManager.instance.students
+                      .firstWhere(
+                        (s) => s.student.id == item.studentId,
+                        orElse: () => DataManager.instance.students.first,
+                      )
+                      .student
+                      .name,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 17,
+                    fontWeight: FontWeight.w600,
+                  ),
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
@@ -464,7 +549,9 @@ class _PlannedTile extends StatelessWidget {
                         builder: (_) => _MakeupEditDialog(item: item),
                       );
                       if (updated != null) {
-                        await DataManager.instance.updateSessionOverride(updated);
+                        await DataManager.instance.updateSessionOverride(
+                          updated,
+                        );
                       }
                     },
                   ),
@@ -486,19 +573,34 @@ class _PlannedTile extends StatelessWidget {
             children: [
               Text(
                 makeupText,
-                style: const TextStyle(color: Color(0xFF33A373), fontSize: 18, fontWeight: FontWeight.w700),
+                style: const TextStyle(
+                  color: Color(0xFF33A373),
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
               if (orig != null) ...[
                 const SizedBox(width: 10),
-                const Icon(Icons.arrow_back_ios_new, size: 15, color: Colors.white60),
+                const Icon(
+                  Icons.arrow_back_ios_new,
+                  size: 15,
+                  color: Colors.white60,
+                ),
                 const SizedBox(width: 10),
                 Text(
                   origText,
-                  style: const TextStyle(color: Colors.white70, fontSize: 18, fontWeight: FontWeight.w600),
+                  style: const TextStyle(
+                    color: Colors.white70,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ],
               const Spacer(),
-              Text('기간: ${duration}분', style: const TextStyle(color: Colors.white54, fontSize: 13)),
+              Text(
+                '기간: ${duration}분',
+                style: const TextStyle(color: Colors.white54, fontSize: 13),
+              ),
             ],
           ),
         ],
@@ -532,7 +634,9 @@ class _CompletedTile extends StatelessWidget {
             children: [
               Icon(
                 isAbsent ? Icons.close : Icons.check,
-                color: isAbsent ? const Color(0xFFE57373) : const Color(0xFF4CAF50),
+                color: isAbsent
+                    ? const Color(0xFFE57373)
+                    : const Color(0xFF4CAF50),
                 size: 22,
               ),
             ],
@@ -540,7 +644,11 @@ class _CompletedTile extends StatelessWidget {
           const SizedBox(height: 8),
           Text(
             isAbsent ? '결석' : '출석 완료',
-            style: TextStyle(color: Colors.white.withOpacity(0.7), fontSize: 15, fontWeight: FontWeight.w600),
+            style: TextStyle(
+              color: Colors.white.withOpacity(0.7),
+              fontSize: 15,
+              fontWeight: FontWeight.w600,
+            ),
           ),
         ],
       ),
@@ -555,15 +663,23 @@ class _OverrideTile extends StatelessWidget {
 
   String _fmt(DateTime d) {
     return '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')} '
-           '${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
+        '${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
   }
 
   @override
   Widget build(BuildContext context) {
-    final studentName = DataManager.instance.students.firstWhere((s) => s.student.id == item.studentId, orElse: () => DataManager.instance.students.first).student.name;
+    final studentName = DataManager.instance.students
+        .firstWhere(
+          (s) => s.student.id == item.studentId,
+          orElse: () => DataManager.instance.students.first,
+        )
+        .student
+        .name;
     final original = item.originalClassDateTime;
     final repl = item.replacementClassDateTime;
-    final Color statusColor = item.status == OverrideStatus.canceled ? const Color(0xFFE53E3E) : const Color(0xFF1976D2);
+    final Color statusColor = item.status == OverrideStatus.canceled
+        ? const Color(0xFFE53E3E)
+        : const Color(0xFF1976D2);
 
     if (simple) {
       return Expanded(
@@ -574,7 +690,11 @@ class _OverrideTile extends StatelessWidget {
               children: [
                 Text(
                   studentName,
-                  style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600),
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
                 const Spacer(),
                 if (item.status == OverrideStatus.planned)
@@ -590,12 +710,16 @@ class _OverrideTile extends StatelessWidget {
                           );
                           if (updated != null) {
                             try {
-                              await DataManager.instance.updateSessionOverride(updated);
+                              await DataManager.instance.updateSessionOverride(
+                                updated,
+                              );
                               if (context.mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                                  content: Text('보강이 수정되었습니다.'),
-                                  backgroundColor: Color(0xFF1976D2),
-                                ));
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text('보강이 수정되었습니다.'),
+                                    backgroundColor: Color(0xFF1976D2),
+                                  ),
+                                );
                               }
                             } catch (e) {
                               // error handling
@@ -609,7 +733,9 @@ class _OverrideTile extends StatelessWidget {
                         tooltip: '취소',
                         color: const Color(0xFFE57373),
                         onTap: () async {
-                          await DataManager.instance.cancelSessionOverride(item.id);
+                          await DataManager.instance.cancelSessionOverride(
+                            item.id,
+                          );
                         },
                       ),
                     ],
@@ -620,14 +746,24 @@ class _OverrideTile extends StatelessWidget {
             if (repl != null)
               Row(
                 children: [
-                  const Icon(Icons.access_time, size: 14, color: Color(0xFF64B5F6)),
+                  const Icon(
+                    Icons.access_time,
+                    size: 14,
+                    color: Color(0xFF64B5F6),
+                  ),
                   const SizedBox(width: 6),
-                  Text(_fmt(repl), style: const TextStyle(color: Colors.white70, fontSize: 14)),
+                  Text(
+                    _fmt(repl),
+                    style: const TextStyle(color: Colors.white70, fontSize: 14),
+                  ),
                 ],
               ),
             if (item.durationMinutes != null) ...[
               const SizedBox(height: 4),
-              Text('${item.durationMinutes}분', style: const TextStyle(color: Colors.white38, fontSize: 12)),
+              Text(
+                '${item.durationMinutes}분',
+                style: const TextStyle(color: Colors.white38, fontSize: 12),
+              ),
             ],
           ],
         ),
@@ -648,7 +784,14 @@ class _OverrideTile extends StatelessWidget {
           Row(
             children: [
               Expanded(
-                child: Text(studentName, style: const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.w600)),
+                child: Text(
+                  studentName,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 17,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
               ),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -659,7 +802,11 @@ class _OverrideTile extends StatelessWidget {
                 ),
                 child: Text(
                   item.status == OverrideStatus.canceled ? '취소됨' : '예정',
-                  style: TextStyle(color: statusColor, fontSize: 12, fontWeight: FontWeight.bold),
+                  style: TextStyle(
+                    color: statusColor,
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
               ),
             ],
@@ -669,20 +816,35 @@ class _OverrideTile extends StatelessWidget {
             children: [
               Text(
                 repl != null ? _fmt(repl) : '-',
-                style: const TextStyle(color: Color(0xFF33A373), fontSize: 18, fontWeight: FontWeight.w700),
+                style: const TextStyle(
+                  color: Color(0xFF33A373),
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
               if (original != null) ...[
                 const SizedBox(width: 10),
-                const Icon(Icons.arrow_back_ios_new, size: 15, color: Colors.white60),
+                const Icon(
+                  Icons.arrow_back_ios_new,
+                  size: 15,
+                  color: Colors.white60,
+                ),
                 const SizedBox(width: 10),
                 Text(
                   _fmt(original),
-                  style: const TextStyle(color: Colors.white70, fontSize: 18, fontWeight: FontWeight.w600),
+                  style: const TextStyle(
+                    color: Colors.white70,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ],
               const Spacer(),
               if (item.durationMinutes != null)
-                Text('기간: ${item.durationMinutes}분', style: const TextStyle(color: Colors.white54, fontSize: 13)),
+                Text(
+                  '기간: ${item.durationMinutes}분',
+                  style: const TextStyle(color: Colors.white54, fontSize: 13),
+                ),
             ],
           ),
         ],
@@ -728,11 +890,13 @@ extension on _MakeupViewState {
     );
     if (mounted && saved == true) {
       await DataManager.instance.loadSessionOverrides();
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('보강이 추가되었습니다.'),
-        backgroundColor: Color(0xFF1976D2),
-        duration: Duration(milliseconds: 1500),
-      ));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('보강이 추가되었습니다.'),
+          backgroundColor: Color(0xFF1976D2),
+          duration: Duration(milliseconds: 1500),
+        ),
+      );
     }
   }
 }
@@ -761,7 +925,10 @@ class _MakeupAddDialogState extends State<MakeupAddDialog> {
   Widget build(BuildContext context) {
     return AlertDialog(
       backgroundColor: const Color(0xFF1F1F1F),
-      title: const Text('추가 수업', style: TextStyle(color: Colors.white, fontSize: 18)),
+      title: const Text(
+        '추가 수업',
+        style: TextStyle(color: Colors.white, fontSize: 18),
+      ),
       content: SizedBox(
         width: 380,
         child: Column(
@@ -769,33 +936,49 @@ class _MakeupAddDialogState extends State<MakeupAddDialog> {
           children: [
             const SizedBox(height: 24),
             ListTile(
-              leading: const Icon(Icons.person_add_alt_1, color: Colors.white70),
-              title: Text(_studentName ?? '학생 선택', style: const TextStyle(color: Colors.white)),
+              leading: const Icon(
+                Icons.person_add_alt_1,
+                color: Colors.white70,
+              ),
+              title: Text(
+                _studentName ?? '학생 선택',
+                style: const TextStyle(color: Colors.white),
+              ),
               onTap: _pickStudent,
               tileColor: const Color(0xFF2A2A2A),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
             ),
             const SizedBox(height: 12),
             ListTile(
               leading: const Icon(Icons.calendar_today, color: Colors.white70),
-              title: Text(_selectedDate == null
-                  ? '날짜 선택'
-                  : '${_selectedDate!.year}-${_two(_selectedDate!.month)}-${_two(_selectedDate!.day)}',
-                  style: const TextStyle(color: Colors.white)),
+              title: Text(
+                _selectedDate == null
+                    ? '날짜 선택'
+                    : '${_selectedDate!.year}-${_two(_selectedDate!.month)}-${_two(_selectedDate!.day)}',
+                style: const TextStyle(color: Colors.white),
+              ),
               onTap: _pickDate,
               tileColor: const Color(0xFF2A2A2A),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
             ),
             const SizedBox(height: 12),
             ListTile(
               leading: const Icon(Icons.access_time, color: Colors.white70),
-              title: Text(_selectedTime == null
-                  ? '시간 선택'
-                  : '${_two(_selectedTime!.hour)}:${_two(_selectedTime!.minute)}',
-                  style: const TextStyle(color: Colors.white)),
+              title: Text(
+                _selectedTime == null
+                    ? '시간 선택'
+                    : '${_two(_selectedTime!.hour)}:${_two(_selectedTime!.minute)}',
+                style: const TextStyle(color: Colors.white),
+              ),
               onTap: _pickTime,
               tileColor: const Color(0xFF2A2A2A),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
             ),
             const SizedBox(height: 12),
             Row(
@@ -813,7 +996,9 @@ class _MakeupAddDialogState extends State<MakeupAddDialog> {
                       initialValue: _duration.toString(),
                       keyboardType: TextInputType.number,
                       style: const TextStyle(color: Colors.white),
-                      decoration: const InputDecoration(border: InputBorder.none),
+                      decoration: const InputDecoration(
+                        border: InputBorder.none,
+                      ),
                       onChanged: (v) {
                         final n = int.tryParse(v);
                         if (n != null && n > 0 && n <= 360) _duration = n;
@@ -822,7 +1007,7 @@ class _MakeupAddDialogState extends State<MakeupAddDialog> {
                   ),
                 ),
               ],
-            )
+            ),
           ],
         ),
       ),
@@ -902,9 +1087,12 @@ class _MakeupAddDialogState extends State<MakeupAddDialog> {
               dialBackgroundColor: Color(0xFF18181A),
               entryModeIconColor: Color(0xFF1976D2),
               shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.all(Radius.circular(24))
+                borderRadius: BorderRadius.all(Radius.circular(24)),
               ),
-              helpTextStyle: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+              helpTextStyle: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+              ),
               dayPeriodTextColor: Colors.white,
               dayPeriodColor: Color(0xFF1976D2),
             ),
@@ -918,14 +1106,22 @@ class _MakeupAddDialogState extends State<MakeupAddDialog> {
 
   Future<void> _save() async {
     if (_studentId == null || _selectedDate == null || _selectedTime == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('학생/날짜/시간을 선택해 주세요'),
-        backgroundColor: Color(0xFFE53E3E),
-      ));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('학생/날짜/시간을 선택해 주세요'),
+          backgroundColor: Color(0xFFE53E3E),
+        ),
+      );
       return;
     }
-    final dt = DateTime(_selectedDate!.year, _selectedDate!.month, _selectedDate!.day, _selectedTime!.hour, _selectedTime!.minute);
-    
+    final dt = DateTime(
+      _selectedDate!.year,
+      _selectedDate!.month,
+      _selectedDate!.day,
+      _selectedTime!.hour,
+      _selectedTime!.minute,
+    );
+
     final ov = SessionOverride(
       studentId: _studentId!,
       overrideType: OverrideType.add,
@@ -938,10 +1134,12 @@ class _MakeupAddDialogState extends State<MakeupAddDialog> {
       await DataManager.instance.addSessionOverride(ov);
       if (mounted) Navigator.of(context).pop(true);
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('보강 저장 실패: $e'),
-        backgroundColor: const Color(0xFFE53E3E),
-      ));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('보강 저장 실패: $e'),
+          backgroundColor: const Color(0xFFE53E3E),
+        ),
+      );
     }
   }
 
@@ -953,7 +1151,10 @@ class _StudentPickerProxy extends StatelessWidget {
   const _StudentPickerProxy();
   @override
   Widget build(BuildContext context) {
-    return _ProxyContent(onPicked: (id, name) => Navigator.of(context).pop({'id': id, 'name': name}));
+    return _ProxyContent(
+      onPicked: (id, name) =>
+          Navigator.of(context).pop({'id': id, 'name': name}),
+    );
   }
 }
 
@@ -999,7 +1200,12 @@ class _StudentListState extends State<_StudentList> {
   @override
   Widget build(BuildContext context) {
     final students = DataManager.instance.students
-        .where((s) => _query.isEmpty || s.student.name.contains(_query) || s.student.school.contains(_query))
+        .where(
+          (s) =>
+              _query.isEmpty ||
+              s.student.name.contains(_query) ||
+              s.student.school.contains(_query),
+        )
         .toList();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1009,8 +1215,12 @@ class _StudentListState extends State<_StudentList> {
             hintText: '학생 이름/학교 검색',
             hintStyle: TextStyle(color: Colors.white54),
             prefixIcon: Icon(Icons.search, color: Colors.white70),
-            enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
-            focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1976D2))),
+            enabledBorder: OutlineInputBorder(
+              borderSide: BorderSide(color: Colors.white24),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderSide: BorderSide(color: Color(0xFF1976D2)),
+            ),
           ),
           style: const TextStyle(color: Colors.white),
           onChanged: (v) => setState(() => _query = v),
@@ -1019,12 +1229,19 @@ class _StudentListState extends State<_StudentList> {
         Expanded(
           child: ListView.separated(
             itemCount: students.length,
-            separatorBuilder: (_, __) => const Divider(color: Colors.white12, height: 1),
+            separatorBuilder: (_, __) =>
+                const Divider(color: Colors.white12, height: 1),
             itemBuilder: (context, idx) {
               final si = students[idx];
               return ListTile(
-                title: Text(si.student.name, style: const TextStyle(color: Colors.white)),
-                subtitle: Text('${si.student.school} / ${si.student.grade}학년', style: const TextStyle(color: Colors.white70)),
+                title: Text(
+                  si.student.name,
+                  style: const TextStyle(color: Colors.white),
+                ),
+                subtitle: Text(
+                  '${si.student.school} / ${si.student.grade}학년',
+                  style: const TextStyle(color: Colors.white70),
+                ),
                 onTap: () => widget.onPicked(si.student.id, si.student.name),
               );
             },
@@ -1039,7 +1256,11 @@ class _Badge extends StatelessWidget {
   final String text;
   final Color color;
   final bool outlined;
-  const _Badge({required this.text, required this.color, this.outlined = false});
+  const _Badge({
+    required this.text,
+    required this.color,
+    this.outlined = false,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1080,7 +1301,8 @@ class _MakeupEditDialogState extends State<_MakeupEditDialog> {
   @override
   void initState() {
     super.initState();
-    _duration = widget.item.durationMinutes ?? DataManager.instance.academySettings.lessonDuration;
+    _duration = widget.item.durationMinutes ??
+        DataManager.instance.academySettings.lessonDuration;
     if (widget.item.originalClassDateTime != null) {
       final dt = widget.item.originalClassDateTime!;
       _dateOriginal = DateTime(dt.year, dt.month, dt.day);
@@ -1109,34 +1331,51 @@ class _MakeupEditDialogState extends State<_MakeupEditDialog> {
                 children: [
                   Align(
                     alignment: Alignment.centerLeft,
-                    child: Text('원본 일정', style: TextStyle(color: Colors.white70)),
+                    child: Text(
+                      '원본 일정',
+                      style: TextStyle(color: Colors.white70),
+                    ),
                   ),
                   const SizedBox(height: 8),
                   Row(
                     children: [
                       Expanded(
                         child: ListTile(
-                          leading: const Icon(Icons.calendar_today, color: Colors.white70),
+                          leading: const Icon(
+                            Icons.calendar_today,
+                            color: Colors.white70,
+                          ),
                           title: Text(
-                            _dateOriginal == null ? '날짜 선택' : _fmtDate(_dateOriginal!),
+                            _dateOriginal == null
+                                ? '날짜 선택'
+                                : _fmtDate(_dateOriginal!),
                             style: const TextStyle(color: Colors.white),
                           ),
                           onTap: () => _pickDate(isReplacement: false),
                           tileColor: const Color(0xFF2A2A2A),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
                         ),
                       ),
                       const SizedBox(width: 8),
                       Expanded(
                         child: ListTile(
-                          leading: const Icon(Icons.access_time, color: Colors.white70),
+                          leading: const Icon(
+                            Icons.access_time,
+                            color: Colors.white70,
+                          ),
                           title: Text(
-                            _timeOriginal == null ? '시간 선택' : _fmtTime(_timeOriginal!),
+                            _timeOriginal == null
+                                ? '시간 선택'
+                                : _fmtTime(_timeOriginal!),
                             style: const TextStyle(color: Colors.white),
                           ),
                           onTap: () => _pickTime(isReplacement: false),
                           tileColor: const Color(0xFF2A2A2A),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
                         ),
                       ),
                     ],
@@ -1150,7 +1389,9 @@ class _MakeupEditDialogState extends State<_MakeupEditDialog> {
                 Align(
                   alignment: Alignment.centerLeft,
                   child: Text(
-                    widget.item.overrideType == OverrideType.add ? '날짜' : '보강 일정',
+                    widget.item.overrideType == OverrideType.add
+                        ? '날짜'
+                        : '보강 일정',
                     style: TextStyle(color: Colors.white70),
                   ),
                 ),
@@ -1159,27 +1400,41 @@ class _MakeupEditDialogState extends State<_MakeupEditDialog> {
                   children: [
                     Expanded(
                       child: ListTile(
-                        leading: const Icon(Icons.calendar_today, color: Colors.white70),
+                        leading: const Icon(
+                          Icons.calendar_today,
+                          color: Colors.white70,
+                        ),
                         title: Text(
-                          _dateReplacement == null ? '날짜 선택' : _fmtDate(_dateReplacement!),
+                          _dateReplacement == null
+                              ? '날짜 선택'
+                              : _fmtDate(_dateReplacement!),
                           style: const TextStyle(color: Colors.white),
                         ),
                         onTap: () => _pickDate(isReplacement: true),
                         tileColor: const Color(0xFF2A2A2A),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
                       ),
                     ),
                     const SizedBox(width: 8),
                     Expanded(
                       child: ListTile(
-                        leading: const Icon(Icons.access_time, color: Colors.white70),
+                        leading: const Icon(
+                          Icons.access_time,
+                          color: Colors.white70,
+                        ),
                         title: Text(
-                          _timeReplacement == null ? '시간 선택' : _fmtTime(_timeReplacement!),
+                          _timeReplacement == null
+                              ? '시간 선택'
+                              : _fmtTime(_timeReplacement!),
                           style: const TextStyle(color: Colors.white),
                         ),
                         onTap: () => _pickTime(isReplacement: true),
                         tileColor: const Color(0xFF2A2A2A),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
                       ),
                     ),
                   ],
@@ -1193,13 +1448,18 @@ class _MakeupEditDialogState extends State<_MakeupEditDialog> {
                 const SizedBox(width: 12),
                 Expanded(
                   child: Container(
-                    decoration: BoxDecoration(color: const Color(0xFF2A2A2A), borderRadius: BorderRadius.circular(8)),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF2A2A2A),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
                     padding: const EdgeInsets.symmetric(horizontal: 12),
                     child: TextFormField(
                       initialValue: _duration.toString(),
                       keyboardType: TextInputType.number,
                       style: const TextStyle(color: Colors.white),
-                      decoration: const InputDecoration(border: InputBorder.none),
+                      decoration: const InputDecoration(
+                        border: InputBorder.none,
+                      ),
                       onChanged: (v) {
                         final n = int.tryParse(v);
                         if (n != null && n > 0 && n <= 360) _duration = n;
@@ -1208,7 +1468,7 @@ class _MakeupEditDialogState extends State<_MakeupEditDialog> {
                   ),
                 ),
               ],
-            )
+            ),
           ],
         ),
       ),
@@ -1226,8 +1486,10 @@ class _MakeupEditDialogState extends State<_MakeupEditDialog> {
     );
   }
 
-  String _fmtDate(DateTime d) => '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
-  String _fmtTime(TimeOfDay t) => '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+  String _fmtDate(DateTime d) =>
+      '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+  String _fmtTime(TimeOfDay t) =>
+      '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
 
   Future<void> _pickDate({required bool isReplacement}) async {
     final initial = isReplacement ? _dateReplacement : _dateOriginal;
@@ -1272,7 +1534,10 @@ class _MakeupEditDialogState extends State<_MakeupEditDialog> {
             helpTextStyle: TextStyle(color: Colors.white),
             entryModeIconColor: Color(0xFF1976D2),
           ),
-          colorScheme: const ColorScheme.dark(primary: Color(0xFF1976D2), surface: Color(0xFF1F1F1F)),
+          colorScheme: const ColorScheme.dark(
+            primary: Color(0xFF1976D2),
+            surface: Color(0xFF1F1F1F),
+          ),
         ),
         child: child!,
       ),
@@ -1297,14 +1562,20 @@ class _MakeupEditDialogState extends State<_MakeupEditDialog> {
     DateTime? origDt;
     if (widget.item.overrideType != OverrideType.add) {
       origDt = DateTime(
-        _dateOriginal!.year, _dateOriginal!.month, _dateOriginal!.day,
-        _timeOriginal!.hour, _timeOriginal!.minute,
+        _dateOriginal!.year,
+        _dateOriginal!.month,
+        _dateOriginal!.day,
+        _timeOriginal!.hour,
+        _timeOriginal!.minute,
       );
     }
 
     final replDt = DateTime(
-      _dateReplacement!.year, _dateReplacement!.month, _dateReplacement!.day,
-      _timeReplacement!.hour, _timeReplacement!.minute,
+      _dateReplacement!.year,
+      _dateReplacement!.month,
+      _dateReplacement!.day,
+      _timeReplacement!.hour,
+      _timeReplacement!.minute,
     );
 
     final updated = widget.item.copyWith(
@@ -1315,4 +1586,3 @@ class _MakeupEditDialogState extends State<_MakeupEditDialog> {
     Navigator.of(context).pop(updated);
   }
 }
-
