@@ -16,12 +16,20 @@ class HomeworkQuickAddProxyDialog extends StatefulWidget {
   final Color? initialColor;
   final List<StudentFlow> flows;
   final String? initialFlowId;
+  final bool childAddMode;
+  final String? lockedGroupTitle;
+  final String? lockedBookId;
+  final String? lockedGradeLabel;
   const HomeworkQuickAddProxyDialog({
     required this.studentId,
     required this.flows,
     this.initialTitle,
     this.initialColor,
     this.initialFlowId,
+    this.childAddMode = false,
+    this.lockedGroupTitle,
+    this.lockedBookId,
+    this.lockedGradeLabel,
   });
   @override
   State<HomeworkQuickAddProxyDialog> createState() =>
@@ -71,6 +79,23 @@ class HomeworkQuickAddProxyDialogState
   String? _expandedBigKey;
   String? _expandedMidKey;
 
+  bool get _isChildAddMode => widget.childAddMode;
+
+  String? get _lockedBookIdentity {
+    final bookId = (widget.lockedBookId ?? '').trim();
+    final gradeLabel = (widget.lockedGradeLabel ?? '').trim();
+    if (bookId.isEmpty || gradeLabel.isEmpty) return null;
+    return '$bookId|$gradeLabel';
+  }
+
+  String? _lockedLinkedBookKeyForFlow(String flowId) {
+    final identity = _lockedBookIdentity;
+    if (identity == null) return null;
+    final cleanedFlowId = flowId.trim();
+    if (cleanedFlowId.isEmpty) return null;
+    return '$cleanedFlowId|$identity';
+  }
+
   _LinkedTextbook? get _selectedLinkedBook {
     final key = _selectedLinkedBookKey;
     if (key == null) return null;
@@ -90,7 +115,9 @@ class HomeworkQuickAddProxyDialogState
     _page = ImeAwareTextEditingController(text: '');
     _count = ImeAwareTextEditingController(text: '');
     _memo = ImeAwareTextEditingController(text: '');
-    final initialGroupTitle = (widget.initialTitle ?? '').trim();
+    final initialGroupTitle = _isChildAddMode
+        ? (widget.lockedGroupTitle ?? widget.initialTitle ?? '').trim()
+        : (widget.initialTitle ?? '').trim();
     _groupTitle = ImeAwareTextEditingController(
       text: initialGroupTitle.isEmpty ? '그룹 과제' : initialGroupTitle,
     );
@@ -102,7 +129,10 @@ class HomeworkQuickAddProxyDialogState
       _flowId = widget.flows.isNotEmpty ? widget.flows.first.id : '';
     }
     unawaited(_loadAllFlowLinkedBooks());
-    _handleFlowChanged();
+    _handleFlowChanged(
+      preferredLinkedBookKey:
+          _isChildAddMode ? _lockedLinkedBookKeyForFlow(_flowId) : null,
+    );
   }
 
   @override
@@ -265,6 +295,8 @@ class HomeworkQuickAddProxyDialogState
     String? preferredLinkedBookKey,
     bool forceNoBookSelection = false,
   }) async {
+    final lockedKeyForFlow =
+        _isChildAddMode ? _lockedLinkedBookKeyForFlow(_flowId) : null;
     if (_flowId.isEmpty) {
       if (!mounted) return;
       setState(() {
@@ -283,7 +315,9 @@ class HomeworkQuickAddProxyDialogState
       _loadingFlowTextbooks = true;
       _loadingMetadata = false;
       _linkedTextbooks = const <_LinkedTextbook>[];
-      if (forceNoBookSelection) {
+      if (_isChildAddMode) {
+        _selectedLinkedBookKey = lockedKeyForFlow;
+      } else if (forceNoBookSelection) {
         _selectedLinkedBookKey = null;
       } else if (preferredLinkedBookKey != null) {
         _selectedLinkedBookKey = preferredLinkedBookKey;
@@ -302,11 +336,16 @@ class HomeworkQuickAddProxyDialogState
         flowId: _flowId,
         flowName: _flowNameById(_flowId),
       );
-      final preserveKey = preferredLinkedBookKey ?? _selectedLinkedBookKey;
+      final preserveKey = _isChildAddMode
+          ? lockedKeyForFlow
+          : (preferredLinkedBookKey ?? _selectedLinkedBookKey);
       final hasPreserveKey =
           preserveKey != null && links.any((e) => e.key == preserveKey);
-      final nextSelectedKey =
-          forceNoBookSelection ? null : (hasPreserveKey ? preserveKey : null);
+      final nextSelectedKey = _isChildAddMode
+          ? (hasPreserveKey ? preserveKey : null)
+          : (forceNoBookSelection
+              ? null
+              : (hasPreserveKey ? preserveKey : null));
       setState(() {
         _linkedTextbooks = links;
         _selectedLinkedBookKey = nextSelectedKey;
@@ -894,6 +933,13 @@ class HomeworkQuickAddProxyDialogState
   }
 
   Future<void> _generateGroupTitleByAi() async {
+    if (_isChildAddMode) {
+      final locked = (widget.lockedGroupTitle ?? '').trim();
+      if (locked.isNotEmpty) {
+        _setControllerText(_groupTitle, locked);
+      }
+      return;
+    }
     if (_draftGroupItems.isEmpty) {
       _setControllerText(_groupTitle, '그룹 과제');
       return;
@@ -1989,10 +2035,11 @@ class HomeworkQuickAddProxyDialogState
   }
 
   Widget _buildFlowSelectorDropdown({required bool enabled}) {
+    final selectorEnabled = enabled && !_isChildAddMode;
     final selectedValue =
         widget.flows.any((f) => f.id == _flowId) ? _flowId : null;
     return Opacity(
-      opacity: enabled ? 1.0 : 0.58,
+      opacity: selectorEnabled ? 1.0 : 0.58,
       child: DropdownButtonFormField<String>(
         value: selectedValue,
         items: widget.flows
@@ -2003,7 +2050,7 @@ class HomeworkQuickAddProxyDialogState
               ),
             )
             .toList(growable: false),
-        onChanged: enabled
+        onChanged: selectorEnabled
             ? (v) async {
                 if (_draftGroupItems.isNotEmpty) {
                   _showDialogSnackBar('하위 과제가 있을 때는 플로우를 변경할 수 없습니다.');
@@ -2020,7 +2067,11 @@ class HomeworkQuickAddProxyDialogState
                 await _handleFlowChanged(forceNoBookSelection: true);
               }
             : null,
-        decoration: _inputDecoration(enabled ? '플로우 선택' : '플로우 선택 (교재 선택 중)'),
+        decoration: _inputDecoration(
+          _isChildAddMode
+              ? '플로우 고정 (그룹 기준)'
+              : (selectorEnabled ? '플로우 선택' : '플로우 선택 (교재 선택 중)'),
+        ),
         dropdownColor: kDlgPanelBg,
         style: const TextStyle(color: kDlgText, fontWeight: FontWeight.w600),
         iconEnabledColor: kDlgTextSub,
@@ -2164,6 +2215,8 @@ class HomeworkQuickAddProxyDialogState
   Widget _buildFlowGroupPanel() {
     final flowName = _flowNameById(_flowId).trim();
     final displayFlow = flowName.isEmpty ? '플로우 미선택' : flowName;
+    final groupTitle =
+        _groupTitle.text.trim().isEmpty ? '그룹 과제' : _groupTitle.text.trim();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -2172,11 +2225,31 @@ class HomeworkQuickAddProxyDialogState
           title: '그룹 과제 정보',
         ),
         const SizedBox(height: 8),
-        TextField(
-          controller: _groupTitle,
-          style: const TextStyle(color: kDlgText, fontWeight: FontWeight.w700),
-          decoration: _inputDecoration('그룹 제목', hint: '예: 3월 1주차 과제'),
-        ),
+        if (_isChildAddMode)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+            decoration: BoxDecoration(
+              color: kDlgPanelBg,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: kDlgBorder),
+            ),
+            child: Text(
+              '대상 그룹: $groupTitle',
+              style: const TextStyle(
+                color: kDlgText,
+                fontSize: 13.2,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          )
+        else
+          TextField(
+            controller: _groupTitle,
+            style:
+                const TextStyle(color: kDlgText, fontWeight: FontWeight.w700),
+            decoration: _inputDecoration('그룹 제목', hint: '예: 3월 1주차 과제'),
+          ),
         const SizedBox(height: 8),
         Container(
           width: double.infinity,
@@ -2374,7 +2447,7 @@ class HomeworkQuickAddProxyDialogState
         onPressed: _addDraftGroupItemFromInput,
         style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
         icon: const Icon(Icons.add),
-        label: const Text('과제 추가 버튼'),
+        label: Text(_isChildAddMode ? '하위 과제 추가' : '과제 추가 버튼'),
       ),
     );
   }
@@ -2628,6 +2701,7 @@ class HomeworkQuickAddProxyDialogState
   }
 
   Future<void> _submit({String action = 'add'}) async {
+    final resolvedAction = _isChildAddMode ? 'add' : action;
     if (_flowId.isEmpty) {
       _showDialogSnackBar('플로우를 선택하세요.');
       return;
@@ -2639,9 +2713,10 @@ class HomeworkQuickAddProxyDialogState
       Navigator.pop(context, {
         'studentId': widget.studentId,
         'groupMode': true,
+        if (_isChildAddMode) 'childAddMode': true,
         'groupTitle': groupTitle,
         'flowId': _flowId,
-        'action': action,
+        'action': resolvedAction,
         'items':
             _draftGroupItems.map((e) => e.toJson()).toList(growable: false),
       });
@@ -2670,7 +2745,7 @@ class HomeworkQuickAddProxyDialogState
       Navigator.pop(context, {
         'studentId': widget.studentId,
         'flowId': _flowId,
-        'action': action,
+        'action': resolvedAction,
         'type': linkedType,
         'title': title,
         'page': page,
@@ -2728,7 +2803,7 @@ class HomeworkQuickAddProxyDialogState
     Navigator.pop(context, {
       'studentId': widget.studentId,
       'flowId': _flowId,
-      'action': action,
+      'action': resolvedAction,
       'type': linkedType,
       'title': title,
       'page': mergedTask.page,
@@ -2768,24 +2843,37 @@ class HomeworkQuickAddProxyDialogState
     }
     final hasDraftItems = _draftGroupItems.isNotEmpty;
     final draftBookKey = _currentDraftBookKey();
+    final lockedBookKey = _lockedBookIdentity;
+    final visibleLinks = _allLinkedTextbooks
+        .where((link) => !_isChildAddMode || link.flowId == _flowId)
+        .toList(growable: false);
+    final hasLockedCandidate = lockedBookKey != null &&
+        visibleLinks.any((link) => _bookIdentity(link) == lockedBookKey);
+    if (visibleLinks.isEmpty) {
+      return _buildNoticeCard('현재 그룹 플로우에 연결된 교재가 없습니다.');
+    }
     return Wrap(
       spacing: 10,
       runSpacing: 10,
       children: [
-        for (final link in _allLinkedTextbooks)
+        for (final link in visibleLinks)
           (() {
             final linkBookKey = _bookIdentity(link);
             final selected = _selectedLinkedBookKey == link.key;
             final disabledByDraft =
                 hasDraftItems && linkBookKey != draftBookKey;
-            final enabled = !disabledByDraft;
+            final disabledByChildLock = _isChildAddMode &&
+                hasLockedCandidate &&
+                linkBookKey != lockedBookKey;
+            final enabled = !disabledByDraft && !disabledByChildLock;
             return _buildPickerChip(
               label: '${link.bookName} · ${link.gradeLabel}',
               selected: selected,
               enabled: enabled,
               onTap: () async {
+                if (!enabled) return;
                 if (_selectedLinkedBookKey == link.key) {
-                  if (hasDraftItems) {
+                  if (hasDraftItems || _isChildAddMode) {
                     return;
                   }
                   setState(() {
@@ -3036,8 +3124,10 @@ class HomeworkQuickAddProxyDialogState
     return AlertDialog(
       backgroundColor: kDlgBg,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      title: const Text('과제 추가',
-          style: TextStyle(color: kDlgText, fontWeight: FontWeight.w900)),
+      title: Text(
+        _isChildAddMode ? '하위 과제 추가' : '과제 추가',
+        style: const TextStyle(color: kDlgText, fontWeight: FontWeight.w900),
+      ),
       content: AnimatedContainer(
         duration: const Duration(milliseconds: 130),
         curve: Curves.easeOutQuad,
@@ -3066,18 +3156,19 @@ class HomeworkQuickAddProxyDialogState
           style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
           child: const Text('취소'),
         ),
-        OutlinedButton(
-          onPressed: () => _submit(action: 'reserve'),
-          style: OutlinedButton.styleFrom(
-            foregroundColor: kDlgText,
-            side: const BorderSide(color: kDlgBorder),
+        if (!_isChildAddMode)
+          OutlinedButton(
+            onPressed: () => _submit(action: 'reserve'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: kDlgText,
+              side: const BorderSide(color: kDlgBorder),
+            ),
+            child: const Text('예약'),
           ),
-          child: const Text('예약'),
-        ),
         FilledButton(
           onPressed: () => _submit(action: 'add'),
           style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
-          child: const Text('과제 내기'),
+          child: Text(_isChildAddMode ? '하위 과제 추가' : '과제 내기'),
         ),
       ],
     );

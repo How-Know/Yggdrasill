@@ -1873,6 +1873,60 @@ class HomeworkStore {
     }
   }
 
+  Future<bool> updateGroupTitle({
+    required String studentId,
+    required String groupId,
+    required String title,
+  }) async {
+    final cleanedGroupId = groupId.trim();
+    final cleanedTitle = title.trim();
+    if (cleanedGroupId.isEmpty || cleanedTitle.isEmpty) return false;
+    final groups = _groupsByStudentId[studentId];
+    if (groups == null || groups.isEmpty) return false;
+    final idx = groups.indexWhere((g) => g.id == cleanedGroupId);
+    if (idx < 0) return false;
+    final editableChildren = itemsInGroup(studentId, cleanedGroupId)
+        .where((e) => e.status != HomeworkStatus.completed)
+        .toList(growable: false);
+    final editableInWaiting = editableChildren.isNotEmpty &&
+        editableChildren.every((e) => e.phase == 1 && e.completedAt == null);
+    if (!editableInWaiting) return false;
+
+    final group = groups[idx];
+    final previousTitle = group.title;
+    if (previousTitle.trim() == cleanedTitle) return true;
+
+    group.title = cleanedTitle;
+    group.updatedAt = DateTime.now();
+    _bump();
+
+    try {
+      final academyId = (await TenantService.instance.getActiveAcademyId()) ??
+          await TenantService.instance.ensureActiveAcademy();
+      final supa = Supabase.instance.client;
+      await supa
+          .from('homework_groups')
+          .update({
+            'title': cleanedTitle,
+            'updated_at': DateTime.now().toUtc().toIso8601String(),
+          })
+          .eq('academy_id', academyId)
+          .eq('id', cleanedGroupId);
+      await _reloadGroups(
+        academyId: academyId,
+        studentId: studentId,
+        bump: false,
+      );
+      _bump();
+      return true;
+    } catch (e, st) {
+      group.title = previousTitle;
+      _bump();
+      debugPrint('[HW][groups][title-update][ERROR] $e\n$st');
+      return false;
+    }
+  }
+
   Future<void> moveToBottom(String studentId, String id) async {
     await placeItemAtActiveTail(studentId, id);
   }
@@ -2618,6 +2672,59 @@ class HomeworkStore {
       return _parseInt(raw);
     } catch (_) {
       return 0;
+    }
+  }
+
+  Future<bool> moveWaitingItemToGroup({
+    required String studentId,
+    required String itemId,
+    required String targetGroupId,
+    String? targetBeforeItemId,
+  }) async {
+    final cleanedItemId = itemId.trim();
+    final cleanedTargetGroupId = targetGroupId.trim();
+    final cleanedBeforeId = (targetBeforeItemId ?? '').trim();
+    if (cleanedItemId.isEmpty || cleanedTargetGroupId.isEmpty) return false;
+
+    final sourceItem = getById(studentId, cleanedItemId);
+    if (sourceItem == null) return false;
+    if (sourceItem.status == HomeworkStatus.completed ||
+        sourceItem.phase != 1) {
+      throw StateError('MOVE_ONLY_WAITING_PHASE');
+    }
+    if (await _hasActiveAssignmentForAny(studentId, [cleanedItemId])) {
+      throw StateError('ASSIGNMENT_EXISTS_FOR_MOVE_ITEM');
+    }
+
+    final sourceGroupId = (_groupIdByItemId[cleanedItemId] ?? '').trim();
+    if (sourceGroupId.isEmpty) {
+      throw StateError('MOVE_SOURCE_GROUP_NOT_FOUND');
+    }
+    if (sourceGroupId == cleanedTargetGroupId &&
+        cleanedBeforeId.isNotEmpty &&
+        cleanedBeforeId == cleanedItemId) {
+      return true;
+    }
+
+    try {
+      final academyId = (await TenantService.instance.getActiveAcademyId()) ??
+          await TenantService.instance.ensureActiveAcademy();
+      final raw = await Supabase.instance.client.rpc(
+        'homework_group_move_waiting',
+        params: {
+          'p_item_id': cleanedItemId,
+          'p_target_group_id': cleanedTargetGroupId,
+          'p_target_before_item_id':
+              cleanedBeforeId.isEmpty ? null : cleanedBeforeId,
+          'p_academy_id': academyId,
+        },
+      );
+      await _reloadStudent(studentId);
+      final result = (raw is Map<String, dynamic>) ? raw : <String, dynamic>{};
+      final moved = result['moved'];
+      return moved is bool ? moved : true;
+    } catch (e) {
+      throw StateError(e.toString());
     }
   }
 

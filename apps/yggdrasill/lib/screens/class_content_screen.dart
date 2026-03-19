@@ -3578,8 +3578,7 @@ Future<void> _showGroupChildMemoEditDialog({
   required String studentId,
   required HomeworkItem child,
 }) async {
-  final controller =
-      ImeAwareTextEditingController(text: (child.memo ?? '').trim());
+  final controller = TextEditingController(text: (child.memo ?? '').trim());
   final submitted = await showDialog<bool>(
     context: context,
     builder: (dialogContext) => AlertDialog(
@@ -3642,134 +3641,177 @@ Future<void> _showAddChildHomeworkDialog({
   required List<HomeworkItem> children,
 }) async {
   final template = children.isEmpty ? null : children.first;
-  final titleController = ImeAwareTextEditingController(
-    text: (template?.title ?? group.title).trim(),
-  );
-  final pageController =
-      ImeAwareTextEditingController(text: (template?.page ?? '').trim());
-  final countController = ImeAwareTextEditingController(
-    text: template?.count == null ? '' : '${template!.count}',
-  );
-  final typeController =
-      ImeAwareTextEditingController(text: (template?.type ?? '').trim());
-  final memoController =
-      ImeAwareTextEditingController(text: (template?.memo ?? '').trim());
+  final enabledFlows = await ensureEnabledFlowsForHomework(context, studentId);
+  if (enabledFlows.isEmpty) return;
 
+  final desiredFlowId =
+      (group.flowId ?? template?.flowId ?? enabledFlows.first.id).trim();
+  final initialFlowId = enabledFlows.any((f) => f.id == desiredFlowId)
+      ? desiredFlowId
+      : enabledFlows.first.id;
+
+  String? lockedBookId;
+  String? lockedGradeLabel;
+  for (final child in children) {
+    final candidateBookId = (child.bookId ?? '').trim();
+    final candidateGrade = (child.gradeLabel ?? '').trim();
+    if (candidateBookId.isEmpty || candidateGrade.isEmpty) continue;
+    lockedBookId = candidateBookId;
+    lockedGradeLabel = candidateGrade;
+    break;
+  }
+
+  final result = await showDialog<dynamic>(
+    context: context,
+    builder: (ctx) => HomeworkQuickAddProxyDialog(
+      studentId: studentId,
+      flows: enabledFlows,
+      initialFlowId: initialFlowId,
+      initialTitle: (template?.title ?? group.title).trim(),
+      initialColor: template?.color ?? const Color(0xFF1976D2),
+      childAddMode: true,
+      lockedGroupTitle: group.title.trim().isEmpty
+          ? (template?.title ?? '그룹 과제')
+          : group.title.trim(),
+      lockedBookId: lockedBookId,
+      lockedGradeLabel: lockedGradeLabel,
+    ),
+  );
+  if (!context.mounted || result is! Map<String, dynamic>) return;
+  if ((result['studentId'] as String?)?.trim() != studentId) return;
+
+  int? parsePositiveInt(dynamic value) {
+    if (value is int) return value > 0 ? value : null;
+    if (value is num) {
+      final parsed = value.toInt();
+      return parsed > 0 ? parsed : null;
+    }
+    if (value is String) {
+      final parsed = int.tryParse(value.trim());
+      return (parsed != null && parsed > 0) ? parsed : null;
+    }
+    return null;
+  }
+
+  List<Map<String, dynamic>>? parseUnitMappings(dynamic value) {
+    if (value is! List) return null;
+    final out = <Map<String, dynamic>>[];
+    for (final row in value) {
+      if (row is Map<String, dynamic>) {
+        out.add(Map<String, dynamic>.from(row));
+      } else if (row is Map) {
+        out.add(Map<String, dynamic>.from(row));
+      }
+    }
+    return out;
+  }
+
+  final rawItems = result['items'];
+  final entries = <Map<String, dynamic>>[];
+  if (rawItems is List) {
+    for (final row in rawItems) {
+      if (row is Map<String, dynamic>) {
+        entries.add(Map<String, dynamic>.from(row));
+      } else if (row is Map) {
+        entries.add(Map<String, dynamic>.from(row));
+      }
+    }
+  } else {
+    entries.add(Map<String, dynamic>.from(result));
+  }
+  if (entries.isEmpty) {
+    _showHomeworkChipSnackBar(context, '하위 과제가 비어 있습니다.');
+    return;
+  }
+
+  final flowId = (result['flowId'] as String?)?.trim();
+  int createdCount = 0;
+  for (final entry in entries) {
+    final createdId = await HomeworkStore.instance.addWaitingItemToGroup(
+      studentId: studentId,
+      groupId: group.id,
+      title: (entry['title'] as String?)?.trim() ?? '',
+      body: (entry['body'] as String?)?.trim(),
+      page: (entry['page'] as String?)?.trim(),
+      count: parsePositiveInt(entry['count']),
+      type: (entry['type'] as String?)?.trim(),
+      memo: (entry['memo'] as String?)?.trim(),
+      content: (entry['content'] as String?)?.trim(),
+      bookId: (entry['bookId'] as String?)?.trim(),
+      gradeLabel: (entry['gradeLabel'] as String?)?.trim(),
+      sourceUnitLevel: (entry['sourceUnitLevel'] as String?)?.trim(),
+      sourceUnitPath: (entry['sourceUnitPath'] as String?)?.trim(),
+      unitMappings: parseUnitMappings(entry['unitMappings']),
+      templateItemId: template?.id,
+      flowId: flowId,
+      color: entry['color'] as Color?,
+      defaultSplitParts: parsePositiveInt(entry['splitParts']),
+    );
+    if (createdId != null && createdId.isNotEmpty) {
+      createdCount += 1;
+    }
+  }
+
+  if (!context.mounted) return;
+  if (createdCount == entries.length) {
+    _showHomeworkChipSnackBar(context, '하위 과제 ${createdCount}개를 추가했어요.');
+    return;
+  }
+  if (createdCount > 0) {
+    _showHomeworkChipSnackBar(
+      context,
+      '하위 과제 ${createdCount}개를 추가했고 일부는 실패했어요.',
+    );
+    return;
+  }
+  _showHomeworkChipSnackBar(context, '하위 과제 추가에 실패했습니다.');
+}
+
+Future<void> _showHomeworkGroupTitleEditDialog({
+  required BuildContext context,
+  required String studentId,
+  required HomeworkGroup group,
+}) async {
+  final editableChildren = HomeworkStore.instance
+      .itemsInGroup(studentId, group.id)
+      .where((e) => e.status != HomeworkStatus.completed)
+      .toList(growable: false);
+  final editableInWaiting = editableChildren.isNotEmpty &&
+      editableChildren.every((e) => e.phase == 1 && e.completedAt == null);
+  if (!editableInWaiting) {
+    _showHomeworkChipSnackBar(context, '대기 상태 그룹 과제만 제목을 수정할 수 있습니다.');
+    return;
+  }
+
+  final controller = TextEditingController(text: group.title.trim());
   final submitted = await showDialog<bool>(
     context: context,
     builder: (dialogContext) => AlertDialog(
       backgroundColor: kDlgBg,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       title: const Text(
-        '하위 과제 추가',
+        '그룹 과제명 수정',
         style: TextStyle(color: kDlgText, fontWeight: FontWeight.w900),
       ),
-      content: SizedBox(
-        width: 500,
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: titleController,
-                style: const TextStyle(color: kDlgText),
-                decoration: InputDecoration(
-                  labelText: '제목',
-                  labelStyle: const TextStyle(color: kDlgTextSub),
-                  filled: true,
-                  fillColor: kDlgFieldBg,
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(10),
-                    borderSide: const BorderSide(color: kDlgBorder),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(10),
-                    borderSide: const BorderSide(color: kDlgAccent, width: 1.4),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: pageController,
-                style: const TextStyle(color: kDlgText),
-                decoration: InputDecoration(
-                  labelText: '페이지',
-                  labelStyle: const TextStyle(color: kDlgTextSub),
-                  hintText: '예) 10-15',
-                  hintStyle: const TextStyle(color: Color(0xFF6E7E7E)),
-                  filled: true,
-                  fillColor: kDlgFieldBg,
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(10),
-                    borderSide: const BorderSide(color: kDlgBorder),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(10),
-                    borderSide: const BorderSide(color: kDlgAccent, width: 1.4),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: countController,
-                keyboardType: TextInputType.number,
-                style: const TextStyle(color: kDlgText),
-                decoration: InputDecoration(
-                  labelText: '문항수',
-                  labelStyle: const TextStyle(color: kDlgTextSub),
-                  filled: true,
-                  fillColor: kDlgFieldBg,
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(10),
-                    borderSide: const BorderSide(color: kDlgBorder),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(10),
-                    borderSide: const BorderSide(color: kDlgAccent, width: 1.4),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: typeController,
-                style: const TextStyle(color: kDlgText),
-                decoration: InputDecoration(
-                  labelText: '유형',
-                  labelStyle: const TextStyle(color: kDlgTextSub),
-                  filled: true,
-                  fillColor: kDlgFieldBg,
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(10),
-                    borderSide: const BorderSide(color: kDlgBorder),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(10),
-                    borderSide: const BorderSide(color: kDlgAccent, width: 1.4),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: memoController,
-                minLines: 2,
-                maxLines: 5,
-                style: const TextStyle(color: kDlgText),
-                decoration: InputDecoration(
-                  labelText: '메모',
-                  labelStyle: const TextStyle(color: kDlgTextSub),
-                  filled: true,
-                  fillColor: kDlgFieldBg,
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(10),
-                    borderSide: const BorderSide(color: kDlgBorder),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(10),
-                    borderSide: const BorderSide(color: kDlgAccent, width: 1.4),
-                  ),
-                ),
-              ),
-            ],
+      content: TextField(
+        controller: controller,
+        autofocus: true,
+        maxLines: 1,
+        style: const TextStyle(color: kDlgText),
+        decoration: InputDecoration(
+          labelText: '그룹 과제명',
+          labelStyle: const TextStyle(color: kDlgTextSub),
+          hintText: '그룹 과제명을 입력하세요.',
+          hintStyle: const TextStyle(color: Color(0xFF6E7E7E)),
+          filled: true,
+          fillColor: kDlgFieldBg,
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(10),
+            borderSide: const BorderSide(color: kDlgBorder),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(10),
+            borderSide: const BorderSide(color: kDlgAccent, width: 1.4),
           ),
         ),
       ),
@@ -3782,136 +3824,89 @@ Future<void> _showAddChildHomeworkDialog({
         FilledButton(
           onPressed: () => Navigator.of(dialogContext).pop(true),
           style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
-          child: const Text('추가'),
+          child: const Text('저장'),
         ),
       ],
     ),
   );
-  if (submitted != true || !context.mounted) return;
-
-  final page = pageController.text.trim();
-  if (page.isEmpty) {
-    _showHomeworkChipSnackBar(context, '페이지를 입력해 주세요.');
+  if (submitted != true) return;
+  final nextTitle = controller.text.trim();
+  if (nextTitle.isEmpty) {
+    _showHomeworkChipSnackBar(context, '그룹 과제명을 입력해 주세요.');
     return;
   }
-
-  final createdId = await HomeworkStore.instance.addWaitingItemToGroup(
+  if (nextTitle == group.title.trim()) {
+    _showHomeworkChipSnackBar(context, '변경 내용이 없습니다.');
+    return;
+  }
+  final updated = await HomeworkStore.instance.updateGroupTitle(
     studentId: studentId,
     groupId: group.id,
-    title: titleController.text.trim(),
-    page: page,
-    count: int.tryParse(countController.text.trim()),
-    type: typeController.text.trim(),
-    memo: memoController.text.trim(),
-    templateItemId: template?.id,
+    title: nextTitle,
   );
   if (!context.mounted) return;
   _showHomeworkChipSnackBar(
     context,
-    createdId == null ? '하위 과제 추가에 실패했습니다.' : '하위 과제를 추가했어요.',
+    updated ? '그룹 과제명을 수정했어요.' : '그룹 과제명 수정에 실패했습니다.',
   );
 }
 
-String _mergeGroupChildMemoText(Iterable<HomeworkItem> items) {
-  final out = <String>[];
-  final seen = <String>{};
-  for (final item in items) {
-    final memo = (item.memo ?? '').trim();
-    if (memo.isEmpty) continue;
-    if (seen.add(memo)) out.add(memo);
-  }
-  return out.join('\n');
-}
-
-Future<void> _mergeGroupChildrenByDrag({
+Future<void> _moveGroupChildByDrag({
   required BuildContext context,
   required String studentId,
-  required HomeworkGroup group,
+  required HomeworkGroup targetGroup,
   required HomeworkItem source,
-  required HomeworkItem target,
+  HomeworkItem? targetBefore,
 }) async {
-  if (source.id == target.id) return;
   final sourceWaiting =
       source.status != HomeworkStatus.completed && source.phase == 1;
-  final targetWaiting =
-      target.status != HomeworkStatus.completed && target.phase == 1;
-  if (!sourceWaiting || !targetWaiting) {
-    _showHomeworkChipSnackBar(context, '병합은 대기 상태 하위 과제끼리만 가능합니다.');
+  if (!sourceWaiting) {
+    _showHomeworkChipSnackBar(context, '대기 상태 하위 과제만 이동할 수 있습니다.');
     return;
   }
+  if (targetBefore != null) {
+    final targetWaiting = targetBefore.status != HomeworkStatus.completed &&
+        targetBefore.phase == 1;
+    if (!targetWaiting) {
+      _showHomeworkChipSnackBar(context, '대기 상태 하위 과제 위치로만 이동할 수 있습니다.');
+      return;
+    }
+    if (targetBefore.id == source.id) return;
+  }
 
-  final shouldMerge = await showDialog<bool>(
-    context: context,
-    builder: (dialogContext) => AlertDialog(
-      backgroundColor: kDlgBg,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-      title: const Text(
-        '하위 과제 병합',
-        style: TextStyle(color: kDlgText, fontWeight: FontWeight.w900),
-      ),
-      content: Text(
-        '`${source.title.trim().isEmpty ? '(제목 없음)' : source.title.trim()}`을(를)\n'
-        '`${target.title.trim().isEmpty ? '(제목 없음)' : target.title.trim()}` 위로 합칠까요?',
-        style: const TextStyle(color: kDlgTextSub, height: 1.35),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(dialogContext).pop(false),
-          style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
-          child: const Text('취소'),
-        ),
-        FilledButton(
-          onPressed: () => Navigator.of(dialogContext).pop(true),
-          style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
-          child: const Text('병합'),
-        ),
-      ],
-    ),
-  );
-  if (shouldMerge != true || !context.mounted) return;
-
-  final mergedTitle = (target.title).trim().isNotEmpty
-      ? target.title.trim()
-      : ((source.title).trim().isNotEmpty
-          ? source.title.trim()
-          : (group.title.trim().isEmpty ? '병합 과제' : group.title.trim()));
-  final mergedPage = _mergeGroupPageText([source, target]).trim();
-  final mergedCountValue = ((source.count ?? 0) > 0 ? (source.count ?? 0) : 0) +
-      ((target.count ?? 0) > 0 ? (target.count ?? 0) : 0);
-  final mergedType = (target.type ?? '').trim().isNotEmpty
-      ? target.type!.trim()
-      : (source.type ?? '').trim();
-  final mergedMemo = _mergeGroupChildMemoText([target, source]);
+  final sourceGroupId =
+      (HomeworkStore.instance.groupIdOfItem(source.id) ?? '').trim();
+  final targetGroupId = targetGroup.id.trim();
+  if (sourceGroupId.isEmpty || targetGroupId.isEmpty) {
+    _showHomeworkChipSnackBar(context, '그룹 정보를 확인할 수 없어 이동하지 못했습니다.');
+    return;
+  }
+  final sameGroup = sourceGroupId == targetGroupId;
 
   try {
-    final mergedId = await HomeworkStore.instance.mergeWaitingItemsInGroup(
+    final moved = await HomeworkStore.instance.moveWaitingItemToGroup(
       studentId: studentId,
-      groupId: group.id,
-      itemIds: [source.id, target.id],
-      mergedTitle: mergedTitle,
-      mergedPage: mergedPage,
-      mergedCount: mergedCountValue > 0 ? mergedCountValue : null,
-      mergedType: mergedType,
-      mergedMemo: mergedMemo,
+      itemId: source.id,
+      targetGroupId: targetGroupId,
+      targetBeforeItemId: targetBefore?.id,
     );
-    if (mergedId != null && mergedMemo.trim().isNotEmpty) {
-      final mergedItem = HomeworkStore.instance.getById(studentId, mergedId);
-      if (mergedItem != null &&
-          (mergedItem.memo ?? '').trim() != mergedMemo.trim()) {
-        HomeworkStore.instance.edit(
-          studentId,
-          _copyHomeworkItemForInlineEdit(mergedItem, memo: mergedMemo.trim()),
-        );
-      }
-    }
     if (!context.mounted) return;
+    if (!moved) {
+      _showHomeworkChipSnackBar(context, '하위 과제 이동에 실패했습니다.');
+      return;
+    }
     _showHomeworkChipSnackBar(
       context,
-      mergedId == null ? '병합 결과를 확인하지 못했습니다.' : '드래그 병합 완료',
+      sameGroup ? '하위 과제 순서를 변경했어요.' : '하위 과제를 다른 그룹으로 이동했어요.',
     );
   } catch (e) {
     if (!context.mounted) return;
-    _showHomeworkChipSnackBar(context, '병합 실패: ${e.toString()}');
+    final message = e.toString();
+    if (message.contains('ASSIGNMENT') || message.contains('MOVE_BLOCKED')) {
+      _showHomeworkChipSnackBar(context, '숙제 연결된 과제는 이동할 수 없습니다.');
+      return;
+    }
+    _showHomeworkChipSnackBar(context, '하위 과제 이동 실패: $message');
   }
 }
 
@@ -4725,11 +4720,13 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
       0,
       (sum, item) => sum + (assignmentCounts[item.id] ?? 0),
     );
-    final submittedKeys = children
+    final submittedChildren = children
         .where((e) =>
             e.status != HomeworkStatus.completed &&
             e.completedAt == null &&
             e.phase == 3)
+        .toList(growable: false);
+    final submittedKeys = submittedChildren
         .map((e) => (studentId: studentId, itemId: e.id))
         .toList(growable: false);
     final bool groupPendingSelected = submittedKeys.any(
@@ -4741,6 +4738,8 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
     final bool groupIsSubmitted = submittedKeys.isNotEmpty;
     final bool groupIsWaiting = summary.phase == 1;
     final bool groupIsConfirmed = summary.phase == 4;
+    final bool blockDoubleTapForUncheckedHomework =
+        hasHomeworkAssignment && !groupIsSubmitted && !groupIsConfirmed;
     final bool groupSlideDownIsEdit = groupIsWaiting || groupIsConfirmed;
     final bool groupCanSlideDown =
         groupIsRunning || groupIsSubmitted || groupSlideDownIsEdit;
@@ -4843,7 +4842,16 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
           children: children,
         );
       },
-      onDoubleTap: null,
+      onDoubleTap: () {
+        if (printPickMode) return;
+        if (blockDoubleTapForUncheckedHomework) return;
+        if (submittedChildren.isNotEmpty) {
+          onGroupSubmittedDoubleTap?.call(studentId, submittedChildren);
+          return;
+        }
+        unawaited(
+            HomeworkStore.instance.bulkTransitionGroup(studentId, group.id));
+      },
       child: _buildHomeworkChipWithReorderHandle(
         index: i,
         enableReorderDrag: !groupExpanded,
@@ -4889,13 +4897,32 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
               ),
             );
           },
-          onGroupChildMergeDrop: (dragged, target) async {
-            await _mergeGroupChildrenByDrag(
+          onGroupTitleTap: groupIsWaiting && !printPickMode
+              ? () {
+                  unawaited(
+                    _showHomeworkGroupTitleEditDialog(
+                      context: context,
+                      studentId: studentId,
+                      group: group,
+                    ),
+                  );
+                }
+              : null,
+          onGroupChildDropBefore: (dragged, target) async {
+            await _moveGroupChildByDrag(
               context: context,
               studentId: studentId,
-              group: group,
+              targetGroup: group,
               source: dragged,
-              target: target,
+              targetBefore: target,
+            );
+          },
+          onGroupChildDropToEnd: (dragged) async {
+            await _moveGroupChildByDrag(
+              context: context,
+              studentId: studentId,
+              targetGroup: group,
+              source: dragged,
             );
           },
           onInfoTap: () {
@@ -5256,260 +5283,6 @@ Future<void> _showHomeworkGroupSplitDialog({
   }
 }
 
-Future<void> _showHomeworkGroupMergeDialog({
-  required BuildContext context,
-  required String studentId,
-  required HomeworkGroup group,
-}) async {
-  final waitingItems = HomeworkStore.instance
-      .itemsInGroup(studentId, group.id)
-      .where((e) =>
-          e.status != HomeworkStatus.completed &&
-          e.phase == 1 &&
-          e.completedAt == null)
-      .toList();
-  if (waitingItems.length < 2) {
-    _showHomeworkChipSnackBar(context, '병합은 대기 과제 2개 이상일 때 가능합니다.');
-    return;
-  }
-
-  final selectedIds = <String>{
-    waitingItems[0].id,
-    waitingItems[1].id,
-  };
-  final titleController = ImeAwareTextEditingController(
-    text: group.title.trim().isEmpty ? waitingItems.first.title : group.title,
-  );
-  final pageController = ImeAwareTextEditingController(
-    text: _mergeGroupPageText(waitingItems),
-  );
-  final countController = ImeAwareTextEditingController(
-    text: waitingItems
-        .fold<int>(
-            0, (sum, e) => sum + ((e.count ?? 0) > 0 ? (e.count ?? 0) : 0))
-        .toString(),
-  );
-  final typeController = ImeAwareTextEditingController(
-    text: (waitingItems.first.type ?? '').trim(),
-  );
-  final contentController = ImeAwareTextEditingController(
-    text: (waitingItems.first.content ?? '').trim(),
-  );
-
-  final submitted = await showDialog<bool>(
-    context: context,
-    builder: (dialogContext) {
-      return StatefulBuilder(
-        builder: (dialogContext, setLocalState) {
-          return AlertDialog(
-            backgroundColor: kDlgBg,
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-            title: const Text(
-              '그룹 과제 병합',
-              style: TextStyle(color: kDlgText, fontWeight: FontWeight.w900),
-            ),
-            content: SizedBox(
-              width: 560,
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const YggDialogSectionHeader(
-                      icon: Icons.merge_type_rounded,
-                      title: '병합 대상 선택',
-                    ),
-                    ...waitingItems.map(
-                      (item) => CheckboxListTile(
-                        dense: true,
-                        contentPadding: EdgeInsets.zero,
-                        controlAffinity: ListTileControlAffinity.leading,
-                        activeColor: kDlgAccent,
-                        value: selectedIds.contains(item.id),
-                        onChanged: (checked) {
-                          setLocalState(() {
-                            if (checked == true) {
-                              selectedIds.add(item.id);
-                            } else {
-                              selectedIds.remove(item.id);
-                            }
-                          });
-                        },
-                        title: Text(
-                          item.title.trim().isEmpty ? '(제목 없음)' : item.title,
-                          style:
-                              const TextStyle(color: kDlgText, fontSize: 13.5),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        subtitle: Text(
-                          'p.${(item.page ?? '').trim().isEmpty ? '-' : item.page} · ${item.count ?? 0}문항',
-                          style: const TextStyle(
-                              color: kDlgTextSub, fontSize: 11.5),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    const YggDialogSectionHeader(
-                      icon: Icons.settings_rounded,
-                      title: '병합 결과 설정',
-                    ),
-                    const SizedBox(height: 6),
-                    TextField(
-                      controller: titleController,
-                      style: const TextStyle(color: kDlgText),
-                      decoration: InputDecoration(
-                        labelText: '제목',
-                        labelStyle: const TextStyle(color: kDlgTextSub),
-                        filled: true,
-                        fillColor: kDlgFieldBg,
-                        enabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(10),
-                          borderSide: const BorderSide(color: kDlgBorder),
-                        ),
-                        focusedBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(10),
-                          borderSide:
-                              const BorderSide(color: kDlgAccent, width: 1.4),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    TextField(
-                      controller: pageController,
-                      style: const TextStyle(color: kDlgText),
-                      decoration: InputDecoration(
-                        labelText: '페이지',
-                        labelStyle: const TextStyle(color: kDlgTextSub),
-                        filled: true,
-                        fillColor: kDlgFieldBg,
-                        enabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(10),
-                          borderSide: const BorderSide(color: kDlgBorder),
-                        ),
-                        focusedBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(10),
-                          borderSide:
-                              const BorderSide(color: kDlgAccent, width: 1.4),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    TextField(
-                      controller: countController,
-                      keyboardType: TextInputType.number,
-                      style: const TextStyle(color: kDlgText),
-                      decoration: InputDecoration(
-                        labelText: '문항수',
-                        labelStyle: const TextStyle(color: kDlgTextSub),
-                        filled: true,
-                        fillColor: kDlgFieldBg,
-                        enabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(10),
-                          borderSide: const BorderSide(color: kDlgBorder),
-                        ),
-                        focusedBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(10),
-                          borderSide:
-                              const BorderSide(color: kDlgAccent, width: 1.4),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    TextField(
-                      controller: typeController,
-                      style: const TextStyle(color: kDlgText),
-                      decoration: InputDecoration(
-                        labelText: '유형',
-                        labelStyle: const TextStyle(color: kDlgTextSub),
-                        filled: true,
-                        fillColor: kDlgFieldBg,
-                        enabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(10),
-                          borderSide: const BorderSide(color: kDlgBorder),
-                        ),
-                        focusedBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(10),
-                          borderSide:
-                              const BorderSide(color: kDlgAccent, width: 1.4),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    TextField(
-                      controller: contentController,
-                      minLines: 2,
-                      maxLines: 4,
-                      style: const TextStyle(color: kDlgText),
-                      decoration: InputDecoration(
-                        labelText: '내용',
-                        labelStyle: const TextStyle(color: kDlgTextSub),
-                        filled: true,
-                        fillColor: kDlgFieldBg,
-                        enabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(10),
-                          borderSide: const BorderSide(color: kDlgBorder),
-                        ),
-                        focusedBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(10),
-                          borderSide:
-                              const BorderSide(color: kDlgAccent, width: 1.4),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(dialogContext).pop(false),
-                style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
-                child: const Text('취소'),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.of(dialogContext).pop(true),
-                style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
-                child: const Text('병합 실행'),
-              ),
-            ],
-          );
-        },
-      );
-    },
-  );
-  if (submitted != true || !context.mounted) return;
-  if (selectedIds.length < 2) {
-    _showHomeworkChipSnackBar(context, '병합 대상은 최소 2개여야 합니다.');
-    return;
-  }
-  final mergedMemo = _mergeGroupChildMemoText(
-    waitingItems.where((e) => selectedIds.contains(e.id)),
-  );
-
-  try {
-    final mergedId = await HomeworkStore.instance.mergeWaitingItemsInGroup(
-      studentId: studentId,
-      groupId: group.id,
-      itemIds: selectedIds.toList(growable: false),
-      mergedTitle: titleController.text.trim(),
-      mergedPage: pageController.text.trim(),
-      mergedCount: int.tryParse(countController.text.trim()),
-      mergedType: typeController.text.trim(),
-      mergedMemo: mergedMemo,
-      mergedContent: contentController.text.trim(),
-    );
-    if (!context.mounted) return;
-    _showHomeworkChipSnackBar(
-      context,
-      mergedId == null ? '병합 결과를 확인하지 못했습니다.' : '병합 완료',
-    );
-  } catch (e) {
-    if (!context.mounted) return;
-    _showHomeworkChipSnackBar(context, '병합 실패: ${e.toString()}');
-  }
-}
-
 Future<void> _showHomeworkGroupActionDialog({
   required BuildContext context,
   required String studentId,
@@ -5578,22 +5351,6 @@ Future<void> _showHomeworkGroupActionDialog({
                 : null,
             icon: const Icon(Icons.call_split_rounded, size: 16),
             label: const Text('분할'),
-          ),
-          OutlinedButton.icon(
-            onPressed: waitingCount >= 2
-                ? () {
-                    Navigator.of(dialogContext).pop();
-                    unawaited(
-                      _showHomeworkGroupMergeDialog(
-                        context: context,
-                        studentId: studentId,
-                        group: group,
-                      ),
-                    );
-                  }
-                : null,
-            icon: const Icon(Icons.merge_type_rounded, size: 16),
-            label: const Text('병합'),
           ),
           FilledButton.icon(
             onPressed: children.isEmpty
@@ -6635,11 +6392,13 @@ Widget _buildHomeworkChipVisual(
   bool isPendingConfirm = false,
   bool isCompleteCheckbox = false,
   VoidCallback? onInfoTap,
+  VoidCallback? onGroupTitleTap,
   void Function(HomeworkItem child)? onGroupChildPageTap,
   void Function(HomeworkItem child)? onGroupChildMemoTap,
   VoidCallback? onGroupChildAddTap,
   Future<void> Function(HomeworkItem dragged, HomeworkItem target)?
-      onGroupChildMergeDrop,
+      onGroupChildDropBefore,
+  Future<void> Function(HomeworkItem dragged)? onGroupChildDropToEnd,
 }) {
   final bool isRunning =
       HomeworkStore.instance.runningOf(studentId)?.id == hw.id;
@@ -6847,11 +6606,15 @@ Widget _buildHomeworkChipVisual(
       child: Row(
         children: [
           Expanded(
-            child: Text(
-              titleText,
-              style: metaStyle,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: onGroupTitleTap,
+              child: Text(
+                titleText,
+                style: metaStyle,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
           ),
           const SizedBox(width: 8),
@@ -6908,7 +6671,7 @@ Widget _buildHomeworkChipVisual(
     }
 
     Widget buildGroupChildRow(HomeworkItem child, int index) {
-      final bool canDropMerge = onGroupChildMergeDrop != null &&
+      final bool canDropBefore = onGroupChildDropBefore != null &&
           child.status != HomeworkStatus.completed &&
           child.phase == 1;
       final bool canTapPage = onGroupChildPageTap != null;
@@ -6982,7 +6745,7 @@ Widget _buildHomeworkChipVisual(
         ),
       );
 
-      if (canDropMerge) {
+      if (canDropBefore) {
         rowContent = LongPressDraggable<HomeworkItem>(
           data: child,
           maxSimultaneousDrags: 1,
@@ -7006,7 +6769,7 @@ Widget _buildHomeworkChipVisual(
         );
       }
 
-      if (onGroupChildMergeDrop == null) {
+      if (onGroupChildDropBefore == null) {
         return rowContent;
       }
 
@@ -7021,7 +6784,7 @@ Widget _buildHomeworkChipVisual(
               child.phase == 1;
         },
         onAcceptWithDetails: (details) {
-          unawaited(onGroupChildMergeDrop(details.data, child));
+          unawaited(onGroupChildDropBefore(details.data, child));
         },
         builder: (context, candidateData, rejectedData) {
           final highlighted = candidateData.isNotEmpty;
@@ -7117,20 +6880,12 @@ Widget _buildHomeworkChipVisual(
                 GestureDetector(
                   behavior: HitTestBehavior.opaque,
                   onTap: onGroupChildAddTap,
-                  child: Container(
-                    width: 20,
-                    height: 20,
-                    decoration: BoxDecoration(
-                      color: const Color(0x1A9FE3C6),
-                      borderRadius: BorderRadius.circular(999),
-                      border: Border.all(
-                        color: const Color(0x664FBF97),
-                        width: 1.0,
-                      ),
-                    ),
-                    child: const Icon(
+                  child: const SizedBox(
+                    width: 28,
+                    height: 28,
+                    child: Icon(
                       Icons.add_rounded,
-                      size: 14,
+                      size: 20,
                       color: Color(0xFF9FE3C6),
                     ),
                   ),
@@ -7246,6 +7001,36 @@ Widget _buildHomeworkChipVisual(
           ),
         ),
       ],
+    );
+  }
+
+  if (onGroupChildDropToEnd != null && !isPendingConfirm) {
+    final dropTargetChild = chipInner;
+    chipInner = DragTarget<HomeworkItem>(
+      onWillAcceptWithDetails: (details) {
+        final dragged = details.data;
+        final draggedWaiting =
+            dragged.status != HomeworkStatus.completed && dragged.phase == 1;
+        return draggedWaiting;
+      },
+      onAcceptWithDetails: (details) {
+        unawaited(onGroupChildDropToEnd(details.data));
+      },
+      builder: (context, candidateData, rejectedData) {
+        final highlighted = candidateData.isNotEmpty;
+        return AnimatedContainer(
+          duration: const Duration(milliseconds: 120),
+          curve: Curves.easeOut,
+          decoration: BoxDecoration(
+            color: highlighted ? const Color(0x0F4FBF97) : Colors.transparent,
+            borderRadius: BorderRadius.circular(12),
+            border: highlighted
+                ? Border.all(color: const Color(0xFF4FBF97), width: 1.2)
+                : null,
+          ),
+          child: dropTargetChild,
+        );
+      },
     );
   }
 
