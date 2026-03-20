@@ -2876,6 +2876,11 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
   }
 
   Widget _buildFolderTreePanel() {
+    const double _folderRowMinHeight = 56;
+    const double _folderNameFontSize = 18;
+    const double _folderActionIconSize = 20;
+    const double _folderLeftActionWidth = 76;
+    const double _folderRightActionWidth = 168;
     final flattened = <Map<String, dynamic>>[];
     void visit(String? parentId, int depth) {
       final children = _childFoldersOf(parentId);
@@ -3051,21 +3056,21 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                                 return Stack(
                                   children: [
                                     _DualSwipeActionReveal(
-                                      leftActionWidth: 64,
-                                      rightActionWidth: 140,
+                                      leftActionWidth: _folderLeftActionWidth,
+                                      rightActionWidth: _folderRightActionWidth,
                                       borderRadius: BorderRadius.circular(8),
                                       leftActionPane: Padding(
-                                        padding: const EdgeInsets.symmetric(
-                                            horizontal: 6),
+                                        padding:
+                                            const EdgeInsets.symmetric(horizontal: 8),
                                         child: Material(
                                           color: _rsAccent,
                                           borderRadius:
-                                              BorderRadius.circular(10),
+                                              BorderRadius.circular(12),
                                           child: InkWell(
                                             onTap: () async =>
                                                 _handleAddChildFolder(f),
                                             borderRadius:
-                                                BorderRadius.circular(10),
+                                                BorderRadius.circular(12),
                                             splashFactory:
                                                 NoSplash.splashFactory,
                                             highlightColor:
@@ -3074,71 +3079,75 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                                                 Colors.white.withOpacity(0.04),
                                             child: const SizedBox.expand(
                                               child: Center(
-                                                child: Icon(Icons.add,
-                                                    color: Colors.white,
-                                                    size: 18),
+                                                child: Icon(
+                                                  Icons.add,
+                                                  color: Colors.white,
+                                                  size: _folderActionIconSize,
+                                                ),
                                               ),
                                             ),
                                           ),
                                         ),
                                       ),
                                       rightActionPane: Padding(
-                                        padding: const EdgeInsets.symmetric(
-                                            horizontal: 6),
+                                        padding:
+                                            const EdgeInsets.symmetric(horizontal: 8),
                                         child: Row(
                                           children: [
                                             Expanded(
                                               child: Material(
                                                 color: const Color(0xFF223131),
                                                 borderRadius:
-                                                    BorderRadius.circular(10),
+                                                    BorderRadius.circular(12),
                                                 child: InkWell(
                                                   onTap: () async =>
                                                       _handleEditFolder(f),
                                                   borderRadius:
-                                                      BorderRadius.circular(10),
+                                                      BorderRadius.circular(12),
                                                   splashFactory:
                                                       NoSplash.splashFactory,
                                                   highlightColor: Colors.white
                                                       .withOpacity(0.06),
                                                   hoverColor: Colors.white
                                                       .withOpacity(0.03),
-                                                  child: const SizedBox.expand(
+                                                  child: SizedBox.expand(
                                                     child: Center(
                                                       child: Icon(
-                                                          Icons.edit_outlined,
-                                                          color:
-                                                              Color(0xFFEAF2F2),
-                                                          size: 18),
+                                                        Icons.edit_outlined,
+                                                        color:
+                                                            const Color(0xFFEAF2F2),
+                                                        size: _folderActionIconSize,
+                                                      ),
                                                     ),
                                                   ),
                                                 ),
                                               ),
                                             ),
-                                            const SizedBox(width: 6),
+                                            const SizedBox(width: 8),
                                             Expanded(
                                               child: Material(
                                                 color: const Color(0xFFB74C4C),
                                                 borderRadius:
-                                                    BorderRadius.circular(10),
+                                                    BorderRadius.circular(12),
                                                 child: InkWell(
                                                   onTap: () async =>
                                                       _handleDeleteFolder(f),
                                                   borderRadius:
-                                                      BorderRadius.circular(10),
+                                                      BorderRadius.circular(12),
                                                   splashFactory:
                                                       NoSplash.splashFactory,
                                                   highlightColor: Colors.white
                                                       .withOpacity(0.08),
                                                   hoverColor: Colors.white
                                                       .withOpacity(0.04),
-                                                  child: const SizedBox.expand(
+                                                  child: SizedBox.expand(
                                                     child: Center(
                                                       child: Icon(
-                                                          Icons
-                                                              .delete_outline_rounded,
-                                                          color: Colors.white,
-                                                          size: 18),
+                                                        Icons
+                                                            .delete_outline_rounded,
+                                                        color: Colors.white,
+                                                        size: _folderActionIconSize,
+                                                      ),
                                                     ),
                                                   ),
                                                 ),
@@ -3159,6 +3168,8 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                                           }
                                         }),
                                         child: Container(
+                                          constraints: const BoxConstraints(
+                                              minHeight: _folderRowMinHeight),
                                           color: highlightMove
                                               ? const Color(0xFF2F3A4A)
                                               : (isSelected
@@ -3166,9 +3177,9 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                                                   : const Color(0xFF232323)),
                                           padding: EdgeInsets.only(
                                               left: depth * 16.0,
-                                              right: 12.0,
-                                              top: 8.0,
-                                              bottom: 8.0),
+                                              right: 14.0,
+                                              top: 10.0,
+                                              bottom: 10.0),
                                           child: Row(
                                             children: [
                                               if (children.isNotEmpty)
@@ -3187,28 +3198,29 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                                                           ? Icons.expand_more
                                                           : Icons.chevron_right,
                                                       color: Colors.white54,
-                                                      size: 18),
+                                                      size: 20),
                                                 )
                                               else
-                                                const SizedBox(width: 18),
-                                              const SizedBox(width: 4),
+                                                const SizedBox(width: 20),
+                                              const SizedBox(width: 8),
                                               Icon(Icons.folder,
                                                   color:
                                                       (f.color ?? Colors.amber)
                                                           .withOpacity(0.85),
-                                                  size: 18),
-                                              const SizedBox(width: 8),
+                                                  size: 20),
+                                              const SizedBox(width: 10),
                                               Expanded(
                                                 child: Text(
                                                   f.name,
                                                   maxLines: 1,
                                                   overflow:
                                                       TextOverflow.ellipsis,
-                                                  style: const TextStyle(
+                                                  style: TextStyle(
                                                       color: Colors.white,
                                                       fontWeight:
-                                                          FontWeight.w600,
-                                                      fontSize: 16),
+                                                          FontWeight.w800,
+                                                      fontSize: _folderNameFontSize,
+                                                      letterSpacing: -0.2),
                                                 ),
                                               ),
                                               if (highlightMove)
@@ -3272,7 +3284,7 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
         ),
         // 즐겨찾기 고정 항목
         Container(
-          height: 40,
+          height: _folderRowMinHeight,
           child: InkWell(
             onTap: () =>
                 setState(() => _selectedFolderIdForTree = '__FAVORITES__'),
@@ -3284,15 +3296,17 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                   color: _selectedFolderIdForTree == '__FAVORITES__'
                       ? Colors.amber
                       : Colors.white54,
-                  size: 18,
+                  size: 20,
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(width: 10),
                 Expanded(
                   child: Text(
                     '즐겨찾기',
                     style: TextStyle(
                         color: Colors.white.withOpacity(0.95),
-                        fontWeight: FontWeight.w700),
+                        fontWeight: FontWeight.w800,
+                        fontSize: _folderNameFontSize,
+                        letterSpacing: -0.2),
                   ),
                 ),
               ],
