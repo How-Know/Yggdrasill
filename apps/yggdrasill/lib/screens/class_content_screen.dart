@@ -3883,6 +3883,33 @@ Future<void> _moveGroupChildByDrag({
   }
   final sameGroup = sourceGroupId == targetGroupId;
 
+  String textbookKeyOfHomework(HomeworkItem item) {
+    final bookId = (item.bookId ?? '').trim();
+    final gradeLabel = (item.gradeLabel ?? '').trim();
+    if (bookId.isEmpty || gradeLabel.isEmpty) return '';
+    return '$bookId|$gradeLabel';
+  }
+
+  String resolveGroupTextbookKey(String groupId) {
+    final children = HomeworkStore.instance.itemsInGroup(studentId, groupId);
+    for (final child in children) {
+      final key = textbookKeyOfHomework(child);
+      if (key.isNotEmpty) return key;
+    }
+    return '';
+  }
+
+  if (!sameGroup) {
+    final sourceTextbookKey = textbookKeyOfHomework(source);
+    final targetTextbookKey = resolveGroupTextbookKey(targetGroupId);
+    if (sourceTextbookKey.isEmpty ||
+        targetTextbookKey.isEmpty ||
+        sourceTextbookKey != targetTextbookKey) {
+      _showHomeworkChipSnackBar(context, '같은 출제 교재 그룹으로만 이동할 수 있습니다.');
+      return;
+    }
+  }
+
   try {
     final moved = await HomeworkStore.instance.moveWaitingItemToGroup(
       studentId: studentId,
@@ -3916,8 +3943,8 @@ double _homeworkGroupExpandedHeightForChildCount(int childCount) {
   if (childCount <= 0) return _homeworkChipExpandedHeight;
   // 상단 정보와 하위 리스트를 충분히 분리하고,
   // 하위 과제 수에 비례해 카드 높이가 늘어나도록 계산한다.
-  const double groupSectionHeaderHeight = 72;
-  const double perChildRowHeight = 58;
+  const double groupSectionHeaderHeight = 60;
+  const double perChildRowHeight = 69;
   return _homeworkChipExpandedHeight +
       groupSectionHeaderHeight +
       (childCount * perChildRowHeight);
@@ -4690,6 +4717,7 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
 
   final groupWidgets = <Widget>[];
   final orderedGroupIds = <String>[];
+  final assignedItemIds = assignmentDueByItemId.keys.toSet();
   for (int i = 0; i < cappedGroups.length; i++) {
     final entry = cappedGroups[i];
     final group = entry.group;
@@ -4861,6 +4889,8 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
           summary,
           groupFlowName,
           groupAssignmentCount,
+          groupId: group.id,
+          assignedItemIds: assignedItemIds,
           tick: tick,
           dueLabel: dueLabel,
           isHomeworkDue: hasHomeworkAssignment,
@@ -6381,6 +6411,8 @@ Widget _buildHomeworkChipVisual(
   HomeworkItem hw,
   String flowName,
   int assignmentCount, {
+  String? groupId,
+  Set<String> assignedItemIds = const <String>{},
   required double tick,
   String? dueLabel,
   bool isHomeworkDue = false,
@@ -6408,49 +6440,43 @@ Widget _buildHomeworkChipVisual(
   const Color unifiedHomeworkAccent = kDlgAccent;
   final TextStyle titleStyle = const TextStyle(
     color: Color(0xFFCAD2C5),
-    fontSize: 23,
+    fontSize: 24,
     fontWeight: FontWeight.w700,
     height: 1.1,
   );
   final TextStyle metaStyle = const TextStyle(
     color: Color(0xFFCAD2C5),
-    fontSize: 16,
+    fontSize: 17,
     fontWeight: FontWeight.w600,
     height: 1.1,
   );
   final TextStyle statStyle = const TextStyle(
     color: Color(0xFF7F8C8C),
-    fontSize: 13.5,
+    fontSize: 14.5,
     fontWeight: FontWeight.w600,
     height: 1.1,
   );
   final TextStyle line4Style = const TextStyle(
     color: Color(0xFF748686),
-    fontSize: 12.5,
+    fontSize: 13.5,
     fontWeight: FontWeight.w600,
     height: 1.1,
   );
   final TextStyle typeStyle = const TextStyle(
     color: Color(0xFFCAD2C5),
-    fontSize: 16,
+    fontSize: 17,
     fontWeight: FontWeight.w600,
     height: 1.1,
   );
   final TextStyle groupChildTitleStyle = const TextStyle(
     color: Color(0xFFB9C3BA),
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: FontWeight.w600,
     height: 1.2,
   );
-  final TextStyle groupChildIndexStyle = const TextStyle(
-    color: Color(0xFF7F8C8C),
-    fontSize: 13,
-    fontWeight: FontWeight.w700,
-    height: 1.1,
-  );
   final TextStyle groupChildMetaStyle = const TextStyle(
     color: Color(0xFF8FA1A1),
-    fontSize: 12.5,
+    fontSize: 13.5,
     fontWeight: FontWeight.w600,
     height: 1.1,
   );
@@ -6521,8 +6547,9 @@ Widget _buildHomeworkChipVisual(
     if (splitParts <= 1) return safeCount.toString();
     return resolveSplitCount(safeCount, splitParts, splitRound).toString();
   }();
-  final String line4Left =
-      '페이지 p.${page.isNotEmpty ? page : '-'} · 문항 ${displayCount.isNotEmpty ? displayCount : '-'}문항';
+  final String line4PageText = 'p.${page.isNotEmpty ? page : '-'}';
+  final String line4TotalCountText =
+      '총 ${displayCount.isNotEmpty ? displayCount : '-'}문항';
   final int runningMs = hw.runStart != null
       ? DateTime.now().difference(hw.runStart!).inMilliseconds
       : 0;
@@ -6556,6 +6583,52 @@ Widget _buildHomeworkChipVisual(
   final double fixedWidth = ClassContentScreen._studentColumnContentWidth;
   final double maxRowW = fixedWidth - leftPad - rightPad;
   final bool hasGroupChildren = groupChildren.isNotEmpty;
+  final String resolvedGroupId = (groupId ?? '').trim();
+
+  String textbookKeyOfHomework(HomeworkItem item) {
+    final bookId = (item.bookId ?? '').trim();
+    final gradeLabel = (item.gradeLabel ?? '').trim();
+    if (bookId.isEmpty || gradeLabel.isEmpty) return '';
+    return '$bookId|$gradeLabel';
+  }
+
+  String resolveTargetGroupTextbookKey() {
+    for (final child in groupChildren) {
+      final key = textbookKeyOfHomework(child);
+      if (key.isNotEmpty) return key;
+    }
+    final summaryKey = textbookKeyOfHomework(hw);
+    return summaryKey;
+  }
+
+  final String targetGroupTextbookKey = resolveTargetGroupTextbookKey();
+
+  bool canAcceptGroupChildDrag(
+    HomeworkItem dragged, {
+    HomeworkItem? targetBefore,
+  }) {
+    if (assignedItemIds.contains(dragged.id)) return false;
+    if (dragged.status == HomeworkStatus.completed || dragged.phase != 1) {
+      return false;
+    }
+    if (targetBefore != null) {
+      if (targetBefore.id == dragged.id) return false;
+      if (targetBefore.status == HomeworkStatus.completed ||
+          targetBefore.phase != 1) {
+        return false;
+      }
+    }
+    if (resolvedGroupId.isEmpty) return false;
+    final sourceGroupId =
+        (HomeworkStore.instance.groupIdOfItem(dragged.id) ?? '').trim();
+    if (sourceGroupId.isEmpty) return false;
+    if (sourceGroupId == resolvedGroupId) return true;
+    final draggedTextbookKey = textbookKeyOfHomework(dragged);
+    if (draggedTextbookKey.isEmpty || targetGroupTextbookKey.isEmpty) {
+      return false;
+    }
+    return draggedTextbookKey == targetGroupTextbookKey;
+  }
 
   final double phase4Pulse = 0.5 + 0.5 * math.sin(2 * math.pi * tick);
   final Border border = (visualPhase == 3)
@@ -6648,8 +6721,9 @@ Widget _buildHomeworkChipVisual(
 
   final List<Widget> columnChildren;
   if (isExpanded) {
-    final String expandedLine3 =
-        '시작 $startedAtText · 진행 ${progressMinutes}분 · 총 $durationText';
+    final String expandedLine3Left =
+        '시작 $startedAtText · 진행 ${progressMinutes}분';
+    final String expandedLine3Right = '총 $durationText';
     final visibleGroupChildren = hasGroupChildren ? groupChildren.length : 0;
 
     String groupChildLabel(HomeworkItem child) {
@@ -6665,53 +6739,85 @@ Widget _buildHomeworkChipVisual(
       return pageRaw.isEmpty ? '-' : 'p.$pageRaw';
     }
 
+    String groupChildCountLabel(HomeworkItem child) {
+      final count = child.count;
+      if (count == null || count <= 0) return '-';
+      return '${count}문항';
+    }
+
+    String groupChildPageCountLabel(HomeworkItem child) {
+      final page = groupChildPageLabel(child);
+      final count = groupChildCountLabel(child);
+      if (page == '-' && count == '-') return '-';
+      if (page == '-') return count;
+      if (count == '-') return page;
+      return '$page · $count';
+    }
+
     String groupChildMemoLabel(HomeworkItem child) {
       final memo = (child.memo ?? '').trim();
       return memo.isEmpty ? '-' : memo;
     }
 
     Widget buildGroupChildRow(HomeworkItem child, int index) {
-      final bool canDropBefore = onGroupChildDropBefore != null &&
+      final bool childHasAssignment = assignedItemIds.contains(child.id);
+      final bool canDragChild = onGroupChildDropBefore != null &&
           child.status != HomeworkStatus.completed &&
-          child.phase == 1;
+          child.phase == 1 &&
+          !childHasAssignment;
       final bool canTapPage = onGroupChildPageTap != null;
       final bool canTapMemo = onGroupChildMemoTap != null;
 
-      Widget rowContent = ConstrainedBox(
-        constraints: BoxConstraints(maxWidth: maxRowW),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
+      Widget buildRowCore({
+        required bool enablePageTap,
+        required bool enableMemoTap,
+      }) {
+        return ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: maxRowW),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 2),
+            child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                SizedBox(
-                  width: 22,
-                  child: Text(
-                    '${index + 1}.',
-                    style: groupChildIndexStyle,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
+                Text(
+                  '${index + 1}. ${groupChildLabel(child)}',
+                  style: groupChildTitleStyle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
-                Expanded(
-                  child: Text(
-                    groupChildLabel(child),
-                    style: groupChildTitleStyle,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-                const SizedBox(width: 8),
+                const SizedBox(height: 4),
                 GestureDetector(
                   behavior: HitTestBehavior.opaque,
-                  onTap: canTapPage ? () => onGroupChildPageTap(child) : null,
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 120),
+                  onTap: enablePageTap
+                      ? () => onGroupChildPageTap?.call(child)
+                      : null,
+                  child: SizedBox(
+                    width: double.infinity,
                     child: Text(
-                      groupChildPageLabel(child),
+                      groupChildPageCountLabel(child),
                       style: groupChildMetaStyle.copyWith(
-                        decoration: canTapPage
+                        decoration: enablePageTap
+                            ? TextDecoration.underline
+                            : TextDecoration.none,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.right,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 3),
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: enableMemoTap
+                      ? () => onGroupChildMemoTap?.call(child)
+                      : null,
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: Text(
+                      groupChildMemoLabel(child),
+                      style: groupChildMetaStyle.copyWith(
+                        decoration: enableMemoTap
                             ? TextDecoration.underline
                             : TextDecoration.none,
                       ),
@@ -6723,49 +6829,45 @@ Widget _buildHomeworkChipVisual(
                 ),
               ],
             ),
-            const SizedBox(height: 2),
-            Padding(
-              padding: const EdgeInsets.only(left: 22),
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: canTapMemo ? () => onGroupChildMemoTap(child) : null,
-                child: Text(
-                  groupChildMemoLabel(child),
-                  style: groupChildMetaStyle.copyWith(
-                    decoration: canTapMemo
-                        ? TextDecoration.underline
-                        : TextDecoration.none,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-            ),
-          ],
-        ),
+          ),
+        );
+      }
+
+      final baseRow = buildRowCore(
+        enablePageTap: canTapPage,
+        enableMemoTap: canTapMemo,
       );
 
-      if (canDropBefore) {
+      Widget rowContent = baseRow;
+      if (canDragChild) {
         rowContent = LongPressDraggable<HomeworkItem>(
           data: child,
           maxSimultaneousDrags: 1,
           feedback: Material(
             color: Colors.transparent,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-              decoration: BoxDecoration(
-                color: const Color(0xFF202629),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: const Color(0xFF3E5757)),
-              ),
-              child: Text(
-                groupChildLabel(child),
-                style: groupChildTitleStyle,
+            child: Opacity(
+              opacity: 0.95,
+              child: Container(
+                width: maxRowW,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF202629),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: const Color(0xFF3E5757)),
+                ),
+                child: buildRowCore(enablePageTap: false, enableMemoTap: false),
               ),
             ),
           ),
-          childWhenDragging: Opacity(opacity: 0.35, child: rowContent),
-          child: rowContent,
+          childWhenDragging: Opacity(
+            opacity: 0.32,
+            child: buildRowCore(
+              enablePageTap: canTapPage,
+              enableMemoTap: canTapMemo,
+            ),
+          ),
+          child: baseRow,
         );
       }
 
@@ -6774,32 +6876,37 @@ Widget _buildHomeworkChipVisual(
       }
 
       return DragTarget<HomeworkItem>(
-        onWillAcceptWithDetails: (details) {
-          final dragged = details.data;
-          if (dragged.id == child.id) return false;
-          final draggedWaiting =
-              dragged.status != HomeworkStatus.completed && dragged.phase == 1;
-          return draggedWaiting &&
-              child.status != HomeworkStatus.completed &&
-              child.phase == 1;
-        },
+        onWillAcceptWithDetails: (details) =>
+            canAcceptGroupChildDrag(details.data, targetBefore: child),
         onAcceptWithDetails: (details) {
           unawaited(onGroupChildDropBefore(details.data, child));
         },
         builder: (context, candidateData, rejectedData) {
           final highlighted = candidateData.isNotEmpty;
-          return AnimatedContainer(
-            duration: const Duration(milliseconds: 120),
-            curve: Curves.easeOut,
-            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-            decoration: BoxDecoration(
-              color: highlighted ? const Color(0x1F4FBF97) : Colors.transparent,
-              borderRadius: BorderRadius.circular(8),
-              border: highlighted
-                  ? Border.all(color: const Color(0xFF4FBF97), width: 1.0)
-                  : null,
-            ),
-            child: rowContent,
+          return Stack(
+            clipBehavior: Clip.none,
+            children: [
+              rowContent,
+              Positioned(
+                left: 22,
+                right: 0,
+                top: 0,
+                child: IgnorePointer(
+                  child: AnimatedOpacity(
+                    duration: const Duration(milliseconds: 90),
+                    curve: Curves.easeOut,
+                    opacity: highlighted ? 1.0 : 0.0,
+                    child: Container(
+                      height: 2,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF4FBF97),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
           );
         },
       );
@@ -6807,26 +6914,54 @@ Widget _buildHomeworkChipVisual(
 
     columnChildren = [
       row1,
-      const SizedBox(height: 15),
+      const SizedBox(height: 19),
       row2,
       const SizedBox(height: 7),
       ConstrainedBox(
         constraints: BoxConstraints(maxWidth: maxRowW),
-        child: Text(
-          expandedLine3,
-          style: statStyle,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                expandedLine3Left,
+                style: statStyle,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              expandedLine3Right,
+              style: statStyle,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.right,
+            ),
+          ],
         ),
       ),
       const SizedBox(height: 6),
       ConstrainedBox(
         constraints: BoxConstraints(maxWidth: maxRowW),
-        child: Text(
-          line4Left,
-          style: line4Style,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                line4PageText,
+                style: line4Style,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              line4TotalCountText,
+              style: line4Style,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.right,
+            ),
+          ],
         ),
       ),
       const SizedBox(height: 6),
@@ -6871,21 +7006,37 @@ Widget _buildHomeworkChipVisual(
               Expanded(
                 child: Text(
                   '그룹 과제 ${groupChildren.length}개',
-                  style: line4Style,
+                  style: metaStyle,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
+              if (onInfoTap != null)
+                GestureDetector(
+                  onTap: onInfoTap,
+                  behavior: HitTestBehavior.opaque,
+                  child: const SizedBox(
+                    width: 34,
+                    height: 34,
+                    child: Icon(
+                      Icons.info_outline_rounded,
+                      size: 24,
+                      color: Color(0xFF9FB3B3),
+                    ),
+                  ),
+                ),
+              if (onInfoTap != null && onGroupChildAddTap != null)
+                const SizedBox(width: 4),
               if (onGroupChildAddTap != null)
                 GestureDetector(
                   behavior: HitTestBehavior.opaque,
                   onTap: onGroupChildAddTap,
                   child: const SizedBox(
-                    width: 28,
-                    height: 28,
+                    width: 34,
+                    height: 34,
                     child: Icon(
                       Icons.add_rounded,
-                      size: 20,
+                      size: 24,
                       color: Color(0xFF9FE3C6),
                     ),
                   ),
@@ -6893,44 +7044,26 @@ Widget _buildHomeworkChipVisual(
             ],
           ),
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 8),
         for (int i = 0; i < visibleGroupChildren; i++) ...[
           buildGroupChildRow(groupChildren[i], i),
           if (i != visibleGroupChildren - 1) ...[
-            const SizedBox(height: 8),
+            const SizedBox(height: 10),
             Container(
               width: maxRowW,
-              height: 1,
+              height: 1.3,
               color: const Color(0x223A4545),
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 10),
           ],
-          const SizedBox(height: 8),
+          const SizedBox(height: 6),
         ],
-      ],
-      if (onInfoTap != null) ...[
-        const SizedBox(height: 4),
-        Align(
-          alignment: Alignment.centerRight,
-          child: GestureDetector(
-            onTap: onInfoTap,
-            behavior: HitTestBehavior.opaque,
-            child: const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 2, vertical: 2),
-              child: Icon(
-                Icons.info_outline_rounded,
-                size: 16,
-                color: Color(0xFF748686),
-              ),
-            ),
-          ),
-        ),
       ],
     ];
   } else {
     columnChildren = [
       row1,
-      const SizedBox(height: 15),
+      const SizedBox(height: 19),
       row2,
       const SizedBox(height: 7),
       collapsedRow3,
@@ -7007,28 +7140,36 @@ Widget _buildHomeworkChipVisual(
   if (onGroupChildDropToEnd != null && !isPendingConfirm) {
     final dropTargetChild = chipInner;
     chipInner = DragTarget<HomeworkItem>(
-      onWillAcceptWithDetails: (details) {
-        final dragged = details.data;
-        final draggedWaiting =
-            dragged.status != HomeworkStatus.completed && dragged.phase == 1;
-        return draggedWaiting;
-      },
+      onWillAcceptWithDetails: (details) =>
+          canAcceptGroupChildDrag(details.data),
       onAcceptWithDetails: (details) {
         unawaited(onGroupChildDropToEnd(details.data));
       },
       builder: (context, candidateData, rejectedData) {
         final highlighted = candidateData.isNotEmpty;
-        return AnimatedContainer(
-          duration: const Duration(milliseconds: 120),
-          curve: Curves.easeOut,
-          decoration: BoxDecoration(
-            color: highlighted ? const Color(0x0F4FBF97) : Colors.transparent,
-            borderRadius: BorderRadius.circular(12),
-            border: highlighted
-                ? Border.all(color: const Color(0xFF4FBF97), width: 1.2)
-                : null,
-          ),
-          child: dropTargetChild,
+        return Stack(
+          children: [
+            dropTargetChild,
+            Positioned(
+              left: leftPad,
+              right: rightPad,
+              bottom: 8,
+              child: IgnorePointer(
+                child: AnimatedOpacity(
+                  duration: const Duration(milliseconds: 90),
+                  curve: Curves.easeOut,
+                  opacity: highlighted ? 1.0 : 0.0,
+                  child: Container(
+                    height: 2,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF4FBF97),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
         );
       },
     );
