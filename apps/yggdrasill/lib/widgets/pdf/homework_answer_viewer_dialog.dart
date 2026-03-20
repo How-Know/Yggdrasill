@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:pdfrx/pdfrx.dart';
 
+import '../../app_overlays.dart';
 import '../dialog_tokens.dart';
 
 enum HomeworkAnswerViewerAction { confirm, complete }
@@ -15,18 +16,24 @@ Future<HomeworkAnswerViewerAction?> openHomeworkAnswerViewerPage(
   String? solutionFilePath,
   String? cacheKey,
   bool enableConfirm = true,
-}) {
-  return Navigator.of(context).push<HomeworkAnswerViewerAction>(
-    MaterialPageRoute<HomeworkAnswerViewerAction>(
-      builder: (_) => HomeworkAnswerViewerPage(
-        filePath: filePath,
-        title: title,
-        solutionFilePath: solutionFilePath,
-        cacheKey: cacheKey,
-        enableConfirm: enableConfirm,
+}) async {
+  final previousMemoFloatingHidden = hideGlobalMemoFloatingBanners.value;
+  hideGlobalMemoFloatingBanners.value = true;
+  try {
+    return await Navigator.of(context).push<HomeworkAnswerViewerAction>(
+      MaterialPageRoute<HomeworkAnswerViewerAction>(
+        builder: (_) => HomeworkAnswerViewerPage(
+          filePath: filePath,
+          title: title,
+          solutionFilePath: solutionFilePath,
+          cacheKey: cacheKey,
+          enableConfirm: enableConfirm,
+        ),
       ),
-    ),
-  );
+    );
+  } finally {
+    hideGlobalMemoFloatingBanners.value = previousMemoFloatingHidden;
+  }
 }
 
 class HomeworkAnswerViewerPage extends StatefulWidget {
@@ -754,6 +761,9 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
                                   top: badgeTop,
                                   child: IgnorePointer(
                                     child: Container(
+                                      constraints: const BoxConstraints(
+                                        minWidth: 28,
+                                      ),
                                       padding: const EdgeInsets.symmetric(
                                         horizontal: 6,
                                         vertical: 4,
@@ -765,13 +775,14 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
                                       child: RotatedBox(
                                         quarterTurns: 0,
                                         child: Text(
-                                          '$displayPage'.split('').join('\n'),
+                                          '$displayPage',
                                           textAlign: TextAlign.center,
+                                          maxLines: 1,
+                                          softWrap: false,
                                           style: const TextStyle(
                                             color: Colors.white,
                                             fontWeight: FontWeight.w900,
                                             fontSize: 12,
-                                            height: 1.0,
                                           ),
                                         ),
                                       ),

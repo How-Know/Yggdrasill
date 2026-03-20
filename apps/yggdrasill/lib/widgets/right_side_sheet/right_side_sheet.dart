@@ -9,6 +9,7 @@ import 'package:file_selector/file_selector.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 import 'package:mneme_flutter/widgets/dark_panel_route.dart';
 import 'package:mneme_flutter/widgets/pdf/pdf_editor_dialog.dart';
+import 'package:mneme_flutter/widgets/pdf/homework_answer_viewer_dialog.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart' as sf;
 import 'package:uuid/uuid.dart';
@@ -675,6 +676,40 @@ class _RightSideSheetState extends State<RightSideSheet> {
     if (mounted) {
       setState(() => _selectedBookId = book.id);
     }
+    final navCtx = widget.dialogContext ?? context;
+    final titleBase = book.name.trim().isEmpty ? '답지 확인' : book.name.trim();
+
+    Future<void> openInInternalViewer({
+      required String filePath,
+      required String gradeKey,
+      required String gradeLabel,
+    }) async {
+      final normalizedPath = filePath.trim();
+      if (normalizedPath.isEmpty) return;
+      final normalizedGradeKey =
+          gradeKey.trim().isEmpty ? 'unknown' : gradeKey.trim();
+      final normalizedGradeLabel = gradeLabel.trim();
+      final title = normalizedGradeLabel.isEmpty
+          ? titleBase
+          : '$titleBase · $normalizedGradeLabel';
+      final cacheKey =
+          'answerkey|$_answerKeyCategory|${book.id}|$normalizedGradeKey|$normalizedPath';
+      try {
+        await openHomeworkAnswerViewerPage(
+          navCtx,
+          filePath: normalizedPath,
+          title: title,
+          cacheKey: cacheKey,
+          enableConfirm: false,
+        );
+      } catch (_) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('내부 PDF 뷰어를 열 수 없습니다.')),
+        );
+      }
+    }
+
     final paths = _pdfPathByBookAndGrade[book.id];
     if (paths == null || paths.isEmpty) {
       if (!mounted) return;
@@ -696,7 +731,11 @@ class _RightSideSheetState extends State<RightSideSheet> {
         );
         return;
       }
-      await OpenFilex.open(entry.value);
+      await openInInternalViewer(
+        filePath: entry.value,
+        gradeKey: entry.key,
+        gradeLabel: entry.key,
+      );
       return;
     }
 
@@ -739,7 +778,11 @@ class _RightSideSheetState extends State<RightSideSheet> {
         });
       }
     }
-    await OpenFilex.open(path);
+    await openInInternalViewer(
+      filePath: path,
+      gradeKey: grade.key,
+      gradeLabel: grade.label,
+    );
   }
 
   Future<void> _onEditGradesPressed() async {
@@ -2810,16 +2853,16 @@ class _BookCardState extends State<_BookCard> {
   static const double _gradeSwipeDistanceThreshold = 30.0;
   static const double _gradeSwipeVelocityThreshold = 240.0;
   double _gradeDragDx = 0.0;
-  bool _gradeDragTriggered = false;
+  bool _gradeDragMovedByDistance = false;
 
   void _resetGradeDrag() {
     _gradeDragDx = 0.0;
-    _gradeDragTriggered = false;
+    _gradeDragMovedByDistance = false;
   }
 
   void _triggerGradeDelta(int delta) {
-    _gradeDragDx = 0.0;
-    _gradeDragTriggered = true;
+    if (delta == 0) return;
+    _gradeDragMovedByDistance = true;
     widget.onGradeDelta(delta);
   }
 
@@ -2828,18 +2871,21 @@ class _BookCardState extends State<_BookCard> {
   }
 
   void _handleGradeDragUpdate(DragUpdateDetails d) {
-    if (_gradeDragTriggered) return;
     _gradeDragDx += d.delta.dx;
     if (_gradeDragDx <= -_gradeSwipeDistanceThreshold) {
-      _triggerGradeDelta(1);
+      final steps = (_gradeDragDx.abs() / _gradeSwipeDistanceThreshold).floor();
+      _gradeDragDx += _gradeSwipeDistanceThreshold * steps;
+      _triggerGradeDelta(steps);
     } else if (_gradeDragDx >= _gradeSwipeDistanceThreshold) {
-      _triggerGradeDelta(-1);
+      final steps = (_gradeDragDx.abs() / _gradeSwipeDistanceThreshold).floor();
+      _gradeDragDx -= _gradeSwipeDistanceThreshold * steps;
+      _triggerGradeDelta(-steps);
     }
   }
 
   void _handleGradeDragEnd(DragEndDetails d) {
     final v = d.primaryVelocity ?? 0.0;
-    if (!_gradeDragTriggered && v.abs() >= _gradeSwipeVelocityThreshold) {
+    if (!_gradeDragMovedByDistance && v.abs() >= _gradeSwipeVelocityThreshold) {
       _triggerGradeDelta(v < 0 ? 1 : -1);
     }
     _resetGradeDrag();
