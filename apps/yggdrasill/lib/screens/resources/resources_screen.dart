@@ -21,6 +21,7 @@ import 'dart:math' as math;
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 import '../../widgets/pdf/pdf_editor_dialog.dart';
 import '../../widgets/resource_file_meta_dialog.dart';
+import '../../widgets/latex_text_renderer.dart';
 import '../../models/textbook_drag_payload.dart';
 import '../../app_overlays.dart';
 import '../../services/print_routing_service.dart';
@@ -1156,9 +1157,10 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
           ),
           const SizedBox(width: 8),
           Expanded(
-            child: Text(
+            child: LatexTextRenderer(
               file.name,
               maxLines: 1,
+              softWrap: false,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(
                 color: _rsText,
@@ -6087,9 +6089,10 @@ class _GridFileCardState extends State<_GridFileCard> {
                                 Row(
                                   children: [
                                     Expanded(
-                                      child: Text(
+                                      child: LatexTextRenderer(
                                         file.name,
                                         maxLines: 1,
+                                        softWrap: false,
                                         overflow: TextOverflow.ellipsis,
                                         style: TextStyle(
                                             color: file.textColor ?? _rsText,
@@ -6110,12 +6113,14 @@ class _GridFileCardState extends State<_GridFileCard> {
                                 ),
                                 if ((file.description ?? '').isNotEmpty) ...[
                                   const SizedBox(height: 1),
-                                  Text(file.description!,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                          color: Colors.white60,
-                                          fontSize: 14.5)),
+                                  LatexTextRenderer(
+                                    file.description!,
+                                    maxLines: 1,
+                                    softWrap: false,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                        color: Colors.white60, fontSize: 14.5),
+                                  ),
                                 ],
                                 const Spacer(),
                                 Row(
@@ -6187,9 +6192,10 @@ class _GridFileCardState extends State<_GridFileCard> {
                     size: 22),
               const SizedBox(width: 8),
               Expanded(
-                child: Text(
+                child: LatexTextRenderer(
                   file.name,
                   maxLines: 1,
+                  softWrap: false,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                       color: file.textColor ??
@@ -6251,10 +6257,12 @@ class _GridFileCardState extends State<_GridFileCard> {
           ),
           const SizedBox(height: 8),
           if ((file.description ?? '').isNotEmpty)
-            Text(file.description!,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: Colors.white60, fontSize: 13.5)),
+            LatexTextRenderer(
+              file.description!,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: Colors.white60, fontSize: 13.5),
+            ),
           const Spacer(),
           Row(
             children: [
@@ -6313,9 +6321,10 @@ class _GridFileCardState extends State<_GridFileCard> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
+                    LatexTextRenderer(
                       file.name,
                       maxLines: 1,
+                      softWrap: false,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         color: file.textColor ??
@@ -6329,7 +6338,7 @@ class _GridFileCardState extends State<_GridFileCard> {
                     ),
                     if ((file.description ?? '').isNotEmpty) ...[
                       const SizedBox(height: 6),
-                      Text(
+                      LatexTextRenderer(
                         file.description!,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
@@ -7297,7 +7306,7 @@ class _PrintRangeDialogState extends State<_PrintRangeDialog> {
                             ),
                             const SizedBox(width: 8),
                             Expanded(
-                              child: Text(
+                              child: LatexTextRenderer(
                                 '${_orderText(big.orderIndex)}. ${big.name}',
                                 style: const TextStyle(
                                   color: _rsText,
@@ -7348,7 +7357,7 @@ class _PrintRangeDialogState extends State<_PrintRangeDialog> {
                                     ),
                                     const SizedBox(width: 8),
                                     Expanded(
-                                      child: Text(
+                                      child: LatexTextRenderer(
                                         '${_orderText(big.orderIndex)}.${_orderText(mid.orderIndex)} ${mid.name}',
                                         style: const TextStyle(
                                           color: _rsText,
@@ -7410,7 +7419,7 @@ class _PrintRangeDialogState extends State<_PrintRangeDialog> {
                                                 ),
                                                 const SizedBox(width: 8),
                                                 Expanded(
-                                                  child: Text(
+                                                  child: LatexTextRenderer(
                                                     '${_orderText(big.orderIndex)}.${_orderText(mid.orderIndex)}.(${_orderText(small.orderIndex)}) $titleText',
                                                     style: const TextStyle(
                                                       color: _rsTextSub,
@@ -7419,6 +7428,8 @@ class _PrintRangeDialogState extends State<_PrintRangeDialog> {
                                                       fontSize: 12.5,
                                                       height: 1.2,
                                                     ),
+                                                    maxLines: 1,
+                                                    softWrap: false,
                                                     overflow:
                                                         TextOverflow.ellipsis,
                                                   ),
@@ -7477,16 +7488,23 @@ class _PrintRangeDialogState extends State<_PrintRangeDialog> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
+            LatexTextRenderer(
               widget.file.name,
               style: const TextStyle(
                   color: _rsText, fontSize: 14, fontWeight: FontWeight.w800),
+              maxLines: 1,
+              softWrap: false,
               overflow: TextOverflow.ellipsis,
             ),
             if (gradeLabel != null && gradeLabel.isNotEmpty) ...[
               const SizedBox(height: 4),
-              Text(gradeLabel,
-                  style: const TextStyle(color: _rsTextSub, fontSize: 12)),
+              LatexTextRenderer(
+                gradeLabel,
+                style: const TextStyle(color: _rsTextSub, fontSize: 12),
+                maxLines: 1,
+                softWrap: false,
+                overflow: TextOverflow.ellipsis,
+              ),
             ],
             const SizedBox(height: 12),
             if (hasUnitFeature) ...[
@@ -8798,9 +8816,10 @@ class _FileCard extends StatelessWidget {
                 size: 22),
           const SizedBox(width: 4),
           Expanded(
-            child: Text(
+            child: LatexTextRenderer(
               file.name,
               maxLines: 1,
+              softWrap: false,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
                   color: file.textColor ??

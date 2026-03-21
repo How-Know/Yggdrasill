@@ -8,6 +8,7 @@ import '../../services/ai_summary.dart';
 import '../../services/data_manager.dart';
 import '../../services/homework_store.dart';
 import '../../widgets/dialog_tokens.dart';
+import '../../widgets/latex_text_renderer.dart';
 import '../../models/student_flow.dart';
 
 class HomeworkQuickAddProxyDialog extends StatefulWidget {
@@ -1607,7 +1608,7 @@ class HomeworkQuickAddProxyDialogState
               border:
                   Border.all(color: borderColor, width: selected ? 1.4 : 1.0),
             ),
-            child: Text(
+            child: LatexTextRenderer(
               label,
               style: TextStyle(
                 color: enabled
@@ -1616,6 +1617,9 @@ class HomeworkQuickAddProxyDialogState
                 fontWeight: selected ? FontWeight.w700 : FontWeight.w600,
                 fontSize: 13.8,
               ),
+              maxLines: 1,
+              softWrap: false,
+              overflow: TextOverflow.ellipsis,
             ),
           ),
         ),
@@ -2312,7 +2316,7 @@ class HomeworkQuickAddProxyDialogState
           ),
         ),
         const SizedBox(height: 4),
-        Text(
+        LatexTextRenderer(
           '범위: $scopeText',
           style: const TextStyle(
             color: kDlgTextSub,
@@ -2527,7 +2531,7 @@ class HomeworkQuickAddProxyDialogState
                   ),
                   const SizedBox(width: 8),
                   Expanded(
-                    child: Text(
+                    child: LatexTextRenderer(
                       big.name,
                       style: const TextStyle(
                         color: kDlgText,
@@ -2581,7 +2585,7 @@ class HomeworkQuickAddProxyDialogState
                           ),
                           const SizedBox(width: 8),
                           Expanded(
-                            child: Text(
+                            child: LatexTextRenderer(
                               mid.name,
                               style: const TextStyle(
                                 color: kDlgText,
@@ -2659,7 +2663,7 @@ class HomeworkQuickAddProxyDialogState
                                         ),
                                         const SizedBox(width: 8),
                                         Expanded(
-                                          child: Text(
+                                          child: LatexTextRenderer(
                                             titleText,
                                             style: TextStyle(
                                               color: blocked
@@ -2669,6 +2673,8 @@ class HomeworkQuickAddProxyDialogState
                                               fontSize: 12.5,
                                               height: 1.2,
                                             ),
+                                            maxLines: 1,
+                                            softWrap: false,
                                             overflow: TextOverflow.ellipsis,
                                           ),
                                         ),

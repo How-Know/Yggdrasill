@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:path/path.dart' as p;
+import '../../widgets/math_shortcuts.dart';
+import '../../widgets/latex_text_renderer.dart';
 
 const double _treeIndentStep = 18.0;
 const double _treeConnectorWidth = 12.0;
@@ -390,8 +392,9 @@ class _TextbookScreenState extends State<TextbookScreen> {
           _selectedBody?.gradeLabel != body.gradeLabel) {
         return;
       }
+      final row = data is Map ? Map<String, dynamic>.from(data as Map) : null;
       _applyLoadedMetadata(
-        data as Map<String, dynamic>?,
+        row,
         book: book,
         body: body,
       );
@@ -688,7 +691,12 @@ class _TextbookScreenState extends State<TextbookScreen> {
       items: _books
           .map((b) => DropdownMenuItem(
                 value: b.id,
-                child: Text(b.name, overflow: TextOverflow.ellipsis),
+                child: LatexTextRenderer(
+                  b.name,
+                  maxLines: 1,
+                  softWrap: false,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ))
           .toList(),
       onChanged: (value) {
@@ -754,8 +762,10 @@ class _TextbookScreenState extends State<TextbookScreen> {
       items: _bodyPdfs
           .map((p) => DropdownMenuItem(
                 value: p.key,
-                child: Text(
+                child: LatexTextRenderer(
                   p.simpleLabel,
+                  maxLines: 1,
+                  softWrap: false,
                   overflow: TextOverflow.ellipsis,
                 ),
               ))
@@ -1162,9 +1172,27 @@ class _TextbookScreenState extends State<TextbookScreen> {
           ),
           const SizedBox(height: 6),
           const Text(
-            '대단원 → 중단원 → 소단원 순서로 입력하세요. 소단원에는 페이지 범위를 기록합니다.',
+            '대단원 → 중단원 → 소단원 순서로 입력하세요. Ctrl+N(인라인), Ctrl+M(블록)으로 수식 템플릿을 삽입할 수 있습니다.',
             style: TextStyle(color: Color(0xFF8A8A8A), fontSize: 13),
           ),
+          if (_isLoadingMetadata)
+            const Padding(
+              padding: EdgeInsets.only(top: 8),
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF9FB3B3)),
+                  ),
+                  SizedBox(width: 8),
+                  Text(
+                    '저장된 메타데이터 불러오는 중...',
+                    style: TextStyle(color: Color(0xFF9FB3B3), fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
           const SizedBox(height: 12),
           if (disabled)
             const Padding(
@@ -1336,6 +1364,7 @@ class _TextbookScreenState extends State<TextbookScreen> {
                 keyboardType: TextInputType.number,
                 inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                 textAlign: TextAlign.center,
+                enableMathShortcuts: false,
               ),
             ),
           ],
@@ -1348,6 +1377,7 @@ class _TextbookScreenState extends State<TextbookScreen> {
               keyboardType: TextInputType.number,
               inputFormatters: [FilteringTextInputFormatter.digitsOnly],
               textAlign: TextAlign.center,
+              enableMathShortcuts: false,
             ),
           ),
           const SizedBox(width: 6),
@@ -1359,6 +1389,7 @@ class _TextbookScreenState extends State<TextbookScreen> {
               keyboardType: TextInputType.number,
               inputFormatters: [FilteringTextInputFormatter.digitsOnly],
               textAlign: TextAlign.center,
+              enableMathShortcuts: false,
             ),
           ),
           const SizedBox(width: 6),
@@ -1441,8 +1472,9 @@ class _TextbookScreenState extends State<TextbookScreen> {
     TextInputType? keyboardType,
     List<TextInputFormatter>? inputFormatters,
     TextAlign textAlign = TextAlign.left,
+    bool enableMathShortcuts = true,
   }) {
-    return TextField(
+    final field = TextField(
       controller: controller,
       keyboardType: keyboardType,
       inputFormatters: inputFormatters,
@@ -1470,10 +1502,17 @@ class _TextbookScreenState extends State<TextbookScreen> {
         ),
       ),
     );
+    if (!enableMathShortcuts) return field;
+    return MathShortcuts.wrap(
+      context: context,
+      controller: controller,
+      child: field,
+    );
   }
 
   Widget _infoRow(String label, String value, {bool selectable = false}) {
     final textStyle = const TextStyle(color: Colors.white70, fontSize: 14);
+    final usePlainSelectable = selectable && !LatexTextRenderer.hasLatex(value);
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Row(
@@ -1485,9 +1524,12 @@ class _TextbookScreenState extends State<TextbookScreen> {
           ),
           const SizedBox(width: 8),
           Expanded(
-            child: selectable
+            child: usePlainSelectable
                 ? SelectableText(value, style: textStyle)
-                : Text(value, style: textStyle),
+                : LatexTextRenderer(
+                    value,
+                    style: textStyle,
+                  ),
           ),
         ],
       ),

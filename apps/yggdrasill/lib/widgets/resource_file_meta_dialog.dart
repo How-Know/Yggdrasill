@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../services/data_manager.dart';
 import 'dialog_tokens.dart';
+import 'latex_text_renderer.dart';
 
 class ResourceFileMetaDialog extends StatefulWidget {
   final String? bookId;
@@ -287,7 +288,7 @@ class _ResourceFileMetaDialogState extends State<ResourceFileMetaDialog> {
       childrenPadding: const EdgeInsets.only(left: 8, right: 8, bottom: 8),
       iconColor: kDlgTextSub,
       collapsedIconColor: kDlgTextSub,
-      title: Text(
+      title: LatexTextRenderer(
         '${_orderText(big.orderIndex)}. ${big.name}',
         style: const TextStyle(
           color: kDlgText,
@@ -314,7 +315,7 @@ class _ResourceFileMetaDialogState extends State<ResourceFileMetaDialog> {
       childrenPadding: const EdgeInsets.only(left: 8, right: 2, bottom: 6),
       iconColor: kDlgTextSub,
       collapsedIconColor: kDlgTextSub,
-      title: Text(
+      title: LatexTextRenderer(
         '${_orderText(big.orderIndex)}.${_orderText(mid.orderIndex)} ${mid.name}',
         style: const TextStyle(
           color: kDlgText,
@@ -349,7 +350,7 @@ class _ResourceFileMetaDialogState extends State<ResourceFileMetaDialog> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
+          LatexTextRenderer(
             '${_orderText(big.orderIndex)}.${_orderText(mid.orderIndex)}.(${_orderText(small.orderIndex)}) ${small.name}',
             style: const TextStyle(
               color: kDlgText,
@@ -540,7 +541,7 @@ class _MetaRow extends StatelessWidget {
           ),
           const SizedBox(width: 8),
           Expanded(
-            child: Text(
+            child: LatexTextRenderer(
               value,
               style: const TextStyle(
                 color: kDlgText,

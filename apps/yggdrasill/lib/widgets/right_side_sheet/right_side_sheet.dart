@@ -14,6 +14,7 @@ import 'package:open_filex/open_filex.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart' as sf;
 import 'package:uuid/uuid.dart';
 import 'file_shortcut_tab.dart';
+import '../latex_text_renderer.dart';
 import '../pill_tab_selector.dart';
 import '../../models/consult_note.dart';
 import '../../models/memo.dart';
@@ -2974,7 +2975,7 @@ class _BookCardState extends State<_BookCard> {
                             child: Row(
                               children: [
                                 Expanded(
-                                  child: Text(
+                                  child: LatexTextRenderer(
                                     widget.item.name,
                                     style: const TextStyle(
                                       color: _rsText,
@@ -2995,7 +2996,7 @@ class _BookCardState extends State<_BookCard> {
                         ],
                       ),
                       const SizedBox(height: 4),
-                      Text(
+                      LatexTextRenderer(
                         widget.item.description,
                         style: const TextStyle(
                           color: _rsTextSub,
@@ -3714,7 +3715,7 @@ class _BookPdfEditDialogState extends State<_BookPdfEditDialog> {
               style: TextStyle(
                   color: _rsText, fontSize: 18, fontWeight: FontWeight.w900)),
           const SizedBox(height: 6),
-          Text(
+          LatexTextRenderer(
             widget.book.name,
             style: const TextStyle(
                 color: _rsTextSub, fontSize: 13, fontWeight: FontWeight.w800),
@@ -4416,11 +4417,13 @@ class _PdfAttachWizardDialogState extends State<_PdfAttachWizardDialog> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(b.name,
-                    style: const TextStyle(
-                        color: _rsText,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w900)),
+                LatexTextRenderer(
+                  b.name,
+                  style: const TextStyle(
+                      color: _rsText, fontSize: 14, fontWeight: FontWeight.w900),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
                 const SizedBox(height: 6),
                 Text(
                   '변경 예정: ${_pendingByGradeIndex.length}개',

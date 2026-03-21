@@ -4,7 +4,7 @@ import 'widgets/category_tree.dart';
 import 'widgets/concept_input_dialog.dart';
 import '../../services/concept_service.dart';
 import '../../widgets/app_navigation_bar.dart';
-import 'package:flutter_math_fork/flutter_math.dart';
+import '../../widgets/latex_text_renderer.dart';
 import '../../services/concept_category_service.dart';
 
 class CurriculumScreen extends StatefulWidget {
@@ -872,70 +872,12 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
   }
 
   Widget _renderConceptContent(String text) {
-    // 재사용: LaTeX 블록/인라인 렌더링
-    const baseStyle = TextStyle(color: Color(0xFFB3B3B3), fontSize: 13);
-    final blockRegex = RegExp(r'\$\$([\s\S]*?)\$\$', dotAll: true);
-    final blocks = blockRegex.allMatches(text).toList();
-    if (blocks.isEmpty) {
-      return _renderInlineMath(text, baseStyle);
-    }
-    int lastIndex = 0;
-    final children = <Widget>[];
-    for (final m in blocks) {
-      final before = text.substring(lastIndex, m.start);
-      if (before.isNotEmpty) {
-        children.add(_renderInlineMath(before, baseStyle));
-      }
-      final formula = m.group(1) ?? '';
-      if (formula.trim().isNotEmpty) {
-        children.add(
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 6),
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Math.tex(
-                formula,
-                mathStyle: MathStyle.display,
-                textStyle: baseStyle.copyWith(color: Colors.white),
-              ),
-            ),
-          ),
-        );
-      }
-      lastIndex = m.end;
-    }
-    final tail = text.substring(lastIndex);
-    if (tail.isNotEmpty) {
-      children.add(_renderInlineMath(tail, baseStyle));
-    }
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: children);
-  }
-
-  Widget _renderInlineMath(String text, TextStyle baseStyle) {
-    final inlineRegex = RegExp(r'\\\( (.*?) \\\)');
-    final spans = <InlineSpan>[];
-    int lastIndex = 0;
-    for (final match in inlineRegex.allMatches(text)) {
-      if (match.start > lastIndex) {
-        spans.add(TextSpan(text: text.substring(lastIndex, match.start), style: baseStyle));
-      }
-      final formula = match.group(1) ?? '';
-      if (formula.isNotEmpty) {
-        spans.add(
-          WidgetSpan(
-            child: Math.tex(
-              formula,
-              textStyle: baseStyle.copyWith(color: Colors.white),
-            ),
-          ),
-        );
-      }
-      lastIndex = match.end;
-    }
-    if (lastIndex < text.length) {
-      spans.add(TextSpan(text: text.substring(lastIndex), style: baseStyle));
-    }
-    return RichText(text: TextSpan(children: spans));
+    return LatexTextRenderer(
+      text,
+      style: const TextStyle(color: Color(0xFFB3B3B3), fontSize: 13),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      blockVerticalPadding: 6,
+    );
   }
 
   // 임시 목업 카테고리 트리 데이터 (도메인별)

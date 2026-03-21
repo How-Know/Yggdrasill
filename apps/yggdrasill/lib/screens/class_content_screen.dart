@@ -26,6 +26,7 @@ import '../app_overlays.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 import '../widgets/flow_setup_dialog.dart';
 import '../widgets/pdf/homework_answer_viewer_dialog.dart';
+import '../widgets/latex_text_renderer.dart';
 import 'class_content/grading_mode_page.dart';
 
 /// 수업 내용 관리 6번째 페이지 (구조만 정의, 기능 미구현)
@@ -2020,6 +2021,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       final isComplete = entry.value;
 
       if (isComplete) {
+        HomeworkStore.instance.markAutoCompleteOnNextWaiting(key.itemId);
         final target = await _resolveHomeworkCheckTarget(
           key.studentId,
           key.itemId,
@@ -2043,7 +2045,6 @@ class _ClassContentScreenState extends State<ClassContentScreen>
             recordAssignmentCheck: false,
           );
         }
-        HomeworkStore.instance.markAutoCompleteOnNextWaiting(key.itemId);
       } else if (hw.phase == 3) {
         final target = await _resolveHomeworkCheckTarget(
           key.studentId,
@@ -2465,7 +2466,7 @@ List<Widget> _buildHomeworkCheckTargetInfo(HomeworkItem hw) {
 
   return [
     if (bookAndCourse.isNotEmpty) ...[
-      Text(
+      LatexTextRenderer(
         bookAndCourse,
         style: const TextStyle(
           color: kDlgText,
@@ -2473,11 +2474,12 @@ List<Widget> _buildHomeworkCheckTargetInfo(HomeworkItem hw) {
           fontWeight: FontWeight.w900,
         ),
         maxLines: 1,
+        softWrap: false,
         overflow: TextOverflow.ellipsis,
       ),
       const SizedBox(height: 4),
     ],
-    Text(
+    LatexTextRenderer(
       title,
       style: TextStyle(
         color: bookAndCourse.isNotEmpty ? kDlgTextSub : kDlgText,
@@ -2486,6 +2488,7 @@ List<Widget> _buildHomeworkCheckTargetInfo(HomeworkItem hw) {
             bookAndCourse.isNotEmpty ? FontWeight.w600 : FontWeight.w800,
       ),
       maxLines: 1,
+      softWrap: false,
       overflow: TextOverflow.ellipsis,
     ),
     if (pageAndCount.isNotEmpty) ...[
@@ -3943,11 +3946,14 @@ double _homeworkGroupExpandedHeightForChildCount(int childCount) {
   if (childCount <= 0) return _homeworkChipExpandedHeight;
   // 상단 정보와 하위 리스트를 충분히 분리하고,
   // 하위 과제 수에 비례해 카드 높이가 늘어나도록 계산한다.
-  const double groupSectionHeaderHeight = 60;
-  const double perChildRowHeight = 69;
+  const double groupSectionHeaderHeight = 58;
+  const double perChildRowHeight = 78;
+  final double overflowSafetyPadding =
+      childCount >= 7 ? 18 : (childCount >= 5 ? 12 : (childCount >= 3 ? 8 : 4));
   return _homeworkChipExpandedHeight +
       groupSectionHeaderHeight +
-      (childCount * perChildRowHeight);
+      (childCount * perChildRowHeight) +
+      overflowSafetyPadding;
 }
 
 double _homeworkChipMaxSlideFor(double h) => h * 0.58;
@@ -3965,6 +3971,14 @@ const String _homeworkPrintTempPrefix = 'hw_print_';
 final Map<String, String> _groupCycleIdentityByGroupId = <String, String>{};
 final Map<String, Map<String, int>> _groupChildCycleBaseByGroupId =
     <String, Map<String, int>>{};
+final Map<String, String> _expandedReservedGroupKeyByStudent =
+    <String, String>{};
+final Set<String> _activatingReservedGroupActionKeys = <String>{};
+final ValueNotifier<int> _reservedGroupUiRevision = ValueNotifier<int>(0);
+
+void _markReservedGroupUiDirty() {
+  _reservedGroupUiRevision.value = _reservedGroupUiRevision.value + 1;
+}
 
 // ------------------------
 // 오른쪽 패널: 슬라이드시트와 동일한 과제 칩 렌더링
@@ -4197,33 +4211,39 @@ Widget _buildReservedHomeworkChipsReactiveForStudent(
                       return ValueListenableBuilder<int>(
                         valueListenable: HomeworkStore.instance.revision,
                         builder: (context, _rev, _) {
-                          final reservedSections =
-                              _buildReservedHomeworkChipsForStudent(
-                            context,
-                            studentId,
-                            flowNames,
-                            assignmentCounts,
-                            activeAssignments,
-                            assignmentCycleMetaByItem,
-                          );
-                          if (reservedSections.isEmpty) {
-                            return const Center(
-                              child: Text(
-                                '예약 과제가 없습니다.',
-                                style: TextStyle(
-                                  color: kDlgTextSub,
-                                  fontSize: 13.5,
-                                  fontWeight: FontWeight.w700,
+                          return ValueListenableBuilder<int>(
+                            valueListenable: _reservedGroupUiRevision,
+                            builder: (context, uiRevision, ____) {
+                              final reservedSections =
+                                  _buildReservedHomeworkChipsForStudent(
+                                context,
+                                studentId,
+                                flowNames,
+                                assignmentCounts,
+                                activeAssignments,
+                                assignmentCycleMetaByItem,
+                              );
+                              if (reservedSections.isEmpty) {
+                                return const Center(
+                                  child: Text(
+                                    '예약 과제가 없습니다.',
+                                    style: TextStyle(
+                                      color: kDlgTextSub,
+                                      fontSize: 13.5,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                );
+                              }
+                              return SingleChildScrollView(
+                                key: ValueKey('reserved_ui_$uiRevision'),
+                                physics: const BouncingScrollPhysics(),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: reservedSections,
                                 ),
-                              ),
-                            );
-                          }
-                          return SingleChildScrollView(
-                            physics: const BouncingScrollPhysics(),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: reservedSections,
-                            ),
+                              );
+                            },
                           );
                         },
                       );
@@ -4262,11 +4282,12 @@ Widget _buildReservedHomeworkTitleReactiveForStudent(String studentId) {
           return ValueListenableBuilder<int>(
             valueListenable: HomeworkStore.instance.revision,
             builder: (context, _rev, _) {
-              final reservedCount = _resolveReservedHomeworkPairsForStudent(
+              final reservedGroupCount =
+                  _resolveReservedHomeworkGroupsForStudent(
                 studentId,
                 activeAssignments,
               ).length;
-              if (reservedCount <= 0) {
+              if (reservedGroupCount <= 0) {
                 return const SizedBox.shrink();
               }
               return SizedBox(
@@ -4274,7 +4295,7 @@ Widget _buildReservedHomeworkTitleReactiveForStudent(String studentId) {
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 24),
                   child: Text(
-                    '예약 과제 $reservedCount개',
+                    '예약 그룹 과제 $reservedGroupCount개',
                     style: const TextStyle(
                       color: kDlgAccent,
                       fontSize: 23,
@@ -4297,28 +4318,51 @@ bool _isReservationAssignment(HomeworkAssignmentDetail assignment) {
   return note == HomeworkAssignmentStore.reservationNote;
 }
 
-Future<void> _activateReservedHomeworkChip({
+Future<void> _activateReservedHomeworkGroup({
   required BuildContext context,
   required String studentId,
-  required HomeworkAssignmentDetail assignment,
+  required _ReservedHomeworkGroupSection group,
 }) async {
-  final hwId = assignment.homeworkItemId.trim();
-  if (hwId.isEmpty) return;
-  await HomeworkStore.instance.placeItemAtActiveTail(
-    studentId,
-    hwId,
-    activateFromHomework: true,
-  );
-  final latest = HomeworkStore.instance.getById(studentId, hwId);
-  if (latest != null && latest.phase != 1) {
-    await HomeworkStore.instance.waitPhase(studentId, hwId);
+  final actionKey = '$studentId|${group.groupKey}';
+  if (_activatingReservedGroupActionKeys.contains(actionKey)) return;
+  _activatingReservedGroupActionKeys.add(actionKey);
+  _markReservedGroupUiDirty();
+  try {
+    final activatedItemIds = <String>{};
+    for (final entry in group.entries) {
+      final hwId = entry.key.homeworkItemId.trim();
+      if (hwId.isEmpty || activatedItemIds.contains(hwId)) continue;
+      await HomeworkStore.instance.placeItemAtActiveTail(
+        studentId,
+        hwId,
+        activateFromHomework: true,
+      );
+      final latest = HomeworkStore.instance.getById(studentId, hwId);
+      if (latest != null && latest.phase != 1) {
+        await HomeworkStore.instance.waitPhase(studentId, hwId);
+      }
+      activatedItemIds.add(hwId);
+    }
+    if (activatedItemIds.isEmpty) return;
+    await HomeworkAssignmentStore.instance.clearActiveAssignmentsForItems(
+      studentId,
+      activatedItemIds.toList(growable: false),
+    );
+    if (!context.mounted) return;
+    final int convertedCount = activatedItemIds.length;
+    final String message = convertedCount > 1
+        ? '예약 그룹 과제 $convertedCount개를 대기 상태로 전환했어요.'
+        : '예약 그룹 과제를 대기 상태로 전환했어요.';
+    _showHomeworkChipSnackBar(context, message);
+    if (_expandedReservedGroupKeyByStudent[studentId] == group.groupKey) {
+      _expandedReservedGroupKeyByStudent.remove(studentId);
+      _markReservedGroupUiDirty();
+    }
+  } finally {
+    if (_activatingReservedGroupActionKeys.remove(actionKey)) {
+      _markReservedGroupUiDirty();
+    }
   }
-  await HomeworkAssignmentStore.instance.clearActiveAssignmentsForItems(
-    studentId,
-    [hwId],
-  );
-  if (!context.mounted) return;
-  _showHomeworkChipSnackBar(context, '예약 과제를 대기 상태로 전환했어요.');
 }
 
 String _formatHomeworkDueChipLabel(DateTime dueDate) {
@@ -4363,130 +4407,345 @@ List<Widget> _buildReservedHomeworkChipsForStudent(
   List<HomeworkAssignmentDetail> activeAssignments,
   Map<String, HomeworkAssignmentCycleMeta> assignmentCycleMetaByItem,
 ) {
-  final reservedPairs = _resolveReservedHomeworkPairsForStudent(
+  final reservedGroups = _resolveReservedHomeworkGroupsForStudent(
     studentId,
     activeAssignments,
   );
-  if (reservedPairs.isEmpty) return const <Widget>[];
+  if (reservedGroups.isEmpty) return const <Widget>[];
 
   final out = <Widget>[];
-  for (int i = 0; i < reservedPairs.length; i++) {
-    final assignment = reservedPairs[i].key;
-    final hw = reservedPairs[i].value;
-    final cycleMeta = assignmentCycleMetaByItem[hw.id];
-    final repeatIndex = (cycleMeta?.repeatIndex ?? 1).clamp(1, 1 << 30);
-    final splitParts =
-        (cycleMeta?.splitParts ?? hw.defaultSplitParts).clamp(1, 4);
-    final splitRound = (cycleMeta?.splitRound ?? 1).clamp(1, splitParts);
-    final flowName = (flowNames[hw.flowId ?? ''] ?? '').trim();
-    final page = (hw.page ?? '').trim();
-    final count = hw.count ?? 0;
-    final countText = count > 0 ? '${count}문항' : '';
-    final metaTopParts = <String>[
-      if (flowName.isNotEmpty) flowName,
-      if (page.isNotEmpty) 'p.$page',
-      if (countText.isNotEmpty) countText,
-    ];
-    final String cycleText = splitParts > 1
-        ? '${repeatIndex}회차 · ${splitParts}분할 ${splitRound}차'
-        : '${repeatIndex}회차';
-    final assignmentCount = assignmentCounts[hw.id] ?? 0;
-    final String title = hw.title.trim().isEmpty ? '(제목 없음)' : hw.title.trim();
-    final String metaTop = metaTopParts.join(' · ');
-    final String metaBottom =
-        assignmentCount > 0 ? '$cycleText · 숙제 ${assignmentCount}회' : cycleText;
-    out.add(
-      MouseRegion(
-        cursor: SystemMouseCursors.click,
-        child: Material(
-          color: Colors.transparent,
-          child: InkWell(
-            borderRadius: BorderRadius.circular(8),
-            onTap: () {
-              unawaited(
-                _activateReservedHomeworkChip(
-                  context: context,
-                  studentId: studentId,
-                  assignment: assignment,
+  for (int i = 0; i < reservedGroups.length; i++) {
+    final group = reservedGroups[i];
+    final entries = group.entries;
+    final actionKey = '$studentId|${group.groupKey}';
+    final bool isExpanded =
+        _expandedReservedGroupKeyByStudent[studentId] == group.groupKey;
+    final bool isActivating =
+        _activatingReservedGroupActionKeys.contains(actionKey);
+
+    final flowLabels = <String>{};
+    final pageLabels = <String>[];
+    int totalQuestionCount = 0;
+    int totalAssignmentCount = 0;
+    DateTime? dueDate;
+    for (final entry in entries) {
+      final assignment = entry.key;
+      final hw = entry.value;
+      final flowId = (hw.flowId ?? assignment.flowId ?? '').trim();
+      final flowLabel = (flowNames[flowId] ?? '').trim();
+      if (flowLabel.isNotEmpty) flowLabels.add(flowLabel);
+      final page = (hw.page ?? '').trim();
+      if (page.isNotEmpty && !pageLabels.contains('p.$page')) {
+        pageLabels.add('p.$page');
+      }
+      final count = hw.count ?? 0;
+      if (count > 0) totalQuestionCount += count;
+      totalAssignmentCount += assignmentCounts[hw.id] ?? 0;
+      dueDate = _mergeHomeworkDueDate(
+        dueDate,
+        assignment.dueDate == null ? null : _dateOnly(assignment.dueDate!),
+      );
+    }
+
+    final String flowSummary = flowLabels.isEmpty
+        ? '플로우 미지정'
+        : (flowLabels.length == 1
+            ? flowLabels.first
+            : '플로우 ${flowLabels.length}개');
+    final String topMeta = <String>[
+      flowSummary,
+      if (pageLabels.isNotEmpty) pageLabels.take(3).join(', '),
+      if (totalQuestionCount > 0) '$totalQuestionCount문항',
+    ].join(' · ');
+    final String bottomMeta = <String>[
+      '하위 과제 ${entries.length}개',
+      if (totalAssignmentCount > 0) '숙제 $totalAssignmentCount회',
+      if (dueDate != null) _formatHomeworkDueChipLabel(dueDate),
+    ].join(' · ');
+
+    final childRows = <Widget>[];
+    for (int childIndex = 0; childIndex < entries.length; childIndex++) {
+      final assignment = entries[childIndex].key;
+      final hw = entries[childIndex].value;
+      final cycleMeta = assignmentCycleMetaByItem[hw.id];
+      final repeatIndex =
+          (cycleMeta?.repeatIndex ?? assignment.repeatIndex).clamp(1, 1 << 30);
+      final splitParts =
+          (cycleMeta?.splitParts ?? assignment.splitParts).clamp(1, 4);
+      final splitRound =
+          (cycleMeta?.splitRound ?? assignment.splitRound).clamp(1, splitParts);
+      final String cycleText = splitParts > 1
+          ? '$repeatIndex회차 · $splitParts분할 $splitRound차'
+          : '$repeatIndex회차';
+      final flowId = (hw.flowId ?? assignment.flowId ?? '').trim();
+      final flowLabel = (flowNames[flowId] ?? '').trim();
+      final page = (hw.page ?? '').trim();
+      final count = hw.count ?? 0;
+      final childTitle = hw.title.trim().isEmpty ? '(제목 없음)' : hw.title.trim();
+      final childMeta = <String>[
+        if (flowLabel.isNotEmpty) flowLabel,
+        if (page.isNotEmpty) 'p.$page',
+        if (count > 0) '$count문항',
+        cycleText,
+      ].join(' · ');
+      childRows.add(
+        Container(
+          padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+          decoration: BoxDecoration(
+            color: const Color(0xFF11171A),
+            borderRadius: BorderRadius.circular(9),
+            border: Border.all(color: const Color(0xFF263237)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                childTitle,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Color(0xFFB9C3BA),
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                  height: 1.2,
                 ),
-              );
-            },
-            child: Padding(
-              key: ValueKey('reserved_${assignment.id}_${hw.id}'),
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
-              child: Row(
+              ),
+              const SizedBox(height: 2),
+              Text(
+                childMeta,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Color(0xFF8FA1A1),
+                  fontSize: 13.5,
+                  fontWeight: FontWeight.w600,
+                  height: 1.1,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+      if (childIndex != entries.length - 1) {
+        childRows.add(const SizedBox(height: 6));
+      }
+    }
+
+    out.add(
+      _SlideableHomeworkChip(
+        key: ValueKey('reserved_group_chip_${studentId}_${group.groupKey}'),
+        maxSlide: _homeworkChipMaxSlideFor(isExpanded ? 260 : 148),
+        canSlideDown: false,
+        canSlideUp: !isActivating,
+        downLabel: '',
+        upLabel: isActivating ? '전환 중' : '진행 전환',
+        downColor: const Color(0xFF9FB3B3),
+        upColor: kDlgAccent,
+        onTap: () {
+          if (isActivating) return;
+          final current = _expandedReservedGroupKeyByStudent[studentId];
+          if (current == group.groupKey) {
+            _expandedReservedGroupKeyByStudent.remove(studentId);
+          } else {
+            _expandedReservedGroupKeyByStudent[studentId] = group.groupKey;
+          }
+          _markReservedGroupUiDirty();
+        },
+        onLongPress: null,
+        onDoubleTap: null,
+        onSlideDown: () {},
+        onSlideUp: () async {
+          await _activateReservedHomeworkGroup(
+            context: context,
+            studentId: studentId,
+            group: group,
+          );
+        },
+        child: AnimatedContainer(
+          key: ValueKey('reserved_group_card_${studentId}_${group.groupKey}'),
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOutCubic,
+          decoration: BoxDecoration(
+            color: const Color(0xFF15171C),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color:
+                  isExpanded ? const Color(0xFF33554C) : const Color(0xFF273338),
+              width: isExpanded ? 1.4 : 1.1,
+            ),
+            boxShadow: isExpanded
+                ? const [
+                    BoxShadow(
+                      color: Color(0x22000000),
+                      blurRadius: 8,
+                      offset: Offset(0, 3),
+                    ),
+                  ]
+                : const [],
+          ),
+          padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
                 children: [
                   const Icon(
-                    Icons.schedule_rounded,
-                    size: 18,
+                    Icons.inventory_2_rounded,
+                    size: 17,
                     color: Color(0xFF8FA3A8),
                   ),
-                  const SizedBox(width: 10),
+                  const SizedBox(width: 8),
                   Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: kDlgText,
-                            fontSize: 14.5,
-                            fontWeight: FontWeight.w800,
-                            height: 1.15,
-                          ),
-                        ),
-                        if (metaTop.isNotEmpty) ...[
-                          const SizedBox(height: 3),
-                          Text(
-                            metaTop,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              color: kDlgTextSub,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                              height: 1.1,
-                            ),
-                          ),
-                        ],
-                        const SizedBox(height: 3),
-                        Text(
-                          metaBottom,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: kDlgAccent,
-                            fontSize: 11.8,
-                            fontWeight: FontWeight.w700,
-                            height: 1.1,
-                          ),
-                        ),
-                      ],
+                    child: Text(
+                      group.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Color(0xFFB9C3BA),
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        height: 1.2,
+                      ),
                     ),
                   ),
-                  const SizedBox(width: 8),
-                  const Icon(
-                    Icons.play_arrow_rounded,
-                    size: 27,
-                    color: kDlgAccent,
-                  ),
+                  if (isActivating)
+                    const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 1.7,
+                        color: kDlgAccent,
+                      ),
+                    )
+                  else
+                    Icon(
+                      isExpanded
+                          ? Icons.keyboard_arrow_up_rounded
+                          : Icons.keyboard_arrow_down_rounded,
+                      size: 20,
+                      color: kDlgTextSub,
+                    ),
                 ],
               ),
-            ),
+              const SizedBox(height: 6),
+              Text(
+                topMeta,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Color(0xFF8FA1A1),
+                  fontSize: 13.5,
+                  fontWeight: FontWeight.w600,
+                  height: 1.1,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                bottomMeta,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: kDlgAccent,
+                  fontSize: 13.5,
+                  fontWeight: FontWeight.w700,
+                  height: 1.1,
+                ),
+              ),
+              const SizedBox(height: 5),
+              const Text(
+                '탭하면 펼쳐지고, 왼쪽으로 밀면 진행 과제로 전환됩니다.',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: Color(0xFF7D8E8F),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  height: 1.1,
+                ),
+              ),
+              if (isExpanded) ...[
+                const SizedBox(height: 10),
+                const Divider(height: 1, thickness: 1, color: kDlgBorder),
+                const SizedBox(height: 8),
+                ...childRows,
+              ],
+            ],
           ),
         ),
       ),
     );
-    if (i != reservedPairs.length - 1) {
-      out.add(
-        const Padding(
-          padding: EdgeInsets.symmetric(vertical: 1),
-          child: Divider(height: 1, thickness: 1, color: kDlgBorder),
-        ),
-      );
+    if (i != reservedGroups.length - 1) {
+      out.add(const SizedBox(height: 9));
     }
+  }
+  return out;
+}
+
+List<_ReservedHomeworkGroupSection> _resolveReservedHomeworkGroupsForStudent(
+  String studentId,
+  List<HomeworkAssignmentDetail> activeAssignments,
+) {
+  final reservedPairs = _resolveReservedHomeworkPairsForStudent(
+    studentId,
+    activeAssignments,
+  );
+  if (reservedPairs.isEmpty) return const <_ReservedHomeworkGroupSection>[];
+
+  final groupedPairs =
+      <String, List<MapEntry<HomeworkAssignmentDetail, HomeworkItem>>>{};
+  final groupIdByKey = <String, String>{};
+  final groupTitleByKey = <String, String>{};
+  for (final pair in reservedPairs) {
+    final assignment = pair.key;
+    final hw = pair.value;
+    final groupId = (assignment.groupId ?? '').trim();
+    final String groupKey =
+        groupId.isNotEmpty ? 'group:$groupId' : 'item:${hw.id}';
+    groupedPairs
+        .putIfAbsent(
+          groupKey,
+          () => <MapEntry<HomeworkAssignmentDetail, HomeworkItem>>[],
+        )
+        .add(pair);
+    if (groupId.isNotEmpty) {
+      groupIdByKey[groupKey] = groupId;
+    }
+    final snapshotTitle = (assignment.groupTitleSnapshot ?? '').trim();
+    if (snapshotTitle.isNotEmpty && !groupTitleByKey.containsKey(groupKey)) {
+      groupTitleByKey[groupKey] = snapshotTitle;
+    }
+  }
+
+  final groupsById = <String, HomeworkGroup>{
+    for (final group in HomeworkStore.instance.groups(studentId)) group.id: group,
+  };
+  final out = <_ReservedHomeworkGroupSection>[];
+  for (final entry in groupedPairs.entries) {
+    final groupKey = entry.key;
+    final rows = entry.value;
+    final rawGroupId = groupIdByKey[groupKey];
+    final groupId = (rawGroupId ?? '').trim();
+    var title = (groupTitleByKey[groupKey] ?? '').trim();
+    if (title.isEmpty && groupId.isNotEmpty) {
+      title = (groupsById[groupId]?.title ?? '').trim();
+    }
+    if (title.isEmpty) {
+      final fromItemTitle = rows.first.value.title.trim();
+      title = fromItemTitle.isNotEmpty
+          ? fromItemTitle
+          : (groupId.isNotEmpty ? '그룹 과제' : '(제목 없음)');
+    }
+    out.add(
+      _ReservedHomeworkGroupSection(
+        groupKey: groupKey,
+        groupId: groupId.isEmpty ? null : groupId,
+        title: title,
+        entries:
+            List<MapEntry<HomeworkAssignmentDetail, HomeworkItem>>.unmodifiable(
+          rows,
+        ),
+      ),
+    );
   }
   return out;
 }
@@ -4878,7 +5137,12 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
           return;
         }
         unawaited(
-            HomeworkStore.instance.bulkTransitionGroup(studentId, group.id));
+          HomeworkStore.instance.bulkTransitionGroup(
+            studentId,
+            group.id,
+            fromPhase: groupIsConfirmed ? 4 : null,
+          ),
+        );
       },
       child: _buildHomeworkChipWithReorderHandle(
         index: i,
@@ -5390,9 +5654,9 @@ Future<void> _showHomeworkGroupActionDialog({
                     unawaited(() async {
                       final int? fromPhase = runningCount > 0
                           ? 2
-                          : (waitingCount > 0
-                              ? 1
-                              : (confirmedCount > 0 ? 4 : null));
+                          : (confirmedCount > 0
+                              ? 4
+                              : (waitingCount > 0 ? 1 : null));
                       final changed =
                           await HomeworkStore.instance.bulkTransitionGroup(
                         studentId,
@@ -5954,7 +6218,7 @@ Future<_HomeworkPrintConfirmResult?> _showHomeworkPrintConfirmDialog({
                                 checkColor: Colors.white,
                                 controlAffinity:
                                     ListTileControlAffinity.leading,
-                                title: Text(
+                                title: LatexTextRenderer(
                                   child.title.trim().isEmpty
                                       ? '(제목 없음)'
                                       : child.title.trim(),
@@ -5963,6 +6227,9 @@ Future<_HomeworkPrintConfirmResult?> _showHomeworkPrintConfirmDialog({
                                     fontWeight: FontWeight.w700,
                                     fontSize: 13.5,
                                   ),
+                                  maxLines: 1,
+                                  softWrap: false,
+                                  overflow: TextOverflow.ellipsis,
                                 ),
                                 subtitle: Text(
                                   subtitle,
@@ -5984,12 +6251,14 @@ Future<_HomeworkPrintConfirmResult?> _showHomeworkPrintConfirmDialog({
                       icon: Icons.print_rounded,
                       title: '출력 정보',
                     ),
-                    Text(
+                    LatexTextRenderer(
                       resolvedTitle.isEmpty ? '(제목 없음)' : resolvedTitle,
                       style: const TextStyle(
                         color: kDlgText,
                         fontWeight: FontWeight.w800,
                       ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
                     ),
                     const SizedBox(height: 6),
                     Text(
@@ -7232,6 +7501,20 @@ class _AttendingStudent {
     required this.name,
     required this.color,
     required this.record,
+  });
+}
+
+class _ReservedHomeworkGroupSection {
+  final String groupKey;
+  final String? groupId;
+  final String title;
+  final List<MapEntry<HomeworkAssignmentDetail, HomeworkItem>> entries;
+
+  const _ReservedHomeworkGroupSection({
+    required this.groupKey,
+    required this.groupId,
+    required this.title,
+    required this.entries,
   });
 }
 

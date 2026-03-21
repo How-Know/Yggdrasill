@@ -19,6 +19,7 @@ import '../../services/tag_preset_service.dart';
 import '../../screens/learning/tag_preset_dialog.dart';
 import '../../widgets/swipe_action_reveal.dart';
 import '../../widgets/dialog_tokens.dart';
+import '../../widgets/latex_text_renderer.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 
 class StudentProfilePage extends StatefulWidget {
@@ -4343,13 +4344,14 @@ class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
                   ),
                   const SizedBox(width: 8),
                   Expanded(
-                    child: Text(
+                    child: LatexTextRenderer(
                       _labelOf(row),
                       style: const TextStyle(
                         color: Color(0xFFEAF2F2),
                         fontSize: 14,
                         fontWeight: FontWeight.w700,
                       ),
+                      maxLines: 2,
                       softWrap: true,
                     ),
                   ),

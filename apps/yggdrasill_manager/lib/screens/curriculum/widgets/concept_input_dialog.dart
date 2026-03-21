@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../services/concept_service.dart';
+import '../../../widgets/math_shortcuts.dart';
 
 Future<ConceptFormResult?> showConceptInputDialog(
   BuildContext context, {
@@ -208,16 +209,20 @@ class _ConceptInputDialogState extends State<_ConceptInputDialog> {
             borderRadius: BorderRadius.circular(8),
             border: Border.all(color: const Color(0xFF3A3A3A)),
           ),
-          child: TextField(
+          child: MathShortcuts.wrap(
+            context: context,
             controller: _contentCtrl,
-            maxLines: 8,
-            style: const TextStyle(color: Colors.white),
-            decoration: const InputDecoration(
-              hintText: '개념 내용을 입력하세요. 수식은 LaTeX 형식으로 작성할 수 있습니다.',
-              hintStyle: TextStyle(color: Colors.white38),
-              border: InputBorder.none,
-              contentPadding:
-                  EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            child: TextField(
+              controller: _contentCtrl,
+              maxLines: 8,
+              style: const TextStyle(color: Colors.white),
+              decoration: const InputDecoration(
+                hintText: '개념 내용을 입력하세요. Ctrl+N / Ctrl+M으로 수식 편집기를 열 수 있습니다.',
+                hintStyle: TextStyle(color: Colors.white38),
+                border: InputBorder.none,
+                contentPadding:
+                    EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              ),
             ),
           ),
         ),
@@ -230,19 +235,23 @@ class _ConceptInputDialogState extends State<_ConceptInputDialog> {
     required TextEditingController controller,
     String? hint,
   }) {
-    return TextField(
+    return MathShortcuts.wrap(
+      context: context,
       controller: controller,
-      style: const TextStyle(color: Colors.white),
-      decoration: InputDecoration(
-        labelText: label,
-        labelStyle: const TextStyle(color: Colors.white70),
-        hintText: hint,
-        hintStyle: const TextStyle(color: Colors.white24),
-        enabledBorder: const OutlineInputBorder(
-          borderSide: BorderSide(color: Color(0xFF3A3A3A)),
-        ),
-        focusedBorder: const OutlineInputBorder(
-          borderSide: BorderSide(color: Color(0xFF4A9EFF)),
+      child: TextField(
+        controller: controller,
+        style: const TextStyle(color: Colors.white),
+        decoration: InputDecoration(
+          labelText: label,
+          labelStyle: const TextStyle(color: Colors.white70),
+          hintText: hint,
+          hintStyle: const TextStyle(color: Colors.white24),
+          enabledBorder: const OutlineInputBorder(
+            borderSide: BorderSide(color: Color(0xFF3A3A3A)),
+          ),
+          focusedBorder: const OutlineInputBorder(
+            borderSide: BorderSide(color: Color(0xFF4A9EFF)),
+          ),
         ),
       ),
     );

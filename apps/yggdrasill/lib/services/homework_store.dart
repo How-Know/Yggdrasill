@@ -2208,6 +2208,24 @@ class HomeworkStore {
     }
   }
 
+  void _consumeMarkedAutoCompleteForWaitingItems(String studentId) {
+    if (_autoCompleteOnNextWaiting.isEmpty) return;
+    final list = _byStudentId[studentId];
+    if (list == null || list.isEmpty) return;
+    final waitingTargets = <String>[];
+    for (final item in list) {
+      if (item.phase != 1) continue;
+      if (item.status == HomeworkStatus.completed) continue;
+      if (!_autoCompleteOnNextWaiting.contains(item.id)) continue;
+      waitingTargets.add(item.id);
+    }
+    if (waitingTargets.isEmpty) return;
+    for (final itemId in waitingTargets) {
+      if (!_autoCompleteOnNextWaiting.remove(itemId)) continue;
+      unawaited(complete(studentId, itemId));
+    }
+  }
+
   // 제출 상태에서 더블클릭 시, 다음 '대기' 진입에 자동 완료되도록 표시
   void markAutoCompleteOnNextWaiting(String id) {
     _autoCompleteOnNextWaiting.add(id);
@@ -2659,7 +2677,7 @@ class HomeworkStore {
           cycleDeltaMs: groupCycleDeltaMs,
         );
       }
-      if (normalizedFromPhase == 4) {
+      if (normalizedFromPhase == 4 || normalizedFromPhase == null) {
         final afterChildren = itemsInGroup(
           studentId,
           cleanedGroupId,
@@ -3242,6 +3260,7 @@ class HomeworkStore {
         studentId: studentId,
         bump: false,
       );
+      _consumeMarkedAutoCompleteForWaitingItems(studentId);
       _bump();
     } catch (_) {}
   }

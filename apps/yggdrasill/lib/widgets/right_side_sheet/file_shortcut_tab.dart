@@ -14,6 +14,7 @@ import '../../services/academy_db.dart';
 import '../../services/data_manager.dart';
 import '../../services/print_routing_service.dart';
 import '../../services/tag_preset_service.dart';
+import '../latex_text_renderer.dart';
 
 // NOTE: RightSideSheet의 private 색상 상수(_rsBg 등)에는 접근할 수 없어서,
 // 동일 톤의 색상을 여기에서 다시 정의합니다. (디자인을 유지하기 위한 중복)
@@ -1806,12 +1807,14 @@ class _FileCardState extends State<_FileCard> {
                       if (p.isEmpty) return;
                       unawaited(OpenFilex.open(p));
                     },
-                    child: Text(
+                    child: LatexTextRenderer(
                       file.name,
                       style: const TextStyle(
                           color: _rsText,
                           fontSize: 15,
                           fontWeight: FontWeight.w900),
+                      maxLines: 1,
+                      softWrap: false,
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
