@@ -1509,6 +1509,43 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         final rightTs = b.checkedAt ?? b.assignedAt;
         return rightTs.compareTo(leftTs);
       });
+      final allClassRecords = DataManager.instance
+          .getAttendanceRecordsForStudent(studentId)
+          .where((record) => record.isPresent)
+          .toList(growable: false)
+        ..sort((a, b) => b.classDateTime.compareTo(a.classDateTime));
+      final classRecordsForFilter =
+          allClassRecords.take(30).toList(growable: false);
+      final sessionFilterOptions = <_HomeworkOverviewSessionFilterOption>[
+        _HomeworkOverviewSessionFilterOption(
+          id: '__all_sessions__',
+          label: classRecordsForFilter.isEmpty
+              ? '전체 수업'
+              : '전체 수업 (최근 ${classRecordsForFilter.length}회차)',
+          targetDay: null,
+          from: null,
+          to: null,
+        ),
+        ...classRecordsForFilter.map((record) {
+          final start = record.classDateTime;
+          final end = record.classEndTime.isAfter(start)
+              ? record.classEndTime
+              : start.add(const Duration(hours: 2));
+          final filterFrom = start.subtract(const Duration(minutes: 20));
+          final filterTo = end.add(const Duration(minutes: 40));
+          final idBase = (record.id ?? '').trim();
+          final id = idBase.isNotEmpty
+              ? idBase
+              : '${record.classDateTime.toIso8601String()}|${record.sessionOrder ?? record.cycle ?? 0}';
+          return _HomeworkOverviewSessionFilterOption(
+            id: id,
+            label: _formatHomeworkOverviewSessionLabel(record),
+            targetDay: _dateOnly(start),
+            from: filterFrom,
+            to: filterTo,
+          );
+        }),
+      ];
 
       String studentName = '학생';
       for (final row in DataManager.instance.students) {
@@ -1518,59 +1555,216 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           break;
         }
       }
+      final expandedCompletedGroupIds = <String>{};
+      String selectedSessionFilterId = sessionFilterOptions.first.id;
 
       await showDialog<void>(
         context: context,
-        builder: (ctx) => AlertDialog(
-          backgroundColor: kDlgBg,
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: Text(
-            '$studentName 숙제 리스트',
-            style: const TextStyle(
-              color: kDlgText,
-              fontWeight: FontWeight.w900,
-            ),
-          ),
-          content: SizedBox(
-            width: 720,
-            child: entries.isEmpty
-                ? const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 12),
-                    child: Text(
-                      '활성 숙제와 오늘 검사 항목이 없습니다.',
-                      style: TextStyle(
-                        color: kDlgTextSub,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  )
-                : SingleChildScrollView(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const YggDialogSectionHeader(
-                          icon: Icons.assignment_rounded,
-                          title: '활성/오늘 검사 현황',
-                        ),
-                        const SizedBox(height: 10),
-                        for (int i = 0; i < entries.length; i++) ...[
-                          if (i > 0) const SizedBox(height: 10),
-                          _buildHomeworkOverviewCard(entries[i]),
-                        ],
-                      ],
-                    ),
+        builder: (ctx) {
+          final media = MediaQuery.of(ctx).size;
+          final dialogWidth = math.min(media.width * 0.9, 1080.0);
+          final panelHeight = math.min(media.height * 0.52, 560.0);
+          return StatefulBuilder(
+            builder: (dialogContext, setDialogState) {
+              final selectedFilter = sessionFilterOptions.firstWhere(
+                (opt) => opt.id == selectedSessionFilterId,
+                orElse: () => sessionFilterOptions.first,
+              );
+              final completedGroupEntries = _collectRecentCompletedHomeworkGroups(
+                studentId,
+                assignmentsByItem: assignmentsByItem,
+                targetDay: selectedFilter.targetDay,
+                windowStart: selectedFilter.from,
+                windowEnd: selectedFilter.to,
+                limit: 16,
+              );
+              return AlertDialog(
+                backgroundColor: kDlgBg,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                title: Text(
+                  '$studentName 숙제 리스트',
+                  style: const TextStyle(
+                    color: kDlgText,
+                    fontWeight: FontWeight.w900,
                   ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
-              child: const Text('닫기'),
-            ),
-          ],
-        ),
+                ),
+                content: SizedBox(
+                  width: dialogWidth,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(
+                            Icons.filter_alt_rounded,
+                            size: 16,
+                            color: kDlgTextSub,
+                          ),
+                          const SizedBox(width: 8),
+                          const Text(
+                            '수업기록 필터',
+                            style: TextStyle(
+                              color: kDlgTextSub,
+                              fontSize: 12.5,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: DropdownButtonHideUnderline(
+                              child: DropdownButton<String>(
+                                isExpanded: true,
+                                value: selectedSessionFilterId,
+                                dropdownColor: kDlgBg,
+                                style: const TextStyle(
+                                  color: kDlgText,
+                                  fontSize: 13.5,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                                items: sessionFilterOptions
+                                    .map(
+                                      (opt) => DropdownMenuItem<String>(
+                                        value: opt.id,
+                                        child: Text(
+                                          opt.label,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                    )
+                                    .toList(growable: false),
+                                onChanged: (value) {
+                                  if (value == null) return;
+                                  setDialogState(() {
+                                    selectedSessionFilterId = value;
+                                    expandedCompletedGroupIds.clear();
+                                  });
+                                },
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const YggDialogSectionHeader(
+                                  icon: Icons.task_alt_rounded,
+                                  title: '완료 그룹과제',
+                                ),
+                                const SizedBox(height: 10),
+                                SizedBox(
+                                  height: panelHeight,
+                                  child: completedGroupEntries.isEmpty
+                                      ? const Center(
+                                          child: Text(
+                                            '선택한 수업에서 완료한 그룹과제가 없습니다.',
+                                            style: TextStyle(
+                                              color: kDlgTextSub,
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
+                                        )
+                                      : ListView.separated(
+                                          itemCount: completedGroupEntries.length,
+                                          separatorBuilder: (_, __) =>
+                                              const SizedBox(height: 10),
+                                          itemBuilder: (context, index) {
+                                            final entry =
+                                                completedGroupEntries[index];
+                                            final isExpanded =
+                                                expandedCompletedGroupIds
+                                                    .contains(entry.groupId);
+                                            return _buildCompletedGroupOverviewCard(
+                                              entry,
+                                              isExpanded: isExpanded,
+                                              onTap: () {
+                                                setDialogState(() {
+                                                  if (isExpanded) {
+                                                    expandedCompletedGroupIds
+                                                        .remove(entry.groupId);
+                                                  } else {
+                                                    expandedCompletedGroupIds
+                                                        .add(entry.groupId);
+                                                  }
+                                                });
+                                              },
+                                            );
+                                          },
+                                        ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 14),
+                          Container(
+                            width: 1,
+                            height: panelHeight + 34,
+                            color: const Color(0xFF2A3B3E),
+                          ),
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const YggDialogSectionHeader(
+                                  icon: Icons.assignment_rounded,
+                                  title: '활성/오늘 검사 현황',
+                                ),
+                                const SizedBox(height: 10),
+                                SizedBox(
+                                  height: panelHeight,
+                                  child: entries.isEmpty
+                                      ? const Center(
+                                          child: Text(
+                                            '활성 숙제와 오늘 검사 항목이 없습니다.',
+                                            style: TextStyle(
+                                              color: kDlgTextSub,
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
+                                        )
+                                      : ListView.separated(
+                                          itemCount: entries.length,
+                                          separatorBuilder: (_, __) =>
+                                              const SizedBox(height: 10),
+                                          itemBuilder: (context, index) =>
+                                              _buildHomeworkOverviewCard(
+                                            entries[index],
+                                          ),
+                                        ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.of(dialogContext).pop(),
+                    style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
+                    child: const Text('닫기'),
+                  ),
+                ],
+              );
+            },
+          );
+        },
       );
     } catch (_) {
       if (!context.mounted) return;
@@ -3045,6 +3239,32 @@ String _formatDateWithWeekdayAndTime(DateTime dt) {
       '분';
 }
 
+String _formatHomeworkOverviewSessionLabel(AttendanceRecord record) {
+  String two(int v) => v.toString().padLeft(2, '0');
+  const weekLong = ['월요일', '화요일', '수요일', '목요일', '금요일', '토요일', '일요일'];
+  final DateTime dt = record.classDateTime;
+  final int? sessionNo = record.sessionOrder ?? record.cycle;
+  final String sessionLabel =
+      sessionNo == null ? '회차미정 수업' : '${sessionNo}회차 수업';
+  return '${two(dt.month)}월 ${two(dt.day)}일 ${weekLong[dt.weekday - 1]} ${two(dt.hour)}시 ${two(dt.minute)}분 · $sessionLabel';
+}
+
+class _HomeworkOverviewSessionFilterOption {
+  final String id;
+  final String label;
+  final DateTime? targetDay;
+  final DateTime? from;
+  final DateTime? to;
+
+  const _HomeworkOverviewSessionFilterOption({
+    required this.id,
+    required this.label,
+    required this.targetDay,
+    required this.from,
+    required this.to,
+  });
+}
+
 final Map<String, Map<String, String>> _flowNameCacheByStudent = {};
 final Set<String> _flowLoadingStudentIds = <String>{};
 final Map<String, int> _assignmentRevisionByStudent = {};
@@ -3262,6 +3482,524 @@ Widget _buildHomeworkOverviewCard(_HomeworkOverviewEntry entry) {
           ],
         ),
       ],
+    ),
+  );
+}
+
+String _stripHomeworkUnitPrefix(String raw) {
+  return raw.replaceFirst(RegExp(r'^\s*\d+\.\d+\.\(\d+\)\s+'), '').trim();
+}
+
+String _extractHomeworkBookName(HomeworkItem hw) {
+  final contentRaw = (hw.content ?? '').trim();
+  final match = RegExp(r'(?:^|\n)\s*교재:\s*([^\n]+)').firstMatch(contentRaw);
+  final fromContent = match?.group(1)?.trim() ?? '';
+  if (fromContent.isNotEmpty) return fromContent;
+
+  final hasLinkedTextbook = (hw.bookId ?? '').trim().isNotEmpty &&
+      (hw.gradeLabel ?? '').trim().isNotEmpty;
+  if (hasLinkedTextbook) {
+    final stripped = _stripHomeworkUnitPrefix(hw.title.trim());
+    if (stripped.isNotEmpty) {
+      final idx = stripped.indexOf('·');
+      if (idx == -1) return stripped;
+      final candidate = stripped.substring(0, idx).trim();
+      if (candidate.isNotEmpty) return candidate;
+    }
+  }
+
+  final typeLabel = (hw.type ?? '').trim();
+  if (typeLabel.isNotEmpty) return typeLabel;
+  return '-';
+}
+
+String _extractHomeworkCourseName(HomeworkItem hw) {
+  final contentRaw = (hw.content ?? '').trim();
+  final match = RegExp(r'(?:^|\n)\s*과정:\s*([^\n]+)').firstMatch(contentRaw);
+  return match?.group(1)?.trim() ?? '';
+}
+
+String _homeworkBookCourseLabel(HomeworkItem hw) {
+  final bookName = _extractHomeworkBookName(hw);
+  final courseName = _extractHomeworkCourseName(hw);
+  return (bookName == '-' || bookName.isEmpty)
+      ? (courseName.isEmpty ? '-' : courseName)
+      : (courseName.isEmpty ? bookName : '$bookName · $courseName');
+}
+
+List<_HomeworkOverviewCompletedGroupEntry> _collectRecentCompletedHomeworkGroups(
+  String studentId, {
+  required Map<String, List<HomeworkAssignmentBrief>> assignmentsByItem,
+  DateTime? targetDay,
+  DateTime? windowStart,
+  DateTime? windowEnd,
+  int limit = 10,
+}) {
+  final flowNameById = <String, String>{
+    for (final flow in StudentFlowStore.instance.cached(studentId))
+      flow.id: flow.name,
+  };
+  final out = <_HomeworkOverviewCompletedGroupEntry>[];
+  final groups = HomeworkStore.instance.groups(studentId);
+  final now = DateTime.now();
+  final DateTime? targetDateOnly =
+      targetDay == null ? null : _dateOnly(targetDay);
+
+  DateTime? completedTimestampOf(HomeworkItem child) {
+    return child.completedAt ?? child.updatedAt ?? child.createdAt;
+  }
+
+  for (final group in groups) {
+    final children = HomeworkStore.instance
+        .itemsInGroup(
+          studentId,
+          group.id,
+          includeCompleted: true,
+        )
+        .toList(growable: false);
+    if (children.isEmpty) continue;
+    final completedChildren = children
+        .where(
+          (child) {
+            if (!(child.status == HomeworkStatus.completed ||
+                child.completedAt != null)) {
+              return false;
+            }
+            final completedTs = completedTimestampOf(child);
+            if (completedTs == null) return false;
+            if (targetDateOnly != null &&
+                _dateOnly(completedTs) != targetDateOnly) {
+              return false;
+            }
+            if (windowStart != null && completedTs.isBefore(windowStart)) {
+              return false;
+            }
+            if (windowEnd != null && completedTs.isAfter(windowEnd)) {
+              return false;
+            }
+            return true;
+          },
+        )
+        .toList(growable: false);
+    if (completedChildren.isEmpty) continue;
+
+    DateTime latestCompletedAt = completedTimestampOf(completedChildren.first) ??
+        DateTime.fromMillisecondsSinceEpoch(0);
+    int totalDurationMs = 0;
+    for (final child in completedChildren) {
+      final completedTs = completedTimestampOf(child);
+      if (completedTs != null && completedTs.isAfter(latestCompletedAt)) {
+        latestCompletedAt = completedTs;
+      }
+      final int runningMs = child.runStart != null
+          ? now.difference(child.runStart!).inMilliseconds
+          : 0;
+      totalDurationMs += math.max(0, child.accumulatedMs + runningMs);
+    }
+    final completedAt = latestCompletedAt;
+    final title = () {
+      final raw = group.title.trim();
+      if (raw.isNotEmpty) return raw;
+      for (final child in children) {
+        final childTitle = child.title.trim();
+        if (childTitle.isNotEmpty) return childTitle;
+      }
+      return '그룹 과제';
+    }();
+    final flowName = () {
+      final groupFlow = (flowNameById[(group.flowId ?? '').trim()] ?? '').trim();
+      if (groupFlow.isNotEmpty) return groupFlow;
+      for (final child in children) {
+        final childFlow = (flowNameById[(child.flowId ?? '').trim()] ?? '').trim();
+        if (childFlow.isNotEmpty) return childFlow;
+      }
+      return '';
+    }();
+    final HomeworkItem representativeForBookCourse = () {
+      for (final child in children) {
+        final label = _homeworkBookCourseLabel(child);
+        if (label != '-') return child;
+      }
+      return children.first;
+    }();
+    final pageLabels = <String>[];
+    int totalQuestionCount = 0;
+    int groupCheckCount = 0;
+    int homeworkCount = 0;
+    HomeworkAssignmentBrief? latestBrief;
+    for (final child in children) {
+      final page = (child.page ?? '').trim();
+      if (page.isNotEmpty && !pageLabels.contains(page) && pageLabels.length < 4) {
+        pageLabels.add(page);
+      }
+      final count = child.count ?? 0;
+      if (count > 0) totalQuestionCount += count;
+      if (child.checkCount > groupCheckCount) {
+        groupCheckCount = child.checkCount;
+      }
+      final assignmentRows = assignmentsByItem[child.id] ?? const <HomeworkAssignmentBrief>[];
+      homeworkCount += assignmentRows.length;
+      for (final brief in assignmentRows) {
+        if (latestBrief == null || brief.assignedAt.isAfter(latestBrief!.assignedAt)) {
+          latestBrief = brief;
+        }
+      }
+    }
+    final repeatIndex = (latestBrief?.repeatIndex ?? 1).clamp(1, 1 << 30);
+    final splitParts = (latestBrief?.splitParts ?? 1).clamp(1, 4);
+    final splitRound = (latestBrief?.splitRound ?? 1).clamp(1, splitParts);
+    int resolveSplitCount(int total, int parts, int round) {
+      if (parts <= 1) return total;
+      final base = total ~/ parts;
+      final remainder = total % parts;
+      return base + (round <= remainder ? 1 : 0);
+    }
+
+    final String displayCount = totalQuestionCount <= 0
+        ? ''
+        : (splitParts <= 1
+            ? totalQuestionCount.toString()
+            : resolveSplitCount(totalQuestionCount, splitParts, splitRound)
+                .toString());
+    final String pageSummary = () {
+      if (pageLabels.isEmpty) return '-';
+      if (pageLabels.length <= 3) return pageLabels.join(', ');
+      return '${pageLabels.take(3).join(', ')}, ...';
+    }();
+    final String line4Left = 'p.$pageSummary';
+    final String line4Right =
+        '총 ${displayCount.isNotEmpty ? displayCount : '-'}문항';
+    final String line5Left = '검사 ${groupCheckCount}회 · 숙제 ${homeworkCount}회';
+    final String splitCycleText =
+        splitParts > 1 ? '${splitParts}분할 ${splitRound}차' : '';
+    final String line5Right = splitCycleText.isEmpty
+        ? '${repeatIndex}회차'
+        : '${repeatIndex}회차 · $splitCycleText';
+
+    out.add(
+      _HomeworkOverviewCompletedGroupEntry(
+        groupId: group.id,
+        completedAt: completedAt,
+        line1Left: _homeworkBookCourseLabel(representativeForBookCourse),
+        line1Right: flowName.isEmpty ? '플로우 미지정' : flowName,
+        line2Left: title,
+        line2Right: '${children.length}개 과제',
+        line3Left: '완료 ${_formatDateTime(completedAt)}',
+        line3Right: '총 ${_formatDurationMs(totalDurationMs)}',
+        line4Left: line4Left,
+        line4Right: line4Right,
+        line5Left: line5Left,
+        line5Right: line5Right,
+        children: [
+          for (final child in children)
+            _HomeworkOverviewCompletedChildEntry(
+              title: child.title.trim().isEmpty ? '(제목 없음)' : child.title.trim(),
+              pageCount: [
+                if ((child.page ?? '').trim().isNotEmpty) 'p.${child.page!.trim()}',
+                if ((child.count ?? 0) > 0) '${child.count}문항',
+              ].join(' · '),
+              memo: (child.memo ?? '').trim(),
+            ),
+        ],
+      ),
+    );
+  }
+
+  out.sort((a, b) {
+    final timeCmp = b.completedAt.compareTo(a.completedAt);
+    if (timeCmp != 0) return timeCmp;
+    final titleCmp = a.line2Left.compareTo(b.line2Left);
+    if (titleCmp != 0) return titleCmp;
+    return a.groupId.compareTo(b.groupId);
+  });
+
+  if (limit <= 0 || out.length <= limit) return out;
+  return out.take(limit).toList(growable: false);
+}
+
+Widget _buildCompletedGroupOverviewCard(
+  _HomeworkOverviewCompletedGroupEntry entry, {
+  required bool isExpanded,
+  required VoidCallback onTap,
+}) {
+  final childRows = <Widget>[];
+  for (int i = 0; i < entry.children.length; i++) {
+    final child = entry.children[i];
+    childRows.add(
+      Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '${i + 1}. ${child.title}',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Color(0xFFB9C3BA),
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+                height: 1.15,
+              ),
+            ),
+            const SizedBox(height: 3),
+            SizedBox(
+              width: double.infinity,
+              child: Text(
+                child.pageCount.isEmpty ? '-' : child.pageCount,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.right,
+                style: const TextStyle(
+                  color: Color(0xFF8FA1A1),
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w600,
+                  height: 1.1,
+                ),
+              ),
+            ),
+            if (child.memo.isNotEmpty) ...[
+              const SizedBox(height: 2),
+              SizedBox(
+                width: double.infinity,
+                child: Text(
+                  child.memo,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.right,
+                  style: const TextStyle(
+                    color: Color(0xFF7D8E8F),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    height: 1.1,
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+    if (i != entry.children.length - 1) {
+      childRows.addAll([
+        const SizedBox(height: 6),
+        Container(
+          width: double.infinity,
+          height: 1,
+          color: const Color(0x223A4545),
+        ),
+        const SizedBox(height: 6),
+      ]);
+    }
+  }
+
+  return GestureDetector(
+    onTap: onTap,
+    behavior: HitTestBehavior.opaque,
+    child: AnimatedContainer(
+      duration: const Duration(milliseconds: 170),
+      curve: Curves.easeOutCubic,
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0x221D2B2C),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: isExpanded ? const Color(0xFF36525A) : const Color(0xFF31464C),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  entry.line1Left,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Color(0xFFCAD2C5),
+                    fontSize: 14.5,
+                    fontWeight: FontWeight.w700,
+                    height: 1.1,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              SizedBox(
+                width: 120,
+                child: Text(
+                  entry.line1Right,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.right,
+                  style: const TextStyle(
+                    color: Color(0xFF8FA1A1),
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w700,
+                    height: 1.1,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  entry.line2Left,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: kDlgText,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
+                    height: 1.1,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                entry.line2Right,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Color(0xFFCAD2C5),
+                  fontSize: 13.5,
+                  fontWeight: FontWeight.w700,
+                  height: 1.1,
+                ),
+              ),
+              const SizedBox(width: 6),
+              Icon(
+                isExpanded
+                    ? Icons.keyboard_arrow_up_rounded
+                    : Icons.keyboard_arrow_down_rounded,
+                size: 18,
+                color: kDlgTextSub,
+              ),
+            ],
+          ),
+          const SizedBox(height: 7),
+          Row(
+            children: [
+              Text(
+                entry.line3Left,
+                style: const TextStyle(
+                  color: kDlgTextSub,
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w600,
+                  height: 1.2,
+                ),
+              ),
+              const Spacer(),
+              Text(
+                entry.line3Right,
+                style: const TextStyle(
+                  color: Color(0xFF8EA3A8),
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w700,
+                  height: 1.2,
+                ),
+              ),
+            ],
+          ),
+          if (isExpanded) ...[
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    entry.line4Left,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Color(0xFF748686),
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w600,
+                      height: 1.1,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  entry.line4Right,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Color(0xFF748686),
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600,
+                    height: 1.1,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    entry.line5Left,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Color(0xFF748686),
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w600,
+                      height: 1.1,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 220),
+                  child: Text(
+                    entry.line5Right,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.right,
+                    style: const TextStyle(
+                      color: Color(0xFF748686),
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w600,
+                      height: 1.1,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            const Divider(height: 1, thickness: 1, color: kDlgBorder),
+            const SizedBox(height: 8),
+            Text(
+              '그룹 과제 ${entry.children.length}개',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Color(0xFFCAD2C5),
+                fontSize: 14.5,
+                fontWeight: FontWeight.w700,
+                height: 1.1,
+              ),
+            ),
+            const SizedBox(height: 8),
+            if (childRows.isEmpty)
+              const Text(
+                '하위과제가 없습니다.',
+                style: TextStyle(
+                  color: kDlgTextSub,
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w600,
+                ),
+              )
+            else
+              ...childRows,
+          ],
+        ],
+      ),
     ),
   );
 }
@@ -4462,71 +5200,171 @@ List<Widget> _buildReservedHomeworkChipsForStudent(
       if (totalAssignmentCount > 0) '숙제 $totalAssignmentCount회',
       if (dueDate != null) _formatHomeworkDueChipLabel(dueDate),
     ].join(' · ');
+    final double collapsedReservedHeight =
+        (_homeworkChipCollapsedHeight * 0.9) + 2;
+    const double expandedReservedHeight = 322.0;
+
+    String stripUnitPrefix(String raw) {
+      return raw.replaceFirst(RegExp(r'^\s*\d+\.\d+\.\(\d+\)\s+'), '').trim();
+    }
+
+    String extractBookName(HomeworkItem hw) {
+      final contentRaw = (hw.content ?? '').trim();
+      final match =
+          RegExp(r'(?:^|\n)\s*교재:\s*([^\n]+)').firstMatch(contentRaw);
+      final fromContent = match?.group(1)?.trim() ?? '';
+      if (fromContent.isNotEmpty) return fromContent;
+
+      final hasLinkedTextbook = (hw.bookId ?? '').trim().isNotEmpty &&
+          (hw.gradeLabel ?? '').trim().isNotEmpty;
+      if (hasLinkedTextbook) {
+        final stripped = stripUnitPrefix(hw.title.trim());
+        if (stripped.isNotEmpty) {
+          final idx = stripped.indexOf('·');
+          if (idx == -1) return stripped;
+          final candidate = stripped.substring(0, idx).trim();
+          if (candidate.isNotEmpty) return candidate;
+        }
+      }
+
+      final typeLabel = (hw.type ?? '').trim();
+      if (typeLabel.isNotEmpty) return typeLabel;
+      return '';
+    }
+
+    String extractCourseName(HomeworkItem hw) {
+      final contentRaw = (hw.content ?? '').trim();
+      final match =
+          RegExp(r'(?:^|\n)\s*과정:\s*([^\n]+)').firstMatch(contentRaw);
+      return match?.group(1)?.trim() ?? '';
+    }
+
+    String textbookAndCourseLabel(HomeworkItem hw) {
+      final bookName = extractBookName(hw);
+      final courseName = extractCourseName(hw);
+      if (bookName.isEmpty && courseName.isEmpty) return '-';
+      if (bookName.isEmpty) return courseName;
+      if (courseName.isEmpty) return bookName;
+      return '$bookName · $courseName';
+    }
+
+    final String line1TextbookLabel = () {
+      final labels = <String>[];
+      for (final entry in entries) {
+        final label = textbookAndCourseLabel(entry.value);
+        if (label.isEmpty || label == '-') continue;
+        if (!labels.contains(label)) labels.add(label);
+      }
+      if (labels.isEmpty) return '-';
+      if (labels.length == 1) return labels.first;
+      return '${labels.first} 외 ${labels.length - 1}개';
+    }();
+    final String line2GroupTitle =
+        group.title.trim().isEmpty ? '그룹 과제' : group.title.trim();
+
+    String childLabel(HomeworkItem hw) {
+      final title = hw.title.trim();
+      if (title.isNotEmpty) return title;
+      final pageRaw = (hw.page ?? '').trim();
+      if (pageRaw.isNotEmpty) return 'p.$pageRaw';
+      return '(제목 없음)';
+    }
+
+    String childPageLabel(HomeworkItem hw) {
+      final pageRaw = (hw.page ?? '').trim();
+      return pageRaw.isEmpty ? '-' : 'p.$pageRaw';
+    }
+
+    String childCountLabel(HomeworkItem hw) {
+      final count = hw.count;
+      if (count == null || count <= 0) return '-';
+      return '$count문항';
+    }
+
+    String childPageCountLabel(HomeworkItem hw) {
+      final page = childPageLabel(hw);
+      final count = childCountLabel(hw);
+      if (page == '-' && count == '-') return '-';
+      if (page == '-') return count;
+      if (count == '-') return page;
+      return '$page · $count';
+    }
+
+    String childMemoLabel(HomeworkItem hw) {
+      final memo = (hw.memo ?? '').trim();
+      return memo.isEmpty ? '-' : memo;
+    }
 
     final childRows = <Widget>[];
     for (int childIndex = 0; childIndex < entries.length; childIndex++) {
-      final assignment = entries[childIndex].key;
       final hw = entries[childIndex].value;
-      final cycleMeta = assignmentCycleMetaByItem[hw.id];
-      final repeatIndex =
-          (cycleMeta?.repeatIndex ?? assignment.repeatIndex).clamp(1, 1 << 30);
-      final splitParts =
-          (cycleMeta?.splitParts ?? assignment.splitParts).clamp(1, 4);
-      final splitRound =
-          (cycleMeta?.splitRound ?? assignment.splitRound).clamp(1, splitParts);
-      final String cycleText = splitParts > 1
-          ? '$repeatIndex회차 · $splitParts분할 $splitRound차'
-          : '$repeatIndex회차';
-      final flowId = (hw.flowId ?? assignment.flowId ?? '').trim();
-      final flowLabel = (flowNames[flowId] ?? '').trim();
-      final page = (hw.page ?? '').trim();
-      final count = hw.count ?? 0;
-      final childTitle = hw.title.trim().isEmpty ? '(제목 없음)' : hw.title.trim();
-      final childMeta = <String>[
-        if (flowLabel.isNotEmpty) flowLabel,
-        if (page.isNotEmpty) 'p.$page',
-        if (count > 0) '$count문항',
-        cycleText,
-      ].join(' · ');
       childRows.add(
-        Container(
-          padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
-          decoration: BoxDecoration(
-            color: const Color(0xFF11171A),
-            borderRadius: BorderRadius.circular(9),
-            border: Border.all(color: const Color(0xFF263237)),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                childTitle,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: Color(0xFFB9C3BA),
-                  fontSize: 15,
-                  fontWeight: FontWeight.w600,
-                  height: 1.2,
+        ConstrainedBox(
+          constraints: const BoxConstraints(minWidth: double.infinity),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 3),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '${childIndex + 1}. ${childLabel(hw)}',
+                  style: const TextStyle(
+                    color: Color(0xFFB9C3BA),
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    height: 1.2,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                childMeta,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: Color(0xFF8FA1A1),
-                  fontSize: 13.5,
-                  fontWeight: FontWeight.w600,
-                  height: 1.1,
+                const SizedBox(height: 4),
+                SizedBox(
+                  width: double.infinity,
+                  child: Text(
+                    childPageCountLabel(hw),
+                    style: const TextStyle(
+                      color: Color(0xFF8FA1A1),
+                        fontSize: 14.5,
+                      fontWeight: FontWeight.w600,
+                      height: 1.1,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.right,
+                  ),
                 ),
-              ),
-            ],
+                const SizedBox(height: 3),
+                SizedBox(
+                  width: double.infinity,
+                  child: Text(
+                    childMemoLabel(hw),
+                    style: const TextStyle(
+                      color: Color(0xFF8FA1A1),
+                        fontSize: 14.5,
+                      fontWeight: FontWeight.w600,
+                      height: 1.1,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.right,
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       );
       if (childIndex != entries.length - 1) {
+        childRows.addAll([
+          const SizedBox(height: 10),
+          Container(
+            width: double.infinity,
+            height: 1.3,
+            color: const Color(0x223A4545),
+          ),
+          const SizedBox(height: 10),
+        ]);
+      } else {
         childRows.add(const SizedBox(height: 6));
       }
     }
@@ -4534,7 +5372,9 @@ List<Widget> _buildReservedHomeworkChipsForStudent(
     out.add(
       _SlideableHomeworkChip(
         key: ValueKey('reserved_group_chip_${studentId}_${group.groupKey}'),
-        maxSlide: _homeworkChipMaxSlideFor(isExpanded ? 260 : 148),
+        maxSlide: _homeworkChipMaxSlideFor(
+          isExpanded ? expandedReservedHeight : collapsedReservedHeight,
+        ),
         canSlideDown: false,
         canSlideUp: !isActivating,
         downLabel: '',
@@ -4565,6 +5405,10 @@ List<Widget> _buildReservedHomeworkChipsForStudent(
           key: ValueKey('reserved_group_card_${studentId}_${group.groupKey}'),
           duration: const Duration(milliseconds: 180),
           curve: Curves.easeOutCubic,
+          constraints: BoxConstraints(
+            minHeight:
+                isExpanded ? expandedReservedHeight : collapsedReservedHeight,
+          ),
           decoration: BoxDecoration(
             color: const Color(0xFF15171C),
             borderRadius: BorderRadius.circular(12),
@@ -4583,7 +5427,7 @@ List<Widget> _buildReservedHomeworkChipsForStudent(
                   ]
                 : const [],
           ),
-          padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -4594,17 +5438,17 @@ List<Widget> _buildReservedHomeworkChipsForStudent(
                     size: 17,
                     color: Color(0xFF8FA3A8),
                   ),
-                  const SizedBox(width: 8),
+                  const SizedBox(width: 14),
                   Expanded(
                     child: Text(
-                      group.title,
+                      line1TextbookLabel,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
-                        color: Color(0xFFB9C3BA),
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600,
-                        height: 1.2,
+                        color: Color(0xFFCAD2C5),
+                        fontSize: 17,
+                        fontWeight: FontWeight.w700,
+                        height: 1.15,
                       ),
                     ),
                   ),
@@ -4627,46 +5471,58 @@ List<Widget> _buildReservedHomeworkChipsForStudent(
                     ),
                 ],
               ),
-              const SizedBox(height: 6),
+              const SizedBox(height: 14),
+              Text(
+                line2GroupTitle,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Color(0xFFB9C3BA),
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                  height: 1.2,
+                ),
+              ),
+              const SizedBox(height: 5),
               Text(
                 topMeta,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
                   color: Color(0xFF8FA1A1),
-                  fontSize: 13.5,
+                  fontSize: 14.5,
                   fontWeight: FontWeight.w600,
                   height: 1.1,
                 ),
               ),
-              const SizedBox(height: 4),
+              const SizedBox(height: 5),
               Text(
                 bottomMeta,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
                   color: kDlgAccent,
-                  fontSize: 13.5,
+                  fontSize: 14.5,
                   fontWeight: FontWeight.w700,
                   height: 1.1,
                 ),
               ),
-              const SizedBox(height: 5),
-              const Text(
-                '탭하면 펼쳐지고, 왼쪽으로 밀면 진행 과제로 전환됩니다.',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: Color(0xFF7D8E8F),
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  height: 1.1,
-                ),
-              ),
               if (isExpanded) ...[
-                const SizedBox(height: 10),
+                const SizedBox(height: 20),
                 const Divider(height: 1, thickness: 1, color: kDlgBorder),
-                const SizedBox(height: 8),
+                const SizedBox(height: 16),
+                Text(
+                  '그룹 과제 ${entries.length}개',
+                  style: const TextStyle(
+                    color: Color(0xFFCAD2C5),
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600,
+                    height: 1.1,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 12),
                 ...childRows,
               ],
             ],
@@ -7537,6 +8393,50 @@ class _HomeworkOverviewEntry {
     required this.checkedAt,
     required this.progress,
     required this.isActive,
+  });
+}
+
+class _HomeworkOverviewCompletedGroupEntry {
+  final String groupId;
+  final DateTime completedAt;
+  final String line1Left;
+  final String line1Right;
+  final String line2Left;
+  final String line2Right;
+  final String line3Left;
+  final String line3Right;
+  final String line4Left;
+  final String line4Right;
+  final String line5Left;
+  final String line5Right;
+  final List<_HomeworkOverviewCompletedChildEntry> children;
+
+  const _HomeworkOverviewCompletedGroupEntry({
+    required this.groupId,
+    required this.completedAt,
+    required this.line1Left,
+    required this.line1Right,
+    required this.line2Left,
+    required this.line2Right,
+    required this.line3Left,
+    required this.line3Right,
+    required this.line4Left,
+    required this.line4Right,
+    required this.line5Left,
+    required this.line5Right,
+    required this.children,
+  });
+}
+
+class _HomeworkOverviewCompletedChildEntry {
+  final String title;
+  final String pageCount;
+  final String memo;
+
+  const _HomeworkOverviewCompletedChildEntry({
+    required this.title,
+    required this.pageCount,
+    required this.memo,
   });
 }
 
