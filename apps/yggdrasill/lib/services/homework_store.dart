@@ -560,6 +560,84 @@ class HomeworkStore {
     return false;
   }
 
+  int _ensureLocalGroupLink({
+    required String studentId,
+    required String groupId,
+    required String itemId,
+    int? itemOrderIndex,
+    DateTime? createdAt,
+    DateTime? updatedAt,
+  }) {
+    final cleanedStudentId = studentId.trim();
+    final cleanedGroupId = groupId.trim();
+    final cleanedItemId = itemId.trim();
+    if (cleanedStudentId.isEmpty ||
+        cleanedGroupId.isEmpty ||
+        cleanedItemId.isEmpty) {
+      return itemOrderIndex ?? 0;
+    }
+    final targetGroups = _groupsByStudentId[cleanedStudentId];
+    final hasTargetGroup =
+        targetGroups != null && targetGroups.any((g) => g.id == cleanedGroupId);
+    if (!hasTargetGroup) {
+      return itemOrderIndex ?? 0;
+    }
+
+    int resolveNextOrder(List<HomeworkGroupItem> links) {
+      var maxOrder = -1;
+      for (final link in links) {
+        if (link.itemOrderIndex > maxOrder) {
+          maxOrder = link.itemOrderIndex;
+        }
+      }
+      return maxOrder + 1;
+    }
+
+    final previousGroupId = _groupIdByItemId[cleanedItemId];
+    if (previousGroupId != null && previousGroupId != cleanedGroupId) {
+      final previousLinks = _groupItemsByGroupId[previousGroupId];
+      if (previousLinks != null) {
+        previousLinks.removeWhere((e) => e.homeworkItemId == cleanedItemId);
+        if (previousLinks.isEmpty) {
+          _groupItemsByGroupId.remove(previousGroupId);
+        }
+      }
+      if (_isLegacyGroupId(previousGroupId)) {
+        _groupsByStudentId[cleanedStudentId]
+            ?.removeWhere((g) => g.id == previousGroupId);
+      }
+    }
+
+    final links =
+        _groupItemsByGroupId.putIfAbsent(cleanedGroupId, () => <HomeworkGroupItem>[]);
+    final existingIdx =
+        links.indexWhere((e) => e.homeworkItemId == cleanedItemId);
+    final resolvedOrder = itemOrderIndex ??
+        (existingIdx >= 0
+            ? links[existingIdx].itemOrderIndex
+            : resolveNextOrder(links));
+    final now = DateTime.now();
+    if (existingIdx >= 0) {
+      links[existingIdx].itemOrderIndex = resolvedOrder;
+      links[existingIdx].updatedAt = updatedAt ?? now;
+    } else {
+      links.add(
+        HomeworkGroupItem(
+          id: 'local_link_${cleanedGroupId}_$cleanedItemId',
+          groupId: cleanedGroupId,
+          studentId: cleanedStudentId,
+          homeworkItemId: cleanedItemId,
+          itemOrderIndex: resolvedOrder,
+          createdAt: createdAt ?? now,
+          updatedAt: updatedAt ?? now,
+        ),
+      );
+    }
+    links.sort(_compareGroupItemByOrder);
+    _groupIdByItemId[cleanedItemId] = cleanedGroupId;
+    return resolvedOrder;
+  }
+
   Future<void> _reloadGroups({
     required String academyId,
     String? studentId,
@@ -2049,26 +2127,72 @@ class HomeworkStore {
     } catch (_) {}
   }
 
-  Future<void> complete(String studentId, String id) async {
+  Future<void> completeBatch(String studentId, Iterable<String> ids) async {
     final list = _byStudentId[studentId];
-    if (list == null) return;
-    final idx = list.indexWhere((e) => e.id == id);
-    if (idx == -1) return;
+    if (list == null || list.isEmpty) return;
+    final targetIds = ids
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    if (targetIds.isEmpty) return;
+
+    final byId = <String, HomeworkItem>{for (final item in list) item.id: item};
+    final now = DateTime.now();
+    final completedIds = <String>[];
+    bool changed = false;
+    for (final id in targetIds) {
+      final item = byId[id];
+      if (item == null || item.status == HomeworkStatus.completed) continue;
+      if (item.runStart != null) {
+        item.accumulatedMs += now.difference(item.runStart!).inMilliseconds;
+        item.runStart = null;
+      }
+      item.status = HomeworkStatus.completed;
+      item.phase = 0;
+      item.completedAt ??= now;
+      item.updatedAt = now;
+      changed = true;
+      completedIds.add(id);
+    }
+    if (completedIds.isEmpty) return;
+
+    if (changed) {
+      _sortStudentList(list);
+      _applyFallbackGroupsForStudent(studentId);
+      _bump();
+    }
+
     try {
       final String academyId =
           (await TenantService.instance.getActiveAcademyId()) ??
               await TenantService.instance.ensureActiveAcademy();
-      await Supabase.instance.client.rpc('homework_complete', params: {
-        'p_item_id': id,
-        'p_academy_id': academyId,
-      });
+      await Future.wait(
+        completedIds.map(
+          (id) => Supabase.instance.client.rpc(
+            'homework_complete',
+            params: {
+              'p_item_id': id,
+              'p_academy_id': academyId,
+            },
+          ),
+        ),
+      );
       await _reloadStudent(studentId);
       unawaited(_normalizeActiveOrderIndices(studentId));
-      final completed = getById(studentId, id);
-      if (completed != null) {
-        unawaited(_distributeStatsToPages(academyId, completed));
+      for (final id in completedIds) {
+        final completed = getById(studentId, id);
+        if (completed != null) {
+          unawaited(_distributeStatsToPages(academyId, completed));
+        }
       }
-    } catch (_) {}
+    } catch (_) {
+      await _reloadStudent(studentId);
+    }
+  }
+
+  Future<void> complete(String studentId, String id) async {
+    await completeBatch(studentId, [id]);
   }
 
   Future<void> submit(String studentId, String id) async {
@@ -2221,9 +2345,9 @@ class HomeworkStore {
     }
     if (waitingTargets.isEmpty) return;
     for (final itemId in waitingTargets) {
-      if (!_autoCompleteOnNextWaiting.remove(itemId)) continue;
-      unawaited(complete(studentId, itemId));
+      _autoCompleteOnNextWaiting.remove(itemId);
     }
+    unawaited(completeBatch(studentId, waitingTargets));
   }
 
   // 제출 상태에서 더블클릭 시, 다음 '대기' 진입에 자동 완료되도록 표시
@@ -2895,6 +3019,9 @@ class HomeworkStore {
     String? flowId,
     Color? color,
     int? defaultSplitParts,
+    int? itemOrderIndexOverride,
+    bool deferReload = false,
+    bool deferBump = false,
   }) async {
     final cleanedGroupId = groupId.trim();
     if (cleanedGroupId.isEmpty) return null;
@@ -2993,7 +3120,17 @@ class HomeworkStore {
     final list = _byStudentId.putIfAbsent(studentId, () => <HomeworkItem>[]);
     list.add(item);
     _sortStudentList(list);
-    _bump();
+    final localLinkOrder = _ensureLocalGroupLink(
+      studentId: studentId,
+      groupId: cleanedGroupId,
+      itemId: item.id,
+      itemOrderIndex: itemOrderIndexOverride,
+      createdAt: now,
+      updatedAt: now,
+    );
+    if (!deferBump) {
+      _bump();
+    }
 
     try {
       final academyId = (await TenantService.instance.getActiveAcademyId()) ??
@@ -3040,19 +3177,12 @@ class HomeworkStore {
         item.version = (typedInsertRows.first['version'] as num?)?.toInt() ?? 1;
       }
 
-      final links = groupLinks(cleanedGroupId);
-      var nextItemOrder = 0;
-      for (final link in links) {
-        if (link.itemOrderIndex >= nextItemOrder) {
-          nextItemOrder = link.itemOrderIndex + 1;
-        }
-      }
       await supa.from('homework_group_items').upsert({
         'academy_id': academyId,
         'group_id': cleanedGroupId,
         'student_id': studentId,
         'homework_item_id': item.id,
-        'item_order_index': nextItemOrder,
+        'item_order_index': localLinkOrder,
       }, onConflict: 'academy_id,homework_item_id');
 
       await _syncUnitMappings(
@@ -3065,7 +3195,9 @@ class HomeworkStore {
         studentId: studentId,
         item: item,
       );
-      await _reloadStudent(studentId);
+      if (!deferReload) {
+        await _reloadStudent(studentId);
+      }
       return item.id;
     } catch (e, st) {
       print('[HW][addWaitingItemToGroup][ERROR] $e\n$st');
@@ -3175,7 +3307,6 @@ class HomeworkStore {
         _groupsByStudentId.putIfAbsent(studentId, () => <HomeworkGroup>[]);
     studentGroups.add(group);
     studentGroups.sort(_compareGroupByOrder);
-    _bump();
 
     try {
       final academyId = (await TenantService.instance.getActiveAcademyId()) ??
@@ -3194,27 +3325,41 @@ class HomeworkStore {
         'version': 1,
       });
 
-      final createdIds = <String>[];
-      for (final entry in normalized) {
-        final createdId = await addWaitingItemToGroup(
-          studentId: studentId,
-          groupId: groupId,
-          title: asText(entry['title']),
-          body: asText(entry['body']),
-          page: asText(entry['page']),
-          count: asPositiveInt(entry['count']),
-          type: asText(entry['type']),
-          memo: asText(entry['memo']),
-          content: asText(entry['content']),
-          bookId: asNullableText(entry['bookId']),
-          gradeLabel: asNullableText(entry['gradeLabel']),
-          sourceUnitLevel: asNullableText(entry['sourceUnitLevel']),
-          sourceUnitPath: asNullableText(entry['sourceUnitPath']),
-          unitMappings: asUnitMappings(entry['unitMappings']),
-          flowId: cleanedFlowId.isEmpty ? null : cleanedFlowId,
-          color: asColor(entry['color']),
-          defaultSplitParts: asSplitParts(entry['splitParts']),
+      final pendingCreates = <Future<String?>>[];
+      for (int idx = 0; idx < normalized.length; idx++) {
+        final entry = normalized[idx];
+        pendingCreates.add(
+          addWaitingItemToGroup(
+            studentId: studentId,
+            groupId: groupId,
+            title: asText(entry['title']),
+            body: asText(entry['body']),
+            page: asText(entry['page']),
+            count: asPositiveInt(entry['count']),
+            type: asText(entry['type']),
+            memo: asText(entry['memo']),
+            content: asText(entry['content']),
+            bookId: asNullableText(entry['bookId']),
+            gradeLabel: asNullableText(entry['gradeLabel']),
+            sourceUnitLevel: asNullableText(entry['sourceUnitLevel']),
+            sourceUnitPath: asNullableText(entry['sourceUnitPath']),
+            unitMappings: asUnitMappings(entry['unitMappings']),
+            flowId: cleanedFlowId.isEmpty ? null : cleanedFlowId,
+            color: asColor(entry['color']),
+            defaultSplitParts: asSplitParts(entry['splitParts']),
+            itemOrderIndexOverride: idx,
+            deferReload: true,
+            deferBump: true,
+          ),
         );
+      }
+      if (pendingCreates.isNotEmpty) {
+        // UI를 먼저 완성된 그룹 형태로 반영한 뒤 서버 동기화를 진행한다.
+        _bump();
+      }
+      final createdIds = <String>[];
+      final createdResults = await Future.wait(pendingCreates);
+      for (final createdId in createdResults) {
         if (createdId != null && createdId.isNotEmpty) {
           createdIds.add(createdId);
         }

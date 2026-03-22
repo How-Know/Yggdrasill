@@ -3187,6 +3187,11 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     return stripped.isEmpty ? trimmed : stripped;
   }
 
+  bool _isRunningHomeworkItem(HomeworkItem item) {
+    if (item.status == HomeworkStatus.completed) return false;
+    return item.runStart != null || item.phase == 2;
+  }
+
   List<Widget> _buildHomeworkChipsOnce(
     _AttendanceTarget t, {
     Set<String> hiddenItemIds = const <String>{},
@@ -3283,7 +3288,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     for (final group in groups) {
       final children = HomeworkStore.instance
           .itemsInGroup(studentId, group.id)
-          .where((e) => e.status != HomeworkStatus.completed)
+          // 왼쪽 사이드시트에서는 "현재 수행중(phase=2/runStart 존재)" 항목만 칩에 반영한다.
+          .where(_isRunningHomeworkItem)
           .where((e) => !hiddenItemIds.contains(e.id))
           .toList();
       if (children.isEmpty) continue;
@@ -3301,19 +3307,6 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
           ? fromAssignment
           : (fromGroup.isNotEmpty ? fromGroup : '그룹 과제');
       addGroupTitleChip(rawTitle, visualPhase: groupPhase);
-    }
-
-    // 그룹 메타가 아직 동기화되지 않은 경우에도, 할당 스냅샷의 그룹명으로 칩을 복원한다.
-    if (chips.isEmpty && groupTitleById.isNotEmpty) {
-      final seenTitles = <String>{};
-      final entries = groupTitleById.entries.toList()
-        ..sort((a, b) => a.key.compareTo(b.key));
-      for (final entry in entries) {
-        final title = entry.value.trim();
-        if (title.isEmpty) continue;
-        if (!seenTitles.add(title)) continue;
-        addGroupTitleChip(title);
-      }
     }
     return chips;
   }

@@ -104,47 +104,47 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                       final submittedCount = _countSubmittedHomeworkItems(list);
                       return Padding(
                         padding: const EdgeInsets.fromLTRB(40, 16, 16, 0),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: RichText(
-                                text: TextSpan(
-                                  children: [
-                                    TextSpan(
-                                      text: _formatDateWithWeekdayAndTime(_now),
-                                      style: const TextStyle(
-                                          color: Colors.white,
-                                          fontSize: 50,
-                                          fontWeight: FontWeight.bold),
-                                    ),
-                                    const WidgetSpan(
-                                        child: SizedBox(width: 30)),
-                                    TextSpan(
-                                      text: '등원중: ${list.length}명',
-                                      style: const TextStyle(
-                                          color: Colors.white60,
-                                          fontSize: 40,
-                                          fontWeight: FontWeight.bold),
-                                    ),
-                                    const WidgetSpan(
-                                        child: SizedBox(width: 24)),
-                                    TextSpan(
-                                      text: '제출: $submittedCount개',
-                                      style: const TextStyle(
-                                        color: Color(0xFF8FB3FF),
-                                        fontSize: 40,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                  ],
+                        child: LayoutBuilder(
+                          builder: (context, constraints) {
+                            final bool stackedHeader = constraints.maxWidth < 1500;
+                            final bool compactHeader = constraints.maxWidth < 1240;
+                            final Widget infoBlock = Wrap(
+                              crossAxisAlignment: WrapCrossAlignment.center,
+                              spacing: compactHeader ? 14 : 24,
+                              runSpacing: compactHeader ? 6 : 0,
+                              children: [
+                                Text(
+                                  _formatDateWithWeekdayAndTime(_now),
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: compactHeader ? 38 : 50,
+                                    fontWeight: FontWeight.bold,
+                                    height: 1.0,
+                                  ),
                                 ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                            const SizedBox(width: 20),
-                            Row(
-                              mainAxisSize: MainAxisSize.min,
+                                Text(
+                                  '등원중: ${list.length}명',
+                                  style: TextStyle(
+                                    color: Colors.white60,
+                                    fontSize: compactHeader ? 30 : 40,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                                Text(
+                                  '제출: $submittedCount개',
+                                  style: TextStyle(
+                                    color: const Color(0xFF8FB3FF),
+                                    fontSize: compactHeader ? 30 : 40,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ],
+                            );
+                            final Widget controls = Wrap(
+                              alignment: WrapAlignment.end,
+                              crossAxisAlignment: WrapCrossAlignment.center,
+                              spacing: 8,
+                              runSpacing: 8,
                               children: [
                                 SizedBox(
                                   height: 44,
@@ -175,8 +175,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                     child: const Icon(Icons.print, size: 20),
                                   ),
                                 ),
-                                const SizedBox(width: 8),
-                                if (_isGradingMode) ...[
+                                if (_isGradingMode)
                                   Tooltip(
                                     message: '채점 이력',
                                     child: SizedBox(
@@ -205,31 +204,33 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                       ),
                                     ),
                                   ),
-                                  const SizedBox(width: 10),
-                                ],
-                                const Text(
-                                  '채점 모드',
-                                  style: TextStyle(
-                                    color: Colors.white70,
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.w700,
-                                  ),
+                                Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Text(
+                                      '채점 모드',
+                                      style: TextStyle(
+                                        color: Colors.white70,
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Switch(
+                                      value: _isGradingMode,
+                                      onChanged: (value) {
+                                        setState(() {
+                                          _isGradingMode = value;
+                                          if (!value) {
+                                            _pendingConfirms.clear();
+                                          }
+                                        });
+                                        gradingModeActive.value = value;
+                                      },
+                                      activeColor: kDlgAccent,
+                                    ),
+                                  ],
                                 ),
-                                const SizedBox(width: 8),
-                                Switch(
-                                  value: _isGradingMode,
-                                  onChanged: (value) {
-                                    setState(() {
-                                      _isGradingMode = value;
-                                      if (!value) {
-                                        _pendingConfirms.clear();
-                                      }
-                                    });
-                                    gradingModeActive.value = value;
-                                  },
-                                  activeColor: kDlgAccent,
-                                ),
-                                const SizedBox(width: 12),
                                 Opacity(
                                   opacity: _pendingConfirms.isEmpty ? 0.4 : 1.0,
                                   child: SizedBox(
@@ -270,15 +271,35 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                   ),
                                 ),
                               ],
-                            ),
-                          ],
+                            );
+                            if (stackedHeader) {
+                              return Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  infoBlock,
+                                  const SizedBox(height: 10),
+                                  Align(
+                                    alignment: Alignment.centerRight,
+                                    child: controls,
+                                  ),
+                                ],
+                              );
+                            }
+                            return Row(
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                Expanded(child: infoBlock),
+                                const SizedBox(width: 20),
+                                controls,
+                              ],
+                            );
+                          },
                         ),
                       );
                     },
                   ),
                   const SizedBox(height: 16),
-                  const Divider(color: Color(0xFF223131), height: 24),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: 20),
                   Expanded(
                     child: _isGradingMode
                         ? GradingModePage(
