@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'models/behavior_card_drag_payload.dart';
 import 'models/textbook_drag_payload.dart';
 
+typedef AsyncUiAction = Future<void> Function();
+
 /// MaterialApp.builder에서 만든 최상위 Overlay(=Navigator 밖) 안에
 /// "FAB 드롭다운 전용 레이어"를 만들기 위한 키.
 ///
@@ -13,10 +15,21 @@ import 'models/textbook_drag_payload.dart';
 final GlobalKey<OverlayState> fabDropdownOverlayKey = GlobalKey<OverlayState>();
 
 /// 전역 메모 플로팅 배너 표시 여부 제어 (true면 숨김)
-final ValueNotifier<bool> hideGlobalMemoFloatingBanners = ValueNotifier<bool>(false);
+final ValueNotifier<bool> hideGlobalMemoFloatingBanners =
+    ValueNotifier<bool>(false);
 
 /// 홈(수업 내용) 채점 모드 활성 시 true. FAB 숨김에 사용.
 final ValueNotifier<bool> gradingModeActive = ValueNotifier<bool>(false);
+
+/// 홈(수업 내용)에서 일괄 확인 FAB 노출 여부.
+final ValueNotifier<bool> homeBatchConfirmFabVisible =
+    ValueNotifier<bool>(false);
+
+/// 홈(수업 내용)에서 현재 선택된 일괄 확인 대상 수.
+final ValueNotifier<int> homeBatchConfirmPendingCount = ValueNotifier<int>(0);
+
+/// 홈(수업 내용) 일괄 확인 실행 액션.
+AsyncUiAction? homeBatchConfirmAction;
 
 /// 전역 오른쪽 사이드시트 열림 방지 (성향 탭 등에서 사용)
 final ValueNotifier<bool> blockRightSideSheetOpen = ValueNotifier<bool>(false);
@@ -41,17 +54,3 @@ final ValueNotifier<BehaviorCardDragPayload?> activeBehaviorCardDragPayload =
 /// 행동 카드 드래그 피드백이 왼쪽 사이드시트 영역에 진입했는지 여부.
 final ValueNotifier<bool> isBehaviorDraggingOverLeftSideSheet =
     ValueNotifier<bool>(false);
-
-
-
-
-
-
-
-
-
-
-
-
-
-

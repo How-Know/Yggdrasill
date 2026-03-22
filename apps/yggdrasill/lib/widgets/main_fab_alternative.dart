@@ -9,7 +9,12 @@ import 'makeup_quick_dialog.dart';
 import '../app_overlays.dart';
 
 class MainFabAlternative extends StatefulWidget {
-  const MainFabAlternative({Key? key}) : super(key: key);
+  final bool showHomeBatchConfirmFab;
+
+  const MainFabAlternative({
+    Key? key,
+    this.showHomeBatchConfirmFab = false,
+  }) : super(key: key);
 
   @override
   State<MainFabAlternative> createState() => _MainFabAlternativeState();
@@ -24,10 +29,11 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
   late Animation<Offset> _slideAnimation3;
   late Animation<double> _fadeAnimation;
   late Animation<double> _shapeAnimation; // 직사각형 -> 원형 애니메이션
-  
+
   bool _isFabExpanded = false;
   double _fabBottomPadding = 16.0;
-  ScaffoldFeatureController<SnackBar, SnackBarClosedReason>? _snackBarController;
+  ScaffoldFeatureController<SnackBar, SnackBarClosedReason>?
+      _snackBarController;
   OverlayEntry? _menuOverlay; // FAB 확장 시 드롭다운 버튼을 오버레이로 표시
 
   @override
@@ -254,63 +260,139 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedPadding(
-      duration: const Duration(milliseconds: 200),
-      padding: EdgeInsets.only(bottom: _fabBottomPadding, right: 16.0),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.end,
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          // 메뉴 버튼들은 오버레이에서 렌더링 (항상 최상단)
-          // 🎯 메인 FAB 버튼 (직사각형 -> 원형 모양 변화)
-          AnimatedBuilder(
-            animation: _fabController,
-            builder: (context, child) {
-              return GestureDetector(
-                onTap: () {
-                  setState(() {
-                    _isFabExpanded = !_isFabExpanded;
-                    if (_isFabExpanded) {
-                      _fabController.forward();
-                      _insertMenuOverlay(context);
-                    } else {
-                      _fabController.reverse();
-                      _removeMenuOverlay();
-                    }
-                  });
-                },
-                child: Container(
-                  width: 56,
-                  height: 56,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF1B6B63),
-                    borderRadius: BorderRadius.circular(_shapeAnimation.value), // 동적으로 변하는 모서리
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.2),
-                        spreadRadius: 1,
-                        blurRadius: 4,
-                        offset: const Offset(0, 2),
+    return ValueListenableBuilder<bool>(
+      valueListenable: homeBatchConfirmFabVisible,
+      builder: (context, showBatchConfirmFab, _) {
+        return ValueListenableBuilder<int>(
+          valueListenable: homeBatchConfirmPendingCount,
+          builder: (context, pendingConfirmCount, __) {
+            final shouldShowBatchConfirmFab =
+                widget.showHomeBatchConfirmFab && showBatchConfirmFab;
+            final canRunBatchConfirm = shouldShowBatchConfirmFab &&
+                pendingConfirmCount > 0 &&
+                homeBatchConfirmAction != null;
+            return AnimatedPadding(
+              duration: const Duration(milliseconds: 200),
+              padding: EdgeInsets.only(bottom: _fabBottomPadding, right: 16.0),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  if (shouldShowBatchConfirmFab) ...[
+                    Opacity(
+                      opacity: canRunBatchConfirm ? 1.0 : 0.45,
+                      child: IgnorePointer(
+                        ignoring: !canRunBatchConfirm,
+                        child: GestureDetector(
+                          onTap: () async {
+                            final action = homeBatchConfirmAction;
+                            if (action == null) return;
+                            await action();
+                          },
+                          child: SizedBox(
+                            width: 170,
+                            height: 56,
+                            child: Container(
+                              alignment: Alignment.center,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF1B6B63),
+                                borderRadius: BorderRadius.circular(28),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withOpacity(0.2),
+                                    spreadRadius: 1,
+                                    blurRadius: 4,
+                                    offset: const Offset(0, 2),
+                                  ),
+                                ],
+                              ),
+                              child: const Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    Icons.check_rounded,
+                                    size: 21,
+                                    color: Colors.white,
+                                  ),
+                                  SizedBox(width: 8),
+                                  Text(
+                                    '확인',
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 17,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                  ],
+                  Column(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      // 메뉴 버튼들은 오버레이에서 렌더링 (항상 최상단)
+                      // 🎯 메인 FAB 버튼 (직사각형 -> 원형 모양 변화)
+                      AnimatedBuilder(
+                        animation: _fabController,
+                        builder: (context, child) {
+                          return GestureDetector(
+                            onTap: () {
+                              setState(() {
+                                _isFabExpanded = !_isFabExpanded;
+                                if (_isFabExpanded) {
+                                  _fabController.forward();
+                                  _insertMenuOverlay(context);
+                                } else {
+                                  _fabController.reverse();
+                                  _removeMenuOverlay();
+                                }
+                              });
+                            },
+                            child: Container(
+                              width: 56,
+                              height: 56,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF1B6B63),
+                                borderRadius: BorderRadius.circular(
+                                    _shapeAnimation.value), // 동적으로 변하는 모서리
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withOpacity(0.2),
+                                    spreadRadius: 1,
+                                    blurRadius: 4,
+                                    offset: const Offset(0, 2),
+                                  ),
+                                ],
+                              ),
+                              child: Center(
+                                child: AnimatedRotation(
+                                  duration: const Duration(milliseconds: 200),
+                                  turns: _isFabExpanded ? 0.125 : 0,
+                                  child: Icon(
+                                    _isFabExpanded ? Icons.close : Icons.add,
+                                    size: 24,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          );
+                        },
                       ),
                     ],
                   ),
-                  child: Center(
-                    child: AnimatedRotation(
-                      duration: const Duration(milliseconds: 200),
-                      turns: _isFabExpanded ? 0.125 : 0,
-                      child: Icon(
-                        _isFabExpanded ? Icons.close : Icons.add,
-                        size: 24,
-                        color: Colors.white,
-                      ),
-                    ),
-                  ),
-                ),
-              );
-            },
-          ),
-        ],
-      ),
+                ],
+              ),
+            );
+          },
+        );
+      },
     );
   }
 
@@ -393,7 +475,10 @@ class _MemoQuickAddDialogState extends State<_MemoQuickAddDialog> {
       actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
       title: const Text(
         '메모 추가',
-        style: TextStyle(color: Color(0xFFEAF2F2), fontSize: 20, fontWeight: FontWeight.bold),
+        style: TextStyle(
+            color: Color(0xFFEAF2F2),
+            fontSize: 20,
+            fontWeight: FontWeight.bold),
       ),
       content: SizedBox(
         width: 520,
@@ -409,7 +494,8 @@ class _MemoQuickAddDialogState extends State<_MemoQuickAddDialog> {
             fillColor: const Color(0xFF15171C),
             enabledBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(8),
-              borderSide: BorderSide(color: const Color(0xFF3A3F44).withOpacity(0.6)),
+              borderSide:
+                  BorderSide(color: const Color(0xFF3A3F44).withOpacity(0.6)),
             ),
             focusedBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(8),
@@ -440,9 +526,11 @@ class _MemoQuickAddDialogState extends State<_MemoQuickAddDialog> {
             backgroundColor: const Color(0xFF33A373),
             foregroundColor: Colors.white,
             padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
           ),
-          child: const Text('저장', style: TextStyle(fontWeight: FontWeight.bold)),
+          child:
+              const Text('저장', style: TextStyle(fontWeight: FontWeight.bold)),
         ),
       ],
     );

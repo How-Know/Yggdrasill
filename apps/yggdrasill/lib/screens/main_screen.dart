@@ -1055,7 +1055,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     HomeworkStore.instance.loadAll();
     hideGlobalMemoFloatingBanners.value =
         (_selectedIndex == 0 || _selectedIndex == 1);
-    blockRightSideSheetOpen.value = false;
+    blockRightSideSheetOpen.value = (_selectedIndex == 0);
     // 출석 데이터 변경 시 사이드 시트 캐시 무효화
     DataManager.instance.attendanceRecordsNotifier.addListener(
       _markSideSheetDirty,
@@ -1953,7 +1953,9 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                 _selectedIndex = index;
               });
               hideGlobalMemoFloatingBanners.value = (index == 0 || index == 1);
-              if (index != 1) {
+              if (index == 0) {
+                blockRightSideSheetOpen.value = true;
+              } else if (index != 1) {
                 blockRightSideSheetOpen.value = false;
               }
             },
@@ -2608,12 +2610,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
           Expanded(child: _buildContent()),
         ],
       ),
-      floatingActionButton: ValueListenableBuilder<bool>(
-        valueListenable: gradingModeActive,
-        builder: (context, gradingOn, _) {
-          if (_selectedIndex == 0 && gradingOn) return const SizedBox.shrink();
-          return MainFabAlternative();
-        },
+      floatingActionButton: MainFabAlternative(
+        showHomeBatchConfirmFab: _selectedIndex == 0,
       ),
     );
   }

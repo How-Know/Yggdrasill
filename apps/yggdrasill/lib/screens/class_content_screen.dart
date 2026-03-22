@@ -27,6 +27,7 @@ import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 import '../widgets/flow_setup_dialog.dart';
 import '../widgets/pdf/homework_answer_viewer_dialog.dart';
 import '../widgets/latex_text_renderer.dart';
+import '../widgets/home_header_weather_icon.dart';
 import 'class_content/grading_mode_page.dart';
 
 /// 수업 내용 관리 6번째 페이지 (구조만 정의, 기능 미구현)
@@ -53,11 +54,15 @@ class _ClassContentScreenState extends State<ClassContentScreen>
   final Map<({String studentId, String itemId}), bool> _pendingConfirms = {};
   final Set<String> _expandedHomeworkIds = {};
   String? _expandedReservedStudentId;
+  bool _pendingConfirmFabSyncScheduled = false;
 
   @override
   void initState() {
     super.initState();
     gradingModeActive.value = _isGradingMode;
+    homeBatchConfirmFabVisible.value = true;
+    homeBatchConfirmPendingCount.value = 0;
+    homeBatchConfirmAction = null;
     DataManager.instance.loadDeviceBindings();
     _uiAnimController = AnimationController(
         duration: const Duration(milliseconds: 1800), vsync: this)
@@ -72,13 +77,38 @@ class _ClassContentScreenState extends State<ClassContentScreen>
 
   @override
   void dispose() {
+    homeBatchConfirmAction = null;
+    homeBatchConfirmPendingCount.value = 0;
+    homeBatchConfirmFabVisible.value = false;
     _uiAnimController.dispose();
     _clockTimer.cancel();
     super.dispose();
   }
 
+  void _scheduleHomeBatchConfirmFabSync() {
+    if (_pendingConfirmFabSyncScheduled) return;
+    _pendingConfirmFabSyncScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _pendingConfirmFabSyncScheduled = false;
+      if (!mounted) return;
+      homeBatchConfirmFabVisible.value = true;
+      final pendingCount = _pendingConfirms.length;
+      if (homeBatchConfirmPendingCount.value != pendingCount) {
+        homeBatchConfirmPendingCount.value = pendingCount;
+      }
+      homeBatchConfirmAction = pendingCount == 0
+          ? null
+          : () async {
+              if (!mounted) return;
+              await _executeBatchConfirm(context);
+              _scheduleHomeBatchConfirmFabSync();
+            };
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
+    _scheduleHomeBatchConfirmFabSync();
     return Stack(
       children: [
         Container(
@@ -106,13 +136,19 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                         padding: const EdgeInsets.fromLTRB(40, 16, 16, 0),
                         child: LayoutBuilder(
                           builder: (context, constraints) {
-                            final bool stackedHeader = constraints.maxWidth < 1500;
-                            final bool compactHeader = constraints.maxWidth < 1240;
+                            final bool stackedHeader =
+                                constraints.maxWidth < 1500;
+                            final bool compactHeader =
+                                constraints.maxWidth < 1240;
                             final Widget infoBlock = Wrap(
                               crossAxisAlignment: WrapCrossAlignment.center,
                               spacing: compactHeader ? 14 : 24,
                               runSpacing: compactHeader ? 6 : 0,
                               children: [
+                                HomeHeaderWeatherIcon(
+                                  iconSize: compactHeader ? 34 : 42,
+                                  color: Colors.white70,
+                                ),
                                 Text(
                                   _formatDateWithWeekdayAndTime(_now),
                                   style: TextStyle(
@@ -230,45 +266,6 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                       activeColor: kDlgAccent,
                                     ),
                                   ],
-                                ),
-                                Opacity(
-                                  opacity: _pendingConfirms.isEmpty ? 0.4 : 1.0,
-                                  child: SizedBox(
-                                    width: 130,
-                                    height: 48,
-                                    child: Material(
-                                      color: const Color(0xFF1B6B63),
-                                      borderRadius: BorderRadius.circular(24),
-                                      child: InkWell(
-                                        borderRadius: BorderRadius.circular(24),
-                                        onTap: _pendingConfirms.isEmpty
-                                            ? null
-                                            : () =>
-                                                _executeBatchConfirm(context),
-                                        child: const Padding(
-                                          padding: EdgeInsets.only(right: 10),
-                                          child: Row(
-                                            mainAxisAlignment:
-                                                MainAxisAlignment.center,
-                                            children: [
-                                              Icon(Icons.check,
-                                                  color: Color(0xFFEAF2F2),
-                                                  size: 20),
-                                              SizedBox(width: 8),
-                                              Text(
-                                                '확인',
-                                                style: TextStyle(
-                                                  color: Color(0xFFEAF2F2),
-                                                  fontSize: 18,
-                                                  fontWeight: FontWeight.bold,
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                  ),
                                 ),
                               ],
                             );
@@ -1591,7 +1588,8 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                 (opt) => opt.id == selectedSessionFilterId,
                 orElse: () => sessionFilterOptions.first,
               );
-              final completedGroupEntries = _collectRecentCompletedHomeworkGroups(
+              final completedGroupEntries =
+                  _collectRecentCompletedHomeworkGroups(
                 studentId,
                 assignmentsByItem: assignmentsByItem,
                 targetDay: selectedFilter.targetDay,
@@ -1697,7 +1695,8 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                           ),
                                         )
                                       : ListView.separated(
-                                          itemCount: completedGroupEntries.length,
+                                          itemCount:
+                                              completedGroupEntries.length,
                                           separatorBuilder: (_, __) =>
                                               const SizedBox(height: 10),
                                           itemBuilder: (context, index) {
@@ -3548,7 +3547,8 @@ String _homeworkBookCourseLabel(HomeworkItem hw) {
       : (courseName.isEmpty ? bookName : '$bookName · $courseName');
 }
 
-List<_HomeworkOverviewCompletedGroupEntry> _collectRecentCompletedHomeworkGroups(
+List<_HomeworkOverviewCompletedGroupEntry>
+    _collectRecentCompletedHomeworkGroups(
   String studentId, {
   required Map<String, List<HomeworkAssignmentBrief>> assignmentsByItem,
   DateTime? targetDay,
@@ -3579,33 +3579,32 @@ List<_HomeworkOverviewCompletedGroupEntry> _collectRecentCompletedHomeworkGroups
         )
         .toList(growable: false);
     if (children.isEmpty) continue;
-    final completedChildren = children
-        .where(
-          (child) {
-            if (!(child.status == HomeworkStatus.completed ||
-                child.completedAt != null)) {
-              return false;
-            }
-            final completedTs = completedTimestampOf(child);
-            if (completedTs == null) return false;
-            if (targetDateOnly != null &&
-                _dateOnly(completedTs) != targetDateOnly) {
-              return false;
-            }
-            if (windowStart != null && completedTs.isBefore(windowStart)) {
-              return false;
-            }
-            if (windowEnd != null && completedTs.isAfter(windowEnd)) {
-              return false;
-            }
-            return true;
-          },
-        )
-        .toList(growable: false);
+    final completedChildren = children.where(
+      (child) {
+        if (!(child.status == HomeworkStatus.completed ||
+            child.completedAt != null)) {
+          return false;
+        }
+        final completedTs = completedTimestampOf(child);
+        if (completedTs == null) return false;
+        if (targetDateOnly != null &&
+            _dateOnly(completedTs) != targetDateOnly) {
+          return false;
+        }
+        if (windowStart != null && completedTs.isBefore(windowStart)) {
+          return false;
+        }
+        if (windowEnd != null && completedTs.isAfter(windowEnd)) {
+          return false;
+        }
+        return true;
+      },
+    ).toList(growable: false);
     if (completedChildren.isEmpty) continue;
 
-    DateTime latestCompletedAt = completedTimestampOf(completedChildren.first) ??
-        DateTime.fromMillisecondsSinceEpoch(0);
+    DateTime latestCompletedAt =
+        completedTimestampOf(completedChildren.first) ??
+            DateTime.fromMillisecondsSinceEpoch(0);
     int totalDurationMs = 0;
     for (final child in completedChildren) {
       final completedTs = completedTimestampOf(child);
@@ -3628,10 +3627,12 @@ List<_HomeworkOverviewCompletedGroupEntry> _collectRecentCompletedHomeworkGroups
       return '그룹 과제';
     }();
     final flowName = () {
-      final groupFlow = (flowNameById[(group.flowId ?? '').trim()] ?? '').trim();
+      final groupFlow =
+          (flowNameById[(group.flowId ?? '').trim()] ?? '').trim();
       if (groupFlow.isNotEmpty) return groupFlow;
       for (final child in children) {
-        final childFlow = (flowNameById[(child.flowId ?? '').trim()] ?? '').trim();
+        final childFlow =
+            (flowNameById[(child.flowId ?? '').trim()] ?? '').trim();
         if (childFlow.isNotEmpty) return childFlow;
       }
       return '';
@@ -3650,7 +3651,9 @@ List<_HomeworkOverviewCompletedGroupEntry> _collectRecentCompletedHomeworkGroups
     HomeworkAssignmentBrief? latestBrief;
     for (final child in children) {
       final page = (child.page ?? '').trim();
-      if (page.isNotEmpty && !pageLabels.contains(page) && pageLabels.length < 4) {
+      if (page.isNotEmpty &&
+          !pageLabels.contains(page) &&
+          pageLabels.length < 4) {
         pageLabels.add(page);
       }
       final count = child.count ?? 0;
@@ -3658,10 +3661,12 @@ List<_HomeworkOverviewCompletedGroupEntry> _collectRecentCompletedHomeworkGroups
       if (child.checkCount > groupCheckCount) {
         groupCheckCount = child.checkCount;
       }
-      final assignmentRows = assignmentsByItem[child.id] ?? const <HomeworkAssignmentBrief>[];
+      final assignmentRows =
+          assignmentsByItem[child.id] ?? const <HomeworkAssignmentBrief>[];
       homeworkCount += assignmentRows.length;
       for (final brief in assignmentRows) {
-        if (latestBrief == null || brief.assignedAt.isAfter(latestBrief!.assignedAt)) {
+        if (latestBrief == null ||
+            brief.assignedAt.isAfter(latestBrief!.assignedAt)) {
           latestBrief = brief;
         }
       }
@@ -3714,9 +3719,11 @@ List<_HomeworkOverviewCompletedGroupEntry> _collectRecentCompletedHomeworkGroups
         children: [
           for (final child in children)
             _HomeworkOverviewCompletedChildEntry(
-              title: child.title.trim().isEmpty ? '(제목 없음)' : child.title.trim(),
+              title:
+                  child.title.trim().isEmpty ? '(제목 없음)' : child.title.trim(),
               pageCount: [
-                if ((child.page ?? '').trim().isNotEmpty) 'p.${child.page!.trim()}',
+                if ((child.page ?? '').trim().isNotEmpty)
+                  'p.${child.page!.trim()}',
                 if ((child.count ?? 0) > 0) '${child.count}문항',
               ].join(' · '),
               memo: (child.memo ?? '').trim(),
@@ -5231,8 +5238,7 @@ List<Widget> _buildReservedHomeworkChipsForStudent(
 
     String extractBookName(HomeworkItem hw) {
       final contentRaw = (hw.content ?? '').trim();
-      final match =
-          RegExp(r'(?:^|\n)\s*교재:\s*([^\n]+)').firstMatch(contentRaw);
+      final match = RegExp(r'(?:^|\n)\s*교재:\s*([^\n]+)').firstMatch(contentRaw);
       final fromContent = match?.group(1)?.trim() ?? '';
       if (fromContent.isNotEmpty) return fromContent;
 
@@ -5255,8 +5261,7 @@ List<Widget> _buildReservedHomeworkChipsForStudent(
 
     String extractCourseName(HomeworkItem hw) {
       final contentRaw = (hw.content ?? '').trim();
-      final match =
-          RegExp(r'(?:^|\n)\s*과정:\s*([^\n]+)').firstMatch(contentRaw);
+      final match = RegExp(r'(?:^|\n)\s*과정:\s*([^\n]+)').firstMatch(contentRaw);
       return match?.group(1)?.trim() ?? '';
     }
 
@@ -5345,7 +5350,7 @@ List<Widget> _buildReservedHomeworkChipsForStudent(
                     childPageCountLabel(hw),
                     style: const TextStyle(
                       color: Color(0xFF8FA1A1),
-                        fontSize: 14.5,
+                      fontSize: 14.5,
                       fontWeight: FontWeight.w600,
                       height: 1.1,
                     ),
@@ -5361,7 +5366,7 @@ List<Widget> _buildReservedHomeworkChipsForStudent(
                     childMemoLabel(hw),
                     style: const TextStyle(
                       color: Color(0xFF8FA1A1),
-                        fontSize: 14.5,
+                      fontSize: 14.5,
                       fontWeight: FontWeight.w600,
                       height: 1.1,
                     ),
@@ -5434,8 +5439,9 @@ List<Widget> _buildReservedHomeworkChipsForStudent(
             color: const Color(0xFF15171C),
             borderRadius: BorderRadius.circular(12),
             border: Border.all(
-              color:
-                  isExpanded ? const Color(0xFF33554C) : const Color(0xFF273338),
+              color: isExpanded
+                  ? const Color(0xFF33554C)
+                  : const Color(0xFF273338),
               width: isExpanded ? 1.4 : 1.1,
             ),
             boxShadow: isExpanded
@@ -5594,7 +5600,8 @@ List<_ReservedHomeworkGroupSection> _resolveReservedHomeworkGroupsForStudent(
   }
 
   final groupsById = <String, HomeworkGroup>{
-    for (final group in HomeworkStore.instance.groups(studentId)) group.id: group,
+    for (final group in HomeworkStore.instance.groups(studentId))
+      group.id: group,
   };
   final out = <_ReservedHomeworkGroupSection>[];
   for (final entry in groupedPairs.entries) {
