@@ -67,11 +67,17 @@ class _HomeHeaderWeatherIconState extends State<HomeHeaderWeatherIcon> {
 
         final weather = snapshot.data!;
         final usedFallback = weather.usedFallbackLocation;
+        final localityName = weather.localityName.trim().isNotEmpty
+            ? weather.localityName.trim()
+            : (usedFallback ? '학원 기본 위치' : '현재 위치');
+        final weatherLabel = _weatherLabelForCode(weather.weatherCode);
+        final tooltipMessage = '현재 $localityName · '
+            '${weather.temperatureC.toStringAsFixed(1)}°C · '
+            '$weatherLabel'
+            '${usedFallback ? ' (기본 위치 폴백)' : ''}';
         return _buildIcon(
           icon: _iconForWeatherCode(weather.weatherCode, weather.isDay),
-          tooltip: usedFallback
-              ? '기기 위치를 사용할 수 없어 기본 위치 날씨를 표시합니다.'
-              : '기기 위치 기반 현재 날씨',
+          tooltip: tooltipMessage,
           color: widget.color,
           iconSize: iconSize,
         );
@@ -117,5 +123,24 @@ class _HomeHeaderWeatherIconState extends State<HomeHeaderWeatherIcon> {
       return Symbols.thunderstorm_rounded;
     }
     return Symbols.cloudy_rounded;
+  }
+
+  String _weatherLabelForCode(int weatherCode) {
+    if (weatherCode == 0) return '맑음';
+    if (weatherCode >= 1 && weatherCode <= 3) return '구름 조금';
+    if (weatherCode == 45 || weatherCode == 48) return '안개';
+    if ((weatherCode >= 51 && weatherCode <= 67) ||
+        (weatherCode >= 80 && weatherCode <= 82)) {
+      return '비';
+    }
+    if ((weatherCode >= 71 && weatherCode <= 77) ||
+        weatherCode == 85 ||
+        weatherCode == 86) {
+      return '눈';
+    }
+    if (weatherCode == 95 || weatherCode == 96 || weatherCode == 99) {
+      return '뇌우';
+    }
+    return '흐림';
   }
 }

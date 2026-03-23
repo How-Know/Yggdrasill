@@ -36,8 +36,17 @@ import 'resource_service.dart';
 import 'answer_key_service.dart';
 import 'attendance_service.dart';
 import 'homework_score_service.dart';
-import 'package:supabase_flutter/supabase_flutter.dart' show RealtimeChannel, PostgresChangeEvent, PostgresChangeFilter, PostgresChangeFilterType, Supabase, AuthState, AuthChangeEvent;
-import 'package:supabase_flutter/supabase_flutter.dart' show RealtimeChannel, Supabase;
+import 'package:supabase_flutter/supabase_flutter.dart'
+    show
+        RealtimeChannel,
+        PostgresChangeEvent,
+        PostgresChangeFilter,
+        PostgresChangeFilterType,
+        Supabase,
+        AuthState,
+        AuthChangeEvent;
+import 'package:supabase_flutter/supabase_flutter.dart'
+    show RealtimeChannel, Supabase;
 
 class StudentWithInfo {
   final Student student;
@@ -94,14 +103,19 @@ class DataManager {
   List<StudentPausePeriod> _studentPausePeriods = [];
   List<StudentChargePoint> _studentChargePoints = [];
 
-  final ValueNotifier<List<GroupInfo>> groupsNotifier = ValueNotifier<List<GroupInfo>>([]);
-  final ValueNotifier<List<StudentWithInfo>> studentsNotifier = ValueNotifier<List<StudentWithInfo>>([]);
+  final ValueNotifier<List<GroupInfo>> groupsNotifier =
+      ValueNotifier<List<GroupInfo>>([]);
+  final ValueNotifier<List<StudentWithInfo>> studentsNotifier =
+      ValueNotifier<List<StudentWithInfo>>([]);
   // invalidation-only refresh: bump 시 화면에서 디바운스 재조회 트리거
   final ValueNotifier<int> studentsRevision = ValueNotifier<int>(0);
+
   /// M5 기기 바인딩 변경 시 UI 즉시 반영용
   final ValueNotifier<int> deviceBindingsRevision = ValueNotifier<int>(0);
-  final ValueNotifier<List<PaymentRecord>> paymentRecordsNotifier = ValueNotifier<List<PaymentRecord>>([]);
-  final ValueNotifier<List<StudentPaymentInfo>> studentPaymentInfosNotifier = ValueNotifier<List<StudentPaymentInfo>>([]);
+  final ValueNotifier<List<PaymentRecord>> paymentRecordsNotifier =
+      ValueNotifier<List<PaymentRecord>>([]);
+  final ValueNotifier<List<StudentPaymentInfo>> studentPaymentInfosNotifier =
+      ValueNotifier<List<StudentPaymentInfo>>([]);
   final ValueNotifier<int> studentPaymentInfoRevision = ValueNotifier<int>(0);
 
   // Pause periods / charge points (휴원/차감포인트)
@@ -111,24 +125,32 @@ class DataManager {
   final ValueNotifier<List<StudentChargePoint>> studentChargePointsNotifier =
       ValueNotifier<List<StudentChargePoint>>([]);
   final ValueNotifier<int> studentChargePointsRevision = ValueNotifier<int>(0);
-  
+
   // Session Overrides (보강/예외)
   List<SessionOverride> _sessionOverrides = [];
-  final ValueNotifier<List<SessionOverride>> sessionOverridesNotifier = ValueNotifier<List<SessionOverride>>([]);
+  final ValueNotifier<List<SessionOverride>> sessionOverridesNotifier =
+      ValueNotifier<List<SessionOverride>>([]);
   RealtimeChannel? _sessionOverridesRealtimeChannel;
 
   List<GroupInfo> get groups {
     // print('[DEBUG] DataManager.groups: $_groups');
     return List.unmodifiable(_groups);
   }
+
   List<StudentWithInfo> get students => List.unmodifiable(_studentsWithInfo);
   String? boundDeviceId(String studentId) => _deviceBindings[studentId];
   List<PaymentRecord> get paymentRecords => List.unmodifiable(_paymentRecords);
-  List<AttendanceRecord> get attendanceRecords => AttendanceService.instance.attendanceRecords;
+  List<AttendanceRecord> get attendanceRecords =>
+      AttendanceService.instance.attendanceRecords;
   ValueNotifier<List<AttendanceRecord>> get attendanceRecordsNotifier =>
       AttendanceService.instance.attendanceRecordsNotifier;
 
-  AcademySettings _academySettings = AcademySettings(name: '', slogan: '', defaultCapacity: 30, lessonDuration: 50, logo: null);
+  AcademySettings _academySettings = AcademySettings(
+      name: '',
+      slogan: '',
+      defaultCapacity: 30,
+      lessonDuration: 50,
+      logo: null);
   PaymentType _paymentType = PaymentType.monthly;
 
   AcademySettings get academySettings => _academySettings;
@@ -144,7 +166,8 @@ class DataManager {
   }
 
   List<StudentTimeBlock> _studentTimeBlocks = [];
-  final ValueNotifier<List<StudentTimeBlock>> studentTimeBlocksNotifier = ValueNotifier<List<StudentTimeBlock>>([]);
+  final ValueNotifier<List<StudentTimeBlock>> studentTimeBlocksNotifier =
+      ValueNotifier<List<StudentTimeBlock>>([]);
   final ValueNotifier<int> studentTimeBlocksRevision = ValueNotifier<int>(0);
   final ValueNotifier<int> classesRevision = ValueNotifier<int>(0);
   final ValueNotifier<int> classAssignmentsRevision = ValueNotifier<int>(0);
@@ -153,11 +176,13 @@ class DataManager {
   // - 서버/로컬에서 "해당 주에 겹치는 블록만" 가져와 캐시한다.
   // - 기존 _studentTimeBlocks(전역)는 planned/정산/편집 로직에서 그대로 사용하되,
   //   UI는 필요 시 week cache를 우선 활용한다.
-  final Map<String, List<StudentTimeBlock>> _studentTimeBlocksByWeek = <String, List<StudentTimeBlock>>{};
+  final Map<String, List<StudentTimeBlock>> _studentTimeBlocksByWeek =
+      <String, List<StudentTimeBlock>>{};
   final Set<String> _studentTimeBlocksWeekLoading = <String>{};
   // ✅ 성능: week-cache + 로컬 변경분 merge/sort는 build 중 여러 번 호출될 수 있어 매우 비싸다.
   // 같은 revision에서는 결과가 동일하므로 주(key)별로 병합 결과를 캐시한다.
-  final Map<String, List<StudentTimeBlock>> _studentTimeBlocksMergedByWeek = <String, List<StudentTimeBlock>>{};
+  final Map<String, List<StudentTimeBlock>> _studentTimeBlocksMergedByWeek =
+      <String, List<StudentTimeBlock>>{};
   final Map<String, int> _studentTimeBlocksMergedByWeekRev = <String, int>{};
 
   static String _ymd(DateTime d) {
@@ -200,7 +225,8 @@ class DataManager {
       } else {
         // 로컬 DB는 일단 전체 로드 후 범위 필터(필요 시 AcademyDbService에 range query 추가 가능)
         final all = await AcademyDbService.instance.getStudentTimeBlocks();
-        blocks = all.where((b) => _overlapsRange(b, weekStart, weekEnd)).toList();
+        blocks =
+            all.where((b) => _overlapsRange(b, weekStart, weekEnd)).toList();
       }
 
       _studentTimeBlocksByWeek[key] = List.unmodifiable(blocks);
@@ -259,7 +285,8 @@ class DataManager {
     return merged;
   }
 
-  bool _overlapsRange(StudentTimeBlock b, DateTime rangeStart, DateTime rangeEnd) {
+  bool _overlapsRange(
+      StudentTimeBlock b, DateTime rangeStart, DateTime rangeEnd) {
     final rs = _dateOnly(rangeStart);
     final re = _dateOnly(rangeEnd);
     final sd = _dateOnly(b.startDate);
@@ -276,10 +303,14 @@ class DataManager {
       return DateTime.tryParse(v) ?? fallback;
     }
 
-    final createdAt = DateTime.tryParse((mm['block_created_at'] as String?) ?? '') ?? DateTime.now();
-    final startDate = parseDateOnlyOr(createdAt, (mm['start_date'] as String?)) ;
+    final createdAt =
+        DateTime.tryParse((mm['block_created_at'] as String?) ?? '') ??
+            DateTime.now();
+    final startDate = parseDateOnlyOr(createdAt, (mm['start_date'] as String?));
     final endDateStr = (mm['end_date'] as String?);
-    final endDate = (endDateStr != null && endDateStr.trim().isNotEmpty) ? DateTime.tryParse(endDateStr) : null;
+    final endDate = (endDateStr != null && endDateStr.trim().isNotEmpty)
+        ? DateTime.tryParse(endDateStr)
+        : null;
     return StudentTimeBlock(
       id: (mm['id'] as String?) ?? '',
       studentId: (mm['student_id'] as String?) ?? '',
@@ -311,7 +342,8 @@ class DataManager {
     while (true) {
       final data = await Supabase.instance.client
           .from('student_time_blocks')
-          .select('id,student_id,day_index,start_hour,start_minute,duration,block_created_at,start_date,end_date,set_id,number,session_type_id,weekly_order')
+          .select(
+              'id,student_id,day_index,start_hour,start_minute,duration,block_created_at,start_date,end_date,set_id,number,session_type_id,weekly_order')
           .eq('academy_id', academyId)
           // range overlap
           .lte('start_date', re)
@@ -332,6 +364,7 @@ class DataManager {
     }
     return out;
   }
+
   void _bumpStudentTimeBlocksRevision() {
     studentTimeBlocksRevision.value++;
     classAssignmentsRevision.value++;
@@ -339,6 +372,7 @@ class DataManager {
     _studentTimeBlocksMergedByWeek.clear();
     _studentTimeBlocksMergedByWeekRev.clear();
   }
+
   DateTime _todayDateOnly() {
     final now = DateTime.now();
     return DateTime(now.year, now.month, now.day);
@@ -346,8 +380,12 @@ class DataManager {
 
   bool _isBlockActiveOn(StudentTimeBlock block, DateTime date) {
     final target = DateTime(date.year, date.month, date.day);
-    final start = DateTime(block.startDate.year, block.startDate.month, block.startDate.day);
-    final end = block.endDate != null ? DateTime(block.endDate!.year, block.endDate!.month, block.endDate!.day) : null;
+    final start = DateTime(
+        block.startDate.year, block.startDate.month, block.startDate.day);
+    final end = block.endDate != null
+        ? DateTime(
+            block.endDate!.year, block.endDate!.month, block.endDate!.day)
+        : null;
     return !start.isAfter(target) && (end == null || !end.isBefore(target));
   }
 
@@ -392,14 +430,14 @@ class DataManager {
 
         final otherSetId = (other.setId ?? '').trim();
         final sameSet = plannedSetId.isNotEmpty && plannedSetId == otherSetId;
-        final sameOriginal =
-            sameMinute(other.originalClassDateTime, planned.originalClassDateTime);
+        final sameOriginal = sameMinute(
+            other.originalClassDateTime, planned.originalClassDateTime);
         final sameReplacement = sameMinute(
           other.replacementClassDateTime,
           planned.replacementClassDateTime,
         );
-        final linkedByConnectedFlow =
-            sameMinute(other.originalClassDateTime, planned.replacementClassDateTime) &&
+        final linkedByConnectedFlow = sameMinute(other.originalClassDateTime,
+                planned.replacementClassDateTime) &&
             (sameSet || plannedSetId.isEmpty);
 
         if ((sameReplacement && (sameSet || sameOriginal)) ||
@@ -477,7 +515,8 @@ class DataManager {
 
       final resolvedSetId = (hit.setId ?? '').trim();
       if (resolvedSetId.isNotEmpty) {
-        lockByStudentSetKeyInferred.putIfAbsent('$sid|$resolvedSetId', () => ov);
+        lockByStudentSetKeyInferred.putIfAbsent(
+            '$sid|$resolvedSetId', () => ov);
       } else {
         // legacy(세트 없음) 블록: id 단위로 잠금
         lockByBlockIdInferred.putIfAbsent(hit.id, () => ov);
@@ -519,7 +558,8 @@ class DataManager {
       if (rep != null || orig != null)
         '(${rep != null ? '보강 ${fmt(rep)}' : ''}${rep != null && orig != null ? ' · ' : ''}${orig != null ? '원본 ${fmt(orig)}' : ''})',
     ];
-    throw ScheduleLockedByMakeupException(parts.join('\n'), blockingOverride: ov);
+    throw ScheduleLockedByMakeupException(parts.join('\n'),
+        blockingOverride: ov);
   }
 
   void _publishStudentTimeBlocks({DateTime? refDate}) {
@@ -528,7 +568,8 @@ class DataManager {
   }
 
   // UI 깜빡임을 줄이기 위한 낙관적 반영용 헬퍼
-  void applyStudentTimeBlocksOptimistic(List<StudentTimeBlock> blocks, {DateTime? refDate}) {
+  void applyStudentTimeBlocksOptimistic(List<StudentTimeBlock> blocks,
+      {DateTime? refDate}) {
     _studentTimeBlocks = List<StudentTimeBlock>.from(blocks);
     _publishStudentTimeBlocks(refDate: refDate);
     _bumpStudentTimeBlocksRevision();
@@ -640,7 +681,9 @@ class DataManager {
     String? studentId,
   }) {
     final blocks = _studentTimeBlocks.where((b) {
-      final hit = b.dayIndex == dayIdx && b.startHour == startHour && b.startMinute == startMinute;
+      final hit = b.dayIndex == dayIdx &&
+          b.startHour == startHour &&
+          b.startMinute == startMinute;
       if (!hit) return false;
       if (studentId != null && studentId.isNotEmpty) {
         return b.studentId == studentId;
@@ -648,18 +691,21 @@ class DataManager {
       return true;
     }).toList();
     if (blocks.isEmpty) {
-      print('[STB][dump] day=$dayIdx time=$startHour:$startMinute studentId=${studentId ?? 'any'} -> 0');
+      print(
+          '[STB][dump] day=$dayIdx time=$startHour:$startMinute studentId=${studentId ?? 'any'} -> 0');
       return;
     }
     final payload = blocks
         .map((b) =>
             '${b.id}|student=${b.studentId}|set=${b.setId}|sess=${b.sessionTypeId}|sd=${b.startDate.toIso8601String().split("T").first}|ed=${b.endDate?.toIso8601String().split("T").first ?? 'null'}|created=${b.createdAt.toIso8601String()}')
         .join(', ');
-    print('[STB][dump] day=$dayIdx time=$startHour:$startMinute studentId=${studentId ?? 'any'} count=${blocks.length} payload=[$payload]');
+    print(
+        '[STB][dump] day=$dayIdx time=$startHour:$startMinute studentId=${studentId ?? 'any'} count=${blocks.length} payload=[$payload]');
   }
-  
+
   List<GroupSchedule> _groupSchedules = [];
-  final ValueNotifier<List<GroupSchedule>> groupSchedulesNotifier = ValueNotifier<List<GroupSchedule>>([]);
+  final ValueNotifier<List<GroupSchedule>> groupSchedulesNotifier =
+      ValueNotifier<List<GroupSchedule>>([]);
   final ValueNotifier<int> studentBasicInfoRevision = ValueNotifier<int>(0);
 
   // ===== SNAPSHOT HELPERS =====
@@ -676,10 +722,13 @@ class DataManager {
     final effStart = effectiveStart ?? _todayDateOnly();
     final effEnd = effectiveEnd;
     final dateOnlyStart = DateTime(effStart.year, effStart.month, effStart.day);
-    final dateOnlyEnd = effEnd != null ? DateTime(effEnd.year, effEnd.month, effEnd.day) : null;
+    final dateOnlyEnd =
+        effEnd != null ? DateTime(effEnd.year, effEnd.month, effEnd.day) : null;
 
     // 활성 블록 중 대상 학생만 추출
-    final blocks = _activeBlocks(dateOnlyStart).where((b) => b.studentId == studentId).toList();
+    final blocks = _activeBlocks(dateOnlyStart)
+        .where((b) => b.studentId == studentId)
+        .toList();
     if (blocks.isEmpty) {
       throw Exception('해당 학생의 활성 블록이 없습니다.');
     }
@@ -698,38 +747,40 @@ class DataManager {
     // Supabase용/로컬용 헤더
     final headerId = const Uuid().v4();
     Map<String, dynamic> _headerRow(String academyId) => {
-      'id': headerId,
-      'academy_id': academyId,
-      'student_id': studentId,
-      'snapshot_at': now.toIso8601String(),
-      'effective_start': dateOnlyStart.toIso8601String().split('T').first,
-      'effective_end': dateOnlyEnd?.toIso8601String().split('T').first,
-      'weekly_count': weeklyCount,
-      'day_pattern': dayPattern,
-      'expected_sessions': expectedSessions,
-      'billed_amount': billedAmount,
-      'unit_price': unitPrice,
-      'note': note,
-      'set_ids': setIds,
-      'source': source,
-    }..removeWhere((k, v) => v == null);
+          'id': headerId,
+          'academy_id': academyId,
+          'student_id': studentId,
+          'snapshot_at': now.toIso8601String(),
+          'effective_start': dateOnlyStart.toIso8601String().split('T').first,
+          'effective_end': dateOnlyEnd?.toIso8601String().split('T').first,
+          'weekly_count': weeklyCount,
+          'day_pattern': dayPattern,
+          'expected_sessions': expectedSessions,
+          'billed_amount': billedAmount,
+          'unit_price': unitPrice,
+          'note': note,
+          'set_ids': setIds,
+          'source': source,
+        }..removeWhere((k, v) => v == null);
 
-    List<Map<String, dynamic>> _blockRows(String academyId) =>
-      blocks.map((b) => <String, dynamic>{
-        'id': const Uuid().v4(),
-        'snapshot_id': headerId,
-        'day_index': b.dayIndex,
-        'start_hour': b.startHour,
-        'start_minute': b.startMinute,
-        'duration': b.duration.inMinutes,
-        'number': b.number,
-        'weekly_order': b.weeklyOrder,
-        'set_id': b.setId,
-        'session_type_id': b.sessionTypeId,
-      }..removeWhere((k, v) => v == null)).toList();
+    List<Map<String, dynamic>> _blockRows(String academyId) => blocks
+        .map((b) => <String, dynamic>{
+              'id': const Uuid().v4(),
+              'snapshot_id': headerId,
+              'day_index': b.dayIndex,
+              'start_hour': b.startHour,
+              'start_minute': b.startMinute,
+              'duration': b.duration.inMinutes,
+              'number': b.number,
+              'weekly_order': b.weeklyOrder,
+              'set_id': b.setId,
+              'session_type_id': b.sessionTypeId,
+            }..removeWhere((k, v) => v == null))
+        .toList();
 
     if (TagPresetService.preferSupabaseRead) {
-      final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+      final academyId = await TenantService.instance.getActiveAcademyId() ??
+          await TenantService.instance.ensureActiveAcademy();
       final header = _headerRow(academyId);
       final blocksRow = _blockRows(academyId);
       final supa = Supabase.instance.client;
@@ -740,7 +791,8 @@ class DataManager {
     } else {
       final header = _headerRow('local');
       final blocksRow = _blockRows('local');
-      await AcademyDbService.instance.addLessonSnapshot(header: header, blocks: blocksRow);
+      await AcademyDbService.instance
+          .addLessonSnapshot(header: header, blocks: blocksRow);
     }
     return headerId;
   }
@@ -757,12 +809,16 @@ class DataManager {
   }) async {
     final today = _todayDateOnly();
     final baseStart = effectiveStart != null
-        ? DateTime(effectiveStart.year, effectiveStart.month, effectiveStart.day)
+        ? DateTime(
+            effectiveStart.year, effectiveStart.month, effectiveStart.day)
         : today;
     // ✅ planned 생성/재생성에는 "미래 세그먼트"까지 포함된 전체 블록이 필요하다.
     // (오늘 활성 블록만 넘기면 미래 시작 예약/세그먼트가 planned에 반영되지 않음)
     final blocksForSets = _studentTimeBlocks
-        .where((b) => b.studentId == studentId && b.setId != null && setIds.contains(b.setId))
+        .where((b) =>
+            b.studentId == studentId &&
+            b.setId != null &&
+            setIds.contains(b.setId))
         .toList();
 
     // 스냅샷은 기본적으로 effectiveStart(없으면 today) 기준으로 찍되,
@@ -793,7 +849,8 @@ class DataManager {
         if (blocksForSets.isEmpty) rethrow;
         DateTime minStart = DateTime(2999, 1, 1);
         for (final b in blocksForSets) {
-          final sd = DateTime(b.startDate.year, b.startDate.month, b.startDate.day);
+          final sd =
+              DateTime(b.startDate.year, b.startDate.month, b.startDate.day);
           if (sd.isBefore(minStart)) minStart = sd;
         }
         snapshotId = await createLessonSnapshotForStudent(
@@ -824,28 +881,33 @@ class DataManager {
     );
   }
 
-  List<StudentTimeBlock> get studentTimeBlocks => List.unmodifiable(_studentTimeBlocks);
+  List<StudentTimeBlock> get studentTimeBlocks =>
+      List.unmodifiable(_studentTimeBlocks);
   set studentTimeBlocks(List<StudentTimeBlock> value) {
     _studentTimeBlocks = value;
   }
+
   List<GroupSchedule> get groupSchedules => List.unmodifiable(_groupSchedules);
 
   List<Teacher> _teachers = [];
-  final ValueNotifier<List<Teacher>> teachersNotifier = ValueNotifier<List<Teacher>>([]);
+  final ValueNotifier<List<Teacher>> teachersNotifier =
+      ValueNotifier<List<Teacher>>([]);
   List<Teacher> get teachers => List.unmodifiable(_teachers);
 
   List<SelfStudyTimeBlock> _selfStudyTimeBlocks = [];
-  final ValueNotifier<List<SelfStudyTimeBlock>> selfStudyTimeBlocksNotifier = ValueNotifier<List<SelfStudyTimeBlock>>([]);
+  final ValueNotifier<List<SelfStudyTimeBlock>> selfStudyTimeBlocksNotifier =
+      ValueNotifier<List<SelfStudyTimeBlock>>([]);
   // ===== EXAM DATA CACHE =====
   // key: '${level.index}|$school|$grade'
   final Map<String, Map<DateTime, List<String>>> _examTitlesBySg = {};
   final Map<String, Map<DateTime, String>> _examRangesBySg = {};
   final Map<String, Set<DateTime>> _examDaysBySg = {};
 
-  String _sgKey(String school, EducationLevel level, int grade) => '${level.index}|$school|$grade';
+  String _sgKey(String school, EducationLevel level, int grade) =>
+      '${level.index}|$school|$grade';
 
-
-  List<SelfStudyTimeBlock> get selfStudyTimeBlocks => List.unmodifiable(_selfStudyTimeBlocks);
+  List<SelfStudyTimeBlock> get selfStudyTimeBlocks =>
+      List.unmodifiable(_selfStudyTimeBlocks);
 
   // 1Hz 전역 티커: 과제 러닝 타이머 UI 갱신용
   final ValueNotifier<int> globalTick = ValueNotifier<int>(0);
@@ -877,7 +939,6 @@ class DataManager {
     );
   }
 
-
   Future<void> addSelfStudyTimeBlock(SelfStudyTimeBlock block) async {
     _selfStudyTimeBlocks.add(block);
     selfStudyTimeBlocksNotifier.value = List.unmodifiable(_selfStudyTimeBlocks);
@@ -891,11 +952,13 @@ class DataManager {
     await loadSelfStudyTimeBlocks(); // DB 삭제 후 메모리/상태 최신화
   }
 
-  Future<void> updateSelfStudyTimeBlock(String id, SelfStudyTimeBlock newBlock) async {
+  Future<void> updateSelfStudyTimeBlock(
+      String id, SelfStudyTimeBlock newBlock) async {
     final index = _selfStudyTimeBlocks.indexWhere((b) => b.id == id);
     if (index != -1) {
       _selfStudyTimeBlocks[index] = newBlock;
-      selfStudyTimeBlocksNotifier.value = List.unmodifiable(_selfStudyTimeBlocks);
+      selfStudyTimeBlocksNotifier.value =
+          List.unmodifiable(_selfStudyTimeBlocks);
       await AcademyDbService.instance.updateSelfStudyTimeBlock(id, newBlock);
       await loadSelfStudyTimeBlocks(); // DB 업데이트 후 메모리/상태 최신화
     }
@@ -909,10 +972,14 @@ class DataManager {
     try {
       _configureAttendanceService();
       // 로그인/테넌트 보장 후 일괄 로딩
-      try { await TenantService.instance.ensureActiveAcademy(); } catch (_) {}
+      try {
+        await TenantService.instance.ensureActiveAcademy();
+      } catch (_) {}
       await reloadAllData();
       // ✅ 데이터 정합성 백필(1회): 등/하원 시간이 있으나 is_present=false인 행 보정
-      try { await AttendanceService.instance.backfillIsPresentFromTimesOnce(); } catch (_) {}
+      try {
+        await AttendanceService.instance.backfillIsPresentFromTimesOnce();
+      } catch (_) {}
       await _subscribeSessionOverridesRealtime();
       await _subscribeStudentTimeBlocksRealtime();
       await _subscribeStudentsInvalidation();
@@ -940,39 +1007,51 @@ class DataManager {
   Future<void> _subscribeSessionOverridesRealtime() async {
     try {
       _sessionOverridesRealtimeChannel?.unsubscribe();
-      final String academyId = (await TenantService.instance.getActiveAcademyId()) ?? await TenantService.instance.ensureActiveAcademy();
-      final chan = Supabase.instance.client.channel('public:session_overrides:$academyId');
+      final String academyId =
+          (await TenantService.instance.getActiveAcademyId()) ??
+              await TenantService.instance.ensureActiveAcademy();
+      final chan = Supabase.instance.client
+          .channel('public:session_overrides:$academyId');
       _sessionOverridesRealtimeChannel = chan
         ..onPostgresChanges(
           event: PostgresChangeEvent.insert,
           schema: 'public',
           table: 'session_overrides',
-          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
+          filter: PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'academy_id',
+              value: academyId),
           callback: (payload) {
             final m = payload.newRecord;
             if (m == null) return;
-            DateTime? parseTsOpt(dynamic v) => (v == null) ? null : DateTime.tryParse(v as String)?.toLocal();
+            DateTime? parseTsOpt(dynamic v) =>
+                (v == null) ? null : DateTime.tryParse(v as String)?.toLocal();
             try {
               final ov = SessionOverride(
                 id: m['id'] as String,
                 studentId: m['student_id'] as String,
                 sessionTypeId: m['session_type_id'] as String?,
                 setId: m['set_id'] as String?,
-                overrideType: SessionOverride.parseType(m['override_type'] as String),
+                overrideType:
+                    SessionOverride.parseType(m['override_type'] as String),
                 originalClassDateTime: parseTsOpt(m['original_class_datetime']),
-                replacementClassDateTime: parseTsOpt(m['replacement_class_datetime']),
+                replacementClassDateTime:
+                    parseTsOpt(m['replacement_class_datetime']),
                 durationMinutes: (m['duration_minutes'] as num?)?.toInt(),
                 reason: SessionOverride.parseReason(m['reason'] as String?),
                 status: SessionOverride.parseStatus(m['status'] as String),
                 originalAttendanceId: m['original_attendance_id'] as String?,
-                replacementAttendanceId: m['replacement_attendance_id'] as String?,
+                replacementAttendanceId:
+                    m['replacement_attendance_id'] as String?,
                 createdAt: DateTime.parse(m['created_at'] as String).toLocal(),
                 updatedAt: DateTime.parse(m['updated_at'] as String).toLocal(),
-                version: (m['version'] is num) ? (m['version'] as num).toInt() : 1,
+                version:
+                    (m['version'] is num) ? (m['version'] as num).toInt() : 1,
               );
               if (_sessionOverrides.any((o) => o.id == ov.id)) return;
               _sessionOverrides.insert(0, ov);
-              sessionOverridesNotifier.value = List.unmodifiable(_sessionOverrides);
+              sessionOverridesNotifier.value =
+                  List.unmodifiable(_sessionOverrides);
             } catch (_) {}
           },
         )
@@ -980,29 +1059,39 @@ class DataManager {
           event: PostgresChangeEvent.update,
           schema: 'public',
           table: 'session_overrides',
-          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
+          filter: PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'academy_id',
+              value: academyId),
           callback: (payload) {
             final m = payload.newRecord;
             if (m == null) return;
             final idx = _sessionOverrides.indexWhere((o) => o.id == m['id']);
             if (idx == -1) return;
-            DateTime? parseTsOpt(dynamic v) => (v == null) ? null : DateTime.tryParse(v as String)?.toLocal();
+            DateTime? parseTsOpt(dynamic v) =>
+                (v == null) ? null : DateTime.tryParse(v as String)?.toLocal();
             try {
               _sessionOverrides[idx] = _sessionOverrides[idx].copyWith(
                 sessionTypeId: m['session_type_id'] as String?,
                 setId: m['set_id'] as String?,
-                overrideType: SessionOverride.parseType(m['override_type'] as String),
+                overrideType:
+                    SessionOverride.parseType(m['override_type'] as String),
                 originalClassDateTime: parseTsOpt(m['original_class_datetime']),
-                replacementClassDateTime: parseTsOpt(m['replacement_class_datetime']),
+                replacementClassDateTime:
+                    parseTsOpt(m['replacement_class_datetime']),
                 durationMinutes: (m['duration_minutes'] as num?)?.toInt(),
                 reason: SessionOverride.parseReason(m['reason'] as String?),
                 status: SessionOverride.parseStatus(m['status'] as String),
                 originalAttendanceId: m['original_attendance_id'] as String?,
-                replacementAttendanceId: m['replacement_attendance_id'] as String?,
+                replacementAttendanceId:
+                    m['replacement_attendance_id'] as String?,
                 updatedAt: DateTime.parse(m['updated_at'] as String).toLocal(),
-                version: (m['version'] is num) ? (m['version'] as num).toInt() : _sessionOverrides[idx].version,
+                version: (m['version'] is num)
+                    ? (m['version'] as num).toInt()
+                    : _sessionOverrides[idx].version,
               );
-              sessionOverridesNotifier.value = List.unmodifiable(_sessionOverrides);
+              sessionOverridesNotifier.value =
+                  List.unmodifiable(_sessionOverrides);
             } catch (_) {}
           },
         )
@@ -1010,12 +1099,16 @@ class DataManager {
           event: PostgresChangeEvent.delete,
           schema: 'public',
           table: 'session_overrides',
-          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
+          filter: PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'academy_id',
+              value: academyId),
           callback: (payload) {
             final m = payload.oldRecord;
             if (m == null) return;
             _sessionOverrides.removeWhere((o) => o.id == m['id']);
-            sessionOverridesNotifier.value = List.unmodifiable(_sessionOverrides);
+            sessionOverridesNotifier.value =
+                List.unmodifiable(_sessionOverrides);
           },
         )
         ..subscribe();
@@ -1023,7 +1116,8 @@ class DataManager {
   }
 
   // ======== MEMOS ========
-  ValueNotifier<List<Memo>> get memosNotifier => MemoService.instance.memosNotifier;
+  ValueNotifier<List<Memo>> get memosNotifier =>
+      MemoService.instance.memosNotifier;
 
   Future<void> loadMemos() => MemoService.instance.loadMemos();
   Future<void> addMemo(Memo memo) => MemoService.instance.addMemo(memo);
@@ -1040,7 +1134,12 @@ class DataManager {
     _paymentRecords = [];
     AttendanceService.instance.reset();
     _sessionOverrides = [];
-    _academySettings = AcademySettings(name: '', slogan: '', defaultCapacity: 30, lessonDuration: 50, logo: null);
+    _academySettings = AcademySettings(
+        name: '',
+        slogan: '',
+        defaultCapacity: 30,
+        lessonDuration: 50,
+        logo: null);
     _paymentType = PaymentType.monthly;
     _notifyListeners();
   }
@@ -1050,40 +1149,56 @@ class DataManager {
       if (TagPresetService.preferSupabaseRead) {
         try {
           print('[GROUPS][load] preferSupabaseRead=true → server select 시작');
-          final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+          final academyId = await TenantService.instance.getActiveAcademyId() ??
+              await TenantService.instance.ensureActiveAcademy();
           final data = await Supabase.instance.client
               .from('groups')
-              .select('id,name,description,capacity,duration,color,display_order')
+              .select(
+                  'id,name,description,capacity,duration,color,display_order')
               .eq('academy_id', academyId)
               .order('display_order', ascending: true)
               .order('name');
-          _groups = (data as List).map((m) => GroupInfo(
-            id: (m['id'] as String),
-            name: (m['name'] as String? ?? ''),
-            description: (m['description'] as String? ?? ''),
-            capacity: m['capacity'] as int?, // null이면 제한 없음
-            duration: (m['duration'] as int?) ?? 0,
-            color: Color((((m['color'] as int?) ?? 0xFF607D8B)).toSigned(32)),
-            displayOrder: (m['display_order'] as int?),
-          )).toList();
-          print('[GROUPS][load] server loaded count=' + _groups.length.toString() + ', orders=' + _groups.map((g)=> (g.displayOrder?.toString() ?? 'null') + ':' + g.name).toList().toString());
+          _groups = (data as List)
+              .map((m) => GroupInfo(
+                    id: (m['id'] as String),
+                    name: (m['name'] as String? ?? ''),
+                    description: (m['description'] as String? ?? ''),
+                    capacity: m['capacity'] as int?, // null이면 제한 없음
+                    duration: (m['duration'] as int?) ?? 0,
+                    color: Color(
+                        (((m['color'] as int?) ?? 0xFF607D8B)).toSigned(32)),
+                    displayOrder: (m['display_order'] as int?),
+                  ))
+              .toList();
+          print('[GROUPS][load] server loaded count=' +
+              _groups.length.toString() +
+              ', orders=' +
+              _groups
+                  .map((g) =>
+                      (g.displayOrder?.toString() ?? 'null') + ':' + g.name)
+                  .toList()
+                  .toString());
           // Fallback/backfill은 dualWrite가 켜진 경우에만 수행
           if (_groups.isEmpty && TagPresetService.dualWrite) {
             print('[GROUPS][load] server empty → dualWrite fallback to local');
-            final local = (await AcademyDbService.instance.getGroups()).where((g) => g != null).toList();
+            final local = (await AcademyDbService.instance.getGroups())
+                .where((g) => g != null)
+                .toList();
             if (local.isNotEmpty) {
               _groups = local;
               if (TagPresetService.dualWrite) {
                 try {
-                  final rows = _groups.map((g) => {
-                    'id': g.id,
-                    'academy_id': academyId,
-                    'name': g.name,
-                    'description': g.description,
-                    'capacity': g.capacity,
-                    'duration': g.duration,
-                    'color': g.color.value.toSigned(32),
-                  }).toList();
+                  final rows = _groups
+                      .map((g) => {
+                            'id': g.id,
+                            'academy_id': academyId,
+                            'name': g.name,
+                            'description': g.description,
+                            'capacity': g.capacity,
+                            'duration': g.duration,
+                            'color': g.color.value.toSigned(32),
+                          })
+                      .toList();
                   if (rows.isNotEmpty) {
                     await Supabase.instance.client.from('groups').insert(rows);
                   }
@@ -1095,16 +1210,26 @@ class DataManager {
           _notifyListeners();
           return;
         } catch (e, st) {
-          print('[GROUPS][load] server select 실패, fallback 시도: ' + e.toString());
+          print(
+              '[GROUPS][load] server select 실패, fallback 시도: ' + e.toString());
           // fallback to local below
         }
       }
       // 서버 전용 모드에서는 로컬 폴백을 하지 않는다
       if (!TagPresetService.preferSupabaseRead) {
-      print('[GROUPS][load] preferSupabaseRead=false → local DB 로드');
-      _groups = (await AcademyDbService.instance.getGroups()).where((g) => g != null).toList();
-      print('[GROUPS][load] local loaded count=' + _groups.length.toString() + ', orders=' + _groups.map((g)=> (g.displayOrder?.toString() ?? 'null') + ':' + g.name).toList().toString());
-      _groupsById = {for (var g in _groups) g.id: g};
+        print('[GROUPS][load] preferSupabaseRead=false → local DB 로드');
+        _groups = (await AcademyDbService.instance.getGroups())
+            .where((g) => g != null)
+            .toList();
+        print('[GROUPS][load] local loaded count=' +
+            _groups.length.toString() +
+            ', orders=' +
+            _groups
+                .map((g) =>
+                    (g.displayOrder?.toString() ?? 'null') + ':' + g.name)
+                .toList()
+                .toString());
+        _groupsById = {for (var g in _groups) g.id: g};
       } else {
         print('[GROUPS][load] preferSupabaseRead=true 이지만 server 경로 실패 → 빈 목록');
         _groups = [];
@@ -1123,25 +1248,31 @@ class DataManager {
     // 서버우선: Supabase에서 먼저 시도 후 성공 시 즉시 반영
     if (TagPresetService.preferSupabaseRead) {
       try {
-        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final academyId = await TenantService.instance.getActiveAcademyId() ??
+            await TenantService.instance.ensureActiveAcademy();
         final supa = Supabase.instance.client;
         final rows = await supa
             .from('students')
             .select('id,name,school,education_level,grade')
             .eq('academy_id', academyId);
-        final supaStudents = (rows as List).map((r) => Student(
-          id: r['id'] as String,
-          name: (r['name'] as String?) ?? '',
-          school: (r['school'] as String?) ?? '',
-          grade: (r['grade'] as int?) ?? 0,
-          educationLevel: EducationLevel.values[(r['education_level'] as int?) ?? 0],
-        )).toList();
+        final supaStudents = (rows as List)
+            .map((r) => Student(
+                  id: r['id'] as String,
+                  name: (r['name'] as String?) ?? '',
+                  school: (r['school'] as String?) ?? '',
+                  grade: (r['grade'] as int?) ?? 0,
+                  educationLevel: EducationLevel
+                      .values[(r['education_level'] as int?) ?? 0],
+                ))
+            .toList();
         final sbiRows = await supa
             .from('student_basic_info')
-            .select('student_id,phone_number,parent_phone_number,group_id,memo,notification_consent')
+            .select(
+                'student_id,phone_number,parent_phone_number,group_id,memo,notification_consent')
             .eq('academy_id', academyId);
         final Map<String, Map<String, dynamic>> byId = {
-          for (final m in (sbiRows as List)) (m['student_id'] as String): Map<String, dynamic>.from(m)
+          for (final m in (sbiRows as List))
+            (m['student_id'] as String): Map<String, dynamic>.from(m)
         };
         final List<StudentBasicInfo> basicInfos = [];
         for (final s in supaStudents) {
@@ -1149,9 +1280,18 @@ class DataManager {
           final paymentInfo = _studentPaymentInfos.firstWhere(
             (p) => p.studentId == s.id,
             orElse: () => StudentPaymentInfo(
-              id: '', studentId: s.id, registrationDate: DateTime.now(), paymentMethod: 'monthly',
-              tuitionFee: 0, latenessThreshold: 10, scheduleNotification: false, attendanceNotification: false,
-              departureNotification: false, latenessNotification: false, createdAt: DateTime.now(), updatedAt: DateTime.now(),
+              id: '',
+              studentId: s.id,
+              registrationDate: DateTime.now(),
+              paymentMethod: 'monthly',
+              tuitionFee: 0,
+              latenessThreshold: 10,
+              scheduleNotification: false,
+              attendanceNotification: false,
+              departureNotification: false,
+              latenessNotification: false,
+              createdAt: DateTime.now(),
+              updatedAt: DateTime.now(),
             ),
           );
           final reg = paymentInfo.registrationDate;
@@ -1166,7 +1306,8 @@ class DataManager {
               notificationConsent: info['notification_consent'] == true,
             ));
           } else {
-            basicInfos.add(StudentBasicInfo(studentId: s.id, registrationDate: reg));
+            basicInfos
+                .add(StudentBasicInfo(studentId: s.id, registrationDate: reg));
           }
         }
         // 서버에 데이터가 전혀 없으면 로컬로 폴백하여 표시(초기 백필 전 단계 방지)
@@ -1185,11 +1326,14 @@ class DataManager {
               phoneNumber: basicInfos[i].phoneNumber,
               parentPhoneNumber: basicInfos[i].parentPhoneNumber,
               groupId: basicInfos[i].groupId,
-              groupInfo: basicInfos[i].groupId != null ? _groupsById[basicInfos[i].groupId] : null,
+              groupInfo: basicInfos[i].groupId != null
+                  ? _groupsById[basicInfos[i].groupId]
+                  : null,
             )
         ];
         _studentsWithInfo = [
-          for (int i = 0; i < students.length; i++) StudentWithInfo(student: students[i], basicInfo: basicInfos[i])
+          for (int i = 0; i < students.length; i++)
+            StudentWithInfo(student: students[i], basicInfo: basicInfos[i])
         ];
         // 기기 바인딩을 먼저 갱신한 뒤 notifier 설정 → UI에서 boundDeviceId()가 최신값을 읽도록
         try {
@@ -1224,7 +1368,7 @@ class DataManager {
     List<StudentBasicInfo> basicInfos = [];
     for (final s in studentsRaw) {
       final info = await AcademyDbService.instance.getStudentBasicInfo(s.id);
-      
+
       // 3. student_payment_info에서 registration_date 가져오기
       DateTime? registrationDate;
       final paymentInfo = _studentPaymentInfos.firstWhere(
@@ -1245,7 +1389,7 @@ class DataManager {
         ),
       );
       registrationDate = paymentInfo.registrationDate;
-      
+
       if (info != null) {
         basicInfos.add(StudentBasicInfo(
           studentId: info['student_id'] as String,
@@ -1275,7 +1419,9 @@ class DataManager {
           phoneNumber: basicInfos[i].phoneNumber,
           parentPhoneNumber: basicInfos[i].parentPhoneNumber,
           groupId: basicInfos[i].groupId,
-          groupInfo: basicInfos[i].groupId != null ? _groupsById[basicInfos[i].groupId] : null,
+          groupInfo: basicInfos[i].groupId != null
+              ? _groupsById[basicInfos[i].groupId]
+              : null,
         )
     ];
     // 5. 매칭해서 StudentWithInfo 리스트 생성
@@ -1284,14 +1430,16 @@ class DataManager {
         StudentWithInfo(student: students[i], basicInfo: basicInfos[i])
     ];
     studentsNotifier.value = List.unmodifiable(_studentsWithInfo);
-    print('[DEBUG][loadStudents] studentsNotifier.value 갱신: ${_studentsWithInfo.length}명');
+    print(
+        '[DEBUG][loadStudents] studentsNotifier.value 갱신: ${_studentsWithInfo.length}명');
   }
 
   /// M5 기기 바인딩만 다시 불러와 UI에 반영(바인딩/해제 시 즉시 표시)
   Future<void> loadDeviceBindings() async {
     if (!TagPresetService.preferSupabaseRead) return;
     try {
-      final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+      final academyId = await TenantService.instance.getActiveAcademyId() ??
+          await TenantService.instance.ensureActiveAcademy();
       final supa = Supabase.instance.client;
       final bindRows = await supa
           .from('m5_device_bindings')
@@ -1311,7 +1459,8 @@ class DataManager {
 
   Future<void> saveStudents() async {
     if (!RuntimeFlags.serverOnly) {
-      await AcademyDbService.instance.saveStudents(_studentsWithInfo.map((si) => si.student).toList());
+      await AcademyDbService.instance
+          .saveStudents(_studentsWithInfo.map((si) => si.student).toList());
     }
   }
 
@@ -1319,12 +1468,16 @@ class DataManager {
     try {
       if (TagPresetService.preferSupabaseRead) {
         try {
-          print('[GROUPS][save] preferSupabaseRead=true → server upsert 시작, count=' + _groups.length.toString());
-          final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+          print(
+              '[GROUPS][save] preferSupabaseRead=true → server upsert 시작, count=' +
+                  _groups.length.toString());
+          final academyId = await TenantService.instance.getActiveAcademyId() ??
+              await TenantService.instance.ensureActiveAcademy();
           final supa = Supabase.instance.client;
           if (_groups.isNotEmpty) {
             final rows = _groups.asMap().entries.map((e) {
-              final g = e.value; final idx = e.key;
+              final g = e.value;
+              final idx = e.key;
               return {
                 'id': g.id,
                 'academy_id': academyId,
@@ -1336,16 +1489,26 @@ class DataManager {
                 'display_order': g.displayOrder ?? idx,
               };
             }).toList();
-            print('[GROUPS][save] server upsert rows orders=' + rows.map((r)=> (r['display_order']).toString() + ':' + (r['name'] as String)).toList().toString());
+            print('[GROUPS][save] server upsert rows orders=' +
+                rows
+                    .map((r) =>
+                        (r['display_order']).toString() +
+                        ':' +
+                        (r['name'] as String))
+                    .toList()
+                    .toString());
             await supa.from('groups').upsert(rows, onConflict: 'id');
           } else {
             print('[GROUPS][save] server upsert skip: empty');
           }
           return;
-        } catch (e, st) { print('[SUPA][groups save] $e\n$st'); }
+        } catch (e, st) {
+          print('[SUPA][groups save] $e\n$st');
+        }
       }
       if (!RuntimeFlags.serverOnly) {
-        print('[GROUPS][save] local DB 저장 시작 (serverOnly=false), count=' + _groups.length.toString());
+        print('[GROUPS][save] local DB 저장 시작 (serverOnly=false), count=' +
+            _groups.length.toString());
         await AcademyDbService.instance.saveGroups(_groups);
       }
     } catch (e) {
@@ -1359,16 +1522,36 @@ class DataManager {
       Map<String, dynamic>? dbData;
       if (TagPresetService.preferSupabaseRead) {
         try {
-          final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
-          final data = await Supabase.instance.client
-              .from('academy_settings')
-              .select('name,slogan,default_capacity,lesson_duration,payment_type,logo,session_cycle,logo_bucket,logo_path,logo_url')
-              .eq('academy_id', academyId)
-              .maybeSingle();
-          if (data != null) {
-            dbData = Map<String, dynamic>.from(data);
+          final academyId = await TenantService.instance.getActiveAcademyId() ??
+              await TenantService.instance.ensureActiveAcademy();
+          final supa = Supabase.instance.client;
+          try {
+            final data = await supa
+                .from('academy_settings')
+                .select(
+                    'name,slogan,address,default_capacity,lesson_duration,payment_type,logo,session_cycle,logo_bucket,logo_path,logo_url')
+                .eq('academy_id', academyId)
+                .maybeSingle();
+            if (data != null) {
+              dbData = Map<String, dynamic>.from(data);
+            }
+          } catch (e, st) {
+            // address 컬럼이 아직 반영되지 않은 서버도 안전하게 읽기
+            print('[SUPA][academy_settings select with address] $e\n$st');
+            final legacyData = await supa
+                .from('academy_settings')
+                .select(
+                    'name,slogan,default_capacity,lesson_duration,payment_type,logo,session_cycle,logo_bucket,logo_path,logo_url')
+                .eq('academy_id', academyId)
+                .maybeSingle();
+            if (legacyData != null) {
+              dbData = Map<String, dynamic>.from(legacyData);
+              dbData['address'] = dbData['address'] ?? '';
+            }
           }
-        } catch (e, st) { print('[SUPA][student_payment_info select] $e\n$st'); }
+        } catch (e, st) {
+          print('[SUPA][academy_settings select] $e\n$st');
+        }
       }
       if (!RuntimeFlags.serverOnly) {
         dbData ??= await AcademyDbService.instance.getAcademySettings();
@@ -1379,9 +1562,14 @@ class DataManager {
         if (TagPresetService.preferSupabaseRead) {
           final bucket = dbData['logo_bucket'] as String?;
           final path = dbData['logo_path'] as String?;
-          if (bucket != null && bucket.isNotEmpty && path != null && path.isNotEmpty) {
+          if (bucket != null &&
+              bucket.isNotEmpty &&
+              path != null &&
+              path.isNotEmpty) {
             try {
-              logoBytes = await Supabase.instance.client.storage.from(bucket).download(path);
+              logoBytes = await Supabase.instance.client.storage
+                  .from(bucket)
+                  .download(path);
             } catch (e, st) {
               print('[SUPA][academy logo download] $e\n$st');
             }
@@ -1396,10 +1584,12 @@ class DataManager {
             logoBytes = Uint8List.fromList(List<int>.from(legacy));
           }
         }
-        print('[DataManager] loadAcademySettings: storage bucket=${dbData['logo_bucket']}, path=${dbData['logo_path']}, resolvedBytes=${logoBytes?.length ?? 0}');
+        print(
+            '[DataManager] loadAcademySettings: storage bucket=${dbData['logo_bucket']}, path=${dbData['logo_path']}, resolvedBytes=${logoBytes?.length ?? 0}');
         _academySettings = AcademySettings(
           name: dbData['name'] as String? ?? '',
           slogan: dbData['slogan'] as String? ?? '',
+          address: dbData['address'] as String? ?? '',
           defaultCapacity: dbData['default_capacity'] as int? ?? 30,
           lessonDuration: dbData['lesson_duration'] as int? ?? 50,
           logo: logoBytes,
@@ -1413,25 +1603,40 @@ class DataManager {
           _paymentType = PaymentType.monthly;
         }
       } else {
-        _academySettings = AcademySettings(name: '', slogan: '', defaultCapacity: 30, lessonDuration: 50, logo: null, sessionCycle: 1);
+        _academySettings = AcademySettings(
+            name: '',
+            slogan: '',
+            defaultCapacity: 30,
+            lessonDuration: 50,
+            logo: null,
+            sessionCycle: 1);
         _paymentType = PaymentType.monthly;
       }
     } catch (e) {
       print('Error loading settings: $e');
-      _academySettings = AcademySettings(name: '', slogan: '', defaultCapacity: 30, lessonDuration: 50, logo: null, sessionCycle: 1);
+      _academySettings = AcademySettings(
+          name: '',
+          slogan: '',
+          defaultCapacity: 30,
+          lessonDuration: 50,
+          logo: null,
+          sessionCycle: 1);
       _paymentType = PaymentType.monthly;
     }
   }
 
   Future<void> saveAcademySettings(AcademySettings settings) async {
     try {
-      print('[DataManager] saveAcademySettings: logo type=\x1B[32m${settings.logo?.runtimeType}\x1B[0m, length=\x1B[32m${settings.logo?.length}\x1B[0m, isNull=\x1B[32m${settings.logo == null}\x1B[0m');
+      print(
+          '[DataManager] saveAcademySettings: logo type=\x1B[32m${settings.logo?.runtimeType}\x1B[0m, length=\x1B[32m${settings.logo?.length}\x1B[0m, isNull=\x1B[32m${settings.logo == null}\x1B[0m');
       print('[DataManager] saveAcademySettings: _paymentType = $_paymentType');
       _academySettings = settings;
-      await AcademyDbService.instance.saveAcademySettings(settings, _paymentType == PaymentType.monthly ? 'monthly' : 'session');
+      await AcademyDbService.instance.saveAcademySettings(settings,
+          _paymentType == PaymentType.monthly ? 'monthly' : 'session');
       if (TagPresetService.preferSupabaseRead || TagPresetService.dualWrite) {
         try {
-          final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+          final academyId = await TenantService.instance.getActiveAcademyId() ??
+              await TenantService.instance.ensureActiveAcademy();
           final supa = Supabase.instance.client;
 
           String? logoBucket;
@@ -1442,14 +1647,14 @@ class DataManager {
             logoBucket = 'academy-logos';
             final objectPath = '$academyId/${const Uuid().v4()}.png';
             await supa.storage.from(logoBucket).uploadBinary(
-              objectPath,
-              bytes,
-              fileOptions: const FileOptions(
-                upsert: true,
-                contentType: 'image/png',
-                cacheControl: '3600',
-              ),
-            );
+                  objectPath,
+                  bytes,
+                  fileOptions: const FileOptions(
+                    upsert: true,
+                    contentType: 'image/png',
+                    cacheControl: '3600',
+                  ),
+                );
             logoPath = objectPath;
           }
 
@@ -1457,9 +1662,11 @@ class DataManager {
             'academy_id': academyId,
             'name': settings.name,
             'slogan': settings.slogan,
+            'address': settings.address,
             'default_capacity': settings.defaultCapacity,
             'lesson_duration': settings.lessonDuration,
-            'payment_type': _paymentType == PaymentType.monthly ? 'monthly' : 'session',
+            'payment_type':
+                _paymentType == PaymentType.monthly ? 'monthly' : 'session',
             'session_cycle': settings.sessionCycle,
           };
 
@@ -1469,8 +1676,21 @@ class DataManager {
             row['logo_url'] = null;
           }
 
-          await supa.from('academy_settings').upsert(row, onConflict: 'academy_id');
-        } catch (e, st) { print('[SUPA][academy_settings upsert (server)] $e\n$st'); }
+          try {
+            await supa
+                .from('academy_settings')
+                .upsert(row, onConflict: 'academy_id');
+          } catch (e, st) {
+            // address 컬럼 미적용 서버 호환
+            print('[SUPA][academy_settings upsert with address] $e\n$st');
+            final legacyRow = Map<String, dynamic>.from(row)..remove('address');
+            await supa
+                .from('academy_settings')
+                .upsert(legacyRow, onConflict: 'academy_id');
+          }
+        } catch (e, st) {
+          print('[SUPA][academy_settings upsert (server)] $e\n$st');
+        }
       }
     } catch (e) {
       print('Error saving settings: $e');
@@ -1502,15 +1722,19 @@ class DataManager {
 
   // =================== SESSION OVERRIDES (보강/예외) ===================
 
-  List<SessionOverride> get sessionOverrides => List.unmodifiable(_sessionOverrides);
+  List<SessionOverride> get sessionOverrides =>
+      List.unmodifiable(_sessionOverrides);
 
   Future<void> loadSessionOverrides() async {
     try {
-      final String academyId = (await TenantService.instance.getActiveAcademyId()) ?? await TenantService.instance.ensureActiveAcademy();
+      final String academyId =
+          (await TenantService.instance.getActiveAcademyId()) ??
+              await TenantService.instance.ensureActiveAcademy();
       final supa = Supabase.instance.client;
       final rows = await supa
           .from('session_overrides')
-          .select('id,student_id,session_type_id,set_id,occurrence_id,override_type,original_attendance_id,replacement_attendance_id,original_class_datetime,replacement_class_datetime,duration_minutes,reason,status,created_at,updated_at,version')
+          .select(
+              'id,student_id,session_type_id,set_id,occurrence_id,override_type,original_attendance_id,replacement_attendance_id,original_class_datetime,replacement_class_datetime,duration_minutes,reason,status,created_at,updated_at,version')
           .eq('academy_id', academyId)
           .order('updated_at', ascending: false);
       final list = rows as List<dynamic>;
@@ -1520,6 +1744,7 @@ class DataManager {
           if (v == null || v.isEmpty) return null;
           return DateTime.parse(v).toLocal();
         }
+
         return SessionOverride(
           id: m['id'] as String,
           studentId: m['student_id'] as String,
@@ -1541,7 +1766,8 @@ class DataManager {
         );
       }).toList();
       sessionOverridesNotifier.value = List.unmodifiable(_sessionOverrides);
-      print('[DEBUG] session_overrides 로드 완료(Supabase): ${_sessionOverrides.length}개');
+      print(
+          '[DEBUG] session_overrides 로드 완료(Supabase): ${_sessionOverrides.length}개');
       // TODO: Realtime subscribe (다음 단계)
     } catch (e) {
       print('[ERROR] loadSessionOverrides 실패: $e');
@@ -1552,7 +1778,9 @@ class DataManager {
 
   Future<void> addSessionOverride(SessionOverride overrideData) async {
     try {
-      final String academyId = (await TenantService.instance.getActiveAcademyId()) ?? await TenantService.instance.ensureActiveAcademy();
+      final String academyId =
+          (await TenantService.instance.getActiveAcademyId()) ??
+              await TenantService.instance.ensureActiveAcademy();
       final supa = Supabase.instance.client;
       final row = {
         'id': overrideData.id,
@@ -1561,9 +1789,12 @@ class DataManager {
         'session_type_id': overrideData.sessionTypeId,
         'set_id': overrideData.setId,
         'occurrence_id': overrideData.occurrenceId,
-        'override_type': SessionOverride.typeToString(overrideData.overrideType),
-        'original_class_datetime': overrideData.originalClassDateTime?.toUtc().toIso8601String(),
-        'replacement_class_datetime': overrideData.replacementClassDateTime?.toUtc().toIso8601String(),
+        'override_type':
+            SessionOverride.typeToString(overrideData.overrideType),
+        'original_class_datetime':
+            overrideData.originalClassDateTime?.toUtc().toIso8601String(),
+        'replacement_class_datetime':
+            overrideData.replacementClassDateTime?.toUtc().toIso8601String(),
         'duration_minutes': overrideData.durationMinutes,
         'reason': SessionOverride.reasonToString(overrideData.reason),
         'status': SessionOverride.statusToString(overrideData.status),
@@ -1573,13 +1804,18 @@ class DataManager {
         'updated_at': overrideData.updatedAt.toUtc().toIso8601String(),
         'version': overrideData.version,
       };
-      final ins = await supa.from('session_overrides').insert(row).select('version').maybeSingle();
+      final ins = await supa
+          .from('session_overrides')
+          .insert(row)
+          .select('version')
+          .maybeSingle();
       final ver = (ins?['version'] as num?)?.toInt() ?? 1;
       final merged = overrideData.copyWith(version: ver);
       _sessionOverrides.removeWhere((o) => o.id == merged.id);
       _sessionOverrides.add(merged);
       sessionOverridesNotifier.value = List.unmodifiable(_sessionOverrides);
-      print('[DEBUG] session_override 추가(Supabase): id=${merged.id}, status=${merged.status}');
+      print(
+          '[DEBUG] session_override 추가(Supabase): id=${merged.id}, status=${merged.status}');
       await _regeneratePlannedAttendanceForOverride(merged);
     } catch (e) {
       print('[ERROR] addSessionOverride 실패: $e');
@@ -1601,8 +1837,10 @@ class DataManager {
         'set_id': newData.setId,
         'occurrence_id': newData.occurrenceId,
         'override_type': SessionOverride.typeToString(newData.overrideType),
-        'original_class_datetime': newData.originalClassDateTime?.toUtc().toIso8601String(),
-        'replacement_class_datetime': newData.replacementClassDateTime?.toUtc().toIso8601String(),
+        'original_class_datetime':
+            newData.originalClassDateTime?.toUtc().toIso8601String(),
+        'replacement_class_datetime':
+            newData.replacementClassDateTime?.toUtc().toIso8601String(),
         'duration_minutes': newData.durationMinutes,
         'reason': SessionOverride.reasonToString(newData.reason),
         'status': SessionOverride.statusToString(newData.status),
@@ -1650,19 +1888,24 @@ class DataManager {
     }
 
     // 겹침 체크용 범위(분 단위)
-    final repStart = Duration(hours: replacement.hour, minutes: replacement.minute);
+    final repStart =
+        Duration(hours: replacement.hour, minutes: replacement.minute);
     final repEnd = repStart + Duration(minutes: duration);
     // ✅ 운영시간/휴게시간 검증 제거 (요청 사항)
     // 기존 보강들과 충돌 금지(동일 학생)
     for (final other in _sessionOverrides) {
       if (other.id == ov.id || other.studentId != ov.studentId) continue;
       if (other.status == OverrideStatus.canceled) continue;
-      final otherStart = other.replacementClassDateTime ?? other.originalClassDateTime;
+      final otherStart =
+          other.replacementClassDateTime ?? other.originalClassDateTime;
       final otherDur = other.durationMinutes ?? _academySettings.lessonDuration;
       if (otherStart == null) continue;
-      final otherRangeStart = Duration(hours: otherStart.hour, minutes: otherStart.minute);
+      final otherRangeStart =
+          Duration(hours: otherStart.hour, minutes: otherStart.minute);
       final otherRangeEnd = otherRangeStart + Duration(minutes: otherDur);
-      final overlap = repStart < otherRangeEnd && repEnd > otherRangeStart && _isSameDate(replacement, otherStart);
+      final overlap = repStart < otherRangeEnd &&
+          repEnd > otherRangeStart &&
+          _isSameDate(replacement, otherStart);
       if (overlap) {
         throw Exception('동일 학생의 다른 보강/예외와 시간이 겹칩니다.');
       }
@@ -1677,7 +1920,8 @@ class DataManager {
     try {
       final idx = _sessionOverrides.indexWhere((o) => o.id == id);
       if (idx == -1) return;
-      final canceled = _sessionOverrides[idx].copyWith(status: OverrideStatus.canceled, updatedAt: DateTime.now());
+      final canceled = _sessionOverrides[idx]
+          .copyWith(status: OverrideStatus.canceled, updatedAt: DateTime.now());
       await updateSessionOverride(canceled);
       await _regeneratePlannedAttendanceForOverride(canceled);
     } catch (e) {
@@ -1738,11 +1982,15 @@ class DataManager {
     final List<StudentWithInfo> affectedStudents = [];
     for (var i = 0; i < _studentsWithInfo.length; i++) {
       final studentWithInfo = _studentsWithInfo[i];
-      final String? currentGroupId = studentWithInfo.student.groupInfo?.id ?? studentWithInfo.basicInfo.groupId;
+      final String? currentGroupId = studentWithInfo.student.groupInfo?.id ??
+          studentWithInfo.basicInfo.groupId;
       if (currentGroupId == groupInfo.id) {
-        final clearedStudent = studentWithInfo.student.copyWith(clearGroupInfo: true, clearGroupId: true);
-        final clearedBasic = studentWithInfo.basicInfo.copyWith(clearGroupId: true);
-        final updated = StudentWithInfo(student: clearedStudent, basicInfo: clearedBasic);
+        final clearedStudent = studentWithInfo.student
+            .copyWith(clearGroupInfo: true, clearGroupId: true);
+        final clearedBasic =
+            studentWithInfo.basicInfo.copyWith(clearGroupId: true);
+        final updated =
+            StudentWithInfo(student: clearedStudent, basicInfo: clearedBasic);
         _studentsWithInfo[i] = updated;
         affectedStudents.add(updated);
       }
@@ -1752,7 +2000,8 @@ class DataManager {
     unawaited(_persistGroupDeletion(groupInfo.id, affectedStudents));
   }
 
-  Future<void> _persistGroupDeletion(String groupId, List<StudentWithInfo> clearedStudents) async {
+  Future<void> _persistGroupDeletion(
+      String groupId, List<StudentWithInfo> clearedStudents) async {
     final List<Future<void>> futures = [];
 
     futures.add(_deleteGroupFromSupabase(groupId));
@@ -1777,10 +2026,12 @@ class DataManager {
     }
   }
 
-  Future<void> _clearGroupAssignmentsInSupabase(List<StudentWithInfo> students) async {
+  Future<void> _clearGroupAssignmentsInSupabase(
+      List<StudentWithInfo> students) async {
     if (students.isEmpty) return;
     try {
-      final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+      final academyId = await TenantService.instance.getActiveAcademyId() ??
+          await TenantService.instance.ensureActiveAcademy();
       final supa = Supabase.instance.client;
       final rows = students.map((s) {
         return {
@@ -1792,15 +2043,19 @@ class DataManager {
           'memo': s.basicInfo.memo,
         };
       }).toList();
-      await supa.from('student_basic_info').upsert(rows, onConflict: 'student_id');
-      print('[GROUPS][students] Cleared group assignments in Supabase: ${students.length}');
+      await supa
+          .from('student_basic_info')
+          .upsert(rows, onConflict: 'student_id');
+      print(
+          '[GROUPS][students] Cleared group assignments in Supabase: ${students.length}');
     } catch (e, st) {
       print('[SUPA][students clear group] $e\n$st');
       rethrow;
     }
   }
 
-  Future<void> _clearGroupAssignmentsInLocalDb(List<StudentWithInfo> students) async {
+  Future<void> _clearGroupAssignmentsInLocalDb(
+      List<StudentWithInfo> students) async {
     if (students.isEmpty || RuntimeFlags.serverOnly) return;
     for (final s in students) {
       await AcademyDbService.instance.updateStudentBasicInfo(s.student.id, {
@@ -1815,7 +2070,8 @@ class DataManager {
 
   Future<void> _deleteGroupFromSupabase(String groupId) async {
     try {
-      final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+      final academyId = await TenantService.instance.getActiveAcademyId() ??
+          await TenantService.instance.ensureActiveAcademy();
       final supa = Supabase.instance.client;
       await supa
           .from('groups')
@@ -1836,17 +2092,23 @@ class DataManager {
     if (basicInfo.groupId != null) {
       final group = _groupsById[basicInfo.groupId];
       if (group != null && group.capacity != null) {
-        final currentCount = _studentsWithInfo.where((s) => s.student.groupInfo?.id == group.id).length;
+        final currentCount = _studentsWithInfo
+            .where((s) => s.student.groupInfo?.id == group.id)
+            .length;
         if (currentCount >= group.capacity!) {
-          throw Exception('정원 초과: ${group.name} 그룹의 정원(${group.capacity})을 초과할 수 없습니다.');
+          throw Exception(
+              '정원 초과: ${group.name} 그룹의 정원(${group.capacity})을 초과할 수 없습니다.');
         }
       }
     }
-    print('[DEBUG][addStudent] DB에 저장 직전 student.toDb(): ' + student.toDb().toString());
-    print('[DEBUG][addStudent] DB에 저장 직전 basicInfo.toDb(): ' + basicInfo.toDb().toString());
+    print('[DEBUG][addStudent] DB에 저장 직전 student.toDb(): ' +
+        student.toDb().toString());
+    print('[DEBUG][addStudent] DB에 저장 직전 basicInfo.toDb(): ' +
+        basicInfo.toDb().toString());
     if (TagPresetService.preferSupabaseRead) {
       try {
-        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final academyId = await TenantService.instance.getActiveAcademyId() ??
+            await TenantService.instance.ensureActiveAcademy();
         final supa = Supabase.instance.client;
         await supa.from('students').upsert({
           'id': student.id,
@@ -1885,10 +2147,13 @@ class DataManager {
         }, onConflict: 'student_id');
         await Supabase.instance.client.rpc('init_first_due', params: {
           'p_student_id': paymentInfo.studentId,
-          'p_first_due': paymentInfo.registrationDate.toIso8601String().substring(0, 10),
+          'p_first_due':
+              paymentInfo.registrationDate.toIso8601String().substring(0, 10),
           'p_academy_id': academyId,
         });
-      } catch (e, st) { print('[SUPA][addStudent server-only] $e\n$st'); }
+      } catch (e, st) {
+        print('[SUPA][addStudent server-only] $e\n$st');
+      }
       await loadStudents();
       return;
     }
@@ -1899,7 +2164,8 @@ class DataManager {
     await loadStudents();
     if (TagPresetService.dualWrite) {
       try {
-        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final academyId = await TenantService.instance.getActiveAcademyId() ??
+            await TenantService.instance.ensureActiveAcademy();
         final supa = Supabase.instance.client;
         await supa.from('students').upsert({
           'id': student.id,
@@ -1918,28 +2184,39 @@ class DataManager {
           'memo': basicInfo.memo,
           'notification_consent': basicInfo.notificationConsent,
         }, onConflict: 'student_id');
-      } catch (e, st) { print('[SUPA][teachers insert] $e\n$st'); }
+      } catch (e, st) {
+        print('[SUPA][teachers insert] $e\n$st');
+      }
     }
   }
 
-  Future<void> updateStudent(Student student, StudentBasicInfo basicInfo) async {
+  Future<void> updateStudent(
+      Student student, StudentBasicInfo basicInfo) async {
     print('[DEBUG][updateStudent] student: ' + student.toString());
     print('[DEBUG][updateStudent] basicInfo: ' + basicInfo.toString());
     // 그룹 정원 초과 이중 방어
     if (basicInfo.groupId != null) {
       final group = _groupsById[basicInfo.groupId];
       if (group != null && group.capacity != null) {
-        final currentCount = _studentsWithInfo.where((s) => s.student.groupInfo?.id == group.id && s.student.id != student.id).length;
+        final currentCount = _studentsWithInfo
+            .where((s) =>
+                s.student.groupInfo?.id == group.id &&
+                s.student.id != student.id)
+            .length;
         if (currentCount >= group.capacity!) {
-          throw Exception('정원 초과: ${group.name} 그룹의 정원(${group.capacity})을 초과할 수 없습니다.');
+          throw Exception(
+              '정원 초과: ${group.name} 그룹의 정원(${group.capacity})을 초과할 수 없습니다.');
         }
       }
     }
-    print('[DEBUG][updateStudent] DB에 저장 직전 student.toDb(): ' + student.toDb().toString());
-    print('[DEBUG][updateStudent] DB에 저장 직전 basicInfo.toDb(): ' + basicInfo.toDb().toString());
+    print('[DEBUG][updateStudent] DB에 저장 직전 student.toDb(): ' +
+        student.toDb().toString());
+    print('[DEBUG][updateStudent] DB에 저장 직전 basicInfo.toDb(): ' +
+        basicInfo.toDb().toString());
     if (TagPresetService.preferSupabaseRead) {
       try {
-        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final academyId = await TenantService.instance.getActiveAcademyId() ??
+            await TenantService.instance.ensureActiveAcademy();
         final supa = Supabase.instance.client;
         await supa.from('students').upsert({
           'id': student.id,
@@ -1958,18 +2235,22 @@ class DataManager {
           'memo': basicInfo.memo,
           'notification_consent': basicInfo.notificationConsent,
         }, onConflict: 'student_id');
-      } catch (e, st) { print('[SUPA][updateStudent server-only] $e\n$st'); }
+      } catch (e, st) {
+        print('[SUPA][updateStudent server-only] $e\n$st');
+      }
       await loadStudents();
       return;
     }
 
     await AcademyDbService.instance.updateStudent(student);
-    await AcademyDbService.instance.updateStudentBasicInfo(student.id, basicInfo.toDb());
+    await AcademyDbService.instance
+        .updateStudentBasicInfo(student.id, basicInfo.toDb());
     print('[DEBUG][updateStudent] DB 저장 완료');
     await loadStudents();
     if (TagPresetService.dualWrite) {
       try {
-        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final academyId = await TenantService.instance.getActiveAcademyId() ??
+            await TenantService.instance.ensureActiveAcademy();
         final supa = Supabase.instance.client;
         await supa.from('students').upsert({
           'id': student.id,
@@ -1988,7 +2269,9 @@ class DataManager {
           'memo': basicInfo.memo,
           'notification_consent': basicInfo.notificationConsent,
         }, onConflict: 'student_id');
-      } catch (e, st) { print('[SUPA][classes upsert(add)] $e\n$st'); }
+      } catch (e, st) {
+        print('[SUPA][classes upsert(add)] $e\n$st');
+      }
     }
   }
 
@@ -1996,20 +2279,22 @@ class DataManager {
     print('[DEBUG][deleteStudent] 진입: id=$id');
     if (TagPresetService.preferSupabaseRead) {
       final supa = Supabase.instance.client;
-      final academyId =
-          (await TenantService.instance.getActiveAcademyId()) ??
-              await TenantService.instance.ensureActiveAcademy();
+      final academyId = (await TenantService.instance.getActiveAcademyId()) ??
+          await TenantService.instance.ensureActiveAcademy();
 
       Future<void> timed(String label, Future<void> Function() fn) async {
         final sw = Stopwatch()..start();
-        print('[DEBUG][deleteStudent][server-only] $label 시작: id=$id, academyId=$academyId');
+        print(
+            '[DEBUG][deleteStudent][server-only] $label 시작: id=$id, academyId=$academyId');
         try {
           await fn();
           sw.stop();
-          print('[DEBUG][deleteStudent][server-only] $label 완료: elapsedMs=${sw.elapsedMilliseconds}');
+          print(
+              '[DEBUG][deleteStudent][server-only] $label 완료: elapsedMs=${sw.elapsedMilliseconds}');
         } catch (e, st) {
           sw.stop();
-          print('[ERROR][deleteStudent][server-only] $label 실패: elapsedMs=${sw.elapsedMilliseconds} err=$e\n$st');
+          print(
+              '[ERROR][deleteStudent][server-only] $label 실패: elapsedMs=${sw.elapsedMilliseconds} err=$e\n$st');
           rethrow;
         }
       }
@@ -2017,7 +2302,9 @@ class DataManager {
       bool isStatementTimeout(dynamic e) {
         if (e is PostgrestException) return e.code == '57014';
         final s = e.toString();
-        return s.contains('code: 57014') || (s.contains('57014') && s.toLowerCase().contains('statement timeout'));
+        return s.contains('code: 57014') ||
+            (s.contains('57014') &&
+                s.toLowerCase().contains('statement timeout'));
       }
 
       String inFilterForIds(List<String> ids) {
@@ -2059,17 +2346,20 @@ class DataManager {
           if (ids.isEmpty) break;
           batchNo++;
 
-          var dq = supa.from(table).delete().filter('id', 'in', inFilterForIds(ids));
+          var dq =
+              supa.from(table).delete().filter('id', 'in', inFilterForIds(ids));
           if (hasAcademyId) dq = dq.eq('academy_id', academyId);
           await dq;
 
           total += ids.length;
           if (batchNo <= 3 || batchNo % 10 == 0) {
-            print('[DEBUG][deleteStudent][server-only][hard] $table delete batch=$batchNo size=${ids.length} total=$total');
+            print(
+                '[DEBUG][deleteStudent][server-only][hard] $table delete batch=$batchNo size=${ids.length} total=$total');
           }
         }
         sw.stop();
-        print('[DEBUG][deleteStudent][server-only][hard] $table delete done: total=$total elapsedMs=${sw.elapsedMilliseconds}');
+        print(
+            '[DEBUG][deleteStudent][server-only][hard] $table delete done: total=$total elapsedMs=${sw.elapsedMilliseconds}');
         return total;
       }
 
@@ -2092,83 +2382,119 @@ class DataManager {
           if (ids.isEmpty) break;
           batchNo++;
 
-          var uq = supa.from(table).update({studentIdCol: null}).filter('id', 'in', inFilterForIds(ids));
+          var uq = supa.from(table).update({studentIdCol: null}).filter(
+              'id', 'in', inFilterForIds(ids));
           if (hasAcademyId) uq = uq.eq('academy_id', academyId);
           await uq;
 
           total += ids.length;
           if (batchNo <= 3 || batchNo % 10 == 0) {
-            print('[DEBUG][deleteStudent][server-only][hard] $table nullify batch=$batchNo size=${ids.length} total=$total');
+            print(
+                '[DEBUG][deleteStudent][server-only][hard] $table nullify batch=$batchNo size=${ids.length} total=$total');
           }
         }
         sw.stop();
-        print('[DEBUG][deleteStudent][server-only][hard] $table nullify done: total=$total elapsedMs=${sw.elapsedMilliseconds}');
+        print(
+            '[DEBUG][deleteStudent][server-only][hard] $table nullify done: total=$total elapsedMs=${sw.elapsedMilliseconds}');
         return total;
       }
 
       Future<void> hardDeleteStudentWithLogs() async {
-        print('[WARN][deleteStudent][server-only][hard] 학생 삭제 타임아웃(57014) -> 연관 데이터 배치 삭제로 전환: studentId=$id, academyId=$academyId');
+        print(
+            '[WARN][deleteStudent][server-only][hard] 학생 삭제 타임아웃(57014) -> 연관 데이터 배치 삭제로 전환: studentId=$id, academyId=$academyId');
 
         // 1) FK set-null/연쇄 업데이트 비용을 줄이기 위해 먼저 session_overrides 제거
         await timed('hard: session_overrides 배치 삭제', () async {
-          await batchDeleteByStudent(table: 'session_overrides', hasAcademyId: true, batchSize: 100);
+          await batchDeleteByStudent(
+              table: 'session_overrides', hasAcademyId: true, batchSize: 100);
         });
 
         // 2) 출석(가장 큰 테이블일 가능성 높음) 삭제
         await timed('hard: attendance_records 배치 삭제', () async {
-          await batchDeleteByStudent(table: 'attendance_records', hasAcademyId: true, batchSize: 120);
+          await batchDeleteByStudent(
+              table: 'attendance_records', hasAcademyId: true, batchSize: 120);
         });
 
         // 3) 결제 레코드 삭제
         await timed('hard: payment_records 배치 삭제', () async {
-          await batchDeleteByStudent(table: 'payment_records', hasAcademyId: true, batchSize: 200);
+          await batchDeleteByStudent(
+              table: 'payment_records', hasAcademyId: true, batchSize: 200);
         });
 
         // 4) 배치/세션 삭제 (academy_id 컬럼 없음)
         await timed('hard: lesson_batch_sessions 배치 삭제', () async {
-          await batchDeleteByStudent(table: 'lesson_batch_sessions', hasAcademyId: false, batchSize: 200);
+          await batchDeleteByStudent(
+              table: 'lesson_batch_sessions',
+              hasAcademyId: false,
+              batchSize: 200);
         });
         await timed('hard: lesson_batch_headers 배치 삭제', () async {
-          await batchDeleteByStudent(table: 'lesson_batch_headers', hasAcademyId: true, batchSize: 200);
+          await batchDeleteByStudent(
+              table: 'lesson_batch_headers',
+              hasAcademyId: true,
+              batchSize: 200);
         });
 
         // 5) 스냅샷 삭제 (attendance_records.snapshot_id FK 때문에 attendance 먼저 삭제)
         await timed('hard: lesson_snapshot_headers 배치 삭제', () async {
-          await batchDeleteByStudent(table: 'lesson_snapshot_headers', hasAcademyId: true, batchSize: 200);
+          await batchDeleteByStudent(
+              table: 'lesson_snapshot_headers',
+              hasAcademyId: true,
+              batchSize: 200);
         });
 
         // 6) 시간표 블록 삭제
         await timed('hard: student_time_blocks 배치 삭제', () async {
-          await batchDeleteByStudent(table: 'student_time_blocks', hasAcademyId: true, batchSize: 200);
+          await batchDeleteByStudent(
+              table: 'student_time_blocks', hasAcademyId: true, batchSize: 200);
         });
 
         // 7) on delete set null 대상(규모가 크면 학생 삭제를 느리게 만듦) -> 미리 NULL 처리
         await timed('hard: homework_items student_id null 처리(배치)', () async {
           try {
-            await batchNullifyByStudent(table: 'homework_items', hasAcademyId: true, batchSize: 200);
+            await batchNullifyByStudent(
+                table: 'homework_items', hasAcademyId: true, batchSize: 200);
           } catch (e) {
-            print('[WARN][deleteStudent][server-only][hard] homework_items nullify 실패(무시): $e');
+            print(
+                '[WARN][deleteStudent][server-only][hard] homework_items nullify 실패(무시): $e');
           }
         });
         await timed('hard: tag_events student_id null 처리(배치)', () async {
           try {
-            await batchNullifyByStudent(table: 'tag_events', studentIdCol: 'student_id', hasAcademyId: true, batchSize: 200);
+            await batchNullifyByStudent(
+                table: 'tag_events',
+                studentIdCol: 'student_id',
+                hasAcademyId: true,
+                batchSize: 200);
           } catch (e) {
-            print('[WARN][deleteStudent][server-only][hard] tag_events nullify 실패(무시): $e');
+            print(
+                '[WARN][deleteStudent][server-only][hard] tag_events nullify 실패(무시): $e');
           }
         });
 
         // 8) 작은 테이블 정리
         await timed('hard: student_basic_info 삭제', () async {
-          await supa.from('student_basic_info').delete().eq('student_id', id).eq('academy_id', academyId);
+          await supa
+              .from('student_basic_info')
+              .delete()
+              .eq('student_id', id)
+              .eq('academy_id', academyId);
         });
         await timed('hard: student_payment_info 삭제', () async {
-          await supa.from('student_payment_info').delete().eq('student_id', id).eq('academy_id', academyId);
+          await supa
+              .from('student_payment_info')
+              .delete()
+              .eq('student_id', id)
+              .eq('academy_id', academyId);
         });
 
         // 9) 마지막으로 students 삭제 (이 시점엔 cascade 작업량이 매우 줄어야 함)
         await timed('hard: students 최종 삭제', () async {
-          await supa.from('students').delete().eq('id', id).eq('academy_id', academyId);
+          await supa
+              .from('students')
+              .delete()
+              .eq('id', id)
+              .eq('academy_id', academyId);
         });
       }
 
@@ -2180,13 +2506,18 @@ class DataManager {
           'p_academy_id': academyId,
           'p_student_id': id,
         });
-        print('[DEBUG][deleteStudent][server-only] archive_student ok: archiveId=$archived');
+        print(
+            '[DEBUG][deleteStudent][server-only] archive_student ok: archiveId=$archived');
       });
 
       // ✅ 일부 환경/스키마에서는 학생 삭제가 보강/예외(session_overrides)를 자동 정리하지 못해 orphan이 남을 수 있음.
       // 학생 삭제 전에 session_overrides를 선삭제하여 "학생 삭제 후에도 보강기록이 남는" 문제를 방지한다.
       await timed('session_overrides 삭제(선)', () async {
-        await supa.from('session_overrides').delete().eq('student_id', id).eq('academy_id', academyId);
+        await supa
+            .from('session_overrides')
+            .delete()
+            .eq('student_id', id)
+            .eq('academy_id', academyId);
       });
       _sessionOverrides.removeWhere((o) => o.studentId == id);
       sessionOverridesNotifier.value = List.unmodifiable(_sessionOverrides);
@@ -2223,7 +2554,8 @@ class DataManager {
           'p_academy_id': academyId,
           'p_student_id': id,
         });
-        print('[DEBUG][deleteStudent][dualWrite] archive_student ok: archiveId=$archived');
+        print(
+            '[DEBUG][deleteStudent][dualWrite] archive_student ok: archiveId=$archived');
 
         await supa.rpc('delete_student', params: {
           'p_academy_id': academyId,
@@ -2231,7 +2563,8 @@ class DataManager {
         });
         print('[DEBUG][deleteStudent][dualWrite] delete_student ok: id=$id');
       } catch (e, st) {
-        print('[ERROR][deleteStudent][dualWrite] archive/delete failed: $e\n$st');
+        print(
+            '[ERROR][deleteStudent][dualWrite] archive/delete failed: $e\n$st');
         rethrow;
       }
     }
@@ -2253,16 +2586,21 @@ class DataManager {
     try {
       if (!TagPresetService.dualWrite) {
         final supa = Supabase.instance.client;
-        final academyId = (await TenantService.instance.getActiveAcademyId()) ?? await TenantService.instance.ensureActiveAcademy();
+        final academyId = (await TenantService.instance.getActiveAcademyId()) ??
+            await TenantService.instance.ensureActiveAcademy();
 
         // ✅ 보강/예외(SessionOverride)도 서버에서 함께 제거(세션 오버라이드는 Supabase에서 로드됨)
-        await supa.from('session_overrides').delete()
-          .eq('student_id', id)
-          .eq('academy_id', academyId);
-        await supa.from('attendance_records').delete()
-          .eq('student_id', id)
-          .eq('academy_id', academyId)
-          .eq('is_planned', true);
+        await supa
+            .from('session_overrides')
+            .delete()
+            .eq('student_id', id)
+            .eq('academy_id', academyId);
+        await supa
+            .from('attendance_records')
+            .delete()
+            .eq('student_id', id)
+            .eq('academy_id', academyId)
+            .eq('is_planned', true);
         await AttendanceService.instance.loadAttendanceRecords();
         print('[DEBUG][deleteStudent] planned attendance 삭제 완료: id=$id');
       }
@@ -2276,14 +2614,16 @@ class DataManager {
   }
 
   // StudentBasicInfo만 업데이트하는 메소드
-  Future<void> updateStudentBasicInfo(String studentId, StudentBasicInfo basicInfo) async {
+  Future<void> updateStudentBasicInfo(
+      String studentId, StudentBasicInfo basicInfo) async {
     print('[DEBUG][updateStudentBasicInfo] studentId: $studentId');
     print('[DEBUG][updateStudentBasicInfo] basicInfo: ${basicInfo.toString()}');
-    
+
     try {
       if (TagPresetService.preferSupabaseRead) {
         try {
-          final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+          final academyId = await TenantService.instance.getActiveAcademyId() ??
+              await TenantService.instance.ensureActiveAcademy();
           await Supabase.instance.client.from('student_basic_info').upsert({
             'student_id': studentId,
             'academy_id': academyId,
@@ -2293,21 +2633,25 @@ class DataManager {
             'memo': basicInfo.memo,
             'notification_consent': basicInfo.notificationConsent,
           }, onConflict: 'student_id');
-        } catch (e, st) { print('[SUPA][updateStudentBasicInfo server-only] $e\n$st'); }
+        } catch (e, st) {
+          print('[SUPA][updateStudentBasicInfo server-only] $e\n$st');
+        }
         await loadStudents();
         return;
       }
 
       // 로컬 경로
-      await AcademyDbService.instance.updateStudentBasicInfo(studentId, basicInfo.toDb());
+      await AcademyDbService.instance
+          .updateStudentBasicInfo(studentId, basicInfo.toDb());
       print('[DEBUG][updateStudentBasicInfo] DB 저장 완료');
-      
+
       // 메모리 상태 최신화
       await loadStudents();
       print('[DEBUG][updateStudentBasicInfo] 메모리 상태 최신화 완료');
       if (TagPresetService.dualWrite) {
         try {
-          final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+          final academyId = await TenantService.instance.getActiveAcademyId() ??
+              await TenantService.instance.ensureActiveAcademy();
           await Supabase.instance.client.from('student_basic_info').upsert({
             'student_id': studentId,
             'academy_id': academyId,
@@ -2317,7 +2661,9 @@ class DataManager {
             'memo': basicInfo.memo,
             'notification_consent': basicInfo.notificationConsent,
           }, onConflict: 'student_id');
-        } catch (e, st) { print('[SUPA][student_payment_info upsert(update)] $e\n$st'); }
+        } catch (e, st) {
+          print('[SUPA][student_payment_info upsert(update)] $e\n$st');
+        }
       }
     } catch (e) {
       print('[ERROR][updateStudentBasicInfo] 오류 발생: $e');
@@ -2348,8 +2694,7 @@ class DataManager {
     final defaults = _defaultStudentLevelScalesRows();
     if (TagPresetService.preferSupabaseRead) {
       try {
-        final academyId =
-            await TenantService.instance.getActiveAcademyId() ??
+        final academyId = await TenantService.instance.getActiveAcademyId() ??
             await TenantService.instance.ensureActiveAcademy();
         final supa = Supabase.instance.client;
         final rows = await supa
@@ -2368,8 +2713,8 @@ class DataManager {
             'level_code': code,
             'display_name':
                 (map['display_name'] as String?)?.trim().isNotEmpty == true
-                ? (map['display_name'] as String).trim()
-                : '${code}등급',
+                    ? (map['display_name'] as String).trim()
+                    : '${code}등급',
             'upper_percent': (map['upper_percent'] as num?)?.toDouble() ??
                 (double.tryParse('${map['upper_percent'] ?? ''}') ?? 0.0),
           };
@@ -2393,9 +2738,9 @@ class DataManager {
         }
         if (missingRows.isNotEmpty) {
           await supa.from('student_level_scales').upsert(
-            missingRows,
-            onConflict: 'academy_id,level_code',
-          );
+                missingRows,
+                onConflict: 'academy_id,level_code',
+              );
         }
         if (!RuntimeFlags.serverOnly) {
           await AcademyDbService.instance.saveStudentLevelScales(merged);
@@ -2423,12 +2768,12 @@ class DataManager {
     if (studentId.trim().isEmpty) return null;
     if (TagPresetService.preferSupabaseRead) {
       try {
-        final academyId =
-            await TenantService.instance.getActiveAcademyId() ??
+        final academyId = await TenantService.instance.getActiveAcademyId() ??
             await TenantService.instance.ensureActiveAcademy();
         final row = await Supabase.instance.client
             .from('student_level_states')
-            .select('student_id,current_level_code,desired_level_code,target_level_code')
+            .select(
+                'student_id,current_level_code,desired_level_code,target_level_code')
             .eq('academy_id', academyId)
             .eq('student_id', studentId)
             .maybeSingle();
@@ -2476,8 +2821,7 @@ class DataManager {
 
     if (TagPresetService.preferSupabaseRead || TagPresetService.dualWrite) {
       try {
-        final academyId =
-            await TenantService.instance.getActiveAcademyId() ??
+        final academyId = await TenantService.instance.getActiveAcademyId() ??
             await TenantService.instance.ensureActiveAcademy();
         final supa = Supabase.instance.client;
         if (currentLevelCode == null &&
@@ -2506,9 +2850,12 @@ class DataManager {
   }
 
   void updateStudentGroup(Student student, GroupInfo? newGroup) {
-    final index = _studentsWithInfo.indexWhere((si) => si.student.id == student.id);
+    final index =
+        _studentsWithInfo.indexWhere((si) => si.student.id == student.id);
     if (index != -1) {
-      _studentsWithInfo[index] = StudentWithInfo(student: student.copyWith(groupInfo: newGroup), basicInfo: _studentsWithInfo[index].basicInfo);
+      _studentsWithInfo[index] = StudentWithInfo(
+          student: student.copyWith(groupInfo: newGroup),
+          basicInfo: _studentsWithInfo[index].basicInfo);
       _notifyListeners();
       saveStudents();
     }
@@ -2523,27 +2870,39 @@ class DataManager {
       }
       if (TagPresetService.dualWrite) {
         try {
-          final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+          final academyId = await TenantService.instance.getActiveAcademyId() ??
+              await TenantService.instance.ensureActiveAcademy();
           final supa = Supabase.instance.client;
-          await supa.from('operating_hours').delete().eq('academy_id', academyId);
+          await supa
+              .from('operating_hours')
+              .delete()
+              .eq('academy_id', academyId);
           if (hours.isNotEmpty) {
-            final rows = hours.map((h) => {
-              'academy_id': academyId,
-              'day_of_week': h.dayOfWeek,
-              'start_time': '${h.startHour.toString().padLeft(2,'0')}:${h.startMinute.toString().padLeft(2,'0')}',
-              'end_time': '${h.endHour.toString().padLeft(2,'0')}:${h.endMinute.toString().padLeft(2,'0')}',
-              'break_times': (h.breakTimes.isEmpty)
-                  ? null
-                  : jsonEncode(h.breakTimes.map((b)=>{
-                      'startHour': b.startHour,
-                      'startMinute': b.startMinute,
-                      'endHour': b.endHour,
-                      'endMinute': b.endMinute,
-                    }).toList()),
-            }).toList();
+            final rows = hours
+                .map((h) => {
+                      'academy_id': academyId,
+                      'day_of_week': h.dayOfWeek,
+                      'start_time':
+                          '${h.startHour.toString().padLeft(2, '0')}:${h.startMinute.toString().padLeft(2, '0')}',
+                      'end_time':
+                          '${h.endHour.toString().padLeft(2, '0')}:${h.endMinute.toString().padLeft(2, '0')}',
+                      'break_times': (h.breakTimes.isEmpty)
+                          ? null
+                          : jsonEncode(h.breakTimes
+                              .map((b) => {
+                                    'startHour': b.startHour,
+                                    'startMinute': b.startMinute,
+                                    'endHour': b.endHour,
+                                    'endMinute': b.endMinute,
+                                  })
+                              .toList()),
+                    })
+                .toList();
             await supa.from('operating_hours').insert(rows);
           }
-        } catch (e, st) { print('[SUPA][student_payment_info delete] $e\n$st'); }
+        } catch (e, st) {
+          print('[SUPA][student_payment_info delete] $e\n$st');
+        }
       }
     } catch (e) {
       print('Error saving operating hours: $e');
@@ -2555,7 +2914,8 @@ class DataManager {
   // Pause periods / charge points
   // =========================
 
-  static DateTime _dateOnlyStatic(DateTime d) => DateTime(d.year, d.month, d.day);
+  static DateTime _dateOnlyStatic(DateTime d) =>
+      DateTime(d.year, d.month, d.day);
 
   StudentPausePeriod? getActivePauseForStudent(String studentId) {
     final now = DateTime.now();
@@ -2569,8 +2929,8 @@ class DataManager {
 
   bool isStudentPausedOn(String studentId, DateTime dateLocal) {
     final d = _dateOnlyStatic(dateLocal);
-    return _studentPausePeriods.any(
-        (p) => p.studentId == studentId && p.isActiveOn(d));
+    return _studentPausePeriods
+        .any((p) => p.studentId == studentId && p.isActiveOn(d));
   }
 
   DateTime? getEffectiveNextDueDateTime(String studentId) {
@@ -2604,7 +2964,8 @@ class DataManager {
           .map((m0) =>
               StudentPausePeriod.fromMap(Map<String, dynamic>.from(m0 as Map)))
           .toList();
-      studentPausePeriodsNotifier.value = List.unmodifiable(_studentPausePeriods);
+      studentPausePeriodsNotifier.value =
+          List.unmodifiable(_studentPausePeriods);
       studentPausePeriodsRevision.value++;
     } catch (e, st) {
       print('[PAUSE][load][WARN] $e\n$st');
@@ -2637,7 +2998,8 @@ class DataManager {
           .map((m0) =>
               StudentChargePoint.fromMap(Map<String, dynamic>.from(m0 as Map)))
           .toList();
-      studentChargePointsNotifier.value = List.unmodifiable(_studentChargePoints);
+      studentChargePointsNotifier.value =
+          List.unmodifiable(_studentChargePoints);
       studentChargePointsRevision.value++;
     } catch (e, st) {
       print('[CHARGE][load][WARN] $e\n$st');
@@ -2670,7 +3032,8 @@ class DataManager {
 
     // 휴원 기간에는 예정수업이 없어야 하므로, 향후 planned를 정리한다(15일 범위 내 우선).
     try {
-      await AttendanceService.instance.deletePlannedAttendanceForStudent(studentId, days: 15);
+      await AttendanceService.instance
+          .deletePlannedAttendanceForStudent(studentId, days: 15);
     } catch (_) {}
     // 차감포인트 재계산(서버)
     try {
@@ -2710,7 +3073,8 @@ class DataManager {
 
     // planned 재생성(휴원 구간은 AttendanceService에서 스킵하도록 별도 처리 예정)
     try {
-      await _regeneratePlannedAttendanceForStudent(studentId: studentId, days: 15);
+      await _regeneratePlannedAttendanceForStudent(
+          studentId: studentId, days: 15);
     } catch (_) {}
   }
 
@@ -2723,24 +3087,39 @@ class DataManager {
       List<OperatingHours> raw;
       if (TagPresetService.preferSupabaseRead) {
         try {
-          final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+          final academyId = await TenantService.instance.getActiveAcademyId() ??
+              await TenantService.instance.ensureActiveAcademy();
           final data = await Supabase.instance.client
               .from('operating_hours')
               .select('day_of_week,start_time,end_time,break_times')
               .eq('academy_id', academyId)
               .order('day_of_week');
-          raw = (data as List).map((m){
-            String? parseTime(String? t){ return t; }
-            int hh(String? t){ if(t==null||t.length<2) return 0; return int.tryParse(t.split(':').first)??0; }
-            int mm(String? t){ if(t==null||!t.contains(':')) return 0; return int.tryParse(t.split(':').last)??0; }
+          raw = (data as List).map((m) {
+            String? parseTime(String? t) {
+              return t;
+            }
+
+            int hh(String? t) {
+              if (t == null || t.length < 2) return 0;
+              return int.tryParse(t.split(':').first) ?? 0;
+            }
+
+            int mm(String? t) {
+              if (t == null || !t.contains(':')) return 0;
+              return int.tryParse(t.split(':').last) ?? 0;
+            }
+
             List<BreakTime> breaks = [];
-            try{
+            try {
               final bt = m['break_times'];
               if (bt != null) {
                 final arr = (bt is String) ? jsonDecode(bt) : bt;
-                breaks = (arr as List).map((e)=>BreakTime.fromJson(Map<String,dynamic>.from(e))).toList();
+                breaks = (arr as List)
+                    .map(
+                        (e) => BreakTime.fromJson(Map<String, dynamic>.from(e)))
+                    .toList();
               }
-            } catch(_){}
+            } catch (_) {}
             return OperatingHours(
               dayOfWeek: (m['day_of_week'] as int?) ?? 0,
               startHour: hh(m['start_time'] as String?),
@@ -2788,11 +3167,13 @@ class DataManager {
     final tsStart = DateTime.now();
     if (TagPresetService.preferSupabaseRead) {
       try {
-        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final academyId = await TenantService.instance.getActiveAcademyId() ??
+            await TenantService.instance.ensureActiveAcademy();
         // ✅ 서버 응답 max rows(예: 1000) 제한에 걸리면 일부만 로드되어 "기존 블록이 사라져 보이는" 문제가 생길 수 있다.
         // → (1) 페이지네이션(range) + (2) 아주 오래된 종료 이력은 제외(lookback)로 안정화/최적화.
         const int pageSize = 1000;
-        const int lookbackDays = 180; // 결제 사이클/회차(session_order) 안정화를 위해 충분히 넉넉하게 유지
+        const int lookbackDays =
+            180; // 결제 사이클/회차(session_order) 안정화를 위해 충분히 넉넉하게 유지
         final today = _todayDateOnly();
         final minEnd = today.subtract(const Duration(days: lookbackDays));
         final minEndYmd = _ymd(minEnd);
@@ -2802,7 +3183,8 @@ class DataManager {
         while (true) {
           final data = await Supabase.instance.client
               .from('student_time_blocks')
-              .select('id,student_id,day_index,start_hour,start_minute,duration,block_created_at,start_date,end_date,set_id,number,session_type_id,weekly_order')
+              .select(
+                  'id,student_id,day_index,start_hour,start_minute,duration,block_created_at,start_date,end_date,set_id,number,session_type_id,weekly_order')
               .eq('academy_id', academyId)
               // "열려있거나, 최근 lookback 기간 내에 종료된 것"만 유지(아주 오래된 이력은 week-cache로 조회)
               .or('end_date.is.null,end_date.gte.$minEndYmd')
@@ -2829,7 +3211,8 @@ class DataManager {
             final sd = _dateOnly(b.startDate);
             return sd.isAfter(today);
           }).toList()
-            ..sort((a, b) => _dateOnly(a.startDate).compareTo(_dateOnly(b.startDate)));
+            ..sort((a, b) =>
+                _dateOnly(a.startDate).compareTo(_dateOnly(b.startDate)));
 
           DateTime? minSd;
           DateTime? maxSd;
@@ -2847,7 +3230,7 @@ class DataManager {
           print(
               '[STB][load] source=supabase count=${_studentTimeBlocks.length} elapsedMs=${DateTime.now().difference(tsStart).inMilliseconds} '
               'sdRange=${minSd == null ? 'n/a' : _ymd(minSd!)}..${maxSd == null ? 'n/a' : _ymd(maxSd!)} '
-              'futureCount=${futureBlocks.length} futureSample=${futureBlocks.take(8).map((b)=>'${b.id} sd=${_ymd(_dateOnly(b.startDate))} sid=${b.studentId}').toList()} '
+              'futureCount=${futureBlocks.length} futureSample=${futureBlocks.take(8).map((b) => '${b.id} sd=${_ymd(_dateOnly(b.startDate))} sid=${b.studentId}').toList()} '
               'sample=$sample');
 
           // ===== optional targeted trace =====
@@ -2879,23 +3262,31 @@ class DataManager {
               return true;
             }).toList()
               ..sort((a, b) {
-                final cSd = _dateOnly(a.startDate).compareTo(_dateOnly(b.startDate));
+                final cSd =
+                    _dateOnly(a.startDate).compareTo(_dateOnly(b.startDate));
                 if (cSd != 0) return cSd;
-                final aEd = a.endDate == null ? DateTime(9999, 1, 1) : _dateOnly(a.endDate!);
-                final bEd = b.endDate == null ? DateTime(9999, 1, 1) : _dateOnly(b.endDate!);
+                final aEd = a.endDate == null
+                    ? DateTime(9999, 1, 1)
+                    : _dateOnly(a.endDate!);
+                final bEd = b.endDate == null
+                    ? DateTime(9999, 1, 1)
+                    : _dateOnly(b.endDate!);
                 final cEd = aEd.compareTo(bEd);
                 if (cEd != 0) return cEd;
                 return a.createdAt.compareTo(b.createdAt);
               });
             if (traced.isEmpty) {
-              print('[STB][trace] student="$sid" slot="$slot" -> no blocks found');
+              print(
+                  '[STB][trace] student="$sid" slot="$slot" -> no blocks found');
             } else {
               final lines = traced.take(60).map((b) {
                 final sd = _ymd(_dateOnly(b.startDate));
-                final ed = b.endDate == null ? 'null' : _ymd(_dateOnly(b.endDate!));
+                final ed =
+                    b.endDate == null ? 'null' : _ymd(_dateOnly(b.endDate!));
                 return '${b.id} sid=${b.studentId} day=${b.dayIndex} t=${b.startHour}:${b.startMinute.toString().padLeft(2, '0')} sd=$sd ed=$ed set=${b.setId ?? ''} created=${b.createdAt.toIso8601String()}';
               }).toList();
-              print('[STB][trace] student="$sid" slot="$slot" count=${traced.length} items=$lines');
+              print(
+                  '[STB][trace] student="$sid" slot="$slot" count=${traced.length} items=$lines');
             }
           }
         } else {
@@ -2930,32 +3321,40 @@ class DataManager {
   }
 
   Future<void> addStudentTimeBlock(StudentTimeBlock block) async {
-    final dateOnly = DateTime(block.startDate.year, block.startDate.month, block.startDate.day);
+    final dateOnly = DateTime(
+        block.startDate.year, block.startDate.month, block.startDate.day);
     final normalized = block.copyWith(
       startDate: dateOnly,
-      endDate: block.endDate != null ? DateTime(block.endDate!.year, block.endDate!.month, block.endDate!.day) : null,
+      endDate: block.endDate != null
+          ? DateTime(
+              block.endDate!.year, block.endDate!.month, block.endDate!.day)
+          : null,
     );
     // 중복 체크: 같은 학생, 같은 요일, 같은 시작시간, 같은 duration 블록이 이미 있으면 등록 금지
     final activeAtDate = _activeBlocks(dateOnly);
     final exists = activeAtDate.any((b) =>
-      b.studentId == normalized.studentId &&
-      b.dayIndex == normalized.dayIndex &&
-      b.startHour == normalized.startHour &&
-      b.startMinute == normalized.startMinute
-    );
-    if (exists) {
-      final dupes = activeAtDate.where((b) =>
         b.studentId == normalized.studentId &&
         b.dayIndex == normalized.dayIndex &&
         b.startHour == normalized.startHour &&
-        b.startMinute == normalized.startMinute
-      ).map((b) => '${b.id}|sess=${b.sessionTypeId}|sd=${b.startDate.toIso8601String().split("T").first}|ed=${b.endDate?.toIso8601String().split("T").first}|set=${b.setId}').toList();
-      print('[STB][add][conflict] ref=$dateOnly new=${normalized.id}|set=${normalized.setId}|sess=${normalized.sessionTypeId}|day=${normalized.dayIndex}|t=${normalized.startHour}:${normalized.startMinute} existing=$dupes');
+        b.startMinute == normalized.startMinute);
+    if (exists) {
+      final dupes = activeAtDate
+          .where((b) =>
+              b.studentId == normalized.studentId &&
+              b.dayIndex == normalized.dayIndex &&
+              b.startHour == normalized.startHour &&
+              b.startMinute == normalized.startMinute)
+          .map((b) =>
+              '${b.id}|sess=${b.sessionTypeId}|sd=${b.startDate.toIso8601String().split("T").first}|ed=${b.endDate?.toIso8601String().split("T").first}|set=${b.setId}')
+          .toList();
+      print(
+          '[STB][add][conflict] ref=$dateOnly new=${normalized.id}|set=${normalized.setId}|sess=${normalized.sessionTypeId}|day=${normalized.dayIndex}|t=${normalized.startHour}:${normalized.startMinute} existing=$dupes');
       throw Exception('이미 등록된 시간입니다.');
     }
     if (TagPresetService.preferSupabaseRead) {
       try {
-        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final academyId = await TenantService.instance.getActiveAcademyId() ??
+            await TenantService.instance.ensureActiveAcademy();
         final row = <String, dynamic>{
           'id': normalized.id,
           'academy_id': academyId,
@@ -2973,7 +3372,9 @@ class DataManager {
           'weekly_order': normalized.weeklyOrder,
         }..removeWhere((k, v) => v == null);
         print('[STB][add][supabase] row=$row');
-        await Supabase.instance.client.from('student_time_blocks').upsert(row, onConflict: 'id');
+        await Supabase.instance.client
+            .from('student_time_blocks')
+            .upsert(row, onConflict: 'id');
         _studentTimeBlocks.add(normalized);
         _publishStudentTimeBlocks(refDate: dateOnly);
         if (normalized.setId != null) {
@@ -3017,16 +3418,25 @@ class DataManager {
     }
     if (TagPresetService.preferSupabaseRead) {
       try {
-        sidForSync = removedBlocks.isNotEmpty ? removedBlocks.first.studentId : null;
+        sidForSync =
+            removedBlocks.isNotEmpty ? removedBlocks.first.studentId : null;
         await Supabase.instance.client.from('student_time_blocks').update({
           'end_date': endDate.toIso8601String().split('T').first,
         }).eq('id', id);
-        _studentTimeBlocks = _studentTimeBlocks.map((b) => b.id == id ? b.copyWith(endDate: endDate) : b).toList();
+        _studentTimeBlocks = _studentTimeBlocks
+            .map((b) => b.id == id ? b.copyWith(endDate: endDate) : b)
+            .toList();
         _publishStudentTimeBlocks(refDate: today);
         if (sidForSync != null) {
-          final remain = _studentTimeBlocks.where((b) => b.studentId == sidForSync).toList();
-          final remainSets = remain.where((b) => b.setId != null && b.setId!.isNotEmpty).map((b) => b.setId!).toSet();
-          print('[SYNC][remove] after single delete: studentId=$sidForSync blocks=${remain.length} setIds=$remainSets');
+          final remain = _studentTimeBlocks
+              .where((b) => b.studentId == sidForSync)
+              .toList();
+          final remainSets = remain
+              .where((b) => b.setId != null && b.setId!.isNotEmpty)
+              .map((b) => b.setId!)
+              .toSet();
+          print(
+              '[SYNC][remove] after single delete: studentId=$sidForSync blocks=${remain.length} setIds=$remainSets');
         }
         return;
       } catch (e, st) {
@@ -3036,13 +3446,20 @@ class DataManager {
     }
     final removed = _studentTimeBlocks.where((b) => b.id == id).toList();
     sidForSync = removed.isNotEmpty ? removed.first.studentId : null;
-    _studentTimeBlocks = _studentTimeBlocks.map((b) => b.id == id ? b.copyWith(endDate: endDate) : b).toList();
+    _studentTimeBlocks = _studentTimeBlocks
+        .map((b) => b.id == id ? b.copyWith(endDate: endDate) : b)
+        .toList();
     _publishStudentTimeBlocks(refDate: today);
     await AcademyDbService.instance.closeStudentTimeBlocks([id], endDate);
     if (sidForSync != null) {
-      final remain = _studentTimeBlocks.where((b) => b.studentId == sidForSync).toList();
-      final remainSets = remain.where((b) => b.setId != null && b.setId!.isNotEmpty).map((b) => b.setId!).toSet();
-      print('[SYNC][remove-local] after single delete: studentId=$sidForSync blocks=${remain.length} setIds=$remainSets');
+      final remain =
+          _studentTimeBlocks.where((b) => b.studentId == sidForSync).toList();
+      final remainSets = remain
+          .where((b) => b.setId != null && b.setId!.isNotEmpty)
+          .map((b) => b.setId!)
+          .toSet();
+      print(
+          '[SYNC][remove-local] after single delete: studentId=$sidForSync blocks=${remain.length} setIds=$remainSets');
     }
   }
 
@@ -3075,9 +3492,9 @@ class DataManager {
       if (weekStart == null) continue;
       final weekEnd = weekStart.add(const Duration(days: 6));
       if (!_overlapsRange(b, weekStart, weekEnd)) continue;
-      final current = _studentTimeBlocksByWeek[key] ?? const <StudentTimeBlock>[];
-      final next = current.where((x) => x.id != b.id).toList()
-        ..add(b);
+      final current =
+          _studentTimeBlocksByWeek[key] ?? const <StudentTimeBlock>[];
+      final next = current.where((x) => x.id != b.id).toList()..add(b);
       next.sort((a, b) {
         final c1 = a.dayIndex.compareTo(b.dayIndex);
         if (c1 != 0) return c1;
@@ -3107,7 +3524,8 @@ class DataManager {
       }
 
       // 일부 환경에서는 payload에 레코드가 없을 수 있으므로 안전 폴백
-      if ((newMap == null || newMap.isEmpty) && (oldMap == null || oldMap.isEmpty)) {
+      if ((newMap == null || newMap.isEmpty) &&
+          (oldMap == null || oldMap.isEmpty)) {
         _bumpStudentTimeBlocksRevision();
         _debouncedReload(loadStudentTimeBlocks);
         return;
@@ -3154,28 +3572,45 @@ class DataManager {
 
   Future<void> _subscribeStudentTimeBlocksRealtime() async {
     try {
-      final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
-      _rtStudentTimeBlocks ??= Supabase.instance.client.channel('public:student_time_blocks:$academyId')
+      final academyId = await TenantService.instance.getActiveAcademyId() ??
+          await TenantService.instance.ensureActiveAcademy();
+      _rtStudentTimeBlocks ??= Supabase.instance.client
+          .channel('public:student_time_blocks:$academyId')
         ..onPostgresChanges(
           event: PostgresChangeEvent.insert,
           schema: 'public',
           table: 'student_time_blocks',
-          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
-          callback: (payload) async { _applyStudentTimeBlocksRealtimePayload(payload); },
+          filter: PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'academy_id',
+              value: academyId),
+          callback: (payload) async {
+            _applyStudentTimeBlocksRealtimePayload(payload);
+          },
         )
         ..onPostgresChanges(
           event: PostgresChangeEvent.update,
           schema: 'public',
           table: 'student_time_blocks',
-          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
-          callback: (payload) async { _applyStudentTimeBlocksRealtimePayload(payload); },
+          filter: PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'academy_id',
+              value: academyId),
+          callback: (payload) async {
+            _applyStudentTimeBlocksRealtimePayload(payload);
+          },
         )
         ..onPostgresChanges(
           event: PostgresChangeEvent.delete,
           schema: 'public',
           table: 'student_time_blocks',
-          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
-          callback: (payload) async { _applyStudentTimeBlocksRealtimePayload(payload); },
+          filter: PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'academy_id',
+              value: academyId),
+          callback: (payload) async {
+            _applyStudentTimeBlocksRealtimePayload(payload);
+          },
         )
         ..subscribe();
     } catch (_) {}
@@ -3183,60 +3618,109 @@ class DataManager {
 
   // generic debouncer
   Timer? _debounceTimer;
-  void _debouncedReload(Future<void> Function() loader, {Duration delay = const Duration(milliseconds: 500)}) {
+  void _debouncedReload(Future<void> Function() loader,
+      {Duration delay = const Duration(milliseconds: 500)}) {
     _debounceTimer?.cancel();
     _debounceTimer = Timer(delay, () async {
-      try { await loader(); } catch (_) {}
+      try {
+        await loader();
+      } catch (_) {}
     });
   }
 
   Future<void> _subscribeStudentsInvalidation() async {
     try {
-      final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
-      final chan = Supabase.instance.client.channel('public:students:' + academyId)
-        ..onPostgresChanges(
-          event: PostgresChangeEvent.insert,
-          schema: 'public', table: 'students',
-          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
-          callback: (_) { studentsRevision.value++; _debouncedReload(loadStudents); },
-        )
-        ..onPostgresChanges(
-          event: PostgresChangeEvent.update,
-          schema: 'public', table: 'students',
-          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
-          callback: (_) { studentsRevision.value++; _debouncedReload(loadStudents); },
-        )
-        ..onPostgresChanges(
-          event: PostgresChangeEvent.delete,
-          schema: 'public', table: 'students',
-          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
-          callback: (_) { studentsRevision.value++; _debouncedReload(loadStudents); },
-        )
-        ..subscribe();
+      final academyId = await TenantService.instance.getActiveAcademyId() ??
+          await TenantService.instance.ensureActiveAcademy();
+      final chan =
+          Supabase.instance.client.channel('public:students:' + academyId)
+            ..onPostgresChanges(
+              event: PostgresChangeEvent.insert,
+              schema: 'public',
+              table: 'students',
+              filter: PostgresChangeFilter(
+                  type: PostgresChangeFilterType.eq,
+                  column: 'academy_id',
+                  value: academyId),
+              callback: (_) {
+                studentsRevision.value++;
+                _debouncedReload(loadStudents);
+              },
+            )
+            ..onPostgresChanges(
+              event: PostgresChangeEvent.update,
+              schema: 'public',
+              table: 'students',
+              filter: PostgresChangeFilter(
+                  type: PostgresChangeFilterType.eq,
+                  column: 'academy_id',
+                  value: academyId),
+              callback: (_) {
+                studentsRevision.value++;
+                _debouncedReload(loadStudents);
+              },
+            )
+            ..onPostgresChanges(
+              event: PostgresChangeEvent.delete,
+              schema: 'public',
+              table: 'students',
+              filter: PostgresChangeFilter(
+                  type: PostgresChangeFilterType.eq,
+                  column: 'academy_id',
+                  value: academyId),
+              callback: (_) {
+                studentsRevision.value++;
+                _debouncedReload(loadStudents);
+              },
+            )
+            ..subscribe();
     } catch (_) {}
   }
 
   Future<void> _subscribeStudentBasicInfoInvalidation() async {
     try {
-      final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
-      final chan = Supabase.instance.client.channel('public:student_basic_info:' + academyId)
+      final academyId = await TenantService.instance.getActiveAcademyId() ??
+          await TenantService.instance.ensureActiveAcademy();
+      final chan = Supabase.instance.client
+          .channel('public:student_basic_info:' + academyId)
         ..onPostgresChanges(
           event: PostgresChangeEvent.insert,
-          schema: 'public', table: 'student_basic_info',
-          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
-          callback: (_) { studentBasicInfoRevision.value++; _debouncedReload(loadStudents); },
+          schema: 'public',
+          table: 'student_basic_info',
+          filter: PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'academy_id',
+              value: academyId),
+          callback: (_) {
+            studentBasicInfoRevision.value++;
+            _debouncedReload(loadStudents);
+          },
         )
         ..onPostgresChanges(
           event: PostgresChangeEvent.update,
-          schema: 'public', table: 'student_basic_info',
-          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
-          callback: (_) { studentBasicInfoRevision.value++; _debouncedReload(loadStudents); },
+          schema: 'public',
+          table: 'student_basic_info',
+          filter: PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'academy_id',
+              value: academyId),
+          callback: (_) {
+            studentBasicInfoRevision.value++;
+            _debouncedReload(loadStudents);
+          },
         )
         ..onPostgresChanges(
           event: PostgresChangeEvent.delete,
-          schema: 'public', table: 'student_basic_info',
-          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
-          callback: (_) { studentBasicInfoRevision.value++; _debouncedReload(loadStudents); },
+          schema: 'public',
+          table: 'student_basic_info',
+          filter: PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'academy_id',
+              value: academyId),
+          callback: (_) {
+            studentBasicInfoRevision.value++;
+            _debouncedReload(loadStudents);
+          },
         )
         ..subscribe();
     } catch (_) {}
@@ -3244,44 +3728,73 @@ class DataManager {
 
   Future<void> _subscribeStudentPaymentInfoInvalidation() async {
     try {
-      final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
-      final chan = Supabase.instance.client.channel('public:student_payment_info:' + academyId)
+      final academyId = await TenantService.instance.getActiveAcademyId() ??
+          await TenantService.instance.ensureActiveAcademy();
+      final chan = Supabase.instance.client
+          .channel('public:student_payment_info:' + academyId)
         ..onPostgresChanges(
           event: PostgresChangeEvent.insert,
-          schema: 'public', table: 'student_payment_info',
-          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
-          callback: (_) { studentPaymentInfoRevision.value++; _debouncedReload(loadStudentPaymentInfos); },
+          schema: 'public',
+          table: 'student_payment_info',
+          filter: PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'academy_id',
+              value: academyId),
+          callback: (_) {
+            studentPaymentInfoRevision.value++;
+            _debouncedReload(loadStudentPaymentInfos);
+          },
         )
         ..onPostgresChanges(
           event: PostgresChangeEvent.update,
-          schema: 'public', table: 'student_payment_info',
-          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
-          callback: (_) { studentPaymentInfoRevision.value++; _debouncedReload(loadStudentPaymentInfos); },
+          schema: 'public',
+          table: 'student_payment_info',
+          filter: PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'academy_id',
+              value: academyId),
+          callback: (_) {
+            studentPaymentInfoRevision.value++;
+            _debouncedReload(loadStudentPaymentInfos);
+          },
         )
         ..onPostgresChanges(
           event: PostgresChangeEvent.delete,
-          schema: 'public', table: 'student_payment_info',
-          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
-          callback: (_) { studentPaymentInfoRevision.value++; _debouncedReload(loadStudentPaymentInfos); },
+          schema: 'public',
+          table: 'student_payment_info',
+          filter: PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'academy_id',
+              value: academyId),
+          callback: (_) {
+            studentPaymentInfoRevision.value++;
+            _debouncedReload(loadStudentPaymentInfos);
+          },
         )
         ..subscribe();
     } catch (_) {}
   }
 
   void _subscribeAuthChanges() {
-    _authSub ??= Supabase.instance.client.auth.onAuthStateChange.listen((AuthState state) async {
+    _authSub ??= Supabase.instance.client.auth.onAuthStateChange
+        .listen((AuthState state) async {
       try {
-        if (state.event == AuthChangeEvent.signedIn || state.event == AuthChangeEvent.tokenRefreshed) {
-          try { await TenantService.instance.ensureActiveAcademy(); } catch (_) {}
+        if (state.event == AuthChangeEvent.signedIn ||
+            state.event == AuthChangeEvent.tokenRefreshed) {
+          try {
+            await TenantService.instance.ensureActiveAcademy();
+          } catch (_) {}
           // 1) 첫 로그인/재로그인 시, 이메일로 교사-사용자 연결 및 멤버십 보장
           try {
             final client = Supabase.instance.client;
             final email = client.auth.currentUser?.email;
             if (email != null && email.isNotEmpty) {
               final aid = await TenantService.instance.getActiveAcademyId();
-              final allow = await client.rpc('is_teacher_email_allowed', params: {'p_email': email});
+              final allow = await client
+                  .rpc('is_teacher_email_allowed', params: {'p_email': email});
               if (allow is bool && allow) {
-                await client.rpc('join_academy_by_email', params: {'p_email': email, 'p_academy_id': aid});
+                await client.rpc('join_academy_by_email',
+                    params: {'p_email': email, 'p_academy_id': aid});
               }
             }
           } catch (_) {}
@@ -3298,31 +3811,75 @@ class DataManager {
   }
 
   Future<void> reloadAllData() async {
-    try { await loadGroups(); } catch (_) {}
-    try { await loadStudentPaymentInfos(); } catch (_) {}
-    try { await loadStudents(); } catch (_) {}
-    try { await loadAcademySettings(); } catch (_) {}
-    try { await loadPaymentType(); } catch (_) {}
-    try { await _loadOperatingHours(); } catch (_) {}
-    try { await loadStudentTimeBlocks(); } catch (_) {}
-    try { await loadSessionOverrides(); } catch (_) {}
-    try { await loadSelfStudyTimeBlocks(); } catch (_) {}
-    try { await loadGroupSchedules(); } catch (_) {}
-    try { await loadTeachers(); } catch (_) {}
-    try { await loadClasses(); } catch (_) {}
-    try { await loadPaymentRecords(); } catch (_) {}
-    try { await AttendanceService.instance.loadLessonOccurrences(); } catch (_) {}
-    try { await loadAttendanceRecords(); } catch (_) {}
-    try { await loadStudentPausePeriods(); } catch (_) {}
-    try { await loadStudentChargePoints(); } catch (_) {}
-    try { await loadMemos(); } catch (_) {}
-    try { await loadResourceFolders(); } catch (_) {}
-    try { await loadResourceFiles(); } catch (_) {}
-    try { await TagPresetService.instance.loadPresets(); } catch (_) {}
-    try { await TagStore.instance.loadAllFromDb(); } catch (_) {}
+    try {
+      await loadGroups();
+    } catch (_) {}
+    try {
+      await loadStudentPaymentInfos();
+    } catch (_) {}
+    try {
+      await loadStudents();
+    } catch (_) {}
+    try {
+      await loadAcademySettings();
+    } catch (_) {}
+    try {
+      await loadPaymentType();
+    } catch (_) {}
+    try {
+      await _loadOperatingHours();
+    } catch (_) {}
+    try {
+      await loadStudentTimeBlocks();
+    } catch (_) {}
+    try {
+      await loadSessionOverrides();
+    } catch (_) {}
+    try {
+      await loadSelfStudyTimeBlocks();
+    } catch (_) {}
+    try {
+      await loadGroupSchedules();
+    } catch (_) {}
+    try {
+      await loadTeachers();
+    } catch (_) {}
+    try {
+      await loadClasses();
+    } catch (_) {}
+    try {
+      await loadPaymentRecords();
+    } catch (_) {}
+    try {
+      await AttendanceService.instance.loadLessonOccurrences();
+    } catch (_) {}
+    try {
+      await loadAttendanceRecords();
+    } catch (_) {}
+    try {
+      await loadStudentPausePeriods();
+    } catch (_) {}
+    try {
+      await loadStudentChargePoints();
+    } catch (_) {}
+    try {
+      await loadMemos();
+    } catch (_) {}
+    try {
+      await loadResourceFolders();
+    } catch (_) {}
+    try {
+      await loadResourceFiles();
+    } catch (_) {}
+    try {
+      await TagPresetService.instance.loadPresets();
+    } catch (_) {}
+    try {
+      await TagStore.instance.loadAllFromDb();
+    } catch (_) {}
     await ensurePlannedCoverageForToday(days: 15, force: true);
   }
-  
+
   Future<void> bulkAddStudentTimeBlocks(
     List<StudentTimeBlock> blocks, {
     bool immediate = false,
@@ -3333,23 +3890,29 @@ class DataManager {
       print('[SUPA][stb bulk add] skip empty payload');
       return;
     }
-    print('[SUPA][stb bulk add][start] count=${blocks.length} immediate=$immediate injectLocal=$injectLocal skipOverlap=$skipOverlapCheck sample=${blocks.take(3).map((b)=>'${b.studentId}:${b.sessionTypeId}:${b.setId}:${b.startDate.toIso8601String().split("T").first}').toList()}');
+    print(
+        '[SUPA][stb bulk add][start] count=${blocks.length} immediate=$immediate injectLocal=$injectLocal skipOverlap=$skipOverlapCheck sample=${blocks.take(3).map((b) => '${b.studentId}:${b.sessionTypeId}:${b.setId}:${b.startDate.toIso8601String().split("T").first}').toList()}');
     // 중복 및 시간 겹침 방어: 모든 블록에 대해 검사
     final normalizedBlocks = blocks.map((b) {
       final sd = DateTime(b.startDate.year, b.startDate.month, b.startDate.day);
-      final ed = b.endDate != null ? DateTime(b.endDate!.year, b.endDate!.month, b.endDate!.day) : null;
+      final ed = b.endDate != null
+          ? DateTime(b.endDate!.year, b.endDate!.month, b.endDate!.day)
+          : null;
       return b.copyWith(startDate: sd, endDate: ed);
     }).toList();
 
     if (!skipOverlapCheck) {
       for (final newBlock in normalizedBlocks) {
         final overlap = _activeBlocks(newBlock.startDate).any((b) =>
-          b.studentId == newBlock.studentId &&
-          b.dayIndex == newBlock.dayIndex &&
-          // 시간 겹침 검사
-          (newBlock.startHour * 60 + newBlock.startMinute) < (b.startHour * 60 + b.startMinute + b.duration.inMinutes) &&
-          (b.startHour * 60 + b.startMinute) < (newBlock.startHour * 60 + newBlock.startMinute + newBlock.duration.inMinutes)
-        );
+            b.studentId == newBlock.studentId &&
+            b.dayIndex == newBlock.dayIndex &&
+            // 시간 겹침 검사
+            (newBlock.startHour * 60 + newBlock.startMinute) <
+                (b.startHour * 60 + b.startMinute + b.duration.inMinutes) &&
+            (b.startHour * 60 + b.startMinute) <
+                (newBlock.startHour * 60 +
+                    newBlock.startMinute +
+                    newBlock.duration.inMinutes));
         if (overlap) {
           throw Exception('이미 등록된 시간과 겹칩니다.');
         }
@@ -3357,30 +3920,38 @@ class DataManager {
     } else {
       print('[SUPA][stb bulk add] overlap check skipped (caller requested)');
     }
-    
+
     if (TagPresetService.preferSupabaseRead) {
       try {
-        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
-        final sessionTypes = normalizedBlocks.map((b) => b.sessionTypeId).toSet();
-        print('[SYNC][bulkAdd] count=${normalizedBlocks.length}, sessionTypes=$sessionTypes, sample=${normalizedBlocks.take(5).map((b)=>'${b.id}:${b.sessionTypeId}:${b.setId}').toList()}');
-        final rows = normalizedBlocks.map((b) => <String, dynamic>{
-          'id': b.id,
-          'academy_id': academyId,
-          'student_id': b.studentId,
-          'day_index': b.dayIndex,
-          'start_hour': b.startHour,
-          'start_minute': b.startMinute,
-          'duration': b.duration.inMinutes,
-          'block_created_at': b.createdAt.toIso8601String(),
-          'start_date': b.startDate.toIso8601String().split('T').first,
-          'end_date': b.endDate?.toIso8601String().split('T').first,
-          'set_id': b.setId,
-          'number': b.number,
-          'session_type_id': b.sessionTypeId,
-          'weekly_order': b.weeklyOrder,
-        }..removeWhere((k, v) => v == null)).toList();
-        print('[SUPA][stb bulk add] rows=${rows.length} first=${rows.isNotEmpty ? rows.first : 'none'}');
-        await Supabase.instance.client.from('student_time_blocks').upsert(rows, onConflict: 'id');
+        final academyId = await TenantService.instance.getActiveAcademyId() ??
+            await TenantService.instance.ensureActiveAcademy();
+        final sessionTypes =
+            normalizedBlocks.map((b) => b.sessionTypeId).toSet();
+        print(
+            '[SYNC][bulkAdd] count=${normalizedBlocks.length}, sessionTypes=$sessionTypes, sample=${normalizedBlocks.take(5).map((b) => '${b.id}:${b.sessionTypeId}:${b.setId}').toList()}');
+        final rows = normalizedBlocks
+            .map((b) => <String, dynamic>{
+                  'id': b.id,
+                  'academy_id': academyId,
+                  'student_id': b.studentId,
+                  'day_index': b.dayIndex,
+                  'start_hour': b.startHour,
+                  'start_minute': b.startMinute,
+                  'duration': b.duration.inMinutes,
+                  'block_created_at': b.createdAt.toIso8601String(),
+                  'start_date': b.startDate.toIso8601String().split('T').first,
+                  'end_date': b.endDate?.toIso8601String().split('T').first,
+                  'set_id': b.setId,
+                  'number': b.number,
+                  'session_type_id': b.sessionTypeId,
+                  'weekly_order': b.weeklyOrder,
+                }..removeWhere((k, v) => v == null))
+            .toList();
+        print(
+            '[SUPA][stb bulk add] rows=${rows.length} first=${rows.isNotEmpty ? rows.first : 'none'}');
+        await Supabase.instance.client
+            .from('student_time_blocks')
+            .upsert(rows, onConflict: 'id');
         if (injectLocal) {
           _studentTimeBlocks.addAll(normalizedBlocks);
         }
@@ -3389,13 +3960,15 @@ class DataManager {
         rethrow;
       }
     } else {
-    if (injectLocal) {
-      _studentTimeBlocks.addAll(normalizedBlocks);
+      if (injectLocal) {
+        _studentTimeBlocks.addAll(normalizedBlocks);
+      }
+      print(
+          '[SYNC][bulkAdd-local] count=${normalizedBlocks.length}, sessionTypes=${normalizedBlocks.map((b) => b.sessionTypeId).toSet()}, sample=${normalizedBlocks.take(5).map((b) => '${b.id}:${b.sessionTypeId}:${b.setId}').toList()}');
+      await AcademyDbService.instance
+          .bulkAddStudentTimeBlocks(normalizedBlocks);
     }
-    print('[SYNC][bulkAdd-local] count=${normalizedBlocks.length}, sessionTypes=${normalizedBlocks.map((b)=>b.sessionTypeId).toSet()}, sample=${normalizedBlocks.take(5).map((b)=>'${b.id}:${b.sessionTypeId}:${b.setId}').toList()}');
-    await AcademyDbService.instance.bulkAddStudentTimeBlocks(normalizedBlocks);
-    }
-    
+
     final affectedStudents = normalizedBlocks.map((b) => b.studentId).toSet();
     if (immediate || blocks.length == 1) {
       // 단일 블록이나 즉시 반영 요청 시 바로 업데이트
@@ -3423,26 +3996,34 @@ class DataManager {
     }
   }
 
-  Future<void> bulkAddStudentTimeBlocksDeferred(List<StudentTimeBlock> blocks) async {
+  Future<void> bulkAddStudentTimeBlocksDeferred(
+      List<StudentTimeBlock> blocks) async {
     // 기존 overlap 방어 로직 재사용
     final normalizedBlocks = blocks.map((b) {
       final sd = DateTime(b.startDate.year, b.startDate.month, b.startDate.day);
-      final ed = b.endDate != null ? DateTime(b.endDate!.year, b.endDate!.month, b.endDate!.day) : null;
+      final ed = b.endDate != null
+          ? DateTime(b.endDate!.year, b.endDate!.month, b.endDate!.day)
+          : null;
       return b.copyWith(startDate: sd, endDate: ed);
     }).toList();
 
     // ✅ 성능: 같은 start_date에 대해 _activeBlocks(date)를 반복 계산하지 않도록 캐시한다.
-    final Map<String, List<StudentTimeBlock>> activeByDate = <String, List<StudentTimeBlock>>{};
+    final Map<String, List<StudentTimeBlock>> activeByDate =
+        <String, List<StudentTimeBlock>>{};
     for (final newBlock in normalizedBlocks) {
-      final d = DateTime(newBlock.startDate.year, newBlock.startDate.month, newBlock.startDate.day);
+      final d = DateTime(newBlock.startDate.year, newBlock.startDate.month,
+          newBlock.startDate.day);
       final key = _ymd(d);
       final active = activeByDate.putIfAbsent(key, () => _activeBlocks(d));
       final overlap = active.any((b) =>
-        b.studentId == newBlock.studentId &&
-        b.dayIndex == newBlock.dayIndex &&
-        (newBlock.startHour * 60 + newBlock.startMinute) < (b.startHour * 60 + b.startMinute + b.duration.inMinutes) &&
-        (b.startHour * 60 + b.startMinute) < (newBlock.startHour * 60 + newBlock.startMinute + newBlock.duration.inMinutes)
-      );
+          b.studentId == newBlock.studentId &&
+          b.dayIndex == newBlock.dayIndex &&
+          (newBlock.startHour * 60 + newBlock.startMinute) <
+              (b.startHour * 60 + b.startMinute + b.duration.inMinutes) &&
+          (b.startHour * 60 + b.startMinute) <
+              (newBlock.startHour * 60 +
+                  newBlock.startMinute +
+                  newBlock.duration.inMinutes));
       if (overlap) {
         throw Exception('이미 등록된 시간과 겹칩니다.');
       }
@@ -3453,9 +4034,11 @@ class DataManager {
     _bumpStudentTimeBlocksRevision();
   }
 
-  List<StudentTimeBlock> get pendingStudentTimeBlocks => List.unmodifiable(_pendingTimeBlocks);
+  List<StudentTimeBlock> get pendingStudentTimeBlocks =>
+      List.unmodifiable(_pendingTimeBlocks);
 
-  Future<void> discardPendingTimeBlocks(String studentId, {Set<String>? setIds}) async {
+  Future<void> discardPendingTimeBlocks(String studentId,
+      {Set<String>? setIds}) async {
     final sid = studentId.trim();
     if (sid.isEmpty) return;
 
@@ -3491,26 +4074,32 @@ class DataManager {
     final pending = List<StudentTimeBlock>.from(_pendingTimeBlocks);
     _pendingTimeBlocks.clear();
 
-    final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
-    final rows = pending.map((b) => <String, dynamic>{
-      'id': b.id,
-      'academy_id': academyId,
-      'student_id': b.studentId,
-      'day_index': b.dayIndex,
-      'start_hour': b.startHour,
-      'start_minute': b.startMinute,
-      'duration': b.duration.inMinutes,
-      'block_created_at': b.createdAt.toIso8601String(),
-      'start_date': b.startDate.toIso8601String().split('T').first,
-      'end_date': b.endDate?.toIso8601String().split('T').first,
-      'set_id': b.setId,
-      'number': b.number,
-      'session_type_id': b.sessionTypeId,
-      'weekly_order': b.weeklyOrder,
-    }..removeWhere((k, v) => v == null)).toList();
+    final academyId = await TenantService.instance.getActiveAcademyId() ??
+        await TenantService.instance.ensureActiveAcademy();
+    final rows = pending
+        .map((b) => <String, dynamic>{
+              'id': b.id,
+              'academy_id': academyId,
+              'student_id': b.studentId,
+              'day_index': b.dayIndex,
+              'start_hour': b.startHour,
+              'start_minute': b.startMinute,
+              'duration': b.duration.inMinutes,
+              'block_created_at': b.createdAt.toIso8601String(),
+              'start_date': b.startDate.toIso8601String().split('T').first,
+              'end_date': b.endDate?.toIso8601String().split('T').first,
+              'set_id': b.setId,
+              'number': b.number,
+              'session_type_id': b.sessionTypeId,
+              'weekly_order': b.weeklyOrder,
+            }..removeWhere((k, v) => v == null))
+        .toList();
     try {
-      print('[SUPA][stb flushPending] rows=${rows.length} first=${rows.isNotEmpty ? rows.first : 'none'}');
-      await Supabase.instance.client.from('student_time_blocks').upsert(rows, onConflict: 'id');
+      print(
+          '[SUPA][stb flushPending] rows=${rows.length} first=${rows.isNotEmpty ? rows.first : 'none'}');
+      await Supabase.instance.client
+          .from('student_time_blocks')
+          .upsert(rows, onConflict: 'id');
     } catch (e, st) {
       print('[SUPA][stb flushPending] $e\n$st');
       rethrow;
@@ -3524,7 +4113,9 @@ class DataManager {
     if (generatePlanned) {
       final Map<String, Set<String>> setIdsByStudent = {};
       for (final b in pending.where((e) => e.setId != null)) {
-        setIdsByStudent.putIfAbsent(b.studentId, () => <String>{}).add(b.setId!);
+        setIdsByStudent
+            .putIfAbsent(b.studentId, () => <String>{})
+            .add(b.setId!);
       }
       for (final entry in setIdsByStudent.entries) {
         await _regeneratePlannedAttendanceForStudentSets(
@@ -3543,42 +4134,59 @@ class DataManager {
     bool publish = true, // 중간 publish를 건너뛸 수 있게 추가
     DateTime? endDateOverride, // 기본: 오늘-1일. 예약 변경 등에서 특정 날짜로 닫기 위해 사용
   }) async {
-    final removedBlocks = _studentTimeBlocks.where((b) => blockIds.contains(b.id)).toList();
+    final removedBlocks =
+        _studentTimeBlocks.where((b) => blockIds.contains(b.id)).toList();
     if (removedBlocks.isNotEmpty) {
       _assertStudentTimeBlockChangeAllowed(removedBlocks, action: '삭제');
     }
     final affectedStudents = removedBlocks.map((b) => b.studentId).toSet();
     final today = _todayDateOnly();
     final endDate = endDateOverride != null
-        ? DateTime(endDateOverride.year, endDateOverride.month, endDateOverride.day)
+        ? DateTime(
+            endDateOverride.year, endDateOverride.month, endDateOverride.day)
         : today.subtract(const Duration(days: 1));
 
     if (TagPresetService.preferSupabaseRead) {
       try {
-        await Supabase.instance.client
-            .from('student_time_blocks')
-            .update({'end_date': endDate.toIso8601String().split('T').first})
-            .filter('id', 'in', '(${blockIds.map((e) => '"$e"').join(',')})');
-        _studentTimeBlocks = _studentTimeBlocks.map((b) => blockIds.contains(b.id) ? b.copyWith(endDate: endDate) : b).toList();
+        await Supabase.instance.client.from('student_time_blocks').update({
+          'end_date': endDate.toIso8601String().split('T').first
+        }).filter('id', 'in', '(${blockIds.map((e) => '"$e"').join(',')})');
+        _studentTimeBlocks = _studentTimeBlocks
+            .map((b) =>
+                blockIds.contains(b.id) ? b.copyWith(endDate: endDate) : b)
+            .toList();
         for (final sid in affectedStudents) {
-          final remain = _studentTimeBlocks.where((b) => b.studentId == sid).toList();
-          final remainSets = remain.where((b) => b.setId != null && b.setId!.isNotEmpty).map((b) => b.setId!).toSet();
-          print('[SYNC][bulkRemove] studentId=$sid blocks=${remain.length} setIds=$remainSets');
+          final remain =
+              _studentTimeBlocks.where((b) => b.studentId == sid).toList();
+          final remainSets = remain
+              .where((b) => b.setId != null && b.setId!.isNotEmpty)
+              .map((b) => b.setId!)
+              .toSet();
+          print(
+              '[SYNC][bulkRemove] studentId=$sid blocks=${remain.length} setIds=$remainSets');
         }
       } catch (e, st) {
         print('[SUPA][stb bulk delete] $e\n$st');
         rethrow;
       }
     } else {
-      _studentTimeBlocks = _studentTimeBlocks.map((b) => blockIds.contains(b.id) ? b.copyWith(endDate: endDate) : b).toList();
+      _studentTimeBlocks = _studentTimeBlocks
+          .map(
+              (b) => blockIds.contains(b.id) ? b.copyWith(endDate: endDate) : b)
+          .toList();
       await AcademyDbService.instance.closeStudentTimeBlocks(blockIds, endDate);
       for (final sid in affectedStudents) {
-        final remain = _studentTimeBlocks.where((b) => b.studentId == sid).toList();
-        final remainSets = remain.where((b) => b.setId != null && b.setId!.isNotEmpty).map((b) => b.setId!).toSet();
-        print('[SYNC][bulkRemove-local] studentId=$sid blocks=${remain.length} setIds=$remainSets');
+        final remain =
+            _studentTimeBlocks.where((b) => b.studentId == sid).toList();
+        final remainSets = remain
+            .where((b) => b.setId != null && b.setId!.isNotEmpty)
+            .map((b) => b.setId!)
+            .toSet();
+        print(
+            '[SYNC][bulkRemove-local] studentId=$sid blocks=${remain.length} setIds=$remainSets');
       }
     }
-    
+
     if (!publish) {
       // 호출 측에서 직접 publish 하는 경우
     } else if (immediate || blockIds.length == 1) {
@@ -3596,7 +4204,8 @@ class DataManager {
 
     if (!skipPlannedRegen) {
       // 예정 출석 정리: 삭제된 블록들의 setId 기준으로 미래 planned 제거/재생성(없으므로 제거만)
-      final setIds = removedBlocks.map((b) => b.setId).whereType<String>().toSet();
+      final setIds =
+          removedBlocks.map((b) => b.setId).whereType<String>().toSet();
       for (final sid in affectedStudents) {
         for (final setId in setIds) {
           await _regeneratePlannedAttendanceForSet(
@@ -3698,10 +4307,15 @@ class DataManager {
     final today = _todayDateOnly();
     // ✅ 기본: refDate부터 삭제(= end_date는 refDate-1)
     // ✅ 단, refDate가 "오늘"이면 오늘까지 유지하고 내일부터 삭제(= end_date=today)
-    final bool isToday = date.year == today.year && date.month == today.month && date.day == today.day;
-    final DateTime endDateToSet = isToday ? today : date.subtract(const Duration(days: 1));
+    final bool isToday = date.year == today.year &&
+        date.month == today.month &&
+        date.day == today.day;
+    final DateTime endDateToSet =
+        isToday ? today : date.subtract(const Duration(days: 1));
 
-    final all = _studentTimeBlocks.where((b) => b.studentId == sid && b.setId == sset).toList();
+    final all = _studentTimeBlocks
+        .where((b) => b.studentId == sid && b.setId == sset)
+        .toList();
     if (all.isEmpty) return;
     _assertStudentTimeBlockChangeAllowed(all, action: '수정');
 
@@ -3714,15 +4328,32 @@ class DataManager {
     // refDate에 활성인 블록 중에서도,
     // endDateToSet(refDate-1)가 start_date보다 빠른 경우는 "종료" 대신 하드 삭제가 더 안전하다.
     final active = all.where(isActiveOnRef).toList();
-    final closableActiveIds = active.where((b) {
-      final sd = DateTime(b.startDate.year, b.startDate.month, b.startDate.day);
-      return !sd.isAfter(endDateToSet);
-    }).map((b) => b.id).where((id) => id.isNotEmpty).toSet().toList();
-    final hardDeleteActiveIds = active.where((b) {
-      final sd = DateTime(b.startDate.year, b.startDate.month, b.startDate.day);
-      return sd.isAfter(endDateToSet);
-    }).map((b) => b.id).where((id) => id.isNotEmpty).toSet().toList();
-    final futureIds = all.where(isFutureSegment).map((b) => b.id).where((id) => id.isNotEmpty).toSet().toList();
+    final closableActiveIds = active
+        .where((b) {
+          final sd =
+              DateTime(b.startDate.year, b.startDate.month, b.startDate.day);
+          return !sd.isAfter(endDateToSet);
+        })
+        .map((b) => b.id)
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList();
+    final hardDeleteActiveIds = active
+        .where((b) {
+          final sd =
+              DateTime(b.startDate.year, b.startDate.month, b.startDate.day);
+          return sd.isAfter(endDateToSet);
+        })
+        .map((b) => b.id)
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList();
+    final futureIds = all
+        .where(isFutureSegment)
+        .map((b) => b.id)
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList();
 
     // 1) refDate에 활성인 블록들만 종료(end_date=refDate)
     if (closableActiveIds.isNotEmpty) {
@@ -3775,7 +4406,9 @@ class DataManager {
     bool regeneratePlanned = true,
   }) async {
     final sd = DateTime(startDate.year, startDate.month, startDate.day);
-    final ed = endDate == null ? null : DateTime(endDate.year, endDate.month, endDate.day);
+    final ed = endDate == null
+        ? null
+        : DateTime(endDate.year, endDate.month, endDate.day);
     if (ed != null && ed.isBefore(sd)) {
       throw Exception('종료일은 시작일보다 빠를 수 없습니다.');
     }
@@ -3801,7 +4434,8 @@ class DataManager {
         rethrow;
       }
     } else {
-      await AcademyDbService.instance.updateStudentTimeBlock(blockId, next.copyWith(createdAt: now));
+      await AcademyDbService.instance
+          .updateStudentTimeBlock(blockId, next.copyWith(createdAt: now));
     }
 
     final applied = next.copyWith(createdAt: now);
@@ -3838,15 +4472,22 @@ class DataManager {
     DateTime? refDate,
     bool touchModifiedAt = true,
   }) async {
-    final ids = blockIds.where((e) => e.trim().isNotEmpty).map((e) => e.trim()).toSet().toList();
+    final ids = blockIds
+        .where((e) => e.trim().isNotEmpty)
+        .map((e) => e.trim())
+        .toSet()
+        .toList();
     if (ids.isEmpty) return;
-    final targets = _studentTimeBlocks.where((b) => ids.contains(b.id)).toList();
+    final targets =
+        _studentTimeBlocks.where((b) => ids.contains(b.id)).toList();
     if (targets.isNotEmpty) {
       _assertStudentTimeBlockChangeAllowed(targets, action: '수정');
     }
 
     final sd = DateTime(startDate.year, startDate.month, startDate.day);
-    final ed = endDate == null ? null : DateTime(endDate.year, endDate.month, endDate.day);
+    final ed = endDate == null
+        ? null
+        : DateTime(endDate.year, endDate.month, endDate.day);
     if (ed != null && ed.isBefore(sd)) {
       throw Exception('종료일은 시작일보다 빠를 수 없습니다.');
     }
@@ -3913,16 +4554,23 @@ class DataManager {
     DateTime? refDate,
     bool touchModifiedAt = true,
   }) async {
-    final ids = blockIds.where((e) => e.trim().isNotEmpty).map((e) => e.trim()).toSet().toList();
+    final ids = blockIds
+        .where((e) => e.trim().isNotEmpty)
+        .map((e) => e.trim())
+        .toSet()
+        .toList();
     if (ids.isEmpty) return;
-    final targets = _studentTimeBlocks.where((b) => ids.contains(b.id)).toList();
+    final targets =
+        _studentTimeBlocks.where((b) => ids.contains(b.id)).toList();
     if (targets.isNotEmpty) {
       _assertStudentTimeBlockChangeAllowed(targets, action: '수정');
     }
 
     final now = DateTime.now();
     final patch = <String, dynamic>{
-      'session_type_id': (sessionTypeId == null || sessionTypeId.trim().isEmpty) ? null : sessionTypeId.trim(),
+      'session_type_id': (sessionTypeId == null || sessionTypeId.trim().isEmpty)
+          ? null
+          : sessionTypeId.trim(),
     };
     if (touchModifiedAt) {
       patch['block_created_at'] = now.toIso8601String();
@@ -3944,7 +4592,9 @@ class DataManager {
         if (idx == -1) continue;
         final prev = _studentTimeBlocks[idx];
         final next = prev.copyWith(
-          sessionTypeId: (sessionTypeId == null || sessionTypeId.trim().isEmpty) ? null : sessionTypeId.trim(),
+          sessionTypeId: (sessionTypeId == null || sessionTypeId.trim().isEmpty)
+              ? null
+              : sessionTypeId.trim(),
           createdAt: touchModifiedAt ? now : prev.createdAt,
         );
         await AcademyDbService.instance.updateStudentTimeBlock(id, next);
@@ -3955,7 +4605,9 @@ class DataManager {
       final b = _studentTimeBlocks[i];
       if (!ids.contains(b.id)) continue;
       final next = b.copyWith(
-        sessionTypeId: (sessionTypeId == null || sessionTypeId.trim().isEmpty) ? null : sessionTypeId.trim(),
+        sessionTypeId: (sessionTypeId == null || sessionTypeId.trim().isEmpty)
+            ? null
+            : sessionTypeId.trim(),
         createdAt: touchModifiedAt ? now : b.createdAt,
       );
       _studentTimeBlocks[i] = next;
@@ -4012,7 +4664,10 @@ class DataManager {
 
     if (TagPresetService.preferSupabaseRead) {
       try {
-        await Supabase.instance.client.from('student_time_blocks').update(patch).eq('id', id);
+        await Supabase.instance.client
+            .from('student_time_blocks')
+            .update(patch)
+            .eq('id', id);
       } catch (e, st) {
         print('[SUPA][stb update schedule] $e\n$st');
         rethrow;
@@ -4040,13 +4695,21 @@ class DataManager {
     final sid = studentId.trim();
     final sset = setId.trim();
     if (sid.isEmpty || sset.isEmpty) return;
-    _schedulePlannedRegen(sid, sset, effectiveStart: effectiveStart, immediate: immediate);
+    _schedulePlannedRegen(sid, sset,
+        effectiveStart: effectiveStart, immediate: immediate);
   }
 
   // 특정 학생의 set_id 목록에 해당하는 모든 수업 블록 삭제
-  Future<void> removeStudentTimeBlocksBySetIds(String studentId, Set<String> setIds) async {
+  Future<void> removeStudentTimeBlocksBySetIds(
+      String studentId, Set<String> setIds) async {
     if (setIds.isEmpty) return;
-    final targets = _studentTimeBlocks.where((b) => b.studentId == studentId && b.setId != null && setIds.contains(b.setId!)).map((b) => b.id).toList();
+    final targets = _studentTimeBlocks
+        .where((b) =>
+            b.studentId == studentId &&
+            b.setId != null &&
+            setIds.contains(b.setId!))
+        .map((b) => b.id)
+        .toList();
     if (targets.isEmpty) return;
     await bulkDeleteStudentTimeBlocks(targets, immediate: true);
     // 예정 출석 재생성(삭제)도 함께 처리
@@ -4059,7 +4722,8 @@ class DataManager {
     }
   }
 
-  Future<void> updateStudentTimeBlock(String id, StudentTimeBlock newBlock) async {
+  Future<void> updateStudentTimeBlock(
+      String id, StudentTimeBlock newBlock) async {
     final prevIndex = _studentTimeBlocks.indexWhere((b) => b.id == id);
     final prev = prevIndex != -1 ? _studentTimeBlocks[prevIndex] : null;
     final prevSession = prev?.sessionTypeId;
@@ -4082,14 +4746,16 @@ class DataManager {
       if (toClose.isEmpty) {
         toClose.add(id);
       }
-      final closingBlocks = _studentTimeBlocks.where((b) => toClose.contains(b.id)).toList();
+      final closingBlocks =
+          _studentTimeBlocks.where((b) => toClose.contains(b.id)).toList();
       if (closingBlocks.isNotEmpty) {
         _assertStudentTimeBlockChangeAllowed(closingBlocks, action: '수정');
       }
       _studentTimeBlocks = _studentTimeBlocks
           .map((b) => toClose.contains(b.id) ? b.copyWith(endDate: endDate) : b)
           .toList();
-      await bulkDeleteStudentTimeBlocks(toClose, immediate: true, publish: false);
+      await bulkDeleteStudentTimeBlocks(toClose,
+          immediate: true, publish: false);
       final fresh = newBlock.copyWith(
         id: const Uuid().v4(),
         startDate: today,
@@ -4100,7 +4766,8 @@ class DataManager {
       _publishStudentTimeBlocks(refDate: today);
       _bumpStudentTimeBlocksRevision();
     } catch (e, st) {
-      print('[ERROR][updateStudentTimeBlock] id=$id setId=${newBlock.setId} day=${newBlock.dayIndex} time=${newBlock.startHour}:${newBlock.startMinute} sess=$newSession error=$e\n$st');
+      print(
+          '[ERROR][updateStudentTimeBlock] id=$id setId=${newBlock.setId} day=${newBlock.dayIndex} time=${newBlock.startHour}:${newBlock.startMinute} sess=$newSession error=$e\n$st');
       rethrow;
     }
   }
@@ -4108,7 +4775,9 @@ class DataManager {
   // 주간 순번 재계산: 학생의 모든 set_id를 대표시간(가장 이른 요일/시간) 기준으로 정렬하여 weekly_order=1..N 부여
   Future<void> _recalculateWeeklyOrderForStudent(String studentId) async {
     // 대상 학생의 활성 블록만 수집
-    final blocks = _activeBlocks(_todayDateOnly()).where((b) => b.studentId == studentId).toList();
+    final blocks = _activeBlocks(_todayDateOnly())
+        .where((b) => b.studentId == studentId)
+        .toList();
     if (blocks.isEmpty) return;
     // setId가 있는 블록만 고려
     final Map<String, List<StudentTimeBlock>> bySet = {};
@@ -4120,10 +4789,17 @@ class DataManager {
     // 각 set의 대표시간: 요일(0~6), 시간(시*60+분) 기준 최소값
     List<MapEntry<String, DateTime>> setRepresentatives = [];
     for (final entry in bySet.entries) {
-      final rep = entry.value.map((b) => DateTime(0, 1, 1, b.startHour, b.startMinute))
-          .reduce((a, b) => (a.hour * 60 + a.minute) <= (b.hour * 60 + b.minute) ? a : b);
+      final rep = entry.value
+          .map((b) => DateTime(0, 1, 1, b.startHour, b.startMinute))
+          .reduce((a, b) =>
+              (a.hour * 60 + a.minute) <= (b.hour * 60 + b.minute) ? a : b);
       // 요일까지 반영하기 위해 dayIndex를 분에 가중치로 반영
-      final minutesWithDay = (entry.value.map((b) => b.dayIndex).reduce((a, b) => a < b ? a : b)) * 24 * 60 + rep.hour * 60 + rep.minute;
+      final minutesWithDay =
+          (entry.value.map((b) => b.dayIndex).reduce((a, b) => a < b ? a : b)) *
+                  24 *
+                  60 +
+              rep.hour * 60 +
+              rep.minute;
       // minutesWithDay를 DateTime으로 재구성(비교용)
       final combined = DateTime(0, 1, 1).add(Duration(minutes: minutesWithDay));
       setRepresentatives.add(MapEntry(entry.key, combined));
@@ -4148,23 +4824,25 @@ class DataManager {
         try {
           await Supabase.instance.client
               .from('student_time_blocks')
-              .update({'weekly_order': order})
-              .eq('id', updated.id);
-        } catch (e, st) { print('[SUPA][stb weekly_order update] $e\n$st'); }
+              .update({'weekly_order': order}).eq('id', updated.id);
+        } catch (e, st) {
+          print('[SUPA][stb weekly_order update] $e\n$st');
+        }
       }
     } else {
-    List<Future> futures = [];
-    for (int i = 0; i < _studentTimeBlocks.length; i++) {
-      final b = _studentTimeBlocks[i];
-      if (b.studentId != studentId || b.setId == null) continue;
-      final order = setToOrder[b.setId!];
-      if (order == null) continue;
-      if (b.weeklyOrder == order) continue;
-      final updated = b.copyWith(weeklyOrder: order);
-      _studentTimeBlocks[i] = updated;
-      futures.add(AcademyDbService.instance.updateStudentTimeBlock(updated.id, updated));
-    }
-    await Future.wait(futures);
+      List<Future> futures = [];
+      for (int i = 0; i < _studentTimeBlocks.length; i++) {
+        final b = _studentTimeBlocks[i];
+        if (b.studentId != studentId || b.setId == null) continue;
+        final order = setToOrder[b.setId!];
+        if (order == null) continue;
+        if (b.weeklyOrder == order) continue;
+        final updated = b.copyWith(weeklyOrder: order);
+        _studentTimeBlocks[i] = updated;
+        futures.add(AcademyDbService.instance
+            .updateStudentTimeBlock(updated.id, updated));
+      }
+      await Future.wait(futures);
     }
     _publishStudentTimeBlocks();
   }
@@ -4180,7 +4858,9 @@ class DataManager {
 
   Future<List<GroupSchedule>> getGroupSchedules(String groupId) async {
     // _storage 관련 코드와 json/hive 기반 메서드 전체를 완전히 삭제
-    return _groupSchedules.where((schedule) => schedule.groupId == groupId).toList();
+    return _groupSchedules
+        .where((schedule) => schedule.groupId == groupId)
+        .toList();
   }
 
   Future<void> addGroupSchedule(GroupSchedule schedule) async {
@@ -4209,7 +4889,9 @@ class DataManager {
 
   Future<void> applyGroupScheduleToStudents(GroupSchedule schedule) async {
     // 해당 그룹에 속한 모든 학생 가져오기
-    final groupStudents = _studentsWithInfo.where((si) => si.student.groupInfo?.id == schedule.groupId).toList();
+    final groupStudents = _studentsWithInfo
+        .where((si) => si.student.groupInfo?.id == schedule.groupId)
+        .toList();
     // 각 학생에 대한 시간 블록 생성 (groupId 전달 제거)
     for (final si in groupStudents) {
       final block = StudentTimeBlock(
@@ -4230,28 +4912,32 @@ class DataManager {
 
   Future<void> loadTeachers() async {
     try {
-      final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+      final academyId = await TenantService.instance.getActiveAcademyId() ??
+          await TenantService.instance.ensureActiveAcademy();
       final data = await Supabase.instance.client
           .from('teachers')
-          .select('id,user_id,name,role,contact,email,description,display_order,pin_hash,avatar_url,avatar_preset_color,avatar_preset_initial,avatar_use_icon')
+          .select(
+              'id,user_id,name,role,contact,email,description,display_order,pin_hash,avatar_url,avatar_preset_color,avatar_preset_initial,avatar_use_icon')
           .eq('academy_id', academyId)
           .order('display_order', ascending: true, nullsFirst: false)
           .order('name');
-      _teachers = (data as List).map((t) => Teacher(
-        id: (t['id'] as String?),
-        userId: (t['user_id'] as String?),
-        name: t['name'] as String? ?? '',
-        role: TeacherRole.values[(t['role'] as int?) ?? 0],
-        contact: t['contact'] as String? ?? '',
-        email: t['email'] as String? ?? '',
-        description: t['description'] as String? ?? '',
-        displayOrder: (t['display_order'] as int?),
-        pinHash: t['pin_hash'] as String?,
-        avatarUrl: t['avatar_url'] as String?,
-        avatarPresetColor: t['avatar_preset_color'] as String?,
-        avatarPresetInitial: t['avatar_preset_initial'] as String?,
-        avatarUseIcon: t['avatar_use_icon'] as bool?,
-      )).toList();
+      _teachers = (data as List)
+          .map((t) => Teacher(
+                id: (t['id'] as String?),
+                userId: (t['user_id'] as String?),
+                name: t['name'] as String? ?? '',
+                role: TeacherRole.values[(t['role'] as int?) ?? 0],
+                contact: t['contact'] as String? ?? '',
+                email: t['email'] as String? ?? '',
+                description: t['description'] as String? ?? '',
+                displayOrder: (t['display_order'] as int?),
+                pinHash: t['pin_hash'] as String?,
+                avatarUrl: t['avatar_url'] as String?,
+                avatarPresetColor: t['avatar_preset_color'] as String?,
+                avatarPresetInitial: t['avatar_preset_initial'] as String?,
+                avatarUseIcon: t['avatar_use_icon'] as bool?,
+              ))
+          .toList();
       _notifyListeners();
       return;
     } catch (e, st) {
@@ -4264,8 +4950,11 @@ class DataManager {
 
   Future<void> saveTeachers() async {
     try {
-      print('[DEBUG] saveTeachers(serverside) 시작: ' + _teachers.length.toString() + '명');
-      final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+      print('[DEBUG] saveTeachers(serverside) 시작: ' +
+          _teachers.length.toString() +
+          '명');
+      final academyId = await TenantService.instance.getActiveAcademyId() ??
+          await TenantService.instance.ensureActiveAcademy();
       final supa = Supabase.instance.client;
       // 더 이상 전체 삭제/재삽입하지 않습니다. 필요 시 개별 단건 API를 사용하세요.
       print('[DEBUG] saveTeachers 완료');
@@ -4282,7 +4971,8 @@ class DataManager {
     teachersNotifier.value = List.unmodifiable(_teachers);
     // 2) 서버 단건 삽입
     try {
-      final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+      final academyId = await TenantService.instance.getActiveAcademyId() ??
+          await TenantService.instance.ensureActiveAcademy();
       final supa = Supabase.instance.client;
       final idx = _teachers.length - 1;
       final row = {
@@ -4300,10 +4990,15 @@ class DataManager {
         'avatar_preset_initial': teacher.avatarPresetInitial,
         'avatar_use_icon': teacher.avatarUseIcon,
       }..removeWhere((k, v) => v == null);
-      final inserted = await supa.from('teachers').insert(row).select('id,user_id,display_order').single();
+      final inserted = await supa
+          .from('teachers')
+          .insert(row)
+          .select('id,user_id,display_order')
+          .single();
       final newId = inserted['id'] as String?;
       final newUserId = inserted['user_id'] as String?;
-      final newOrder = (inserted['display_order'] as int?) ?? (teacher.displayOrder ?? idx);
+      final newOrder =
+          (inserted['display_order'] as int?) ?? (teacher.displayOrder ?? idx);
       // 3) 로컬 반영(id/순서 갱신)
       final prev = _teachers[idx];
       _teachers[idx] = Teacher(
@@ -4362,7 +5057,8 @@ class DataManager {
         pinHash: updated.pinHash ?? prev.pinHash,
         avatarUrl: updated.avatarUrl ?? prev.avatarUrl,
         avatarPresetColor: updated.avatarPresetColor ?? prev.avatarPresetColor,
-        avatarPresetInitial: updated.avatarPresetInitial ?? prev.avatarPresetInitial,
+        avatarPresetInitial:
+            updated.avatarPresetInitial ?? prev.avatarPresetInitial,
         avatarUseIcon: updated.avatarUseIcon ?? prev.avatarUseIcon,
       );
       teachersNotifier.value = List.unmodifiable(_teachers);
@@ -4370,7 +5066,8 @@ class DataManager {
       try {
         final id = prev.id;
         final supa = Supabase.instance.client;
-        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final academyId = await TenantService.instance.getActiveAcademyId() ??
+            await TenantService.instance.ensureActiveAcademy();
         final row = {
           'academy_id': academyId,
           'user_id': updated.userId ?? prev.userId,
@@ -4382,14 +5079,17 @@ class DataManager {
           'display_order': updated.displayOrder ?? prev.displayOrder,
           'pin_hash': updated.pinHash ?? prev.pinHash,
           'avatar_url': updated.avatarUrl ?? prev.avatarUrl,
-          'avatar_preset_color': updated.avatarPresetColor ?? prev.avatarPresetColor,
-          'avatar_preset_initial': updated.avatarPresetInitial ?? prev.avatarPresetInitial,
+          'avatar_preset_color':
+              updated.avatarPresetColor ?? prev.avatarPresetColor,
+          'avatar_preset_initial':
+              updated.avatarPresetInitial ?? prev.avatarPresetInitial,
           'avatar_use_icon': updated.avatarUseIcon ?? prev.avatarUseIcon,
         }..removeWhere((k, v) => v == null);
         if (id != null && id.isNotEmpty) {
           await supa.from('teachers').update(row).eq('id', id);
         } else {
-          final inserted = await supa.from('teachers').insert(row).select('id').single();
+          final inserted =
+              await supa.from('teachers').insert(row).select('id').single();
           final newId = inserted['id'] as String?;
           _teachers[idx] = Teacher(
             id: newId,
@@ -4431,19 +5131,29 @@ class DataManager {
       final client = Supabase.instance.client;
       final meta = client.auth.currentUser?.userMetadata ?? {};
       String? url;
-      try { url = (meta['avatar_url'] as String?); } catch (_) {}
+      try {
+        url = (meta['avatar_url'] as String?);
+      } catch (_) {}
       url ??= (meta['picture'] as String?);
       if ((url ?? '').isEmpty) return;
 
       // 로컬에서 해당 교사 찾기
       int idx = -1;
       for (int i = 0; i < _teachers.length; i++) {
-        if ((_teachers[i].email).toLowerCase() == email.toLowerCase()) { idx = i; break; }
+        if ((_teachers[i].email).toLowerCase() == email.toLowerCase()) {
+          idx = i;
+          break;
+        }
       }
       if (idx < 0) {
-        try { await loadTeachers(); } catch (_) {}
+        try {
+          await loadTeachers();
+        } catch (_) {}
         for (int i = 0; i < _teachers.length; i++) {
-          if ((_teachers[i].email).toLowerCase() == email.toLowerCase()) { idx = i; break; }
+          if ((_teachers[i].email).toLowerCase() == email.toLowerCase()) {
+            idx = i;
+            break;
+          }
         }
         if (idx < 0) return;
       }
@@ -4451,7 +5161,9 @@ class DataManager {
       if (id == null || id.isEmpty) return;
 
       // 서버 업데이트
-      await Supabase.instance.client.from('teachers').update({'avatar_url': url}).eq('id', id);
+      await Supabase.instance.client
+          .from('teachers')
+          .update({'avatar_url': url}).eq('id', id);
       // 로컬 반영
       final prev = _teachers[idx];
       _teachers[idx] = Teacher(
@@ -4552,7 +5264,8 @@ class DataManager {
 
   Future<void> saveTeachersOrderOnly() async {
     try {
-      final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+      final academyId = await TenantService.instance.getActiveAcademyId() ??
+          await TenantService.instance.ensureActiveAcademy();
       final supa = Supabase.instance.client;
       // id가 있는 항목만 display_order를 업서트. id가 null인 신규 항목은 전체 저장 경로에서 처리.
       final rows = _teachers
@@ -4575,17 +5288,27 @@ class DataManager {
   /// 학생별 수업블록(setId 기준) 개수 반환 (수업명 무관, setId 고유 개수)
   int getStudentLessonSetCount(String studentId, {DateTime? refDate}) {
     // 기준 날짜(refDate, 기본 오늘) 기준 활성 블록만 포함하여 setId 개수 계산
-    final date = refDate != null ? DateTime(refDate.year, refDate.month, refDate.day) : _todayDateOnly();
+    final date = refDate != null
+        ? DateTime(refDate.year, refDate.month, refDate.day)
+        : _todayDateOnly();
     final blocks = _studentTimeBlocks.where((b) {
       if (b.studentId != studentId) return false;
       if (b.setId == null || b.setId!.isEmpty) return false;
-      final start = DateTime(b.startDate.year, b.startDate.month, b.startDate.day);
-      final end = b.endDate != null ? DateTime(b.endDate!.year, b.endDate!.month, b.endDate!.day) : null;
+      final start =
+          DateTime(b.startDate.year, b.startDate.month, b.startDate.day);
+      final end = b.endDate != null
+          ? DateTime(b.endDate!.year, b.endDate!.month, b.endDate!.day)
+          : null;
       return !start.isAfter(date) && (end == null || !end.isBefore(date));
     }).toList();
     final setIds = blocks.map((b) => b.setId!).toSet();
-    final detail = blocks.take(20).map((b) => '${b.sessionTypeId}|set:${b.setId}|day:${b.dayIndex}|t=${b.startHour}:${b.startMinute}|start=${b.startDate.toIso8601String().split("T").first}|end=${b.endDate?.toIso8601String().split("T").first}').toList();
-    print('[DEBUG][DataManager] getStudentLessonSetCount($studentId, date=$date) = ${setIds.length}, blocks=${blocks.length}, setIds=$setIds, detail=$detail');
+    final detail = blocks
+        .take(20)
+        .map((b) =>
+            '${b.sessionTypeId}|set:${b.setId}|day:${b.dayIndex}|t=${b.startHour}:${b.startMinute}|start=${b.startDate.toIso8601String().split("T").first}|end=${b.endDate?.toIso8601String().split("T").first}')
+        .toList();
+    print(
+        '[DEBUG][DataManager] getStudentLessonSetCount($studentId, date=$date) = ${setIds.length}, blocks=${blocks.length}, setIds=$setIds, detail=$detail');
     return setIds.length;
   }
 
@@ -4629,18 +5352,28 @@ class DataManager {
   /// 학생별 고유 세트 개수 반환 (setId 고유 개수, sessionTypeId 여부 무관)
   /// refDate 기준 활성 블록만 카운트한다.
   int getStudentSetCount(String studentId, {DateTime? refDate}) {
-    final date = refDate != null ? DateTime(refDate.year, refDate.month, refDate.day) : _todayDateOnly();
+    final date = refDate != null
+        ? DateTime(refDate.year, refDate.month, refDate.day)
+        : _todayDateOnly();
     final blocks = _studentTimeBlocks.where((b) {
       if (b.studentId != studentId) return false;
       if (b.setId == null || b.setId!.isEmpty) return false;
-      final start = DateTime(b.startDate.year, b.startDate.month, b.startDate.day);
-      final end = b.endDate != null ? DateTime(b.endDate!.year, b.endDate!.month, b.endDate!.day) : null;
+      final start =
+          DateTime(b.startDate.year, b.startDate.month, b.startDate.day);
+      final end = b.endDate != null
+          ? DateTime(b.endDate!.year, b.endDate!.month, b.endDate!.day)
+          : null;
       return !start.isAfter(date) && (end == null || !end.isBefore(date));
     }).toList();
     final setIds = blocks.map((b) => b.setId!).toSet();
-    final detail = blocks.take(50).map((b) => '${b.id}|set:${b.setId}|sess:${b.sessionTypeId}|day:${b.dayIndex}|t=${b.startHour}:${b.startMinute}|start=${b.startDate.toIso8601String().split("T").first}|end=${b.endDate?.toIso8601String().split("T").first}').toList();
+    final detail = blocks
+        .take(50)
+        .map((b) =>
+            '${b.id}|set:${b.setId}|sess:${b.sessionTypeId}|day:${b.dayIndex}|t=${b.startHour}:${b.startMinute}|start=${b.startDate.toIso8601String().split("T").first}|end=${b.endDate?.toIso8601String().split("T").first}')
+        .toList();
     final cnt = setIds.length;
-    print('[SYNC][setCount] studentId=$studentId date=$date blocks=${blocks.length} setIds=$setIds setCount=$cnt detail=$detail');
+    print(
+        '[SYNC][setCount] studentId=$studentId date=$date blocks=${blocks.length} setIds=$setIds setCount=$cnt detail=$detail');
     return cnt;
   }
 
@@ -4649,10 +5382,12 @@ class DataManager {
     final eligible = students.where((s) {
       final setCount = getStudentLessonSetCount(s.student.id);
       final remain = 1 - setCount;
-      print('[DEBUG][DataManager] getSelfStudyEligibleStudents: ${s.student.name}, remain=$remain');
+      print(
+          '[DEBUG][DataManager] getSelfStudyEligibleStudents: ${s.student.name}, remain=$remain');
       return remain <= 0;
     }).toList();
-    print('[DEBUG][DataManager] getSelfStudyEligibleStudents: ${eligible.map((s) => s.student.name).toList()}');
+    print(
+        '[DEBUG][DataManager] getSelfStudyEligibleStudents: ${eligible.map((s) => s.student.name).toList()}');
     return eligible;
   }
 
@@ -4660,8 +5395,11 @@ class DataManager {
   /// - refDate를 주면 "보고 있는 날짜" 기준으로 start_date/end_date 활성판정 후 카운트
   int getStudentCountForClass(String classId, {DateTime? refDate}) {
     // print('[DEBUG][getStudentCountForClass] 전체 studentTimeBlocks.length=${_studentTimeBlocks.length}');
-    final d = refDate != null ? DateTime(refDate.year, refDate.month, refDate.day) : _todayDateOnly();
-    final blocks = _activeBlocks(d).where((b) => b.sessionTypeId == classId).toList();
+    final d = refDate != null
+        ? DateTime(refDate.year, refDate.month, refDate.day)
+        : _todayDateOnly();
+    final blocks =
+        _activeBlocks(d).where((b) => b.sessionTypeId == classId).toList();
     //print('[DEBUG][getStudentCountForClass] classId=$classId, blocks=' + blocks.map((b) => '${b.studentId}:${b.setId}:${b.number}').toList().toString());
     final studentIds = blocks.map((b) => b.studentId).toSet();
     //print('[DEBUG][getStudentCountForClass] studentIds=$studentIds');
@@ -4687,56 +5425,65 @@ class DataManager {
     if (block.sessionTypeId == null) return null;
     final cls = _classes.firstWhere(
       (c) => c.id == block.sessionTypeId,
-      orElse: () => ClassInfo(id: '', name: '', description: '', capacity: null, color: null),
+      orElse: () => ClassInfo(
+          id: '', name: '', description: '', capacity: null, color: null),
     );
     return cls.id.isEmpty ? null : cls.color;
   }
 
   /// 특정 요일/시간(+선택적 setId) 블록 기준 학생의 수업 색상 반환 (없으면 null)
   /// refDate를 넘기면 해당 날짜 기준 활성 블록을 판단; 없으면 오늘 날짜 사용
-  Color? getStudentClassColorAt(String studentId, int dayIdx, DateTime startTime, {String? setId, DateTime? refDate}) {
+  Color? getStudentClassColorAt(
+      String studentId, int dayIdx, DateTime startTime,
+      {String? setId, DateTime? refDate}) {
     const bool _colorDebug = false;
     final refDateResolved = refDate ?? _todayDateOnly();
     // ✅ 주 이동(과거/미래)에서도 정확한 값을 얻기 위해 week-cache(해당 주 겹침) 기반으로 후보를 만든다.
     final weekStart = _weekMonday(refDateResolved);
     final weekBlocks = getStudentTimeBlocksForWeek(weekStart);
-    final candidates = weekBlocks
-        .where((b) {
-          if (b.studentId != studentId) return false;
-          if (b.dayIndex != dayIdx) return false;
-          if (b.startHour != startTime.hour) return false;
-          if (b.startMinute != startTime.minute) return false;
-          if (setId != null && setId.isNotEmpty && b.setId != setId) return false;
-          return _isBlockActiveOn(b, refDateResolved);
-        })
-        .toList();
+    final candidates = weekBlocks.where((b) {
+      if (b.studentId != studentId) return false;
+      if (b.dayIndex != dayIdx) return false;
+      if (b.startHour != startTime.hour) return false;
+      if (b.startMinute != startTime.minute) return false;
+      if (setId != null && setId.isNotEmpty && b.setId != setId) return false;
+      return _isBlockActiveOn(b, refDateResolved);
+    }).toList();
     if (_colorDebug) {
       if (candidates.isNotEmpty) {
-        print('[COLOR][ref] sid=$studentId day=$dayIdx time=${startTime.hour}:${startTime.minute} set=$setId ref=$refDateResolved candidates=${candidates.map((b) => '${b.id}|sess=${b.sessionTypeId}|set=${b.setId}|sd=${b.startDate.toIso8601String().split("T").first}|ed=${b.endDate?.toIso8601String().split("T").first ?? 'null'}').join(',')}');
+        print(
+            '[COLOR][ref] sid=$studentId day=$dayIdx time=${startTime.hour}:${startTime.minute} set=$setId ref=$refDateResolved candidates=${candidates.map((b) => '${b.id}|sess=${b.sessionTypeId}|set=${b.setId}|sd=${b.startDate.toIso8601String().split("T").first}|ed=${b.endDate?.toIso8601String().split("T").first ?? 'null'}').join(',')}');
       } else {
-        print('[COLOR][ref] sid=$studentId day=$dayIdx time=${startTime.hour}:${startTime.minute} set=$setId ref=$refDateResolved candidates=0');
+        print(
+            '[COLOR][ref] sid=$studentId day=$dayIdx time=${startTime.hour}:${startTime.minute} set=$setId ref=$refDateResolved candidates=0');
       }
     }
     if (candidates.isEmpty) {
       if (_colorDebug) {
-        print('[COLOR][pick] sid=$studentId day=$dayIdx time=${startTime.hour}:${startTime.minute} set=$setId ref=$refDateResolved no-active-candidates');
+        print(
+            '[COLOR][pick] sid=$studentId day=$dayIdx time=${startTime.hour}:${startTime.minute} set=$setId ref=$refDateResolved no-active-candidates');
       }
       return null;
     }
 
-    final withSession = candidates.where((b) => b.sessionTypeId != null && b.sessionTypeId!.isNotEmpty).toList();
+    final withSession = candidates
+        .where((b) => b.sessionTypeId != null && b.sessionTypeId!.isNotEmpty)
+        .toList();
     if (withSession.isNotEmpty) {
       withSession.sort((a, b) => b.createdAt.compareTo(a.createdAt));
       final block = withSession.first; // 최신 createdAt
       final cls = _classes.firstWhere(
         (c) => c.id == block.sessionTypeId,
-        orElse: () => ClassInfo(id: '', name: '', description: '', capacity: null, color: null),
+        orElse: () => ClassInfo(
+            id: '', name: '', description: '', capacity: null, color: null),
       );
       final color = cls.id.isEmpty ? null : cls.color;
       if (_colorDebug) {
-        print('[COLOR][pick] sid=$studentId day=$dayIdx time=${startTime.hour}:${startTime.minute} set=$setId ref=$refDateResolved choose=${block.id}|sess=${block.sessionTypeId}|set=${block.setId}|sd=${block.startDate.toIso8601String().split("T").first}|ed=${block.endDate?.toIso8601String().split("T").first} color=$color candidates=${candidates.length} withSession=${withSession.length}');
+        print(
+            '[COLOR][pick] sid=$studentId day=$dayIdx time=${startTime.hour}:${startTime.minute} set=$setId ref=$refDateResolved choose=${block.id}|sess=${block.sessionTypeId}|set=${block.setId}|sd=${block.startDate.toIso8601String().split("T").first}|ed=${block.endDate?.toIso8601String().split("T").first} color=$color candidates=${candidates.length} withSession=${withSession.length}');
         if (color == null) {
-          print('[COLOR][lookup] sid=$studentId day=$dayIdx time=${startTime.hour}:${startTime.minute} set=$setId ref=$refDateResolved reason=no-class-color block=${block.id}|sess=${block.sessionTypeId}|set=${block.setId}|sd=${block.startDate.toIso8601String().split("T").first}|ed=${block.endDate?.toIso8601String().split("T").first}');
+          print(
+              '[COLOR][lookup] sid=$studentId day=$dayIdx time=${startTime.hour}:${startTime.minute} set=$setId ref=$refDateResolved reason=no-class-color block=${block.id}|sess=${block.sessionTypeId}|set=${block.setId}|sd=${block.startDate.toIso8601String().split("T").first}|ed=${block.endDate?.toIso8601String().split("T").first}');
         }
       }
       return color;
@@ -4746,13 +5493,16 @@ class DataManager {
     final fallback = candidates.first; // sessionTypeId 없을 때도 최신 createdAt 사용
     final cls = _classes.firstWhere(
       (c) => c.id == fallback.sessionTypeId,
-      orElse: () => ClassInfo(id: '', name: '', description: '', capacity: null, color: null),
+      orElse: () => ClassInfo(
+          id: '', name: '', description: '', capacity: null, color: null),
     );
     final color = cls.id.isEmpty ? null : cls.color;
     if (_colorDebug) {
-      print('[COLOR][pick] sid=$studentId day=$dayIdx time=${startTime.hour}:${startTime.minute} set=$setId ref=$refDateResolved choose=${fallback.id}|sess=${fallback.sessionTypeId}|set=${fallback.setId}|sd=${fallback.startDate.toIso8601String().split("T").first}|ed=${fallback.endDate?.toIso8601String().split("T").first} (no sess) candidates=${candidates.length}');
+      print(
+          '[COLOR][pick] sid=$studentId day=$dayIdx time=${startTime.hour}:${startTime.minute} set=$setId ref=$refDateResolved choose=${fallback.id}|sess=${fallback.sessionTypeId}|set=${fallback.setId}|sd=${fallback.startDate.toIso8601String().split("T").first}|ed=${fallback.endDate?.toIso8601String().split("T").first} (no sess) candidates=${candidates.length}');
       if (color == null) {
-        print('[COLOR][lookup] sid=$studentId day=$dayIdx time=${startTime.hour}:${startTime.minute} set=$setId ref=$refDateResolved reason=no-session block=${fallback.id}|sess=${fallback.sessionTypeId}|set=${fallback.setId}|sd=${fallback.startDate.toIso8601String().split("T").first}|ed=${fallback.endDate?.toIso8601String().split("T").first}');
+        print(
+            '[COLOR][lookup] sid=$studentId day=$dayIdx time=${startTime.hour}:${startTime.minute} set=$setId ref=$refDateResolved reason=no-session block=${fallback.id}|sess=${fallback.sessionTypeId}|set=${fallback.setId}|sd=${fallback.startDate.toIso8601String().split("T").first}|ed=${fallback.endDate?.toIso8601String().split("T").first}');
       }
     }
     return color;
@@ -4761,8 +5511,10 @@ class DataManager {
   // 자습 블록을 DB에서 불러오는 메서드 추가
   Future<void> loadSelfStudyTimeBlocks() async {
     try {
-      _selfStudyTimeBlocks = await AcademyDbService.instance.getSelfStudyTimeBlocks();
-      selfStudyTimeBlocksNotifier.value = List.unmodifiable(_selfStudyTimeBlocks);
+      _selfStudyTimeBlocks =
+          await AcademyDbService.instance.getSelfStudyTimeBlocks();
+      selfStudyTimeBlocksNotifier.value =
+          List.unmodifiable(_selfStudyTimeBlocks);
     } catch (e) {
       print('Error loading self study time blocks: $e');
       _selfStudyTimeBlocks = [];
@@ -4770,12 +5522,13 @@ class DataManager {
     }
   }
 
-List<ClassInfo> _classes = [];
-final ValueNotifier<List<ClassInfo>> classesNotifier = ValueNotifier<List<ClassInfo>>([]);
-List<ClassInfo> get classes => List.unmodifiable(_classes);
-bool _isSavingClassesOrder = false;
-DateTime? _lastClassesOrderSaveEnd;
-DateTime? _lastClassesOrderSaveStart;
+  List<ClassInfo> _classes = [];
+  final ValueNotifier<List<ClassInfo>> classesNotifier =
+      ValueNotifier<List<ClassInfo>>([]);
+  List<ClassInfo> get classes => List.unmodifiable(_classes);
+  bool _isSavingClassesOrder = false;
+  DateTime? _lastClassesOrderSaveEnd;
+  DateTime? _lastClassesOrderSaveStart;
 
   /// UI 즉시 반영용: 수업을 로컬 상태에서 먼저 제거한다(서버 작업은 별도).
   void removeClassOptimistic(String id) {
@@ -4793,13 +5546,17 @@ DateTime? _lastClassesOrderSaveStart;
       return;
     }
     if (_lastClassesOrderSaveEnd != null &&
-        now.difference(_lastClassesOrderSaveEnd!) < const Duration(seconds: 1)) {
-      print('[SUPA][classes load] skip because recent order save completed <1s ago');
+        now.difference(_lastClassesOrderSaveEnd!) <
+            const Duration(seconds: 1)) {
+      print(
+          '[SUPA][classes load] skip because recent order save completed <1s ago');
       return;
     }
     if (TagPresetService.preferSupabaseRead) {
-      final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
-      print('[SUPA][classes load] academyId=$academyId preferSupabaseRead=true');
+      final academyId = await TenantService.instance.getActiveAcademyId() ??
+          await TenantService.instance.ensureActiveAcademy();
+      print(
+          '[SUPA][classes load] academyId=$academyId preferSupabaseRead=true');
       // 1차: order_index 지원 스키마
       try {
         final data = await Supabase.instance.client
@@ -4808,20 +5565,25 @@ DateTime? _lastClassesOrderSaveStart;
             .eq('academy_id', academyId)
             .order('order_index', ascending: true)
             .order('name');
-        _classes = (data as List).map((m) => ClassInfo(
-          id: (m['id'] as String),
-          name: (m['name'] as String? ?? ''),
-          capacity: (m['capacity'] as int?),
-          description: (m['description'] as String? ?? ''),
-          color: (m['color'] == null) ? null : Color(m['color'] as int),
-        )).toList();
-        print('[SUPA][classes load] order_index schema 로드: ${_classes.map((c) => c.name).toList()}');
+        _classes = (data as List)
+            .map((m) => ClassInfo(
+                  id: (m['id'] as String),
+                  name: (m['name'] as String? ?? ''),
+                  capacity: (m['capacity'] as int?),
+                  description: (m['description'] as String? ?? ''),
+                  color: (m['color'] == null) ? null : Color(m['color'] as int),
+                ))
+            .toList();
+        print(
+            '[SUPA][classes load] order_index schema 로드: ${_classes.map((c) => c.name).toList()}');
 
-          // 저장이 더 최근에 시작되었으면 이 로드 결과는 폐기
-          if (_lastClassesOrderSaveStart != null && loadStartedAt.isBefore(_lastClassesOrderSaveStart!)) {
-            print('[SUPA][classes load] skip apply because newer save started after load began');
-            return;
-          }
+        // 저장이 더 최근에 시작되었으면 이 로드 결과는 폐기
+        if (_lastClassesOrderSaveStart != null &&
+            loadStartedAt.isBefore(_lastClassesOrderSaveStart!)) {
+          print(
+              '[SUPA][classes load] skip apply because newer save started after load began');
+          return;
+        }
       } catch (e, st) {
         print('[SUPA][classes load order_index] $e\n$st');
         // 2차: 구 스키마( order_index 없음 ) fallback
@@ -4831,18 +5593,24 @@ DateTime? _lastClassesOrderSaveStart;
               .select('id,name,capacity,description,color')
               .eq('academy_id', academyId)
               .order('name');
-          _classes = (data as List).map((m) => ClassInfo(
-            id: (m['id'] as String),
-            name: (m['name'] as String? ?? ''),
-            capacity: (m['capacity'] as int?),
-            description: (m['description'] as String? ?? ''),
-            color: (m['color'] == null) ? null : Color(m['color'] as int),
-          )).toList();
-          print('[SUPA][classes load] fallback name order 로드: ${_classes.map((c) => c.name).toList()}');
+          _classes = (data as List)
+              .map((m) => ClassInfo(
+                    id: (m['id'] as String),
+                    name: (m['name'] as String? ?? ''),
+                    capacity: (m['capacity'] as int?),
+                    description: (m['description'] as String? ?? ''),
+                    color:
+                        (m['color'] == null) ? null : Color(m['color'] as int),
+                  ))
+              .toList();
+          print(
+              '[SUPA][classes load] fallback name order 로드: ${_classes.map((c) => c.name).toList()}');
 
           // 저장이 더 최근에 시작되었으면 이 로드 결과는 폐기
-          if (_lastClassesOrderSaveStart != null && loadStartedAt.isBefore(_lastClassesOrderSaveStart!)) {
-            print('[SUPA][classes load] skip apply (fallback) because newer save started after load began');
+          if (_lastClassesOrderSaveStart != null &&
+              loadStartedAt.isBefore(_lastClassesOrderSaveStart!)) {
+            print(
+                '[SUPA][classes load] skip apply (fallback) because newer save started after load began');
             return;
           }
         } catch (e2, st2) {
@@ -4852,7 +5620,8 @@ DateTime? _lastClassesOrderSaveStart;
 
       // Supabase 모드에서는 로컬 DB와 섞이지 않도록, 로컬 fallback 중단
       if (_classes.isNotEmpty) {
-        print('[SUPA][classes load] 최종 _classes=${_classes.map((c) => c.name).toList()}');
+        print(
+            '[SUPA][classes load] 최종 _classes=${_classes.map((c) => c.name).toList()}');
       } else {
         print('[SUPA][classes load] Supabase 결과 없음(비어 있음), 로컬 fallback 생략');
       }
@@ -4867,22 +5636,30 @@ DateTime? _lastClassesOrderSaveStart;
     classesRevision.value++;
     classAssignmentsRevision.value++;
   }
+
   Future<void> saveClasses() async {
     if (TagPresetService.preferSupabaseRead) {
       try {
-        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
-        final rows = _classes.map((c) => {
-          'id': c.id,
-          'academy_id': academyId,
-          'name': c.name,
-          'capacity': c.capacity,
-          'description': c.description,
-          'color': c.color?.value.toSigned(32),
-        }).toList();
+        final academyId = await TenantService.instance.getActiveAcademyId() ??
+            await TenantService.instance.ensureActiveAcademy();
+        final rows = _classes
+            .map((c) => {
+                  'id': c.id,
+                  'academy_id': academyId,
+                  'name': c.name,
+                  'capacity': c.capacity,
+                  'description': c.description,
+                  'color': c.color?.value.toSigned(32),
+                })
+            .toList();
         if (rows.isNotEmpty) {
-          await Supabase.instance.client.from('classes').upsert(rows, onConflict: 'id');
+          await Supabase.instance.client
+              .from('classes')
+              .upsert(rows, onConflict: 'id');
         }
-      } catch (e, st) { print('[SUPA][classes save] $e\n$st'); }
+      } catch (e, st) {
+        print('[SUPA][classes save] $e\n$st');
+      }
       classesNotifier.value = List.unmodifiable(_classes);
       return;
     }
@@ -4891,10 +5668,12 @@ DateTime? _lastClassesOrderSaveStart;
     }
     classesNotifier.value = List.unmodifiable(_classes);
   }
+
   Future<void> addClass(ClassInfo c) async {
     if (TagPresetService.preferSupabaseRead) {
       try {
-        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final academyId = await TenantService.instance.getActiveAcademyId() ??
+            await TenantService.instance.ensureActiveAcademy();
         final row = {
           'id': c.id,
           'academy_id': academyId,
@@ -4903,7 +5682,9 @@ DateTime? _lastClassesOrderSaveStart;
           'description': c.description,
           'color': c.color?.value.toSigned(32),
         };
-        await Supabase.instance.client.from('classes').upsert(row, onConflict: 'id');
+        await Supabase.instance.client
+            .from('classes')
+            .upsert(row, onConflict: 'id');
         // 서버 반영 후 메모리 반영 및 UI 업데이트
         _classes.add(c);
         classesNotifier.value = List.unmodifiable(_classes);
@@ -4919,10 +5700,12 @@ DateTime? _lastClassesOrderSaveStart;
     classesNotifier.value = List.unmodifiable(_classes);
     classesRevision.value++;
   }
+
   Future<void> updateClass(ClassInfo c) async {
     if (TagPresetService.preferSupabaseRead) {
       try {
-        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final academyId = await TenantService.instance.getActiveAcademyId() ??
+            await TenantService.instance.ensureActiveAcademy();
         await Supabase.instance.client.from('classes').upsert({
           'id': c.id,
           'academy_id': academyId,
@@ -4931,8 +5714,11 @@ DateTime? _lastClassesOrderSaveStart;
           'description': c.description,
           'color': c.color?.value.toSigned(32),
         }, onConflict: 'id');
-    final idx = _classes.indexWhere((e) => e.id == c.id);
-        if (idx != -1) _classes[idx] = c; else _classes.add(c);
+        final idx = _classes.indexWhere((e) => e.id == c.id);
+        if (idx != -1)
+          _classes[idx] = c;
+        else
+          _classes.add(c);
         classesNotifier.value = List.unmodifiable(_classes);
         classesRevision.value++;
         classAssignmentsRevision.value++;
@@ -4943,12 +5729,16 @@ DateTime? _lastClassesOrderSaveStart;
       }
     }
     final idx = _classes.indexWhere((e) => e.id == c.id);
-    if (idx != -1) _classes[idx] = c; else _classes.add(c);
+    if (idx != -1)
+      _classes[idx] = c;
+    else
+      _classes.add(c);
     await AcademyDbService.instance.updateClass(c);
     classesNotifier.value = List.unmodifiable(_classes);
     classesRevision.value++;
     classAssignmentsRevision.value++;
   }
+
   Future<void> deleteClass(String id) async {
     _classes.removeWhere((c) => c.id == id);
     classesNotifier.value = List.unmodifiable(_classes);
@@ -4968,11 +5758,14 @@ DateTime? _lastClassesOrderSaveStart;
     await AcademyDbService.instance.deleteClass(id);
   }
 
-  Future<void> saveClassesOrder(List<ClassInfo> newOrder, {bool skipNotifierUpdate = false}) async {
-    print('[DEBUG][DataManager.saveClassesOrder] 시작: ${newOrder.map((c) => c.name).toList()}');
+  Future<void> saveClassesOrder(List<ClassInfo> newOrder,
+      {bool skipNotifierUpdate = false}) async {
+    print(
+        '[DEBUG][DataManager.saveClassesOrder] 시작: ${newOrder.map((c) => c.name).toList()}');
     _classes = List<ClassInfo>.from(newOrder);
-    print('[DEBUG][DataManager.saveClassesOrder] _classes 업데이트: ${_classes.map((c) => c.name).toList()}');
-    
+    print(
+        '[DEBUG][DataManager.saveClassesOrder] _classes 업데이트: ${_classes.map((c) => c.name).toList()}');
+
     if (_isSavingClassesOrder) {
       print('[SUPA][classes reorder] 이미 저장 중이라 중복 호출 무시');
       return;
@@ -4980,64 +5773,75 @@ DateTime? _lastClassesOrderSaveStart;
     _lastClassesOrderSaveStart = DateTime.now();
     _isSavingClassesOrder = true;
     try {
-    if (TagPresetService.preferSupabaseRead) {
-      try {
-        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
-        final supa = Supabase.instance.client;
-        print('[SUPA][classes reorder] academyId=$academyId rows=${_classes.length}');
-        if (_classes.isNotEmpty) {
-          final rows = _classes.asMap().entries.map((entry) {
-            final idx = entry.key;
-            final c = entry.value;
-            return {
-              'id': c.id,
-              'academy_id': academyId,
-              'name': c.name,
-              'capacity': c.capacity,
-              'description': c.description,
-              'color': c.color?.value.toSigned(32),
-              'order_index': idx,
-            };
-          }).toList();
-          try {
-            print('[SUPA][classes reorder upsert] rows(detail)=${rows.map((r) => '${r['name']}|${r['order_index']}').toList()}');
-            await supa.from('classes').upsert(rows, onConflict: 'id');
-            print('[SUPA][classes reorder upsert] order_index 사용 rows=${rows.length}');
-          } catch (e, st) {
-            print('[SUPA][classes reorder upsert order_index] $e\n$st');
-            // order_index가 없는 구스키마 대비: order_index를 제외하고 upsert 재시도
-            final fallbackRows = _classes.map((c) => {
-              'id': c.id,
-              'academy_id': academyId,
-              'name': c.name,
-              'capacity': c.capacity,
-              'description': c.description,
-              'color': c.color?.value.toSigned(32),
+      if (TagPresetService.preferSupabaseRead) {
+        try {
+          final academyId = await TenantService.instance.getActiveAcademyId() ??
+              await TenantService.instance.ensureActiveAcademy();
+          final supa = Supabase.instance.client;
+          print(
+              '[SUPA][classes reorder] academyId=$academyId rows=${_classes.length}');
+          if (_classes.isNotEmpty) {
+            final rows = _classes.asMap().entries.map((entry) {
+              final idx = entry.key;
+              final c = entry.value;
+              return {
+                'id': c.id,
+                'academy_id': academyId,
+                'name': c.name,
+                'capacity': c.capacity,
+                'description': c.description,
+                'color': c.color?.value.toSigned(32),
+                'order_index': idx,
+              };
             }).toList();
-            print('[SUPA][classes reorder fallback upsert] rows(detail)=${fallbackRows.map((r) => '${r['name']}').toList()}');
-            await supa.from('classes').upsert(fallbackRows, onConflict: 'id');
-            print('[SUPA][classes reorder upsert] fallback rows=${fallbackRows.length}');
+            try {
+              print(
+                  '[SUPA][classes reorder upsert] rows(detail)=${rows.map((r) => '${r['name']}|${r['order_index']}').toList()}');
+              await supa.from('classes').upsert(rows, onConflict: 'id');
+              print(
+                  '[SUPA][classes reorder upsert] order_index 사용 rows=${rows.length}');
+            } catch (e, st) {
+              print('[SUPA][classes reorder upsert order_index] $e\n$st');
+              // order_index가 없는 구스키마 대비: order_index를 제외하고 upsert 재시도
+              final fallbackRows = _classes
+                  .map((c) => {
+                        'id': c.id,
+                        'academy_id': academyId,
+                        'name': c.name,
+                        'capacity': c.capacity,
+                        'description': c.description,
+                        'color': c.color?.value.toSigned(32),
+                      })
+                  .toList();
+              print(
+                  '[SUPA][classes reorder fallback upsert] rows(detail)=${fallbackRows.map((r) => '${r['name']}').toList()}');
+              await supa.from('classes').upsert(fallbackRows, onConflict: 'id');
+              print(
+                  '[SUPA][classes reorder upsert] fallback rows=${fallbackRows.length}');
+            }
           }
+        } catch (e, st) {
+          print('[SUPA][classes reorder] $e\n$st');
         }
-      } catch (e, st) { print('[SUPA][classes reorder] $e\n$st'); }
-    } else {
-    await AcademyDbService.instance.deleteAllClasses();
-    print('[DEBUG][DataManager.saveClassesOrder] deleteAllClasses 완료');
-    for (final c in _classes) {
-      await AcademyDbService.instance.addClass(c);
-    }
-    print('[DEBUG][DataManager.saveClassesOrder] 모든 클래스 재저장 완료');
-    }
-    
-    if (!skipNotifierUpdate) {
-      classesNotifier.value = List.unmodifiable(_classes);
-      print('[DEBUG][DataManager.saveClassesOrder] classesNotifier 업데이트 완료');
-      classesRevision.value++;
-      classAssignmentsRevision.value++;
-    } else {
-      // 로컬 UI만 업데이트한 경우, 불필요한 리비전 bump를 생략해 불필요한 재빌드/리셋을 방지
-      print('[DEBUG][DataManager.saveClassesOrder] skipNotifierUpdate=true → revision bump 생략');
-    }
+      } else {
+        await AcademyDbService.instance.deleteAllClasses();
+        print('[DEBUG][DataManager.saveClassesOrder] deleteAllClasses 완료');
+        for (final c in _classes) {
+          await AcademyDbService.instance.addClass(c);
+        }
+        print('[DEBUG][DataManager.saveClassesOrder] 모든 클래스 재저장 완료');
+      }
+
+      if (!skipNotifierUpdate) {
+        classesNotifier.value = List.unmodifiable(_classes);
+        print('[DEBUG][DataManager.saveClassesOrder] classesNotifier 업데이트 완료');
+        classesRevision.value++;
+        classAssignmentsRevision.value++;
+      } else {
+        // 로컬 UI만 업데이트한 경우, 불필요한 리비전 bump를 생략해 불필요한 재빌드/리셋을 방지
+        print(
+            '[DEBUG][DataManager.saveClassesOrder] skipNotifierUpdate=true → revision bump 생략');
+      }
     } finally {
       _isSavingClassesOrder = false;
       _lastClassesOrderSaveEnd = DateTime.now();
@@ -5049,7 +5853,8 @@ DateTime? _lastClassesOrderSaveStart;
     // 서버 우선 읽기: Supabase에서 결제 레코드를 불러온다.
     if (TagPresetService.preferSupabaseRead) {
       try {
-        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final academyId = await TenantService.instance.getActiveAcademyId() ??
+            await TenantService.instance.ensureActiveAcademy();
         final data = await Supabase.instance.client
             .from('payment_records')
             .select('id,student_id,cycle,due_date,paid_date,postpone_reason')
@@ -5059,7 +5864,8 @@ DateTime? _lastClassesOrderSaveStart;
         _paymentRecords = (data as List).map((m) {
           final String sid = m['student_id'] as String;
           final int cycle = (m['cycle'] as int);
-          final String? dueStr = m['due_date'] as String?; // DATE → 'YYYY-MM-DD'
+          final String? dueStr =
+              m['due_date'] as String?; // DATE → 'YYYY-MM-DD'
           final String? paidStr = m['paid_date'] as String?; // nullable
           final DateTime due = (dueStr != null && dueStr.isNotEmpty)
               ? DateTime.parse(dueStr)
@@ -5077,7 +5883,8 @@ DateTime? _lastClassesOrderSaveStart;
           );
         }).toList();
         paymentRecordsNotifier.value = List.unmodifiable(_paymentRecords);
-        print('[DEBUG] payment_records 로드 완료(Supabase): ${_paymentRecords.length}개');
+        print(
+            '[DEBUG] payment_records 로드 완료(Supabase): ${_paymentRecords.length}개');
         return;
       } catch (e, st) {
         print('[ERROR] payment_records Supabase 로드 실패: $e\n$st');
@@ -5096,11 +5903,14 @@ DateTime? _lastClassesOrderSaveStart;
     // 서버 전용 처리: 결제 발생 시 RPC 사용
     if (TagPresetService.preferSupabaseRead) {
       try {
-        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final academyId = await TenantService.instance.getActiveAcademyId() ??
+            await TenantService.instance.ensureActiveAcademy();
         await Supabase.instance.client.rpc('record_payment', params: {
           'p_student_id': record.studentId,
           'p_cycle': record.cycle,
-          'p_paid': (record.paidDate ?? DateTime.now()).toIso8601String().substring(0, 10),
+          'p_paid': (record.paidDate ?? DateTime.now())
+              .toIso8601String()
+              .substring(0, 10),
           'p_academy_id': academyId,
         });
         await loadPaymentRecords();
@@ -5116,11 +5926,14 @@ DateTime? _lastClassesOrderSaveStart;
     // 서버 전용: 납부 처리만 허용하며, 납부된 항목은 수정 불가. 납부 처리 역시 RPC 사용.
     if (TagPresetService.preferSupabaseRead) {
       try {
-        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final academyId = await TenantService.instance.getActiveAcademyId() ??
+            await TenantService.instance.ensureActiveAcademy();
         await Supabase.instance.client.rpc('record_payment', params: {
           'p_student_id': record.studentId,
           'p_cycle': record.cycle,
-          'p_paid': (record.paidDate ?? DateTime.now()).toIso8601String().substring(0, 10),
+          'p_paid': (record.paidDate ?? DateTime.now())
+              .toIso8601String()
+              .substring(0, 10),
           'p_academy_id': academyId,
         });
         await loadPaymentRecords();
@@ -5156,7 +5969,9 @@ DateTime? _lastClassesOrderSaveStart;
   Future<void> initFirstDue(String studentId, DateTime firstDue) async {
     if (!TagPresetService.preferSupabaseRead) return; // 서버 우선 모드에서만 사용
     try {
-      final String academyId = (await TenantService.instance.getActiveAcademyId()) ?? await TenantService.instance.ensureActiveAcademy();
+      final String academyId =
+          (await TenantService.instance.getActiveAcademyId()) ??
+              await TenantService.instance.ensureActiveAcademy();
       await Supabase.instance.client.rpc('init_first_due', params: {
         'p_student_id': studentId,
         'p_first_due': firstDue.toIso8601String().substring(0, 10),
@@ -5168,10 +5983,12 @@ DateTime? _lastClassesOrderSaveStart;
     }
   }
 
-  Future<void> recordPayment(String studentId, int cycle, DateTime paidDate) async {
+  Future<void> recordPayment(
+      String studentId, int cycle, DateTime paidDate) async {
     if (!TagPresetService.preferSupabaseRead) return; // 서버 우선 모드에서만 사용
     try {
-      final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+      final academyId = await TenantService.instance.getActiveAcademyId() ??
+          await TenantService.instance.ensureActiveAcademy();
       await Supabase.instance.client.rpc('record_payment', params: {
         'p_student_id': studentId,
         'p_cycle': cycle,
@@ -5184,10 +6001,12 @@ DateTime? _lastClassesOrderSaveStart;
     }
   }
 
-  Future<void> postponeDueDate(String studentId, int cycle, DateTime newDue, String reason) async {
+  Future<void> postponeDueDate(
+      String studentId, int cycle, DateTime newDue, String reason) async {
     if (!TagPresetService.preferSupabaseRead) return; // 서버 우선 모드에서만 사용
     try {
-      final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+      final academyId = await TenantService.instance.getActiveAcademyId() ??
+          await TenantService.instance.ensureActiveAcademy();
       await Supabase.instance.client.rpc('postpone_due_date', params: {
         'p_student_id': studentId,
         'p_cycle': cycle,
@@ -5218,11 +6037,12 @@ DateTime? _lastClassesOrderSaveStart;
       AttendanceService.instance.deleteAttendanceRecord(id);
   List<AttendanceRecord> getAttendanceRecordsForStudent(String studentId) =>
       AttendanceService.instance.getAttendanceRecordsForStudent(studentId);
-  AttendanceRecord? getAttendanceRecord(String studentId, DateTime classDateTime) =>
+  AttendanceRecord? getAttendanceRecord(
+          String studentId, DateTime classDateTime) =>
       AttendanceService.instance.getAttendanceRecord(studentId, classDateTime);
   Future<void> ensurePlannedAttendanceForNextDays({int days = 15}) =>
-      AttendanceService.instance.generatePlannedAttendanceForNextDays(days: days);
-
+      AttendanceService.instance
+          .generatePlannedAttendanceForNextDays(days: days);
 
   /// (디버그/정리용) 특정 학생의 "순수 planned(예정수업)"를 전부 삭제한 뒤,
   /// 현재 시간표(student_time_blocks)를 기준으로 planned를 다시 생성한다.
@@ -5259,7 +6079,8 @@ DateTime? _lastClassesOrderSaveStart;
     await AttendanceService.instance.purgePlannedBatchSessions(studentId: sid);
 
     if (activeOrFutureSetIds.isEmpty) {
-      print('[PLAN][resetStudent] skip regen: no active/future setIds student=$sid');
+      print(
+          '[PLAN][resetStudent] skip regen: no active/future setIds student=$sid');
       return;
     }
 
@@ -5301,7 +6122,8 @@ DateTime? _lastClassesOrderSaveStart;
     await AttendanceService.instance.purgePlannedBatchSessions();
 
     if (setIdsByStudent.isEmpty) {
-      print('[PLAN][resetAll] skip regen: no active/future setIds in student_time_blocks');
+      print(
+          '[PLAN][resetAll] skip regen: no active/future setIds in student_time_blocks');
       return;
     }
 
@@ -5325,7 +6147,8 @@ DateTime? _lastClassesOrderSaveStart;
       final setIds = e.value;
       final label = (nameById[sid] ?? sid).trim();
       try {
-        print('[PLAN][resetAll] ($done/${entries.length}) student=$label setIds=${setIds.length}');
+        print(
+            '[PLAN][resetAll] ($done/${entries.length}) student=$label setIds=${setIds.length}');
         await regeneratePlannedWithSnapshot(
           studentId: sid,
           setIds: setIds,
@@ -5338,7 +6161,8 @@ DateTime? _lastClassesOrderSaveStart;
         print('[PLAN][resetAll][ERROR] student=$label err=$err\n$st');
       }
     }
-    print('[PLAN][resetAll] regen done students=${entries.length} failed=$failed');
+    print(
+        '[PLAN][resetAll] regen done students=${entries.length} failed=$failed');
   }
 
   /// 출석 기록(is_planned=false 등)으로 들어온 "추가수업"을
@@ -5354,14 +6178,17 @@ DateTime? _lastClassesOrderSaveStart;
     if (walkIn.studentId != planned.studentId) {
       throw Exception('학생이 다릅니다.');
     }
-    if (!(planned.isPlanned && !planned.isPresent && planned.arrivalTime == null)) {
+    if (!(planned.isPlanned &&
+        !planned.isPresent &&
+        planned.arrivalTime == null)) {
       throw Exception('연결 대상이 순수 예정 수업이 아닙니다.');
     }
 
     final int durMin = () {
       final d = walkIn.classEndTime.difference(walkIn.classDateTime).inMinutes;
       if (d > 0) return d;
-      final pd = planned.classEndTime.difference(planned.classDateTime).inMinutes;
+      final pd =
+          planned.classEndTime.difference(planned.classDateTime).inMinutes;
       if (pd > 0) return pd;
       return _academySettings.lessonDuration;
     }();
@@ -5371,7 +6198,9 @@ DateTime? _lastClassesOrderSaveStart;
       studentId: walkIn.studentId,
       classDateTime: walkIn.classDateTime,
       classEndTime: walkIn.classEndTime,
-      className: (planned.className.trim().isNotEmpty ? planned.className : walkIn.className),
+      className: (planned.className.trim().isNotEmpty
+          ? planned.className
+          : walkIn.className),
       isPresent: walkIn.isPresent,
       arrivalTime: walkIn.arrivalTime,
       departureTime: walkIn.departureTime,
@@ -5407,7 +6236,8 @@ DateTime? _lastClassesOrderSaveStart;
       if (o.overrideType != OverrideType.replace) continue;
       if (o.reason != OverrideReason.makeup) continue;
       if (o.status != OverrideStatus.planned) continue;
-      if (!sameMinute(o.replacementClassDateTime, planned.classDateTime)) continue;
+      if (!sameMinute(o.replacementClassDateTime, planned.classDateTime))
+        continue;
       existingPlannedReplace = o;
       break;
     }
@@ -5444,6 +6274,7 @@ DateTime? _lastClassesOrderSaveStart;
     );
     await addSessionOverride(ov);
   }
+
   CycleAttendanceSummary? getCycleAttendanceSummary({
     required String studentId,
     required int cycle,
@@ -5542,7 +6373,8 @@ DateTime? _lastClassesOrderSaveStart;
         ranked.where((e) => e.value > (targetScoreValue + eps)).length;
     final int rank = higherCount + 1;
     final int cohortSize = ranked.length;
-    final double topPercent = cohortSize > 0 ? (rank / cohortSize) * 100.0 : 0.0;
+    final double topPercent =
+        cohortSize > 0 ? (rank / cohortSize) * 100.0 : 0.0;
 
     base.addAll(<String, dynamic>{
       'rank': rank,
@@ -5552,6 +6384,7 @@ DateTime? _lastClassesOrderSaveStart;
     });
     return base;
   }
+
   Future<Map<String, dynamic>> calculateHomeworkScoreAsync({
     required String studentId,
     DateTime? nowRef,
@@ -5644,7 +6477,8 @@ DateTime? _lastClassesOrderSaveStart;
         ranked.where((e) => e.value > (targetScoreValue + eps)).length;
     final int rank = higherCount + 1;
     final int cohortSize = ranked.length;
-    final double topPercent = cohortSize > 0 ? (rank / cohortSize) * 100.0 : 0.0;
+    final double topPercent =
+        cohortSize > 0 ? (rank / cohortSize) * 100.0 : 0.0;
 
     base.addAll(<String, dynamic>{
       'rank': rank,
@@ -5654,8 +6488,10 @@ DateTime? _lastClassesOrderSaveStart;
     });
     return base;
   }
+
   Future<void> _generatePlannedAttendanceForNextDays({int days = 15}) =>
-      AttendanceService.instance.generatePlannedAttendanceForNextDays(days: days);
+      AttendanceService.instance
+          .generatePlannedAttendanceForNextDays(days: days);
   static bool _sameDate(DateTime a, DateTime b) =>
       a.year == b.year && a.month == b.month && a.day == b.day;
   Future<void> ensurePlannedCoverageForToday({
@@ -5687,6 +6523,7 @@ DateTime? _lastClassesOrderSaveStart;
       _plannedCoverageInFlight = false;
     }
   }
+
   Future<void> _regeneratePlannedAttendanceForSet({
     required String studentId,
     required String setId,
@@ -5698,6 +6535,7 @@ DateTime? _lastClassesOrderSaveStart;
       days: days,
     );
   }
+
   Future<void> _regeneratePlannedAttendanceForStudentSets({
     required String studentId,
     required Set<String> setIds,
@@ -5709,6 +6547,7 @@ DateTime? _lastClassesOrderSaveStart;
       days: days,
     );
   }
+
   Future<void> _regeneratePlannedAttendanceForStudent({
     required String studentId,
     int days = 15,
@@ -5723,9 +6562,12 @@ DateTime? _lastClassesOrderSaveStart;
     DateTime? effectiveStart,
     bool immediate = false,
   }) {
-    _pendingRegenSetIdsByStudent.putIfAbsent(studentId, () => <String>{}).add(setId);
+    _pendingRegenSetIdsByStudent
+        .putIfAbsent(studentId, () => <String>{})
+        .add(setId);
     if (effectiveStart != null) {
-      final d = DateTime(effectiveStart.year, effectiveStart.month, effectiveStart.day);
+      final d = DateTime(
+          effectiveStart.year, effectiveStart.month, effectiveStart.day);
       final prev = _pendingRegenEffectiveStartByStudent[studentId];
       if (prev == null || d.isBefore(prev)) {
         _pendingRegenEffectiveStartByStudent[studentId] = d;
@@ -5735,7 +6577,8 @@ DateTime? _lastClassesOrderSaveStart;
       _flushPlannedRegen();
       return;
     }
-    _plannedRegenTimer ??= Timer(const Duration(milliseconds: 200), _flushPlannedRegen);
+    _plannedRegenTimer ??=
+        Timer(const Duration(milliseconds: 200), _flushPlannedRegen);
   }
 
   Future<void> flushPendingPlannedRegens() => _flushPlannedRegen();
@@ -5743,7 +6586,8 @@ DateTime? _lastClassesOrderSaveStart;
   Future<void> _flushPlannedRegen() async {
     final pending = Map<String, Set<String>>.from(_pendingRegenSetIdsByStudent);
     _pendingRegenSetIdsByStudent.clear();
-    final pendingStart = Map<String, DateTime>.from(_pendingRegenEffectiveStartByStudent);
+    final pendingStart =
+        Map<String, DateTime>.from(_pendingRegenEffectiveStartByStudent);
     _pendingRegenEffectiveStartByStudent.clear();
     _plannedRegenTimer?.cancel();
     _plannedRegenTimer = null;
@@ -5779,6 +6623,7 @@ DateTime? _lastClassesOrderSaveStart;
       );
     }
   }
+
   Future<void> _regeneratePlannedAttendanceForOverride(SessionOverride ov) =>
       AttendanceService.instance.regeneratePlannedAttendanceForOverride(ov);
   Future<void> _removePlannedAttendanceForDate({
@@ -5831,34 +6676,52 @@ DateTime? _lastClassesOrderSaveStart;
   Future<void> _subscribePaymentsRealtime() async {
     try {
       _paymentsRealtimeChannel?.unsubscribe();
-      final String academyId = (await TenantService.instance.getActiveAcademyId()) ?? await TenantService.instance.ensureActiveAcademy();
-      final chan = Supabase.instance.client.channel('public:payment_records:' + academyId);
+      final String academyId =
+          (await TenantService.instance.getActiveAcademyId()) ??
+              await TenantService.instance.ensureActiveAcademy();
+      final chan = Supabase.instance.client
+          .channel('public:payment_records:' + academyId);
       _paymentsRealtimeChannel = chan
         ..onPostgresChanges(
           event: PostgresChangeEvent.insert,
           schema: 'public',
           table: 'payment_records',
-          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
+          filter: PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'academy_id',
+              value: academyId),
           callback: (_) async {
-            try { await loadPaymentRecords(); } catch (_) {}
+            try {
+              await loadPaymentRecords();
+            } catch (_) {}
           },
         )
         ..onPostgresChanges(
           event: PostgresChangeEvent.update,
           schema: 'public',
           table: 'payment_records',
-          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
+          filter: PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'academy_id',
+              value: academyId),
           callback: (_) async {
-            try { await loadPaymentRecords(); } catch (_) {}
+            try {
+              await loadPaymentRecords();
+            } catch (_) {}
           },
         )
         ..onPostgresChanges(
           event: PostgresChangeEvent.delete,
           schema: 'public',
           table: 'payment_records',
-          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
+          filter: PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'academy_id',
+              value: academyId),
           callback: (_) async {
-            try { await loadPaymentRecords(); } catch (_) {}
+            try {
+              await loadPaymentRecords();
+            } catch (_) {}
           },
         )
         ..subscribe();
@@ -5870,34 +6733,52 @@ DateTime? _lastClassesOrderSaveStart;
   Future<void> _subscribeM5DeviceBindingsRealtime() async {
     try {
       _rtM5DeviceBindings?.unsubscribe();
-      final String academyId = (await TenantService.instance.getActiveAcademyId()) ?? await TenantService.instance.ensureActiveAcademy();
-      final chan = Supabase.instance.client.channel('public:m5_device_bindings:' + academyId);
+      final String academyId =
+          (await TenantService.instance.getActiveAcademyId()) ??
+              await TenantService.instance.ensureActiveAcademy();
+      final chan = Supabase.instance.client
+          .channel('public:m5_device_bindings:' + academyId);
       _rtM5DeviceBindings = chan
         ..onPostgresChanges(
           event: PostgresChangeEvent.insert,
           schema: 'public',
           table: 'm5_device_bindings',
-          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
+          filter: PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'academy_id',
+              value: academyId),
           callback: (_) async {
-            try { await loadDeviceBindings(); } catch (_) {}
+            try {
+              await loadDeviceBindings();
+            } catch (_) {}
           },
         )
         ..onPostgresChanges(
           event: PostgresChangeEvent.update,
           schema: 'public',
           table: 'm5_device_bindings',
-          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
+          filter: PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'academy_id',
+              value: academyId),
           callback: (_) async {
-            try { await loadDeviceBindings(); } catch (_) {}
+            try {
+              await loadDeviceBindings();
+            } catch (_) {}
           },
         )
         ..onPostgresChanges(
           event: PostgresChangeEvent.delete,
           schema: 'public',
           table: 'm5_device_bindings',
-          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'academy_id', value: academyId),
+          filter: PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'academy_id',
+              value: academyId),
           callback: (_) async {
-            try { await loadDeviceBindings(); } catch (_) {}
+            try {
+              await loadDeviceBindings();
+            } catch (_) {}
           },
         )
         ..subscribe();
@@ -5906,55 +6787,79 @@ DateTime? _lastClassesOrderSaveStart;
 
   // =================== STUDENT PAYMENT INFO ===================
 
-  List<StudentPaymentInfo> get studentPaymentInfos => List.unmodifiable(_studentPaymentInfos);
+  List<StudentPaymentInfo> get studentPaymentInfos =>
+      List.unmodifiable(_studentPaymentInfos);
 
   // 학생 결제 정보 로드
   Future<void> loadStudentPaymentInfos() async {
     try {
       if (TagPresetService.preferSupabaseRead) {
         try {
-          final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+          final academyId = await TenantService.instance.getActiveAcademyId() ??
+              await TenantService.instance.ensureActiveAcademy();
           final rows = await Supabase.instance.client
               .from('student_payment_info')
-              .select('id,student_id,registration_date,payment_method,tuition_fee,lateness_threshold,'
-                      'schedule_notification,attendance_notification,departure_notification,lateness_notification,'
-                      'created_at,updated_at')
+              .select(
+                  'id,student_id,registration_date,payment_method,tuition_fee,lateness_threshold,'
+                  'schedule_notification,attendance_notification,departure_notification,lateness_notification,'
+                  'created_at,updated_at')
               .eq('academy_id', academyId);
-          _studentPaymentInfos = (rows as List).map((m) => StudentPaymentInfo(
-            id: (m['id'] as String?),
-            studentId: (m['student_id'] as String),
-            registrationDate: DateTime.tryParse((m['registration_date'] as String?) ?? '') ?? DateTime.now(),
-            paymentMethod: (m['payment_method'] as String?) ?? 'monthly',
-            tuitionFee: (m['tuition_fee'] as int?) ?? 0,
-            latenessThreshold: (m['lateness_threshold'] as int?) ?? 10,
-            scheduleNotification: (m['schedule_notification'] as bool?) ?? false,
-            attendanceNotification: (m['attendance_notification'] as bool?) ?? false,
-            departureNotification: (m['departure_notification'] as bool?) ?? false,
-            latenessNotification: (m['lateness_notification'] as bool?) ?? false,
-            createdAt: DateTime.tryParse((m['created_at'] as String?) ?? '') ?? DateTime.now(),
-            updatedAt: DateTime.tryParse((m['updated_at'] as String?) ?? '') ?? DateTime.now(),
-          )).toList();
-          studentPaymentInfosNotifier.value = List.unmodifiable(_studentPaymentInfos);
-          print('[DEBUG] 학생 결제 정보 로드 완료(Supabase): ${_studentPaymentInfos.length}개');
+          _studentPaymentInfos = (rows as List)
+              .map((m) => StudentPaymentInfo(
+                    id: (m['id'] as String?),
+                    studentId: (m['student_id'] as String),
+                    registrationDate: DateTime.tryParse(
+                            (m['registration_date'] as String?) ?? '') ??
+                        DateTime.now(),
+                    paymentMethod:
+                        (m['payment_method'] as String?) ?? 'monthly',
+                    tuitionFee: (m['tuition_fee'] as int?) ?? 0,
+                    latenessThreshold: (m['lateness_threshold'] as int?) ?? 10,
+                    scheduleNotification:
+                        (m['schedule_notification'] as bool?) ?? false,
+                    attendanceNotification:
+                        (m['attendance_notification'] as bool?) ?? false,
+                    departureNotification:
+                        (m['departure_notification'] as bool?) ?? false,
+                    latenessNotification:
+                        (m['lateness_notification'] as bool?) ?? false,
+                    createdAt:
+                        DateTime.tryParse((m['created_at'] as String?) ?? '') ??
+                            DateTime.now(),
+                    updatedAt:
+                        DateTime.tryParse((m['updated_at'] as String?) ?? '') ??
+                            DateTime.now(),
+                  ))
+              .toList();
+          studentPaymentInfosNotifier.value =
+              List.unmodifiable(_studentPaymentInfos);
+          print(
+              '[DEBUG] 학생 결제 정보 로드 완료(Supabase): ${_studentPaymentInfos.length}개');
           return;
         } catch (_) {}
       }
       await AcademyDbService.instance.ensureStudentPaymentInfoTable();
-      final paymentInfoMaps = await AcademyDbService.instance.getAllStudentPaymentInfo();
-      _studentPaymentInfos = paymentInfoMaps.map((map) => StudentPaymentInfo.fromJson(map)).toList();
-      studentPaymentInfosNotifier.value = List.unmodifiable(_studentPaymentInfos);
+      final paymentInfoMaps =
+          await AcademyDbService.instance.getAllStudentPaymentInfo();
+      _studentPaymentInfos = paymentInfoMaps
+          .map((map) => StudentPaymentInfo.fromJson(map))
+          .toList();
+      studentPaymentInfosNotifier.value =
+          List.unmodifiable(_studentPaymentInfos);
       print('[DEBUG] 학생 결제 정보 로드 완료(Local): ${_studentPaymentInfos.length}개');
     } catch (e) {
       print('[ERROR] 학생 결제 정보 로드 실패: $e');
       _studentPaymentInfos = [];
-      studentPaymentInfosNotifier.value = List.unmodifiable(_studentPaymentInfos);
+      studentPaymentInfosNotifier.value =
+          List.unmodifiable(_studentPaymentInfos);
     }
   }
 
   // 특정 학생의 결제 정보 조회
   StudentPaymentInfo? getStudentPaymentInfo(String studentId) {
     try {
-      return _studentPaymentInfos.firstWhere((info) => info.studentId == studentId);
+      return _studentPaymentInfos
+          .firstWhere((info) => info.studentId == studentId);
     } catch (e) {
       return null;
     }
@@ -5965,21 +6870,24 @@ DateTime? _lastClassesOrderSaveStart;
     try {
       final paymentInfoData = paymentInfo.toJson();
       await AcademyDbService.instance.addStudentPaymentInfo(paymentInfoData);
-      
+
       // 메모리 업데이트
-      final existingIndex = _studentPaymentInfos.indexWhere((info) => info.studentId == paymentInfo.studentId);
+      final existingIndex = _studentPaymentInfos
+          .indexWhere((info) => info.studentId == paymentInfo.studentId);
       if (existingIndex != -1) {
         _studentPaymentInfos[existingIndex] = paymentInfo;
       } else {
         _studentPaymentInfos.add(paymentInfo);
       }
-      
-      studentPaymentInfosNotifier.value = List.unmodifiable(_studentPaymentInfos);
+
+      studentPaymentInfosNotifier.value =
+          List.unmodifiable(_studentPaymentInfos);
       print('[DEBUG] 학생 결제 정보 추가/업데이트 완료: ${paymentInfo.studentId}');
       // 서버 우선 모드: 결제 정보 upsert + 최초 due 생성 RPC 호출
       if (TagPresetService.preferSupabaseRead) {
         try {
-          final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+          final academyId = await TenantService.instance.getActiveAcademyId() ??
+              await TenantService.instance.ensureActiveAcademy();
           await Supabase.instance.client.from('student_payment_info').upsert({
             'id': paymentInfo.id,
             'academy_id': academyId,
@@ -5995,14 +6903,18 @@ DateTime? _lastClassesOrderSaveStart;
           }, onConflict: 'student_id');
           await Supabase.instance.client.rpc('init_first_due', params: {
             'p_student_id': paymentInfo.studentId,
-            'p_first_due': paymentInfo.registrationDate.toIso8601String().substring(0, 10),
+            'p_first_due':
+                paymentInfo.registrationDate.toIso8601String().substring(0, 10),
             'p_academy_id': academyId,
           });
-        } catch (e, st) { print('[SUPA][student_payment_info upsert/init_first_due] $e\n$st'); }
+        } catch (e, st) {
+          print('[SUPA][student_payment_info upsert/init_first_due] $e\n$st');
+        }
       } else if (TagPresetService.dualWrite) {
         // 레거시 듀얼라이트 지원
         try {
-          final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+          final academyId = await TenantService.instance.getActiveAcademyId() ??
+              await TenantService.instance.ensureActiveAcademy();
           await Supabase.instance.client.from('student_payment_info').upsert({
             'id': paymentInfo.id,
             'academy_id': academyId,
@@ -6027,31 +6939,38 @@ DateTime? _lastClassesOrderSaveStart;
   // 학생 결제 정보 업데이트
   Future<void> updateStudentPaymentInfo(StudentPaymentInfo paymentInfo) async {
     try {
-      final updatedPaymentInfo = paymentInfo.copyWith(updatedAt: DateTime.now());
+      final updatedPaymentInfo =
+          paymentInfo.copyWith(updatedAt: DateTime.now());
       final paymentInfoData = updatedPaymentInfo.toJson();
-      await AcademyDbService.instance.updateStudentPaymentInfo(paymentInfo.studentId, paymentInfoData);
-      
+      await AcademyDbService.instance
+          .updateStudentPaymentInfo(paymentInfo.studentId, paymentInfoData);
+
       // 메모리 업데이트
-      final index = _studentPaymentInfos.indexWhere((info) => info.studentId == paymentInfo.studentId);
+      final index = _studentPaymentInfos
+          .indexWhere((info) => info.studentId == paymentInfo.studentId);
       if (index != -1) {
         _studentPaymentInfos[index] = updatedPaymentInfo;
-        studentPaymentInfosNotifier.value = List.unmodifiable(_studentPaymentInfos);
+        studentPaymentInfosNotifier.value =
+            List.unmodifiable(_studentPaymentInfos);
       }
-      
+
       print('[DEBUG] 학생 결제 정보 업데이트 완료: ${paymentInfo.studentId}');
       if (TagPresetService.dualWrite) {
         try {
-          final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+          final academyId = await TenantService.instance.getActiveAcademyId() ??
+              await TenantService.instance.ensureActiveAcademy();
           await Supabase.instance.client.from('student_payment_info').upsert({
             'id': updatedPaymentInfo.id,
             'academy_id': academyId,
             'student_id': updatedPaymentInfo.studentId,
-            'registration_date': updatedPaymentInfo.registrationDate.toIso8601String(),
+            'registration_date':
+                updatedPaymentInfo.registrationDate.toIso8601String(),
             'payment_method': updatedPaymentInfo.paymentMethod,
             'tuition_fee': updatedPaymentInfo.tuitionFee,
             'lateness_threshold': updatedPaymentInfo.latenessThreshold,
             'schedule_notification': updatedPaymentInfo.scheduleNotification,
-            'attendance_notification': updatedPaymentInfo.attendanceNotification,
+            'attendance_notification':
+                updatedPaymentInfo.attendanceNotification,
             'departure_notification': updatedPaymentInfo.departureNotification,
             'lateness_notification': updatedPaymentInfo.latenessNotification,
           }, onConflict: 'student_id');
@@ -6067,15 +6986,19 @@ DateTime? _lastClassesOrderSaveStart;
   Future<void> deleteStudentPaymentInfo(String studentId) async {
     try {
       await AcademyDbService.instance.deleteStudentPaymentInfo(studentId);
-      
+
       // 메모리에서 제거
       _studentPaymentInfos.removeWhere((info) => info.studentId == studentId);
-      studentPaymentInfosNotifier.value = List.unmodifiable(_studentPaymentInfos);
-      
+      studentPaymentInfosNotifier.value =
+          List.unmodifiable(_studentPaymentInfos);
+
       print('[DEBUG] 학생 결제 정보 삭제 완료: $studentId');
       if (TagPresetService.dualWrite) {
         try {
-          await Supabase.instance.client.from('student_payment_info').delete().eq('student_id', studentId);
+          await Supabase.instance.client
+              .from('student_payment_info')
+              .delete()
+              .eq('student_id', studentId);
         } catch (_) {}
       }
     } catch (e) {
@@ -6087,15 +7010,18 @@ DateTime? _lastClassesOrderSaveStart;
   // ======== RESOURCES (FOLDERS/FILES) ========
   Future<void> saveResourceFolders(List<Map<String, dynamic>> rows) =>
       ResourceService.instance.saveResourceFolders(rows);
-  Future<void> saveResourceFoldersForCategory(String category, List<Map<String, dynamic>> rows) =>
+  Future<void> saveResourceFoldersForCategory(
+          String category, List<Map<String, dynamic>> rows) =>
       ResourceService.instance.saveResourceFoldersForCategory(category, rows);
   Future<List<Map<String, dynamic>>> loadResourceFolders() =>
       ResourceService.instance.loadResourceFolders();
-  Future<List<Map<String, dynamic>>> loadResourceFoldersForCategory(String category) =>
+  Future<List<Map<String, dynamic>>> loadResourceFoldersForCategory(
+          String category) =>
       ResourceService.instance.loadResourceFoldersForCategory(category);
   Future<void> saveResourceFile(Map<String, dynamic> row) =>
       ResourceService.instance.saveResourceFile(row);
-  Future<void> saveResourceFileWithCategory(Map<String, dynamic> row, String category) =>
+  Future<void> saveResourceFileWithCategory(
+          Map<String, dynamic> row, String category) =>
       ResourceService.instance.saveResourceFileWithCategory(row, category);
 
   Future<void> saveResourceFileOrders({
@@ -6112,9 +7038,11 @@ DateTime? _lastClassesOrderSaveStart;
       );
   Future<List<Map<String, dynamic>>> loadResourceFiles() =>
       ResourceService.instance.loadResourceFiles();
-  Future<List<Map<String, dynamic>>> loadResourceFilesForCategory(String category) =>
+  Future<List<Map<String, dynamic>>> loadResourceFilesForCategory(
+          String category) =>
       ResourceService.instance.loadResourceFilesForCategory(category);
-  Future<void> saveResourceFileLinks(String fileId, Map<String, String> links) =>
+  Future<void> saveResourceFileLinks(
+          String fileId, Map<String, String> links) =>
       ResourceService.instance.saveResourceFileLinks(fileId, links);
   Future<Map<String, String>> loadResourceFileLinks(String fileId) =>
       ResourceService.instance.loadResourceFileLinks(fileId);
@@ -6163,7 +7091,8 @@ DateTime? _lastClassesOrderSaveStart;
   // ======== RESOURCE FILE BOOKMARKS ========
   Future<List<Map<String, dynamic>>> loadResourceFileBookmarks(String fileId) =>
       ResourceService.instance.loadResourceFileBookmarks(fileId);
-  Future<void> saveResourceFileBookmarks(String fileId, List<Map<String, dynamic>> items) =>
+  Future<void> saveResourceFileBookmarks(
+          String fileId, List<Map<String, dynamic>> items) =>
       ResourceService.instance.saveResourceFileBookmarks(fileId, items);
 
   // ======== RESOURCE GRADES (학년 목록/순서) ========
@@ -6203,21 +7132,25 @@ DateTime? _lastClassesOrderSaveStart;
     required String bookId,
     required String gradeKey,
   }) =>
-      AnswerKeyService.instance.deleteAnswerKeyBookPdf(bookId: bookId, gradeKey: gradeKey);
+      AnswerKeyService.instance
+          .deleteAnswerKeyBookPdf(bookId: bookId, gradeKey: gradeKey);
 
   // ===== EXAM (persisted) =====
-  Future<void> saveExamFor(String school, EducationLevel level, int grade, Map<DateTime, List<String>> titles, Map<DateTime, String> ranges) async {
+  Future<void> saveExamFor(String school, EducationLevel level, int grade,
+      Map<DateTime, List<String>> titles, Map<DateTime, String> ranges) async {
     await AcademyDbService.instance.saveExamDataForSchoolGrade(
       school: school,
       level: level.index,
       grade: grade,
       titlesByDateIso: {
         for (final e in titles.entries)
-          DateTime(e.key.year, e.key.month, e.key.day).toIso8601String(): e.value,
+          DateTime(e.key.year, e.key.month, e.key.day).toIso8601String():
+              e.value,
       },
       rangesByDateIso: {
         for (final e in ranges.entries)
-          DateTime(e.key.year, e.key.month, e.key.day).toIso8601String(): e.value,
+          DateTime(e.key.year, e.key.month, e.key.day).toIso8601String():
+              e.value,
       },
     );
     final key = _sgKey(school, level, grade);
@@ -6233,76 +7166,136 @@ DateTime? _lastClassesOrderSaveStart;
     // Supabase dual-write: exam_schedules + exam_ranges
     if (TagPresetService.dualWrite) {
       try {
-        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final academyId = await TenantService.instance.getActiveAcademyId() ??
+            await TenantService.instance.ensureActiveAcademy();
         final supa = Supabase.instance.client;
         // schedules
-        await supa.from('exam_schedules').delete().match({'academy_id': academyId, 'school': school, 'level': level.index, 'grade': grade});
-        if (titles.isNotEmpty) {
-          final rows = titles.entries.map((e) => {
-            'academy_id': academyId,
+        await supa.from('exam_schedules').delete().match({
+          'academy_id': academyId,
           'school': school,
           'level': level.index,
-          'grade': grade,
-            'date': DateTime(e.key.year, e.key.month, e.key.day).toIso8601String().substring(0,10),
-            'names_json': jsonEncode(e.value),
-          }).toList();
+          'grade': grade
+        });
+        if (titles.isNotEmpty) {
+          final rows = titles.entries
+              .map((e) => {
+                    'academy_id': academyId,
+                    'school': school,
+                    'level': level.index,
+                    'grade': grade,
+                    'date': DateTime(e.key.year, e.key.month, e.key.day)
+                        .toIso8601String()
+                        .substring(0, 10),
+                    'names_json': jsonEncode(e.value),
+                  })
+              .toList();
           await supa.from('exam_schedules').insert(rows);
         }
         // ranges
-        await supa.from('exam_ranges').delete().match({'academy_id': academyId, 'school': school, 'level': level.index, 'grade': grade});
-        if (ranges.isNotEmpty) {
-          final rows2 = ranges.entries.map((e) => {
-            'academy_id': academyId,
+        await supa.from('exam_ranges').delete().match({
+          'academy_id': academyId,
           'school': school,
           'level': level.index,
-          'grade': grade,
-            'date': DateTime(e.key.year, e.key.month, e.key.day).toIso8601String().substring(0,10),
-            'range_text': e.value,
-          }).toList();
+          'grade': grade
+        });
+        if (ranges.isNotEmpty) {
+          final rows2 = ranges.entries
+              .map((e) => {
+                    'academy_id': academyId,
+                    'school': school,
+                    'level': level.index,
+                    'grade': grade,
+                    'date': DateTime(e.key.year, e.key.month, e.key.day)
+                        .toIso8601String()
+                        .substring(0, 10),
+                    'range_text': e.value,
+                  })
+              .toList();
           await supa.from('exam_ranges').insert(rows2);
         }
       } catch (_) {}
     }
   }
 
-  Future<Map<String, dynamic>> loadExamFor(String school, EducationLevel level, int grade) async {
+  Future<Map<String, dynamic>> loadExamFor(
+      String school, EducationLevel level, int grade) async {
     if (TagPresetService.preferSupabaseRead) {
       try {
-        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final academyId = await TenantService.instance.getActiveAcademyId() ??
+            await TenantService.instance.ensureActiveAcademy();
         final supa = Supabase.instance.client;
-        final schedules = await supa.from('exam_schedules').select('date,names_json').match({'academy_id': academyId, 'school': school, 'level': level.index, 'grade': grade}).order('date');
-        final ranges = await supa.from('exam_ranges').select('date,range_text').match({'academy_id': academyId, 'school': school, 'level': level.index, 'grade': grade}).order('date');
-        final days = await supa.from('exam_days').select('date').match({'academy_id': academyId, 'school': school, 'level': level.index, 'grade': grade}).order('date');
+        final schedules = await supa
+            .from('exam_schedules')
+            .select('date,names_json')
+            .match({
+          'academy_id': academyId,
+          'school': school,
+          'level': level.index,
+          'grade': grade
+        }).order('date');
+        final ranges = await supa
+            .from('exam_ranges')
+            .select('date,range_text')
+            .match({
+          'academy_id': academyId,
+          'school': school,
+          'level': level.index,
+          'grade': grade
+        }).order('date');
+        final days = await supa.from('exam_days').select('date').match({
+          'academy_id': academyId,
+          'school': school,
+          'level': level.index,
+          'grade': grade
+        }).order('date');
         final res = {
-          'schedules': (schedules as List).map((r) => {
-            'date': (r['date'] as String?) ?? '',
-            'names_json': (r['names_json'] as String?) ?? '[]',
-          }).toList(),
-          'ranges': (ranges as List).map((r) => {
-            'date': (r['date'] as String?) ?? '',
-            'range_text': (r['range_text'] as String?) ?? '',
-          }).toList(),
-          'days': (days as List).map((r) => {
-            'date': (r['date'] as String?) ?? '',
-          }).toList(),
+          'schedules': (schedules as List)
+              .map((r) => {
+                    'date': (r['date'] as String?) ?? '',
+                    'names_json': (r['names_json'] as String?) ?? '[]',
+                  })
+              .toList(),
+          'ranges': (ranges as List)
+              .map((r) => {
+                    'date': (r['date'] as String?) ?? '',
+                    'range_text': (r['range_text'] as String?) ?? '',
+                  })
+              .toList(),
+          'days': (days as List)
+              .map((r) => {
+                    'date': (r['date'] as String?) ?? '',
+                  })
+              .toList(),
         };
         // 캐시에 반영
         final titles = <DateTime, List<String>>{};
-        for (final row in (res['schedules'] as List).cast<Map<String, dynamic>>()) {
-          final iso = row['date'] as String?; if (iso == null || iso.isEmpty) continue;
+        for (final row
+            in (res['schedules'] as List).cast<Map<String, dynamic>>()) {
+          final iso = row['date'] as String?;
+          if (iso == null || iso.isEmpty) continue;
           final d = DateTime.parse(iso);
-          List<dynamic> list; try { list = jsonDecode((row['names_json'] as String?) ?? '[]'); } catch (_) { list = []; }
-          titles[DateTime(d.year, d.month, d.day)] = list.map((e)=>e.toString()).toList();
+          List<dynamic> list;
+          try {
+            list = jsonDecode((row['names_json'] as String?) ?? '[]');
+          } catch (_) {
+            list = [];
+          }
+          titles[DateTime(d.year, d.month, d.day)] =
+              list.map((e) => e.toString()).toList();
         }
         final rangesMap = <DateTime, String>{};
-        for (final row in (res['ranges'] as List).cast<Map<String, dynamic>>()) {
-          final iso = row['date'] as String?; if (iso == null || iso.isEmpty) continue;
+        for (final row
+            in (res['ranges'] as List).cast<Map<String, dynamic>>()) {
+          final iso = row['date'] as String?;
+          if (iso == null || iso.isEmpty) continue;
           final d = DateTime.parse(iso);
-          rangesMap[DateTime(d.year, d.month, d.day)] = (row['range_text'] as String?) ?? '';
+          rangesMap[DateTime(d.year, d.month, d.day)] =
+              (row['range_text'] as String?) ?? '';
         }
         final daysSet = <DateTime>{};
         for (final row in (res['days'] as List).cast<Map<String, dynamic>>()) {
-          final iso = row['date'] as String?; if (iso == null || iso.isEmpty) continue;
+          final iso = row['date'] as String?;
+          if (iso == null || iso.isEmpty) continue;
           final d = DateTime.parse(iso);
           daysSet.add(DateTime(d.year, d.month, d.day));
         }
@@ -6323,20 +7316,30 @@ DateTime? _lastClassesOrderSaveStart;
     // 기존 캐시 반영 로직 유지
     final titles = <DateTime, List<String>>{};
     for (final row in (res['schedules'] as List).cast<Map<String, dynamic>>()) {
-      final iso = row['date'] as String?; if (iso == null || iso.isEmpty) continue;
+      final iso = row['date'] as String?;
+      if (iso == null || iso.isEmpty) continue;
       final d = DateTime.parse(iso);
-      List<dynamic> list; try { list = jsonDecode((row['names_json'] as String?) ?? '[]'); } catch (_) { list = []; }
-      titles[DateTime(d.year, d.month, d.day)] = list.map((e)=>e.toString()).toList();
+      List<dynamic> list;
+      try {
+        list = jsonDecode((row['names_json'] as String?) ?? '[]');
+      } catch (_) {
+        list = [];
+      }
+      titles[DateTime(d.year, d.month, d.day)] =
+          list.map((e) => e.toString()).toList();
     }
     final rangesMap = <DateTime, String>{};
     for (final row in (res['ranges'] as List).cast<Map<String, dynamic>>()) {
-      final iso = row['date'] as String?; if (iso == null || iso.isEmpty) continue;
+      final iso = row['date'] as String?;
+      if (iso == null || iso.isEmpty) continue;
       final d = DateTime.parse(iso);
-      rangesMap[DateTime(d.year, d.month, d.day)] = (row['range_text'] as String?) ?? '';
+      rangesMap[DateTime(d.year, d.month, d.day)] =
+          (row['range_text'] as String?) ?? '';
     }
     final daysSet = <DateTime>{};
     for (final row in (res['days'] as List).cast<Map<String, dynamic>>()) {
-      final iso = row['date'] as String?; if (iso == null || iso.isEmpty) continue;
+      final iso = row['date'] as String?;
+      if (iso == null || iso.isEmpty) continue;
       final d = DateTime.parse(iso);
       daysSet.add(DateTime(d.year, d.month, d.day));
     }
@@ -6347,23 +7350,40 @@ DateTime? _lastClassesOrderSaveStart;
     return res;
   }
 
-  Future<void> deleteExamData(String school, EducationLevel level, int grade) async {
+  Future<void> deleteExamData(
+      String school, EducationLevel level, int grade) async {
     // 서버 우선: Supabase에서 삭제, 실패 시 로컬로 폴백
     if (TagPresetService.preferSupabaseRead) {
       try {
-        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final academyId = await TenantService.instance.getActiveAcademyId() ??
+            await TenantService.instance.ensureActiveAcademy();
         final supa = Supabase.instance.client;
-        await supa.from('exam_schedules').delete().match({'academy_id': academyId, 'school': school, 'level': level.index, 'grade': grade});
-        await supa.from('exam_ranges').delete().match({'academy_id': academyId, 'school': school, 'level': level.index, 'grade': grade});
-        await supa.from('exam_days').delete().match({'academy_id': academyId, 'school': school, 'level': level.index, 'grade': grade});
+        await supa.from('exam_schedules').delete().match({
+          'academy_id': academyId,
+          'school': school,
+          'level': level.index,
+          'grade': grade
+        });
+        await supa.from('exam_ranges').delete().match({
+          'academy_id': academyId,
+          'school': school,
+          'level': level.index,
+          'grade': grade
+        });
+        await supa.from('exam_days').delete().match({
+          'academy_id': academyId,
+          'school': school,
+          'level': level.index,
+          'grade': grade
+        });
       } catch (e, st) {
         print('[SUPA][exam delete] $e\n$st');
         // 폴백: 로컬 삭제
-    await AcademyDbService.instance.deleteExamDataForSchoolGrade(
-      school: school,
-      level: level.index,
-      grade: grade,
-    );
+        await AcademyDbService.instance.deleteExamDataForSchoolGrade(
+          school: school,
+          level: level.index,
+          grade: grade,
+        );
       }
     } else {
       await AcademyDbService.instance.deleteExamDataForSchoolGrade(
@@ -6379,8 +7399,11 @@ DateTime? _lastClassesOrderSaveStart;
     _examDaysBySg.remove(key);
   }
 
-  Future<void> saveExamDays(String school, EducationLevel level, int grade, Set<DateTime> days) async {
-    final list = days.map((d) => DateTime(d.year, d.month, d.day).toIso8601String()).toList();
+  Future<void> saveExamDays(String school, EducationLevel level, int grade,
+      Set<DateTime> days) async {
+    final list = days
+        .map((d) => DateTime(d.year, d.month, d.day).toIso8601String())
+        .toList();
     await AcademyDbService.instance.saveExamDaysForSchoolGrade(
       school: school,
       level: level.index,
@@ -6388,23 +7411,32 @@ DateTime? _lastClassesOrderSaveStart;
       daysIso: list,
     );
     final key = _sgKey(school, level, grade);
-    _examDaysBySg[key] = days.map((d)=>DateTime(d.year, d.month, d.day)).toSet();
+    _examDaysBySg[key] =
+        days.map((d) => DateTime(d.year, d.month, d.day)).toSet();
 
     // Supabase dual-write
     if (TagPresetService.dualWrite) {
       try {
-        final academyId = await TenantService.instance.getActiveAcademyId() ?? await TenantService.instance.ensureActiveAcademy();
+        final academyId = await TenantService.instance.getActiveAcademyId() ??
+            await TenantService.instance.ensureActiveAcademy();
         final supa = Supabase.instance.client;
         // delete all then insert to keep exact match
-        await supa.from('exam_days').delete().match({'academy_id': academyId, 'school': school, 'level': level.index, 'grade': grade});
+        await supa.from('exam_days').delete().match({
+          'academy_id': academyId,
+          'school': school,
+          'level': level.index,
+          'grade': grade
+        });
         if (list.isNotEmpty) {
-          final rows = list.map((iso) => {
-            'academy_id': academyId,
-            'school': school,
-            'level': level.index,
-            'grade': grade,
-            'date': iso.substring(0, 10),
-          }).toList();
+          final rows = list
+              .map((iso) => {
+                    'academy_id': academyId,
+                    'school': school,
+                    'level': level.index,
+                    'grade': grade,
+                    'date': iso.substring(0, 10),
+                  })
+              .toList();
           await supa.from('exam_days').insert(rows);
         }
       } catch (_) {}
@@ -6436,10 +7468,16 @@ DateTime? _lastClassesOrderSaveStart;
         final iso = (r['date'] as String?) ?? '';
         if (school.isEmpty || iso.isEmpty) continue;
         final d = DateTime.parse(iso);
-        List<dynamic> list; try { list = jsonDecode((r['names_json'] as String?) ?? '[]'); } catch (_) { list = []; }
+        List<dynamic> list;
+        try {
+          list = jsonDecode((r['names_json'] as String?) ?? '[]');
+        } catch (_) {
+          list = [];
+        }
         final key = _sgKey(school, level, grade);
-        final map = _examTitlesBySg.putIfAbsent(key, ()=>{});
-        map[DateTime(d.year, d.month, d.day)] = list.map((e)=>e.toString()).toList();
+        final map = _examTitlesBySg.putIfAbsent(key, () => {});
+        map[DateTime(d.year, d.month, d.day)] =
+            list.map((e) => e.toString()).toList();
       }
       final ranges = await AcademyDbService.instance.loadAllExamRanges();
       for (final r in ranges) {
@@ -6451,7 +7489,7 @@ DateTime? _lastClassesOrderSaveStart;
         if (school.isEmpty || iso.isEmpty) continue;
         final d = DateTime.parse(iso);
         final key = _sgKey(school, level, grade);
-        final map = _examRangesBySg.putIfAbsent(key, ()=>{});
+        final map = _examRangesBySg.putIfAbsent(key, () => {});
         map[DateTime(d.year, d.month, d.day)] = text;
       }
       final days = await AcademyDbService.instance.loadAllExamDays();
@@ -6463,9 +7501,9 @@ DateTime? _lastClassesOrderSaveStart;
         if (school.isEmpty || iso.isEmpty) continue;
         final d = DateTime.parse(iso);
         final key = _sgKey(school, level, grade);
-        final set = _examDaysBySg.putIfAbsent(key, ()=>{});
+        final set = _examDaysBySg.putIfAbsent(key, () => {});
         set.add(DateTime(d.year, d.month, d.day));
       }
     } catch (_) {}
   }
-} 
+}

@@ -97,6 +97,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // 학원 설정 컨트롤러들
   final TextEditingController _academyNameController =
       ImeAwareTextEditingController();
+  final TextEditingController _academyAddressController =
+      ImeAwareTextEditingController();
   final TextEditingController _sloganController =
       ImeAwareTextEditingController();
   final TextEditingController _capacityController =
@@ -606,6 +608,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void dispose() {
     _academyNameController.dispose();
+    _academyAddressController.dispose();
     _sloganController.dispose();
     _capacityController.dispose();
     _lessonDurationController.dispose();
@@ -623,6 +626,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       await DataManager.instance.loadPaymentType();
       setState(() {
         _academyNameController.text = DataManager.instance.academySettings.name;
+        _academyAddressController.text =
+            DataManager.instance.academySettings.address;
         _sloganController.text = DataManager.instance.academySettings.slogan;
         _capacityController.text =
             DataManager.instance.academySettings.defaultCapacity.toString();
@@ -2764,6 +2769,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Widget _buildAcademySettings() {
+    const double academyInfoCardHeight = 680;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final ctx = _academyInfoKey.currentContext;
       if (ctx != null) {
@@ -2787,9 +2793,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
               padding: const EdgeInsets.only(top: 48),
               child: SizedBox(
                 width: 780,
-                height: 600,
+                height: academyInfoCardHeight,
                 child: Container(
-                  height: 600,
+                  height: academyInfoCardHeight,
                   margin: EdgeInsets.zero,
                   padding:
                       const EdgeInsets.symmetric(horizontal: 28, vertical: 28),
@@ -2817,6 +2823,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           style: const TextStyle(color: Colors.white),
                           decoration: InputDecoration(
                             labelText: '학원명',
+                            labelStyle:
+                                TextStyle(color: Colors.white.withOpacity(0.7)),
+                            enabledBorder: OutlineInputBorder(
+                              borderSide: BorderSide(
+                                  color: Colors.white.withOpacity(0.3)),
+                            ),
+                            focusedBorder: const OutlineInputBorder(
+                              borderSide: BorderSide(color: _kSignatureGreen),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                      // 주소 입력
+                      SizedBox(
+                        width: 600,
+                        child: TextFormField(
+                          controller: _academyAddressController,
+                          style: const TextStyle(color: Colors.white),
+                          decoration: InputDecoration(
+                            labelText: '학원 주소',
                             labelStyle:
                                 TextStyle(color: Colors.white.withOpacity(0.7)),
                             enabledBorder: OutlineInputBorder(
@@ -3086,6 +3113,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         '[DEBUG] 저장 버튼 클릭: _academyLogo type= [36m${_academyLogo.runtimeType} [0m, length=${_academyLogo?.length}, isNull=${_academyLogo == null}');
                     final academySettings = AcademySettings(
                       name: _academyNameController.text.trim(),
+                      address: _academyAddressController.text.trim(),
                       slogan: _sloganController.text.trim(),
                       defaultCapacity:
                           int.tryParse(_capacityController.text.trim()) ?? 30,

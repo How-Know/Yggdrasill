@@ -140,20 +140,24 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                 constraints.maxWidth < 1500;
                             final bool compactHeader =
                                 constraints.maxWidth < 1240;
+                            final double dateTimeFontSize =
+                                compactHeader ? 38 : 50;
+                            final double weatherIconSize =
+                                dateTimeFontSize * 1.1;
                             final Widget infoBlock = Wrap(
                               crossAxisAlignment: WrapCrossAlignment.center,
                               spacing: compactHeader ? 14 : 24,
                               runSpacing: compactHeader ? 6 : 0,
                               children: [
                                 HomeHeaderWeatherIcon(
-                                  iconSize: compactHeader ? 34 : 42,
+                                  iconSize: weatherIconSize,
                                   color: Colors.white70,
                                 ),
                                 Text(
                                   _formatDateWithWeekdayAndTime(_now),
                                   style: TextStyle(
                                     color: Colors.white,
-                                    fontSize: compactHeader ? 38 : 50,
+                                    fontSize: dateTimeFontSize,
                                     fontWeight: FontWeight.bold,
                                     height: 1.0,
                                   ),

@@ -30,10 +30,11 @@ class AcademyDbService {
   Future<Database> _initDb() async {
     // server-only 모드에서는 메모리 DB를 사용해 파일 I/O를 전혀 하지 않음
     final bool mem = RuntimeFlags.serverOnly;
-    final String path = mem ? inMemoryDatabasePath : await _resolveLocalDbPath();
+    final String path =
+        mem ? inMemoryDatabasePath : await _resolveLocalDbPath();
     return await openDatabaseWithLog(
       path,
-      version: 52,
+      version: 53,
       onConfigure: (db) async {
         // 잠금 최소화를 위한 설정은 유지
         await db.execute('PRAGMA journal_mode=WAL');
@@ -46,6 +47,7 @@ class AcademyDbService {
             id INTEGER PRIMARY KEY,
             name TEXT,
             slogan TEXT,
+            address TEXT,
             default_capacity INTEGER,
             lesson_duration INTEGER,
             payment_type TEXT,
@@ -668,9 +670,11 @@ class AcademyDbService {
         if (oldVersion < 36) {
           try {
             final cols = await db.rawQuery('PRAGMA table_info(teachers)');
-            final has = cols.any((c) => (c['name'] as String?) == 'display_order');
+            final has =
+                cols.any((c) => (c['name'] as String?) == 'display_order');
             if (!has) {
-              await db.execute('ALTER TABLE teachers ADD COLUMN display_order INTEGER');
+              await db.execute(
+                  'ALTER TABLE teachers ADD COLUMN display_order INTEGER');
             }
           } catch (e) {
             print('[DB][마이그레이션] v36 teachers.display_order 추가 실패: $e');
@@ -715,10 +719,12 @@ class AcademyDbService {
               )
             ''');
             // attendance_records.snapshot_id 컬럼 추가
-            final cols = await db.rawQuery("PRAGMA table_info(attendance_records)");
+            final cols =
+                await db.rawQuery("PRAGMA table_info(attendance_records)");
             final hasSnapshot = cols.any((c) => c['name'] == 'snapshot_id');
             if (!hasSnapshot) {
-              await db.execute("ALTER TABLE attendance_records ADD COLUMN snapshot_id TEXT");
+              await db.execute(
+                  "ALTER TABLE attendance_records ADD COLUMN snapshot_id TEXT");
             }
           } catch (e) {
             print('[DB][마이그레이션] v38 lesson snapshots/snapshot_id 추가 실패: $e');
@@ -758,10 +764,13 @@ class AcademyDbService {
                 updated_at TEXT
               )
             ''');
-            final cols = await db.rawQuery("PRAGMA table_info(attendance_records)");
-            final hasBatchSession = cols.any((c) => c['name'] == 'batch_session_id');
+            final cols =
+                await db.rawQuery("PRAGMA table_info(attendance_records)");
+            final hasBatchSession =
+                cols.any((c) => c['name'] == 'batch_session_id');
             if (!hasBatchSession) {
-              await db.execute("ALTER TABLE attendance_records ADD COLUMN batch_session_id TEXT");
+              await db.execute(
+                  "ALTER TABLE attendance_records ADD COLUMN batch_session_id TEXT");
             }
           } catch (e) {
             print('[DB][마이그레이션] v39 lesson batch/batch_session_id 추가 실패: $e');
@@ -800,27 +809,36 @@ class AcademyDbService {
               ON lesson_occurrences(student_id, kind, set_id, original_class_datetime)
             ''');
 
-            final attCols = await db.rawQuery("PRAGMA table_info(attendance_records)");
-            final hasOccInAttendance = attCols.any((c) => c['name'] == 'occurrence_id');
+            final attCols =
+                await db.rawQuery("PRAGMA table_info(attendance_records)");
+            final hasOccInAttendance =
+                attCols.any((c) => c['name'] == 'occurrence_id');
             if (!hasOccInAttendance) {
-              await db.execute("ALTER TABLE attendance_records ADD COLUMN occurrence_id TEXT");
+              await db.execute(
+                  "ALTER TABLE attendance_records ADD COLUMN occurrence_id TEXT");
             }
 
-            final ovCols = await db.rawQuery("PRAGMA table_info(session_overrides)");
-            final hasOccInOverrides = ovCols.any((c) => c['name'] == 'occurrence_id');
+            final ovCols =
+                await db.rawQuery("PRAGMA table_info(session_overrides)");
+            final hasOccInOverrides =
+                ovCols.any((c) => c['name'] == 'occurrence_id');
             if (!hasOccInOverrides) {
-              await db.execute("ALTER TABLE session_overrides ADD COLUMN occurrence_id TEXT");
+              await db.execute(
+                  "ALTER TABLE session_overrides ADD COLUMN occurrence_id TEXT");
             }
           } catch (e) {
-            print('[DB][마이그레이션] v40 lesson_occurrences/occurrence_id 추가 실패: $e');
+            print(
+                '[DB][마이그레이션] v40 lesson_occurrences/occurrence_id 추가 실패: $e');
           }
         }
         if (oldVersion < 41) {
           try {
-            final cols = await db.rawQuery("PRAGMA table_info(student_basic_info)");
+            final cols =
+                await db.rawQuery("PRAGMA table_info(student_basic_info)");
             final hasFlows = cols.any((c) => c['name'] == 'flows');
             if (!hasFlows) {
-              await db.execute("ALTER TABLE student_basic_info ADD COLUMN flows TEXT");
+              await db.execute(
+                  "ALTER TABLE student_basic_info ADD COLUMN flows TEXT");
             }
           } catch (e) {
             print('[DB][마이그레이션] v41 student_basic_info.flows 추가 실패: $e');
@@ -831,7 +849,8 @@ class AcademyDbService {
             final cols = await db.rawQuery("PRAGMA table_info(homework_items)");
             final hasFlowId = cols.any((c) => c['name'] == 'flow_id');
             if (!hasFlowId) {
-              await db.execute("ALTER TABLE homework_items ADD COLUMN flow_id TEXT");
+              await db.execute(
+                  "ALTER TABLE homework_items ADD COLUMN flow_id TEXT");
             }
           } catch (e) {
             print('[DB][마이그레이션] v42 homework_items.flow_id 추가 실패: $e');
@@ -845,16 +864,20 @@ class AcademyDbService {
             final hasCount = cols.any((c) => c['name'] == 'count');
             final hasContent = cols.any((c) => c['name'] == 'content');
             if (!hasType) {
-              await db.execute("ALTER TABLE homework_items ADD COLUMN type TEXT");
+              await db
+                  .execute("ALTER TABLE homework_items ADD COLUMN type TEXT");
             }
             if (!hasPage) {
-              await db.execute("ALTER TABLE homework_items ADD COLUMN page TEXT");
+              await db
+                  .execute("ALTER TABLE homework_items ADD COLUMN page TEXT");
             }
             if (!hasCount) {
-              await db.execute("ALTER TABLE homework_items ADD COLUMN count INTEGER");
+              await db.execute(
+                  "ALTER TABLE homework_items ADD COLUMN count INTEGER");
             }
             if (!hasContent) {
-              await db.execute("ALTER TABLE homework_items ADD COLUMN content TEXT");
+              await db.execute(
+                  "ALTER TABLE homework_items ADD COLUMN content TEXT");
             }
           } catch (e) {
             print('[DB][마이그레이션] v43 homework_items 타입/페이지/문항수/내용 추가 실패: $e');
@@ -885,7 +908,8 @@ class AcademyDbService {
             final cols = await db.rawQuery("PRAGMA table_info(homework_items)");
             final hasCheckCount = cols.any((c) => c['name'] == 'check_count');
             if (!hasCheckCount) {
-              await db.execute("ALTER TABLE homework_items ADD COLUMN check_count INTEGER");
+              await db.execute(
+                  "ALTER TABLE homework_items ADD COLUMN check_count INTEGER");
             }
           } catch (e) {
             print('[DB][마이그레이션] v45 homework_items.check_count 추가 실패: $e');
@@ -893,17 +917,20 @@ class AcademyDbService {
         }
         if (oldVersion < 46) {
           try {
-            await db.execute('ALTER TABLE homework_assignments ADD COLUMN progress INTEGER');
+            await db.execute(
+                'ALTER TABLE homework_assignments ADD COLUMN progress INTEGER');
           } catch (e) {
             print('[DB][마이그레이션] v46 homework_assignments.progress 추가 실패: $e');
           }
           try {
-            await db.execute('ALTER TABLE homework_assignments ADD COLUMN issue_type TEXT');
+            await db.execute(
+                'ALTER TABLE homework_assignments ADD COLUMN issue_type TEXT');
           } catch (e) {
             print('[DB][마이그레이션] v46 homework_assignments.issue_type 추가 실패: $e');
           }
           try {
-            await db.execute('ALTER TABLE homework_assignments ADD COLUMN issue_note TEXT');
+            await db.execute(
+                'ALTER TABLE homework_assignments ADD COLUMN issue_note TEXT');
           } catch (e) {
             print('[DB][마이그레이션] v46 homework_assignments.issue_note 추가 실패: $e');
           }
@@ -928,14 +955,17 @@ class AcademyDbService {
         }
         if (oldVersion < 37) {
           try {
-            final cols = await db.rawQuery("PRAGMA table_info(student_time_blocks)");
+            final cols =
+                await db.rawQuery("PRAGMA table_info(student_time_blocks)");
             final hasStartDate = cols.any((c) => c['name'] == 'start_date');
             final hasEndDate = cols.any((c) => c['name'] == 'end_date');
             if (!hasStartDate) {
-              await db.execute('ALTER TABLE student_time_blocks ADD COLUMN start_date TEXT');
+              await db.execute(
+                  'ALTER TABLE student_time_blocks ADD COLUMN start_date TEXT');
             }
             if (!hasEndDate) {
-              await db.execute('ALTER TABLE student_time_blocks ADD COLUMN end_date TEXT');
+              await db.execute(
+                  'ALTER TABLE student_time_blocks ADD COLUMN end_date TEXT');
             }
             await db.execute('''
               UPDATE student_time_blocks
@@ -943,7 +973,8 @@ class AcademyDbService {
                WHERE start_date IS NULL
             ''');
           } catch (e) {
-            print('[DB][마이그레이션] v37 student_time_blocks start/end_date 추가 실패: $e');
+            print(
+                '[DB][마이그레이션] v37 student_time_blocks start/end_date 추가 실패: $e');
           }
         }
         if (oldVersion < 26) {
@@ -966,10 +997,12 @@ class AcademyDbService {
         if (oldVersion < 27) {
           // Add parent_id to resource_folders for nested folder tree
           try {
-            final cols = await db.rawQuery("PRAGMA table_info(resource_folders)");
+            final cols =
+                await db.rawQuery("PRAGMA table_info(resource_folders)");
             final hasParent = cols.any((c) => c['name'] == 'parent_id');
             if (!hasParent) {
-              await db.execute('ALTER TABLE resource_folders ADD COLUMN parent_id TEXT');
+              await db.execute(
+                  'ALTER TABLE resource_folders ADD COLUMN parent_id TEXT');
             }
           } catch (e) {
             print('[DB][마이그레이션] v27: resource_folders.parent_id 추가 실패: $e');
@@ -977,10 +1010,12 @@ class AcademyDbService {
         }
         if (oldVersion < 28) {
           try {
-            final cols = await db.rawQuery("PRAGMA table_info(resource_folders)");
+            final cols =
+                await db.rawQuery("PRAGMA table_info(resource_folders)");
             final hasOrder = cols.any((c) => c['name'] == 'order_index');
             if (!hasOrder) {
-              await db.execute('ALTER TABLE resource_folders ADD COLUMN order_index INTEGER');
+              await db.execute(
+                  'ALTER TABLE resource_folders ADD COLUMN order_index INTEGER');
             }
           } catch (e) {
             print('[DB][마이그레이션] v28: resource_folders.order_index 추가 실패: $e');
@@ -991,7 +1026,8 @@ class AcademyDbService {
             final cols = await db.rawQuery("PRAGMA table_info(resource_files)");
             final hasOrder = cols.any((c) => c['name'] == 'order_index');
             if (!hasOrder) {
-              await db.execute('ALTER TABLE resource_files ADD COLUMN order_index INTEGER');
+              await db.execute(
+                  'ALTER TABLE resource_files ADD COLUMN order_index INTEGER');
             }
             await db.execute('''
               CREATE TABLE IF NOT EXISTS resource_favorites (
@@ -999,24 +1035,29 @@ class AcademyDbService {
               )
             ''');
           } catch (e) {
-            print('[DB][마이그레이션] v29: resource_files.order_index/resource_favorites 추가 실패: $e');
+            print(
+                '[DB][마이그레이션] v29: resource_files.order_index/resource_favorites 추가 실패: $e');
           }
         }
         if (oldVersion < 30) {
           try {
-            final colsF = await db.rawQuery("PRAGMA table_info(resource_folders)");
+            final colsF =
+                await db.rawQuery("PRAGMA table_info(resource_folders)");
             final hasCatF = colsF.any((c) => c['name'] == 'category');
             if (!hasCatF) {
-              await db.execute('ALTER TABLE resource_folders ADD COLUMN category TEXT');
+              await db.execute(
+                  'ALTER TABLE resource_folders ADD COLUMN category TEXT');
             }
           } catch (e) {
             print('[DB][마이그레이션] v30: resource_folders.category 추가 실패: $e');
           }
           try {
-            final colsFi = await db.rawQuery("PRAGMA table_info(resource_files)");
+            final colsFi =
+                await db.rawQuery("PRAGMA table_info(resource_files)");
             final hasCatFi = colsFi.any((c) => c['name'] == 'category');
             if (!hasCatFi) {
-              await db.execute('ALTER TABLE resource_files ADD COLUMN category TEXT');
+              await db.execute(
+                  'ALTER TABLE resource_files ADD COLUMN category TEXT');
             }
           } catch (e) {
             print('[DB][마이그레이션] v30: resource_files.category 추가 실패: $e');
@@ -1041,9 +1082,11 @@ class AcademyDbService {
         if (oldVersion < 36) {
           try {
             final cols = await db.rawQuery("PRAGMA table_info(groups)");
-            final hasDisplayOrder = cols.any((c) => c['name'] == 'display_order');
+            final hasDisplayOrder =
+                cols.any((c) => c['name'] == 'display_order');
             if (!hasDisplayOrder) {
-              await db.execute('ALTER TABLE groups ADD COLUMN display_order INTEGER');
+              await db.execute(
+                  'ALTER TABLE groups ADD COLUMN display_order INTEGER');
               await db.execute('''
                 UPDATE groups
                    SET display_order = (
@@ -1107,10 +1150,13 @@ class AcademyDbService {
         }
         if (oldVersion < 5) {
           // [추가] session_cycle 컬럼이 없으면 추가
-          final columns = await db.rawQuery("PRAGMA table_info(academy_settings)");
-          final hasSessionCycle = columns.any((col) => col['name'] == 'session_cycle');
+          final columns =
+              await db.rawQuery("PRAGMA table_info(academy_settings)");
+          final hasSessionCycle =
+              columns.any((col) => col['name'] == 'session_cycle');
           if (!hasSessionCycle) {
-            await db.execute("ALTER TABLE academy_settings ADD COLUMN session_cycle INTEGER DEFAULT 1");
+            await db.execute(
+                "ALTER TABLE academy_settings ADD COLUMN session_cycle INTEGER DEFAULT 1");
           }
         }
         if (oldVersion < 6) {
@@ -1175,10 +1221,12 @@ class AcademyDbService {
         // v25: payment_records.postpone_reason 컬럼 보정 추가
         if (oldVersion < 25) {
           try {
-            final cols = await db.rawQuery("PRAGMA table_info(payment_records)");
+            final cols =
+                await db.rawQuery("PRAGMA table_info(payment_records)");
             final hasPostpone = cols.any((c) => c['name'] == 'postpone_reason');
             if (!hasPostpone) {
-              await db.execute('ALTER TABLE payment_records ADD COLUMN postpone_reason TEXT');
+              await db.execute(
+                  'ALTER TABLE payment_records ADD COLUMN postpone_reason TEXT');
               print('[DB][마이그레이션] v25: payment_records.postpone_reason 추가 완료');
             }
           } catch (e, st) {
@@ -1222,19 +1270,19 @@ class AcademyDbService {
             )
           ''');
         }
-        
+
         // 버전 12: students_basic_info -> student_basic_info 마이그레이션 및 컬럼 정리
         if (oldVersion < 12) {
-          print('[DB] 버전 12 마이그레이션 시작: students_basic_info -> student_basic_info');
-          
+          print(
+              '[DB] 버전 12 마이그레이션 시작: students_basic_info -> student_basic_info');
+
           // 1. 기존 students_basic_info 테이블 존재 확인
           final tableExists = await db.rawQuery(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='students_basic_info'"
-          );
-          
+              "SELECT name FROM sqlite_master WHERE type='table' AND name='students_basic_info'");
+
           if (tableExists.isNotEmpty) {
             print('[DB] 기존 students_basic_info 테이블 발견, 마이그레이션 진행');
-            
+
             // 2. 새 student_basic_info 테이블 생성
             await db.execute('''
               CREATE TABLE IF NOT EXISTS student_basic_info (
@@ -1246,17 +1294,17 @@ class AcademyDbService {
                 FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
               )
             ''');
-            
+
             // 3. 기존 데이터를 새 테이블로 마이그레이션 (필요한 컬럼만)
             await db.execute('''
               INSERT OR REPLACE INTO student_basic_info (student_id, phone_number, parent_phone_number, group_id)
               SELECT student_id, phone_number, parent_phone_number, group_id 
               FROM students_basic_info
             ''');
-            
+
             // 4. 기존 테이블 삭제
             await db.execute('DROP TABLE students_basic_info');
-            
+
             print('[DB] students_basic_info -> student_basic_info 마이그레이션 완료');
           } else {
             print('[DB] students_basic_info 테이블이 없음, 새로 생성');
@@ -1275,10 +1323,12 @@ class AcademyDbService {
         }
         // 버전 17: student_basic_info에 memo 컬럼 추가
         if (oldVersion < 17) {
-          final columns = await db.rawQuery("PRAGMA table_info(student_basic_info)");
+          final columns =
+              await db.rawQuery("PRAGMA table_info(student_basic_info)");
           final hasMemo = columns.any((col) => col['name'] == 'memo');
           if (!hasMemo) {
-            await db.execute('ALTER TABLE student_basic_info ADD COLUMN memo TEXT');
+            await db
+                .execute('ALTER TABLE student_basic_info ADD COLUMN memo TEXT');
           }
         }
         if (oldVersion < 18) {
@@ -1317,39 +1367,47 @@ class AcademyDbService {
         // v20: openai_api_key - 제거됨 (platform_config로 이전)
         if (oldVersion < 21) {
           final columns = await db.rawQuery("PRAGMA table_info(memos)");
-          final hasRecurrenceType = columns.any((c) => c['name'] == 'recurrence_type');
+          final hasRecurrenceType =
+              columns.any((c) => c['name'] == 'recurrence_type');
           if (!hasRecurrenceType) {
-            await db.execute('ALTER TABLE memos ADD COLUMN recurrence_type TEXT');
+            await db
+                .execute('ALTER TABLE memos ADD COLUMN recurrence_type TEXT');
           }
           final hasWeekdays = columns.any((c) => c['name'] == 'weekdays');
           if (!hasWeekdays) {
             await db.execute('ALTER TABLE memos ADD COLUMN weekdays TEXT');
           }
-          final hasRecurrenceEnd = columns.any((c) => c['name'] == 'recurrence_end');
+          final hasRecurrenceEnd =
+              columns.any((c) => c['name'] == 'recurrence_end');
           if (!hasRecurrenceEnd) {
-            await db.execute('ALTER TABLE memos ADD COLUMN recurrence_end TEXT');
+            await db
+                .execute('ALTER TABLE memos ADD COLUMN recurrence_end TEXT');
           }
         }
         if (oldVersion < 22) {
           final columns = await db.rawQuery("PRAGMA table_info(memos)");
           final hasCount = columns.any((c) => c['name'] == 'recurrence_count');
           if (!hasCount) {
-            await db.execute('ALTER TABLE memos ADD COLUMN recurrence_count INTEGER');
+            await db.execute(
+                'ALTER TABLE memos ADD COLUMN recurrence_count INTEGER');
           }
         }
         if (oldVersion < 23) {
           final cols = await db.rawQuery("PRAGMA table_info(resource_files)");
           final hasTextColor = cols.any((c) => c['name'] == 'text_color');
           if (!hasTextColor) {
-            await db.execute('ALTER TABLE resource_files ADD COLUMN text_color INTEGER');
+            await db.execute(
+                'ALTER TABLE resource_files ADD COLUMN text_color INTEGER');
           }
           final hasIconImage = cols.any((c) => c['name'] == 'icon_image_path');
           if (!hasIconImage) {
-            await db.execute('ALTER TABLE resource_files ADD COLUMN icon_image_path TEXT');
+            await db.execute(
+                'ALTER TABLE resource_files ADD COLUMN icon_image_path TEXT');
           }
           final hasDesc = cols.any((c) => c['name'] == 'description');
           if (!hasDesc) {
-            await db.execute('ALTER TABLE resource_files ADD COLUMN description TEXT');
+            await db.execute(
+                'ALTER TABLE resource_files ADD COLUMN description TEXT');
           }
           await db.execute('''
             CREATE TABLE IF NOT EXISTS resource_file_bookmarks (
@@ -1366,7 +1424,8 @@ class AcademyDbService {
           final cols = await db.rawQuery("PRAGMA table_info(resource_files)");
           final hasIconCode = cols.any((c) => c['name'] == 'icon_code');
           if (!hasIconCode) {
-            await db.execute('ALTER TABLE resource_files ADD COLUMN icon_code INTEGER');
+            await db.execute(
+                'ALTER TABLE resource_files ADD COLUMN icon_code INTEGER');
           }
         }
         // ensure new resources-related tables (links, grades)
@@ -1385,20 +1444,20 @@ class AcademyDbService {
             order_index INTEGER
           )
         ''');
-        
+
         // 버전 13: student_time_blocks 테이블 컬럼 구조 수정
         if (oldVersion < 13) {
           print('[DB] 버전 13 마이그레이션 시작: student_time_blocks 컬럼 구조 수정');
-          
+
           // 1. 기존 student_time_blocks 테이블 백업
           await db.execute('''
             CREATE TABLE student_time_blocks_backup AS 
             SELECT * FROM student_time_blocks
           ''');
-          
+
           // 2. 기존 테이블 삭제
           await db.execute('DROP TABLE student_time_blocks');
-          
+
           // 3. 새로운 구조로 테이블 재생성
           await db.execute('''
             CREATE TABLE student_time_blocks (
@@ -1415,14 +1474,15 @@ class AcademyDbService {
               weekly_order INTEGER
             )
           ''');
-          
+
           // 4. 백업 데이터를 새 구조로 변환하여 복원 (start_time을 start_hour, start_minute로 분리)
-          final backupData = await db.rawQuery('SELECT * FROM student_time_blocks_backup');
+          final backupData =
+              await db.rawQuery('SELECT * FROM student_time_blocks_backup');
           for (final row in backupData) {
             String? startTime = row['start_time'] as String?;
             int startHour = 0;
             int startMinute = 0;
-            
+
             if (startTime != null && startTime.contains(':')) {
               final parts = startTime.split(':');
               if (parts.length >= 2) {
@@ -1430,7 +1490,7 @@ class AcademyDbService {
                 startMinute = int.tryParse(parts[1]) ?? 0;
               }
             }
-            
+
             await db.insert('student_time_blocks', {
               'id': row['id'],
               'student_id': row['student_id'],
@@ -1445,10 +1505,10 @@ class AcademyDbService {
               'weekly_order': row['weekly_order'],
             });
           }
-          
+
           // 5. 백업 테이블 삭제
           await db.execute('DROP TABLE student_time_blocks_backup');
-          
+
           print('[DB] 버전 13 마이그레이션 완료: student_time_blocks 컬럼 구조 수정');
         }
         // 버전 14: session_overrides 테이블 생성 및 인덱스 추가
@@ -1485,7 +1545,8 @@ class AcademyDbService {
         }
         // 버전 16: student_time_blocks에서 group_id 제거 및 weekly_order 컬럼 추가
         if (oldVersion < 16) {
-          print('[DB] 버전 16 마이그레이션 시작: student_time_blocks 테이블 재구성 (group_id 제거, weekly_order 추가)');
+          print(
+              '[DB] 버전 16 마이그레이션 시작: student_time_blocks 테이블 재구성 (group_id 제거, weekly_order 추가)');
           // 1) 백업 테이블 생성
           await db.execute('''
             CREATE TABLE student_time_blocks_v16_backup AS
@@ -1510,7 +1571,8 @@ class AcademyDbService {
             )
           ''');
           // 4) 백업 데이터 읽어서 변환 삽입
-          final backupRows = await db.rawQuery('SELECT * FROM student_time_blocks_v16_backup');
+          final backupRows =
+              await db.rawQuery('SELECT * FROM student_time_blocks_v16_backup');
           for (final row in backupRows) {
             // start_time -> start_hour/start_minute 변환은 v13에서 처리됨, 여기서는 그대로 사용
             await db.insert('student_time_blocks', {
@@ -1551,8 +1613,10 @@ class AcademyDbService {
         }
         if (oldVersion < 49) {
           try {
-            final itemCols = await db.rawQuery("PRAGMA table_info(homework_items)");
-            final hasItemOrder = itemCols.any((c) => c['name'] == 'order_index');
+            final itemCols =
+                await db.rawQuery("PRAGMA table_info(homework_items)");
+            final hasItemOrder =
+                itemCols.any((c) => c['name'] == 'order_index');
             if (!hasItemOrder) {
               await db.execute(
                 'ALTER TABLE homework_items ADD COLUMN order_index INTEGER',
@@ -1631,7 +1695,8 @@ class AcademyDbService {
               nextByGroup[groupKey] = next + 1;
             }
           } catch (e) {
-            print('[DB][마이그레이션] v49 homework_assignments.order_index 추가/백필 실패: $e');
+            print(
+                '[DB][마이그레이션] v49 homework_assignments.order_index 추가/백필 실패: $e');
           }
         }
         if (oldVersion < 50) {
@@ -1640,21 +1705,24 @@ class AcademyDbService {
               'ALTER TABLE homework_assignments ADD COLUMN repeat_index INTEGER',
             );
           } catch (e) {
-            print('[DB][마이그레이션] v50 homework_assignments.repeat_index 추가 실패: $e');
+            print(
+                '[DB][마이그레이션] v50 homework_assignments.repeat_index 추가 실패: $e');
           }
           try {
             await db.execute(
               'ALTER TABLE homework_assignments ADD COLUMN split_parts INTEGER',
             );
           } catch (e) {
-            print('[DB][마이그레이션] v50 homework_assignments.split_parts 추가 실패: $e');
+            print(
+                '[DB][마이그레이션] v50 homework_assignments.split_parts 추가 실패: $e');
           }
           try {
             await db.execute(
               'ALTER TABLE homework_assignments ADD COLUMN split_round INTEGER',
             );
           } catch (e) {
-            print('[DB][마이그레이션] v50 homework_assignments.split_round 추가 실패: $e');
+            print(
+                '[DB][마이그레이션] v50 homework_assignments.split_round 추가 실패: $e');
           }
           try {
             await db.execute('''
@@ -1687,7 +1755,8 @@ class AcademyDbService {
               'ALTER TABLE homework_items ADD COLUMN default_split_parts INTEGER',
             );
           } catch (e) {
-            print('[DB][마이그레이션] v51 homework_items.default_split_parts 추가 실패: $e');
+            print(
+                '[DB][마이그레이션] v51 homework_items.default_split_parts 추가 실패: $e');
           }
           try {
             await db.execute('''
@@ -1702,12 +1771,14 @@ class AcademyDbService {
                   OR default_split_parts > 4
             ''');
           } catch (e) {
-            print('[DB][마이그레이션] v51 homework_items.default_split_parts 백필 실패: $e');
+            print(
+                '[DB][마이그레이션] v51 homework_items.default_split_parts 백필 실패: $e');
           }
         }
         if (oldVersion < 52) {
           try {
-            final cols = await db.rawQuery("PRAGMA table_info(student_basic_info)");
+            final cols =
+                await db.rawQuery("PRAGMA table_info(student_basic_info)");
             final has = cols.any((c) => c['name'] == 'notification_consent');
             if (!has) {
               await db.execute(
@@ -1715,7 +1786,22 @@ class AcademyDbService {
               );
             }
           } catch (e) {
-            print('[DB][마이그레이션] v52 student_basic_info.notification_consent 추가 실패: $e');
+            print(
+                '[DB][마이그레이션] v52 student_basic_info.notification_consent 추가 실패: $e');
+          }
+        }
+        if (oldVersion < 53) {
+          try {
+            final cols =
+                await db.rawQuery("PRAGMA table_info(academy_settings)");
+            final has = cols.any((c) => c['name'] == 'address');
+            if (!has) {
+              await db.execute(
+                "ALTER TABLE academy_settings ADD COLUMN address TEXT",
+              );
+            }
+          } catch (e) {
+            print('[DB][마이그레이션] v53 academy_settings.address 추가 실패: $e');
           }
         }
       },
@@ -1724,7 +1810,8 @@ class AcademyDbService {
 
   Future<String> _resolveLocalDbPath() async {
     // 우선순위 1) 빌드 타임 주입 경로(override)
-    const definedPath = String.fromEnvironment('LOCAL_DB_PATH', defaultValue: '');
+    const definedPath =
+        String.fromEnvironment('LOCAL_DB_PATH', defaultValue: '');
     if (definedPath.isNotEmpty) {
       return definedPath;
     }
@@ -1732,14 +1819,18 @@ class AcademyDbService {
     // 우선순위 2) Windows OneDrive(문서/Documents) 탐색
     try {
       if (Platform.isWindows) {
-        final oneDrive = Platform.environment['OneDrive'] ?? Platform.environment['OneDriveConsumer'] ?? '';
+        final oneDrive = Platform.environment['OneDrive'] ??
+            Platform.environment['OneDriveConsumer'] ??
+            '';
         final userProfile = Platform.environment['USERPROFILE'] ?? '';
 
         final candidates = <String>[
           if (oneDrive.isNotEmpty) join(oneDrive, '문서', 'academy.db'),
           if (oneDrive.isNotEmpty) join(oneDrive, 'Documents', 'academy.db'),
-          if (userProfile.isNotEmpty) join(userProfile, 'OneDrive', '문서', 'academy.db'),
-          if (userProfile.isNotEmpty) join(userProfile, 'OneDrive', 'Documents', 'academy.db'),
+          if (userProfile.isNotEmpty)
+            join(userProfile, 'OneDrive', '문서', 'academy.db'),
+          if (userProfile.isNotEmpty)
+            join(userProfile, 'OneDrive', 'Documents', 'academy.db'),
         ];
 
         for (final p in candidates) {
@@ -1755,6 +1846,7 @@ class AcademyDbService {
     final documentsDirectory = await getApplicationDocumentsDirectory();
     return join(documentsDirectory.path, 'academy.db');
   }
+
   // ======== EXAM SCHEDULE/RANGE PERSISTENCE ========
   Future<void> ensureExamTables() async {
     final dbClient = await db;
@@ -1800,25 +1892,35 @@ class AcademyDbService {
     await ensureExamTables();
     await dbClient.transaction((txn) async {
       // 기존 데이터 삭제 후 저장 (해당 school/level/grade 범위)
-      await txn.delete('exam_schedules', where: 'school = ? AND level = ? AND grade = ?', whereArgs: [school, level, grade]);
-      await txn.delete('exam_ranges', where: 'school = ? AND level = ? AND grade = ?', whereArgs: [school, level, grade]);
+      await txn.delete('exam_schedules',
+          where: 'school = ? AND level = ? AND grade = ?',
+          whereArgs: [school, level, grade]);
+      await txn.delete('exam_ranges',
+          where: 'school = ? AND level = ? AND grade = ?',
+          whereArgs: [school, level, grade]);
       for (final e in titlesByDateIso.entries) {
-        await txn.insert('exam_schedules', {
-          'school': school,
-          'level': level,
-          'grade': grade,
-          'date': e.key,
-          'names_json': e.value.isEmpty ? '[]' : jsonEncode(e.value),
-        }, conflictAlgorithm: ConflictAlgorithm.replace);
+        await txn.insert(
+            'exam_schedules',
+            {
+              'school': school,
+              'level': level,
+              'grade': grade,
+              'date': e.key,
+              'names_json': e.value.isEmpty ? '[]' : jsonEncode(e.value),
+            },
+            conflictAlgorithm: ConflictAlgorithm.replace);
       }
       for (final e in rangesByDateIso.entries) {
-        await txn.insert('exam_ranges', {
-          'school': school,
-          'level': level,
-          'grade': grade,
-          'date': e.key,
-          'range_text': e.value,
-        }, conflictAlgorithm: ConflictAlgorithm.replace);
+        await txn.insert(
+            'exam_ranges',
+            {
+              'school': school,
+              'level': level,
+              'grade': grade,
+              'date': e.key,
+              'range_text': e.value,
+            },
+            conflictAlgorithm: ConflictAlgorithm.replace);
       }
     });
   }
@@ -1830,9 +1932,15 @@ class AcademyDbService {
   }) async {
     final dbClient = await db;
     await ensureExamTables();
-    final schedules = await dbClient.query('exam_schedules', where: 'school = ? AND level = ? AND grade = ?', whereArgs: [school, level, grade]);
-    final ranges = await dbClient.query('exam_ranges', where: 'school = ? AND level = ? AND grade = ?', whereArgs: [school, level, grade]);
-    final days = await dbClient.query('exam_days', where: 'school = ? AND level = ? AND grade = ?', whereArgs: [school, level, grade]);
+    final schedules = await dbClient.query('exam_schedules',
+        where: 'school = ? AND level = ? AND grade = ?',
+        whereArgs: [school, level, grade]);
+    final ranges = await dbClient.query('exam_ranges',
+        where: 'school = ? AND level = ? AND grade = ?',
+        whereArgs: [school, level, grade]);
+    final days = await dbClient.query('exam_days',
+        where: 'school = ? AND level = ? AND grade = ?',
+        whereArgs: [school, level, grade]);
     return {
       'schedules': schedules,
       'ranges': ranges,
@@ -1849,14 +1957,19 @@ class AcademyDbService {
     final dbClient = await db;
     await ensureExamTables();
     await dbClient.transaction((txn) async {
-      await txn.delete('exam_days', where: 'school = ? AND level = ? AND grade = ?', whereArgs: [school, level, grade]);
+      await txn.delete('exam_days',
+          where: 'school = ? AND level = ? AND grade = ?',
+          whereArgs: [school, level, grade]);
       for (final d in daysIso) {
-        await txn.insert('exam_days', {
-          'school': school,
-          'level': level,
-          'grade': grade,
-          'date': d,
-        }, conflictAlgorithm: ConflictAlgorithm.replace);
+        await txn.insert(
+            'exam_days',
+            {
+              'school': school,
+              'level': level,
+              'grade': grade,
+              'date': d,
+            },
+            conflictAlgorithm: ConflictAlgorithm.replace);
       }
     });
   }
@@ -1887,13 +2000,23 @@ class AcademyDbService {
     final dbClient = await db;
     await ensureExamTables();
     await dbClient.transaction((txn) async {
-      await txn.delete('exam_schedules', where: 'school = ? AND level = ? AND grade = ?', whereArgs: [school, level, grade]);
-      await txn.delete('exam_ranges', where: 'school = ? AND level = ? AND grade = ?', whereArgs: [school, level, grade]);
-      await txn.delete('exam_days', where: 'school = ? AND level = ? AND grade = ?', whereArgs: [school, level, grade]);
+      await txn.delete('exam_schedules',
+          where: 'school = ? AND level = ? AND grade = ?',
+          whereArgs: [school, level, grade]);
+      await txn.delete('exam_ranges',
+          where: 'school = ? AND level = ? AND grade = ?',
+          whereArgs: [school, level, grade]);
+      await txn.delete('exam_days',
+          where: 'school = ? AND level = ? AND grade = ?',
+          whereArgs: [school, level, grade]);
     });
   }
 
-  Future<Database> openDatabaseWithLog(String path, {int version = 1, OnDatabaseCreateFn? onCreate, OnDatabaseVersionChangeFn? onUpgrade, OnDatabaseConfigureFn? onConfigure}) async {
+  Future<Database> openDatabaseWithLog(String path,
+      {int version = 1,
+      OnDatabaseCreateFn? onCreate,
+      OnDatabaseVersionChangeFn? onUpgrade,
+      OnDatabaseConfigureFn? onConfigure}) async {
     print('[DB][경로] 실제 사용 DB 파일 경로: $path');
 
     // 메모리 DB는 파일 점검을 건너뜀
@@ -1910,23 +2033,31 @@ class AcademyDbService {
       print('[DB] server-only: in-memory database in use');
     }
 
-    return await openDatabase(path, version: version, onCreate: onCreate, onUpgrade: onUpgrade, onConfigure: onConfigure);
+    return await openDatabase(path,
+        version: version,
+        onCreate: onCreate,
+        onUpgrade: onUpgrade,
+        onConfigure: onConfigure);
   }
 
-  Future<void> saveAcademySettings(AcademySettings settings, String paymentType) async {
+  Future<void> saveAcademySettings(
+      AcademySettings settings, String paymentType) async {
     try {
       final dbClient = await db;
       // paymentType 문자열 변환
       String paymentTypeStr = paymentType;
-      if (paymentType == 'perClass' || paymentType == 'session') paymentTypeStr = 'session';
+      if (paymentType == 'perClass' || paymentType == 'session')
+        paymentTypeStr = 'session';
       if (paymentType == 'monthly') paymentTypeStr = 'monthly';
-      print('[DB] saveAcademySettings: $settings, paymentType: $paymentTypeStr');
+      print(
+          '[DB] saveAcademySettings: $settings, paymentType: $paymentTypeStr');
       await dbClient.insert(
         'academy_settings',
         {
           'id': 1,
           'name': settings.name,
           'slogan': settings.slogan,
+          'address': settings.address,
           'default_capacity': settings.defaultCapacity,
           'lesson_duration': settings.lessonDuration,
           'payment_type': paymentTypeStr,
@@ -1945,18 +2076,22 @@ class AcademyDbService {
   Future<void> addMemo(Map<String, dynamic> map) async {
     final dbClient = await db;
     await ensureMemosTable();
-    await dbClient.insert('memos', map, conflictAlgorithm: ConflictAlgorithm.replace);
+    await dbClient.insert('memos', map,
+        conflictAlgorithm: ConflictAlgorithm.replace);
   }
+
   Future<void> updateMemo(String id, Map<String, dynamic> map) async {
     final dbClient = await db;
     await ensureMemosTable();
     await dbClient.update('memos', map, where: 'id = ?', whereArgs: [id]);
   }
+
   Future<void> deleteMemo(String id) async {
     final dbClient = await db;
     await ensureMemosTable();
     await dbClient.delete('memos', where: 'id = ?', whereArgs: [id]);
   }
+
   Future<List<Map<String, dynamic>>> getMemos() async {
     final dbClient = await db;
     await ensureMemosTable();
@@ -1965,7 +2100,8 @@ class AcademyDbService {
 
   Future<void> ensureMemosTable() async {
     final dbClient = await db;
-    final result = await dbClient.rawQuery("SELECT name FROM sqlite_master WHERE type='table' AND name='memos'");
+    final result = await dbClient.rawQuery(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='memos'");
     if (result.isEmpty) {
       await dbClient.execute('''
         CREATE TABLE IF NOT EXISTS memos (
@@ -2091,7 +2227,8 @@ class AcademyDbService {
   Future<List<Map<String, dynamic>>> loadAnswerKeyGrades() async {
     final dbClient = await db;
     await ensureAnswerKeyTables();
-    return await dbClient.query('answer_key_grades', orderBy: 'order_index ASC');
+    return await dbClient.query('answer_key_grades',
+        orderBy: 'order_index ASC');
   }
 
   Future<void> saveAnswerKeyGrades(List<Map<String, dynamic>> rows) async {
@@ -2100,7 +2237,8 @@ class AcademyDbService {
     await dbClient.transaction((txn) async {
       await txn.delete('answer_key_grades');
       for (final row in rows) {
-        await txn.insert('answer_key_grades', row, conflictAlgorithm: ConflictAlgorithm.replace);
+        await txn.insert('answer_key_grades', row,
+            conflictAlgorithm: ConflictAlgorithm.replace);
       }
     });
   }
@@ -2116,13 +2254,15 @@ class AcademyDbService {
     await ensureAnswerKeyTables();
     final String id = row['id'] as String;
     // 기존 레코드가 있으면 병합하여 덮어쓰기 (일부 필드만 저장하는 호출에서도 안전)
-    final existingList = await dbClient.query('answer_key_books', where: 'id = ?', whereArgs: [id], limit: 1);
+    final existingList = await dbClient.query('answer_key_books',
+        where: 'id = ?', whereArgs: [id], limit: 1);
     Map<String, dynamic> merged = {};
     if (existingList.isNotEmpty) {
       merged = Map<String, dynamic>.from(existingList.first);
     }
     merged.addAll(row);
-    await dbClient.insert('answer_key_books', merged, conflictAlgorithm: ConflictAlgorithm.replace);
+    await dbClient.insert('answer_key_books', merged,
+        conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   Future<void> saveAnswerKeyBooks(List<Map<String, dynamic>> rows) async {
@@ -2131,7 +2271,8 @@ class AcademyDbService {
     await dbClient.transaction((txn) async {
       await txn.delete('answer_key_books');
       for (final row in rows) {
-        await txn.insert('answer_key_books', row, conflictAlgorithm: ConflictAlgorithm.replace);
+        await txn.insert('answer_key_books', row,
+            conflictAlgorithm: ConflictAlgorithm.replace);
       }
     });
   }
@@ -2140,7 +2281,8 @@ class AcademyDbService {
     final dbClient = await db;
     await ensureAnswerKeyTables();
     await dbClient.delete('answer_key_books', where: 'id = ?', whereArgs: [id]);
-    await dbClient.delete('answer_key_book_pdfs', where: 'book_id = ?', whereArgs: [id]);
+    await dbClient
+        .delete('answer_key_book_pdfs', where: 'book_id = ?', whereArgs: [id]);
   }
 
   Future<List<Map<String, dynamic>>> loadAnswerKeyBookPdfs() async {
@@ -2152,7 +2294,8 @@ class AcademyDbService {
   Future<void> saveAnswerKeyBookPdf(Map<String, dynamic> row) async {
     final dbClient = await db;
     await ensureAnswerKeyTables();
-    await dbClient.insert('answer_key_book_pdfs', row, conflictAlgorithm: ConflictAlgorithm.replace);
+    await dbClient.insert('answer_key_book_pdfs', row,
+        conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   Future<void> deleteAnswerKeyBookPdf({
@@ -2176,27 +2319,32 @@ class AcademyDbService {
       // 이렇게 해야 UI에서 삭제한 폴더가 재시작 시 다시 나타나는 문제를 방지할 수 있음
       await txn.delete('resource_folders');
       for (final row in rows) {
-        await txn.insert('resource_folders', row, conflictAlgorithm: ConflictAlgorithm.replace);
+        await txn.insert('resource_folders', row,
+            conflictAlgorithm: ConflictAlgorithm.replace);
       }
     });
   }
 
   // Category-scoped save to avoid wiping other tabs' data
-  Future<void> saveResourceFoldersForCategory(String category, List<Map<String, dynamic>> rows) async {
+  Future<void> saveResourceFoldersForCategory(
+      String category, List<Map<String, dynamic>> rows) async {
     final dbClient = await db;
     await ensureResourceTables();
     await dbClient.transaction((txn) async {
       // v30+: category 열 기반으로 해당 카테고리만 정리
       // 구버전 데이터(카테고리 null)는 교재(textbook)로 간주하여 함께 정리
       if (category == 'textbook') {
-        await txn.delete('resource_folders', where: 'category = ? OR category IS NULL', whereArgs: [category]);
+        await txn.delete('resource_folders',
+            where: 'category = ? OR category IS NULL', whereArgs: [category]);
       } else {
-        await txn.delete('resource_folders', where: 'category = ?', whereArgs: [category]);
+        await txn.delete('resource_folders',
+            where: 'category = ?', whereArgs: [category]);
       }
       for (final raw in rows) {
         final row = Map<String, dynamic>.from(raw);
         row['category'] = category;
-        await txn.insert('resource_folders', row, conflictAlgorithm: ConflictAlgorithm.replace);
+        await txn.insert('resource_folders', row,
+            conflictAlgorithm: ConflictAlgorithm.replace);
       }
     });
   }
@@ -2207,13 +2355,16 @@ class AcademyDbService {
     return await dbClient.query('resource_folders');
   }
 
-  Future<List<Map<String, dynamic>>> loadResourceFoldersForCategory(String category) async {
+  Future<List<Map<String, dynamic>>> loadResourceFoldersForCategory(
+      String category) async {
     final dbClient = await db;
     await ensureResourceTables();
     if (category == 'textbook') {
-      return await dbClient.query('resource_folders', where: 'category = ? OR category IS NULL', whereArgs: [category]);
+      return await dbClient.query('resource_folders',
+          where: 'category = ? OR category IS NULL', whereArgs: [category]);
     }
-    return await dbClient.query('resource_folders', where: 'category = ?', whereArgs: [category]);
+    return await dbClient.query('resource_folders',
+        where: 'category = ?', whereArgs: [category]);
   }
 
   Future<void> saveResourceFile(Map<String, dynamic> row) async {
@@ -2221,27 +2372,32 @@ class AcademyDbService {
     await ensureResourceTables();
     final String id = row['id'] as String;
     // 기존 레코드가 있으면 병합하여 덮어쓰기 (일부 필드만 저장하는 호출에서도 안전하게 유지)
-    final existingList = await dbClient.query('resource_files', where: 'id = ?', whereArgs: [id], limit: 1);
+    final existingList = await dbClient.query('resource_files',
+        where: 'id = ?', whereArgs: [id], limit: 1);
     Map<String, dynamic> merged = {};
     if (existingList.isNotEmpty) {
       merged = Map<String, dynamic>.from(existingList.first);
     }
     merged.addAll(row);
-    await dbClient.insert('resource_files', merged, conflictAlgorithm: ConflictAlgorithm.replace);
+    await dbClient.insert('resource_files', merged,
+        conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
-  Future<void> saveResourceFileWithCategory(Map<String, dynamic> row, String category) async {
+  Future<void> saveResourceFileWithCategory(
+      Map<String, dynamic> row, String category) async {
     final dbClient = await db;
     await ensureResourceTables();
     final String id = row['id'] as String;
-    final existingList = await dbClient.query('resource_files', where: 'id = ?', whereArgs: [id], limit: 1);
+    final existingList = await dbClient.query('resource_files',
+        where: 'id = ?', whereArgs: [id], limit: 1);
     Map<String, dynamic> merged = {};
     if (existingList.isNotEmpty) {
       merged = Map<String, dynamic>.from(existingList.first);
     }
     merged.addAll(row);
     merged['category'] = category;
-    await dbClient.insert('resource_files', merged, conflictAlgorithm: ConflictAlgorithm.replace);
+    await dbClient.insert('resource_files', merged,
+        conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   Future<void> saveResourceFileOrders({
@@ -2273,7 +2429,8 @@ class AcademyDbService {
       for (final id in removed) {
         await txn.delete(
           'resource_file_orders',
-          where: 'scope_type = ? AND category = ? AND parent_id = ? AND file_id = ?',
+          where:
+              'scope_type = ? AND category = ? AND parent_id = ? AND file_id = ?',
           whereArgs: [scopeType, category, parent, id],
         );
       }
@@ -2324,7 +2481,8 @@ class AcademyDbService {
   /// - 해당 category에 존재하지만 rows에는 없는 파일은 로컬에서 제거한다.
   /// - rows에 있는 파일은 upsert(기존 레코드와 병합)한다.
   /// - **서버 write는 하지 않는 local-only 동작**이다.
-  Future<void> saveResourceFilesForCategory(String category, List<Map<String, dynamic>> rows) async {
+  Future<void> saveResourceFilesForCategory(
+      String category, List<Map<String, dynamic>> rows) async {
     final dbClient = await db;
     await ensureResourceTables();
     await dbClient.transaction((txn) async {
@@ -2335,27 +2493,37 @@ class AcademyDbService {
       }
 
       final existing = (category == 'textbook')
-          ? await txn.query('resource_files', columns: ['id'], where: 'category = ? OR category IS NULL', whereArgs: [category])
-          : await txn.query('resource_files', columns: ['id'], where: 'category = ?', whereArgs: [category]);
-      final existingIds = existing.map((r) => (r['id'] as String?) ?? '').where((id) => id.isNotEmpty).toSet();
+          ? await txn.query('resource_files',
+              columns: ['id'],
+              where: 'category = ? OR category IS NULL',
+              whereArgs: [category])
+          : await txn.query('resource_files',
+              columns: ['id'], where: 'category = ?', whereArgs: [category]);
+      final existingIds = existing
+          .map((r) => (r['id'] as String?) ?? '')
+          .where((id) => id.isNotEmpty)
+          .toSet();
 
       final removed = existingIds.difference(newIds);
       for (final id in removed) {
-        await txn.delete('resource_file_links', where: 'file_id = ?', whereArgs: [id]);
+        await txn.delete('resource_file_links',
+            where: 'file_id = ?', whereArgs: [id]);
         await txn.delete('resource_files', where: 'id = ?', whereArgs: [id]);
       }
 
       for (final raw in rows) {
         final id = (raw['id'] as String?) ?? '';
         if (id.isEmpty) continue;
-        final existingList = await txn.query('resource_files', where: 'id = ?', whereArgs: [id], limit: 1);
+        final existingList = await txn.query('resource_files',
+            where: 'id = ?', whereArgs: [id], limit: 1);
         Map<String, dynamic> merged = {};
         if (existingList.isNotEmpty) {
           merged = Map<String, dynamic>.from(existingList.first);
         }
         merged.addAll(Map<String, dynamic>.from(raw));
         merged['category'] = category;
-        await txn.insert('resource_files', merged, conflictAlgorithm: ConflictAlgorithm.replace);
+        await txn.insert('resource_files', merged,
+            conflictAlgorithm: ConflictAlgorithm.replace);
       }
     });
   }
@@ -2366,14 +2534,17 @@ class AcademyDbService {
     return await dbClient.query('resource_files');
   }
 
-  Future<List<Map<String, dynamic>>> loadResourceFilesForCategory(String category) async {
+  Future<List<Map<String, dynamic>>> loadResourceFilesForCategory(
+      String category) async {
     final dbClient = await db;
     await ensureResourceTables();
     if (category == 'textbook') {
-      final rows = await dbClient.query('resource_files', where: 'category = ? OR category IS NULL', whereArgs: [category]);
+      final rows = await dbClient.query('resource_files',
+          where: 'category = ? OR category IS NULL', whereArgs: [category]);
       return await _applyResourceFileOrders(category, rows);
     }
-    final rows = await dbClient.query('resource_files', where: 'category = ?', whereArgs: [category]);
+    final rows = await dbClient
+        .query('resource_files', where: 'category = ?', whereArgs: [category]);
     return await _applyResourceFileOrders(category, rows);
   }
 
@@ -2382,10 +2553,13 @@ class AcademyDbService {
     List<Map<String, dynamic>> rows,
   ) async {
     if (rows.isEmpty) return rows;
-    final scopeType = category == 'file_shortcut' ? 'file_shortcut' : 'resources';
-    final orders = await loadResourceFileOrders(scopeType: scopeType, category: category);
+    final scopeType =
+        category == 'file_shortcut' ? 'file_shortcut' : 'resources';
+    final orders =
+        await loadResourceFileOrders(scopeType: scopeType, category: category);
     if (orders.isEmpty) {
-      await _seedResourceFileOrdersFromRows(scopeType: scopeType, category: category, rows: rows);
+      await _seedResourceFileOrdersFromRows(
+          scopeType: scopeType, category: category, rows: rows);
       return rows;
     }
     final orderByKey = <String, int>{};
@@ -2444,11 +2618,13 @@ class AcademyDbService {
     }
   }
 
-  Future<void> saveResourceFileLinks(String fileId, Map<String, String> links) async {
+  Future<void> saveResourceFileLinks(
+      String fileId, Map<String, String> links) async {
     final dbClient = await db;
     await ensureResourceTables();
     await dbClient.transaction((txn) async {
-      await txn.delete('resource_file_links', where: 'file_id = ?', whereArgs: [fileId]);
+      await txn.delete('resource_file_links',
+          where: 'file_id = ?', whereArgs: [fileId]);
       for (final entry in links.entries) {
         final grade = entry.key;
         final url = entry.value.trim();
@@ -2465,7 +2641,8 @@ class AcademyDbService {
   Future<Map<String, String>> loadResourceFileLinks(String fileId) async {
     final dbClient = await db;
     await ensureResourceTables();
-    final rows = await dbClient.query('resource_file_links', where: 'file_id = ?', whereArgs: [fileId]);
+    final rows = await dbClient.query('resource_file_links',
+        where: 'file_id = ?', whereArgs: [fileId]);
     final Map<String, String> result = {};
     for (final r in rows) {
       final grade = (r['grade'] as String?) ?? '';
@@ -2478,19 +2655,22 @@ class AcademyDbService {
   Future<void> deleteResourceFile(String fileId) async {
     final dbClient = await db;
     await ensureResourceTables();
-    await dbClient.delete('resource_files', where: 'id = ?', whereArgs: [fileId]);
+    await dbClient
+        .delete('resource_files', where: 'id = ?', whereArgs: [fileId]);
   }
 
   Future<void> deleteResourceFileOrdersByFileId(String fileId) async {
     final dbClient = await db;
     await ensureResourceTables();
-    await dbClient.delete('resource_file_orders', where: 'file_id = ?', whereArgs: [fileId]);
+    await dbClient.delete('resource_file_orders',
+        where: 'file_id = ?', whereArgs: [fileId]);
   }
 
   Future<void> deleteResourceFileLinksByFileId(String fileId) async {
     final dbClient = await db;
     await ensureResourceTables();
-    await dbClient.delete('resource_file_links', where: 'file_id = ?', whereArgs: [fileId]);
+    await dbClient.delete('resource_file_links',
+        where: 'file_id = ?', whereArgs: [fileId]);
   }
 
   // ======== RESOURCE GRADES ========
@@ -2531,21 +2711,26 @@ class AcademyDbService {
   Future<void> setResourceGradeIcon(String name, int icon) async {
     final dbClient = await db;
     await ensureResourceTables();
-    await dbClient.insert('resource_grade_icons', {
-      'name': name,
-      'icon': icon,
-    }, conflictAlgorithm: ConflictAlgorithm.replace);
+    await dbClient.insert(
+        'resource_grade_icons',
+        {
+          'name': name,
+          'icon': icon,
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   Future<void> deleteResourceGradeIcon(String name) async {
     final dbClient = await db;
     await ensureResourceTables();
-    await dbClient.delete('resource_grade_icons', where: 'name = ?', whereArgs: [name]);
+    await dbClient
+        .delete('resource_grade_icons', where: 'name = ?', whereArgs: [name]);
   }
 
   Future<Map<String, dynamic>?> getAcademySettings() async {
     final dbClient = await db;
-    final result = await dbClient.query('academy_settings', where: 'id = ?', whereArgs: [1]);
+    final result = await dbClient
+        .query('academy_settings', where: 'id = ?', whereArgs: [1]);
     if (result.isNotEmpty) {
       return result.first;
     }
@@ -2553,10 +2738,14 @@ class AcademyDbService {
   }
 
   // 로컬 DB 사용 중단에 따라 미사용 보관 (호출 금지)
-  Future<void> saveTeachers(List teachers) async { return; }
+  Future<void> saveTeachers(List teachers) async {
+    return;
+  }
 
   // 로컬 DB 사용 중단에 따라 미사용 보관 (호출 금지)
-  Future<List<Map<String, dynamic>>> getTeachers() async { return []; }
+  Future<List<Map<String, dynamic>>> getTeachers() async {
+    return [];
+  }
 
   Future<void> saveGroups(List<GroupInfo> groups) async {
     final dbClient = await db;
@@ -2582,17 +2771,20 @@ class AcademyDbService {
 
   Future<List<GroupInfo>> getGroups() async {
     final dbClient = await db;
-    final result = await dbClient.query('groups', orderBy: 'display_order ASC, name ASC');
+    final result =
+        await dbClient.query('groups', orderBy: 'display_order ASC, name ASC');
     print('[GROUPS][local][load] loaded ' + result.length.toString() + ' rows');
-    return result.map((row) => GroupInfo(
-      id: row['id'] as String,
-      name: row['name'] as String,
-      description: row['description'] as String,
-      capacity: row['capacity'] as int?, // null 허용
-      duration: row['duration'] as int,
-      color: Color(row['color'] as int),
-      displayOrder: row['display_order'] as int?,
-    )).toList();
+    return result
+        .map((row) => GroupInfo(
+              id: row['id'] as String,
+              name: row['name'] as String,
+              description: row['description'] as String,
+              capacity: row['capacity'] as int?, // null 허용
+              duration: row['duration'] as int,
+              color: Color(row['color'] as int),
+              displayOrder: row['display_order'] as int?,
+            ))
+        .toList();
   }
 
   Future<void> addGroup(GroupInfo group) async {
@@ -2610,14 +2802,18 @@ class AcademyDbService {
 
   Future<void> updateGroup(GroupInfo group) async {
     final dbClient = await db;
-    await dbClient.update('groups', {
-      'name': group.name,
-      'description': group.description,
-      'capacity': group.capacity,
-      'duration': group.duration,
-      'color': group.color.value,
-      'display_order': group.displayOrder,
-    }, where: 'id = ?', whereArgs: [group.id]);
+    await dbClient.update(
+        'groups',
+        {
+          'name': group.name,
+          'description': group.description,
+          'capacity': group.capacity,
+          'duration': group.duration,
+          'color': group.color.value,
+          'display_order': group.displayOrder,
+        },
+        where: 'id = ?',
+        whereArgs: [group.id]);
   }
 
   Future<void> deleteGroup(String groupId) async {
@@ -2657,13 +2853,16 @@ class AcademyDbService {
     List<OperatingHours> result = [];
     for (final row in opRows) {
       final opId = row['id'] as int;
-      final breakRows = await dbClient.query('break_times', where: 'operating_hour_id = ?', whereArgs: [opId]);
-      final breakTimes = breakRows.map((b) => BreakTime(
-        startHour: b['start_hour'] as int,
-        startMinute: b['start_minute'] as int,
-        endHour: b['end_hour'] as int,
-        endMinute: b['end_minute'] as int,
-      )).toList();
+      final breakRows = await dbClient.query('break_times',
+          where: 'operating_hour_id = ?', whereArgs: [opId]);
+      final breakTimes = breakRows
+          .map((b) => BreakTime(
+                startHour: b['start_hour'] as int,
+                startMinute: b['start_minute'] as int,
+                endHour: b['end_hour'] as int,
+                endMinute: b['end_minute'] as int,
+              ))
+          .toList();
       result.add(OperatingHours(
         id: opId,
         dayOfWeek: row['day_of_week'] as int,
@@ -2682,7 +2881,8 @@ class AcademyDbService {
       final dbClient = await db;
       print('[DB] addStudent: ' + student.toDb().toString());
       await dbClient.transaction((txn) async {
-        await txn.insert('students', student.toDb(), conflictAlgorithm: ConflictAlgorithm.replace);
+        await txn.insert('students', student.toDb(),
+            conflictAlgorithm: ConflictAlgorithm.replace);
       });
     } catch (e, st) {
       print('[DB][ERROR] addStudent: $e\n$st');
@@ -2691,9 +2891,11 @@ class AcademyDbService {
   }
 
   Future<void> updateStudent(Student student) async {
-    print('[DB] updateStudent:  [33m${student.name} [0m, id= [36m${student.id} [0m');
+    print(
+        '[DB] updateStudent:  [33m${student.name} [0m, id= [36m${student.id} [0m');
     final dbClient = await db;
-    await dbClient.update('students', student.toDb(), where: 'id = ?', whereArgs: [student.id]);
+    await dbClient.update('students', student.toDb(),
+        where: 'id = ?', whereArgs: [student.id]);
   }
 
   Future<void> deleteStudent(String id) async {
@@ -2719,26 +2921,32 @@ class AcademyDbService {
   Future<void> insertStudentBasicInfo(Map<String, dynamic> info) async {
     final dbClient = await db;
     await dbClient.transaction((txn) async {
-      await txn.insert('student_basic_info', info, conflictAlgorithm: ConflictAlgorithm.replace);
+      await txn.insert('student_basic_info', info,
+          conflictAlgorithm: ConflictAlgorithm.replace);
     });
   }
 
   Future<Map<String, dynamic>?> getStudentBasicInfo(String studentId) async {
     final dbClient = await db;
-    final result = await dbClient.query('student_basic_info', where: 'student_id = ?', whereArgs: [studentId]);
+    final result = await dbClient.query('student_basic_info',
+        where: 'student_id = ?', whereArgs: [studentId]);
     if (result.isNotEmpty) return result.first;
     return null;
   }
 
-  Future<void> updateStudentBasicInfo(String studentId, Map<String, dynamic> info) async {
-    print('[DB] updateStudentBasicInfo:  [33mstudentId=$studentId [0m, groupId= [36m${info['group_id']} [0m');
+  Future<void> updateStudentBasicInfo(
+      String studentId, Map<String, dynamic> info) async {
+    print(
+        '[DB] updateStudentBasicInfo:  [33mstudentId=$studentId [0m, groupId= [36m${info['group_id']} [0m');
     final dbClient = await db;
-    await dbClient.update('student_basic_info', info, where: 'student_id = ?', whereArgs: [studentId]);
+    await dbClient.update('student_basic_info', info,
+        where: 'student_id = ?', whereArgs: [studentId]);
   }
 
   Future<void> deleteStudentBasicInfo(String studentId) async {
     final dbClient = await db;
-    await dbClient.delete('student_basic_info', where: 'student_id = ?', whereArgs: [studentId]);
+    await dbClient.delete('student_basic_info',
+        where: 'student_id = ?', whereArgs: [studentId]);
   }
 
   Future<void> ensureStudentLevelTables() async {
@@ -2759,8 +2967,10 @@ class AcademyDbService {
         updated_at TEXT
       )
     ''');
-    final cols = await dbClient.rawQuery('PRAGMA table_info(student_level_states)');
-    final hasDesired = cols.any((c) => '${c['name'] ?? ''}' == 'desired_level_code');
+    final cols =
+        await dbClient.rawQuery('PRAGMA table_info(student_level_states)');
+    final hasDesired =
+        cols.any((c) => '${c['name'] ?? ''}' == 'desired_level_code');
     if (!hasDesired) {
       await dbClient.execute(
         'ALTER TABLE student_level_states ADD COLUMN desired_level_code INTEGER',
@@ -2787,9 +2997,10 @@ class AcademyDbService {
             ? row['level_code'] as int
             : int.tryParse('${row['level_code'] ?? ''}');
         if (code == null) continue;
-        final String name = (row['display_name'] as String?)?.trim().isNotEmpty == true
-            ? (row['display_name'] as String).trim()
-            : '${code}등급';
+        final String name =
+            (row['display_name'] as String?)?.trim().isNotEmpty == true
+                ? (row['display_name'] as String).trim()
+                : '${code}등급';
         final double percent = row['upper_percent'] is num
             ? (row['upper_percent'] as num).toDouble()
             : (double.tryParse('${row['upper_percent'] ?? ''}') ?? 0);
@@ -2877,21 +3088,26 @@ class AcademyDbService {
   Future<List<StudentTimeBlock>> getStudentTimeBlocks() async {
     final dbClient = await db;
     final result = await dbClient.query('student_time_blocks');
-    return result.map((row) => StudentTimeBlock(
-      id: row['id'] as String,
-      studentId: row['student_id'] as String,
-      dayIndex: row['day_index'] as int? ?? 0,
-      startHour: row['start_hour'] as int? ?? 0,
-      startMinute: row['start_minute'] as int? ?? 0,
-      duration: Duration(minutes: row['duration'] as int? ?? 0),
-      createdAt: DateTime.parse(row['created_at'] as String),
-      startDate: DateTime.parse(row['start_date'] as String? ?? (row['created_at'] as String)),
-      endDate: (row['end_date'] as String?) != null ? DateTime.tryParse(row['end_date'] as String) : null,
-      setId: row['set_id'] as String?,
-      number: row['number'] as int?,
-      sessionTypeId: row['session_type_id'] as String?,
-      weeklyOrder: row['weekly_order'] as int?,
-    )).toList();
+    return result
+        .map((row) => StudentTimeBlock(
+              id: row['id'] as String,
+              studentId: row['student_id'] as String,
+              dayIndex: row['day_index'] as int? ?? 0,
+              startHour: row['start_hour'] as int? ?? 0,
+              startMinute: row['start_minute'] as int? ?? 0,
+              duration: Duration(minutes: row['duration'] as int? ?? 0),
+              createdAt: DateTime.parse(row['created_at'] as String),
+              startDate: DateTime.parse(row['start_date'] as String? ??
+                  (row['created_at'] as String)),
+              endDate: (row['end_date'] as String?) != null
+                  ? DateTime.tryParse(row['end_date'] as String)
+                  : null,
+              setId: row['set_id'] as String?,
+              number: row['number'] as int?,
+              sessionTypeId: row['session_type_id'] as String?,
+              weeklyOrder: row['weekly_order'] as int?,
+            ))
+        .toList();
   }
 
   Future<void> saveStudentTimeBlocks(List<StudentTimeBlock> blocks) async {
@@ -2918,12 +3134,14 @@ class AcademyDbService {
 
   Future<void> deleteStudentTimeBlock(String id) async {
     final dbClient = await db;
-    await dbClient.delete('student_time_blocks', where: 'id = ?', whereArgs: [id]);
+    await dbClient
+        .delete('student_time_blocks', where: 'id = ?', whereArgs: [id]);
   }
 
   Future<void> deleteStudentTimeBlocksByStudentId(String studentId) async {
     final dbClient = await db;
-    await dbClient.delete('student_time_blocks', where: 'student_id = ?', whereArgs: [studentId]);
+    await dbClient.delete('student_time_blocks',
+        where: 'student_id = ?', whereArgs: [studentId]);
   }
 
   Future<void> bulkAddStudentTimeBlocks(List<StudentTimeBlock> blocks) async {
@@ -2957,7 +3175,8 @@ class AcademyDbService {
     final dbClient = await db;
     await dbClient.transaction((txn) async {
       for (final id in blockIds) {
-        await txn.delete('student_time_blocks', where: 'id = ?', whereArgs: [id]);
+        await txn
+            .delete('student_time_blocks', where: 'id = ?', whereArgs: [id]);
       }
     });
   }
@@ -2980,17 +3199,19 @@ class AcademyDbService {
   Future<List<SelfStudyTimeBlock>> getSelfStudyTimeBlocks() async {
     final dbClient = await db;
     final result = await dbClient.query('self_study_time_blocks');
-    return result.map((row) => SelfStudyTimeBlock(
-      id: row['id'] as String,
-      studentId: row['student_id'] as String,
-      dayIndex: row['day_index'] as int,
-      startHour: row['start_hour'] as int,
-      startMinute: row['start_minute'] as int,
-      duration: Duration(minutes: row['duration'] as int),
-      createdAt: DateTime.parse(row['created_at'] as String),
-      setId: row['set_id'] as String?,
-      number: row['number'] as int?,
-    )).toList();
+    return result
+        .map((row) => SelfStudyTimeBlock(
+              id: row['id'] as String,
+              studentId: row['student_id'] as String,
+              dayIndex: row['day_index'] as int,
+              startHour: row['start_hour'] as int,
+              startMinute: row['start_minute'] as int,
+              duration: Duration(minutes: row['duration'] as int),
+              createdAt: DateTime.parse(row['created_at'] as String),
+              setId: row['set_id'] as String?,
+              number: row['number'] as int?,
+            ))
+        .toList();
   }
 
   Future<void> saveSelfStudyTimeBlocks(List<SelfStudyTimeBlock> blocks) async {
@@ -3013,10 +3234,12 @@ class AcademyDbService {
 
   Future<void> deleteSelfStudyTimeBlock(String id) async {
     final dbClient = await db;
-    await dbClient.delete('self_study_time_blocks', where: 'id = ?', whereArgs: [id]);
+    await dbClient
+        .delete('self_study_time_blocks', where: 'id = ?', whereArgs: [id]);
   }
 
-  Future<void> updateSelfStudyTimeBlock(String id, SelfStudyTimeBlock newBlock) async {
+  Future<void> updateSelfStudyTimeBlock(
+      String id, SelfStudyTimeBlock newBlock) async {
     final dbClient = await db;
     await dbClient.update(
       'self_study_time_blocks',
@@ -3028,10 +3251,12 @@ class AcademyDbService {
 
   Future<void> deleteSelfStudyTimeBlocksByStudentId(String studentId) async {
     final dbClient = await db;
-    await dbClient.delete('self_study_time_blocks', where: 'student_id = ?', whereArgs: [studentId]);
+    await dbClient.delete('self_study_time_blocks',
+        where: 'student_id = ?', whereArgs: [studentId]);
   }
 
-  Future<void> bulkAddSelfStudyTimeBlocks(List<SelfStudyTimeBlock> blocks) async {
+  Future<void> bulkAddSelfStudyTimeBlocks(
+      List<SelfStudyTimeBlock> blocks) async {
     final dbClient = await db;
     await dbClient.transaction((txn) async {
       for (final block in blocks) {
@@ -3057,12 +3282,14 @@ class AcademyDbService {
     final dbClient = await db;
     await dbClient.transaction((txn) async {
       for (final id in blockIds) {
-        await txn.delete('self_study_time_blocks', where: 'id = ?', whereArgs: [id]);
+        await txn
+            .delete('self_study_time_blocks', where: 'id = ?', whereArgs: [id]);
       }
     });
   }
 
-  Future<void> updateStudentTimeBlock(String id, StudentTimeBlock newBlock) async {
+  Future<void> updateStudentTimeBlock(
+      String id, StudentTimeBlock newBlock) async {
     final dbClient = await db;
     // print('[DEBUG][AcademyDbService.updateStudentTimeBlock] id=$id, newBlock=${newBlock.toJson()}');
     final result = await dbClient.update(
@@ -3074,9 +3301,13 @@ class AcademyDbService {
     // print('[DEBUG][AcademyDbService.updateStudentTimeBlock] update result: $result');
   }
 
-  Future<void> closeStudentTimeBlocks(List<String> blockIds, DateTime endDate) async {
+  Future<void> closeStudentTimeBlocks(
+      List<String> blockIds, DateTime endDate) async {
     final dbClient = await db;
-    final endIso = DateTime(endDate.year, endDate.month, endDate.day).toIso8601String().split('T').first;
+    final endIso = DateTime(endDate.year, endDate.month, endDate.day)
+        .toIso8601String()
+        .split('T')
+        .first;
     await dbClient.transaction((txn) async {
       for (final id in blockIds) {
         await txn.update(
@@ -3092,22 +3323,28 @@ class AcademyDbService {
   // ClassInfo CRUD
   Future<void> addClass(ClassInfo c) async {
     final dbClient = await db;
-    await dbClient.insert('classes', c.toJson(), conflictAlgorithm: ConflictAlgorithm.replace);
+    await dbClient.insert('classes', c.toJson(),
+        conflictAlgorithm: ConflictAlgorithm.replace);
   }
+
   Future<void> updateClass(ClassInfo c) async {
     final dbClient = await db;
-    await dbClient.update('classes', c.toJson(), where: 'id = ?', whereArgs: [c.id]);
+    await dbClient
+        .update('classes', c.toJson(), where: 'id = ?', whereArgs: [c.id]);
   }
+
   Future<void> deleteClass(String id) async {
     final dbClient = await db;
     await dbClient.delete('classes', where: 'id = ?', whereArgs: [id]);
   }
+
   Future<List<ClassInfo>> getClasses() async {
     final dbClient = await db;
     // reorderable 순서 유지: 저장 시 삽입 순서를 rowid로 보존하므로 rowid ASC로 조회
     final result = await dbClient.query('classes', orderBy: 'rowid');
     return result.map((row) => ClassInfo.fromJson(row)).toList();
   }
+
   Future<void> deleteAllClasses() async {
     final dbClient = await db;
     await dbClient.delete('classes');
@@ -3149,7 +3386,8 @@ class AcademyDbService {
     );
   }
 
-  Future<List<PaymentRecord>> getPaymentRecordsForStudent(String studentId) async {
+  Future<List<PaymentRecord>> getPaymentRecordsForStudent(
+      String studentId) async {
     final dbClient = await db;
     final result = await dbClient.query(
       'payment_records',
@@ -3162,16 +3400,15 @@ class AcademyDbService {
   // payment_records 테이블 존재 여부 확인 및 생성
   Future<void> ensurePaymentRecordsTable() async {
     final dbClient = await db;
-    
+
     try {
       // 테이블 존재 여부 확인
       final result = await dbClient.rawQuery(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='payment_records'"
-      );
-      
+          "SELECT name FROM sqlite_master WHERE type='table' AND name='payment_records'");
+
       if (result.isEmpty) {
         print('[DEBUG] payment_records 테이블이 존재하지 않음. 생성 중...');
-        
+
         // 테이블 생성
         await dbClient.execute('''
           CREATE TABLE payment_records (
@@ -3184,16 +3421,19 @@ class AcademyDbService {
             FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
           )
         ''');
-        
+
         print('[DEBUG] payment_records 테이블 생성 완료');
       } else {
         print('[DEBUG] payment_records 테이블이 이미 존재함');
         // 컬럼 존재 여부 점검 후 없으면 추가
-        final columns = await dbClient.rawQuery("PRAGMA table_info(payment_records)");
-        final hasPostpone = columns.any((col) => col['name'] == 'postpone_reason');
+        final columns =
+            await dbClient.rawQuery("PRAGMA table_info(payment_records)");
+        final hasPostpone =
+            columns.any((col) => col['name'] == 'postpone_reason');
         if (!hasPostpone) {
           print('[DB][마이그레이션] payment_records.postpone_reason 컬럼 추가');
-          await dbClient.execute('ALTER TABLE payment_records ADD COLUMN postpone_reason TEXT');
+          await dbClient.execute(
+              'ALTER TABLE payment_records ADD COLUMN postpone_reason TEXT');
         }
       }
     } catch (e) {
@@ -3203,20 +3443,19 @@ class AcademyDbService {
   }
 
   // =================== STUDENT PAYMENT INFO ===================
-  
+
   // student_payment_info 테이블 존재 여부 확인 및 생성
   Future<void> ensureStudentPaymentInfoTable() async {
     final dbClient = await db;
-    
+
     try {
       // 테이블 존재 여부 확인
       final result = await dbClient.rawQuery(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='student_payment_info'"
-      );
-      
+          "SELECT name FROM sqlite_master WHERE type='table' AND name='student_payment_info'");
+
       if (result.isEmpty) {
         print('[DEBUG] student_payment_info 테이블이 존재하지 않음. 생성 중...');
-        
+
         // 테이블 생성
         await dbClient.execute('''
           CREATE TABLE student_payment_info (
@@ -3235,7 +3474,7 @@ class AcademyDbService {
             FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
           )
         ''');
-        
+
         print('[DEBUG] student_payment_info 테이블 생성 완료');
       } else {
         print('[DEBUG] student_payment_info 테이블이 이미 존재함');
@@ -3247,10 +3486,11 @@ class AcademyDbService {
   }
 
   // 학생 결제 정보 추가
-  Future<void> addStudentPaymentInfo(Map<String, dynamic> paymentInfoData) async {
+  Future<void> addStudentPaymentInfo(
+      Map<String, dynamic> paymentInfoData) async {
     final dbClient = await db;
     await dbClient.insert(
-      'student_payment_info', 
+      'student_payment_info',
       paymentInfoData,
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
@@ -3258,7 +3498,8 @@ class AcademyDbService {
   }
 
   // 학생 결제 정보 업데이트
-  Future<void> updateStudentPaymentInfo(String studentId, Map<String, dynamic> paymentInfoData) async {
+  Future<void> updateStudentPaymentInfo(
+      String studentId, Map<String, dynamic> paymentInfoData) async {
     final dbClient = await db;
     await dbClient.update(
       'student_payment_info',
@@ -3277,7 +3518,7 @@ class AcademyDbService {
       where: 'student_id = ?',
       whereArgs: [studentId],
     );
-    
+
     if (result.isNotEmpty) {
       return result.first;
     }
@@ -3302,19 +3543,22 @@ class AcademyDbService {
   }
 
   // =================== ATTENDANCE RECORDS ===================
-  
+
   Future<void> addAttendanceRecord(Map<String, dynamic> attendanceData) async {
     final dbClient = await db;
     await dbClient.insert('attendance_records', attendanceData);
-    print('[DEBUG] 출석 기록 추가: ${attendanceData['student_id']} - ${attendanceData['class_date_time']}');
+    print(
+        '[DEBUG] 출석 기록 추가: ${attendanceData['student_id']} - ${attendanceData['class_date_time']}');
   }
 
   Future<List<Map<String, dynamic>>> getAttendanceRecords() async {
     final dbClient = await db;
-    return await dbClient.query('attendance_records', orderBy: 'class_date_time DESC');
+    return await dbClient.query('attendance_records',
+        orderBy: 'class_date_time DESC');
   }
 
-  Future<void> updateAttendanceRecord(String id, Map<String, dynamic> attendanceData) async {
+  Future<void> updateAttendanceRecord(
+      String id, Map<String, dynamic> attendanceData) async {
     final dbClient = await db;
     await dbClient.update(
       'attendance_records',
@@ -3358,7 +3602,8 @@ class AcademyDbService {
     });
   }
 
-  Future<List<Map<String, dynamic>>> getAttendanceRecordsForStudent(String studentId) async {
+  Future<List<Map<String, dynamic>>> getAttendanceRecordsForStudent(
+      String studentId) async {
     final dbClient = await db;
     final result = await dbClient.query(
       'attendance_records',
@@ -3369,7 +3614,8 @@ class AcademyDbService {
     return result;
   }
 
-  Future<Map<String, dynamic>?> getAttendanceRecord(String studentId, String classDateTime) async {
+  Future<Map<String, dynamic>?> getAttendanceRecord(
+      String studentId, String classDateTime) async {
     final dbClient = await db;
     final result = await dbClient.query(
       'attendance_records',
@@ -3382,16 +3628,15 @@ class AcademyDbService {
 
   Future<void> ensureAttendanceRecordsTable() async {
     final dbClient = await db;
-    
+
     try {
       // 테이블 존재 여부 확인
       final result = await dbClient.rawQuery(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='attendance_records'"
-      );
-      
+          "SELECT name FROM sqlite_master WHERE type='table' AND name='attendance_records'");
+
       if (result.isEmpty) {
         print('[DEBUG] attendance_records 테이블이 존재하지 않음. 생성 중...');
-        
+
         // 테이블 생성
         await dbClient.execute('''
           CREATE TABLE attendance_records (
@@ -3411,39 +3656,44 @@ class AcademyDbService {
             FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
           )
         ''');
-        
+
         print('[DEBUG] attendance_records 테이블 생성 완료');
       } else {
         print('[DEBUG] attendance_records 테이블이 이미 존재함');
-        
+
         // 기존 테이블이 있으면 스키마 업데이트 확인
-        final tableInfo = await dbClient.rawQuery("PRAGMA table_info(attendance_records)");
-        final columnNames = tableInfo.map((col) => col['name'] as String).toList();
-        
+        final tableInfo =
+            await dbClient.rawQuery("PRAGMA table_info(attendance_records)");
+        final columnNames =
+            tableInfo.map((col) => col['name'] as String).toList();
+
         // class_end_time 컬럼이 없으면 추가
         if (!columnNames.contains('class_end_time')) {
           print('[DEBUG] class_end_time 컬럼 추가 중...');
-          await dbClient.execute('ALTER TABLE attendance_records ADD COLUMN class_end_time TEXT');
+          await dbClient.execute(
+              'ALTER TABLE attendance_records ADD COLUMN class_end_time TEXT');
         }
 
         if (!columnNames.contains('occurrence_id')) {
           print('[DEBUG] occurrence_id 컬럼 추가 중...');
-          await dbClient.execute('ALTER TABLE attendance_records ADD COLUMN occurrence_id TEXT');
+          await dbClient.execute(
+              'ALTER TABLE attendance_records ADD COLUMN occurrence_id TEXT');
         }
-        
+
         // date 컬럼이 있으면 삭제 (SQLite는 DROP COLUMN을 지원하지 않으므로 테이블 재생성)
         // 하지만 이 마이그레이션은 한 번만 실행되어야 함
         if (columnNames.contains('date')) {
           print('[DEBUG] date 컬럼 제거를 위해 테이블 재생성 중...');
-          print('[WARNING] 이 작업은 한 번만 실행되어야 합니다. 프로그램 재시작 시 데이터 손실 방지를 위해 주의깊게 진행합니다.');
-          
+          print(
+              '[WARNING] 이 작업은 한 번만 실행되어야 합니다. 프로그램 재시작 시 데이터 손실 방지를 위해 주의깊게 진행합니다.');
+
           // 기존 데이터 백업 (더 안전한 방식)
           final existingData = await dbClient.query('attendance_records');
           print('[DEBUG] 백업된 기존 데이터: ${existingData.length}개 레코드');
-          
+
           // 기존 테이블 삭제
           await dbClient.execute('DROP TABLE attendance_records');
-          
+
           // 새 테이블 생성
           await dbClient.execute('''
             CREATE TABLE attendance_records (
@@ -3463,33 +3713,36 @@ class AcademyDbService {
               FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
             )
           ''');
-          
+
           // 데이터 복원 (date 컬럼 제외, 더 안전한 방식)
           int restoredCount = 0;
           for (final row in existingData) {
             try {
               final newRow = Map<String, dynamic>.from(row);
               newRow.remove('date');
-              
+
               // class_end_time 계산 (기존 로직에서 duration 사용)
               if (newRow['class_date_time'] != null) {
                 try {
-                  final classDateTime = DateTime.parse(newRow['class_date_time']);
-                  final classEndTime = classDateTime.add(const Duration(minutes: 50)); // 기본 50분
+                  final classDateTime =
+                      DateTime.parse(newRow['class_date_time']);
+                  final classEndTime =
+                      classDateTime.add(const Duration(minutes: 50)); // 기본 50분
                   newRow['class_end_time'] = classEndTime.toIso8601String();
                 } catch (e) {
                   print('[WARNING] class_end_time 계산 실패: $e');
                 }
               }
-              
+
               await dbClient.insert('attendance_records', newRow);
               restoredCount++;
             } catch (e) {
               print('[ERROR] 데이터 복원 실패: $e, 레코드: $row');
             }
           }
-          
-          print('[DEBUG] 테이블 재생성 및 데이터 복원 완료: $restoredCount/${existingData.length}개 복원됨');
+
+          print(
+              '[DEBUG] 테이블 재생성 및 데이터 복원 완료: $restoredCount/${existingData.length}개 복원됨');
         }
       }
     } catch (e) {
@@ -3502,59 +3755,73 @@ class AcademyDbService {
 
   Future<void> addSessionOverride(Map<String, dynamic> data) async {
     final dbClient = await db;
-    await dbClient.insert('session_overrides', data, conflictAlgorithm: ConflictAlgorithm.replace);
+    await dbClient.insert('session_overrides', data,
+        conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
-  Future<void> updateSessionOverride(String id, Map<String, dynamic> data) async {
+  Future<void> updateSessionOverride(
+      String id, Map<String, dynamic> data) async {
     final dbClient = await db;
-    await dbClient.update('session_overrides', data, where: 'id = ?', whereArgs: [id]);
+    await dbClient
+        .update('session_overrides', data, where: 'id = ?', whereArgs: [id]);
   }
 
   Future<void> deleteSessionOverride(String id) async {
     final dbClient = await db;
-    await dbClient.delete('session_overrides', where: 'id = ?', whereArgs: [id]);
+    await dbClient
+        .delete('session_overrides', where: 'id = ?', whereArgs: [id]);
   }
 
   Future<void> deleteSessionOverridesByStudentId(String studentId) async {
     final dbClient = await db;
-    await dbClient.delete('session_overrides', where: 'student_id = ?', whereArgs: [studentId]);
+    await dbClient.delete('session_overrides',
+        where: 'student_id = ?', whereArgs: [studentId]);
   }
 
-  Future<List<Map<String, dynamic>>> getSessionOverridesForStudent(String studentId) async {
+  Future<List<Map<String, dynamic>>> getSessionOverridesForStudent(
+      String studentId) async {
     final dbClient = await db;
-    return await dbClient.query('session_overrides', where: 'student_id = ?', whereArgs: [studentId], orderBy: 'replacement_class_datetime ASC, original_class_datetime ASC');
+    return await dbClient.query('session_overrides',
+        where: 'student_id = ?',
+        whereArgs: [studentId],
+        orderBy: 'replacement_class_datetime ASC, original_class_datetime ASC');
   }
 
   Future<List<Map<String, dynamic>>> getSessionOverridesAll() async {
     final dbClient = await db;
-    return await dbClient.query('session_overrides', orderBy: 'replacement_class_datetime ASC, original_class_datetime ASC');
+    return await dbClient.query('session_overrides',
+        orderBy: 'replacement_class_datetime ASC, original_class_datetime ASC');
   }
 
   // ======== TAG EVENTS PERSISTENCE ========
-  Future<void> setTagEventsForSet(String setId, List<Map<String, dynamic>> events) async {
+  Future<void> setTagEventsForSet(
+      String setId, List<Map<String, dynamic>> events) async {
     final dbClient = await db;
     await dbClient.transaction((txn) async {
       await txn.delete('tag_events', where: 'set_id = ?', whereArgs: [setId]);
       for (final e in events) {
         final map = Map<String, dynamic>.from(e);
         map['set_id'] = setId;
-        await txn.insert('tag_events', map, conflictAlgorithm: ConflictAlgorithm.replace);
+        await txn.insert('tag_events', map,
+            conflictAlgorithm: ConflictAlgorithm.replace);
       }
     });
   }
 
   Future<void> appendTagEvent(Map<String, dynamic> map) async {
     final dbClient = await db;
-    await dbClient.insert('tag_events', map, conflictAlgorithm: ConflictAlgorithm.replace);
+    await dbClient.insert('tag_events', map,
+        conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   Future<List<Map<String, dynamic>>> getTagEventsForSet(String setId) async {
     final dbClient = await db;
-    return await dbClient.query('tag_events', where: 'set_id = ?', whereArgs: [setId], orderBy: 'timestamp ASC');
+    return await dbClient.query('tag_events',
+        where: 'set_id = ?', whereArgs: [setId], orderBy: 'timestamp ASC');
   }
 
   Future<List<Map<String, dynamic>>> getAllTagEvents() async {
     final dbClient = await db;
     return await dbClient.query('tag_events', orderBy: 'timestamp ASC');
   }
-} 
+}
