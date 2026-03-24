@@ -69,7 +69,7 @@ class LatexTextRenderer extends StatelessWidget {
                 mathStyle: MathStyle.display,
                 textStyle: displayMathTextStyle,
                 onErrorFallback: (dynamic _) =>
-                    Text(r'\$\$' + formula + r'\$\$', style: effectiveStyle),
+                    Text(formula, style: effectiveStyle),
               ),
             ),
           ),
@@ -117,7 +117,7 @@ class LatexTextRenderer extends StatelessWidget {
                 textStyle: inlineMathTextStyle,
                 mathStyle: MathStyle.text,
                 onErrorFallback: (dynamic _) =>
-                    Text(fullMatch, style: effectiveStyle),
+                    Text(formula, style: effectiveStyle),
               ),
             ),
           ),

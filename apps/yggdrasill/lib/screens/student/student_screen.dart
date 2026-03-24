@@ -525,8 +525,8 @@ class StudentScreenState extends State<StudentScreen> {
 
   Widget _buildStudentAddSplitButton() {
     // ✅ 시간메뉴 상단 "+ 추가" 버튼과 동일한 알약 스타일
-    const double controlHeight = 56;
-    const double mainButtonWidth = 170;
+    const double controlHeight = 48;
+    const double mainButtonWidth = 130;
     return SizedBox(
       width: mainButtonWidth,
       height: controlHeight,
@@ -537,19 +537,19 @@ class StudentScreenState extends State<StudentScreen> {
           borderRadius: BorderRadius.circular(controlHeight / 2),
           onTap: showStudentRegistrationDialog,
           child: const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 18),
+            padding: EdgeInsets.only(right: 10),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.center,
-              mainAxisSize: MainAxisSize.min,
+              mainAxisSize: MainAxisSize.max,
               children: [
-                Icon(Icons.add, color: _studentPrimaryTextColor, size: 21),
+                Icon(Icons.add, color: Colors.white, size: 20),
                 SizedBox(width: 8),
                 Text(
                   '추가',
                   style: TextStyle(
-                    color: _studentPrimaryTextColor,
-                    fontSize: 17,
-                    fontWeight: FontWeight.w700,
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
                   ),
                 ),
               ],

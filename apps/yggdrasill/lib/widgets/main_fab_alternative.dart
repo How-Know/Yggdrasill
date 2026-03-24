@@ -290,7 +290,7 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
                             await action();
                           },
                           child: SizedBox(
-                            width: 170,
+                            width: 140,
                             height: 56,
                             child: Container(
                               alignment: Alignment.center,

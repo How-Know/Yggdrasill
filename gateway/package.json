@@ -6,16 +6,26 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
+    "api:pb": "node src/problem_bank_api.js",
     "worker:alimtalk": "node src/attendance_alimtalk_worker.js",
-    "worker:alimtalk:once": "node src/attendance_alimtalk_worker.js --once"
+    "worker:alimtalk:once": "node src/attendance_alimtalk_worker.js --once",
+    "worker:pb-extract": "node src/problem_bank_extract_worker.js",
+    "worker:pb-extract:once": "node src/problem_bank_extract_worker.js --once",
+    "worker:pb-export": "node src/problem_bank_export_worker.js",
+    "worker:pb-export:once": "node src/problem_bank_export_worker.js --once",
+    "quality:pb": "node src/problem_bank_quality_gate.js",
+    "quality:pb:metrics": "node src/problem_bank_quality_metrics.js"
   },
   "dependencies": {
+    "@pdf-lib/fontkit": "^1.1.1",
     "@supabase/supabase-js": "^2.45.4",
+    "adm-zip": "^0.5.16",
     "ajv": "^8.12.0",
     "dotenv": "^16.4.5",
+    "fast-xml-parser": "^5.5.9",
+    "he": "^1.2.0",
     "mqtt": "^5.3.4",
+    "pdf-lib": "^1.17.1",
     "uuid": "^9.0.1"
   }
 }
-
-

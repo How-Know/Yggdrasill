@@ -2155,6 +2155,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     }
     await _handleWaitingChipLongPressPrint(
       context: context,
+      studentId: studentId,
       hw: latest,
     );
   }
@@ -2210,6 +2211,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
 
     await _handleWaitingChipLongPressPrint(
       context: context,
+      studentId: studentId,
       hw: seed,
       initialRangeOverride: printRange,
       dialogTitleOverride: dialogTitle,
@@ -2639,7 +2641,13 @@ Future<_HomeworkCheckTarget?> _resolveHomeworkCheckTarget(
   );
 }
 
-List<Widget> _buildHomeworkCheckTargetInfo(HomeworkItem hw) {
+List<Widget> _buildHomeworkCheckTargetInfo(
+  HomeworkItem hw, {
+  List<HomeworkItem> groupChildren = const <HomeworkItem>[],
+  Map<String, int> assignmentCountsByItem = const <String, int>{},
+  Map<String, HomeworkAssignmentCycleMeta> cycleMetaByItem =
+      const <String, HomeworkAssignmentCycleMeta>{},
+}) {
   String extractBookName() {
     final contentRaw = (hw.content ?? '').trim();
     final match = RegExp(r'(?:^|\n)\s*교재:\s*([^\n]+)').firstMatch(contentRaw);
@@ -2682,7 +2690,46 @@ List<Widget> _buildHomeworkCheckTargetInfo(HomeworkItem hw) {
     if (count != null && count > 0) '$count문항',
   ].join('  ');
 
-  return [
+  int resolveSplitCount(int total, int parts, int round) {
+    if (parts <= 1) return total;
+    final base = total ~/ parts;
+    final remainder = total % parts;
+    return base + (round <= remainder ? 1 : 0);
+  }
+
+  String childTitle(HomeworkItem child) {
+    final title = child.title.trim();
+    if (title.isNotEmpty) return title;
+    final pageRaw = (child.page ?? '').trim();
+    if (pageRaw.isNotEmpty) return 'p.$pageRaw';
+    return '(제목 없음)';
+  }
+
+  String childPageCount(HomeworkItem child) {
+    final pageRaw = (child.page ?? '').trim();
+    final pageText = pageRaw.isEmpty ? '' : 'p.$pageRaw';
+    final countRaw = child.count ?? 0;
+    final safeCount = countRaw < 0 ? 0 : countRaw;
+    final meta = cycleMetaByItem[child.id];
+    final splitParts = (meta?.splitParts ?? child.defaultSplitParts).clamp(1, 4);
+    final splitRound = (meta?.splitRound ?? 1).clamp(1, splitParts);
+    final splitCount = splitParts <= 1
+        ? safeCount
+        : resolveSplitCount(safeCount, splitParts, splitRound);
+    final countText = safeCount <= 0 ? '' : '$splitCount문항';
+    if (pageText.isEmpty && countText.isEmpty) return '-';
+    if (pageText.isEmpty) return countText;
+    if (countText.isEmpty) return pageText;
+    return '$pageText · $countText';
+  }
+
+  String childCheckHomeworkText(HomeworkItem child) {
+    final homeworkCountRaw = assignmentCountsByItem[child.id] ?? 0;
+    final homeworkCount = homeworkCountRaw < 0 ? 0 : homeworkCountRaw;
+    return '검사 ${child.checkCount}회 · 숙제 $homeworkCount회';
+  }
+
+  final widgets = <Widget>[
     if (bookAndCourse.isNotEmpty) ...[
       LatexTextRenderer(
         bookAndCourse,
@@ -2717,6 +2764,113 @@ List<Widget> _buildHomeworkCheckTargetInfo(HomeworkItem hw) {
       ),
     ],
   ];
+  if (groupChildren.isEmpty) return widgets;
+
+  widgets.addAll([
+    const SizedBox(height: 12),
+    Container(
+      width: double.infinity,
+      height: 1,
+      color: const Color(0x223A4545),
+    ),
+    const SizedBox(height: 10),
+    Text(
+      '하위 과제 ${groupChildren.length}개',
+      style: const TextStyle(
+        color: kDlgText,
+        fontSize: 14,
+        fontWeight: FontWeight.w800,
+      ),
+    ),
+    const SizedBox(height: 8),
+  ]);
+
+  const TextStyle groupChildTitleStyle = TextStyle(
+    color: Color(0xFFB9C3BA),
+    fontSize: 15,
+    fontWeight: FontWeight.w600,
+    height: 1.2,
+  );
+  const TextStyle groupChildMetaStyle = TextStyle(
+    color: Color(0xFF8FA1A1),
+    fontSize: 13.5,
+    fontWeight: FontWeight.w600,
+    height: 1.1,
+  );
+
+  for (int i = 0; i < groupChildren.length; i++) {
+    final child = groupChildren[i];
+    final memo = (child.memo ?? '').trim();
+    final memoText = memo.isEmpty ? '-' : memo;
+    widgets.add(
+      Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '${i + 1}. ${childTitle(child)}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: groupChildTitleStyle,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Flexible(
+                  child: Text(
+                    childCheckHomeworkText(child),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.right,
+                    style: groupChildMetaStyle,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 3),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    childPageCount(child),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: groupChildMetaStyle,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Flexible(
+                  child: Text(
+                    memoText,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.right,
+                    style: groupChildMetaStyle,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+    if (i != groupChildren.length - 1) {
+      widgets.addAll([
+        const SizedBox(height: 5),
+        Container(
+          width: double.infinity,
+          height: 1,
+          color: const Color(0x223A4545),
+        ),
+        const SizedBox(height: 5),
+      ]);
+    }
+  }
+
+  return widgets;
 }
 
 Future<_HomeworkCheckDraft?> _showHomeworkItemCheckDialog({
@@ -2724,6 +2878,10 @@ Future<_HomeworkCheckDraft?> _showHomeworkItemCheckDialog({
   required HomeworkItem hw,
   required _HomeworkCheckTarget target,
   required int minProgress,
+  List<HomeworkItem> groupChildren = const <HomeworkItem>[],
+  Map<String, int> assignmentCountsByItem = const <String, int>{},
+  Map<String, HomeworkAssignmentCycleMeta> cycleMetaByItem =
+      const <String, HomeworkAssignmentCycleMeta>{},
 }) async {
   int progress = minProgress.clamp(0, 150);
   final progressController =
@@ -2811,7 +2969,12 @@ Future<_HomeworkCheckDraft?> _showHomeworkItemCheckDialog({
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           mainAxisSize: MainAxisSize.min,
-                          children: _buildHomeworkCheckTargetInfo(hw),
+                          children: _buildHomeworkCheckTargetInfo(
+                            hw,
+                            groupChildren: groupChildren,
+                            assignmentCountsByItem: assignmentCountsByItem,
+                            cycleMetaByItem: cycleMetaByItem,
+                          ),
                         ),
                       ),
                       const SizedBox(height: 14),
@@ -3191,12 +3354,31 @@ Future<void> _runHomeworkCheckDialogForGroup({
     issueType: issueType,
     issueNote: issueNote,
   );
+  final assignmentCountsByItem =
+      await HomeworkAssignmentStore.instance.loadAssignmentCounts(studentId);
+  if (!context.mounted) return;
+  final cycleMetaByItem =
+      await HomeworkAssignmentStore.instance.loadLatestCycleMetaByItem(
+    studentId,
+  );
+  if (!context.mounted) return;
+  final targetChildIds = targetChildren.map((e) => e.id).toSet();
+  final groupAssignmentCounts = <String, int>{
+    for (final id in targetChildIds) id: assignmentCountsByItem[id] ?? 0,
+  };
+  final groupCycleMetaByItem = <String, HomeworkAssignmentCycleMeta>{
+    for (final id in targetChildIds)
+      if (cycleMetaByItem[id] != null) id: cycleMetaByItem[id]!,
+  };
 
   final draft = await _showHomeworkItemCheckDialog(
     context: context,
     hw: summary,
     target: dialogTarget,
     minProgress: globalMinProgress,
+    groupChildren: targetChildren,
+    assignmentCountsByItem: groupAssignmentCounts,
+    cycleMetaByItem: groupCycleMetaByItem,
   );
   if (!context.mounted || draft == null) return;
 
@@ -6176,6 +6358,167 @@ class _HomeworkPrintConfirmResult {
   });
 }
 
+class _HomeworkPrintOverlayMeta {
+  final String assignedDateText;
+  final String bookCourseText;
+  final String studentName;
+
+  const _HomeworkPrintOverlayMeta({
+    required this.assignedDateText,
+    required this.bookCourseText,
+    required this.studentName,
+  });
+}
+
+String _resolveHomeworkPrintStudentName(String studentId) {
+  final sid = studentId.trim();
+  if (sid.isEmpty) return '학생';
+  for (final row in DataManager.instance.students) {
+    if (row.student.id != sid) continue;
+    final name = row.student.name.trim();
+    return name.isEmpty ? '학생' : name;
+  }
+  return '학생';
+}
+
+Future<_HomeworkPrintOverlayMeta> _resolveHomeworkPrintOverlayMeta({
+  required String studentId,
+  required HomeworkItem fallbackHomework,
+  required List<HomeworkItem> selectedHomeworks,
+}) async {
+  final byId = <String, HomeworkItem>{};
+  for (final hw in selectedHomeworks) {
+    final id = hw.id.trim();
+    if (id.isEmpty || byId.containsKey(id)) continue;
+    byId[id] = hw;
+  }
+  if (byId.isEmpty) {
+    final fallbackId = fallbackHomework.id.trim();
+    if (fallbackId.isNotEmpty) {
+      byId[fallbackId] = fallbackHomework;
+    }
+  }
+  if (byId.isEmpty) {
+    return _HomeworkPrintOverlayMeta(
+      assignedDateText: '-',
+      bookCourseText: '교재 미기재',
+      studentName: _resolveHomeworkPrintStudentName(studentId),
+    );
+  }
+
+  HomeworkItem representative = byId.values.first;
+  DateTime? firstAssignedAt;
+  DateTime? firstCreatedAt;
+  for (final hw in byId.values) {
+    final createdAt = hw.createdAt;
+    if (createdAt == null) continue;
+    if (firstCreatedAt == null || createdAt.isBefore(firstCreatedAt)) {
+      firstCreatedAt = createdAt;
+    }
+  }
+  try {
+    final assignmentsByItem =
+        await HomeworkAssignmentStore.instance.loadAssignmentsForStudent(
+      studentId,
+    );
+    for (final entry in byId.entries) {
+      final rows =
+          List<HomeworkAssignmentBrief>.from(assignmentsByItem[entry.key] ?? []);
+      if (rows.isEmpty) continue;
+      rows.sort((a, b) => a.assignedAt.compareTo(b.assignedAt));
+      final DateTime candidateAssignedAt = rows.first.assignedAt;
+      if (firstAssignedAt == null ||
+          candidateAssignedAt.isBefore(firstAssignedAt)) {
+        firstAssignedAt = candidateAssignedAt;
+        representative = entry.value;
+      }
+    }
+  } catch (_) {}
+
+  final bookCourseRaw = _homeworkBookCourseLabel(representative).trim();
+  final String bookCourseText =
+      (bookCourseRaw.isEmpty || bookCourseRaw == '-')
+          ? '교재 미기재'
+          : bookCourseRaw;
+  final DateTime? assignedDateBase = firstAssignedAt ?? firstCreatedAt;
+  final String assignedDateText =
+      assignedDateBase == null ? '-' : _formatDateShort(assignedDateBase);
+  return _HomeworkPrintOverlayMeta(
+    assignedDateText: assignedDateText,
+    bookCourseText: bookCourseText,
+    studentName: _resolveHomeworkPrintStudentName(studentId),
+  );
+}
+
+Future<sf.PdfFont> _loadHomeworkPrintOverlayFont(
+  double size, {
+  bool bold = false,
+}) async {
+  if (Platform.isWindows) {
+    final candidates = <String>[
+      if (bold) r'C:\Windows\Fonts\malgunbd.ttf',
+      r'C:\Windows\Fonts\malgun.ttf',
+      if (!bold) r'C:\Windows\Fonts\malgunbd.ttf',
+    ];
+    for (final path in candidates) {
+      try {
+        final file = File(path);
+        if (!await file.exists()) continue;
+        final bytes = await file.readAsBytes();
+        return sf.PdfTrueTypeFont(
+          bytes,
+          size,
+          style: bold ? sf.PdfFontStyle.bold : sf.PdfFontStyle.regular,
+        );
+      } catch (_) {}
+    }
+  }
+  return sf.PdfStandardFont(
+    sf.PdfFontFamily.helvetica,
+    size,
+    style: bold ? sf.PdfFontStyle.bold : sf.PdfFontStyle.regular,
+  );
+}
+
+void _drawHomeworkPrintOverlayOnFirstPage({
+  required sf.PdfPage page,
+  required _HomeworkPrintOverlayMeta meta,
+  required sf.PdfFont line1Font,
+  required sf.PdfFont line2Font,
+}) {
+  final size = page.getClientSize();
+  final line1Parts = <String>[
+    if (meta.assignedDateText.trim().isNotEmpty && meta.assignedDateText != '-')
+      meta.assignedDateText,
+    if (meta.bookCourseText.trim().isNotEmpty) meta.bookCourseText,
+  ];
+  final line1 = line1Parts.isEmpty ? '-' : line1Parts.join(' · ');
+  final line2 = meta.studentName.trim().isEmpty ? '학생' : meta.studentName;
+  const double rightInset = 14;
+  const double topInset = 9;
+  final double boxWidth = math.max(180, size.width * 0.68);
+  final double left = math.max(0, size.width - boxWidth - rightInset);
+  final format = sf.PdfStringFormat(
+    alignment: sf.PdfTextAlignment.right,
+    lineAlignment: sf.PdfVerticalAlignment.top,
+  );
+  final textBrush = sf.PdfSolidBrush(sf.PdfColor(32, 32, 32));
+  page.graphics.drawString(
+    line1,
+    line1Font,
+    brush: textBrush,
+    bounds: Rect.fromLTWH(left, topInset, boxWidth, 12),
+    format: format,
+  );
+  page.graphics.drawString(
+    line2,
+    line2Font,
+    brush: textBrush,
+    bounds: Rect.fromLTWH(left, topInset + 12, boxWidth, 12),
+    format: format,
+  );
+}
+
 bool _isWebUrl(String raw) {
   final lower = raw.trim().toLowerCase();
   return lower.startsWith('http://') || lower.startsWith('https://');
@@ -6838,6 +7181,7 @@ List<int> _parsePageRange(String input, int pageCount) {
 Future<String?> _buildPdfForPrintRange({
   required String inputPath,
   required String pageRange,
+  _HomeworkPrintOverlayMeta? overlayMeta,
 }) async {
   final inPath = inputPath.trim();
   if (inPath.isEmpty || !inPath.toLowerCase().endsWith('.pdf')) return null;
@@ -6851,7 +7195,14 @@ Future<String?> _buildPdfForPrintRange({
     final pageCount = src.pages.count;
     final indices = _parsePageRange(pageRange, pageCount);
     if (indices.isEmpty) return null;
-    for (final i in indices) {
+    sf.PdfFont? line1Font;
+    sf.PdfFont? line2Font;
+    if (overlayMeta != null) {
+      line1Font = await _loadHomeworkPrintOverlayFont(8.9, bold: true);
+      line2Font = await _loadHomeworkPrintOverlayFont(8.4);
+    }
+    for (int outIndex = 0; outIndex < indices.length; outIndex++) {
+      final i = indices[outIndex];
       if (i < 0 || i >= pageCount) continue;
       final srcPage = src.pages[i];
       final srcSize = srcPage.size;
@@ -6871,6 +7222,17 @@ Future<String?> _buildPdfForPrintRange({
         } catch (_) {
           newPage.graphics.drawPdfTemplate(tmpl, const Offset(0, 0));
         }
+        if (outIndex == 0 &&
+            overlayMeta != null &&
+            line1Font != null &&
+            line2Font != null) {
+          _drawHomeworkPrintOverlayOnFirstPage(
+            page: newPage,
+            meta: overlayMeta,
+            line1Font: line1Font,
+            line2Font: line2Font,
+          );
+        }
         continue;
       }
       // 프린터 여백 영향을 줄이기 위해 약간 확대해서 출력한다.
@@ -6884,6 +7246,17 @@ Future<String?> _buildPdfForPrintRange({
         newPage.graphics.drawPdfTemplate(tmpl, Offset(dx, dy), Size(w, h));
       } catch (_) {
         newPage.graphics.drawPdfTemplate(tmpl, const Offset(0, 0));
+      }
+      if (outIndex == 0 &&
+          overlayMeta != null &&
+          line1Font != null &&
+          line2Font != null) {
+        _drawHomeworkPrintOverlayOnFirstPage(
+          page: newPage,
+          meta: overlayMeta,
+          line1Font: line1Font,
+          line2Font: line2Font,
+        );
       }
     }
     final outBytes = await dst.save();
@@ -7332,6 +7705,7 @@ Future<void> _runWithPrintProgressDialog(
 
 Future<void> _handleWaitingChipLongPressPrint({
   required BuildContext context,
+  required String studentId,
   required HomeworkItem hw,
   String? initialRangeOverride,
   String? dialogTitleOverride,
@@ -7396,6 +7770,18 @@ Future<void> _handleWaitingChipLongPressPrint({
     _showHomeworkChipSnackBar(context, '인쇄할 하위 과제를 선택하세요.');
     return;
   }
+  final selectedIds = confirmResult.selectedChildIds.toSet();
+  final selectedHomeworks = selectableGroupChildren.isNotEmpty
+      ? selectableGroupChildren
+          .where((child) => selectedIds.contains(child.id))
+          .toList(growable: false)
+      : <HomeworkItem>[hw];
+  final overlayMeta = await _resolveHomeworkPrintOverlayMeta(
+    studentId: studentId,
+    fallbackHomework: hw,
+    selectedHomeworks: selectedHomeworks,
+  );
+  if (!context.mounted) return;
 
   final selectedRange = confirmResult.pageRange;
   String pathToPrint = bodyPath;
@@ -7406,22 +7792,26 @@ Future<void> _handleWaitingChipLongPressPrint({
     await _runWithPrintProgressDialog(
       context,
       run: (progressText) async {
-        if (rangeRaw.isNotEmpty) {
-          if (!bodyPath.toLowerCase().endsWith('.pdf')) {
-            printError = '페이지 범위 인쇄는 PDF에서만 지원합니다.';
-            return;
-          }
-          progressText.value = '선택한 페이지를 인쇄 파일로 만드는 중입니다...';
+        if (bodyPath.toLowerCase().endsWith('.pdf')) {
+          progressText.value = rangeRaw.isEmpty
+              ? '인쇄 파일을 준비하는 중입니다...'
+              : '선택한 페이지를 인쇄 파일로 만드는 중입니다...';
           final out = await _buildPdfForPrintRange(
             inputPath: bodyPath,
             pageRange: rangeRaw,
+            overlayMeta: overlayMeta,
           );
           if (out == null || out.isEmpty) {
-            printError = '페이지 범위를 확인하세요. (예: 10-15, 20)';
+            printError = rangeRaw.isEmpty
+                ? '인쇄 파일 생성에 실패했습니다.'
+                : '페이지 범위를 확인하세요. (예: 10-15, 20)';
             return;
           }
           pathToPrint = out;
           _scheduleTempDelete(pathToPrint);
+        } else if (rangeRaw.isNotEmpty) {
+          printError = '페이지 범위 인쇄는 PDF에서만 지원합니다.';
+          return;
         }
         progressText.value = '프린터로 전송 중입니다...';
         await _openPrintDialogForPath(pathToPrint);

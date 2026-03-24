@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "thresholds": {
+    "questionCountAccuracy": 0.99,
+    "choiceAccuracy": 0.9,
+    "equationAccuracy": 0.85,
+    "figureBindingAccuracy": 0.9,
+    "pdfHashMatch": 1.0
+  },
+  "samples": []
+}
