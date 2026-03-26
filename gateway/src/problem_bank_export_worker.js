@@ -87,6 +87,97 @@ function sanitizeText(value) {
   return String(value ?? '').replace(/\r/g, '').trim();
 }
 
+function normalizeWhitespace(value) {
+  return String(value ?? '').replace(/\s+/g, ' ').trim();
+}
+
+async function toBufferFromStorageData(data) {
+  if (!data) return Buffer.alloc(0);
+  if (Buffer.isBuffer(data)) return data;
+  if (data instanceof ArrayBuffer) return Buffer.from(data);
+  if (typeof data.arrayBuffer === 'function') {
+    const arr = await data.arrayBuffer();
+    return Buffer.from(arr);
+  }
+  if (typeof data.stream === 'function') {
+    const chunks = [];
+    const stream = data.stream();
+    for await (const chunk of stream) {
+      chunks.push(Buffer.from(chunk));
+    }
+    return Buffer.concat(chunks);
+  }
+  throw new Error('Unsupported storage payload type');
+}
+
+function pickApprovedFigureAsset(question) {
+  const meta = question?.meta && typeof question.meta === 'object' ? question.meta : {};
+  const assets = Array.isArray(meta.figure_assets) ? meta.figure_assets : [];
+  const approved = assets.find((asset) => asset?.approved === true);
+  if (!approved) return null;
+  const bucket = normalizeWhitespace(approved?.bucket || '');
+  const path = normalizeWhitespace(approved?.path || '');
+  if (!bucket || !path) return null;
+  const mimeType = normalizeWhitespace(approved?.mime_type || approved?.mimeType || '');
+  return { ...approved, bucket, path, mimeType };
+}
+
+function estimateFigureRenderBox(question, contentWidth) {
+  const embed = question.figure_embed;
+  if (!embed) return null;
+  const dims = embed.scale(1);
+  if (!dims || !Number.isFinite(dims.width) || !Number.isFinite(dims.height)) {
+    return null;
+  }
+  const maxWidth = contentWidth;
+  const maxHeight = 170;
+  const scale = Math.min(maxWidth / dims.width, maxHeight / dims.height, 1);
+  const width = Math.max(1, dims.width * scale);
+  const height = Math.max(1, dims.height * scale);
+  return { width, height };
+}
+
+async function hydrateApprovedFigureEmbeds(pdfDoc, questions) {
+  const embedCache = new Map();
+  for (const q of questions) {
+    q.figure_asset = null;
+    q.figure_embed = null;
+    const asset = pickApprovedFigureAsset(q);
+    if (!asset) continue;
+    const cacheKey = `${asset.bucket}/${asset.path}`;
+    if (!embedCache.has(cacheKey)) {
+      try {
+        const { data, error } = await supa.storage
+          .from(asset.bucket)
+          .download(asset.path);
+        if (error || !data) {
+          embedCache.set(cacheKey, null);
+        } else {
+          const bytes = await toBufferFromStorageData(data);
+          let embed = null;
+          const mime = String(asset.mimeType || '').toLowerCase();
+          if (mime.includes('jpeg') || mime.includes('jpg') || /\.jpe?g$/i.test(asset.path)) {
+            embed = await pdfDoc.embedJpg(bytes);
+          } else if (
+            mime.includes('png') ||
+            /\.png$/i.test(asset.path) ||
+            mime.includes('image/')
+          ) {
+            embed = await pdfDoc.embedPng(bytes);
+          }
+          embedCache.set(cacheKey, embed);
+        }
+      } catch (_) {
+        embedCache.set(cacheKey, null);
+      }
+    }
+    const embed = embedCache.get(cacheKey);
+    if (!embed) continue;
+    q.figure_asset = asset;
+    q.figure_embed = embed;
+  }
+}
+
 function normalizePaper(raw) {
   const key = String(raw || '').trim();
   return PAPER_SIZE[key] ? key : 'A4';
@@ -208,8 +299,11 @@ function estimateQuestionHeight(question, fonts, layout, contentWidth) {
     contentWidth,
   );
   h += stemLines.length * layout.lineHeight;
-  if (question.figure_refs.length > 0) {
-    h += layout.lineHeight + 40; // figure note + placeholder box
+  const figureBox = estimateFigureRenderBox(question, contentWidth);
+  if (figureBox) {
+    h += layout.lineHeight + figureBox.height + 8;
+  } else if (question.figure_refs.length > 0) {
+    h += layout.lineHeight + 40;
   }
   if (question.choices.length > 0) {
     for (const c of question.choices) {
@@ -316,25 +410,46 @@ function drawQuestion({
     }
   }
 
-  if (question.figure_refs.length > 0) {
-    page.drawText('[그림/자료 포함 문항]', {
-      x: layout.margin,
-      y: curY,
-      size: 9.5,
-      font: fonts.regular,
-      color: rgb(0.28, 0.35, 0.58),
-    });
-    curY -= layout.lineHeight - 1;
-    page.drawRectangle({
-      x: layout.margin,
-      y: curY - 38,
-      width: contentWidth,
-      height: 36,
-      borderColor: rgb(0.72, 0.72, 0.72),
-      borderWidth: 0.8,
-      color: rgb(0.97, 0.97, 0.97),
-    });
-    curY -= 42;
+  if (question.figure_refs.length > 0 || question.figure_embed) {
+    const figureBox = estimateFigureRenderBox(question, contentWidth);
+    if (figureBox) {
+      page.drawText('[AI 그림 반영]', {
+        x: layout.margin,
+        y: curY,
+        size: 9.5,
+        font: fonts.regular,
+        color: rgb(0.23, 0.38, 0.58),
+      });
+      curY -= layout.lineHeight - 1;
+      const drawX = layout.margin + (contentWidth - figureBox.width) / 2;
+      const drawY = curY - figureBox.height;
+      page.drawImage(question.figure_embed, {
+        x: drawX,
+        y: drawY,
+        width: figureBox.width,
+        height: figureBox.height,
+      });
+      curY -= figureBox.height + 8;
+    } else {
+      page.drawText('[그림/자료 포함 문항]', {
+        x: layout.margin,
+        y: curY,
+        size: 9.5,
+        font: fonts.regular,
+        color: rgb(0.28, 0.35, 0.58),
+      });
+      curY -= layout.lineHeight - 1;
+      page.drawRectangle({
+        x: layout.margin,
+        y: curY - 38,
+        width: contentWidth,
+        height: 36,
+        borderColor: rgb(0.72, 0.72, 0.72),
+        borderWidth: 0.8,
+        color: rgb(0.97, 0.97, 0.97),
+      });
+      curY -= 42;
+    }
   }
 
   if (question.choices.length > 0) {
@@ -467,7 +582,7 @@ async function fetchQuestionsForJob(job) {
   let query = supa
     .from('pb_questions')
     .select(
-      'id,question_number,question_type,stem,choices,figure_refs,equations,confidence,flags,reviewer_notes,source_page,source_order',
+      'id,question_number,question_type,stem,choices,figure_refs,equations,confidence,flags,reviewer_notes,source_page,source_order,meta',
     )
     .eq('academy_id', academyId)
     .eq('document_id', documentId);
@@ -503,6 +618,7 @@ async function fetchQuestionsForJob(job) {
         reviewer_notes: String(row.reviewer_notes || ''),
         source_page: Number(row.source_page || 0),
         source_order: Number(row.source_order || 0),
+        meta: row.meta && typeof row.meta === 'object' ? row.meta : {},
       }));
 }
 
@@ -516,6 +632,7 @@ async function renderPdf(job, questions) {
   const pageSize = PAPER_SIZE[paper];
   const contentWidth = pageSize.width - layout.margin * 2;
   const pageBottom = layout.margin;
+  await hydrateApprovedFigureEmbeds(pdfDoc, questions);
 
   let page = pdfDoc.addPage([pageSize.width, pageSize.height]);
   let pageNum = 1;
@@ -588,6 +705,7 @@ async function processOneJob(job) {
     throw new Error('selected_questions_empty');
   }
   const rendered = await renderPdf(job, questions);
+  const figureAppliedCount = questions.filter((q) => Boolean(q.figure_embed)).length;
   const objectPath = `${job.academy_id}/${job.id}.pdf`;
 
   const { error: uploadErr } = await supa.storage
@@ -620,6 +738,7 @@ async function processOneJob(job) {
         profile: rendered.profile,
         paper: rendered.paper,
         questionCount: questions.length,
+        figureAppliedCount,
       },
       finished_at: nowIso,
       updated_at: nowIso,
@@ -632,6 +751,7 @@ async function processOneJob(job) {
   return {
     pageCount: rendered.pageCount,
     questionCount: questions.length,
+    figureAppliedCount,
     outputPath: objectPath,
   };
 }
@@ -665,6 +785,7 @@ async function processBatch() {
           jobId: locked.id,
           questions: result.questionCount,
           pages: result.pageCount,
+          figureApplied: result.figureAppliedCount,
           outputPath: result.outputPath,
         }),
       );

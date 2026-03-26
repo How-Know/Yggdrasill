@@ -48,6 +48,7 @@ const GEMINI_PRIORITY = String(
 const GEMINI_ENABLED =
   (process.env.PB_GEMINI_ENABLED === '1' || GEMINI_KEY_CONFIGURED) &&
   GEMINI_MODEL.length > 0;
+const AUTO_QUEUE_FIGURE_JOBS = process.env.PB_AUTO_QUEUE_FIGURE_JOBS !== '0';
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
   console.error(
@@ -338,11 +339,66 @@ function parseAnswerLine(line) {
   const m = input.match(/^\[?\s*정답\s*\]?\s*[:：]?\s*(.+)$/);
   if (!m) return null;
   const raw = stripPotentialWatermarkText(m[1] || '', { equation: true });
-  if (!raw) return '[수식]';
-  if (/^[1-5]$/.test(raw)) {
-    return String.fromCharCode(0x2460 + Number.parseInt(raw, 10) - 1); // ①
+  if (!raw) return null;
+  if (/^[\[\]]+$/.test(raw)) return null;
+  return raw;
+}
+
+function parseAnswerLineLoose(line) {
+  const input = normalizeWhitespace(line);
+  if (!input) return null;
+  const marker = input.search(/\[?\s*정답\s*\]?/);
+  if (marker < 0) return null;
+  return parseAnswerLine(input.slice(marker));
+}
+
+function toCircledNumber(value) {
+  const n = Number.parseInt(String(value || '').trim(), 10);
+  if (!Number.isFinite(n) || n < 1 || n > 10) return String(value || '').trim();
+  return String.fromCharCode(0x2460 + n - 1);
+}
+
+function normalizeAnswerKeyForQuestion(answerKey, question) {
+  const raw = normalizeWhitespace(String(answerKey || ''));
+  if (!raw) return '';
+  const choiceCount = Array.isArray(question?.choices) ? question.choices.length : 0;
+  const objectiveHint =
+    choiceCount >= 2 ||
+    String(question?.question_type || '').trim() === '객관식';
+  if (!objectiveHint) return raw;
+  if (/^[①②③④⑤⑥⑦⑧⑨⑩]$/.test(raw)) return raw;
+  if (/^\d{1,2}$/.test(raw)) return toCircledNumber(raw);
+  if (/^\d{1,2}(\s*[,/]\s*\d{1,2})+$/.test(raw)) {
+    return raw
+      .split(/[,/]/)
+      .map((token) => toCircledNumber(token))
+      .join(', ');
   }
   return raw;
+}
+
+function renderAnswerEquationTokens(input, equationTokenMap) {
+  let out = normalizeWhitespace(
+    String(input || '').replace(/\[\[PB_EQ_[^\]]+\]\]/g, (token) => {
+      const eq = equationTokenMap.get(token);
+      const rendered = normalizeWhitespace(eq?.latex || eq?.raw || '');
+      return rendered || '[수식]';
+    }),
+  );
+  for (let i = 0; i < 4; i += 1) {
+    const next = out
+      .replace(
+        /\{([^{}]+)\}\s*\\over\s*\{([^{}]+)\}/g,
+        (_, a, b) => `\\frac{${normalizeWhitespace(a)}}{${normalizeWhitespace(b)}}`,
+      )
+      .replace(
+        /([\-]?\d+(?:\.\d+)?)\s*\\over\s*\{([^{}]+)\}/g,
+        (_, a, b) => `\\frac{${normalizeWhitespace(a)}}{${normalizeWhitespace(b)}}`,
+      );
+    if (next === out) break;
+    out = next;
+  }
+  return normalizeWhitespace(out);
 }
 
 function isSourceMarkerLine(line) {
@@ -497,19 +553,97 @@ function collectEquationCandidates(xmlText, sectionIndex) {
   return { replacedXml: replaced, equations };
 }
 
+function extractEndNoteAnswerHints(xmlText, equations = []) {
+  const hints = {};
+  const equationTokenMap = new Map();
+  for (const eq of equations || []) {
+    const token = normalizeWhitespace(eq?.token || '');
+    if (!token) continue;
+    equationTokenMap.set(token, eq);
+  }
+  const noteRegex = /<hp:endNote\b([^>]*)>([\s\S]*?)<\/hp:endNote>/gi;
+  let m = null;
+  while ((m = noteRegex.exec(xmlText)) !== null) {
+    const attrs = String(m[1] || '');
+    const body = String(m[2] || '');
+    const n1 = attrs.match(/\bnumber\s*=\s*["']?(\d{1,3})["']?/i);
+    const n2 = body.match(/<hp:autoNum[^>]*\bnum="(\d{1,3})"[^>]*>/i);
+    const qNumberRaw = n1?.[1] || n2?.[1] || '';
+    const qNumber = String(Number.parseInt(qNumberRaw, 10) || '').trim();
+    if (!qNumber) continue;
+
+    const textNodes = Array.from(
+      body.matchAll(/<hp:t>([\s\S]*?)<\/hp:t>/gi),
+      (x) =>
+        normalizeWhitespace(
+          htmlDecode(String(x[1] || ''))
+            .replace(/<[^>]+>/g, ' ')
+            .replace(/\s+/g, ' '),
+        ),
+    ).filter(Boolean);
+    const bodyPlain = normalizeWhitespace(
+      htmlDecode(body)
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\s+/g, ' '),
+    );
+    const candidates = [
+      normalizeWhitespace(textNodes.join(' ')),
+      bodyPlain,
+      ...textNodes,
+    ].filter(Boolean);
+    let answer = null;
+    for (const candidate of candidates) {
+      answer = parseAnswerLine(candidate) || parseAnswerLineLoose(candidate);
+      if (answer) break;
+    }
+    if (!answer) continue;
+    const rendered = renderAnswerEquationTokens(answer, equationTokenMap);
+    if (!rendered || /^[\[\]]+$/.test(rendered)) continue;
+    hints[qNumber] = rendered;
+  }
+  return hints;
+}
+
 function transformXmlToLines(xmlText, sectionIndex) {
   const { replacedXml, equations } = collectEquationCandidates(
     xmlText,
     sectionIndex,
   );
+  const answerHints = extractEndNoteAnswerHints(replacedXml, equations);
   // 문단 내부/외부에 섞여 있는 미주/각주 본문은 문제 텍스트 추출에서 제외한다.
-  const purifiedXml = replacedXml
+  let purifiedXml = replacedXml
     .replace(/<hp:endNote[\s\S]*?<\/hp:endNote>/gi, ' ')
     .replace(/<hp:footNote[\s\S]*?<\/hp:footNote>/gi, ' ')
     .replace(/<hp:note[\s\S]*?<\/hp:note>/gi, ' ');
+
+  // hp:tbl (표) → [박스시작]/[박스끝] 마커로 감싸기 (hp:p로 래핑하여 파싱 보장)
+  purifiedXml = purifiedXml.replace(/<hp:tbl\b[\s\S]*?<\/hp:tbl>/gi, (match) => {
+    const innerText = match
+      .replace(/<hp:pic[\s\S]*?<\/hp:pic>/gi, ' [그림] ')
+      .replace(/<hp:shape[\s\S]*?<\/hp:shape>/gi, ' [도형] ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!innerText) return '';
+    return `<hp:p><hp:t>[박스시작]</hp:t></hp:p><hp:p><hp:t>${innerText}</hp:t></hp:p><hp:p><hp:t>[박스끝]</hp:t></hp:p>`;
+  });
+
+  // hp:rect (사각형 도형) → [박스시작]/[박스끝] 마커로 감싸기
+  purifiedXml = purifiedXml.replace(/<hp:rect\b[\s\S]*?<\/hp:rect>/gi, (match) => {
+    const innerText = match
+      .replace(/<hp:pic[\s\S]*?<\/hp:pic>/gi, ' [그림] ')
+      .replace(/<hp:shape[\s\S]*?<\/hp:shape>/gi, ' [도형] ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!innerText) return '';
+    return `<hp:p><hp:t>[박스시작]</hp:t></hp:p><hp:p><hp:t>${innerText}</hp:t></hp:p><hp:p><hp:t>[박스끝]</hp:t></hp:p>`;
+  });
+
   const lines = [];
   let lineIndex = 0;
   let page = 1;
+  let prevParagraphHadContent = false;
   const paragraphRegex = /<hp:p\b([^>]*)>([\s\S]*?)<\/hp:p>/gi;
   let m = null;
   while ((m = paragraphRegex.exec(purifiedXml)) !== null) {
@@ -520,12 +654,10 @@ function transformXmlToLines(xmlText, sectionIndex) {
     }
 
     let s = body;
-    // 본문 번호를 autoNum으로 표현한 경우 숫자를 살려둔다.
     s = s.replace(
       /<hp:autoNum[^>]*num="(\d+)"[^>]*>[\s\S]*?<\/hp:autoNum>/gi,
       ' $1 ',
     );
-    // 표 내부 텍스트를 살리기 위해 hp:tbl 본문은 지우지 않는다.
     s = s.replace(/<hp:pic[\s\S]*?<\/hp:pic>/gi, ' [그림] ');
     s = s.replace(/<hp:shape[\s\S]*?<\/hp:shape>/gi, ' [도형] ');
     s = s.replace(/<br\s*\/?>/gi, '\n');
@@ -537,12 +669,37 @@ function transformXmlToLines(xmlText, sectionIndex) {
     s = s.replace(/<[^>]+>/g, ' ');
     s = htmlDecode(s);
     s = normalizeWhitespace(s);
-    if (!s) continue;
+    if (!s) {
+      if (prevParagraphHadContent) {
+        lines.push({
+          section: sectionIndex,
+          index: lineIndex,
+          page,
+          text: '[문단]',
+        });
+        lineIndex += 1;
+        prevParagraphHadContent = false;
+      }
+      continue;
+    }
+
+    // 이전 문단과 현재 문단 사이에 문단 경계 마커 삽입
+    if (prevParagraphHadContent) {
+      lines.push({
+        section: sectionIndex,
+        index: lineIndex,
+        page,
+        text: '[문단]',
+      });
+      lineIndex += 1;
+    }
 
     const paragraphLines = s
       .split('\n')
       .map((line) => normalizeWhitespace(line))
       .filter((line) => line.length > 0);
+    const isStructuralMarker = paragraphLines.length === 1 &&
+      /^\[(박스시작|박스끝|문단)\]$/.test(paragraphLines[0]);
     for (const text of paragraphLines) {
       lines.push({
         section: sectionIndex,
@@ -552,9 +709,12 @@ function transformXmlToLines(xmlText, sectionIndex) {
       });
       lineIndex += 1;
     }
+    if (!isStructuralMarker) {
+      prevParagraphHadContent = paragraphLines.length > 0;
+    }
   }
 
-  return { lines, equations };
+  return { lines, equations, answerHints };
 }
 
 function countScoreHeadersFromXml(xmlText) {
@@ -717,15 +877,23 @@ function enrichXmlQuestionsWithPreview(xmlBuilt, previewBuilt, threshold) {
   );
   let stemPatched = 0;
   let choicePatched = 0;
-  for (const q of xmlBuilt.questions || []) {
+  const xmlQuestions = xmlBuilt.questions || [];
+  for (const [idx, q] of xmlQuestions.entries()) {
     const pq = previewMap.get(String(q.question_number || ''));
     if (!pq) continue;
     const currentStem = normalizeWhitespace(q.stem || '');
     const previewStem = normalizeWhitespace(pq.stem || '');
+    const prevStem = idx > 0 ? normalizeWhitespace(xmlQuestions[idx - 1]?.stem || '') : '';
+    const duplicatedPrevStem =
+      prevStem.length >= 6 &&
+      previewStem.length >= 6 &&
+      previewStem === prevStem &&
+      String(xmlQuestions[idx - 1]?.question_number || '') !== String(q.question_number || '');
     const currentHasPrompt = /(다음|옳은|설명|구하|계산|만족)/.test(currentStem);
     const previewHasPrompt = /(다음|옳은|설명|구하|계산|만족)/.test(previewStem);
     if (
       previewStem.length >= 6 &&
+      !(duplicatedPrevStem && currentStem.length >= 6) &&
       (
         currentStem.length < 6 ||
         /^(김정우|홍길동)$/.test(currentStem) ||
@@ -1164,7 +1332,8 @@ function enrichBuiltWithGemini(baseBuilt, geminiBuilt, threshold) {
   let touchedCount = 0;
   let stemPatched = 0;
   let choicePatched = 0;
-  for (const q of baseBuilt.questions || []) {
+  const baseQuestions = baseBuilt.questions || [];
+  for (const [idx, q] of baseQuestions.entries()) {
     const g = geminiMap.get(String(q.question_number || ''));
     if (!g) continue;
 
@@ -1173,6 +1342,14 @@ function enrichBuiltWithGemini(baseBuilt, geminiBuilt, threshold) {
     const geminiStem = normalizeWhitespace(g.stem || '');
     const geminiStemSanitized = stripEquationPlaceholders(geminiStem);
     const geminiStemHasPlaceholder = placeholderTokenCount(geminiStem) > 0;
+    const prevStem =
+      idx > 0 ? normalizeWhitespace(baseQuestions[idx - 1]?.stem || '') : '';
+    const duplicatePrevGeminiStem =
+      prevStem.length >= 6 &&
+      geminiStemSanitized.length >= 6 &&
+      geminiStemSanitized === prevStem &&
+      String(baseQuestions[idx - 1]?.question_number || '') !==
+        String(q.question_number || '');
     const baseHasPrompt = /(다음|옳은|설명|구하|계산|만족)/.test(baseStem);
     const geminiHasPrompt = /(다음|옳은|설명|구하|계산|만족)/.test(
       geminiStemSanitized,
@@ -1180,6 +1357,7 @@ function enrichBuiltWithGemini(baseBuilt, geminiBuilt, threshold) {
     if (
       !geminiStemHasPlaceholder &&
       geminiStemSanitized.length >= 6 &&
+      !(duplicatePrevGeminiStem && baseStem.length >= 6) &&
       (
         baseStem.length < 6 ||
         geminiStemSanitized.length > baseStem.length + 8 ||
@@ -1332,8 +1510,17 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
   let sourceLineCount = 0;
   let segmentedLineCount = 0;
   const equationMap = new Map();
+  const answerHintMap = new Map();
 
   for (const sec of parsed.sections) {
+    for (const [k, v] of Object.entries(sec.answerHints || {})) {
+      const key = String(Number.parseInt(String(k || ''), 10) || '').trim();
+      const value = normalizeWhitespace(String(v || ''));
+      if (!key || !value) continue;
+      if (!answerHintMap.has(key)) {
+        answerHintMap.set(key, value);
+      }
+    }
     for (const eq of sec.equations) {
       equationMap.set(eq.token, {
         raw: eq.raw,
@@ -1389,6 +1576,14 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
     if (!current) return;
     current.stem = normalizeWhitespace(current.stemLines.join('\n'));
     current.question_type = guessQuestionType(current);
+    if (!current.answer_key) {
+      const hinted = answerHintMap.get(String(current.question_number || '').trim());
+      if (hinted) {
+        current.answer_key = hinted;
+        current.sourcePatterns.push('endnote_answer_hint');
+      }
+    }
+    current.answer_key = normalizeAnswerKeyForQuestion(current.answer_key, current);
     current.confidence = scoreQuestion(current);
     if (current.confidence < threshold) {
       current.flags.push('low_confidence');
@@ -1688,6 +1883,7 @@ function parseHwpxBuffer(buffer) {
       path: entry.entryName,
       lines: transformed.lines,
       equations: transformed.equations,
+      answerHints: transformed.answerHints || {},
     });
   }
 
@@ -1700,6 +1896,7 @@ function parseHwpxBuffer(buffer) {
             path: preview.path || 'PrvText.txt',
             lines: preview.lines,
             equations: [],
+            answerHints: {},
           }
         : null,
     hints: {
@@ -1951,6 +2148,8 @@ async function processOneJob(job) {
 
   const { questions, stats } = built;
   const nowIso = new Date().toISOString();
+  let figureJobsQueued = 0;
+  let figureJobSeedError = '';
 
   await supa.from('pb_questions').delete().eq('document_id', job.document_id);
 
@@ -1985,6 +2184,61 @@ async function processOneJob(job) {
     }
   }
 
+  if (AUTO_QUEUE_FIGURE_JOBS && questions.length > 0) {
+    try {
+      const { data: insertedQuestions, error: fetchInsertedErr } = await supa
+        .from('pb_questions')
+        .select('id,figure_refs')
+        .eq('academy_id', job.academy_id)
+        .eq('document_id', job.document_id)
+        .eq('extract_job_id', job.id);
+      if (fetchInsertedErr) {
+        throw new Error(`figure_seed_fetch_failed:${fetchInsertedErr.message}`);
+      }
+      const figureJobRows = (insertedQuestions || [])
+        .filter(
+          (row) => Array.isArray(row.figure_refs) && row.figure_refs.length > 0,
+        )
+        .map((row) => ({
+          academy_id: job.academy_id,
+          document_id: job.document_id,
+          question_id: row.id,
+          created_by: job.created_by || null,
+          status: 'queued',
+          provider: 'gemini',
+          model_name: '',
+          options: {},
+          prompt_text: '',
+          worker_name: '',
+          result_summary: {},
+          output_storage_bucket: 'problem-previews',
+          output_storage_path: '',
+          error_code: '',
+          error_message: '',
+          started_at: null,
+          finished_at: null,
+        }));
+      if (figureJobRows.length > 0) {
+        const { error: figureInsertErr } = await supa
+          .from('pb_figure_jobs')
+          .insert(figureJobRows);
+        if (figureInsertErr) {
+          throw new Error(`figure_job_seed_failed:${figureInsertErr.message}`);
+        }
+        figureJobsQueued = figureJobRows.length;
+      }
+    } catch (err) {
+      figureJobSeedError = compact(err?.message || err);
+      console.warn(
+        '[pb-extract-worker] figure_seed_skip',
+        JSON.stringify({
+          jobId: job.id,
+          message: figureJobSeedError,
+        }),
+      );
+    }
+  }
+
   const reviewRequired = stats.lowConfidenceCount > 0;
   const jobStatus = reviewRequired ? 'review_required' : 'completed';
   const docStatus = reviewRequired ? 'review_required' : 'ready';
@@ -2014,6 +2268,9 @@ async function processOneJob(job) {
     geminiChoicePatched,
     geminiModel: GEMINI_ENABLED ? GEMINI_MODEL : '',
     geminiError,
+    figureJobsQueued,
+    figureJobSeedError,
+    autoQueueFigureJobs: AUTO_QUEUE_FIGURE_JOBS,
     examProfileDetected: stats.examProfile,
     reviewThreshold: REVIEW_CONFIDENCE_THRESHOLD,
   };
@@ -2152,6 +2409,7 @@ async function main() {
       geminiPriority: GEMINI_PRIORITY,
       geminiKeyConfigured: GEMINI_KEY_CONFIGURED,
       geminiFlag: process.env.PB_GEMINI_ENABLED || '',
+      autoQueueFigureJobs: AUTO_QUEUE_FIGURE_JOBS,
       once: PROCESS_ONCE,
     }),
   );

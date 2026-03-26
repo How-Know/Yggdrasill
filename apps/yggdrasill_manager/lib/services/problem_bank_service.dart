@@ -478,12 +478,23 @@ class ProblemBankService {
         .from('pb_exports')
         .select('id,output_storage_bucket,output_storage_path')
         .eq('academy_id', aid);
-    final questionRows =
-        await _client.from('pb_questions').select('id').eq('academy_id', aid);
+    final questionRows = await _client
+        .from('pb_questions')
+        .select('id,meta')
+        .eq('academy_id', aid);
     final extractRows = await _client
         .from('pb_extract_jobs')
         .select('id')
         .eq('academy_id', aid);
+    List<dynamic> figureJobRows = const <dynamic>[];
+    try {
+      figureJobRows = await _client
+          .from('pb_figure_jobs')
+          .select('id,output_storage_bucket,output_storage_path')
+          .eq('academy_id', aid);
+    } catch (_) {
+      figureJobRows = const <dynamic>[];
+    }
 
     final storageByBucket = <String, Set<String>>{};
     for (final row in (docRows as List<dynamic>)) {
@@ -501,6 +512,28 @@ class ProblemBankService {
         bucket: '${map['output_storage_bucket'] ?? ''}',
         path: '${map['output_storage_path'] ?? ''}',
       );
+    }
+    for (final row in figureJobRows) {
+      final map = _mapFromDynamic(row);
+      _collectStoragePath(
+        target: storageByBucket,
+        bucket: '${map['output_storage_bucket'] ?? ''}',
+        path: '${map['output_storage_path'] ?? ''}',
+      );
+    }
+    for (final row in (questionRows as List<dynamic>)) {
+      final map = _mapFromDynamic(row);
+      final meta = _mapFromDynamic(map['meta']);
+      final figureAssets = meta['figure_assets'];
+      if (figureAssets is! List) continue;
+      for (final item in figureAssets) {
+        final asset = _mapFromDynamic(item);
+        _collectStoragePath(
+          target: storageByBucket,
+          bucket: '${asset['bucket'] ?? ''}',
+          path: '${asset['path'] ?? ''}',
+        );
+      }
     }
 
     var storageObjectCount = 0;
@@ -525,6 +558,11 @@ class ProblemBankService {
     await _client.from('pb_questions').delete().eq('academy_id', aid);
     await _client.from('pb_extract_jobs').delete().eq('academy_id', aid);
     await _client.from('pb_exports').delete().eq('academy_id', aid);
+    try {
+      await _client.from('pb_figure_jobs').delete().eq('academy_id', aid);
+    } catch (_) {
+      // 신규 스키마 미적용 환경에서는 무시한다.
+    }
     await _client.from('pb_documents').delete().eq('academy_id', aid);
 
     return ProblemBankResetResult(
@@ -641,6 +679,143 @@ class ProblemBankService {
     );
   }
 
+  Future<ProblemBankFigureJob> createFigureJob({
+    required String academyId,
+    required String documentId,
+    required String questionId,
+    bool forceRegenerate = false,
+  }) async {
+    if (hasGateway) {
+      try {
+        final json = await _gatewayPost(
+          '/pb/jobs/figure',
+          body: {
+            'academyId': academyId,
+            'documentId': documentId,
+            'questionId': questionId,
+            'createdBy': _client.auth.currentUser?.id,
+            'forceRegenerate': forceRegenerate,
+          },
+        );
+        return ProblemBankFigureJob.fromMap(_mapFromDynamic(json['job']));
+      } catch (_) {
+        // gateway 실패 시 fallback
+      }
+    }
+
+    final row = await _client
+        .from('pb_figure_jobs')
+        .insert({
+          'academy_id': academyId,
+          'document_id': documentId,
+          'question_id': questionId,
+          'created_by': _client.auth.currentUser?.id,
+          'status': 'queued',
+          'provider': 'gemini',
+          'model_name': '',
+          'worker_name': '',
+          'result_summary': <String, dynamic>{},
+          'output_storage_bucket': 'problem-previews',
+          'output_storage_path': '',
+          'error_code': '',
+          'error_message': '',
+        })
+        .select('*')
+        .single();
+    return ProblemBankFigureJob.fromMap(
+      Map<String, dynamic>.from(row as Map<dynamic, dynamic>),
+    );
+  }
+
+  Future<ProblemBankFigureJob?> getFigureJob({
+    required String academyId,
+    required String jobId,
+  }) async {
+    if (hasGateway) {
+      try {
+        final json = await _gatewayGet(
+          '/pb/jobs/figure/$jobId',
+          query: {'academyId': academyId},
+        );
+        return ProblemBankFigureJob.fromMap(_mapFromDynamic(json['job']));
+      } catch (_) {
+        // fallback
+      }
+    }
+    final row = await _client
+        .from('pb_figure_jobs')
+        .select('*')
+        .eq('id', jobId)
+        .eq('academy_id', academyId)
+        .maybeSingle();
+    if (row == null) return null;
+    return ProblemBankFigureJob.fromMap(
+      Map<String, dynamic>.from(row as Map<dynamic, dynamic>),
+    );
+  }
+
+  Future<List<ProblemBankFigureJob>> listFigureJobs({
+    required String academyId,
+    String? documentId,
+    String? questionId,
+    String? status,
+    int limit = 40,
+  }) async {
+    final safeDocId = (documentId ?? '').trim();
+    final safeQuestionId = (questionId ?? '').trim();
+    final safeStatus = (status ?? '').trim();
+    if (hasGateway) {
+      try {
+        final query = <String, String>{
+          'academyId': academyId,
+          'limit': '$limit',
+          if (safeDocId.isNotEmpty) 'documentId': safeDocId,
+          if (safeQuestionId.isNotEmpty) 'questionId': safeQuestionId,
+          if (safeStatus.isNotEmpty) 'status': safeStatus,
+        };
+        final json = await _gatewayGet('/pb/jobs/figure', query: query);
+        final jobs = (json['jobs'] as List<dynamic>? ?? const <dynamic>[])
+            .map((e) => ProblemBankFigureJob.fromMap(_mapFromDynamic(e)))
+            .toList(growable: false);
+        return jobs;
+      } catch (_) {
+        // fallback
+      }
+    }
+
+    var q =
+        _client.from('pb_figure_jobs').select('*').eq('academy_id', academyId);
+    if (safeDocId.isNotEmpty) {
+      q = q.eq('document_id', safeDocId);
+    }
+    if (safeQuestionId.isNotEmpty) {
+      q = q.eq('question_id', safeQuestionId);
+    }
+    if (safeStatus.isNotEmpty) {
+      q = q.eq('status', safeStatus);
+    }
+    final rows = await q.order('created_at', ascending: false).limit(limit);
+    return (rows as List<dynamic>)
+        .map((e) => ProblemBankFigureJob.fromMap(
+              Map<String, dynamic>.from(e as Map<dynamic, dynamic>),
+            ))
+        .toList(growable: false);
+  }
+
+  Future<String> createStorageSignedUrl({
+    required String bucket,
+    required String path,
+    int expiresInSeconds = 3600,
+  }) async {
+    final safeBucket = bucket.trim();
+    final safePath = path.trim();
+    if (safeBucket.isEmpty || safePath.isEmpty) return '';
+    final signed = await _client.storage
+        .from(safeBucket)
+        .createSignedUrl(safePath, expiresInSeconds);
+    return signed.trim();
+  }
+
   Future<List<ProblemBankQuestion>> listQuestions({
     required String academyId,
     required String documentId,
@@ -667,6 +842,7 @@ class ProblemBankService {
     String? stem,
     List<ProblemBankChoice>? choices,
     List<ProblemBankEquation>? equations,
+    Map<String, dynamic>? meta,
   }) async {
     final payload = <String, dynamic>{
       'is_checked': isChecked,
@@ -679,6 +855,7 @@ class ProblemBankService {
         'choices': choices.map((e) => e.toMap()).toList(growable: false),
       if (equations != null)
         'equations': equations.map((e) => e.toMap()).toList(growable: false),
+      if (meta != null) 'meta': meta,
     };
     await _client.from('pb_questions').update(payload).eq('id', questionId);
   }

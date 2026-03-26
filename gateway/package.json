@@ -11,6 +11,8 @@
     "worker:alimtalk:once": "node src/attendance_alimtalk_worker.js --once",
     "worker:pb-extract": "node src/problem_bank_extract_worker.js",
     "worker:pb-extract:once": "node src/problem_bank_extract_worker.js --once",
+    "worker:pb-figure": "node src/problem_bank_figure_worker.js",
+    "worker:pb-figure:once": "node src/problem_bank_figure_worker.js --once",
     "worker:pb-export": "node src/problem_bank_export_worker.js",
     "worker:pb-export:once": "node src/problem_bank_export_worker.js --once",
     "quality:pb": "node src/problem_bank_quality_gate.js",

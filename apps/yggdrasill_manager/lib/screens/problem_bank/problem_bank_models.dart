@@ -98,6 +98,68 @@ class ProblemBankExtractJob {
   }
 }
 
+class ProblemBankFigureJob {
+  const ProblemBankFigureJob({
+    required this.id,
+    required this.academyId,
+    required this.documentId,
+    required this.questionId,
+    required this.status,
+    required this.provider,
+    required this.model,
+    required this.workerName,
+    required this.resultSummary,
+    required this.errorCode,
+    required this.errorMessage,
+    required this.createdAt,
+    required this.updatedAt,
+    this.startedAt,
+    this.finishedAt,
+  });
+
+  final String id;
+  final String academyId;
+  final String documentId;
+  final String questionId;
+  final String status;
+  final String provider;
+  final String model;
+  final String workerName;
+  final Map<String, dynamic> resultSummary;
+  final String errorCode;
+  final String errorMessage;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+  final DateTime? startedAt;
+  final DateTime? finishedAt;
+
+  bool get isTerminal =>
+      status == 'completed' ||
+      status == 'review_required' ||
+      status == 'failed' ||
+      status == 'cancelled';
+
+  factory ProblemBankFigureJob.fromMap(Map<String, dynamic> map) {
+    return ProblemBankFigureJob(
+      id: '${map['id'] ?? ''}',
+      academyId: '${map['academy_id'] ?? ''}',
+      documentId: '${map['document_id'] ?? ''}',
+      questionId: '${map['question_id'] ?? ''}',
+      status: '${map['status'] ?? ''}',
+      provider: '${map['provider'] ?? ''}',
+      model: '${map['model_name'] ?? ''}',
+      workerName: '${map['worker_name'] ?? ''}',
+      resultSummary: _mapOrEmpty(map['result_summary']),
+      errorCode: '${map['error_code'] ?? ''}',
+      errorMessage: '${map['error_message'] ?? ''}',
+      createdAt: _dateTimeOrNull(map['created_at']) ?? DateTime.now(),
+      updatedAt: _dateTimeOrNull(map['updated_at']) ?? DateTime.now(),
+      startedAt: _dateTimeOrNull(map['started_at']),
+      finishedAt: _dateTimeOrNull(map['finished_at']),
+    );
+  }
+}
+
 class ProblemBankChoice {
   const ProblemBankChoice({
     required this.label,
@@ -288,6 +350,7 @@ class ProblemBankQuestion {
     bool? isChecked,
     String? reviewerNotes,
     List<String>? flags,
+    Map<String, dynamic>? meta,
   }) {
     return ProblemBankQuestion(
       id: id,
@@ -307,7 +370,7 @@ class ProblemBankQuestion {
       flags: flags ?? this.flags,
       isChecked: isChecked ?? this.isChecked,
       reviewerNotes: reviewerNotes ?? this.reviewerNotes,
-      meta: meta,
+      meta: meta ?? this.meta,
       createdAt: createdAt,
       updatedAt: updatedAt,
     );
@@ -361,11 +424,11 @@ String _stripPotentialWatermarkText(String value) {
         RegExp(r'^[가-힣]{2,4}[\s\u00A0\u2000-\u200D\u2060]*(?=<\s*보\s*기>)'),
         '',
       )
-      .replaceAll(
+      .replaceAllMapped(
         RegExp(
           r'(^|[\s\u00A0\u2000-\u200D\u2060])[가-힣]{2,4}[\s\u00A0\u2000-\u200D\u2060]*(?=<\s*보\s*기>)',
         ),
-        r'$1',
+        (m) => m.group(1) ?? '',
       )
       .trim();
   final lead = RegExp(r'^([가-힣]{2,4})\s+(.+)$').firstMatch(out);

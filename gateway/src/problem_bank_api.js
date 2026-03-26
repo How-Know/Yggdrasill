@@ -269,6 +269,200 @@ async function retryExtractJob(jobId, body, res) {
   sendJson(res, 200, { ok: true, job: updated });
 }
 
+async function ensureQuestionBelongs(academyId, documentId, questionId) {
+  const { data, error } = await supa
+    .from('pb_questions')
+    .select('id,academy_id,document_id,figure_refs,meta')
+    .eq('id', questionId)
+    .eq('academy_id', academyId)
+    .eq('document_id', documentId)
+    .maybeSingle();
+  if (error) {
+    throw new Error(`question_lookup_failed:${error.message}`);
+  }
+  return data;
+}
+
+async function createFigureJob(body, res) {
+  const academyId = String(body.academyId || '').trim();
+  const documentId = String(body.documentId || '').trim();
+  const questionId = String(body.questionId || '').trim();
+  const createdBy = String(body.createdBy || '').trim();
+  const forceRegenerate = normalizeBool(body.forceRegenerate, false);
+  const provider = String(body.provider || 'gemini').trim() || 'gemini';
+  const modelName = String(body.modelName || '').trim();
+  if (!isUuid(academyId) || !isUuid(documentId) || !isUuid(questionId)) {
+    sendJson(res, 400, {
+      ok: false,
+      error: 'academyId/documentId/questionId must be uuid',
+    });
+    return;
+  }
+  const doc = await ensureDocumentBelongs(academyId, documentId);
+  if (!doc) {
+    sendJson(res, 404, { ok: false, error: 'document_not_found' });
+    return;
+  }
+  const question = await ensureQuestionBelongs(academyId, documentId, questionId);
+  if (!question) {
+    sendJson(res, 404, { ok: false, error: 'question_not_found' });
+    return;
+  }
+  const figureRefs = Array.isArray(question.figure_refs) ? question.figure_refs : [];
+  if (figureRefs.length === 0) {
+    sendJson(res, 409, { ok: false, error: 'question_has_no_figure_refs' });
+    return;
+  }
+
+  if (!forceRegenerate) {
+    const { data: existing } = await supa
+      .from('pb_figure_jobs')
+      .select('*')
+      .eq('academy_id', academyId)
+      .eq('document_id', documentId)
+      .eq('question_id', questionId)
+      .in('status', ['queued', 'rendering'])
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (existing) {
+      sendJson(res, 200, { ok: true, job: existing, reused: true });
+      return;
+    }
+  }
+
+  const { data: job, error: insertErr } = await supa
+    .from('pb_figure_jobs')
+    .insert({
+      academy_id: academyId,
+      document_id: documentId,
+      question_id: questionId,
+      created_by: isUuid(createdBy) ? createdBy : null,
+      status: 'queued',
+      provider,
+      model_name: modelName,
+      options: typeof body.options === 'object' && body.options ? body.options : {},
+      prompt_text: String(body.promptText || '').trim(),
+      worker_name: '',
+      result_summary: {},
+      output_storage_bucket: 'problem-previews',
+      output_storage_path: '',
+      error_code: '',
+      error_message: '',
+      started_at: null,
+      finished_at: null,
+    })
+    .select('*')
+    .maybeSingle();
+  if (insertErr || !job) {
+    sendJson(res, 500, {
+      ok: false,
+      error: `figure_job_insert_failed:${insertErr?.message || 'unknown'}`,
+    });
+    return;
+  }
+  sendJson(res, 201, { ok: true, job });
+}
+
+async function listFigureJobs(url, res) {
+  const academyId = String(url.searchParams.get('academyId') || '').trim();
+  if (!isUuid(academyId)) {
+    sendJson(res, 400, { ok: false, error: 'academyId must be uuid' });
+    return;
+  }
+  const documentId = String(url.searchParams.get('documentId') || '').trim();
+  const questionId = String(url.searchParams.get('questionId') || '').trim();
+  const status = String(url.searchParams.get('status') || '').trim();
+  const limit = normalizeLimit(url.searchParams.get('limit'), 30, 120);
+  let q = supa
+    .from('pb_figure_jobs')
+    .select('*')
+    .eq('academy_id', academyId)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (documentId) q = q.eq('document_id', documentId);
+  if (questionId) q = q.eq('question_id', questionId);
+  if (status) q = q.eq('status', status);
+  const { data, error } = await q;
+  if (error) {
+    sendJson(res, 500, { ok: false, error: `figure_job_list_failed:${error.message}` });
+    return;
+  }
+  sendJson(res, 200, { ok: true, jobs: data || [] });
+}
+
+async function getFigureJob(jobId, url, res) {
+  const academyId = String(url.searchParams.get('academyId') || '').trim();
+  if (!isUuid(jobId) || !isUuid(academyId)) {
+    sendJson(res, 400, { ok: false, error: 'jobId/academyId must be uuid' });
+    return;
+  }
+  const { data, error } = await supa
+    .from('pb_figure_jobs')
+    .select('*')
+    .eq('id', jobId)
+    .eq('academy_id', academyId)
+    .maybeSingle();
+  if (error) {
+    sendJson(res, 500, { ok: false, error: `figure_job_get_failed:${error.message}` });
+    return;
+  }
+  if (!data) {
+    sendJson(res, 404, { ok: false, error: 'figure_job_not_found' });
+    return;
+  }
+  sendJson(res, 200, { ok: true, job: data });
+}
+
+async function retryFigureJob(jobId, body, res) {
+  const academyId = String(body.academyId || '').trim();
+  if (!isUuid(jobId) || !isUuid(academyId)) {
+    sendJson(res, 400, { ok: false, error: 'jobId/academyId must be uuid' });
+    return;
+  }
+  const { data: oldJob, error: oldErr } = await supa
+    .from('pb_figure_jobs')
+    .select('*')
+    .eq('id', jobId)
+    .eq('academy_id', academyId)
+    .maybeSingle();
+  if (oldErr) {
+    sendJson(res, 500, { ok: false, error: `figure_job_lookup_failed:${oldErr.message}` });
+    return;
+  }
+  if (!oldJob) {
+    sendJson(res, 404, { ok: false, error: 'figure_job_not_found' });
+    return;
+  }
+  if (oldJob.status === 'rendering') {
+    sendJson(res, 409, { ok: false, error: 'figure_job_in_progress' });
+    return;
+  }
+  const { data: updated, error: updErr } = await supa
+    .from('pb_figure_jobs')
+    .update({
+      status: 'queued',
+      error_code: '',
+      error_message: '',
+      result_summary: {},
+      output_storage_path: '',
+      started_at: null,
+      finished_at: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', jobId)
+    .select('*')
+    .maybeSingle();
+  if (updErr || !updated) {
+    sendJson(res, 500, {
+      ok: false,
+      error: `figure_job_retry_failed:${updErr?.message || 'unknown'}`,
+    });
+    return;
+  }
+  sendJson(res, 200, { ok: true, job: updated });
+}
+
 async function createExportJob(body, res) {
   const academyId = String(body.academyId || '').trim();
   const documentId = String(body.documentId || '').trim();
@@ -508,6 +702,27 @@ async function handler(req, res) {
     if (method === 'GET' && /^\/pb\/jobs\/extract\/[^/]+$/.test(url.pathname)) {
       const jobId = url.pathname.split('/')[4];
       await getExtractJob(jobId, url, res);
+      return;
+    }
+
+    if (method === 'POST' && url.pathname === '/pb/jobs/figure') {
+      const body = await readJson(req);
+      await createFigureJob(body, res);
+      return;
+    }
+    if (method === 'GET' && url.pathname === '/pb/jobs/figure') {
+      await listFigureJobs(url, res);
+      return;
+    }
+    if (method === 'POST' && /^\/pb\/jobs\/figure\/[^/]+\/retry$/.test(url.pathname)) {
+      const jobId = url.pathname.split('/')[4];
+      const body = await readJson(req);
+      await retryFigureJob(jobId, body, res);
+      return;
+    }
+    if (method === 'GET' && /^\/pb\/jobs\/figure\/[^/]+$/.test(url.pathname)) {
+      const jobId = url.pathname.split('/')[4];
+      await getFigureJob(jobId, url, res);
       return;
     }
 

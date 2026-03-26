@@ -2,6 +2,13 @@
 *.class
 *.log
 
+# Environment secrets
+.env
+.env.*
+**/.env
+**/.env.*
+!**/.env.example
+
 # Office temp files (e.g. Excel opens xlsx and creates "~$*.xlsx")
 ~$*.xlsx
 *.pyc
