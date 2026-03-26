@@ -235,6 +235,12 @@ class ProblemBankQuestion {
     required this.flags,
     required this.isChecked,
     required this.reviewerNotes,
+    required this.allowObjective,
+    required this.allowSubjective,
+    required this.objectiveChoices,
+    required this.objectiveAnswerKey,
+    required this.subjectiveAnswer,
+    required this.objectiveGenerated,
     required this.meta,
     required this.createdAt,
     required this.updatedAt,
@@ -257,6 +263,12 @@ class ProblemBankQuestion {
   final List<String> flags;
   final bool isChecked;
   final String reviewerNotes;
+  final bool allowObjective;
+  final bool allowSubjective;
+  final List<ProblemBankChoice> objectiveChoices;
+  final String objectiveAnswerKey;
+  final String subjectiveAnswer;
+  final bool objectiveGenerated;
   final Map<String, dynamic> meta;
   final DateTime? createdAt;
   final DateTime? updatedAt;
@@ -345,6 +357,12 @@ class ProblemBankQuestion {
     String? questionType,
     String? stem,
     List<ProblemBankChoice>? choices,
+    bool? allowObjective,
+    bool? allowSubjective,
+    List<ProblemBankChoice>? objectiveChoices,
+    String? objectiveAnswerKey,
+    String? subjectiveAnswer,
+    bool? objectiveGenerated,
     List<String>? figureRefs,
     List<ProblemBankEquation>? equations,
     bool? isChecked,
@@ -370,6 +388,12 @@ class ProblemBankQuestion {
       flags: flags ?? this.flags,
       isChecked: isChecked ?? this.isChecked,
       reviewerNotes: reviewerNotes ?? this.reviewerNotes,
+      allowObjective: allowObjective ?? this.allowObjective,
+      allowSubjective: allowSubjective ?? this.allowSubjective,
+      objectiveChoices: objectiveChoices ?? this.objectiveChoices,
+      objectiveAnswerKey: objectiveAnswerKey ?? this.objectiveAnswerKey,
+      subjectiveAnswer: subjectiveAnswer ?? this.subjectiveAnswer,
+      objectiveGenerated: objectiveGenerated ?? this.objectiveGenerated,
       meta: meta ?? this.meta,
       createdAt: createdAt,
       updatedAt: updatedAt,
@@ -377,9 +401,36 @@ class ProblemBankQuestion {
   }
 
   factory ProblemBankQuestion.fromMap(Map<String, dynamic> map) {
+    final meta = _mapOrEmpty(map['meta']);
+    final questionType = '${map['question_type'] ?? ''}';
     final choicesList = _listOrEmpty(map['choices'])
         .map((e) => ProblemBankChoice.fromMap(_mapOrEmpty(e)))
         .toList(growable: false);
+    final objectiveChoicesList = _listOrEmpty(map['objective_choices'])
+        .map((e) => ProblemBankChoice.fromMap(_mapOrEmpty(e)))
+        .toList(growable: false);
+    final effectiveObjectiveChoices =
+        objectiveChoicesList.isNotEmpty ? objectiveChoicesList : choicesList;
+    final objectiveAnswerKey = _normalizeAnswerKey(
+      '${map['objective_answer_key'] ?? meta['objective_answer_key'] ?? meta['answer_key'] ?? ''}',
+    );
+    final subjectiveAnswerRaw = _normalizeAnswerKey(
+      '${map['subjective_answer'] ?? meta['subjective_answer'] ?? ''}',
+    );
+    final shouldMapLegacyObjective =
+        questionType.contains('객관식') || choicesList.length >= 2;
+    final subjectiveAnswer = subjectiveAnswerRaw.isNotEmpty
+        ? (shouldMapLegacyObjective &&
+                _looksLikeObjectiveKeyAnswer(subjectiveAnswerRaw)
+            ? _objectiveAnswerToSubjective(
+                subjectiveAnswerRaw,
+                effectiveObjectiveChoices,
+              )
+            : subjectiveAnswerRaw)
+        : _objectiveAnswerToSubjective(
+            objectiveAnswerKey,
+            effectiveObjectiveChoices,
+          );
     final equationsList = _listOrEmpty(map['equations'])
         .map((e) => ProblemBankEquation.fromMap(_mapOrEmpty(e)))
         .toList(growable: false);
@@ -391,7 +442,7 @@ class ProblemBankQuestion {
       sourcePage: _intOrZero(map['source_page']),
       sourceOrder: _intOrZero(map['source_order']),
       questionNumber: '${map['question_number'] ?? ''}',
-      questionType: '${map['question_type'] ?? ''}',
+      questionType: questionType,
       stem: '${map['stem'] ?? ''}',
       choices: choicesList,
       figureRefs: _listOrEmpty(map['figure_refs'])
@@ -404,7 +455,18 @@ class ProblemBankQuestion {
           _listOrEmpty(map['flags']).map((e) => '$e').toList(growable: false),
       isChecked: map['is_checked'] == true,
       reviewerNotes: '${map['reviewer_notes'] ?? ''}',
-      meta: _mapOrEmpty(map['meta']),
+      allowObjective: map.containsKey('allow_objective')
+          ? map['allow_objective'] != false
+          : meta['allow_objective'] != false,
+      allowSubjective: map.containsKey('allow_subjective')
+          ? map['allow_subjective'] != false
+          : meta['allow_subjective'] != false,
+      objectiveChoices: effectiveObjectiveChoices,
+      objectiveAnswerKey: objectiveAnswerKey,
+      subjectiveAnswer: subjectiveAnswer,
+      objectiveGenerated: map['objective_generated'] == true ||
+          meta['objective_generated'] == true,
+      meta: meta,
       createdAt: _dateTimeOrNull(map['created_at']),
       updatedAt: _dateTimeOrNull(map['updated_at']),
     );
@@ -569,4 +631,83 @@ double _doubleOrZero(dynamic value) {
   if (value is double) return value;
   if (value is num) return value.toDouble();
   return double.tryParse('$value') ?? 0;
+}
+
+String _normalizeAnswerKey(String value) {
+  return value.trim().replaceAll(RegExp(r'\s+'), ' ');
+}
+
+String _objectiveAnswerToSubjective(
+  String answerKey,
+  List<ProblemBankChoice> choices,
+) {
+  final normalized = _normalizeAnswerKey(answerKey);
+  if (normalized.isEmpty) return '';
+  final tokens = normalized
+      .split(RegExp(r'\s*[,/]\s*'))
+      .map((e) => _normalizeAnswerKey(e))
+      .where((e) => e.isNotEmpty)
+      .toList(growable: false);
+  final source = tokens.isNotEmpty ? tokens : <String>[normalized];
+  final out = <String>[];
+  for (final token in source) {
+    final idx = _answerTokenToChoiceIndex(token);
+    if (idx != null && idx >= 0 && idx < choices.length) {
+      final text = _normalizeAnswerKey(choices[idx].text);
+      if (text.isNotEmpty) {
+        out.add(text);
+        continue;
+      }
+    }
+    out.add(_tokenToNumeric(token));
+  }
+  return _normalizeAnswerKey(out.join(', '));
+}
+
+bool _looksLikeObjectiveKeyAnswer(String value) {
+  final normalized = _normalizeAnswerKey(value);
+  if (normalized.isEmpty) return false;
+  return RegExp(
+    r'^(?:[①②③④⑤⑥⑦⑧⑨⑩]|[1-9]|10)(?:\s*[,/]\s*(?:[①②③④⑤⑥⑦⑧⑨⑩]|[1-9]|10))*$',
+  ).hasMatch(normalized);
+}
+
+int? _answerTokenToChoiceIndex(String token) {
+  final raw = _normalizeAnswerKey(token);
+  if (raw.isEmpty) return null;
+  const circled = <String>['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩'];
+  final circledIndex = circled.indexOf(raw);
+  if (circledIndex >= 0) return circledIndex;
+  final normalized = raw.replaceAll(RegExp(r'[()（）.]'), '').trim();
+  final n = int.tryParse(normalized);
+  if (n != null && n >= 1) return n - 1;
+  return null;
+}
+
+String _tokenToNumeric(String token) {
+  return token.replaceAllMapped(RegExp(r'[①②③④⑤⑥⑦⑧⑨⑩]'), (m) {
+    switch (m.group(0)) {
+      case '①':
+        return '1';
+      case '②':
+        return '2';
+      case '③':
+        return '3';
+      case '④':
+        return '4';
+      case '⑤':
+        return '5';
+      case '⑥':
+        return '6';
+      case '⑦':
+        return '7';
+      case '⑧':
+        return '8';
+      case '⑨':
+        return '9';
+      case '⑩':
+        return '10';
+    }
+    return '';
+  });
 }

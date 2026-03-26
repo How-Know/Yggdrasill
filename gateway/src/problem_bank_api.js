@@ -619,6 +619,69 @@ async function retryExportJob(jobId, body, res) {
   sendJson(res, 200, { ok: true, job: updated });
 }
 
+async function cleanupExportArtifact(jobId, body, res) {
+  const academyId = String(body.academyId || '').trim();
+  if (!isUuid(jobId) || !isUuid(academyId)) {
+    sendJson(res, 400, { ok: false, error: 'jobId/academyId must be uuid' });
+    return;
+  }
+  const { data: job, error: lookupErr } = await supa
+    .from('pb_exports')
+    .select('id,output_storage_bucket,output_storage_path,result_summary')
+    .eq('id', jobId)
+    .eq('academy_id', academyId)
+    .maybeSingle();
+  if (lookupErr) {
+    sendJson(res, 500, {
+      ok: false,
+      error: `export_job_lookup_failed:${lookupErr.message}`,
+    });
+    return;
+  }
+  if (!job) {
+    sendJson(res, 404, { ok: false, error: 'export_job_not_found' });
+    return;
+  }
+
+  const bucket = String(job.output_storage_bucket || '').trim();
+  const path = String(job.output_storage_path || '').trim();
+  if (bucket && path) {
+    try {
+      await supa.storage.from(bucket).remove([path]);
+    } catch (_) {
+      // ignore storage remove failures
+    }
+  }
+
+  const nowIso = new Date().toISOString();
+  const { data: updated, error: updErr } = await supa
+    .from('pb_exports')
+    .update({
+      output_storage_bucket: '',
+      output_storage_path: '',
+      output_url: '',
+      updated_at: nowIso,
+      result_summary: {
+        ...(job.result_summary && typeof job.result_summary === 'object'
+          ? job.result_summary
+          : {}),
+        local_saved_at: nowIso,
+      },
+    })
+    .eq('id', jobId)
+    .eq('academy_id', academyId)
+    .select('*')
+    .maybeSingle();
+  if (updErr || !updated) {
+    sendJson(res, 500, {
+      ok: false,
+      error: `export_cleanup_failed:${updErr?.message || 'unknown'}`,
+    });
+    return;
+  }
+  sendJson(res, 200, { ok: true, job: updated });
+}
+
 async function documentSummary(url, res) {
   const academyId = String(url.searchParams.get('academyId') || '').trim();
   const documentId = String(url.searchParams.get('documentId') || '').trim();
@@ -739,6 +802,12 @@ async function handler(req, res) {
       const jobId = url.pathname.split('/')[4];
       const body = await readJson(req);
       await retryExportJob(jobId, body, res);
+      return;
+    }
+    if (method === 'POST' && /^\/pb\/jobs\/export\/[^/]+\/cleanup$/.test(url.pathname)) {
+      const jobId = url.pathname.split('/')[4];
+      const body = await readJson(req);
+      await cleanupExportArtifact(jobId, body, res);
       return;
     }
     if (method === 'GET' && /^\/pb\/jobs\/export\/[^/]+$/.test(url.pathname)) {

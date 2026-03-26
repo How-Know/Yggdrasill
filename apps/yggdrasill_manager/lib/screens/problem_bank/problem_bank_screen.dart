@@ -1,9 +1,13 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:screenshot/screenshot.dart';
+import 'package:syncfusion_flutter_pdf/pdf.dart';
 
 import '../../services/problem_bank_service.dart';
 import '../../widgets/latex_text_renderer.dart';
@@ -24,6 +28,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
   static const Color _text = Color(0xFFEAF2F2);
   static const Color _textSub = Color(0xFF9FB3B3);
   static const Color _accent = Color(0xFF33A373);
+  static const String _previewKoreanFontFamily = 'HCRBatang';
   static const double _previewMathScale = 1.10;
   // 분수는 명령(\dfrac) 승격으로 키우고, 식 전체 스케일은 일반 수식과 동일하게 유지한다.
   static const double _previewFractionMathScale = _previewMathScale;
@@ -34,6 +39,17 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
     '모의고사형',
   ];
   static const List<String> _paperOptions = <String>['A4', 'B4', '8절'];
+  static const List<String> _questionModeOptions = <String>[
+    '원본',
+    '객관식',
+    '주관식',
+  ];
+  static const List<String> _layoutColumnOptions = <String>['1단', '2단'];
+  static const Map<String, List<int>> _maxQuestionsPerPageOptionsByLayout =
+      <String, List<int>>{
+    '1단': <int>[1, 2, 3, 4],
+    '2단': <int>[1, 2, 4, 6, 8],
+  };
 
   final ProblemBankService _service = ProblemBankService();
 
@@ -42,6 +58,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
   bool _isUploading = false;
   bool _isExtracting = false;
   bool _isExporting = false;
+  bool _isSavingExportLocally = false;
   bool _isResetting = false;
   bool _hasExtracted = false;
   bool _hasExported = false;
@@ -53,6 +70,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
   String? _academyId;
   String _selectedTemplate = _templateOptions.first;
   String _selectedPaper = _paperOptions.first;
+  String _selectedQuestionMode = _questionModeOptions.first;
+  String _selectedLayoutColumns = _layoutColumnOptions.first;
+  String _selectedMaxQuestionsPerPage = '4';
   bool _includeAnswerSheet = true;
   bool _includeExplanation = false;
 
@@ -68,7 +88,18 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
       <String, Map<String, String>>{};
   final Set<String> _figureGenerating = <String>{};
   final Map<String, String> _scoreDrafts = <String, String>{};
-  final Set<String> _scoreSaving = <String>{};
+  final TextEditingController _sourceYearCtrl = TextEditingController();
+  final TextEditingController _sourceSchoolCtrl = TextEditingController();
+  final TextEditingController _sourceGradeCtrl = TextEditingController();
+  final Set<String> _dirtyQuestionIds = <String>{};
+  bool _isSavingQuestionChanges = false;
+  bool _isDeletingCurrentQuestions = false;
+  bool _dirtyDocumentMeta = false;
+  bool _sourcePrivateMaterial = false;
+  bool _sourceSchoolPastExam = false;
+  bool _sourceMockPastExam = false;
+  String _sourceSemester = '1학기';
+  String _sourceExamTerm = '';
   bool _isFigurePolling = false;
   String? _lastExtractStatus;
   String? _lastExportStatus;
@@ -94,6 +125,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
     final extractStatus = _activeExtractJob?.status ?? '';
     final exportStatus = _activeExportJob?.status ?? '';
     return _isResetting ||
+        _isSavingExportLocally ||
         extractStatus == 'queued' ||
         extractStatus == 'extracting' ||
         exportStatus == 'queued' ||
@@ -104,6 +136,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
 
   double get _progressValue {
     if (_isResetting) return 0.04;
+    if (_isSavingExportLocally) return 0.97;
     if (_isUploading) return 0.08;
     final extractStatus = _activeExtractJob?.status ?? '';
     final exportStatus = _activeExportJob?.status ?? '';
@@ -125,6 +158,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
     final extractStatus = _activeExtractJob?.status ?? '';
     final exportStatus = _activeExportJob?.status ?? '';
     if (_isResetting) return '이전 작업 초기화 중...';
+    if (_isSavingExportLocally) return 'PDF 로컬 저장 중...';
     if (_isUploading) return '업로드 중 (1/4)';
     if (extractStatus == 'queued') {
       final elapsed = _extractQueuedElapsed;
@@ -154,6 +188,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
   @override
   void dispose() {
     _pollTimer?.cancel();
+    _sourceYearCtrl.dispose();
+    _sourceSchoolCtrl.dispose();
+    _sourceGradeCtrl.dispose();
     super.dispose();
   }
 
@@ -167,6 +204,57 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
       default:
         return 'naesin';
     }
+  }
+
+  String _questionModeToValue(String label) {
+    switch (label.trim()) {
+      case '객관식':
+        return 'objective';
+      case '주관식':
+        return 'subjective';
+      case '원본':
+      default:
+        return 'original';
+    }
+  }
+
+  int _layoutColumnsToCount(String label) => label.trim() == '2단' ? 2 : 1;
+
+  List<int> _maxQuestionsPerPageOptionsOf(String layoutLabel) {
+    final options = _maxQuestionsPerPageOptionsByLayout[layoutLabel];
+    if (options != null && options.isNotEmpty) return options;
+    return _maxQuestionsPerPageOptionsByLayout['1단']!;
+  }
+
+  int get _selectedLayoutColumnCount =>
+      _layoutColumnsToCount(_selectedLayoutColumns);
+
+  int get _selectedMaxQuestionsPerPageCount {
+    final options = _maxQuestionsPerPageOptionsOf(_selectedLayoutColumns);
+    final parsed = int.tryParse(_selectedMaxQuestionsPerPage);
+    if (parsed != null && options.contains(parsed)) return parsed;
+    return options.last;
+  }
+
+  void _setSelectedLayoutColumns(String value) {
+    final options = _maxQuestionsPerPageOptionsOf(value);
+    final parsedCurrent = int.tryParse(_selectedMaxQuestionsPerPage);
+    final fallback = options.last.toString();
+    setState(() {
+      _selectedLayoutColumns = value;
+      _selectedMaxQuestionsPerPage = options.contains(parsedCurrent)
+          ? parsedCurrent!.toString()
+          : fallback;
+    });
+  }
+
+  void _setSelectedMaxQuestionsPerPage(String value) {
+    final options = _maxQuestionsPerPageOptionsOf(_selectedLayoutColumns);
+    final parsed = int.tryParse(value);
+    if (parsed == null || !options.contains(parsed)) return;
+    setState(() {
+      _selectedMaxQuestionsPerPage = parsed.toString();
+    });
   }
 
   void _showSnack(String message, {bool error = false}) {
@@ -205,6 +293,55 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
       if (_pipelineLogs.length > 120) {
         _pipelineLogs.removeRange(120, _pipelineLogs.length);
       }
+    });
+  }
+
+  void _applySourceMetaFromDocument(ProblemBankDocument? doc) {
+    final meta = doc?.meta ?? const <String, dynamic>{};
+    final sourceRaw = meta['source_classification'];
+    final source = sourceRaw is Map
+        ? sourceRaw.map((k, dynamic v) => MapEntry('$k', v))
+        : const <String, dynamic>{};
+    final naesinRaw = source['naesin'];
+    final naesin = naesinRaw is Map
+        ? naesinRaw.map((k, dynamic v) => MapEntry('$k', v))
+        : const <String, dynamic>{};
+
+    _sourcePrivateMaterial = source['private_material'] == true;
+    _sourceSchoolPastExam = source['school_past_exam'] == true;
+    _sourceMockPastExam = source['mock_past_exam'] == true;
+
+    _sourceYearCtrl.text = '${naesin['year'] ?? ''}'.trim();
+    _sourceSchoolCtrl.text = '${naesin['school_name'] ?? ''}'.trim();
+    _sourceGradeCtrl.text = '${naesin['grade'] ?? ''}'.trim();
+
+    final semester = '${naesin['semester'] ?? ''}'.trim();
+    _sourceSemester = semester == '2학기' || semester == '1학기' ? semester : '1학기';
+    final examTerm = '${naesin['exam_term'] ?? ''}'.trim();
+    _sourceExamTerm = examTerm == '중간' || examTerm == '기말' ? examTerm : '';
+    _dirtyDocumentMeta = false;
+  }
+
+  Map<String, dynamic> _buildSourceClassificationMeta() {
+    return <String, dynamic>{
+      'private_material': _sourcePrivateMaterial,
+      'school_past_exam': _sourceSchoolPastExam,
+      'mock_past_exam': _sourceMockPastExam,
+      'naesin': <String, dynamic>{
+        'year': _sourceYearCtrl.text.trim(),
+        'school_name': _sourceSchoolCtrl.text.trim(),
+        'grade': _sourceGradeCtrl.text.trim(),
+        'semester': _sourceSemester,
+        'exam_term': _sourceExamTerm,
+      },
+    };
+  }
+
+  void _markDocumentMetaDirty() {
+    if (!mounted) return;
+    if (_dirtyDocumentMeta) return;
+    setState(() {
+      _dirtyDocumentMeta = true;
     });
   }
 
@@ -275,6 +412,156 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
     if (approved) return '승인됨';
     if (status.isNotEmpty) return '검수 필요 ($status)';
     return '검수 필요';
+  }
+
+  double _normalizeFigureScale(double value) {
+    if (!value.isFinite) return 1.0;
+    return value.clamp(0.7, 1.8).toDouble();
+  }
+
+  Map<String, double> _figureRenderScaleMapOf(ProblemBankQuestion q) {
+    final raw = q.meta['figure_render_scales'];
+    if (raw is! Map) return const <String, double>{};
+    final out = <String, double>{};
+    raw.forEach((key, value) {
+      final safeKey = '$key'.trim();
+      if (safeKey.isEmpty) return;
+      final parsed =
+          value is num ? value.toDouble() : double.tryParse('$value');
+      if (parsed == null || !parsed.isFinite) return;
+      out[safeKey] = _normalizeFigureScale(parsed);
+    });
+    return out;
+  }
+
+  String _figureScaleKeyForAsset(Map<String, dynamic>? asset, int order) {
+    final index = int.tryParse('${asset?['figure_index'] ?? ''}');
+    if (index != null && index > 0) return 'idx:$index';
+    final path = '${asset?['path'] ?? ''}'.trim();
+    if (path.isNotEmpty) return 'path:$path';
+    return 'ord:$order';
+  }
+
+  String _figureScaleKeyLabel(String key, int fallbackOrder) {
+    if (key.startsWith('idx:')) {
+      final n = int.tryParse(key.substring(4));
+      if (n != null && n > 0) return '그림 $n';
+    }
+    if (key.startsWith('ord:')) {
+      final n = int.tryParse(key.substring(4));
+      if (n != null && n > 0) return '그림 $n';
+    }
+    return '그림 $fallbackOrder';
+  }
+
+  double _figureRenderScaleOf(ProblemBankQuestion q) {
+    final raw = q.meta['figure_render_scale'];
+    final parsed = raw is num ? raw.toDouble() : double.tryParse('$raw');
+    if (parsed != null && parsed.isFinite) {
+      return _normalizeFigureScale(parsed);
+    }
+    final map = _figureRenderScaleMapOf(q);
+    if (map.isEmpty) return 1.0;
+    final avg = map.values.fold<double>(0.0, (sum, v) => sum + v) / map.length;
+    return _normalizeFigureScale(avg);
+  }
+
+  double _figureRenderScaleForAsset(
+    ProblemBankQuestion q, {
+    Map<String, dynamic>? asset,
+    int order = 1,
+  }) {
+    final scaleMap = _figureRenderScaleMapOf(q);
+    if (scaleMap.isEmpty) return _figureRenderScaleOf(q);
+    final key = _figureScaleKeyForAsset(asset, order);
+    final direct = scaleMap[key];
+    if (direct != null) return direct;
+    final index = int.tryParse('${asset?['figure_index'] ?? ''}');
+    if (index != null) {
+      final byIndex = scaleMap['idx:$index'];
+      if (byIndex != null) return byIndex;
+    }
+    final path = '${asset?['path'] ?? ''}'.trim();
+    if (path.isNotEmpty) {
+      final byPath = scaleMap['path:$path'];
+      if (byPath != null) return byPath;
+    }
+    return _figureRenderScaleOf(q);
+  }
+
+  String _figureRenderScaleLabel(ProblemBankQuestion q) {
+    final pct = (_figureRenderScaleOf(q) * 100).round();
+    return '$pct%';
+  }
+
+  void _setFigureRenderScales(
+    ProblemBankQuestion q,
+    Map<String, double> scales, {
+    double? globalScale,
+  }) {
+    final cleanedMap = <String, dynamic>{};
+    for (final e in scales.entries) {
+      final key = e.key.trim();
+      if (key.isEmpty) continue;
+      final normalized = _normalizeFigureScale(e.value);
+      if ((normalized - 1.0).abs() < 0.01) continue;
+      cleanedMap[key] = (normalized * 100).roundToDouble() / 100.0;
+    }
+    final avg = scales.isEmpty
+        ? (globalScale ?? 1.0)
+        : (scales.values.fold<double>(0.0, (sum, v) => sum + v) /
+            scales.length);
+    final normalizedGlobal = _normalizeFigureScale(globalScale ?? avg);
+    final updatedMeta = Map<String, dynamic>.from(q.meta);
+    if (cleanedMap.isEmpty) {
+      updatedMeta.remove('figure_render_scales');
+    } else {
+      updatedMeta['figure_render_scales'] = cleanedMap;
+    }
+    if ((normalizedGlobal - 1.0).abs() < 0.01) {
+      updatedMeta.remove('figure_render_scale');
+    } else {
+      updatedMeta['figure_render_scale'] =
+          (normalizedGlobal * 100).roundToDouble() / 100.0;
+    }
+    if (!mounted) return;
+    setState(() {
+      _questions = _questions
+          .map((item) =>
+              item.id == q.id ? item.copyWith(meta: updatedMeta) : item)
+          .toList(growable: false);
+      _dirtyQuestionIds.add(q.id);
+    });
+    final pct = (normalizedGlobal * 100).round();
+    _showSnack(
+      '${q.questionNumber}번 그림 크기를 저장했습니다. (기본 배율 $pct%) 상단 `서버 저장` 버튼으로 반영하세요.',
+    );
+  }
+
+  String _figurePromptHintForGeneration(ProblemBankQuestion q) {
+    final equations = q.equations
+        .map((e) =>
+            _normalizePreviewLine((e.latex.isNotEmpty ? e.latex : e.raw)))
+        .where((e) => e.isNotEmpty)
+        .take(5)
+        .toList(growable: false);
+    final scaleMap = _figureRenderScaleMapOf(q);
+    final scaleMapHint = scaleMap.entries.toList(growable: false)
+      ..sort((a, b) => a.key.compareTo(b.key));
+    final scaleHintText = scaleMapHint.asMap().entries.map((entry) {
+      final key = entry.value.key;
+      final label = _figureScaleKeyLabel(key, entry.key + 1);
+      final pct = (entry.value.value * 100).round();
+      return '$label $pct%';
+    }).join(', ');
+    return [
+      '추가 생성 제약:',
+      '- 도형 내부 수식/숫자/문자 라벨의 시각 크기를 문제 본문 수식 크기와 동일하게 맞출 것.',
+      '- 분수/근호/지수 등 2차원 수식도 본문 수식과 동일한 굵기와 비율을 유지할 것.',
+      '- 수식 라벨 배율 힌트: ${_figureRenderScaleLabel(q)}',
+      if (scaleHintText.isNotEmpty) '- 그림별 라벨 배율: $scaleHintText',
+      if (equations.isNotEmpty) '- 본문 수식 예시: ${equations.join(' | ')}',
+    ].join('\n');
   }
 
   Future<void> _prefetchFigurePreviewUrls(
@@ -367,6 +654,11 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
         documentId: doc.id,
         questionId: q.id,
         forceRegenerate: true,
+        promptText: _figurePromptHintForGeneration(q),
+        options: <String, dynamic>{
+          'figureRenderScale': _figureRenderScaleOf(q),
+          'figureRenderScales': _figureRenderScaleMapOf(q),
+        },
       );
       for (var i = 0; i < 60; i += 1) {
         if (job.isTerminal) break;
@@ -442,27 +734,19 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
       'figure_assets': updatedAssets,
       'figure_review_required': updatedAssets.any((e) => e['approved'] != true),
     };
-    try {
-      await _service.updateQuestionReview(
-        questionId: q.id,
-        isChecked: q.isChecked,
-        meta: updatedMeta,
-      );
-      if (!mounted) return;
-      setState(() {
-        _questions = _questions
-            .map((item) =>
-                item.id == q.id ? item.copyWith(meta: updatedMeta) : item)
-            .toList(growable: false);
-      });
-      _showSnack(
-        approved
-            ? '${q.questionNumber}번 AI 그림을 승인했습니다.'
-            : '${q.questionNumber}번 AI 그림 승인을 해제했습니다.',
-      );
-    } catch (e) {
-      _showSnack('AI 그림 승인 상태 저장 실패: $e', error: true);
-    }
+    if (!mounted) return;
+    setState(() {
+      _questions = _questions
+          .map((item) =>
+              item.id == q.id ? item.copyWith(meta: updatedMeta) : item)
+          .toList(growable: false);
+      _dirtyQuestionIds.add(q.id);
+    });
+    _showSnack(
+      approved
+          ? '${q.questionNumber}번 AI 그림 승인 상태를 수정했습니다. `서버 저장` 버튼으로 반영하세요.'
+          : '${q.questionNumber}번 AI 그림 승인 해제 상태를 수정했습니다. `서버 저장` 버튼으로 반영하세요.',
+    );
   }
 
   Future<void> _bootstrap() async {
@@ -549,7 +833,13 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
   }
 
   Future<void> _resetPipelineData() async {
-    if (_isResetting || _isUploading || _isExtracting || _isExporting) return;
+    if (_isResetting ||
+        _isUploading ||
+        _isExtracting ||
+        _isExporting ||
+        _isSavingExportLocally) {
+      return;
+    }
     final academyId = _academyId;
     if (academyId == null || academyId.isEmpty) {
       _showSnack('academy_id를 찾을 수 없습니다.', error: true);
@@ -611,12 +901,13 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
         _activeExtractJob = null;
         _activeExportJob = null;
         _questions = <ProblemBankQuestion>[];
+        _dirtyQuestionIds.clear();
+        _applySourceMetaFromDocument(null);
         _figurePreviewUrls.clear();
         _figurePreviewPaths.clear();
         _figurePreviewUrlsByPath.clear();
         _figureGenerating.clear();
         _scoreDrafts.clear();
-        _scoreSaving.clear();
         _isFigurePolling = false;
         _hasExtracted = false;
         _hasExported = false;
@@ -678,12 +969,13 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
         _activeExtractJob = summary.latestExtractJob;
         _activeExportJob = summary.latestExportJob;
         _questions = questions;
+        _dirtyQuestionIds.clear();
+        _applySourceMetaFromDocument(summary.document);
         _figurePreviewUrls.clear();
         _figurePreviewPaths.clear();
         _figurePreviewUrlsByPath.clear();
         _figureGenerating.clear();
         _scoreDrafts.clear();
-        _scoreSaving.clear();
         _isFigurePolling = false;
         _hasExtracted = questions.isNotEmpty;
         _isExtracting =
@@ -733,7 +1025,13 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
   }
 
   Future<void> _pickAndUploadHwpx() async {
-    if (_isResetting || _isUploading || _isExtracting || _isExporting) return;
+    if (_isResetting ||
+        _isUploading ||
+        _isExtracting ||
+        _isExporting ||
+        _isSavingExportLocally) {
+      return;
+    }
     if (_schemaMissing) {
       _showSnack(
         'DB 마이그레이션이 먼저 필요합니다: 20260324193000_problem_bank_pipeline.sql',
@@ -802,12 +1100,13 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
         _activeExtractJob = extractJob;
         _activeExportJob = null;
         _questions = <ProblemBankQuestion>[];
+        _dirtyQuestionIds.clear();
+        _applySourceMetaFromDocument(uploaded);
         _figurePreviewUrls.clear();
         _figurePreviewPaths.clear();
         _figurePreviewUrlsByPath.clear();
         _figureGenerating.clear();
         _scoreDrafts.clear();
-        _scoreSaving.clear();
         _isFigurePolling = false;
         _isUploading = false;
         _isExtracting = true;
@@ -828,7 +1127,13 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
   }
 
   Future<void> _openPasteImportDialog() async {
-    if (_isResetting || _isUploading || _isExtracting || _isExporting) return;
+    if (_isResetting ||
+        _isUploading ||
+        _isExtracting ||
+        _isExporting ||
+        _isSavingExportLocally) {
+      return;
+    }
     if (_schemaMissing) {
       _showSnack(
         'DB 마이그레이션이 먼저 필요합니다: 20260324193000_problem_bank_pipeline.sql',
@@ -1015,12 +1320,13 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
         _activeDocument = imported.document;
         _activeExtractJob = imported.extractJob;
         _activeExportJob = null;
+        _dirtyQuestionIds.clear();
+        _applySourceMetaFromDocument(imported.document);
         _figurePreviewUrls.clear();
         _figurePreviewPaths.clear();
         _figurePreviewUrlsByPath.clear();
         _figureGenerating.clear();
         _scoreDrafts.clear();
-        _scoreSaving.clear();
         _isFigurePolling = false;
         _isUploading = false;
         _isExtracting = false;
@@ -1048,6 +1354,474 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
       return File(p).readAsBytes();
     } catch (_) {
       return null;
+    }
+  }
+
+  String _safePdfFileName(String raw) {
+    final cleaned = raw
+        .trim()
+        .replaceAll(RegExp(r'[<>:"/\\|?*]+'), '_')
+        .replaceAll(RegExp(r'\s+'), ' ');
+    if (cleaned.isEmpty) return 'problem_bank_export.pdf';
+    final withExt =
+        cleaned.toLowerCase().endsWith('.pdf') ? cleaned : '$cleaned.pdf';
+    return withExt;
+  }
+
+  String _defaultLocalPdfFileNameForSelection() {
+    final source = (_activeDocument?.sourceFilename ?? 'problem_bank').trim();
+    final base = source.replaceAll(RegExp(r'\.[^.]+$'), '');
+    final baseName = base.isEmpty ? 'problem_bank' : base;
+    final now = DateTime.now();
+    final stamp =
+        '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}_${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}';
+    return _safePdfFileName('${baseName}_${_selectedPaper}_$stamp.pdf');
+  }
+
+  String _normalizeSavePathWithPdfExtension(String rawPath) {
+    final trimmed = rawPath.trim();
+    if (trimmed.toLowerCase().endsWith('.pdf')) return trimmed;
+    return '$trimmed.pdf';
+  }
+
+  Size _paperPointSize(String paperLabel) {
+    switch (paperLabel.trim()) {
+      case 'B4':
+        return const Size(729, 1032);
+      case '8절':
+        return const Size(774, 1118);
+      case 'A4':
+      default:
+        return const Size(595, 842);
+    }
+  }
+
+  Future<Uint8List> _capturePageWidgetAsPng(
+    Widget pageWidget, {
+    required Size pageSize,
+  }) async {
+    final capture = ScreenshotController();
+    final wrapped = Material(
+      color: Colors.white,
+      child: SizedBox(
+        width: pageSize.width,
+        height: pageSize.height,
+        child: pageWidget,
+      ),
+    );
+    Object? lastError;
+    for (final ratio in const <double>[7.0, 6.0, 5.0, 4.0]) {
+      try {
+        final png = await capture.captureFromWidget(
+          InheritedTheme.captureAll(context, wrapped),
+          delay: const Duration(milliseconds: 70),
+          context: context,
+          pixelRatio: ratio,
+        );
+        if (png.isNotEmpty) {
+          return png;
+        }
+      } catch (e) {
+        lastError = e;
+      }
+    }
+    if (lastError != null) {
+      throw Exception('페이지 캡처 실패: $lastError');
+    }
+    throw Exception('페이지 캡처 결과가 비어 있습니다.');
+  }
+
+  Widget _buildLocalQuestionPdfPageWidget({
+    required _QuestionLayoutPreviewPage page,
+    required String questionMode,
+    required Size pageSize,
+  }) {
+    final columns = _selectedLayoutColumnCount;
+    final rowCount = page.rowCount > 0 ? page.rowCount : 1;
+    final leftSlots = page.leftColumnSlots;
+    final rightSlots = page.rightColumnSlots;
+    return Container(
+      width: pageSize.width,
+      height: pageSize.height,
+      color: Colors.white,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          const exactGap = 0.0;
+          final resolvedSlotHeight = rowCount > 0
+              ? ((constraints.maxHeight - exactGap * (rowCount - 1)) / rowCount)
+              : constraints.maxHeight;
+          final safeSlotHeight =
+              resolvedSlotHeight.isFinite && resolvedSlotHeight > 0
+                  ? resolvedSlotHeight
+                  : constraints.maxHeight / rowCount;
+          if (columns == 1) {
+            return Column(
+              children: _buildQuestionSlotColumnWidgets(
+                leftSlots,
+                rowCount: rowCount,
+                questionMode: questionMode,
+                baseSlotHeight: safeSlotHeight,
+                slotGap: exactGap,
+              ),
+            );
+          }
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  children: _buildQuestionSlotColumnWidgets(
+                    leftSlots,
+                    rowCount: rowCount,
+                    questionMode: questionMode,
+                    baseSlotHeight: safeSlotHeight,
+                    slotGap: exactGap,
+                  ),
+                ),
+              ),
+              Expanded(
+                child: Column(
+                  children: _buildQuestionSlotColumnWidgets(
+                    rightSlots,
+                    rowCount: rowCount,
+                    questionMode: questionMode,
+                    baseSlotHeight: safeSlotHeight,
+                    slotGap: exactGap,
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  List<Widget> _buildQuestionSlotColumnWidgets(
+    List<_QuestionLayoutSlot> slots, {
+    required int rowCount,
+    required String questionMode,
+    required double baseSlotHeight,
+    required double slotGap,
+  }) {
+    final children = <Widget>[];
+    var row = 0;
+    while (row < rowCount) {
+      final slot =
+          row < slots.length ? slots[row] : const _QuestionLayoutSlot.empty();
+      if (slot.hidden) {
+        row += 1;
+        continue;
+      }
+      final maxSpan = rowCount - row;
+      final useSpan =
+          slot.question == null ? 1 : slot.span.clamp(1, maxSpan).toInt();
+      final slotHeight = baseSlotHeight * useSpan + slotGap * (useSpan - 1);
+      children.add(
+        SizedBox(
+          height: slotHeight,
+          child: _buildQuestionSlotPreview(
+            slot.question,
+            questionMode: questionMode,
+            slotHeight: slotHeight,
+          ),
+        ),
+      );
+      row += useSpan;
+      if (row < rowCount && slotGap > 0) {
+        children.add(SizedBox(height: slotGap));
+      }
+    }
+    return children;
+  }
+
+  Widget _buildLocalAnswerPdfPageWidget({
+    required List<ProblemBankQuestion> questions,
+    required String questionMode,
+    required int pageIndex,
+    required Size pageSize,
+  }) {
+    return Container(
+      width: pageSize.width,
+      height: pageSize.height,
+      color: Colors.white,
+      padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text(
+                '정답지 · $_selectedPaper',
+                style: const TextStyle(
+                  color: Color(0xFF1A1A1A),
+                  fontSize: 13.2,
+                  fontWeight: FontWeight.w700,
+                  fontFamily: _previewKoreanFontFamily,
+                ),
+              ),
+              const Spacer(),
+              Text(
+                'p.$pageIndex',
+                style: const TextStyle(
+                  color: Color(0xFF585858),
+                  fontSize: 11.5,
+                  fontFamily: _previewKoreanFontFamily,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Expanded(
+            child: Wrap(
+              spacing: 12,
+              runSpacing: 9,
+              children: questions.map((q) {
+                return SizedBox(
+                  width: 220,
+                  child: _buildLocalAnswerEntry(q, questionMode: questionMode),
+                );
+              }).toList(growable: false),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLocalAnswerEntry(
+    ProblemBankQuestion q, {
+    required String questionMode,
+  }) {
+    final answer = _previewAnswerForMode(q, questionMode);
+    final normalized = answer.trim();
+    final showDash = normalized.isEmpty;
+    final isObjectiveLike = _isObjectiveAnswerPreview(q, normalized);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '${q.questionNumber}.',
+            style: const TextStyle(
+              color: Color(0xFF2D2D2D),
+              fontSize: 11.4,
+              fontFamily: _previewKoreanFontFamily,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(width: 4),
+          Expanded(
+            child: showDash
+                ? const Text(
+                    '-',
+                    style: TextStyle(
+                      color: Color(0xFF2D2D2D),
+                      fontSize: 11.4,
+                      fontFamily: _previewKoreanFontFamily,
+                    ),
+                  )
+                : isObjectiveLike
+                    ? LatexTextRenderer(
+                        _toPreviewMathMarkup(
+                          normalized,
+                          forceMathTokenWrap: true,
+                        ),
+                        softWrap: true,
+                        enableDisplayMath: true,
+                        inlineMathScale: _previewMathScale,
+                        fractionInlineMathScale: _previewFractionMathScale,
+                        displayMathScale: _previewMathScale,
+                        style: const TextStyle(
+                          color: Color(0xFF2D2D2D),
+                          fontSize: 11.4,
+                          height: 1.34,
+                          fontFamily: _previewKoreanFontFamily,
+                        ),
+                      )
+                    : _buildStemTextPreviewLine(
+                        normalized,
+                        fontSize: 11.4,
+                        normalHeight: 1.34,
+                      ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLocalExplanationPdfPageWidget({
+    required List<ProblemBankQuestion> questions,
+    required int pageIndex,
+    required Size pageSize,
+  }) {
+    return Container(
+      width: pageSize.width,
+      height: pageSize.height,
+      color: Colors.white,
+      padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text(
+                '해설/검수 메모 · $_selectedPaper',
+                style: const TextStyle(
+                  color: Color(0xFF1A1A1A),
+                  fontSize: 13.2,
+                  fontWeight: FontWeight.w700,
+                  fontFamily: _previewKoreanFontFamily,
+                ),
+              ),
+              const Spacer(),
+              Text(
+                'p.$pageIndex',
+                style: const TextStyle(
+                  color: Color(0xFF585858),
+                  fontSize: 11.5,
+                  fontFamily: _previewKoreanFontFamily,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Expanded(
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (var i = 0; i < questions.length; i += 1) ...[
+                    Text(
+                      '${questions[i].questionNumber}. ${questions[i].reviewerNotes.trim().isEmpty ? '해설/메모 없음' : _ellipsizePreviewText(questions[i].reviewerNotes, max: 220)}',
+                      style: const TextStyle(
+                        color: Color(0xFF2D2D2D),
+                        fontSize: 11.4,
+                        height: 1.34,
+                        fontFamily: _previewKoreanFontFamily,
+                      ),
+                    ),
+                    if (i < questions.length - 1) const SizedBox(height: 6),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Uint8List _buildPdfBytesFromPageImages(
+    List<Uint8List> pageImages, {
+    required Size pageSize,
+  }) {
+    final document = PdfDocument();
+    document.pageSettings.size = pageSize;
+    for (final bytes in pageImages) {
+      final page = document.pages.add();
+      final client = page.getClientSize();
+      page.graphics.drawImage(
+        PdfBitmap(bytes),
+        Rect.fromLTWH(0, 0, client.width, client.height),
+      );
+    }
+    final saved = document.saveSync();
+    document.dispose();
+    return Uint8List.fromList(saved);
+  }
+
+  String _defaultLocalPdfFileName(ProblemBankExportJob job) {
+    final source = (_activeDocument?.sourceFilename ?? 'problem_bank').trim();
+    final base = source.replaceAll(RegExp(r'\.[^.]+$'), '');
+    final baseName = base.isEmpty ? 'problem_bank' : base;
+    final now = DateTime.now();
+    final stamp =
+        '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}_${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}';
+    return _safePdfFileName(
+      '${baseName}_${job.paperSize}_$stamp.pdf',
+    );
+  }
+
+  Future<Uint8List> _downloadPdfBytesFromUrl(String url) async {
+    final uri = Uri.tryParse(url.trim());
+    if (uri == null) {
+      throw Exception('유효한 PDF 다운로드 URL이 없습니다.');
+    }
+    final client = HttpClient();
+    try {
+      final req = await client.getUrl(uri);
+      final res = await req.close();
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        throw Exception('PDF 다운로드 실패(${res.statusCode})');
+      }
+      final builder = BytesBuilder(copy: false);
+      await for (final chunk in res) {
+        builder.add(chunk);
+      }
+      final out = builder.takeBytes();
+      if (out.isEmpty) {
+        throw Exception('다운로드한 PDF 데이터가 비어 있습니다.');
+      }
+      return out;
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  Future<void> _saveCompletedExportToLocal(ProblemBankExportJob job) async {
+    final academyId = _academyId;
+    if (_isSavingExportLocally) return;
+    if (academyId == null || academyId.isEmpty) return;
+    if (!mounted) return;
+
+    setState(() {
+      _isSavingExportLocally = true;
+    });
+    try {
+      final savePath = await FilePicker.platform.saveFile(
+        dialogTitle: 'PDF 저장 위치 선택',
+        fileName: _defaultLocalPdfFileName(job),
+        type: FileType.custom,
+        allowedExtensions: const ['pdf'],
+      );
+      if (savePath == null || savePath.trim().isEmpty) {
+        _showSnack('로컬 저장이 취소되었습니다. 서버 파일은 정리합니다.');
+      } else {
+        final rawUrl = job.outputUrl.trim();
+        if (rawUrl.isEmpty) {
+          throw Exception('서명된 PDF URL이 없어 로컬 저장을 진행할 수 없습니다.');
+        }
+        final bytes = await _downloadPdfBytesFromUrl(rawUrl);
+        var normalizedPath = savePath.trim();
+        if (!normalizedPath.toLowerCase().endsWith('.pdf')) {
+          normalizedPath = '$normalizedPath.pdf';
+        }
+        final outFile = File(normalizedPath);
+        await outFile.parent.create(recursive: true);
+        await outFile.writeAsBytes(bytes, flush: true);
+        _appendPipelineLog('export', '로컬 저장 완료: $normalizedPath');
+        _showSnack('PDF를 로컬에 저장했습니다.');
+      }
+    } catch (e) {
+      _appendPipelineLog('export', '로컬 저장 실패: $e', error: true);
+      _showSnack('로컬 저장 실패: $e', error: true);
+    } finally {
+      try {
+        await _service.clearExportStorageArtifact(
+          academyId: academyId,
+          jobId: job.id,
+        );
+        _appendPipelineLog('export', '서버 PDF 파일을 정리했습니다.');
+      } catch (e) {
+        _appendPipelineLog('export', '서버 PDF 정리 실패: $e', error: true);
+      }
+      if (mounted) {
+        setState(() {
+          _isSavingExportLocally = false;
+        });
+      }
     }
   }
 
@@ -1195,11 +1969,17 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
         if (latest.isTerminal) {
           if (latest.status == 'completed') {
             _hasExported = true;
-            _showSnack(
-              latest.outputUrl.trim().isNotEmpty
-                  ? 'PDF 생성 완료: ${latest.outputUrl}'
-                  : 'PDF 생성이 완료되었습니다.',
+            _showSnack('PDF 생성이 완료되었습니다. 저장 위치를 선택해주세요.');
+            await _saveCompletedExportToLocal(latest);
+            final refreshed = await _service.getExportJob(
+              academyId: academyId,
+              jobId: latest.id,
             );
+            if (mounted && refreshed != null) {
+              setState(() {
+                _activeExportJob = refreshed;
+              });
+            }
           } else if (latest.status == 'failed') {
             _showSnack(
               'PDF 생성 실패: ${latest.errorMessage.isEmpty ? latest.errorCode : latest.errorMessage}',
@@ -1207,7 +1987,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
             );
           }
           nextStatusText ??= latest.status == 'completed'
-              ? 'PDF 생성 완료'
+              ? 'PDF 생성 완료 · 로컬 저장 처리됨'
               : 'PDF 생성 작업이 종료되었습니다.';
         }
       }
@@ -1273,9 +2053,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
       if (!mounted) return;
       setState(() {
         _questions = questions;
+        _dirtyQuestionIds.clear();
         final ids = questions.map((q) => q.id).toSet();
         _scoreDrafts.removeWhere((id, _) => !ids.contains(id));
-        _scoreSaving.removeWhere((id) => !ids.contains(id));
         _hasExtracted = questions.isNotEmpty;
         _isExtracting = false;
       });
@@ -1288,42 +2068,204 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
     }
   }
 
-  Future<void> _setAllChecked(bool checked) async {
-    final academyId = _academyId;
+  Future<void> _saveQuestionsToServer() async {
+    if (_isSavingQuestionChanges || _isDeletingCurrentQuestions) return;
+    if (_dirtyQuestionIds.isEmpty && !_dirtyDocumentMeta) {
+      _showSnack('저장할 변경사항이 없습니다.');
+      return;
+    }
+    if (_dirtyDocumentMeta &&
+        _sourceSchoolPastExam &&
+        _sourceExamTerm.isEmpty) {
+      _showSnack('내신 기출은 중간/기말 중 하나를 선택해주세요.', error: true);
+      return;
+    }
+    final dirtyIds = _dirtyQuestionIds.toList(growable: false);
     final doc = _activeDocument;
-    if (academyId == null || doc == null || _questions.isEmpty) return;
+    if (!mounted) return;
+    setState(() {
+      _isSavingQuestionChanges = true;
+    });
     try {
-      await _service.bulkSetChecked(
-        academyId: academyId,
-        documentId: doc.id,
-        isChecked: checked,
-      );
+      for (final id in dirtyIds) {
+        final match = _questions.where((q) => q.id == id);
+        if (match.isEmpty) continue;
+        final q = match.first;
+        final mergedMeta = Map<String, dynamic>.from(q.meta);
+        final parsedScore = _parseScoreDraft(_scoreDraftFor(q));
+        if (parsedScore == null) {
+          mergedMeta.remove('score_point');
+        } else {
+          final rounded = parsedScore.roundToDouble();
+          mergedMeta['score_point'] =
+              rounded == parsedScore ? rounded.toInt() : parsedScore;
+        }
+        await _service.updateQuestionReview(
+          questionId: q.id,
+          isChecked: q.isChecked,
+          reviewerNotes: q.reviewerNotes,
+          questionType: q.questionType,
+          stem: q.stem,
+          choices: q.choices,
+          allowObjective: q.allowObjective,
+          allowSubjective: q.allowSubjective,
+          objectiveChoices: q.objectiveChoices,
+          objectiveAnswerKey: q.objectiveAnswerKey,
+          subjectiveAnswer: q.subjectiveAnswer,
+          objectiveGenerated: q.objectiveGenerated,
+          equations: q.equations,
+          meta: mergedMeta,
+        );
+      }
+      if (_dirtyDocumentMeta && doc != null) {
+        final mergedDocMeta = <String, dynamic>{
+          ...doc.meta,
+          'source_classification': _buildSourceClassificationMeta(),
+        };
+        await _service.updateDocumentMeta(
+          documentId: doc.id,
+          meta: mergedDocMeta,
+        );
+      }
       if (!mounted) return;
       setState(() {
-        _questions = _questions
-            .map((q) => q.copyWith(isChecked: checked))
-            .toList(growable: false);
+        _dirtyQuestionIds.clear();
+        _dirtyDocumentMeta = false;
+        _scoreDrafts.clear();
       });
+      _showSnack('문항 변경사항을 서버에 저장했습니다.');
+      await _reloadQuestions();
     } catch (e) {
-      _showSnack('일괄 체크 업데이트 실패: $e', error: true);
+      _showSnack('서버 저장 실패: $e', error: true);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSavingQuestionChanges = false;
+        });
+      }
     }
   }
 
-  Future<void> _toggleChecked(ProblemBankQuestion q, bool value) async {
+  Future<void> _deleteCurrentDocumentQuestions() async {
+    if (_isDeletingCurrentQuestions || _isSavingQuestionChanges) return;
+    final academyId = _academyId;
+    final doc = _activeDocument;
+    if (academyId == null || academyId.isEmpty || doc == null) {
+      _showSnack('선택된 문서가 없습니다.', error: true);
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            backgroundColor: _panel,
+            title: const Text('이번 문항 삭제', style: TextStyle(color: _text)),
+            content: Text(
+              '${doc.sourceFilename} 문서의 추출 문항을 모두 삭제합니다.\n'
+              '이 작업은 되돌릴 수 없습니다.',
+              style: const TextStyle(color: _textSub, fontSize: 13),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: const Text('취소'),
+              ),
+              FilledButton(
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFFDE6A73),
+                ),
+                onPressed: () => Navigator.of(context).pop(true),
+                child: const Text('삭제'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+    if (!confirmed) return;
+    if (!mounted) return;
+    setState(() {
+      _isDeletingCurrentQuestions = true;
+    });
     try {
-      await _service.updateQuestionReview(
-        questionId: q.id,
-        isChecked: value,
+      await _service.deleteQuestionsForDocument(
+        academyId: academyId,
+        documentId: doc.id,
       );
       if (!mounted) return;
       setState(() {
-        _questions = _questions
-            .map((e) => e.id == q.id ? e.copyWith(isChecked: value) : e)
-            .toList(growable: false);
+        _questions = <ProblemBankQuestion>[];
+        _dirtyQuestionIds.clear();
+        _scoreDrafts.clear();
+        _hasExtracted = false;
       });
+      _showSnack('이번 문항을 모두 삭제했습니다.');
+      await _loadDocumentContext(doc.id);
     } catch (e) {
-      _showSnack('문항 체크 업데이트 실패: $e', error: true);
+      _showSnack('문항 삭제 실패: $e', error: true);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isDeletingCurrentQuestions = false;
+        });
+      }
     }
+  }
+
+  Future<void> _setAllChecked(bool checked) async {
+    if (_questions.isEmpty) return;
+    if (!mounted) return;
+    setState(() {
+      _questions = _questions
+          .map((q) => q.copyWith(isChecked: checked))
+          .toList(growable: false);
+      _dirtyQuestionIds.addAll(_questions.map((q) => q.id));
+    });
+  }
+
+  Future<void> _toggleChecked(ProblemBankQuestion q, bool value) async {
+    if (!mounted) return;
+    setState(() {
+      _questions = _questions
+          .map((e) => e.id == q.id ? e.copyWith(isChecked: value) : e)
+          .toList(growable: false);
+      _dirtyQuestionIds.add(q.id);
+    });
+  }
+
+  bool _allowEssayOf(ProblemBankQuestion q) => q.meta['allow_essay'] == true;
+
+  void _toggleCardMode(
+    ProblemBankQuestion q, {
+    bool? allowObjective,
+    bool? allowSubjective,
+    bool? allowEssay,
+  }) {
+    final nextObjective = allowObjective ?? q.allowObjective;
+    final nextSubjective = allowSubjective ?? q.allowSubjective;
+    final nextEssay = allowEssay ?? _allowEssayOf(q);
+    if (!nextObjective && !nextSubjective) {
+      _showSnack('객관식/주관식 중 하나 이상은 선택되어야 합니다.', error: true);
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      _questions = _questions
+          .map(
+            (e) => e.id == q.id
+                ? e.copyWith(
+                    allowObjective: nextObjective,
+                    allowSubjective: nextSubjective,
+                    meta: <String, dynamic>{
+                      ...e.meta,
+                      'allow_objective': nextObjective,
+                      'allow_subjective': nextSubjective,
+                      'allow_essay': nextEssay,
+                    },
+                  )
+                : e,
+          )
+          .toList(growable: false);
+      _dirtyQuestionIds.add(q.id);
+    });
   }
 
   bool _isLowConfidence(ProblemBankQuestion q) {
@@ -1348,6 +2290,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
     String selectedType =
         question.questionType.isEmpty ? '미분류' : question.questionType;
     bool checked = question.isChecked;
+    bool allowObjective = question.allowObjective;
+    bool allowSubjective = question.allowSubjective;
+    bool allowEssay = _allowEssayOf(question);
     final result = await showDialog<bool>(
       context: context,
       builder: (context) {
@@ -1413,6 +2358,108 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
                         },
                       ),
                     ),
+                  ),
+                  const SizedBox(height: 10),
+                  const Text(
+                    '출제 허용 형식',
+                    style: TextStyle(color: _textSub, fontSize: 12),
+                  ),
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: StatefulBuilder(
+                          builder: (context, setInnerState) {
+                            return CheckboxListTile(
+                              value: allowObjective,
+                              dense: true,
+                              activeColor: _accent,
+                              contentPadding: EdgeInsets.zero,
+                              title: const Text(
+                                '객관식 출제 허용',
+                                style: TextStyle(color: _textSub, fontSize: 12),
+                              ),
+                              controlAffinity: ListTileControlAffinity.leading,
+                              onChanged: (v) {
+                                final next = v ?? false;
+                                if (!next && !allowSubjective) {
+                                  _showSnack(
+                                    '객관식/주관식 중 하나 이상은 허용해야 합니다.',
+                                    error: true,
+                                  );
+                                  return;
+                                }
+                                setInnerState(() {
+                                  allowObjective = next;
+                                });
+                              },
+                            );
+                          },
+                        ),
+                      ),
+                      Expanded(
+                        child: StatefulBuilder(
+                          builder: (context, setInnerState) {
+                            return CheckboxListTile(
+                              value: allowSubjective,
+                              dense: true,
+                              activeColor: _accent,
+                              contentPadding: EdgeInsets.zero,
+                              title: const Text(
+                                '주관식 출제 허용',
+                                style: TextStyle(color: _textSub, fontSize: 12),
+                              ),
+                              controlAffinity: ListTileControlAffinity.leading,
+                              onChanged: (v) {
+                                final next = v ?? false;
+                                if (!next && !allowObjective) {
+                                  _showSnack(
+                                    '객관식/주관식 중 하나 이상은 허용해야 합니다.',
+                                    error: true,
+                                  );
+                                  return;
+                                }
+                                setInnerState(() {
+                                  allowSubjective = next;
+                                });
+                              },
+                            );
+                          },
+                        ),
+                      ),
+                      Expanded(
+                        child: StatefulBuilder(
+                          builder: (context, setInnerState) {
+                            return CheckboxListTile(
+                              value: allowEssay,
+                              dense: true,
+                              activeColor: _accent,
+                              contentPadding: EdgeInsets.zero,
+                              title: const Text(
+                                '서술형 출제 허용',
+                                style: TextStyle(color: _textSub, fontSize: 12),
+                              ),
+                              controlAffinity: ListTileControlAffinity.leading,
+                              onChanged: (v) {
+                                final next = v ?? false;
+                                if (!next &&
+                                    !allowObjective &&
+                                    !allowSubjective) {
+                                  _showSnack(
+                                    '객관식/주관식 중 하나 이상은 허용해야 합니다.',
+                                    error: true,
+                                  );
+                                  return;
+                                }
+                                setInnerState(() {
+                                  allowEssay = next;
+                                });
+                              },
+                            );
+                          },
+                        ),
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 10),
                   const Text(
@@ -1565,6 +2612,13 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
               style: FilledButton.styleFrom(backgroundColor: _accent),
               onPressed: () async {
                 try {
+                  if (!allowObjective && !allowSubjective) {
+                    _showSnack(
+                      '객관식/주관식 중 하나 이상은 허용해야 합니다.',
+                      error: true,
+                    );
+                    return;
+                  }
                   final updatedEquations =
                       question.equations.asMap().entries.map((entry) {
                     final idx = entry.key;
@@ -1580,14 +2634,6 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
                       confidence: eq.confidence,
                     );
                   }).toList(growable: false);
-                  await _service.updateQuestionReview(
-                    questionId: question.id,
-                    isChecked: checked,
-                    reviewerNotes: noteCtrl.text.trim(),
-                    questionType: selectedType,
-                    stem: stemCtrl.text.trim(),
-                    equations: updatedEquations,
-                  );
                   if (!mounted) return;
                   setState(() {
                     _questions = _questions
@@ -1598,15 +2644,24 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
                                   reviewerNotes: noteCtrl.text.trim(),
                                   questionType: selectedType,
                                   stem: stemCtrl.text.trim(),
+                                  allowObjective: allowObjective,
+                                  allowSubjective: allowSubjective,
+                                  meta: <String, dynamic>{
+                                    ...q.meta,
+                                    'allow_objective': allowObjective,
+                                    'allow_subjective': allowSubjective,
+                                    'allow_essay': allowEssay,
+                                  },
                                   equations: updatedEquations,
                                 )
                               : q,
                         )
                         .toList(growable: false);
+                    _dirtyQuestionIds.add(question.id);
                   });
                   if (context.mounted) Navigator.of(context).pop(true);
                 } catch (e) {
-                  _showSnack('검수 저장 실패: $e', error: true);
+                  _showSnack('검수 편집 실패: $e', error: true);
                 }
               },
               child: const Text('저장'),
@@ -1616,70 +2671,750 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
       },
     );
     if (result == true) {
-      await _reloadQuestions();
-      _showSnack('검수 내용이 저장되었습니다.');
+      _showSnack('검수 수정사항을 반영했습니다. 상단 `서버 저장` 버튼으로 저장하세요.');
     }
   }
 
   Future<void> _createExportJob() async {
-    if (_isResetting || _isExporting) return;
-    final academyId = _academyId;
-    final doc = _activeDocument;
-    if (academyId == null || doc == null) {
-      _showSnack('선택된 문서가 없습니다.', error: true);
+    if (_isResetting || _isExporting || _isSavingExportLocally) return;
+    final selectedQuestions = _resolveSelectedQuestionsForExport();
+    if (selectedQuestions == null || selectedQuestions.isEmpty) return;
+    final savePathRaw = await FilePicker.platform.saveFile(
+      dialogTitle: 'PDF 저장 위치 선택',
+      fileName: _defaultLocalPdfFileNameForSelection(),
+      type: FileType.custom,
+      allowedExtensions: const ['pdf'],
+    );
+    if (savePathRaw == null || savePathRaw.trim().isEmpty) {
+      _showSnack('PDF 저장이 취소되었습니다.');
       return;
     }
-    final selectedIds = _questions
-        .where((q) => q.isChecked)
-        .map((q) => q.id)
-        .toList(growable: false);
-    if (selectedIds.isEmpty) {
-      _showSnack('선택된 문항이 없습니다. 문항을 1개 이상 선택해주세요.');
-      return;
-    }
+    final savePath = _normalizeSavePathWithPdfExtension(savePathRaw);
+    final questionMode = _questionModeToValue(_selectedQuestionMode);
+    final layoutColumns = _selectedLayoutColumnCount;
+    final maxQuestionsPerPage = _selectedMaxQuestionsPerPageCount;
+    final pageSize = _paperPointSize(_selectedPaper);
+    if (!mounted) return;
     setState(() {
       _isExporting = true;
       _hasExported = false;
-      _statusText = 'PDF 생성 작업을 등록 중입니다...';
+      _activeExportJob = null;
+      _statusText = 'PDF 로컬 생성 중...';
     });
     _appendPipelineLog(
       'export',
-      'PDF 생성 요청 준비: template=$_selectedTemplate, paper=$_selectedPaper, selected=${selectedIds.length}',
+      '로컬 PDF 생성 시작: template=$_selectedTemplate, paper=$_selectedPaper, mode=$_selectedQuestionMode, columns=$layoutColumns, maxPerPage=$maxQuestionsPerPage, selected=${selectedQuestions.length}',
     );
     try {
-      final job = await _service.createExportJob(
-        academyId: academyId,
-        documentId: doc.id,
-        templateProfile: _templateToProfile(_selectedTemplate),
-        paperSize: _selectedPaper,
-        includeAnswerSheet: _includeAnswerSheet,
-        includeExplanation: _includeExplanation,
-        selectedQuestionIds: selectedIds,
-        options: <String, dynamic>{
-          'templateLabel': _selectedTemplate,
-          'paper': _selectedPaper,
-          'quality': <String, dynamic>{
-            'atomicQuestionLayout': true,
-            'choiceNoWrap': true,
-            'figurePreserve': true,
-          },
-        },
+      final layoutPages = _buildQuestionLayoutPreviewPages(
+        selectedQuestions,
+        questionMode: questionMode,
+        pageSize: pageSize,
       );
-      if (!mounted) return;
-      setState(() {
-        _activeExportJob = job;
-        _statusText = 'PDF 생성 작업이 큐에 등록되었습니다.';
-      });
-      _appendPipelineLog('export', 'PDF 잡 생성: ${job.id} (${job.status})');
-      _ensurePolling();
-    } catch (e) {
-      _appendPipelineLog('export', 'PDF 요청 실패: $e', error: true);
+      final imagePages = <Uint8List>[];
+      var pageIndex = 1;
+      for (final page in layoutPages) {
+        imagePages.add(
+          await _capturePageWidgetAsPng(
+            _buildLocalQuestionPdfPageWidget(
+              page: page,
+              questionMode: questionMode,
+              pageSize: pageSize,
+            ),
+            pageSize: pageSize,
+          ),
+        );
+        pageIndex += 1;
+      }
+      if (_includeAnswerSheet) {
+        imagePages.add(
+          await _capturePageWidgetAsPng(
+            _buildLocalAnswerPdfPageWidget(
+              questions: selectedQuestions,
+              questionMode: questionMode,
+              pageIndex: pageIndex,
+              pageSize: pageSize,
+            ),
+            pageSize: pageSize,
+          ),
+        );
+        pageIndex += 1;
+      }
+      if (_includeExplanation) {
+        imagePages.add(
+          await _capturePageWidgetAsPng(
+            _buildLocalExplanationPdfPageWidget(
+              questions: selectedQuestions,
+              pageIndex: pageIndex,
+              pageSize: pageSize,
+            ),
+            pageSize: pageSize,
+          ),
+        );
+      }
+
+      final pdfBytes = _buildPdfBytesFromPageImages(
+        imagePages,
+        pageSize: pageSize,
+      );
+      final outFile = File(savePath);
+      await outFile.parent.create(recursive: true);
+      await outFile.writeAsBytes(pdfBytes, flush: true);
       if (!mounted) return;
       setState(() {
         _isExporting = false;
+        _hasExported = true;
+        _statusText = 'PDF 로컬 저장 완료';
       });
-      _showSnack('PDF 생성 요청 실패: $e', error: true);
+      _appendPipelineLog(
+        'export',
+        '로컬 PDF 저장 완료: $savePath (${imagePages.length}p)',
+      );
+      _showSnack('PDF 저장 완료: $savePath');
+    } catch (e) {
+      _appendPipelineLog('export', '로컬 PDF 생성 실패: $e', error: true);
+      if (!mounted) return;
+      setState(() {
+        _isExporting = false;
+        _statusText = 'PDF 로컬 생성 실패';
+      });
+      _showSnack('PDF 생성 실패: $e', error: true);
     }
+  }
+
+  List<ProblemBankQuestion>? _resolveSelectedQuestionsForExport({
+    bool showErrorSnack = true,
+  }) {
+    final selectedQuestions =
+        _questions.where((q) => q.isChecked).toList(growable: false);
+    if (selectedQuestions.isEmpty) {
+      if (showErrorSnack) {
+        _showSnack('선택된 문항이 없습니다. 문항을 1개 이상 선택해주세요.');
+      }
+      return null;
+    }
+    final questionMode = _questionModeToValue(_selectedQuestionMode);
+    if (questionMode == 'objective') {
+      final blocked = selectedQuestions
+          .where(
+            (q) =>
+                !q.allowObjective ||
+                (q.objectiveChoices.isEmpty && q.choices.isEmpty),
+          )
+          .map((q) => q.questionNumber)
+          .toList(growable: false);
+      if (blocked.isNotEmpty) {
+        if (showErrorSnack) {
+          final preview = blocked.take(8).join(', ');
+          final suffix = blocked.length > 8 ? ' 외 ${blocked.length - 8}문항' : '';
+          _showSnack(
+            '객관식 출제 불가 문항이 있어 진행할 수 없습니다: $preview$suffix',
+            error: true,
+          );
+        }
+        return null;
+      }
+    } else if (questionMode == 'subjective') {
+      final blocked = selectedQuestions
+          .where((q) => !q.allowSubjective)
+          .map((q) => q.questionNumber)
+          .toList(growable: false);
+      if (blocked.isNotEmpty) {
+        if (showErrorSnack) {
+          final preview = blocked.take(8).join(', ');
+          final suffix = blocked.length > 8 ? ' 외 ${blocked.length - 8}문항' : '';
+          _showSnack(
+            '주관식 출제 불가 문항이 있어 진행할 수 없습니다: $preview$suffix',
+            error: true,
+          );
+        }
+        return null;
+      }
+    }
+    return selectedQuestions;
+  }
+
+  List<_QuestionLayoutPreviewPage> _buildQuestionLayoutPreviewPages(
+    List<ProblemBankQuestion> selectedQuestions, {
+    required String questionMode,
+    required Size pageSize,
+  }) {
+    final pages = <_QuestionLayoutPreviewPage>[];
+    if (selectedQuestions.isEmpty) return pages;
+    final maxPerPage = _selectedMaxQuestionsPerPageCount.clamp(1, 8);
+    final columns = _selectedLayoutColumnCount;
+    final leftSlotCount = columns == 1 ? maxPerPage : (maxPerPage / 2).ceil();
+    final rightSlotCount = columns == 1 ? 0 : (maxPerPage - leftSlotCount);
+    final rowCount =
+        columns == 1 ? leftSlotCount : math.max(leftSlotCount, rightSlotCount);
+    var cursor = 0;
+    while (cursor < selectedQuestions.length) {
+      final leftSlots = List<_QuestionLayoutSlot>.generate(
+        leftSlotCount,
+        (_) => const _QuestionLayoutSlot.empty(),
+        growable: false,
+      );
+      final rightSlots = List<_QuestionLayoutSlot>.generate(
+        rightSlotCount,
+        (_) => const _QuestionLayoutSlot.empty(),
+        growable: false,
+      );
+      var leftCursor = 0;
+      var rightCursor = 0;
+      var placedAny = false;
+
+      while (cursor < selectedQuestions.length) {
+        final original = selectedQuestions[cursor];
+        final previewQuestion = _questionForLayoutPreviewMode(
+          original,
+          questionMode,
+        );
+        final desiredSpan = _estimateSlotSpanForQuestion(
+          previewQuestion,
+          rowCount: rowCount,
+          pageHeight: pageSize.height,
+        );
+        var placed = false;
+
+        if (leftCursor < leftSlotCount) {
+          final leftRemain = leftSlotCount - leftCursor;
+          if (desiredSpan <= leftRemain || leftCursor == 0) {
+            final useSpan =
+                desiredSpan <= leftRemain ? desiredSpan : leftRemain;
+            _placeQuestionIntoSlots(leftSlots, leftCursor, original, useSpan);
+            leftCursor += useSpan;
+            placed = true;
+          } else {
+            // 같은 컬럼에서 잘림 방지를 위해 다음 컬럼으로 넘김
+            leftCursor = leftSlotCount;
+          }
+        }
+
+        if (!placed && rightSlotCount > 0 && rightCursor < rightSlotCount) {
+          final rightRemain = rightSlotCount - rightCursor;
+          if (desiredSpan <= rightRemain || rightCursor == 0) {
+            final useSpan =
+                desiredSpan <= rightRemain ? desiredSpan : rightRemain;
+            _placeQuestionIntoSlots(rightSlots, rightCursor, original, useSpan);
+            rightCursor += useSpan;
+            placed = true;
+          } else {
+            rightCursor = rightSlotCount;
+          }
+        }
+
+        if (!placed) {
+          break;
+        }
+
+        placedAny = true;
+        cursor += 1;
+        final pageFilled = leftCursor >= leftSlotCount &&
+            (rightSlotCount == 0 || rightCursor >= rightSlotCount);
+        if (pageFilled) {
+          break;
+        }
+      }
+
+      if (!placedAny) {
+        _placeQuestionIntoSlots(
+          leftSlots,
+          0,
+          selectedQuestions[cursor],
+          leftSlotCount > 0 ? 1 : 0,
+        );
+        cursor += 1;
+      }
+
+      pages.add(
+        _QuestionLayoutPreviewPage(
+          leftColumnSlots: leftSlots,
+          rightColumnSlots: rightSlots,
+          rowCount: rowCount,
+          leftSlotCount: leftSlotCount,
+          rightSlotCount: rightSlotCount,
+        ),
+      );
+    }
+    return pages;
+  }
+
+  int _estimateSlotSpanForQuestion(
+    ProblemBankQuestion previewQuestion, {
+    required int rowCount,
+    required double pageHeight,
+  }) {
+    if (rowCount <= 1 || pageHeight <= 0) return 1;
+    final baseHeight = _previewDialogHeight(
+      previewQuestion,
+      const Size(1400, 2200),
+    );
+    final figureAssets = _orderedFigureAssetsOf(previewQuestion);
+    final figureCount =
+        math.max(figureAssets.length, previewQuestion.figureRefs.length);
+    final hasFigure = figureCount > 0;
+    final hasViewBlock =
+        _viewBlockPreviewLines(previewQuestion, max: 18).isNotEmpty;
+    final extraFigureHeight = figureCount > 1 ? (figureCount - 1) * 110.0 : 0.0;
+    final extraChoiceHeight =
+        _previewChoicesOf(previewQuestion).isNotEmpty ? 24.0 : 0.0;
+    final naturalHeight = (baseHeight +
+            (hasFigure ? 150.0 : 0.0) +
+            (hasViewBlock ? 48.0 : 34.0) +
+            extraFigureHeight +
+            extraChoiceHeight) *
+        1.15;
+    final slotHeight = pageHeight / rowCount;
+    final span = ((naturalHeight + 24.0) / slotHeight).ceil();
+    if (span < 1) return 1;
+    if (span > rowCount) return rowCount;
+    return span;
+  }
+
+  void _placeQuestionIntoSlots(
+    List<_QuestionLayoutSlot> slots,
+    int startIndex,
+    ProblemBankQuestion question,
+    int span,
+  ) {
+    if (slots.isEmpty || span <= 0) return;
+    final safeStart = startIndex.clamp(0, slots.length - 1).toInt();
+    final maxSpan = math.max(1, math.min(span, slots.length - safeStart));
+    slots[safeStart] = _QuestionLayoutSlot(
+      question: question,
+      span: maxSpan,
+      hidden: false,
+    );
+    for (var i = 1; i < maxSpan; i += 1) {
+      slots[safeStart + i] = const _QuestionLayoutSlot.hidden();
+    }
+  }
+
+  bool _looksObjectiveInOriginalMode(ProblemBankQuestion q) {
+    return q.choices.length >= 2 || q.questionType.contains('객관식');
+  }
+
+  String _previewAnswerForMode(ProblemBankQuestion q, String questionMode) {
+    if (questionMode == 'objective') return _objectiveAnswerForPreview(q);
+    if (questionMode == 'subjective') return _subjectiveAnswerForPreview(q);
+    return _looksObjectiveInOriginalMode(q)
+        ? _objectiveAnswerForPreview(q)
+        : _subjectiveAnswerForPreview(q);
+  }
+
+  ProblemBankQuestion _questionForLayoutPreviewMode(
+    ProblemBankQuestion q,
+    String questionMode,
+  ) {
+    if (questionMode == 'objective') {
+      final choices = _previewChoicesOf(q);
+      return q.copyWith(
+        questionType: '객관식',
+        choices: choices,
+        objectiveChoices: choices,
+      );
+    }
+    if (questionMode == 'subjective') {
+      return q.copyWith(
+        questionType: '주관식',
+        choices: const <ProblemBankChoice>[],
+        objectiveChoices: const <ProblemBankChoice>[],
+      );
+    }
+    if (_looksObjectiveInOriginalMode(q)) {
+      final choices = q.choices.isNotEmpty ? q.choices : _previewChoicesOf(q);
+      return q.copyWith(
+        questionType: '객관식',
+        choices: choices,
+        objectiveChoices: choices,
+      );
+    }
+    return q.copyWith(
+      questionType: '주관식',
+      choices: const <ProblemBankChoice>[],
+      objectiveChoices: const <ProblemBankChoice>[],
+    );
+  }
+
+  double _questionSlotHeightForLayoutPreview({
+    required int columns,
+    required int rows,
+  }) {
+    if (columns == 2) {
+      if (rows <= 1) return 240;
+      if (rows == 2) return 210;
+      if (rows == 3) return 168;
+      return 132;
+    }
+    if (rows <= 1) return 260;
+    if (rows == 2) return 210;
+    if (rows == 3) return 166;
+    return 128;
+  }
+
+  String _ellipsizePreviewText(String raw, {int max = 94}) {
+    final text = _normalizePreviewLine(raw);
+    if (text.length <= max) return text;
+    return '${text.substring(0, max)}...';
+  }
+
+  Future<void> _openExportLayoutPreviewDialog() async {
+    final selectedQuestions = _resolveSelectedQuestionsForExport();
+    if (selectedQuestions == null || selectedQuestions.isEmpty) return;
+    final questionMode = _questionModeToValue(_selectedQuestionMode);
+    final pages = _buildQuestionLayoutPreviewPages(
+      selectedQuestions,
+      questionMode: questionMode,
+      pageSize: _paperPointSize(_selectedPaper),
+    );
+    if (!mounted) return;
+    final size = MediaQuery.sizeOf(context);
+    final maxWidth = (size.width - 48).clamp(980.0, 1480.0).toDouble();
+    final maxHeight = (size.height - 44).clamp(640.0, 1000.0).toDouble();
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) {
+        return Dialog(
+          backgroundColor: _panel,
+          insetPadding:
+              const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: maxWidth,
+              maxHeight: maxHeight,
+              minWidth: 780,
+              minHeight: 560,
+            ),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Text(
+                        '레이아웃 미리보기',
+                        style: TextStyle(
+                          color: _text,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const Spacer(),
+                      IconButton(
+                        tooltip: '닫기',
+                        onPressed: () => Navigator.of(ctx).pop(),
+                        icon: const Icon(Icons.close, color: _textSub),
+                      ),
+                    ],
+                  ),
+                  Text(
+                    '양식=$_selectedTemplate · 용지=$_selectedPaper · 출제형식=$_selectedQuestionMode · 단=$_selectedLayoutColumnCount · 최대 $_selectedMaxQuestionsPerPageCount문항/페이지 · 선택 ${selectedQuestions.length}문항',
+                    style: const TextStyle(color: _textSub, fontSize: 11.8),
+                  ),
+                  const SizedBox(height: 10),
+                  Expanded(
+                    child: ListView(
+                      children: [
+                        for (var i = 0; i < pages.length; i += 1) ...[
+                          _buildQuestionLayoutPreviewPage(
+                            pageIndex: i + 1,
+                            page: pages[i],
+                            questionMode: questionMode,
+                          ),
+                          const SizedBox(height: 12),
+                        ],
+                        if (_includeAnswerSheet) ...[
+                          _buildAnswerSheetLayoutPreview(
+                            questions: selectedQuestions,
+                            questionMode: questionMode,
+                            pageIndex: pages.length + 1,
+                          ),
+                          const SizedBox(height: 12),
+                        ],
+                        if (_includeExplanation)
+                          _buildExplanationLayoutPreview(
+                            questions: selectedQuestions,
+                            pageIndex:
+                                pages.length + (_includeAnswerSheet ? 2 : 1),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildQuestionLayoutPreviewPage({
+    required int pageIndex,
+    required _QuestionLayoutPreviewPage page,
+    required String questionMode,
+  }) {
+    final columns = _selectedLayoutColumnCount;
+    final rowCount = page.rowCount > 0 ? page.rowCount : 1;
+    const slotGap = 8.0;
+    final slotHeight = _questionSlotHeightForLayoutPreview(
+      columns: columns,
+      rows: rowCount,
+    );
+    final panelHeight =
+        rowCount * slotHeight + ((rowCount > 0 ? rowCount - 1 : 0) * slotGap);
+    final leftSlots = page.leftColumnSlots;
+    final rightSlots = page.rightColumnSlots;
+    return Container(
+      decoration: BoxDecoration(
+        color: _field,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: _border),
+      ),
+      padding: const EdgeInsets.all(10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '문제지 p.$pageIndex',
+            style: const TextStyle(
+              color: _textSub,
+              fontSize: 11.5,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Container(
+            width: double.infinity,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xFFD5D5D5)),
+            ),
+            padding: const EdgeInsets.all(10),
+            child: SizedBox(
+              height: panelHeight,
+              child: columns == 1
+                  ? Column(
+                      children: _buildQuestionSlotColumnWidgets(
+                        leftSlots,
+                        rowCount: rowCount,
+                        questionMode: questionMode,
+                        baseSlotHeight: slotHeight,
+                        slotGap: slotGap,
+                      ),
+                    )
+                  : Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: Column(
+                            children: _buildQuestionSlotColumnWidgets(
+                              leftSlots,
+                              rowCount: rowCount,
+                              questionMode: questionMode,
+                              baseSlotHeight: slotHeight,
+                              slotGap: slotGap,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Container(
+                          width: 1,
+                          height: panelHeight,
+                          color: const Color(0xFFE3E5E7),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            children: _buildQuestionSlotColumnWidgets(
+                              rightSlots,
+                              rowCount: rowCount,
+                              questionMode: questionMode,
+                              baseSlotHeight: slotHeight,
+                              slotGap: slotGap,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildQuestionSlotPreview(
+    ProblemBankQuestion? q, {
+    required String questionMode,
+    required double slotHeight,
+  }) {
+    if (q == null) {
+      return const SizedBox.expand(
+        child: ColoredBox(color: Colors.white),
+      );
+    }
+    final previewQuestion = _questionForLayoutPreviewMode(q, questionMode);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final slotWidth =
+            constraints.maxWidth.isFinite ? constraints.maxWidth : 320.0;
+        final baseHeight = _previewDialogHeight(
+          previewQuestion,
+          const Size(1400, 2200),
+        );
+        final figureAssets = _orderedFigureAssetsOf(previewQuestion);
+        final figureCount =
+            math.max(figureAssets.length, previewQuestion.figureRefs.length);
+        final hasFigure = figureCount > 0;
+        final hasViewBlock =
+            _viewBlockPreviewLines(previewQuestion, max: 18).isNotEmpty;
+        final extraFigureHeight =
+            figureCount > 1 ? (figureCount - 1) * 110.0 : 0.0;
+        final extraChoiceHeight =
+            _previewChoicesOf(previewQuestion).isNotEmpty ? 24.0 : 0.0;
+        final naturalHeight = math.max(
+          (baseHeight +
+                  (hasFigure ? 150.0 : 0.0) +
+                  (hasViewBlock ? 48.0 : 34.0) +
+                  extraFigureHeight +
+                  extraChoiceHeight) *
+              1.15,
+          slotHeight + 24,
+        );
+        return ClipRect(
+          child: FittedBox(
+            fit: BoxFit.contain,
+            alignment: Alignment.topCenter,
+            child: SizedBox(
+              width: slotWidth,
+              height: naturalHeight,
+              child: _buildPdfPreviewPaperContent(
+                previewQuestion,
+                expanded: true,
+                scrollable: false,
+                bordered: false,
+                shadow: false,
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildAnswerSheetLayoutPreview({
+    required List<ProblemBankQuestion> questions,
+    required String questionMode,
+    required int pageIndex,
+  }) {
+    return Container(
+      decoration: BoxDecoration(
+        color: _field,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: _border),
+      ),
+      padding: const EdgeInsets.all(10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '정답지 p.$pageIndex',
+            style: const TextStyle(
+              color: _textSub,
+              fontSize: 11.5,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Container(
+            width: double.infinity,
+            decoration: BoxDecoration(
+              color: const Color(0xFFFCFCFC),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xFFD5D5D5)),
+            ),
+            padding: const EdgeInsets.all(10),
+            child: Wrap(
+              spacing: 12,
+              runSpacing: 7,
+              children: questions.map((q) {
+                final ans = _previewAnswerForMode(q, questionMode);
+                return SizedBox(
+                  width: 172,
+                  child: Text(
+                    '${q.questionNumber}. ${ans.isEmpty ? '-' : ans}',
+                    style: const TextStyle(
+                      color: Color(0xFF2D2D2D),
+                      fontSize: 11.5,
+                      fontFamily: _previewKoreanFontFamily,
+                    ),
+                  ),
+                );
+              }).toList(growable: false),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildExplanationLayoutPreview({
+    required List<ProblemBankQuestion> questions,
+    required int pageIndex,
+  }) {
+    return Container(
+      decoration: BoxDecoration(
+        color: _field,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: _border),
+      ),
+      padding: const EdgeInsets.all(10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '해설 p.$pageIndex',
+            style: const TextStyle(
+              color: _textSub,
+              fontSize: 11.5,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Container(
+            width: double.infinity,
+            decoration: BoxDecoration(
+              color: const Color(0xFFFCFCFC),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xFFD5D5D5)),
+            ),
+            padding: const EdgeInsets.all(10),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (var i = 0; i < questions.length; i += 1) ...[
+                  Text(
+                    '${questions[i].questionNumber}. ${questions[i].reviewerNotes.trim().isEmpty ? '해설/메모 없음' : _ellipsizePreviewText(questions[i].reviewerNotes, max: 160)}',
+                    style: const TextStyle(
+                      color: Color(0xFF2D2D2D),
+                      fontSize: 11.5,
+                      height: 1.34,
+                      fontFamily: _previewKoreanFontFamily,
+                    ),
+                  ),
+                  if (i < questions.length - 1) const SizedBox(height: 4),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _buildSectionTitle(String title, {String? subtitle}) {
@@ -1805,8 +3540,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
                 setState(() {
                   _activeDocument = doc;
                   _questions = <ProblemBankQuestion>[];
+                  _dirtyQuestionIds.clear();
+                  _applySourceMetaFromDocument(doc);
                   _scoreDrafts.clear();
-                  _scoreSaving.clear();
                   _hasExtracted = false;
                 });
                 await _loadDocumentContext(doc.id);
@@ -2096,6 +3832,10 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
   }
 
   Widget _buildTemplatePanel() {
+    final maxPerPageValues =
+        _maxQuestionsPerPageOptionsOf(_selectedLayoutColumns)
+            .map((e) => '$e')
+            .toList(growable: false);
     return Container(
       decoration: BoxDecoration(
         color: _panel,
@@ -2130,6 +3870,45 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
                   values: _paperOptions,
                   onChanged: (v) => setState(() => _selectedPaper = v),
                 ),
+              ),
+              const SizedBox(width: 10),
+              SizedBox(
+                width: 140,
+                child: _buildDropdownField(
+                  label: '출제형식',
+                  value: _selectedQuestionMode,
+                  values: _questionModeOptions,
+                  onChanged: (v) => setState(() => _selectedQuestionMode = v),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              SizedBox(
+                width: 120,
+                child: _buildDropdownField(
+                  label: '단 선택',
+                  value: _selectedLayoutColumns,
+                  values: _layoutColumnOptions,
+                  onChanged: _setSelectedLayoutColumns,
+                ),
+              ),
+              const SizedBox(width: 10),
+              SizedBox(
+                width: 170,
+                child: _buildDropdownField(
+                  label: '페이지당 최대 문항',
+                  value: _selectedMaxQuestionsPerPage,
+                  values: maxPerPageValues,
+                  onChanged: _setSelectedMaxQuestionsPerPage,
+                ),
+              ),
+              const Spacer(),
+              Text(
+                '$_selectedLayoutColumnCount열 · 최대 $_selectedMaxQuestionsPerPageCount문항/페이지',
+                style: const TextStyle(color: _textSub, fontSize: 11.4),
               ),
             ],
           ),
@@ -2169,24 +3948,48 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
             ],
           ),
           const SizedBox(height: 8),
-          SizedBox(
-            width: double.infinity,
-            child: FilledButton.icon(
-              onPressed:
-                  (_isExporting || _isResetting) ? null : _createExportJob,
-              style: FilledButton.styleFrom(backgroundColor: _accent),
-              icon: _isExporting
-                  ? const SizedBox(
-                      width: 14,
-                      height: 14,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
-                      ),
-                    )
-                  : const Icon(Icons.picture_as_pdf_outlined, size: 17),
-              label: Text(_isExporting ? 'PDF 생성 중...' : 'PDF 생성 요청'),
-            ),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed:
+                      (_isExporting || _isSavingExportLocally || _isResetting)
+                          ? null
+                          : _openExportLayoutPreviewDialog,
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: _textSub,
+                    side: const BorderSide(color: _border),
+                  ),
+                  icon: const Icon(Icons.preview_outlined, size: 17),
+                  label: const Text('미리보기'),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed:
+                      (_isExporting || _isSavingExportLocally || _isResetting)
+                          ? null
+                          : _createExportJob,
+                  style: FilledButton.styleFrom(backgroundColor: _accent),
+                  icon: (_isExporting || _isSavingExportLocally)
+                      ? const SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Icon(Icons.picture_as_pdf_outlined, size: 17),
+                  label: Text(
+                    _isSavingExportLocally
+                        ? '로컬 저장 중...'
+                        : (_isExporting ? 'PDF 생성 중...' : 'PDF 생성 요청'),
+                  ),
+                ),
+              ),
+            ],
           ),
           if (_activeExportJob != null) ...[
             const SizedBox(height: 8),
@@ -2713,51 +4516,6 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
     return parsed;
   }
 
-  Future<void> _saveScoreDraft(ProblemBankQuestion q) async {
-    if (_scoreSaving.contains(q.id)) return;
-    final raw = (_scoreDrafts[q.id] ?? _scoreDraftFor(q)).trim();
-    if (raw.isNotEmpty && _parseScoreDraft(raw) == null) {
-      _showSnack('배점은 숫자로 입력해 주세요. (예: 4 또는 4.5)', error: true);
-      return;
-    }
-    final parsed = _parseScoreDraft(raw);
-    setState(() {
-      _scoreSaving.add(q.id);
-    });
-    try {
-      final updatedMeta = Map<String, dynamic>.from(q.meta);
-      if (parsed == null) {
-        updatedMeta.remove('score_point');
-      } else {
-        final rounded = parsed.roundToDouble();
-        updatedMeta['score_point'] =
-            rounded == parsed ? rounded.toInt() : parsed;
-      }
-      await _service.updateQuestionReview(
-        questionId: q.id,
-        isChecked: q.isChecked,
-        meta: updatedMeta,
-      );
-      if (!mounted) return;
-      setState(() {
-        _questions = _questions
-            .map((item) =>
-                item.id == q.id ? item.copyWith(meta: updatedMeta) : item)
-            .toList(growable: false);
-        _scoreDrafts[q.id] = parsed == null ? '' : _scorePointInputText(parsed);
-      });
-      _showSnack('배점을 저장했습니다.');
-    } catch (e) {
-      _showSnack('배점 저장 실패: $e', error: true);
-    } finally {
-      if (mounted) {
-        setState(() {
-          _scoreSaving.remove(q.id);
-        });
-      }
-    }
-  }
-
   bool _looksLikeBoxedStemLine(String line) {
     final input = _normalizePreviewLine(line);
     if (input.isEmpty) return false;
@@ -2924,19 +4682,146 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
     return _normalizePreviewMultiline(out);
   }
 
-  String _answerTextForPreview(ProblemBankQuestion q) {
-    final raw = '${q.meta['answer_key'] ?? ''}'.trim();
-    if (raw.isEmpty) return '';
+  String _sanitizeAnswerText(String raw) {
     return raw
+        .trim()
         .replaceFirst(RegExp(r'^\[?\s*정답\s*\]?\s*[:：]?\s*'), '')
         .replaceAll(RegExp(r'\s+'), ' ')
         .trim();
   }
 
+  String _objectiveAnswerToSubjective(String value) {
+    return value.replaceAllMapped(RegExp(r'[①②③④⑤⑥⑦⑧⑨⑩]'), (m) {
+      switch (m.group(0)) {
+        case '①':
+          return '1';
+        case '②':
+          return '2';
+        case '③':
+          return '3';
+        case '④':
+          return '4';
+        case '⑤':
+          return '5';
+        case '⑥':
+          return '6';
+        case '⑦':
+          return '7';
+        case '⑧':
+          return '8';
+        case '⑨':
+          return '9';
+        case '⑩':
+          return '10';
+      }
+      return '';
+    });
+  }
+
+  String _choiceLabelByIndex(int index) {
+    const labels = <String>['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩'];
+    if (index >= 0 && index < labels.length) return labels[index];
+    return '${index + 1}';
+  }
+
+  List<ProblemBankChoice> _previewChoicesOf(ProblemBankQuestion q) {
+    final source =
+        q.objectiveChoices.length >= 2 ? q.objectiveChoices : q.choices;
+    final out = <ProblemBankChoice>[];
+    for (var i = 0; i < source.length; i += 1) {
+      final text = _normalizePreviewLine(source[i].text);
+      if (text.isEmpty) continue;
+      final label = source[i].label.trim().isNotEmpty
+          ? source[i].label.trim()
+          : _choiceLabelByIndex(i);
+      out.add(ProblemBankChoice(label: label, text: text));
+    }
+    return out;
+  }
+
+  int? _answerTokenToChoiceIndex(String token) {
+    final raw = token.trim();
+    if (raw.isEmpty) return null;
+    const circled = <String>['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩'];
+    final circledIdx = circled.indexOf(raw);
+    if (circledIdx >= 0) return circledIdx;
+    final normalized = raw.replaceAll(RegExp(r'[()（）.]'), '').trim();
+    final n = int.tryParse(normalized);
+    if (n != null && n >= 1) return n - 1;
+    return null;
+  }
+
+  bool _looksLikeObjectiveKey(String value) {
+    final normalized = _sanitizeAnswerText(value);
+    if (normalized.isEmpty) return false;
+    return RegExp(
+      r'^(?:[①②③④⑤⑥⑦⑧⑨⑩]|[1-9]|10)(?:\s*[,/]\s*(?:[①②③④⑤⑥⑦⑧⑨⑩]|[1-9]|10))*$',
+    ).hasMatch(normalized);
+  }
+
+  String _subjectiveFromObjectiveChoiceText(
+    String objectiveAnswer,
+    List<ProblemBankChoice> choices,
+  ) {
+    final normalized = _sanitizeAnswerText(objectiveAnswer);
+    if (normalized.isEmpty) return '';
+    final tokens = normalized
+        .split(RegExp(r'\s*[,/]\s*'))
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toList(growable: false);
+    final unitTokens = tokens.isNotEmpty ? tokens : <String>[normalized];
+    final converted = <String>[];
+    for (final token in unitTokens) {
+      final idx = _answerTokenToChoiceIndex(token);
+      if (idx != null && idx >= 0 && idx < choices.length) {
+        final text = _normalizePreviewLine(choices[idx].text);
+        if (text.isNotEmpty) {
+          converted.add(text);
+          continue;
+        }
+      }
+      converted.add(_objectiveAnswerToSubjective(token));
+    }
+    return _sanitizeAnswerText(converted.join(', '));
+  }
+
+  String _objectiveAnswerForPreview(ProblemBankQuestion q) {
+    final raw = _sanitizeAnswerText(
+      q.objectiveAnswerKey.isNotEmpty
+          ? q.objectiveAnswerKey
+          : '${q.meta['objective_answer_key'] ?? q.meta['answer_key'] ?? ''}',
+    );
+    return raw;
+  }
+
+  String _subjectiveAnswerForPreview(ProblemBankQuestion q) {
+    final choices = _previewChoicesOf(q);
+    final shouldMapLegacyObjective =
+        q.questionType.contains('객관식') || q.choices.length >= 2;
+    final direct = _sanitizeAnswerText(
+      q.subjectiveAnswer.isNotEmpty
+          ? q.subjectiveAnswer
+          : '${q.meta['subjective_answer'] ?? ''}',
+    );
+    if (direct.isNotEmpty) {
+      if (shouldMapLegacyObjective &&
+          _looksLikeObjectiveKey(direct) &&
+          choices.isNotEmpty) {
+        final mapped = _subjectiveFromObjectiveChoiceText(direct, choices);
+        if (mapped.isNotEmpty) return mapped;
+      }
+      return direct;
+    }
+    final objective = _objectiveAnswerForPreview(q);
+    if (objective.isEmpty) return '';
+    return _subjectiveFromObjectiveChoiceText(objective, choices);
+  }
+
   bool _isObjectiveAnswerPreview(ProblemBankQuestion q, String answer) {
     final normalized = answer.trim();
     if (normalized.isEmpty) return false;
-    final hasChoices = q.choices.length >= 2;
+    final hasChoices = q.objectiveChoices.length >= 2 || q.choices.length >= 2;
     final choiceLike = RegExp(
       r'^[①②③④⑤⑥⑦⑧⑨⑩](?:\s*[,/]\s*[①②③④⑤⑥⑦⑧⑨⑩])*$',
     ).hasMatch(normalized);
@@ -2948,87 +4833,78 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
 
   Widget _buildAnswerPreviewPanel(ProblemBankQuestion q,
       {bool expanded = false}) {
-    final answer = _answerTextForPreview(q);
-    final isObjectiveAnswer = _isObjectiveAnswerPreview(q, answer);
-    if (answer.isEmpty) {
-      return const Text(
-        '미추출',
-        style: TextStyle(color: Color(0xFF7D8BA5), fontSize: 12.4),
-      );
-    }
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 6),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF4F7FC),
-        borderRadius: BorderRadius.circular(4),
-        border: Border.all(color: const Color(0xFFDDE4F1)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
+    final objective = _objectiveAnswerForPreview(q);
+    final subjective = _subjectiveAnswerForPreview(q);
+    final objectiveText = objective.isEmpty ? '-' : objective;
+    final subjectiveText = subjective.isEmpty ? '-' : subjective;
+    final isObjectiveAnswer = _isObjectiveAnswerPreview(q, objectiveText);
+    final lineHeight = _denseMathLineHeight(objectiveText,
+        normal: isObjectiveAnswer ? 1.34 : 1.4);
+    final objectiveStyle = TextStyle(
+      color: const Color(0xFF232323),
+      fontFamily: _previewKoreanFontFamily,
+      fontSize: isObjectiveAnswer
+          ? (expanded ? 14.8 : 14.4)
+          : (expanded ? 13.6 : 13.2),
+      height: lineHeight,
+      fontWeight: FontWeight.w600,
+    );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (objectiveText == '-')
           const Text(
-            '정답',
-            style: TextStyle(
-              color: Color(0xFF4A5875),
-              fontSize: 12.2,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          const SizedBox(height: 2),
+            '-',
+            style: TextStyle(color: Color(0xFF232323), fontSize: 13.4),
+          )
+        else
           LatexTextRenderer(
-            _toPreviewMathMarkup(answer, forceMathTokenWrap: true),
+            _toPreviewMathMarkup(objectiveText, forceMathTokenWrap: true),
             softWrap: true,
             enableDisplayMath: true,
             inlineMathScale: _previewMathScale,
             fractionInlineMathScale: _previewFractionMathScale,
             displayMathScale: _previewMathScale,
-            blockVerticalPadding: _denseMathLineHeight(
-                      answer,
-                      normal: isObjectiveAnswer ? 1.34 : 1.4,
-                    ) >=
-                    1.7
-                ? 1.0
-                : 0.6,
-            style: TextStyle(
-              color: const Color(0xFF1E2D4A),
-              fontSize: isObjectiveAnswer
-                  ? (expanded ? 14.8 : 14.4)
-                  : (expanded ? 13.6 : 13.2),
-              height: _denseMathLineHeight(
-                answer,
-                normal: isObjectiveAnswer ? 1.34 : 1.4,
-              ),
-              fontWeight: FontWeight.w700,
-            ),
+            blockVerticalPadding: lineHeight >= 1.7 ? 1.0 : 0.6,
+            style: objectiveStyle,
           ),
-        ],
-      ),
+        const SizedBox(height: 6),
+        if (subjectiveText == '-')
+          const Text(
+            '-',
+            style: TextStyle(color: Color(0xFF232323), fontSize: 13.4),
+          )
+        else
+          _buildStemTextPreviewLine(
+            subjectiveText,
+            fontSize: expanded ? 13.8 : 13.4,
+            normalHeight: 1.58,
+          ),
+      ],
     );
   }
 
   Widget _buildAnswerPreviewThumbnail(ProblemBankQuestion q,
       {bool expanded = false}) {
     return Container(
-      height: expanded ? null : 114,
+      height: expanded ? null : 95,
       width: double.infinity,
       decoration: BoxDecoration(
-        color: const Color(0xFF0E1518),
+        color: const Color(0xFFFCFCFC),
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: _border),
+        border: Border.all(color: const Color(0xFFD5D5D5)),
       ),
-      padding: const EdgeInsets.all(8.5),
-      child: Container(
-        decoration: BoxDecoration(
-          color: const Color(0xFFFCFCFC),
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: const Color(0xFFD5D5D5)),
-        ),
-        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 7),
-        child: SingleChildScrollView(
-          physics: expanded
-              ? const ClampingScrollPhysics()
-              : const NeverScrollableScrollPhysics(),
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 7),
+      child: SingleChildScrollView(
+        physics: expanded
+            ? const ClampingScrollPhysics()
+            : const NeverScrollableScrollPhysics(),
+        child: DefaultTextStyle(
+          style: const TextStyle(
+            color: Color(0xFF232323),
+            fontFamily: _previewKoreanFontFamily,
+            fontSize: 13.4,
+          ),
           child: _buildAnswerPreviewPanel(q, expanded: expanded),
         ),
       ),
@@ -3121,7 +4997,12 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
       fractionInlineMathScale: _previewFractionMathScale,
       displayMathScale: _previewMathScale,
       blockVerticalPadding: lineHeight >= 1.82 ? 1.8 : 1.0,
-      style: TextStyle(fontSize: fontSize, height: lineHeight),
+      style: TextStyle(
+        fontSize: fontSize,
+        height: lineHeight,
+        color: const Color(0xFF232323),
+        fontFamily: _previewKoreanFontFamily,
+      ),
     );
   }
 
@@ -3151,7 +5032,14 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
         })
         .take(1)
         .toList(growable: false);
-    final figureHeight = expanded ? 232.0 : 138.0;
+    final figureOrderHint =
+        int.tryParse('${effectiveAsset?['figure_index'] ?? ''}') ?? 1;
+    final figureHeight = (expanded ? 232.0 : 138.0) *
+        _figureRenderScaleForAsset(
+          q,
+          asset: effectiveAsset,
+          order: figureOrderHint,
+        );
     return Container(
       width: double.infinity,
       margin: const EdgeInsets.symmetric(vertical: 6),
@@ -3247,6 +5135,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
       color: const Color(0xFF2D2D2D),
       fontSize: expanded ? 13.8 : 13.2,
       height: lineHeight,
+      fontFamily: _previewKoreanFontFamily,
     );
     if (itemMatch == null) {
       return LatexTextRenderer(
@@ -3289,6 +5178,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
               color: style.color,
               fontSize: style.fontSize,
               height: _denseMathLineHeight(content, normal: 1.76),
+              fontFamily: _previewKoreanFontFamily,
             ),
           ),
         ),
@@ -3343,6 +5233,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
                     fontSize: 13.6,
                     fontWeight: FontWeight.w700,
                     letterSpacing: 0.8,
+                    fontFamily: _previewKoreanFontFamily,
                   ),
                 ),
               ),
@@ -3714,6 +5605,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
       color: const Color(0xFF232323),
       fontSize: contentFontSize,
       height: lineHeight,
+      fontFamily: _previewKoreanFontFamily,
     );
     return Padding(
       padding: EdgeInsets.only(
@@ -3732,6 +5624,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
               color: Color(0xFF232323),
               fontSize: labelFontSize,
               fontWeight: FontWeight.w500,
+              fontFamily: _previewKoreanFontFamily,
             ),
           ),
           const SizedBox(width: 7),
@@ -3781,49 +5674,52 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
     return s.length;
   }
 
+  double _estimateChoiceRequiredWidth(
+      ProblemBankQuestion q, ProblemBankChoice choice) {
+    final text = _normalizePreviewLine(q.renderChoiceText(choice));
+    final visual = _estimateVisualLength(text);
+    final latex = _sanitizeLatexForMathTex(text);
+    final hasNestedFraction = _containsNestedFractionExpression(latex);
+    final hasFraction = _containsFractionExpression(latex);
+    final hasLongMath =
+        RegExp(r'\\(sqrt|sum|int|overline|lim|log)').hasMatch(latex);
+    final symbolCount = RegExp(r'[=+\-×÷<>^_]').allMatches(text).length;
+
+    var width = 30.0 + visual * 7.4 + symbolCount * 2.6;
+    if (hasFraction) width += 24.0;
+    if (hasNestedFraction) width += 46.0;
+    if (hasLongMath) width += 34.0;
+    return width;
+  }
+
   String _choiceLayoutMode(
     ProblemBankQuestion q,
     List<ProblemBankChoice> choices,
+    double availableWidth,
   ) {
     if (choices.length != 5) return 'stacked';
-    int totalVisual = 0;
-    int maxVisual = 0;
-    bool hasNestedFraction = false;
-    bool hasFraction = false;
-    bool hasLongMath = false;
-    for (final choice in choices) {
-      final text = _normalizePreviewLine(q.renderChoiceText(choice));
-      final visual = _estimateVisualLength(text);
-      totalVisual += visual;
-      if (visual > maxVisual) {
-        maxVisual = visual;
-      }
-      final latex = _sanitizeLatexForMathTex(text);
-      if (_containsNestedFractionExpression(latex)) {
-        hasNestedFraction = true;
-      } else if (_containsFractionExpression(latex)) {
-        hasFraction = true;
-      }
-      if (RegExp(r'\\(sqrt|sum|int|overline)').hasMatch(latex)) {
-        hasLongMath = true;
-      }
-    }
-    if (hasNestedFraction || hasLongMath || maxVisual >= 20) {
-      return 'stacked';
-    }
-    if (hasFraction) {
-      if (maxVisual <= 12 && totalVisual <= 50) {
-        return 'split_3_2';
-      }
-      if (maxVisual >= 16 || totalVisual >= 70) {
-        return 'stacked';
-      }
-      return 'split_3_2';
-    }
-    if (maxVisual <= 9 && totalVisual <= 42) {
-      return 'single';
-    }
-    return 'split_3_2';
+    final safeWidth = availableWidth.isFinite && availableWidth > 120
+        ? availableWidth
+        : 620.0;
+    const singleGaps = 8.0 * 4; // 5열
+    const splitGaps = 8.0 * 2; // 3열
+    final singleCellWidth = (safeWidth - singleGaps) / 5;
+    final splitCellWidth = (safeWidth - splitGaps) / 3;
+    final requiredWidths = choices
+        .map((choice) => _estimateChoiceRequiredWidth(q, choice))
+        .toList(growable: false);
+
+    // 1행 우선: 실제 셀 폭에 모두 들어가면 항상 1행
+    final fitsSingle = requiredWidths.every((w) => w <= singleCellWidth);
+    if (fitsSingle) return 'single';
+
+    // 2행(3+2): 각 행의 셀 폭 기준으로 들어가면 2행
+    final topFits = requiredWidths.take(3).every((w) => w <= splitCellWidth);
+    final bottomFits = requiredWidths.skip(3).every((w) => w <= splitCellWidth);
+    if (topFits && bottomFits) return 'split_3_2';
+
+    // 그 외는 5행으로 내려 오버플로우를 방지
+    return 'stacked';
   }
 
   Widget _buildChoiceInlineCell(
@@ -3839,6 +5735,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
       color: const Color(0xFF232323),
       fontSize: contentFontSize,
       height: lineHeight,
+      fontFamily: _previewKoreanFontFamily,
     );
     return ClipRect(
       child: Row(
@@ -3851,6 +5748,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
               color: const Color(0xFF232323),
               fontSize: labelFontSize,
               fontWeight: FontWeight.w500,
+              fontFamily: _previewKoreanFontFamily,
             ),
           ),
           const SizedBox(width: 4),
@@ -3913,10 +5811,14 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
   List<Widget> _buildChoicePreviewBlocks(
     ProblemBankQuestion q, {
     bool expanded = false,
+    List<ProblemBankChoice>? sourceChoices,
+    double availableWidth = 620,
   }) {
-    final choices = q.choices.take(expanded ? 10 : 5).toList(growable: false);
+    final choices = (sourceChoices ?? _previewChoicesOf(q))
+        .take(expanded ? 10 : 5)
+        .toList(growable: false);
     if (choices.isEmpty) return const <Widget>[];
-    final mode = _choiceLayoutMode(q, choices);
+    final mode = _choiceLayoutMode(q, choices, availableWidth);
     if (mode == 'single') {
       return <Widget>[
         _buildChoiceHorizontalRow(q, choices, columns: 5, expanded: expanded)
@@ -3974,14 +5876,98 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
     return _normalizePreviewMultiline(out);
   }
 
-  Widget _buildPdfPreviewThumbnail(ProblemBankQuestion q,
-      {bool expanded = false}) {
+  double _stemToChoiceGap({required bool expanded}) {
+    // 본문 기본 줄간격(라인 높이 - 폰트 크기)을 기준으로,
+    // 문제 본문과 5지선다 사이 간격을 정확히 2배로 맞춘다.
+    const stemLineHeight = 1.58;
+    final stemFontSize = expanded ? 13.8 : 13.4;
+    final stemLineSpacing = stemFontSize * (stemLineHeight - 1.0);
+    return stemLineSpacing * 2;
+  }
+
+  Widget _buildPdfPreviewPaperContent(
+    ProblemBankQuestion q, {
+    bool expanded = false,
+    bool scrollable = true,
+    bool bordered = true,
+    bool shadow = true,
+    EdgeInsetsGeometry contentPadding =
+        const EdgeInsets.symmetric(horizontal: 9, vertical: 7),
+  }) {
     final stemPreview = _stemPreviewWithMarkers(q);
     final viewBlockLines = _viewBlockPreviewLines(q, max: expanded ? 18 : 6);
     final stemBlocks =
         _buildStemPreviewBlocks(q, stemPreview, expanded: expanded);
+    final previewChoices = _previewChoicesOf(q);
+    final body = LayoutBuilder(
+      builder: (context, constraints) {
+        return DefaultTextStyle(
+          style: const TextStyle(
+            color: Color(0xFF232323),
+            fontSize: 13.4,
+            height: 1.46,
+            fontFamily: _previewKoreanFontFamily,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              ...stemBlocks,
+              if (viewBlockLines.isNotEmpty) ...[
+                _buildViewBlockPanel(
+                  viewBlockLines
+                      .take(expanded ? 18 : 6)
+                      .toList(growable: false),
+                  expanded: expanded,
+                ),
+              ],
+              if (previewChoices.isNotEmpty) ...[
+                SizedBox(height: _stemToChoiceGap(expanded: expanded)),
+                ..._buildChoicePreviewBlocks(
+                  q,
+                  expanded: expanded,
+                  sourceChoices: previewChoices,
+                  availableWidth: constraints.maxWidth,
+                ),
+              ],
+            ],
+          ),
+        );
+      },
+    );
     return Container(
-      height: expanded ? null : 260,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(bordered ? 6 : 0),
+        border: bordered
+            ? Border.all(color: const Color(0xFFD5D5D5))
+            : Border.all(color: Colors.transparent),
+        boxShadow: shadow
+            ? const [
+                BoxShadow(
+                  color: Color(0x1A000000),
+                  blurRadius: 3,
+                  offset: Offset(0, 1),
+                ),
+              ]
+            : null,
+      ),
+      padding: contentPadding,
+      child: scrollable
+          ? SingleChildScrollView(
+              physics: const ClampingScrollPhysics(),
+              child: body,
+            )
+          : body,
+    );
+  }
+
+  Widget _buildPdfPreviewThumbnail(
+    ProblemBankQuestion q, {
+    bool expanded = false,
+    double? fixedHeight,
+  }) {
+    return Container(
+      height: expanded ? null : (fixedHeight ?? 260),
       width: double.infinity,
       decoration: BoxDecoration(
         color: const Color(0xFF0E1518),
@@ -3989,55 +5975,20 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
         border: Border.all(color: _border),
       ),
       padding: const EdgeInsets.all(8.5),
-      child: Container(
-        decoration: BoxDecoration(
-          color: const Color(0xFFFCFCFC),
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: const Color(0xFFD5D5D5)),
-          boxShadow: const [
-            BoxShadow(
-              color: Color(0x1A000000),
-              blurRadius: 3,
-              offset: Offset(0, 1),
-            ),
-          ],
-        ),
-        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 7),
-        child: SingleChildScrollView(
-          physics: const ClampingScrollPhysics(),
-          child: DefaultTextStyle(
-            style: const TextStyle(
-              color: Color(0xFF232323),
-              fontSize: 13.4,
-              height: 1.46,
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                ...stemBlocks,
-                if (viewBlockLines.isNotEmpty) ...[
-                  _buildViewBlockPanel(
-                    viewBlockLines
-                        .take(expanded ? 18 : 6)
-                        .toList(growable: false),
-                    expanded: expanded,
-                  ),
-                ],
-                if (q.choices.isNotEmpty) ...[
-                  const SizedBox(height: 4),
-                  ..._buildChoicePreviewBlocks(q, expanded: expanded),
-                ],
-              ],
-            ),
-          ),
-        ),
+      child: _buildPdfPreviewPaperContent(
+        q,
+        expanded: expanded,
+        scrollable: true,
+        bordered: true,
+        shadow: true,
       ),
     );
   }
 
   double _previewDialogWidth(ProblemBankQuestion q, Size screenSize) {
+    final previewChoices = _previewChoicesOf(q);
     final totalChars = _normalizePreviewLine(q.renderedStem).length +
-        q.choices.fold<int>(
+        previewChoices.fold<int>(
             0,
             (sum, c) =>
                 sum + _normalizePreviewLine(q.renderChoiceText(c)).length);
@@ -4052,8 +6003,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
   }
 
   double _previewDialogHeight(ProblemBankQuestion q, Size screenSize) {
+    final previewChoices = _previewChoicesOf(q);
     final totalChars = _normalizePreviewLine(q.renderedStem).length +
-        q.choices.fold<int>(
+        previewChoices.fold<int>(
             0,
             (sum, c) =>
                 sum + _normalizePreviewLine(q.renderChoiceText(c)).length);
@@ -4179,9 +6131,173 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
     );
   }
 
+  Future<void> _openFigureScaleDialog(ProblemBankQuestion q) async {
+    final assets = _orderedFigureAssetsOf(q);
+    final fallbackCount =
+        assets.isNotEmpty ? assets.length : math.max(1, q.figureRefs.length);
+    final scaleMap = _figureRenderScaleMapOf(q);
+    final draftMap = <String, double>{};
+    final labels = <String, String>{};
+    final previewUrls = <String, String>{};
+
+    for (var i = 0; i < fallbackCount; i += 1) {
+      final asset = i < assets.length
+          ? assets[i]
+          : <String, dynamic>{'figure_index': i + 1};
+      final key = _figureScaleKeyForAsset(asset, i + 1);
+      final label = _figureScaleKeyLabel(key, i + 1);
+      final path = '${asset['path'] ?? ''}'.trim();
+      final previewUrl = _figurePreviewUrlForPath(q.id, path);
+      final initial = scaleMap[key] ??
+          _figureRenderScaleForAsset(q, asset: asset, order: i + 1);
+      draftMap[key] = initial;
+      labels[key] = label;
+      previewUrls[key] = previewUrl;
+    }
+
+    final result = await showDialog<Map<String, double>>(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (context, setLocalState) {
+            return AlertDialog(
+              backgroundColor: _panel,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+                side: const BorderSide(color: _border),
+              ),
+              title: Text(
+                '${q.questionNumber}번 그림 크기 조절',
+                style: const TextStyle(color: _text, fontSize: 15.5),
+              ),
+              content: SizedBox(
+                width: 520,
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 440),
+                  child: SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        for (var i = 0; i < draftMap.length; i += 1) ...[
+                          () {
+                            final key = draftMap.keys.elementAt(i);
+                            final value = draftMap[key] ?? 1.0;
+                            final label = labels[key] ?? '그림 ${i + 1}';
+                            final pct = (value * 100).round();
+                            final previewUrl = previewUrls[key] ?? '';
+                            return Container(
+                              margin: EdgeInsets.only(
+                                  bottom: i == draftMap.length - 1 ? 0 : 10),
+                              padding: const EdgeInsets.fromLTRB(10, 9, 10, 7),
+                              decoration: BoxDecoration(
+                                color: _field,
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(color: _border),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Text(
+                                        '$label 배율',
+                                        style: const TextStyle(
+                                          color: _textSub,
+                                          fontSize: 12.1,
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                      const Spacer(),
+                                      Text(
+                                        '$pct%',
+                                        style: const TextStyle(
+                                          color: _text,
+                                          fontSize: 12.1,
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  if (previewUrl.isNotEmpty) ...[
+                                    const SizedBox(height: 6),
+                                    ClipRRect(
+                                      borderRadius: BorderRadius.circular(4),
+                                      child: Image.network(
+                                        previewUrl,
+                                        height: 74,
+                                        width: double.infinity,
+                                        fit: BoxFit.contain,
+                                      ),
+                                    ),
+                                  ],
+                                  Slider(
+                                    value: value,
+                                    min: 0.7,
+                                    max: 1.8,
+                                    divisions: 22,
+                                    activeColor: _accent,
+                                    onChanged: (v) {
+                                      setLocalState(() {
+                                        draftMap[key] = v;
+                                      });
+                                    },
+                                  ),
+                                ],
+                              ),
+                            );
+                          }(),
+                        ],
+                        const SizedBox(height: 4),
+                        const Text(
+                          '문제 본문/미리보기/PDF 렌더링에 반영됩니다. AI 재생성 시에도 배율 힌트로 전달됩니다.',
+                          style: TextStyle(
+                            color: _textSub,
+                            fontSize: 11.2,
+                            height: 1.4,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  child: const Text('취소'),
+                ),
+                TextButton(
+                  onPressed: () {
+                    setLocalState(() {
+                      for (final key in draftMap.keys) {
+                        draftMap[key] = 1.0;
+                      }
+                    });
+                  },
+                  child: const Text('기본값'),
+                ),
+                FilledButton(
+                  style: FilledButton.styleFrom(backgroundColor: _accent),
+                  onPressed: () =>
+                      Navigator.of(ctx).pop(Map<String, double>.from(draftMap)),
+                  child: const Text('적용'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+    if (result == null) return;
+    _setFigureRenderScales(q, result);
+  }
+
   Future<void> _openAnswerReviewDialog(ProblemBankQuestion question) async {
-    final answerCtrl =
-        TextEditingController(text: _answerTextForPreview(question));
+    final objectiveCtrl =
+        TextEditingController(text: _objectiveAnswerForPreview(question));
+    final subjectiveCtrl =
+        TextEditingController(text: _subjectiveAnswerForPreview(question));
     final saved = await showDialog<bool>(
       context: context,
       builder: (context) {
@@ -4202,12 +6318,12 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text(
-                  '정답 추출값',
+                  '객관식 정답',
                   style: TextStyle(color: _textSub, fontSize: 12),
                 ),
                 const SizedBox(height: 6),
                 TextField(
-                  controller: answerCtrl,
+                  controller: objectiveCtrl,
                   maxLines: 2,
                   style: const TextStyle(color: _text, fontSize: 14),
                   decoration: InputDecoration(
@@ -4229,9 +6345,38 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
                     ),
                   ),
                 ),
+                const SizedBox(height: 10),
+                const Text(
+                  '주관식 정답',
+                  style: TextStyle(color: _textSub, fontSize: 12),
+                ),
+                const SizedBox(height: 6),
+                TextField(
+                  controller: subjectiveCtrl,
+                  maxLines: 2,
+                  style: const TextStyle(color: _text, fontSize: 14),
+                  decoration: InputDecoration(
+                    hintText: '예: 2 또는 x=3',
+                    hintStyle: const TextStyle(color: _textSub, fontSize: 12),
+                    filled: true,
+                    fillColor: _field,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: const BorderSide(color: _border),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: const BorderSide(color: _border),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: const BorderSide(color: _accent),
+                    ),
+                  ),
+                ),
                 const SizedBox(height: 8),
                 const Text(
-                  '비워두고 저장하면 정답 추출값을 비웁니다.',
+                  '비워두고 저장하면 해당 정답 값을 비웁니다.',
                   style: TextStyle(color: _textSub, fontSize: 11),
                 ),
               ],
@@ -4246,31 +6391,47 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
               style: FilledButton.styleFrom(backgroundColor: _accent),
               onPressed: () async {
                 try {
-                  final answer = answerCtrl.text.trim();
+                  final objectiveAnswer =
+                      _sanitizeAnswerText(objectiveCtrl.text);
+                  final subjectiveAnswer =
+                      _sanitizeAnswerText(subjectiveCtrl.text);
                   final updatedMeta = Map<String, dynamic>.from(question.meta);
-                  if (answer.isEmpty) {
+                  if (objectiveAnswer.isEmpty) {
+                    updatedMeta.remove('objective_answer_key');
+                  } else {
+                    updatedMeta['objective_answer_key'] = objectiveAnswer;
+                  }
+                  if (subjectiveAnswer.isEmpty) {
+                    updatedMeta.remove('subjective_answer');
+                  } else {
+                    updatedMeta['subjective_answer'] = subjectiveAnswer;
+                  }
+                  final legacyAnswer = objectiveAnswer.isNotEmpty
+                      ? objectiveAnswer
+                      : subjectiveAnswer;
+                  if (legacyAnswer.isEmpty) {
                     updatedMeta.remove('answer_key');
                   } else {
-                    updatedMeta['answer_key'] = answer;
+                    updatedMeta['answer_key'] = legacyAnswer;
                   }
-                  await _service.updateQuestionReview(
-                    questionId: question.id,
-                    isChecked: question.isChecked,
-                    meta: updatedMeta,
-                  );
                   if (!mounted) return;
                   setState(() {
                     _questions = _questions
                         .map(
                           (q) => q.id == question.id
-                              ? q.copyWith(meta: updatedMeta)
+                              ? q.copyWith(
+                                  meta: updatedMeta,
+                                  objectiveAnswerKey: objectiveAnswer,
+                                  subjectiveAnswer: subjectiveAnswer,
+                                )
                               : q,
                         )
                         .toList(growable: false);
+                    _dirtyQuestionIds.add(question.id);
                   });
                   if (context.mounted) Navigator.of(context).pop(true);
                 } catch (e) {
-                  _showSnack('정답 저장 실패: $e', error: true);
+                  _showSnack('정답 편집 실패: $e', error: true);
                 }
               },
               child: const Text('저장'),
@@ -4280,8 +6441,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
       },
     );
     if (saved == true) {
-      await _reloadQuestions();
-      _showSnack('정답 검수 내용이 저장되었습니다.');
+      _showSnack('정답 수정사항을 반영했습니다. 상단 `서버 저장` 버튼으로 저장하세요.');
     }
   }
 
@@ -4296,8 +6456,13 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
     final latestFigureAsset = _latestFigureAssetOf(q);
     final figureApproved = _isFigureAssetApproved(latestFigureAsset);
     final figureGenerating = _figureGenerating.contains(q.id);
+    final figureAssets = _orderedFigureAssetsOf(q);
+    final hasMultiFigure = figureAssets.length >= 2 || q.figureRefs.length >= 2;
+    final figureScaleButtonLabel =
+        hasMultiFigure ? '그림별 크기' : '크기 ${_figureRenderScaleLabel(q)}';
     final scoreDraft = _scoreDraftFor(q);
-    final isScoreSaving = _scoreSaving.contains(q.id);
+    final previewChoices = _previewChoicesOf(q);
+    final objectiveChoiceCount = previewChoices.length;
     return Container(
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
@@ -4382,9 +6547,74 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
             ],
           ),
           const SizedBox(height: 2),
+          Row(
+            children: [
+              SizedBox(
+                height: 20,
+                width: 20,
+                child: Checkbox(
+                  value: q.allowObjective,
+                  activeColor: _accent,
+                  visualDensity:
+                      const VisualDensity(horizontal: -4, vertical: -4),
+                  onChanged: (v) {
+                    if (v == null) return;
+                    _toggleCardMode(q, allowObjective: v);
+                  },
+                ),
+              ),
+              const SizedBox(width: 2),
+              const Text(
+                '객관식',
+                style: TextStyle(color: _textSub, fontSize: 11.4),
+              ),
+              const SizedBox(width: 10),
+              SizedBox(
+                height: 20,
+                width: 20,
+                child: Checkbox(
+                  value: q.allowSubjective,
+                  activeColor: _accent,
+                  visualDensity:
+                      const VisualDensity(horizontal: -4, vertical: -4),
+                  onChanged: (v) {
+                    if (v == null) return;
+                    _toggleCardMode(q, allowSubjective: v);
+                  },
+                ),
+              ),
+              const SizedBox(width: 2),
+              const Text(
+                '주관식',
+                style: TextStyle(color: _textSub, fontSize: 11.4),
+              ),
+              const SizedBox(width: 10),
+              SizedBox(
+                height: 20,
+                width: 20,
+                child: Checkbox(
+                  value: _allowEssayOf(q),
+                  activeColor: _accent,
+                  visualDensity:
+                      const VisualDensity(horizontal: -4, vertical: -4),
+                  onChanged: (v) {
+                    if (v == null) return;
+                    _toggleCardMode(q, allowEssay: v);
+                  },
+                ),
+              ),
+              const SizedBox(width: 2),
+              const Text(
+                '서술형',
+                style: TextStyle(color: _textSub, fontSize: 11.4),
+              ),
+              const Spacer(),
+            ],
+          ),
+          const SizedBox(height: 2),
           Text(
             'p.${q.sourcePage}'
-            ' · 보기 ${q.choices.length}개'
+            ' · 보기 $objectiveChoiceCount개'
             ' · 수식 ${q.equations.length}개'
             '${isViewBlock ? ' · 보기형' : ''}'
             '${q.figureRefs.isNotEmpty ? ' · 그림 포함' : ''}',
@@ -4414,9 +6644,11 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
                     FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
                   ],
                   onChanged: (value) {
-                    _scoreDrafts[q.id] = value;
+                    setState(() {
+                      _scoreDrafts[q.id] = value;
+                      _dirtyQuestionIds.add(q.id);
+                    });
                   },
-                  onFieldSubmitted: (_) => unawaited(_saveScoreDraft(q)),
                   style: const TextStyle(color: _text, fontSize: 12.6),
                   decoration: InputDecoration(
                     isDense: true,
@@ -4443,24 +6675,6 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
                 style: TextStyle(color: _textSub, fontSize: 11.5),
               ),
               const SizedBox(width: 2),
-              IconButton(
-                tooltip: '배점 저장',
-                iconSize: 17,
-                visualDensity:
-                    const VisualDensity(horizontal: -4, vertical: -4),
-                onPressed:
-                    isScoreSaving ? null : () => unawaited(_saveScoreDraft(q)),
-                icon: isScoreSaving
-                    ? const SizedBox(
-                        width: 14,
-                        height: 14,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 1.7,
-                          color: _textSub,
-                        ),
-                      )
-                    : const Icon(Icons.save_outlined, color: _textSub),
-              ),
               const Spacer(),
             ],
           ),
@@ -4505,6 +6719,28 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
                 const Text(
                   'AI 그림',
                   style: TextStyle(color: _textSub, fontSize: 11),
+                ),
+                const SizedBox(width: 6),
+                InkWell(
+                  onTap: () => unawaited(_openFigureScaleDialog(q)),
+                  borderRadius: BorderRadius.circular(4),
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF172028),
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(color: const Color(0xFF374553)),
+                    ),
+                    child: Text(
+                      figureScaleButtonLabel,
+                      style: const TextStyle(
+                        color: _textSub,
+                        fontSize: 10.4,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
                 ),
                 const SizedBox(width: 6),
                 if (latestFigureAsset != null) ...[
@@ -4592,6 +6828,22 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
   }
 
   Widget _buildQuestionTable() {
+    final unsavedCount =
+        _dirtyQuestionIds.length + (_dirtyDocumentMeta ? 1 : 0);
+    final objectiveCount =
+        _questions.where((q) => q.questionType.contains('객관식')).length;
+    final subjectiveCount =
+        _questions.where((q) => q.questionType.contains('주관식')).length;
+    final essayCount =
+        _questions.where((q) => q.questionType.contains('서술')).length;
+    final totalScore = _questions.fold<double>(0, (sum, q) {
+      final parsed = _parseScoreDraft(_scoreDraftFor(q));
+      return sum + (parsed ?? 0);
+    });
+    final roundedTotal = totalScore.roundToDouble();
+    final totalScoreLabel = roundedTotal == totalScore
+        ? '${roundedTotal.toInt()}점'
+        : '${totalScore.toStringAsFixed(1)}점';
     return Container(
       decoration: BoxDecoration(
         color: _panel,
@@ -4602,21 +6854,394 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _buildSectionTitle(
-            '2) 추출 문항 검수',
-            subtitle: '그리드 카드에서 PDF 배치 미리보기를 확인하며 검수하세요.',
+          Wrap(
+            spacing: 10,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              const Text(
+                '파일 출처',
+                style: TextStyle(
+                  color: _textSub,
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: Checkbox(
+                      value: _sourcePrivateMaterial,
+                      activeColor: _accent,
+                      visualDensity:
+                          const VisualDensity(horizontal: -4, vertical: -4),
+                      onChanged: (v) {
+                        setState(() {
+                          _sourcePrivateMaterial = v ?? false;
+                        });
+                        _markDocumentMetaDirty();
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 2),
+                  const Text(
+                    '사설 교재',
+                    style: TextStyle(color: _textSub, fontSize: 12),
+                  ),
+                ],
+              ),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: Checkbox(
+                      value: _sourceSchoolPastExam,
+                      activeColor: _accent,
+                      visualDensity:
+                          const VisualDensity(horizontal: -4, vertical: -4),
+                      onChanged: (v) {
+                        setState(() {
+                          _sourceSchoolPastExam = v ?? false;
+                        });
+                        _markDocumentMetaDirty();
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 2),
+                  const Text(
+                    '내신 기출',
+                    style: TextStyle(color: _textSub, fontSize: 12),
+                  ),
+                ],
+              ),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: Checkbox(
+                      value: _sourceMockPastExam,
+                      activeColor: _accent,
+                      visualDensity:
+                          const VisualDensity(horizontal: -4, vertical: -4),
+                      onChanged: (v) {
+                        setState(() {
+                          _sourceMockPastExam = v ?? false;
+                        });
+                        _markDocumentMetaDirty();
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 2),
+                  const Text(
+                    '모의 고사 기출',
+                    style: TextStyle(color: _textSub, fontSize: 12),
+                  ),
+                ],
+              ),
+              if (_dirtyDocumentMeta)
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: _accent.withValues(alpha: 0.16),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: _accent),
+                  ),
+                  child: const Text(
+                    '출처 저장대기',
+                    style: TextStyle(color: _accent, fontSize: 10.8),
+                  ),
+                ),
+            ],
           ),
-          const SizedBox(height: 14),
+          if (_sourceSchoolPastExam) ...[
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _sourceYearCtrl,
+                    keyboardType: TextInputType.number,
+                    style: const TextStyle(color: _text, fontSize: 12.4),
+                    decoration: InputDecoration(
+                      labelText: '년도',
+                      hintText: '예: 2026',
+                      hintStyle: const TextStyle(color: _textSub, fontSize: 11),
+                      labelStyle:
+                          const TextStyle(color: _textSub, fontSize: 11),
+                      isDense: true,
+                      filled: true,
+                      fillColor: _field,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(color: _border),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(color: _border),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(color: _accent),
+                      ),
+                    ),
+                    onChanged: (_) => _markDocumentMetaDirty(),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  flex: 2,
+                  child: TextField(
+                    controller: _sourceSchoolCtrl,
+                    style: const TextStyle(color: _text, fontSize: 12.4),
+                    decoration: InputDecoration(
+                      labelText: '학교명',
+                      hintText: '예: 경신중',
+                      hintStyle: const TextStyle(color: _textSub, fontSize: 11),
+                      labelStyle:
+                          const TextStyle(color: _textSub, fontSize: 11),
+                      isDense: true,
+                      filled: true,
+                      fillColor: _field,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(color: _border),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(color: _border),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(color: _accent),
+                      ),
+                    ),
+                    onChanged: (_) => _markDocumentMetaDirty(),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                SizedBox(
+                  width: 90,
+                  child: TextField(
+                    controller: _sourceGradeCtrl,
+                    keyboardType: TextInputType.number,
+                    style: const TextStyle(color: _text, fontSize: 12.4),
+                    decoration: InputDecoration(
+                      labelText: '학년',
+                      hintText: '예: 1',
+                      hintStyle: const TextStyle(color: _textSub, fontSize: 11),
+                      labelStyle:
+                          const TextStyle(color: _textSub, fontSize: 11),
+                      isDense: true,
+                      filled: true,
+                      fillColor: _field,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(color: _border),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(color: _border),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(color: _accent),
+                      ),
+                    ),
+                    onChanged: (_) => _markDocumentMetaDirty(),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                SizedBox(
+                  width: 120,
+                  child: _buildDropdownField(
+                    label: '학기',
+                    value: _sourceSemester,
+                    values: const <String>['1학기', '2학기'],
+                    onChanged: (v) {
+                      setState(() {
+                        _sourceSemester = v;
+                      });
+                      _markDocumentMetaDirty();
+                    },
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Row(
+                  children: [
+                    SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: Checkbox(
+                        value: _sourceExamTerm == '중간',
+                        activeColor: _accent,
+                        visualDensity:
+                            const VisualDensity(horizontal: -4, vertical: -4),
+                        onChanged: (v) {
+                          if (v == null) return;
+                          setState(() {
+                            _sourceExamTerm = v ? '중간' : '';
+                          });
+                          _markDocumentMetaDirty();
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 2),
+                    const Text('중간',
+                        style: TextStyle(color: _textSub, fontSize: 12)),
+                  ],
+                ),
+                const SizedBox(width: 10),
+                Row(
+                  children: [
+                    SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: Checkbox(
+                        value: _sourceExamTerm == '기말',
+                        activeColor: _accent,
+                        visualDensity:
+                            const VisualDensity(horizontal: -4, vertical: -4),
+                        onChanged: (v) {
+                          if (v == null) return;
+                          setState(() {
+                            _sourceExamTerm = v ? '기말' : '';
+                          });
+                          _markDocumentMetaDirty();
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 2),
+                    const Text('기말',
+                        style: TextStyle(color: _textSub, fontSize: 12)),
+                  ],
+                ),
+              ],
+            ),
+          ],
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 6,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              const Text(
+                '추출 현황',
+                style: TextStyle(
+                    color: _textSub, fontSize: 12, fontWeight: FontWeight.w700),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: _field,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: _border),
+                ),
+                child: Text('객관식 $objectiveCount개',
+                    style: const TextStyle(color: _textSub, fontSize: 11)),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: _field,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: _border),
+                ),
+                child: Text('주관식 $subjectiveCount개',
+                    style: const TextStyle(color: _textSub, fontSize: 11)),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: _field,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: _border),
+                ),
+                child: Text('서술형 $essayCount개',
+                    style: const TextStyle(color: _textSub, fontSize: 11)),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: _field,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: _border),
+                ),
+                child: Text('총점 $totalScoreLabel',
+                    style: const TextStyle(color: _textSub, fontSize: 11)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
           Row(
             children: [
               Text(
-                '총 ${_questions.length}문항 · 선택 $_checkedCount문항 · 저신뢰 $_lowConfidenceCount문항',
+                '총 ${_questions.length}문항 · 선택 $_checkedCount문항 · 저신뢰 $_lowConfidenceCount문항'
+                '${unsavedCount > 0 ? ' · 저장대기 $unsavedCount건' : ''}',
                 style: const TextStyle(
                   color: _textSub,
                   fontSize: 12,
                 ),
               ),
               const Spacer(),
+              OutlinedButton.icon(
+                onPressed: _activeDocument == null ||
+                        (_dirtyQuestionIds.isEmpty && !_dirtyDocumentMeta) ||
+                        _isSavingQuestionChanges ||
+                        _isDeletingCurrentQuestions
+                    ? null
+                    : () => unawaited(_saveQuestionsToServer()),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: _accent,
+                  side: const BorderSide(color: _accent),
+                ),
+                icon: _isSavingQuestionChanges
+                    ? const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 1.8,
+                          color: _accent,
+                        ),
+                      )
+                    : const Icon(Icons.cloud_upload_outlined, size: 16),
+                label: const Text('서버 저장'),
+              ),
+              const SizedBox(width: 8),
+              OutlinedButton.icon(
+                onPressed: _questions.isEmpty ||
+                        _isSavingQuestionChanges ||
+                        _isDeletingCurrentQuestions
+                    ? null
+                    : () => unawaited(_deleteCurrentDocumentQuestions()),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFFDE6A73),
+                  side: const BorderSide(color: Color(0xFFDE6A73)),
+                ),
+                icon: _isDeletingCurrentQuestions
+                    ? const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 1.8,
+                          color: Color(0xFFDE6A73),
+                        ),
+                      )
+                    : const Icon(Icons.delete_outline, size: 16),
+                label: const Text('이번 문항 삭제'),
+              ),
+              const SizedBox(width: 8),
               OutlinedButton(
                 onPressed: _questions.isEmpty
                     ? null
@@ -4673,7 +7298,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
                     gridDelegate:
                         const SliverGridDelegateWithMaxCrossAxisExtent(
                       maxCrossAxisExtent: 420,
-                      mainAxisExtent: 790,
+                      mainAxisExtent: 760,
                       crossAxisSpacing: 10,
                       mainAxisSpacing: 10,
                     ),
@@ -4695,7 +7320,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
         !_isUploading &&
         !_isExtracting;
     final bool step2Done = _checkedCount > 0;
-    final bool step3Active = _isExporting;
+    final bool step3Active = _isExporting || _isSavingExportLocally;
 
     final canUpload = !_bootstrapLoading &&
         !_schemaMissing &&
@@ -4706,7 +7331,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
         !_isResetting &&
         !_isUploading &&
         !_isExtracting &&
-        !_isExporting;
+        !_isExporting &&
+        !_isSavingExportLocally;
 
     return Container(
       color: _bg,
@@ -4852,6 +7478,44 @@ class _PipelineLogEntry {
   final String stage;
   final String message;
   final bool isError;
+}
+
+class _QuestionLayoutPreviewPage {
+  const _QuestionLayoutPreviewPage({
+    required this.leftColumnSlots,
+    required this.rightColumnSlots,
+    required this.rowCount,
+    required this.leftSlotCount,
+    required this.rightSlotCount,
+  });
+
+  final List<_QuestionLayoutSlot> leftColumnSlots;
+  final List<_QuestionLayoutSlot> rightColumnSlots;
+  final int rowCount;
+  final int leftSlotCount;
+  final int rightSlotCount;
+}
+
+class _QuestionLayoutSlot {
+  const _QuestionLayoutSlot({
+    this.question,
+    this.span = 1,
+    this.hidden = false,
+  });
+
+  const _QuestionLayoutSlot.empty()
+      : question = null,
+        span = 1,
+        hidden = false;
+
+  const _QuestionLayoutSlot.hidden()
+      : question = null,
+        span = 1,
+        hidden = true;
+
+  final ProblemBankQuestion? question;
+  final int span;
+  final bool hidden;
 }
 
 class _PasteImportPayload {

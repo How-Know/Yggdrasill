@@ -18,7 +18,7 @@ void main() async {
   // 데스크톱 플랫폼 설정
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     await windowManager.ensureInitialized();
-    
+
     const windowOptions = WindowOptions(
       size: Size(1400, 900),
       minimumSize: Size(1200, 800),
@@ -28,7 +28,7 @@ void main() async {
       title: 'Yggdrasill Manager',
       titleBarStyle: TitleBarStyle.normal,
     );
-    
+
     await windowManager.waitUntilReadyToShow(windowOptions, () async {
       await windowManager.show();
       await windowManager.focus();
@@ -87,6 +87,7 @@ class YggdrasillManagerApp extends StatelessWidget {
         ),
         useMaterial3: true,
         scaffoldBackgroundColor: const Color(0xFF1F1F1F),
+        fontFamily: 'HCRBatang',
       ),
       home: const AuthWrapper(),
     );
@@ -108,7 +109,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
   void initState() {
     super.initState();
     _checkAuth();
-    
+
     // 인증 상태 변화 감지
     AuthService.authStateChanges.listen((event) {
       final user = event.session?.user;
@@ -198,7 +199,7 @@ class _MainScreenState extends State<MainScreen> {
               await AuthService.signOut();
             },
           ),
-          
+
           // 메인 콘텐츠
           Expanded(
             child: Column(

@@ -189,6 +189,167 @@ function normalizeProfile(raw) {
   return 'naesin';
 }
 
+function normalizeQuestionMode(raw) {
+  const v = String(raw || '').trim().toLowerCase();
+  if (v === 'objective' || v === '객관식' || v === 'mcq') return 'objective';
+  if (v === 'subjective' || v === '주관식' || v === 'essay') return 'subjective';
+  return 'original';
+}
+
+function normalizeLayoutColumns(raw) {
+  const v = String(raw ?? '').trim();
+  if (v === '2' || v === '2단' || v.toLowerCase() === 'two') return 2;
+  return 1;
+}
+
+function normalizeMaxQuestionsPerPage(raw, columns) {
+  const defaults = columns === 2 ? 8 : 4;
+  const parsed = Number.parseInt(String(raw ?? ''), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return defaults;
+  const allowed = columns === 2 ? [1, 2, 4, 6, 8] : [1, 2, 3, 4];
+  if (allowed.includes(parsed)) return parsed;
+  return defaults;
+}
+
+function choiceLabelByIndex(index) {
+  const table = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩'];
+  return table[index] || String(index + 1);
+}
+
+function normalizeChoiceRows(rawChoices) {
+  const rows = Array.isArray(rawChoices) ? rawChoices : [];
+  const out = [];
+  for (let i = 0; i < rows.length; i += 1) {
+    const item = rows[i] || {};
+    const text = normalizeWhitespace(
+      String(item.text ?? item.value ?? item.choice ?? ''),
+    );
+    if (!text) continue;
+    const label = normalizeWhitespace(String(item.label ?? '')) || choiceLabelByIndex(i);
+    out.push({ label, text });
+    if (out.length >= 10) break;
+  }
+  return out;
+}
+
+function sanitizeAnswerText(value) {
+  return normalizeWhitespace(
+    String(value || '').replace(/^\[?\s*정답\s*\]?\s*[:：]?\s*/i, ''),
+  );
+}
+
+function objectiveAnswerToSubjective(value) {
+  const src = sanitizeAnswerText(value);
+  if (!src) return '';
+  return src.replaceAll(
+    /[①②③④⑤⑥⑦⑧⑨⑩]/g,
+    (ch) =>
+      ({
+        '①': '1',
+        '②': '2',
+        '③': '3',
+        '④': '4',
+        '⑤': '5',
+        '⑥': '6',
+        '⑦': '7',
+        '⑧': '8',
+        '⑨': '9',
+        '⑩': '10',
+      })[ch] || ch,
+  );
+}
+
+function resolveObjectiveChoices(question) {
+  const fromDedicated = normalizeChoiceRows(question.objective_choices);
+  if (fromDedicated.length >= 2) return fromDedicated;
+  return normalizeChoiceRows(question.choices);
+}
+
+function resolveObjectiveAnswer(question) {
+  return sanitizeAnswerText(
+    question.objective_answer_key ||
+      question?.meta?.objective_answer_key ||
+      question?.meta?.answer_key ||
+      '',
+  );
+}
+
+function resolveSubjectiveAnswer(question, objectiveAnswer = '') {
+  const dedicated = sanitizeAnswerText(
+    question.subjective_answer || question?.meta?.subjective_answer || '',
+  );
+  if (dedicated) return dedicated;
+  return objectiveAnswerToSubjective(objectiveAnswer);
+}
+
+function applyQuestionModeForExport(questions, questionModeRaw) {
+  const mode = normalizeQuestionMode(questionModeRaw);
+  const normalized = (questions || []).map((q) => {
+    const objectiveChoices = resolveObjectiveChoices(q);
+    const objectiveAnswer = resolveObjectiveAnswer(q);
+    const subjectiveAnswer = resolveSubjectiveAnswer(q, objectiveAnswer);
+    const allowObjective = q.allow_objective !== false;
+    const allowSubjective = q.allow_subjective !== false;
+    const out = {
+      ...q,
+      allow_objective: allowObjective,
+      allow_subjective: allowSubjective,
+      objective_choices: objectiveChoices,
+      objective_answer_key: objectiveAnswer,
+      subjective_answer: subjectiveAnswer,
+      export_answer: '',
+    };
+
+    if (mode === 'objective') {
+      return {
+        ...out,
+        question_type: '객관식',
+        choices: objectiveChoices,
+        export_answer: objectiveAnswer,
+      };
+    }
+    if (mode === 'subjective') {
+      return {
+        ...out,
+        question_type: '주관식',
+        choices: [],
+        export_answer: subjectiveAnswer,
+      };
+    }
+
+    const originalChoices = normalizeChoiceRows(q.choices);
+    const originalLooksObjective =
+      originalChoices.length >= 2 || /객관식/.test(String(q.question_type || ''));
+    return {
+      ...out,
+      choices: originalLooksObjective ? originalChoices : [],
+      export_answer: originalLooksObjective ? objectiveAnswer : subjectiveAnswer,
+    };
+  });
+
+  if (mode === 'objective') {
+    const blocked = normalized
+      .filter((q) => q.allow_objective !== true || (q.choices || []).length < 2)
+      .map((q) => String(q.question_number || '?'));
+    if (blocked.length > 0) {
+      throw new Error(
+        `question_mode_incompatible_objective:${blocked.slice(0, 20).join(',')}`,
+      );
+    }
+  } else if (mode === 'subjective') {
+    const blocked = normalized
+      .filter((q) => q.allow_subjective !== true)
+      .map((q) => String(q.question_number || '?'));
+    if (blocked.length > 0) {
+      throw new Error(
+        `question_mode_incompatible_subjective:${blocked.slice(0, 20).join(',')}`,
+      );
+    }
+  }
+
+  return { mode, questions: normalized };
+}
+
 function toErrorCode(err) {
   const msg = String(err?.message || err || '');
   if (/not\s*found|404/i.test(msg)) return 'NOT_FOUND';
@@ -290,7 +451,8 @@ function wrapTextByWidth(text, font, size, maxWidth) {
   return lines;
 }
 
-function estimateQuestionHeight(question, fonts, layout, contentWidth) {
+function estimateQuestionHeight(question, fonts, layout, contentWidth, startX = 0) {
+  void startX;
   let h = layout.lineHeight; // number line
   const stemLines = wrapTextByWidth(
     question.stem || '',
@@ -378,11 +540,12 @@ function drawQuestion({
   fonts,
   layout,
   contentWidth,
+  startX,
 }) {
   let curY = y;
   const numberLabel = `${question.question_number || '?'}번`;
   page.drawText(numberLabel, {
-    x: layout.margin,
+    x: startX,
     y: curY,
     size: layout.stemSize,
     font: fonts.bold,
@@ -400,7 +563,7 @@ function drawQuestion({
     );
     for (const line of lines) {
       page.drawText(line, {
-        x: layout.margin,
+        x: startX,
         y: curY,
         size: layout.stemSize,
         font: fonts.regular,
@@ -414,14 +577,14 @@ function drawQuestion({
     const figureBox = estimateFigureRenderBox(question, contentWidth);
     if (figureBox) {
       page.drawText('[AI 그림 반영]', {
-        x: layout.margin,
+        x: startX,
         y: curY,
         size: 9.5,
         font: fonts.regular,
         color: rgb(0.23, 0.38, 0.58),
       });
       curY -= layout.lineHeight - 1;
-      const drawX = layout.margin + (contentWidth - figureBox.width) / 2;
+      const drawX = startX + (contentWidth - figureBox.width) / 2;
       const drawY = curY - figureBox.height;
       page.drawImage(question.figure_embed, {
         x: drawX,
@@ -432,7 +595,7 @@ function drawQuestion({
       curY -= figureBox.height + 8;
     } else {
       page.drawText('[그림/자료 포함 문항]', {
-        x: layout.margin,
+        x: startX,
         y: curY,
         size: 9.5,
         font: fonts.regular,
@@ -440,7 +603,7 @@ function drawQuestion({
       });
       curY -= layout.lineHeight - 1;
       page.drawRectangle({
-        x: layout.margin,
+        x: startX,
         y: curY - 38,
         width: contentWidth,
         height: 36,
@@ -464,7 +627,7 @@ function drawQuestion({
       let first = true;
       for (const line of lines) {
         page.drawText(line, {
-          x: layout.margin + (first ? 0 : layout.choiceIndent),
+          x: startX + (first ? 0 : layout.choiceIndent),
           y: curY,
           size: layout.choiceSize,
           font: fonts.regular,
@@ -512,7 +675,9 @@ function drawAnswerSheet({ pdfDoc, fonts, layout, questions, paperLabel }) {
     const x = layout.margin + col * colWidth;
     const yy = y - row * rowHeight;
     if (yy < layout.margin) break;
-    const label = `${questions[i].question_number || '?'}번  (   )`;
+    const answer = sanitizeAnswerText(questions[i].export_answer || '');
+    const answerText = answer ? compact(answer, 20) : '(미기입)';
+    const label = `${questions[i].question_number || '?'}번  ${answerText}`;
     page.drawText(label, {
       x,
       y: yy,
@@ -549,7 +714,7 @@ function drawExplanationPage({ pdfDoc, fonts, layout, questions, paperLabel }) {
   y -= 22;
   for (const q of questions) {
     const note = sanitizeText(q.reviewer_notes || '');
-    const merged = note.isEmpty ? '(검수 메모 없음)' : note;
+    const merged = note.length === 0 ? '(검수 메모 없음)' : note;
     const lines = wrapTextByWidth(
       `${q.question_number || '?'}번: $merged`,
       fonts.regular,
@@ -582,12 +747,12 @@ async function fetchQuestionsForJob(job) {
   let query = supa
     .from('pb_questions')
     .select(
-      'id,question_number,question_type,stem,choices,figure_refs,equations,confidence,flags,reviewer_notes,source_page,source_order,meta',
+      'id,question_number,question_type,stem,choices,allow_objective,allow_subjective,objective_choices,objective_answer_key,subjective_answer,objective_generated,figure_refs,equations,confidence,flags,reviewer_notes,source_page,source_order,meta',
     )
     .eq('academy_id', academyId)
     .eq('document_id', documentId);
 
-  if (selectedIds.isNotEmpty) {
+  if (selectedIds.length > 0) {
     query = query.in('id', selectedIds);
   } else {
     query = query.eq('is_checked', true);
@@ -604,9 +769,13 @@ async function fetchQuestionsForJob(job) {
         question_number: String(row.question_number || ''),
         question_type: String(row.question_type || ''),
         stem: String(row.stem || ''),
-        choices: Array.isArray(row.choices)
-            ? row.choices
-            : [],
+        choices: normalizeChoiceRows(row.choices),
+        allow_objective: row.allow_objective !== false,
+        allow_subjective: row.allow_subjective !== false,
+        objective_choices: normalizeChoiceRows(row.objective_choices),
+        objective_answer_key: sanitizeAnswerText(row.objective_answer_key || ''),
+        subjective_answer: sanitizeAnswerText(row.subjective_answer || ''),
+        objective_generated: row.objective_generated === true,
         figure_refs: Array.isArray(row.figure_refs)
             ? row.figure_refs
             : [],
@@ -626,16 +795,50 @@ async function renderPdf(job, questions) {
   const profile = normalizeProfile(job.template_profile);
   const paper = normalizePaper(job.paper_size);
   const layout = PROFILE_LAYOUT[profile] || PROFILE_LAYOUT.naesin;
+  const options = job.options && typeof job.options === 'object' ? job.options : {};
+  const questionModeRaw =
+    options.questionMode || options.question_mode || options.mode || 'original';
+  const modeApplied = applyQuestionModeForExport(questions, questionModeRaw);
+  const exportQuestions = modeApplied.questions;
+  const questionMode = modeApplied.mode;
+  const layoutColumns = normalizeLayoutColumns(
+    options.layoutColumns ||
+      options.layout_columns ||
+      options.columnCount ||
+      options.columns ||
+      1,
+  );
+  const maxQuestionsPerPage = normalizeMaxQuestionsPerPage(
+    options.maxQuestionsPerPage ||
+      options.max_questions_per_page ||
+      options.perPage ||
+      options.questionsPerPage ||
+      '',
+    layoutColumns,
+  );
 
   const pdfDoc = await PDFDocument.create();
   const fonts = await loadFonts(pdfDoc);
   const pageSize = PAPER_SIZE[paper];
-  const contentWidth = pageSize.width - layout.margin * 2;
+  const pageInnerWidth = pageSize.width - layout.margin * 2;
+  const columnGap = layoutColumns === 2 ? 18 : 0;
+  const contentWidth =
+    layoutColumns === 2 ? (pageInnerWidth - columnGap) / 2 : pageInnerWidth;
   const pageBottom = layout.margin;
-  await hydrateApprovedFigureEmbeds(pdfDoc, questions);
+  const pageTop = pageSize.height - layout.margin - layout.headerHeight;
+  await hydrateApprovedFigureEmbeds(pdfDoc, exportQuestions);
 
   let page = pdfDoc.addPage([pageSize.width, pageSize.height]);
   let pageNum = 1;
+  let questionCountOnPage = 0;
+  let currentColumn = 0;
+  const leftColumnQuota =
+    layoutColumns === 2 ? Math.ceil(maxQuestionsPerPage / 2) : maxQuestionsPerPage;
+  const rightColumnQuota =
+    layoutColumns === 2 ? Math.max(0, maxQuestionsPerPage - leftColumnQuota) : 0;
+  let leftColumnCountOnPage = 0;
+  let rightColumnCountOnPage = 0;
+  let startX = layout.margin;
   drawHeader({
     page,
     fonts,
@@ -644,22 +847,60 @@ async function renderPdf(job, questions) {
     paperLabel: paper,
     pageNumber: pageNum,
   });
-  let y = pageSize.height - layout.margin - layout.headerHeight;
+  let y = pageTop;
 
-  for (const q of questions) {
-    const estimated = estimateQuestionHeight(q, fonts, layout, contentWidth);
+  const beginNewPage = () => {
+    page = pdfDoc.addPage([pageSize.width, pageSize.height]);
+    pageNum += 1;
+    questionCountOnPage = 0;
+    currentColumn = 0;
+    leftColumnCountOnPage = 0;
+    rightColumnCountOnPage = 0;
+    startX = layout.margin;
+    y = pageTop;
+    drawHeader({
+      page,
+      fonts,
+      profile,
+      layout,
+      paperLabel: paper,
+      pageNumber: pageNum,
+    });
+  };
+
+  const moveToNextColumnOrPage = () => {
+    if (layoutColumns === 2 && currentColumn === 0 && rightColumnQuota > 0) {
+      currentColumn = 1;
+      startX = layout.margin + contentWidth + columnGap;
+      y = pageTop;
+      return;
+    }
+    beginNewPage();
+  };
+
+  for (const q of exportQuestions) {
+    if (questionCountOnPage >= maxQuestionsPerPage) {
+      beginNewPage();
+    }
+    if (layoutColumns === 2) {
+      if (currentColumn === 0 && leftColumnCountOnPage >= leftColumnQuota) {
+        moveToNextColumnOrPage();
+      } else if (currentColumn === 1 && rightColumnCountOnPage >= rightColumnQuota) {
+        beginNewPage();
+      }
+    }
+    const estimated = estimateQuestionHeight(
+      q,
+      fonts,
+      layout,
+      contentWidth,
+      startX,
+    );
     if (y - estimated < pageBottom) {
-      page = pdfDoc.addPage([pageSize.width, pageSize.height]);
-      pageNum += 1;
-      drawHeader({
-        page,
-        fonts,
-        profile,
-        layout,
-        paperLabel: paper,
-        pageNumber: pageNum,
-      });
-      y = pageSize.height - layout.margin - layout.headerHeight;
+      moveToNextColumnOrPage();
+      if (y - estimated < pageBottom && currentColumn === 1) {
+        beginNewPage();
+      }
     }
     y = drawQuestion({
       page,
@@ -668,7 +909,21 @@ async function renderPdf(job, questions) {
       fonts,
       layout,
       contentWidth,
+      startX,
     });
+    questionCountOnPage += 1;
+    if (layoutColumns === 2) {
+      if (currentColumn === 0) {
+        leftColumnCountOnPage += 1;
+        if (leftColumnCountOnPage >= leftColumnQuota && rightColumnQuota > 0) {
+          currentColumn = 1;
+          startX = layout.margin + contentWidth + columnGap;
+          y = pageTop;
+        }
+      } else {
+        rightColumnCountOnPage += 1;
+      }
+    }
   }
 
   if (job.include_answer_sheet === true) {
@@ -676,7 +931,7 @@ async function renderPdf(job, questions) {
       pdfDoc,
       fonts,
       layout,
-      questions,
+      questions: exportQuestions,
       paperLabel: paper,
     });
   }
@@ -685,7 +940,7 @@ async function renderPdf(job, questions) {
       pdfDoc,
       fonts,
       layout,
-      questions,
+      questions: exportQuestions,
       paperLabel: paper,
     });
   }
@@ -696,6 +951,10 @@ async function renderPdf(job, questions) {
     pageCount: pdfDoc.getPageCount(),
     profile,
     paper,
+    questionMode,
+    layoutColumns,
+    maxQuestionsPerPage,
+    exportQuestions,
   };
 }
 
@@ -705,7 +964,10 @@ async function processOneJob(job) {
     throw new Error('selected_questions_empty');
   }
   const rendered = await renderPdf(job, questions);
-  const figureAppliedCount = questions.filter((q) => Boolean(q.figure_embed)).length;
+  const exportQuestions = Array.isArray(rendered.exportQuestions)
+    ? rendered.exportQuestions
+    : questions;
+  const figureAppliedCount = exportQuestions.filter((q) => Boolean(q.figure_embed)).length;
   const objectPath = `${job.academy_id}/${job.id}.pdf`;
 
   const { error: uploadErr } = await supa.storage
@@ -737,7 +999,10 @@ async function processOneJob(job) {
       result_summary: {
         profile: rendered.profile,
         paper: rendered.paper,
-        questionCount: questions.length,
+        questionMode: rendered.questionMode || 'original',
+        layoutColumns: rendered.layoutColumns || 1,
+        maxQuestionsPerPage: rendered.maxQuestionsPerPage || 0,
+        questionCount: exportQuestions.length,
         figureAppliedCount,
       },
       finished_at: nowIso,
@@ -750,7 +1015,7 @@ async function processOneJob(job) {
 
   return {
     pageCount: rendered.pageCount,
-    questionCount: questions.length,
+    questionCount: exportQuestions.length,
     figureAppliedCount,
     outputPath: objectPath,
   };

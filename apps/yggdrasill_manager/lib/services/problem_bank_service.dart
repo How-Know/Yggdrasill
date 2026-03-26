@@ -399,6 +399,14 @@ class ProblemBankService {
         'choices': q.choices
             .map((c) => <String, dynamic>{'label': c.label, 'text': c.text})
             .toList(growable: false),
+        'allow_objective': true,
+        'allow_subjective': true,
+        'objective_choices': q.choices
+            .map((c) => <String, dynamic>{'label': c.label, 'text': c.text})
+            .toList(growable: false),
+        'objective_answer_key': '',
+        'subjective_answer': '',
+        'objective_generated': false,
         'figure_refs': const <String>[],
         'equations': const <Map<String, dynamic>>[],
         'source_anchors': <String, dynamic>{
@@ -684,7 +692,11 @@ class ProblemBankService {
     required String documentId,
     required String questionId,
     bool forceRegenerate = false,
+    String? promptText,
+    Map<String, dynamic>? options,
   }) async {
+    final safePromptText = (promptText ?? '').trim();
+    final safeOptions = options == null ? <String, dynamic>{} : {...options};
     if (hasGateway) {
       try {
         final json = await _gatewayPost(
@@ -695,6 +707,8 @@ class ProblemBankService {
             'questionId': questionId,
             'createdBy': _client.auth.currentUser?.id,
             'forceRegenerate': forceRegenerate,
+            if (safePromptText.isNotEmpty) 'promptText': safePromptText,
+            if (safeOptions.isNotEmpty) 'options': safeOptions,
           },
         );
         return ProblemBankFigureJob.fromMap(_mapFromDynamic(json['job']));
@@ -713,6 +727,8 @@ class ProblemBankService {
           'status': 'queued',
           'provider': 'gemini',
           'model_name': '',
+          'options': safeOptions,
+          'prompt_text': safePromptText,
           'worker_name': '',
           'result_summary': <String, dynamic>{},
           'output_storage_bucket': 'problem-previews',
@@ -834,6 +850,27 @@ class ProblemBankService {
         .toList(growable: false);
   }
 
+  Future<void> updateDocumentMeta({
+    required String documentId,
+    required Map<String, dynamic> meta,
+  }) async {
+    await _client.from('pb_documents').update({
+      'meta': meta,
+      'updated_at': DateTime.now().toUtc().toIso8601String(),
+    }).eq('id', documentId);
+  }
+
+  Future<void> deleteQuestionsForDocument({
+    required String academyId,
+    required String documentId,
+  }) async {
+    await _client
+        .from('pb_questions')
+        .delete()
+        .eq('academy_id', academyId)
+        .eq('document_id', documentId);
+  }
+
   Future<void> updateQuestionReview({
     required String questionId,
     required bool isChecked,
@@ -841,6 +878,12 @@ class ProblemBankService {
     String? questionType,
     String? stem,
     List<ProblemBankChoice>? choices,
+    bool? allowObjective,
+    bool? allowSubjective,
+    List<ProblemBankChoice>? objectiveChoices,
+    String? objectiveAnswerKey,
+    String? subjectiveAnswer,
+    bool? objectiveGenerated,
     List<ProblemBankEquation>? equations,
     Map<String, dynamic>? meta,
   }) async {
@@ -853,6 +896,15 @@ class ProblemBankService {
       if (stem != null) 'stem': stem,
       if (choices != null)
         'choices': choices.map((e) => e.toMap()).toList(growable: false),
+      if (allowObjective != null) 'allow_objective': allowObjective,
+      if (allowSubjective != null) 'allow_subjective': allowSubjective,
+      if (objectiveChoices != null)
+        'objective_choices':
+            objectiveChoices.map((e) => e.toMap()).toList(growable: false),
+      if (objectiveAnswerKey != null)
+        'objective_answer_key': objectiveAnswerKey,
+      if (subjectiveAnswer != null) 'subjective_answer': subjectiveAnswer,
+      if (objectiveGenerated != null) 'objective_generated': objectiveGenerated,
       if (equations != null)
         'equations': equations.map((e) => e.toMap()).toList(growable: false),
       if (meta != null) 'meta': meta,
@@ -957,6 +1009,53 @@ class ProblemBankService {
     return ProblemBankExportJob.fromMap(
       Map<String, dynamic>.from(row as Map<dynamic, dynamic>),
     );
+  }
+
+  Future<void> clearExportStorageArtifact({
+    required String academyId,
+    required String jobId,
+  }) async {
+    if (hasGateway) {
+      try {
+        await _gatewayPost(
+          '/pb/jobs/export/$jobId/cleanup',
+          body: {'academyId': academyId},
+        );
+        return;
+      } catch (_) {
+        // fallback
+      }
+    }
+
+    final row = await _client
+        .from('pb_exports')
+        .select('output_storage_bucket,output_storage_path')
+        .eq('academy_id', academyId)
+        .eq('id', jobId)
+        .maybeSingle();
+    if (row == null) return;
+    final map = Map<String, dynamic>.from(row as Map<dynamic, dynamic>);
+    final bucket = '${map['output_storage_bucket'] ?? ''}'.trim();
+    final path = '${map['output_storage_path'] ?? ''}'.trim();
+
+    if (bucket.isNotEmpty && path.isNotEmpty) {
+      try {
+        await _client.storage.from(bucket).remove([path]);
+      } catch (_) {
+        // ignore
+      }
+    }
+
+    await _client
+        .from('pb_exports')
+        .update({
+          'output_storage_bucket': '',
+          'output_storage_path': '',
+          'output_url': '',
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
+        })
+        .eq('academy_id', academyId)
+        .eq('id', jobId);
   }
 
   Future<ProblemBankDocumentSummary?> loadDocumentSummary({

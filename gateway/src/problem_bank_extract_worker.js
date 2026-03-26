@@ -358,6 +358,105 @@ function toCircledNumber(value) {
   return String.fromCharCode(0x2460 + n - 1);
 }
 
+function circledToNumeric(value) {
+  const input = normalizeWhitespace(String(value || ''));
+  if (!input) return '';
+  const table = {
+    '①': '1',
+    '②': '2',
+    '③': '3',
+    '④': '4',
+    '⑤': '5',
+    '⑥': '6',
+    '⑦': '7',
+    '⑧': '8',
+    '⑨': '9',
+    '⑩': '10',
+  };
+  if (table[input]) return table[input];
+  const num = input.match(/^[(（]?\s*(10|[1-9])\s*[)）]?$/);
+  if (num) return num[1];
+  return '';
+}
+
+function answerTokenToChoiceIndex(token) {
+  const raw = normalizeWhitespace(String(token || ''));
+  if (!raw) return -1;
+  const circledMap = {
+    '①': 0,
+    '②': 1,
+    '③': 2,
+    '④': 3,
+    '⑤': 4,
+    '⑥': 5,
+    '⑦': 6,
+    '⑧': 7,
+    '⑨': 8,
+    '⑩': 9,
+  };
+  if (Object.prototype.hasOwnProperty.call(circledMap, raw)) {
+    return circledMap[raw];
+  }
+  const normalized = raw.replace(/[()（）.]/g, '').trim();
+  const n = Number.parseInt(normalized, 10);
+  if (Number.isFinite(n) && n >= 1) return n - 1;
+  return -1;
+}
+
+function objectiveAnswerToSubjective(answerKey, choices = []) {
+  const raw = normalizeWhitespace(String(answerKey || ''));
+  if (!raw) return '';
+  const tokens = raw
+    .split(/[,/]/)
+    .map((t) => normalizeWhitespace(t))
+    .filter(Boolean);
+  if (tokens.length === 0) tokens.push(raw);
+  const normalizedChoices = Array.isArray(choices) ? choices : [];
+  const converted = tokens.map((token) => {
+    const index = answerTokenToChoiceIndex(token);
+    if (index >= 0 && index < normalizedChoices.length) {
+      const choice = normalizedChoices[index] || {};
+      const text = normalizeWhitespace(String(choice.text || choice.value || ''));
+      if (text) return text;
+    }
+    const numeric = circledToNumeric(token);
+    return numeric || token;
+  });
+  return normalizeWhitespace(converted.join(', '));
+}
+
+function normalizeObjectiveAnswerKey(answerKey) {
+  const raw = normalizeWhitespace(String(answerKey || ''));
+  if (!raw) return '';
+  if (/^[①②③④⑤⑥⑦⑧⑨⑩]$/.test(raw)) return raw;
+  if (/^\d{1,2}$/.test(raw)) return toCircledNumber(raw);
+  if (/^\d{1,2}(\s*[,/]\s*\d{1,2})+$/.test(raw)) {
+    return raw
+      .split(/[,/]/)
+      .map((token) => toCircledNumber(token))
+      .join(', ');
+  }
+  if (/^[①②③④⑤⑥⑦⑧⑨⑩](\s*[,/]\s*[①②③④⑤⑥⑦⑧⑨⑩])+$/.test(raw)) {
+    return raw
+      .split(/[,/]/)
+      .map((token) => normalizeWhitespace(token))
+      .filter(Boolean)
+      .join(', ');
+  }
+  return raw;
+}
+
+function shuffleArray(values) {
+  const out = [...values];
+  for (let i = out.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const tmp = out[i];
+    out[i] = out[j];
+    out[j] = tmp;
+  }
+  return out;
+}
+
 function normalizeAnswerKeyForQuestion(answerKey, question) {
   const raw = normalizeWhitespace(String(answerKey || ''));
   if (!raw) return '';
@@ -1505,6 +1604,325 @@ async function callGeminiQuestionExtractor({ sourceText, examProfileHint }) {
   return normalizeGeminiDrafts(parsed);
 }
 
+function normalizeGeminiObjectiveDrafts(payload) {
+  const list = Array.isArray(payload)
+    ? payload
+    : Array.isArray(payload?.questions)
+      ? payload.questions
+      : [];
+  const out = [];
+  for (const [i, item] of list.entries()) {
+    const q = item || {};
+    const numberRaw = safeToString(
+      q.question_number || q.number || q.no || q.index || '',
+    );
+    const numberMatch = numberRaw.match(/\d{1,3}/);
+    const questionNumber = numberMatch ? numberMatch[0] : String(i + 1);
+    const correctText = normalizeWhitespace(
+      safeToString(q.correct_text || q.correct || q.answer || q.correct_choice || ''),
+    );
+    let distractors = [];
+    if (Array.isArray(q.distractors)) {
+      distractors = q.distractors;
+    } else if (Array.isArray(q.wrong_choices)) {
+      distractors = q.wrong_choices;
+    } else if (Array.isArray(q.wrong)) {
+      distractors = q.wrong;
+    } else if (Array.isArray(q.choices)) {
+      distractors = q.choices
+        .filter((c) => c?.is_correct !== true && c?.correct !== true)
+        .map((c) => c?.text || c?.value || c?.choice || '');
+    }
+    const normalizedDistractors = [];
+    for (const d of distractors || []) {
+      const text = normalizeWhitespace(safeToString(d));
+      if (!text) continue;
+      normalizedDistractors.push(text);
+      if (normalizedDistractors.length >= 8) break;
+    }
+    if (!questionNumber) continue;
+    out.push({
+      questionNumber,
+      correctText,
+      distractors: normalizedDistractors,
+    });
+  }
+  return out;
+}
+
+async function callGeminiObjectiveGenerator({
+  subjectiveQuestions,
+  examProfileHint,
+}) {
+  if (!GEMINI_ENABLED) return new Map();
+  if (!GEMINI_KEY_CONFIGURED) return new Map();
+  const list = Array.isArray(subjectiveQuestions) ? subjectiveQuestions : [];
+  if (list.length === 0) return new Map();
+
+  const compacted = list
+    .map((q) => ({
+      questionNumber: String(q.questionNumber || '').trim(),
+      stem: compact(normalizeWhitespace(q.stem || ''), 240),
+      subjectiveAnswer: compact(normalizeWhitespace(q.subjectiveAnswer || ''), 120),
+    }))
+    .filter((q) => q.questionNumber && q.stem)
+    .slice(0, 50);
+  if (compacted.length === 0) return new Map();
+
+  const prompt = [
+    '너는 한국 수학 문항을 객관식 보기로 변환하는 생성기다.',
+    '각 문항마다 정답 1개와 오답 4개를 만들어 총 5개 보기를 구성해라.',
+    '반드시 JSON만 반환해라.',
+    '출력 스키마:',
+    '{ "questions": [ { "question_number": "1", "correct_text": "...", "distractors": ["...", "...", "...", "..."] } ] }',
+    '규칙:',
+    '- question_number는 입력과 동일하게 유지',
+    '- correct_text는 문항의 정답(수치/수식 가능)',
+    '- distractors는 정답과 겹치지 않는 그럴듯한 오답 4개',
+    '- JSON 외 설명 문구 금지',
+    `- 시험 유형 힌트: ${examProfileHint || 'naesin'}`,
+    '',
+    '입력 문항:',
+    JSON.stringify(compacted),
+  ].join('\n');
+
+  const url =
+    `https://generativelanguage.googleapis.com/v1beta/models/` +
+    `${encodeURIComponent(GEMINI_MODEL)}:generateContent?key=` +
+    `${encodeURIComponent(GEMINI_API_KEY)}`;
+
+  const body = {
+    contents: [{ role: 'user', parts: [{ text: prompt }] }],
+    generationConfig: {
+      temperature: 0.45,
+      responseMimeType: 'application/json',
+    },
+  };
+
+  const { signal, clear } = withTimeout(null, GEMINI_TIMEOUT_MS);
+  let res = null;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal,
+    });
+  } finally {
+    clear();
+  }
+
+  if (!res?.ok) {
+    const errText = res ? await res.text() : 'gemini_no_response';
+    throw new Error(`gemini_objective_http_${res?.status || 'unknown'}:${compact(errText)}`);
+  }
+
+  const payload = await res.json();
+  const modelText = (payload?.candidates || [])
+    .flatMap((c) => c?.content?.parts || [])
+    .map((p) => p?.text || '')
+    .join('\n')
+    .trim();
+  const parsed = parseJsonLoose(modelText);
+  if (!parsed) {
+    throw new Error('gemini_objective_invalid_json');
+  }
+
+  const map = new Map();
+  for (const row of normalizeGeminiObjectiveDrafts(parsed)) {
+    map.set(String(row.questionNumber || '').trim(), row);
+  }
+  return map;
+}
+
+function buildFallbackDistractors(correctText) {
+  const answer = normalizeWhitespace(correctText || '');
+  if (!answer) return [];
+
+  const frac = answer.match(/^(-?\d+)\s*\/\s*(-?\d+)$/);
+  if (frac) {
+    const a = Number.parseInt(frac[1], 10);
+    const b = Number.parseInt(frac[2], 10);
+    if (Number.isFinite(a) && Number.isFinite(b) && b !== 0) {
+      return [
+        `${a + 1}/${b}`,
+        `${a - 1}/${b}`,
+        `${a}/${b + (b > 0 ? 1 : -1)}`,
+        `${b}/${a === 0 ? 1 : a}`,
+      ];
+    }
+  }
+
+  const numeric = Number.parseFloat(answer);
+  if (Number.isFinite(numeric)) {
+    return [
+      String(numeric + 1),
+      String(numeric - 1),
+      String(numeric * 2),
+      String(-numeric),
+    ];
+  }
+
+  return [
+    `${answer} + 1`,
+    `${answer} - 1`,
+    `${answer}^2`,
+    `${answer}/2`,
+  ];
+}
+
+async function enrichQuestionsWithDualMode({
+  questions,
+  examProfileHint,
+}) {
+  const out = Array.isArray(questions) ? questions : [];
+  const targets = [];
+
+  for (const q of out) {
+    const rawAnswer = normalizeWhitespace(String(q?.answer_key || q?.meta?.answer_key || ''));
+    const hasObjectiveChoices = meaningfulChoiceTextCount(q?.choices || []) >= 2;
+    const objectiveAnswerKey = hasObjectiveChoices
+      ? normalizeObjectiveAnswerKey(
+          normalizeAnswerKeyForQuestion(rawAnswer, {
+            choices: q?.choices || [],
+            question_type: '객관식',
+          }),
+        )
+      : '';
+
+    q.allow_objective = true;
+    q.allow_subjective = true;
+    q.objective_generated = false;
+    q.objective_choices = hasObjectiveChoices
+      ? (q.choices || []).map((choice, idx) => ({
+          label: normalizeChoiceLabel(choice?.label || '', idx),
+          text: normalizeWhitespace(choice?.text || ''),
+        }))
+      : [];
+    q.objective_answer_key = objectiveAnswerKey;
+    q.subjective_answer = hasObjectiveChoices
+      ? objectiveAnswerToSubjective(
+          objectiveAnswerKey || rawAnswer,
+          q.objective_choices,
+        )
+      : normalizeWhitespace(rawAnswer);
+
+    if (!hasObjectiveChoices) {
+      targets.push({
+        questionNumber: String(q.question_number || '').trim(),
+        stem: normalizeWhitespace(q.stem || ''),
+        subjectiveAnswer: q.subjective_answer || '',
+        question: q,
+      });
+    }
+  }
+
+  if (targets.length > 0) {
+    let generatedMap = new Map();
+    let generationError = '';
+    try {
+      generatedMap = await callGeminiObjectiveGenerator({
+        subjectiveQuestions: targets,
+        examProfileHint,
+      });
+    } catch (err) {
+      generationError = compact(err?.message || err);
+    }
+
+    for (const target of targets) {
+      const q = target.question;
+      const generated = generatedMap.get(target.questionNumber);
+      const correctText = normalizeWhitespace(
+        generated?.correctText || target.subjectiveAnswer || '',
+      );
+      const distractors = Array.isArray(generated?.distractors)
+        ? generated.distractors
+        : [];
+      const candidateTexts = [];
+      if (correctText) candidateTexts.push(correctText);
+      for (const d of distractors) {
+        const text = normalizeWhitespace(String(d || ''));
+        if (!text) continue;
+        if (candidateTexts.some((x) => normalizeWhitespace(x) === text)) continue;
+        candidateTexts.push(text);
+        if (candidateTexts.length >= 5) break;
+      }
+      if (candidateTexts.length < 5 && correctText) {
+        for (const d of buildFallbackDistractors(correctText)) {
+          const text = normalizeWhitespace(String(d || ''));
+          if (!text) continue;
+          if (candidateTexts.some((x) => normalizeWhitespace(x) === text)) continue;
+          candidateTexts.push(text);
+          if (candidateTexts.length >= 5) break;
+        }
+      }
+
+      if (candidateTexts.length >= 5 && correctText) {
+        const optionTexts = shuffleArray(candidateTexts.slice(0, 5));
+        const correctIndex = optionTexts.findIndex(
+          (x) => normalizeWhitespace(x) === normalizeWhitespace(correctText),
+        );
+        if (correctIndex >= 0) {
+          q.objective_choices = optionTexts.map((text, idx) => ({
+            label: choiceLabelByIndex(idx),
+            text: normalizeWhitespace(text),
+          }));
+          q.objective_answer_key = choiceLabelByIndex(correctIndex);
+          q.objective_generated = true;
+          if (!generated) {
+            q.flags = Array.from(
+              new Set([...(q.flags || []), 'objective_generated_fallback']),
+            );
+          }
+          if (!q.subjective_answer) {
+            q.subjective_answer = normalizeWhitespace(correctText);
+          }
+        } else {
+          q.allow_objective = false;
+          q.objective_choices = [];
+          q.objective_answer_key = '';
+          q.flags = Array.from(new Set([...(q.flags || []), 'objective_generation_failed']));
+        }
+      } else {
+        q.allow_objective = false;
+        q.objective_choices = [];
+        q.objective_answer_key = '';
+        q.flags = Array.from(new Set([...(q.flags || []), 'objective_generation_failed']));
+      }
+      if (generationError && !q.objective_generated) {
+        q.flags = Array.from(
+          new Set([...(q.flags || []), 'objective_generation_error']),
+        );
+      }
+    }
+  }
+
+  for (const q of out) {
+    q.meta = {
+      ...(q.meta || {}),
+      answer_key: normalizeWhitespace(String(q?.answer_key || q?.meta?.answer_key || '')),
+      allow_objective: q.allow_objective !== false,
+      allow_subjective: q.allow_subjective !== false,
+      objective_answer_key: normalizeWhitespace(String(q.objective_answer_key || '')),
+      subjective_answer: normalizeWhitespace(String(q.subjective_answer || '')),
+      objective_generated: q.objective_generated === true,
+    };
+  }
+
+  const subjectiveTargets = out.filter((q) => meaningfulChoiceTextCount(q?.choices || []) < 2);
+  const objectiveGeneratedCount = out.filter((q) => q.objective_generated === true).length;
+  const objectiveUnavailableCount = out.filter((q) => q.allow_objective === false).length;
+
+  return {
+    questions: out,
+    stats: {
+      subjectiveTargetCount: subjectiveTargets.length,
+      objectiveGeneratedCount,
+      objectiveUnavailableCount,
+    },
+  };
+}
+
 function buildQuestionRows({ academyId, documentId, extractJobId, parsed, threshold }) {
   const allLines = [];
   let sourceLineCount = 0;
@@ -2146,7 +2564,14 @@ async function processOneJob(job) {
     }
   }
 
+  const dualModeResult = await enrichQuestionsWithDualMode({
+    questions: built.questions || [],
+    examProfileHint: doc.exam_profile || built?.stats?.examProfile || '',
+  });
+  built.questions = dualModeResult.questions;
+
   const { questions, stats } = built;
+  const dualModeStats = dualModeResult.stats || {};
   const nowIso = new Date().toISOString();
   let figureJobsQueued = 0;
   let figureJobSeedError = '';
@@ -2175,6 +2600,14 @@ async function processOneJob(job) {
         reviewed_by: q.reviewed_by,
         reviewed_at: q.reviewed_at,
         reviewer_notes: q.reviewer_notes,
+        allow_objective: q.allow_objective !== false,
+        allow_subjective: q.allow_subjective !== false,
+        objective_choices: Array.isArray(q.objective_choices)
+          ? q.objective_choices
+          : [],
+        objective_answer_key: String(q.objective_answer_key || ''),
+        subjective_answer: String(q.subjective_answer || ''),
+        objective_generated: q.objective_generated === true,
         meta: q.meta,
       }));
       const { error: insertErr } = await supa.from('pb_questions').insert(chunk);
@@ -2271,6 +2704,9 @@ async function processOneJob(job) {
     figureJobsQueued,
     figureJobSeedError,
     autoQueueFigureJobs: AUTO_QUEUE_FIGURE_JOBS,
+    subjectiveTargetCount: Number(dualModeStats.subjectiveTargetCount || 0),
+    objectiveGeneratedCount: Number(dualModeStats.objectiveGeneratedCount || 0),
+    objectiveUnavailableCount: Number(dualModeStats.objectiveUnavailableCount || 0),
     examProfileDetected: stats.examProfile,
     reviewThreshold: REVIEW_CONFIDENCE_THRESHOLD,
   };
