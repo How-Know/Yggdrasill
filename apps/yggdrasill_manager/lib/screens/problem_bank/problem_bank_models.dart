@@ -9,6 +9,17 @@ class ProblemBankDocument {
     required this.examProfile,
     required this.createdAt,
     required this.updatedAt,
+    required this.curriculumCode,
+    required this.sourceTypeCode,
+    required this.courseLabel,
+    required this.gradeLabel,
+    required this.semesterLabel,
+    required this.examTermLabel,
+    required this.schoolName,
+    required this.publisherName,
+    required this.materialName,
+    this.examYear,
+    this.classificationDetail = const <String, dynamic>{},
     this.meta = const <String, dynamic>{},
   });
 
@@ -21,9 +32,33 @@ class ProblemBankDocument {
   final String examProfile;
   final DateTime? createdAt;
   final DateTime? updatedAt;
+  final String curriculumCode;
+  final String sourceTypeCode;
+  final String courseLabel;
+  final String gradeLabel;
+  final int? examYear;
+  final String semesterLabel;
+  final String examTermLabel;
+  final String schoolName;
+  final String publisherName;
+  final String materialName;
+  final Map<String, dynamic> classificationDetail;
   final Map<String, dynamic> meta;
 
   factory ProblemBankDocument.fromMap(Map<String, dynamic> map) {
+    final meta = _mapOrEmpty(map['meta']);
+    final sourceRaw = _mapOrEmpty(meta['source_classification']);
+    final naesin = _mapOrEmpty(sourceRaw['naesin']);
+    final privateMaterial = sourceRaw['private_material'] == true;
+    final mockPast = sourceRaw['mock_past_exam'] == true;
+    final schoolPast = sourceRaw['school_past_exam'] == true;
+    final fallbackSourceType = privateMaterial
+        ? 'market_book'
+        : mockPast
+            ? 'mock_past'
+            : schoolPast
+                ? 'school_past'
+                : 'school_past';
     return ProblemBankDocument(
       id: '${map['id'] ?? ''}',
       academyId: '${map['academy_id'] ?? ''}',
@@ -34,7 +69,25 @@ class ProblemBankDocument {
       examProfile: '${map['exam_profile'] ?? ''}',
       createdAt: _dateTimeOrNull(map['created_at']),
       updatedAt: _dateTimeOrNull(map['updated_at']),
-      meta: _mapOrEmpty(map['meta']),
+      curriculumCode: '${map['curriculum_code'] ?? 'rev_2022'}'.trim().isEmpty
+          ? 'rev_2022'
+          : '${map['curriculum_code']}',
+      sourceTypeCode:
+          '${map['source_type_code'] ?? fallbackSourceType}'.trim().isEmpty
+              ? fallbackSourceType
+              : '${map['source_type_code']}',
+      courseLabel: '${map['course_label'] ?? ''}'.trim(),
+      gradeLabel: '${map['grade_label'] ?? naesin['grade'] ?? ''}'.trim(),
+      examYear: _intOrNull(map['exam_year']) ?? _intOrNull(naesin['year']),
+      semesterLabel:
+          '${map['semester_label'] ?? naesin['semester'] ?? ''}'.trim(),
+      examTermLabel:
+          '${map['exam_term_label'] ?? naesin['exam_term'] ?? ''}'.trim(),
+      schoolName: '${map['school_name'] ?? naesin['school_name'] ?? ''}'.trim(),
+      publisherName: '${map['publisher_name'] ?? ''}'.trim(),
+      materialName: '${map['material_name'] ?? ''}'.trim(),
+      classificationDetail: _mapOrEmpty(map['classification_detail']),
+      meta: meta,
     );
   }
 }
@@ -241,9 +294,20 @@ class ProblemBankQuestion {
     required this.objectiveAnswerKey,
     required this.subjectiveAnswer,
     required this.objectiveGenerated,
+    required this.curriculumCode,
+    required this.sourceTypeCode,
+    required this.courseLabel,
+    required this.gradeLabel,
+    required this.semesterLabel,
+    required this.examTermLabel,
+    required this.schoolName,
+    required this.publisherName,
+    required this.materialName,
+    required this.classificationDetail,
     required this.meta,
     required this.createdAt,
     required this.updatedAt,
+    this.examYear,
   });
 
   final String id;
@@ -269,6 +333,17 @@ class ProblemBankQuestion {
   final String objectiveAnswerKey;
   final String subjectiveAnswer;
   final bool objectiveGenerated;
+  final String curriculumCode;
+  final String sourceTypeCode;
+  final String courseLabel;
+  final String gradeLabel;
+  final int? examYear;
+  final String semesterLabel;
+  final String examTermLabel;
+  final String schoolName;
+  final String publisherName;
+  final String materialName;
+  final Map<String, dynamic> classificationDetail;
   final Map<String, dynamic> meta;
   final DateTime? createdAt;
   final DateTime? updatedAt;
@@ -368,6 +443,17 @@ class ProblemBankQuestion {
     bool? isChecked,
     String? reviewerNotes,
     List<String>? flags,
+    String? curriculumCode,
+    String? sourceTypeCode,
+    String? courseLabel,
+    String? gradeLabel,
+    int? examYear,
+    String? semesterLabel,
+    String? examTermLabel,
+    String? schoolName,
+    String? publisherName,
+    String? materialName,
+    Map<String, dynamic>? classificationDetail,
     Map<String, dynamic>? meta,
   }) {
     return ProblemBankQuestion(
@@ -394,6 +480,17 @@ class ProblemBankQuestion {
       objectiveAnswerKey: objectiveAnswerKey ?? this.objectiveAnswerKey,
       subjectiveAnswer: subjectiveAnswer ?? this.subjectiveAnswer,
       objectiveGenerated: objectiveGenerated ?? this.objectiveGenerated,
+      curriculumCode: curriculumCode ?? this.curriculumCode,
+      sourceTypeCode: sourceTypeCode ?? this.sourceTypeCode,
+      courseLabel: courseLabel ?? this.courseLabel,
+      gradeLabel: gradeLabel ?? this.gradeLabel,
+      examYear: examYear ?? this.examYear,
+      semesterLabel: semesterLabel ?? this.semesterLabel,
+      examTermLabel: examTermLabel ?? this.examTermLabel,
+      schoolName: schoolName ?? this.schoolName,
+      publisherName: publisherName ?? this.publisherName,
+      materialName: materialName ?? this.materialName,
+      classificationDetail: classificationDetail ?? this.classificationDetail,
       meta: meta ?? this.meta,
       createdAt: createdAt,
       updatedAt: updatedAt,
@@ -434,6 +531,18 @@ class ProblemBankQuestion {
     final equationsList = _listOrEmpty(map['equations'])
         .map((e) => ProblemBankEquation.fromMap(_mapOrEmpty(e)))
         .toList(growable: false);
+    final sourceRaw = _mapOrEmpty(meta['source_classification']);
+    final naesin = _mapOrEmpty(sourceRaw['naesin']);
+    final privateMaterial = sourceRaw['private_material'] == true;
+    final mockPast = sourceRaw['mock_past_exam'] == true;
+    final schoolPast = sourceRaw['school_past_exam'] == true;
+    final fallbackSourceType = privateMaterial
+        ? 'market_book'
+        : mockPast
+            ? 'mock_past'
+            : schoolPast
+                ? 'school_past'
+                : 'school_past';
     return ProblemBankQuestion(
       id: '${map['id'] ?? ''}',
       academyId: '${map['academy_id'] ?? ''}',
@@ -466,6 +575,24 @@ class ProblemBankQuestion {
       subjectiveAnswer: subjectiveAnswer,
       objectiveGenerated: map['objective_generated'] == true ||
           meta['objective_generated'] == true,
+      curriculumCode: '${map['curriculum_code'] ?? 'rev_2022'}'.trim().isEmpty
+          ? 'rev_2022'
+          : '${map['curriculum_code']}',
+      sourceTypeCode:
+          '${map['source_type_code'] ?? fallbackSourceType}'.trim().isEmpty
+              ? fallbackSourceType
+              : '${map['source_type_code']}',
+      courseLabel: '${map['course_label'] ?? ''}'.trim(),
+      gradeLabel: '${map['grade_label'] ?? naesin['grade'] ?? ''}'.trim(),
+      examYear: _intOrNull(map['exam_year']) ?? _intOrNull(naesin['year']),
+      semesterLabel:
+          '${map['semester_label'] ?? naesin['semester'] ?? ''}'.trim(),
+      examTermLabel:
+          '${map['exam_term_label'] ?? naesin['exam_term'] ?? ''}'.trim(),
+      schoolName: '${map['school_name'] ?? naesin['school_name'] ?? ''}'.trim(),
+      publisherName: '${map['publisher_name'] ?? ''}'.trim(),
+      materialName: '${map['material_name'] ?? ''}'.trim(),
+      classificationDetail: _mapOrEmpty(map['classification_detail']),
       meta: meta,
       createdAt: _dateTimeOrNull(map['created_at']),
       updatedAt: _dateTimeOrNull(map['updated_at']),
@@ -625,6 +752,14 @@ int _intOrZero(dynamic value) {
   if (value is int) return value;
   if (value is num) return value.toInt();
   return int.tryParse('$value') ?? 0;
+}
+
+int? _intOrNull(dynamic value) {
+  if (value == null) return null;
+  if (value is int) return value;
+  if (value is num) return value.toInt();
+  final parsed = int.tryParse('$value');
+  return parsed;
 }
 
 double _doubleOrZero(dynamic value) {

@@ -83,6 +83,36 @@ function normalizeTemplateProfile(raw) {
   return 'naesin';
 }
 
+const CURRICULUM_CODES = new Set([
+  'legacy_1to6',
+  'k7_1997',
+  'k7_2007',
+  'rev_2009',
+  'rev_2015',
+  'rev_2022',
+]);
+
+const SOURCE_TYPE_CODES = new Set([
+  'market_book',
+  'lecture_book',
+  'ebs_book',
+  'school_past',
+  'mock_past',
+  'original_item',
+]);
+
+function normalizeCurriculumCode(raw, fallback = '') {
+  const code = String(raw || '').trim();
+  if (CURRICULUM_CODES.has(code)) return code;
+  return fallback;
+}
+
+function normalizeSourceTypeCode(raw, fallback = '') {
+  const code = String(raw || '').trim();
+  if (SOURCE_TYPE_CODES.has(code)) return code;
+  return fallback;
+}
+
 function normalizePaper(raw) {
   const v = String(raw || '').trim().toUpperCase();
   if (v === 'A4' || v === 'B4' || v === '8절') return v;
@@ -99,7 +129,27 @@ function isUuid(v) {
 async function ensureDocumentBelongs(academyId, documentId) {
   const { data, error } = await supa
     .from('pb_documents')
-    .select('id,academy_id,status,exam_profile,source_filename')
+    .select(
+      [
+        'id',
+        'academy_id',
+        'status',
+        'exam_profile',
+        'source_filename',
+        'meta',
+        'curriculum_code',
+        'source_type_code',
+        'course_label',
+        'grade_label',
+        'exam_year',
+        'semester_label',
+        'exam_term_label',
+        'school_name',
+        'publisher_name',
+        'material_name',
+        'classification_detail',
+      ].join(','),
+    )
     .eq('id', documentId)
     .eq('academy_id', academyId)
     .maybeSingle();
@@ -727,6 +777,61 @@ async function documentSummary(url, res) {
   });
 }
 
+async function listQuestions(url, res) {
+  const academyId = String(url.searchParams.get('academyId') || '').trim();
+  if (!isUuid(academyId)) {
+    sendJson(res, 400, { ok: false, error: 'academyId must be uuid' });
+    return;
+  }
+
+  const documentId = String(url.searchParams.get('documentId') || '').trim();
+  const curriculumCode = normalizeCurriculumCode(
+    url.searchParams.get('curriculumCode'),
+  );
+  const sourceTypeCode = normalizeSourceTypeCode(
+    url.searchParams.get('sourceTypeCode'),
+  );
+  const gradeLabel = String(url.searchParams.get('gradeLabel') || '').trim();
+  const schoolName = String(url.searchParams.get('schoolName') || '').trim();
+  const questionType = String(url.searchParams.get('questionType') || '').trim();
+  const examYearRaw = String(url.searchParams.get('examYear') || '').trim();
+  const examYear = Number.parseInt(examYearRaw, 10);
+  const limit = normalizeLimit(url.searchParams.get('limit'), 80, 400);
+  const offsetRaw = Number.parseInt(
+    String(url.searchParams.get('offset') || '0'),
+    10,
+  );
+  const offset = Number.isFinite(offsetRaw) && offsetRaw > 0 ? offsetRaw : 0;
+
+  let q = supa.from('pb_questions').select('*').eq('academy_id', academyId);
+  if (documentId) q = q.eq('document_id', documentId);
+  if (curriculumCode) q = q.eq('curriculum_code', curriculumCode);
+  if (sourceTypeCode) q = q.eq('source_type_code', sourceTypeCode);
+  if (gradeLabel) q = q.ilike('grade_label', `%${gradeLabel}%`);
+  if (schoolName) q = q.ilike('school_name', `%${schoolName}%`);
+  if (questionType) q = q.eq('question_type', questionType);
+  if (Number.isFinite(examYear) && examYear > 0) q = q.eq('exam_year', examYear);
+
+  q = q
+    .order('created_at', { ascending: false })
+    .range(offset, offset + limit - 1);
+
+  const { data, error } = await q;
+  if (error) {
+    sendJson(res, 500, {
+      ok: false,
+      error: `question_list_failed:${error.message}`,
+    });
+    return;
+  }
+
+  sendJson(res, 200, {
+    ok: true,
+    questions: data || [],
+    paging: { offset, limit },
+  });
+}
+
 async function handler(req, res) {
   if (req.method === 'OPTIONS') {
     sendJson(res, 200, { ok: true });
@@ -818,6 +923,11 @@ async function handler(req, res) {
 
     if (method === 'GET' && url.pathname === '/pb/documents/summary') {
       await documentSummary(url, res);
+      return;
+    }
+
+    if (method === 'GET' && url.pathname === '/pb/questions') {
+      await listQuestions(url, res);
       return;
     }
 

@@ -1239,9 +1239,27 @@ class _GlobalMemoOverlayState extends State<_GlobalMemoOverlay> {
   // 전역 패널 상태 공유 (앱 어디서나 동일 패널)
   final ValueNotifier<bool> _isOpen = ValueNotifier(false);
 
+  void _syncRightSideSheetOpenState() {
+    final next = _isOpen.value;
+    if (rightSideSheetOpen.value != next) {
+      rightSideSheetOpen.value = next;
+    }
+  }
+
   @override
   void initState() {
     super.initState();
+    _isOpen.addListener(_syncRightSideSheetOpenState);
+    _syncRightSideSheetOpenState();
+    toggleRightSideSheetAction = () async {
+      if (blockRightSideSheetOpen.value) return;
+      _isOpen.value = !_isOpen.value;
+    };
+    closeRightSideSheetAction = () async {
+      if (_isOpen.value) {
+        _isOpen.value = false;
+      }
+    };
     // 앱 시작 시 메모 로드
     WidgetsBinding.instance.addPostFrameCallback((_) {
       DataManager.instance.loadMemos();
@@ -1322,6 +1340,16 @@ class _GlobalMemoOverlayState extends State<_GlobalMemoOverlay> {
         ),
       ),
     );
+  }
+
+  @override
+  void dispose() {
+    _isOpen.removeListener(_syncRightSideSheetOpenState);
+    toggleRightSideSheetAction = null;
+    closeRightSideSheetAction = null;
+    rightSideSheetOpen.value = false;
+    _isOpen.dispose();
+    super.dispose();
   }
 }
 
@@ -4328,103 +4356,114 @@ class _MemoSlideOverlayState extends State<_MemoSlideOverlay> {
       return ValueListenableBuilder<bool>(
         valueListenable: blockRightSideSheetOpen,
         builder: (context, blockOpen, _) {
-          if (blockOpen) {
-            _edgeHoverTimer?.cancel();
-            _edgeHoverTimer = null;
-            _edgeTouchActive = false;
-            _edgeDragStart = null;
-            if (widget.isOpenListenable.value) {
-              WidgetsBinding.instance.addPostFrameCallback((_) {
-                if (!mounted) return;
-                _setOpen(false);
-              });
-            }
-          }
-          return Stack(children: [
-            if (!blockOpen)
-              Positioned(
-                right: 0,
-                top: 0,
-                bottom: 0,
-                width: edgeOpenZoneWidth,
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    // 마우스 호버로 오픈 (기존 동작)
-                    MouseRegion(
-                      onEnter: (_) {
-                        // ✅ 폭을 줄여도 "화면 끝까지" 가면 체감이 비슷할 수 있어
-                        // 실수로 스치기만 해도 열리는 걸 줄이기 위해 약간의 지연을 둔다.
-                        _edgeHoverTimer?.cancel();
-                        if (widget.isOpenListenable.value) return;
-                        _edgeHoverTimer =
-                            Timer(const Duration(milliseconds: 180), () {
-                          if (!mounted) return;
-                          _setOpen(true);
-                        });
-                      },
-                      onExit: (_) {
-                        _edgeHoverTimer?.cancel();
-                        _edgeHoverTimer = null;
-                      },
-                      child: const SizedBox.shrink(),
+          return ValueListenableBuilder<bool>(
+            valueListenable: rightSideSheetEdgeOpenEnabled,
+            builder: (context, edgeOpenEnabled, __) {
+              if (blockOpen) {
+                _edgeHoverTimer?.cancel();
+                _edgeHoverTimer = null;
+                _edgeTouchActive = false;
+                _edgeDragStart = null;
+                if (widget.isOpenListenable.value) {
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (!mounted) return;
+                    _setOpen(false);
+                  });
+                }
+              } else if (!edgeOpenEnabled) {
+                _edgeHoverTimer?.cancel();
+                _edgeHoverTimer = null;
+                _edgeTouchActive = false;
+                _edgeDragStart = null;
+              }
+              final canOpenByEdge = !blockOpen && edgeOpenEnabled;
+              return Stack(children: [
+                if (canOpenByEdge)
+                  Positioned(
+                    right: 0,
+                    top: 0,
+                    bottom: 0,
+                    width: edgeOpenZoneWidth,
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        // 마우스 호버로 오픈 (기존 동작)
+                        MouseRegion(
+                          onEnter: (_) {
+                            // ✅ 폭을 줄여도 "화면 끝까지" 가면 체감이 비슷할 수 있어
+                            // 실수로 스치기만 해도 열리는 걸 줄이기 위해 약간의 지연을 둔다.
+                            _edgeHoverTimer?.cancel();
+                            if (widget.isOpenListenable.value) return;
+                            _edgeHoverTimer =
+                                Timer(const Duration(milliseconds: 180), () {
+                              if (!mounted) return;
+                              _setOpen(true);
+                            });
+                          },
+                          onExit: (_) {
+                            _edgeHoverTimer?.cancel();
+                            _edgeHoverTimer = null;
+                          },
+                          child: const SizedBox.shrink(),
+                        ),
+                        // 터치/펜 엣지 스와이프로 오픈
+                        Listener(
+                          behavior: HitTestBehavior.translucent,
+                          onPointerDown: (event) {
+                            if (event.kind == PointerDeviceKind.touch ||
+                                event.kind == PointerDeviceKind.stylus) {
+                              _edgeTouchActive = true;
+                              _edgeDragStart = event.position;
+                            }
+                          },
+                          onPointerMove: (event) {
+                            if (_edgeTouchActive && _edgeDragStart != null) {
+                              final dx = event.position.dx - _edgeDragStart!.dx;
+                              // 오른쪽 엣지에서 왼쪽으로 edgeOpenZoneWidth 이상 드래그 시 오픈
+                              if (dx < -edgeOpenZoneWidth) {
+                                _setOpen(true);
+                              }
+                            }
+                          },
+                          onPointerUp: (event) {
+                            _edgeTouchActive = false;
+                            _edgeDragStart = null;
+                          },
+                          onPointerCancel: (event) {
+                            _edgeTouchActive = false;
+                            _edgeDragStart = null;
+                          },
+                        ),
+                      ],
                     ),
-                    // 터치/펜 엣지 스와이프로 오픈
-                    Listener(
-                      behavior: HitTestBehavior.translucent,
-                      onPointerDown: (event) {
-                        if (event.kind == PointerDeviceKind.touch ||
-                            event.kind == PointerDeviceKind.stylus) {
-                          _edgeTouchActive = true;
-                          _edgeDragStart = event.position;
-                        }
-                      },
-                      onPointerMove: (event) {
-                        if (_edgeTouchActive && _edgeDragStart != null) {
-                          final dx = event.position.dx - _edgeDragStart!.dx;
-                          // 오른쪽 엣지에서 왼쪽으로 edgeOpenZoneWidth 이상 드래그 시 오픈
-                          if (dx < -edgeOpenZoneWidth) {
-                            _setOpen(true);
-                          }
-                        }
-                      },
-                      onPointerUp: (event) {
-                        _edgeTouchActive = false;
-                        _edgeDragStart = null;
-                      },
-                      onPointerCancel: (event) {
-                        _edgeTouchActive = false;
-                        _edgeDragStart = null;
-                      },
-                    ),
-                  ],
-                ),
-              ),
-            ValueListenableBuilder<bool>(
-              valueListenable: widget.isOpenListenable,
-              builder: (context, open, _) {
-                return AnimatedPositioned(
-                  duration: const Duration(milliseconds: 220),
-                  curve: Curves.easeInOut,
-                  right: open ? 0 : -panelWidth,
-                  top: 0,
-                  bottom: 0,
-                  width: panelWidth,
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      _MemoPanel(
-                        memosListenable: widget.memosListenable,
-                        onAddMemo: () => widget.onAddMemo(context),
-                        onEditMemo: (m) => widget.onEditMemo(context, m),
-                        onRequestClose: () => _setOpen(false),
-                      ),
-                    ],
                   ),
-                );
-              },
-            ),
-          ]);
+                ValueListenableBuilder<bool>(
+                  valueListenable: widget.isOpenListenable,
+                  builder: (context, open, _) {
+                    return AnimatedPositioned(
+                      duration: const Duration(milliseconds: 220),
+                      curve: Curves.easeInOut,
+                      right: open ? 0 : -panelWidth,
+                      top: 0,
+                      bottom: 0,
+                      width: panelWidth,
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          _MemoPanel(
+                            memosListenable: widget.memosListenable,
+                            onAddMemo: () => widget.onAddMemo(context),
+                            onEditMemo: (m) => widget.onEditMemo(context, m),
+                            onRequestClose: () => _setOpen(false),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ]);
+            },
+          );
         },
       );
     });

@@ -50,6 +50,24 @@ const GEMINI_ENABLED =
   GEMINI_MODEL.length > 0;
 const AUTO_QUEUE_FIGURE_JOBS = process.env.PB_AUTO_QUEUE_FIGURE_JOBS !== '0';
 
+const CURRICULUM_CODES = new Set([
+  'legacy_1to6',
+  'k7_1997',
+  'k7_2007',
+  'rev_2009',
+  'rev_2015',
+  'rev_2022',
+]);
+
+const SOURCE_TYPE_CODES = new Set([
+  'market_book',
+  'lecture_book',
+  'ebs_book',
+  'school_past',
+  'mock_past',
+  'original_item',
+]);
+
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
   console.error(
     '[pb-extract-worker] Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY',
@@ -171,6 +189,79 @@ function normalizeWhitespace(value) {
     .replace(/\s+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+}
+
+function normalizeCurriculumCode(raw, fallback = 'rev_2022') {
+  const code = normalizeWhitespace(raw);
+  return CURRICULUM_CODES.has(code) ? code : fallback;
+}
+
+function normalizeSourceTypeCode(raw, fallback = 'school_past') {
+  const code = normalizeWhitespace(raw);
+  return SOURCE_TYPE_CODES.has(code) ? code : fallback;
+}
+
+function toBoolean(raw) {
+  if (raw === true) return true;
+  if (raw === false || raw == null) return false;
+  const s = String(raw).trim().toLowerCase();
+  return s === 'true' || s === '1' || s === 'yes' || s === 'y';
+}
+
+function normalizeExamYear(raw) {
+  if (raw == null) return null;
+  const digits = String(raw).replace(/[^0-9]/g, '').trim();
+  if (!digits) return null;
+  const n = Number.parseInt(digits, 10);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n;
+}
+
+function buildClassificationFromDocument(doc) {
+  const meta = doc?.meta && typeof doc.meta === 'object' ? doc.meta : {};
+  const sourceRaw =
+    meta.source_classification && typeof meta.source_classification === 'object'
+      ? meta.source_classification
+      : {};
+  const naesinRaw = sourceRaw.naesin && typeof sourceRaw.naesin === 'object' ? sourceRaw.naesin : {};
+  const legacySourceType = toBoolean(sourceRaw.private_material)
+    ? 'market_book'
+    : toBoolean(sourceRaw.mock_past_exam)
+      ? 'mock_past'
+      : toBoolean(sourceRaw.school_past_exam)
+        ? 'school_past'
+        : 'school_past';
+  const semesterCandidate = normalizeWhitespace(naesinRaw.semester);
+  const examTermCandidate = normalizeWhitespace(naesinRaw.exam_term);
+  return {
+    curriculum_code: normalizeCurriculumCode(doc?.curriculum_code, 'rev_2022'),
+    source_type_code: normalizeSourceTypeCode(
+      doc?.source_type_code,
+      legacySourceType,
+    ),
+    course_label: normalizeWhitespace(doc?.course_label || ''),
+    grade_label: normalizeWhitespace(
+      doc?.grade_label || naesinRaw.grade || '',
+    ),
+    exam_year: normalizeExamYear(doc?.exam_year ?? naesinRaw.year),
+    semester_label:
+      semesterCandidate === '1학기' || semesterCandidate === '2학기'
+        ? semesterCandidate
+        : normalizeWhitespace(doc?.semester_label || ''),
+    exam_term_label:
+      examTermCandidate === '중간' || examTermCandidate === '기말'
+        ? examTermCandidate
+        : normalizeWhitespace(doc?.exam_term_label || ''),
+    school_name: normalizeWhitespace(
+      doc?.school_name || naesinRaw.school_name || '',
+    ),
+    publisher_name: normalizeWhitespace(doc?.publisher_name || ''),
+    material_name: normalizeWhitespace(doc?.material_name || ''),
+    classification_detail:
+      doc?.classification_detail && typeof doc.classification_detail === 'object'
+        ? doc.classification_detail
+        : {},
+  };
 }
 
 function isLikelyKoreanPersonName(value) {
@@ -2404,7 +2495,26 @@ async function processOneJob(job) {
   const { data: doc, error: docErr } = await supa
     .from('pb_documents')
     .select(
-      'id,academy_id,source_storage_bucket,source_storage_path,source_filename,exam_profile,meta',
+      [
+        'id',
+        'academy_id',
+        'source_storage_bucket',
+        'source_storage_path',
+        'source_filename',
+        'exam_profile',
+        'meta',
+        'curriculum_code',
+        'source_type_code',
+        'course_label',
+        'grade_label',
+        'exam_year',
+        'semester_label',
+        'exam_term_label',
+        'school_name',
+        'publisher_name',
+        'material_name',
+        'classification_detail',
+      ].join(','),
     )
     .eq('id', job.document_id)
     .eq('academy_id', job.academy_id)
@@ -2414,6 +2524,7 @@ async function processOneJob(job) {
     throw new Error(docErr?.message || 'document_not_found');
   }
 
+  const classification = buildClassificationFromDocument(doc);
   const bucket = String(doc.source_storage_bucket || 'problem-documents').trim();
   const path = String(doc.source_storage_path || '').trim();
   if (!path) {
@@ -2608,6 +2719,20 @@ async function processOneJob(job) {
         objective_answer_key: String(q.objective_answer_key || ''),
         subjective_answer: String(q.subjective_answer || ''),
         objective_generated: q.objective_generated === true,
+        curriculum_code: classification.curriculum_code,
+        source_type_code: classification.source_type_code,
+        course_label: classification.course_label,
+        grade_label: classification.grade_label,
+        exam_year: classification.exam_year,
+        semester_label: classification.semester_label,
+        exam_term_label: classification.exam_term_label,
+        school_name: classification.school_name,
+        publisher_name: classification.publisher_name,
+        material_name: classification.material_name,
+        classification_detail: {
+          ...(classification.classification_detail || {}),
+          extracted_by_worker: true,
+        },
         meta: q.meta,
       }));
       const { error: insertErr } = await supa.from('pb_questions').insert(chunk);
@@ -2742,6 +2867,17 @@ async function processOneJob(job) {
     .update({
       status: docStatus,
       exam_profile: stats.examProfile,
+      curriculum_code: classification.curriculum_code,
+      source_type_code: classification.source_type_code,
+      course_label: classification.course_label,
+      grade_label: classification.grade_label,
+      exam_year: classification.exam_year,
+      semester_label: classification.semester_label,
+      exam_term_label: classification.exam_term_label,
+      school_name: classification.school_name,
+      publisher_name: classification.publisher_name,
+      material_name: classification.material_name,
+      classification_detail: classification.classification_detail,
       meta: nextDocMeta,
       updated_at: nowIso,
     })

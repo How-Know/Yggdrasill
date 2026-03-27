@@ -916,6 +916,7 @@ class _SubmittedHomeworkCard extends StatelessWidget {
     final contentPadTop = (12.0 * scale).clamp(6.0, 12.0).toDouble();
     final contentPadBottom = (14.0 * scale).clamp(7.0, 14.0).toDouble();
     final line4 = _buildLine4MinutesSinceSubmitted(entry);
+    final pageLines = _buildOverlayPageLines(entry);
     final childCountText = '하위 ${entry.children.length}개';
 
     final card = Container(
@@ -953,6 +954,7 @@ class _SubmittedHomeworkCard extends StatelessWidget {
                       child: _buildCoverArea(
                         scale,
                         line4: line4,
+                        pageLines: pageLines,
                       ),
                     ),
                     Expanded(
@@ -1091,6 +1093,7 @@ class _SubmittedHomeworkCard extends StatelessWidget {
   Widget _buildCoverArea(
     double scale, {
     required String line4,
+    required List<String> pageLines,
   }) {
     return FutureBuilder<String?>(
       future: coverPathFuture,
@@ -1107,6 +1110,13 @@ class _SubmittedHomeworkCard extends StatelessWidget {
                 : Colors.white;
         final overlayTimeGap = (6.0 * scale).clamp(3.0, 6.0).toDouble();
         final overlayTimeSize = (overlayNameSize * 0.7).clamp(10.0, 29.0);
+        final overlayTextShadows = <Shadow>[
+          Shadow(
+            color: Colors.black.withOpacity(0.6),
+            blurRadius: (4.0 * scale).clamp(2.0, 4.0).toDouble(),
+            offset: Offset(0, (1.0 * scale).clamp(0.5, 1.0).toDouble()),
+          ),
+        ];
         return Stack(
           fit: StackFit.expand,
           children: [
@@ -1136,12 +1146,18 @@ class _SubmittedHomeworkCard extends StatelessWidget {
               ),
             ),
             IgnorePointer(
-              child: Center(
+              child: Align(
+                alignment: Alignment.topCenter,
                 child: Padding(
-                  padding:
-                      EdgeInsets.symmetric(horizontal: overlayHorizontalPad),
+                  padding: EdgeInsets.fromLTRB(
+                    overlayHorizontalPad,
+                    (12.0 * scale).clamp(6.0, 12.0).toDouble(),
+                    overlayHorizontalPad,
+                    0,
+                  ),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       Text(
                         entry.studentName,
@@ -1177,17 +1193,31 @@ class _SubmittedHomeworkCard extends StatelessWidget {
                             color: overlayNameColor,
                             fontSize: overlayTimeSize.toDouble(),
                             fontWeight: FontWeight.w700,
-                            shadows: [
-                              Shadow(
-                                color: Colors.black.withOpacity(0.6),
-                                blurRadius:
-                                    (4.0 * scale).clamp(2.0, 4.0).toDouble(),
-                                offset: Offset(0,
-                                    (1.0 * scale).clamp(0.5, 1.0).toDouble()),
-                              ),
-                            ],
+                            shadows: overlayTextShadows,
                           ),
                         ),
+                      ],
+                      if (pageLines.isNotEmpty) ...[
+                        SizedBox(height: overlayTimeGap),
+                        for (int i = 0; i < pageLines.length; i++) ...[
+                          Text(
+                            pageLines[i],
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            textAlign: TextAlign.left,
+                            style: TextStyle(
+                              color: overlayNameColor,
+                              fontSize: overlayTimeSize.toDouble(),
+                              fontWeight: FontWeight.w700,
+                              shadows: overlayTextShadows,
+                            ),
+                          ),
+                          if (i != pageLines.length - 1)
+                            SizedBox(
+                              height:
+                                  (overlayTimeGap * 0.58).clamp(2.0, 4.0),
+                            ),
+                        ],
                       ],
                     ],
                   ),
@@ -1210,6 +1240,26 @@ class _SubmittedHomeworkCard extends StatelessWidget {
     final mins = totalMinutes % 60;
     if (mins == 0) return '${hours}시간';
     return '${hours}시간 ${mins}분';
+  }
+
+  List<String> _buildOverlayPageLines(_GradingGroupEntry entry) {
+    final seen = <String>{};
+    final out = <String>[];
+    for (final child in entry.children) {
+      final raw = (child.page ?? '').trim();
+      if (raw.isEmpty) continue;
+      final pageLabel = 'p.$raw';
+      if (!seen.add(pageLabel)) continue;
+      out.add(pageLabel);
+    }
+    if (out.isEmpty) {
+      final fallback = (entry.summary.page ?? '').trim();
+      if (fallback.isNotEmpty) {
+        out.add('p.$fallback');
+      }
+    }
+    if (out.length <= 4) return out;
+    return <String>[...out.take(4), '...'];
   }
 
   String _extractBookName(HomeworkItem hw) {

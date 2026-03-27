@@ -38,6 +38,10 @@ const FIGURE_REFERENCE_HWPX_MAX_IMAGES = Math.max(
 );
 const FIGURE_REFERENCE_PASSTHROUGH =
   process.env.PB_FIGURE_REFERENCE_PASSTHROUGH !== '0';
+const FIGURE_MIN_SIDE_PX = Math.max(
+  1024,
+  Number.parseInt(process.env.PB_FIGURE_MIN_SIDE_PX || '3072', 10),
+);
 const FIGURE_ENABLED =
   process.env.PB_FIGURE_ENABLED !== '0' &&
   GEMINI_API_KEY.length > 0 &&
@@ -159,12 +163,55 @@ function parseFigureRenderScale(question) {
     meta.figure_render_scale ?? meta.figureScale ?? meta.figure_scale ?? '';
   const n = Number.parseFloat(String(raw));
   if (!Number.isFinite(n)) return 1.0;
-  return Math.min(1.8, Math.max(0.7, n));
+  return Math.min(2.2, Math.max(0.3, n));
+}
+
+function normalizeJobOptions(job) {
+  const raw = job?.options;
+  if (!raw || typeof raw !== 'object') return {};
+  return raw;
+}
+
+function parseRequestedMinSidePx(job) {
+  const options = normalizeJobOptions(job);
+  const raw = Number.parseInt(
+    String(options.minSidePx ?? options.min_side_px ?? FIGURE_MIN_SIDE_PX),
+    10,
+  );
+  if (!Number.isFinite(raw)) return FIGURE_MIN_SIDE_PX;
+  return Math.max(1024, Math.min(4096, raw));
+}
+
+function parseHorizontalPairHint(question, job) {
+  const options = normalizeJobOptions(job);
+  const fromOptions = Array.isArray(options.figureHorizontalPairs)
+    ? options.figureHorizontalPairs
+    : [];
+  const meta =
+    question?.meta && typeof question.meta === 'object' ? question.meta : {};
+  const fromMeta = Array.isArray(meta.figure_horizontal_pairs)
+    ? meta.figure_horizontal_pairs
+    : [];
+  const source = fromOptions.length > 0 ? fromOptions : fromMeta;
+  const pairs = [];
+  for (const pair of source) {
+    if (!pair || typeof pair !== 'object') continue;
+    const a = normalizeWhitespace(pair.a ?? pair.left ?? '');
+    const b = normalizeWhitespace(pair.b ?? pair.right ?? '');
+    if (!a || !b || a === b) continue;
+    pairs.push(`${a}+${b}`);
+  }
+  return pairs.join(', ');
 }
 
 function buildFigurePrompt(
   question,
-  { referenceImages = [], customPrompt = '' } = {},
+  {
+    referenceImages = [],
+    customPrompt = '',
+    requestedMinSidePx = FIGURE_MIN_SIDE_PX,
+    horizontalPairHint = '',
+  } = {},
 ) {
   const stem = compact(question.stem || '', 1600);
   const figureRefs = Array.isArray(question.figure_refs)
@@ -186,6 +233,7 @@ function buildFigurePrompt(
   const renderScale = parseFigureRenderScale(question);
   const renderScalePct = Math.round(renderScale * 100);
   const safeCustomPrompt = normalizeWhitespace(customPrompt);
+  const safeHorizontalPairHint = normalizeWhitespace(horizontalPairHint);
   return [
     '당신은 한국 중고등 수학 시험 문항용 도형/도표 일러스트 생성기다.',
     useReference
@@ -197,6 +245,8 @@ function buildFigurePrompt(
     '- 본문/보기/수식에 나온 문자·숫자 라벨을 누락하지 말 것',
     '- 도형 내부 수식/숫자/알파벳 라벨 크기를 문제 본문 수식의 시각 크기와 동일하게 맞출 것',
     '- 분수/근호/지수 등 2차원 수식의 굵기와 비율을 본문 수식과 일치시킬 것',
+    `- 결과 이미지는 고해상도로 생성하고, 출력 짧은 변 기준 최소 ${requestedMinSidePx}px 수준을 목표로 할 것`,
+    '- 업스케일된 흐릿한 품질이 아닌 선명한 원본 품질로 생성할 것',
     '- 도형 비율, 각도, 선 길이의 상대 관계를 실제 문제와 일치시킬 것',
     '- 축, 화살표, 점선, 음영, 점/꼭짓점 표기 등 시각 요소를 최대한 동일하게 반영',
     useReference
@@ -212,6 +262,7 @@ function buildFigurePrompt(
     `[도형 힌트] ${figureRefs.join(' | ')}`,
     `[수식 힌트] ${equations.join(' | ')}`,
     `[수식 라벨 배율 힌트] ${renderScalePct}%`,
+    safeHorizontalPairHint ? `[가로 배치 힌트] ${safeHorizontalPairHint}` : '',
     safeCustomPrompt ? `[추가 사용자 지시] ${safeCustomPrompt}` : '',
   ].join('\n');
 }
@@ -494,9 +545,13 @@ async function processOneJob(job) {
     throw new Error('figure_refs_empty');
   }
   const referenceImages = await resolveReferenceImagesForQuestion(job, question);
+  const requestedMinSidePx = parseRequestedMinSidePx(job);
+  const horizontalPairHint = parseHorizontalPairHint(question, job);
   const promptText = buildFigurePrompt(question, {
     referenceImages,
     customPrompt: job.prompt_text,
+    requestedMinSidePx,
+    horizontalPairHint,
   });
   const modelName = normalizeWhitespace(job.model_name) || FIGURE_MODEL;
   const shouldPassthrough =

@@ -72,6 +72,82 @@ class ProblemBankService {
 
   bool get hasGateway => _gatewayBaseUrl.isNotEmpty;
 
+  static const List<String> _curriculumCodes = <String>[
+    'legacy_1to6',
+    'k7_1997',
+    'k7_2007',
+    'rev_2009',
+    'rev_2015',
+    'rev_2022',
+  ];
+  static const List<String> _sourceTypeCodes = <String>[
+    'market_book',
+    'lecture_book',
+    'ebs_book',
+    'school_past',
+    'mock_past',
+    'original_item',
+  ];
+
+  String _normalizeCurriculumCode(String? value) {
+    final code = (value ?? '').trim();
+    if (_curriculumCodes.contains(code)) return code;
+    return 'rev_2022';
+  }
+
+  String _normalizeSourceTypeCode(String? value) {
+    final code = (value ?? '').trim();
+    if (_sourceTypeCodes.contains(code)) return code;
+    return 'school_past';
+  }
+
+  String _normalizeSemesterLabel(String? value) {
+    final label = (value ?? '').trim();
+    if (label == '1학기' || label == '2학기') return label;
+    return '';
+  }
+
+  String _normalizeExamTermLabel(String? value) {
+    final label = (value ?? '').trim();
+    if (label == '중간' || label == '기말') return label;
+    return '';
+  }
+
+  int? _normalizeExamYear(dynamic value) {
+    if (value == null) return null;
+    final digits = '$value'.replaceAll(RegExp(r'[^0-9]'), '').trim();
+    if (digits.isEmpty) return null;
+    return int.tryParse(digits);
+  }
+
+  Map<String, dynamic> _buildClassificationColumns({
+    String? curriculumCode,
+    String? sourceTypeCode,
+    String? courseLabel,
+    String? gradeLabel,
+    dynamic examYear,
+    String? semesterLabel,
+    String? examTermLabel,
+    String? schoolName,
+    String? publisherName,
+    String? materialName,
+    Map<String, dynamic>? classificationDetail,
+  }) {
+    return <String, dynamic>{
+      'curriculum_code': _normalizeCurriculumCode(curriculumCode),
+      'source_type_code': _normalizeSourceTypeCode(sourceTypeCode),
+      'course_label': (courseLabel ?? '').trim(),
+      'grade_label': (gradeLabel ?? '').trim(),
+      'exam_year': _normalizeExamYear(examYear),
+      'semester_label': _normalizeSemesterLabel(semesterLabel),
+      'exam_term_label': _normalizeExamTermLabel(examTermLabel),
+      'school_name': (schoolName ?? '').trim(),
+      'publisher_name': (publisherName ?? '').trim(),
+      'material_name': (materialName ?? '').trim(),
+      'classification_detail': classificationDetail ?? <String, dynamic>{},
+    };
+  }
+
   Uri _gatewayUri(String path, [Map<String, String>? query]) {
     final base = _gatewayBaseUrl.endsWith('/')
         ? _gatewayBaseUrl.substring(0, _gatewayBaseUrl.length - 1)
@@ -246,6 +322,17 @@ class ProblemBankService {
     required Uint8List bytes,
     required String originalName,
     String examProfile = 'naesin',
+    String curriculumCode = 'rev_2022',
+    String sourceTypeCode = 'school_past',
+    String courseLabel = '',
+    String gradeLabel = '',
+    int? examYear,
+    String semesterLabel = '',
+    String examTermLabel = '',
+    String schoolName = '',
+    String publisherName = '',
+    String materialName = '',
+    Map<String, dynamic> classificationDetail = const <String, dynamic>{},
     String? academyId,
   }) async {
     final aid = (academyId ?? await resolveAcademyId()).trim();
@@ -276,6 +363,19 @@ class ProblemBankService {
           'source_size_bytes': bytes.length,
           'status': 'uploaded',
           'exam_profile': examProfile,
+          ..._buildClassificationColumns(
+            curriculumCode: curriculumCode,
+            sourceTypeCode: sourceTypeCode,
+            courseLabel: courseLabel,
+            gradeLabel: gradeLabel,
+            examYear: examYear,
+            semesterLabel: semesterLabel,
+            examTermLabel: examTermLabel,
+            schoolName: schoolName,
+            publisherName: publisherName,
+            materialName: materialName,
+            classificationDetail: classificationDetail,
+          ),
           'meta': <String, dynamic>{
             'uploaded_from': 'manager',
             'uploaded_at': DateTime.now().toUtc().toIso8601String(),
@@ -293,6 +393,17 @@ class ProblemBankService {
     required String rawText,
     String sourceName = 'manual_paste.txt',
     String examProfile = 'naesin',
+    String curriculumCode = 'rev_2022',
+    String sourceTypeCode = 'school_past',
+    String courseLabel = '',
+    String gradeLabel = '',
+    int? examYear,
+    String semesterLabel = '',
+    String examTermLabel = '',
+    String schoolName = '',
+    String publisherName = '',
+    String materialName = '',
+    Map<String, dynamic> classificationDetail = const <String, dynamic>{},
   }) async {
     final aid = academyId.trim();
     if (aid.isEmpty) {
@@ -339,6 +450,19 @@ class ProblemBankService {
           'source_size_bytes': bytes.length,
           'status': 'uploaded',
           'exam_profile': examProfile,
+          ..._buildClassificationColumns(
+            curriculumCode: curriculumCode,
+            sourceTypeCode: sourceTypeCode,
+            courseLabel: courseLabel,
+            gradeLabel: gradeLabel,
+            examYear: examYear,
+            semesterLabel: semesterLabel,
+            examTermLabel: examTermLabel,
+            schoolName: schoolName,
+            publisherName: publisherName,
+            materialName: materialName,
+            classificationDetail: classificationDetail,
+          ),
           'meta': <String, dynamic>{
             'uploaded_from': 'manager_manual_paste',
             'uploaded_at': nowIso,
@@ -407,6 +531,17 @@ class ProblemBankService {
         'objective_answer_key': '',
         'subjective_answer': '',
         'objective_generated': false,
+        'curriculum_code': _normalizeCurriculumCode(curriculumCode),
+        'source_type_code': _normalizeSourceTypeCode(sourceTypeCode),
+        'course_label': courseLabel.trim(),
+        'grade_label': gradeLabel.trim(),
+        'exam_year': _normalizeExamYear(examYear),
+        'semester_label': _normalizeSemesterLabel(semesterLabel),
+        'exam_term_label': _normalizeExamTermLabel(examTermLabel),
+        'school_name': schoolName.trim(),
+        'publisher_name': publisherName.trim(),
+        'material_name': materialName.trim(),
+        'classification_detail': classificationDetail,
         'figure_refs': const <String>[],
         'equations': const <Map<String, dynamic>>[],
         'source_anchors': <String, dynamic>{
@@ -434,6 +569,19 @@ class ProblemBankService {
     await _client.from('pb_documents').update({
       'status': lowConfidenceCount > 0 ? 'review_required' : 'ready',
       'exam_profile': examProfile,
+      ..._buildClassificationColumns(
+        curriculumCode: curriculumCode,
+        sourceTypeCode: sourceTypeCode,
+        courseLabel: courseLabel,
+        gradeLabel: gradeLabel,
+        examYear: examYear,
+        semesterLabel: semesterLabel,
+        examTermLabel: examTermLabel,
+        schoolName: schoolName,
+        publisherName: publisherName,
+        materialName: materialName,
+        classificationDetail: classificationDetail,
+      ),
       'meta': <String, dynamic>{
         ...document.meta,
         'extraction': <String, dynamic>{
@@ -463,6 +611,46 @@ class ProblemBankService {
         .eq('academy_id', academyId)
         .order('created_at', ascending: false)
         .limit(limit);
+    return (rows as List<dynamic>)
+        .map((e) => ProblemBankDocument.fromMap(
+              Map<String, dynamic>.from(e as Map<dynamic, dynamic>),
+            ))
+        .toList(growable: false);
+  }
+
+  Future<List<ProblemBankDocument>> searchDocuments({
+    required String academyId,
+    String? curriculumCode,
+    String? sourceTypeCode,
+    String? gradeLabel,
+    int? examYear,
+    String? schoolName,
+    int limit = 120,
+  }) async {
+    final safeLimit = limit.clamp(1, 400);
+    var q =
+        _client.from('pb_documents').select('*').eq('academy_id', academyId);
+    final safeCurriculum = _normalizeCurriculumCode(curriculumCode);
+    final safeSourceType = _normalizeSourceTypeCode(sourceTypeCode);
+    final safeGrade = (gradeLabel ?? '').trim();
+    final safeSchool = (schoolName ?? '').trim();
+    final safeYear = _normalizeExamYear(examYear);
+    if ((curriculumCode ?? '').trim().isNotEmpty) {
+      q = q.eq('curriculum_code', safeCurriculum);
+    }
+    if ((sourceTypeCode ?? '').trim().isNotEmpty) {
+      q = q.eq('source_type_code', safeSourceType);
+    }
+    if (safeGrade.isNotEmpty) {
+      q = q.ilike('grade_label', '%$safeGrade%');
+    }
+    if (safeSchool.isNotEmpty) {
+      q = q.ilike('school_name', '%$safeSchool%');
+    }
+    if (safeYear != null) {
+      q = q.eq('exam_year', safeYear);
+    }
+    final rows = await q.order('created_at', ascending: false).limit(safeLimit);
     return (rows as List<dynamic>)
         .map((e) => ProblemBankDocument.fromMap(
               Map<String, dynamic>.from(e as Map<dynamic, dynamic>),
@@ -850,14 +1038,161 @@ class ProblemBankService {
         .toList(growable: false);
   }
 
+  Future<List<ProblemBankQuestion>> searchQuestions({
+    required String academyId,
+    String? documentId,
+    String? curriculumCode,
+    String? sourceTypeCode,
+    String? gradeLabel,
+    int? examYear,
+    String? schoolName,
+    String? questionType,
+    int limit = 200,
+    int offset = 0,
+  }) async {
+    final safeLimit = limit.clamp(1, 400);
+    final safeOffset = offset < 0 ? 0 : offset;
+    final safeDocumentId = (documentId ?? '').trim();
+    final safeGrade = (gradeLabel ?? '').trim();
+    final safeSchool = (schoolName ?? '').trim();
+    final safeQuestionType = (questionType ?? '').trim();
+    final safeCurriculum = (curriculumCode ?? '').trim().isEmpty
+        ? ''
+        : _normalizeCurriculumCode(curriculumCode);
+    final safeSourceType = (sourceTypeCode ?? '').trim().isEmpty
+        ? ''
+        : _normalizeSourceTypeCode(sourceTypeCode);
+    final safeYear = _normalizeExamYear(examYear);
+
+    if (hasGateway) {
+      try {
+        final query = <String, String>{
+          'academyId': academyId,
+          'limit': '$safeLimit',
+          'offset': '$safeOffset',
+          if (safeDocumentId.isNotEmpty) 'documentId': safeDocumentId,
+          if (safeCurriculum.isNotEmpty) 'curriculumCode': safeCurriculum,
+          if (safeSourceType.isNotEmpty) 'sourceTypeCode': safeSourceType,
+          if (safeGrade.isNotEmpty) 'gradeLabel': safeGrade,
+          if (safeSchool.isNotEmpty) 'schoolName': safeSchool,
+          if (safeQuestionType.isNotEmpty) 'questionType': safeQuestionType,
+          if (safeYear != null) 'examYear': '$safeYear',
+        };
+        final json = await _gatewayGet('/pb/questions', query: query);
+        final rows = (json['questions'] as List<dynamic>? ?? const <dynamic>[])
+            .map((e) => ProblemBankQuestion.fromMap(_mapFromDynamic(e)))
+            .toList(growable: false);
+        return rows;
+      } catch (_) {
+        // gateway 실패 시 direct query fallback
+      }
+    }
+
+    var q =
+        _client.from('pb_questions').select('*').eq('academy_id', academyId);
+    if (safeDocumentId.isNotEmpty) q = q.eq('document_id', safeDocumentId);
+    if (safeCurriculum.isNotEmpty) q = q.eq('curriculum_code', safeCurriculum);
+    if (safeSourceType.isNotEmpty) q = q.eq('source_type_code', safeSourceType);
+    if (safeGrade.isNotEmpty) q = q.ilike('grade_label', '%$safeGrade%');
+    if (safeSchool.isNotEmpty) q = q.ilike('school_name', '%$safeSchool%');
+    if (safeQuestionType.isNotEmpty) {
+      q = q.eq('question_type', safeQuestionType);
+    }
+    if (safeYear != null) q = q.eq('exam_year', safeYear);
+    final rows = await q
+        .order('created_at', ascending: false)
+        .range(safeOffset, safeOffset + safeLimit - 1);
+    return (rows as List<dynamic>)
+        .map((e) => ProblemBankQuestion.fromMap(
+              Map<String, dynamic>.from(e as Map<dynamic, dynamic>),
+            ))
+        .toList(growable: false);
+  }
+
   Future<void> updateDocumentMeta({
     required String documentId,
     required Map<String, dynamic> meta,
+    String? curriculumCode,
+    String? sourceTypeCode,
+    String? courseLabel,
+    String? gradeLabel,
+    int? examYear,
+    String? semesterLabel,
+    String? examTermLabel,
+    String? schoolName,
+    String? publisherName,
+    String? materialName,
+    Map<String, dynamic>? classificationDetail,
   }) async {
-    await _client.from('pb_documents').update({
+    final payload = <String, dynamic>{
       'meta': meta,
       'updated_at': DateTime.now().toUtc().toIso8601String(),
-    }).eq('id', documentId);
+    };
+    if (curriculumCode != null ||
+        sourceTypeCode != null ||
+        courseLabel != null ||
+        gradeLabel != null ||
+        examYear != null ||
+        semesterLabel != null ||
+        examTermLabel != null ||
+        schoolName != null ||
+        publisherName != null ||
+        materialName != null ||
+        classificationDetail != null) {
+      payload.addAll(
+        _buildClassificationColumns(
+          curriculumCode: curriculumCode,
+          sourceTypeCode: sourceTypeCode,
+          courseLabel: courseLabel,
+          gradeLabel: gradeLabel,
+          examYear: examYear,
+          semesterLabel: semesterLabel,
+          examTermLabel: examTermLabel,
+          schoolName: schoolName,
+          publisherName: publisherName,
+          materialName: materialName,
+          classificationDetail: classificationDetail,
+        ),
+      );
+    }
+    await _client.from('pb_documents').update(payload).eq('id', documentId);
+  }
+
+  Future<void> updateQuestionsClassificationForDocument({
+    required String academyId,
+    required String documentId,
+    required String curriculumCode,
+    required String sourceTypeCode,
+    String courseLabel = '',
+    String gradeLabel = '',
+    int? examYear,
+    String semesterLabel = '',
+    String examTermLabel = '',
+    String schoolName = '',
+    String publisherName = '',
+    String materialName = '',
+    Map<String, dynamic> classificationDetail = const <String, dynamic>{},
+  }) async {
+    await _client
+        .from('pb_questions')
+        .update({
+          ..._buildClassificationColumns(
+            curriculumCode: curriculumCode,
+            sourceTypeCode: sourceTypeCode,
+            courseLabel: courseLabel,
+            gradeLabel: gradeLabel,
+            examYear: examYear,
+            semesterLabel: semesterLabel,
+            examTermLabel: examTermLabel,
+            schoolName: schoolName,
+            publisherName: publisherName,
+            materialName: materialName,
+            classificationDetail: classificationDetail,
+          ),
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
+        })
+        .eq('academy_id', academyId)
+        .eq('document_id', documentId);
   }
 
   Future<void> deleteQuestionsForDocument({
@@ -869,6 +1204,26 @@ class ProblemBankService {
         .delete()
         .eq('academy_id', academyId)
         .eq('document_id', documentId);
+  }
+
+  Future<void> deleteDocument({
+    required String academyId,
+    required ProblemBankDocument document,
+  }) async {
+    final sourceBucket = document.sourceStorageBucket.trim();
+    final sourcePath = document.sourceStoragePath.trim();
+    if (sourceBucket.isNotEmpty && sourcePath.isNotEmpty) {
+      try {
+        await _client.storage.from(sourceBucket).remove([sourcePath]);
+      } catch (_) {
+        // 스토리지 삭제 실패는 문서 삭제를 막지 않는다.
+      }
+    }
+    await _client
+        .from('pb_documents')
+        .delete()
+        .eq('academy_id', academyId)
+        .eq('id', document.id);
   }
 
   Future<void> updateQuestionReview({
@@ -886,6 +1241,17 @@ class ProblemBankService {
     bool? objectiveGenerated,
     List<ProblemBankEquation>? equations,
     Map<String, dynamic>? meta,
+    String? curriculumCode,
+    String? sourceTypeCode,
+    String? courseLabel,
+    String? gradeLabel,
+    int? examYear,
+    String? semesterLabel,
+    String? examTermLabel,
+    String? schoolName,
+    String? publisherName,
+    String? materialName,
+    Map<String, dynamic>? classificationDetail,
   }) async {
     final payload = <String, dynamic>{
       'is_checked': isChecked,
@@ -909,6 +1275,33 @@ class ProblemBankService {
         'equations': equations.map((e) => e.toMap()).toList(growable: false),
       if (meta != null) 'meta': meta,
     };
+    if (curriculumCode != null ||
+        sourceTypeCode != null ||
+        courseLabel != null ||
+        gradeLabel != null ||
+        examYear != null ||
+        semesterLabel != null ||
+        examTermLabel != null ||
+        schoolName != null ||
+        publisherName != null ||
+        materialName != null ||
+        classificationDetail != null) {
+      payload.addAll(
+        _buildClassificationColumns(
+          curriculumCode: curriculumCode,
+          sourceTypeCode: sourceTypeCode,
+          courseLabel: courseLabel,
+          gradeLabel: gradeLabel,
+          examYear: examYear,
+          semesterLabel: semesterLabel,
+          examTermLabel: examTermLabel,
+          schoolName: schoolName,
+          publisherName: publisherName,
+          materialName: materialName,
+          classificationDetail: classificationDetail,
+        ),
+      );
+    }
     await _client.from('pb_questions').update(payload).eq('id', questionId);
   }
 

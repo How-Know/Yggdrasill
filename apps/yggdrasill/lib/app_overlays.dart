@@ -34,6 +34,19 @@ AsyncUiAction? homeBatchConfirmAction;
 /// 전역 오른쪽 사이드시트 열림 방지 (성향 탭 등에서 사용)
 final ValueNotifier<bool> blockRightSideSheetOpen = ValueNotifier<bool>(false);
 
+/// 전역 오른쪽 사이드시트 엣지(호버/스와이프) 오픈 허용 여부.
+final ValueNotifier<bool> rightSideSheetEdgeOpenEnabled =
+    ValueNotifier<bool>(true);
+
+/// 전역 오른쪽 사이드시트 열림 상태.
+final ValueNotifier<bool> rightSideSheetOpen = ValueNotifier<bool>(false);
+
+/// 전역 오른쪽 사이드시트 토글 액션.
+AsyncUiAction? toggleRightSideSheetAction;
+
+/// 전역 오른쪽 사이드시트 닫기 액션.
+AsyncUiAction? closeRightSideSheetAction;
+
 /// 교재 메뉴 카드 드래그 중인 payload.
 /// - null: 드래그 비활성
 /// - non-null: 학생 영역 드롭 대상 활성

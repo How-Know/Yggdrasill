@@ -9,6 +9,18 @@ import '../dialog_tokens.dart';
 
 enum HomeworkAnswerViewerAction { confirm, complete }
 
+class HomeworkAnswerOverlayEntry {
+  final String title;
+  final String page;
+  final String memo;
+
+  const HomeworkAnswerOverlayEntry({
+    required this.title,
+    required this.page,
+    required this.memo,
+  });
+}
+
 Future<HomeworkAnswerViewerAction?> openHomeworkAnswerViewerPage(
   BuildContext context, {
   required String filePath,
@@ -16,6 +28,8 @@ Future<HomeworkAnswerViewerAction?> openHomeworkAnswerViewerPage(
   String? solutionFilePath,
   String? cacheKey,
   bool enableConfirm = true,
+  List<HomeworkAnswerOverlayEntry> overlayEntries =
+      const <HomeworkAnswerOverlayEntry>[],
 }) async {
   final previousMemoFloatingHidden = hideGlobalMemoFloatingBanners.value;
   hideGlobalMemoFloatingBanners.value = true;
@@ -28,6 +42,7 @@ Future<HomeworkAnswerViewerAction?> openHomeworkAnswerViewerPage(
           solutionFilePath: solutionFilePath,
           cacheKey: cacheKey,
           enableConfirm: enableConfirm,
+          overlayEntries: overlayEntries,
         ),
       ),
     );
@@ -42,6 +57,7 @@ class HomeworkAnswerViewerPage extends StatefulWidget {
   final String? solutionFilePath;
   final String? cacheKey;
   final bool enableConfirm;
+  final List<HomeworkAnswerOverlayEntry> overlayEntries;
 
   const HomeworkAnswerViewerPage({
     super.key,
@@ -50,6 +66,7 @@ class HomeworkAnswerViewerPage extends StatefulWidget {
     this.solutionFilePath,
     this.cacheKey,
     this.enableConfirm = true,
+    this.overlayEntries = const <HomeworkAnswerOverlayEntry>[],
   });
 
   @override
@@ -97,6 +114,7 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
   bool _draggingSlider = false;
   bool _isViewerReady = false;
   bool _openingSolution = false;
+  bool _overlayCollapsed = false;
   double? _cachedInitialZoom;
   Offset? _cachedInitialCenter;
   Offset? _cachedInitialCenterRatio;
@@ -354,6 +372,7 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
         title: '${widget.title} · 해설',
         cacheKey: 'sol|${_cacheKey.isEmpty ? widget.filePath : _cacheKey}|$solutionPath',
         enableConfirm: false,
+        overlayEntries: widget.overlayEntries,
       );
     } finally {
       if (mounted) setState(() => _openingSolution = false);
@@ -678,6 +697,13 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
                 ],
               ),
             ),
+            if (widget.overlayEntries.isNotEmpty)
+              Positioned(
+                left: 14,
+                top: 92,
+                right: _pageCount > 1 ? 78 : 14,
+                child: _buildChildOverlayPanel(context),
+              ),
             if (_pageCount > 1)
               Positioned(
                 right: 8,
@@ -880,6 +906,143 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
                 ],
               ),
             ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildChildOverlayPanel(BuildContext context) {
+    final entries = widget.overlayEntries;
+    if (entries.isEmpty) return const SizedBox.shrink();
+    final maxWidth = math.min(MediaQuery.of(context).size.width * 0.29, 380.0);
+    const titleStyle = TextStyle(
+      color: Colors.white,
+      fontSize: 20.0,
+      fontWeight: FontWeight.w800,
+      height: 1.1,
+    );
+    const metaStyle = TextStyle(
+      color: Color(0xFF9AA3AD),
+      fontSize: 20.0,
+      fontWeight: FontWeight.w800,
+      height: 1.1,
+    );
+    String normalize(String raw, {String fallback = '-'}) {
+      final trimmed = raw.trim();
+      return trimmed.isEmpty ? fallback : trimmed;
+    }
+
+    return Align(
+      alignment: Alignment.topLeft,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: maxWidth),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          decoration: BoxDecoration(
+            color: const Color(0xFF121A20),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: Colors.white.withValues(alpha: 0.18),
+            ),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '하위 과제 ${entries.length}개',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 13.5,
+                        fontWeight: FontWeight.w800,
+                        height: 1.1,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  InkWell(
+                    borderRadius: BorderRadius.circular(999),
+                    onTap: () => setState(() {
+                      _overlayCollapsed = !_overlayCollapsed;
+                    }),
+                    child: Padding(
+                      padding: const EdgeInsets.all(3),
+                      child: Icon(
+                        _overlayCollapsed
+                            ? Icons.expand_more_rounded
+                            : Icons.expand_less_rounded,
+                        size: 20,
+                        color: Colors.white.withValues(alpha: 0.92),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              if (!_overlayCollapsed) ...[
+                const SizedBox(height: 8),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 320),
+                  child: SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        for (int i = 0; i < entries.length; i++) ...[
+                          Text(
+                            normalize(
+                              entries[i].title,
+                              fallback: '(제목 없음)',
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: titleStyle,
+                          ),
+                          const SizedBox(height: 6),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  normalize(entries[i].page),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  textAlign: TextAlign.left,
+                                  style: metaStyle,
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  normalize(entries[i].memo),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  textAlign: TextAlign.right,
+                                  style: metaStyle,
+                                ),
+                              ),
+                            ],
+                          ),
+                          if (i != entries.length - 1) ...[
+                            const SizedBox(height: 9),
+                            Container(
+                              width: double.infinity,
+                              height: 1,
+                              color: Colors.white.withValues(alpha: 0.18),
+                            ),
+                            const SizedBox(height: 9),
+                          ],
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+              ],
             ],
           ),
         ),

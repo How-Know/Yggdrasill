@@ -12,6 +12,8 @@ import 'package:syncfusion_flutter_pdf/pdf.dart';
 import '../../services/problem_bank_service.dart';
 import '../../widgets/latex_text_renderer.dart';
 import 'problem_bank_models.dart';
+import 'widgets/problem_bank_classification_filter_panel.dart';
+import 'widgets/problem_bank_mode_tab_bar.dart';
 
 class ProblemBankScreen extends StatefulWidget {
   const ProblemBankScreen({super.key});
@@ -20,7 +22,8 @@ class ProblemBankScreen extends StatefulWidget {
   State<ProblemBankScreen> createState() => _ProblemBankScreenState();
 }
 
-class _ProblemBankScreenState extends State<ProblemBankScreen> {
+class _ProblemBankScreenState extends State<ProblemBankScreen>
+    with SingleTickerProviderStateMixin {
   static const Color _bg = Color(0xFF0B1112);
   static const Color _panel = Color(0xFF10171A);
   static const Color _field = Color(0xFF15171C);
@@ -50,8 +53,43 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
     '1단': <int>[1, 2, 3, 4],
     '2단': <int>[1, 2, 4, 6, 8],
   };
+  static const Map<String, String> _curriculumLabels = <String, String>{
+    'legacy_1to6': '옛날 교육과정(1~6차)',
+    'k7_1997': '7차 교육과정(1997)',
+    'k7_2007': '2007 개정(7차)',
+    'rev_2009': '2009 개정',
+    'rev_2015': '2015 개정',
+    'rev_2022': '2022 개정',
+  };
+  static const Map<String, String> _sourceTypeLabels = <String, String>{
+    'market_book': '시중 교재',
+    'lecture_book': '인강 교재',
+    'ebs_book': 'EBS 교재',
+    'school_past': '내신 기출',
+    'mock_past': '모의고사 기출',
+    'original_item': '자작 문항',
+  };
+  static const Map<String, String> _questionTypeFilterLabels = <String, String>{
+    '': '전체',
+    '객관식': '객관식',
+    '주관식': '주관식',
+    '서술형': '서술형',
+  };
+  static const List<String> _courseLabelOptions = <String>[
+    '',
+    '중등',
+    '고등',
+    '공통',
+  ];
+  static const Map<String, String> _courseLabelLabels = <String, String>{
+    '': '미선택',
+    '중등': '중등',
+    '고등': '고등',
+    '공통': '공통',
+  };
 
   final ProblemBankService _service = ProblemBankService();
+  late final TabController _topTabController;
 
   Timer? _pollTimer;
   bool _bootstrapLoading = true;
@@ -91,15 +129,30 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
   final TextEditingController _sourceYearCtrl = TextEditingController();
   final TextEditingController _sourceSchoolCtrl = TextEditingController();
   final TextEditingController _sourceGradeCtrl = TextEditingController();
+  final TextEditingController _sourcePublisherCtrl = TextEditingController();
+  final TextEditingController _sourceMaterialCtrl = TextEditingController();
+  final TextEditingController _classificationYearFilterCtrl =
+      TextEditingController();
+  final TextEditingController _classificationGradeFilterCtrl =
+      TextEditingController();
+  final TextEditingController _classificationSchoolFilterCtrl =
+      TextEditingController();
   final Set<String> _dirtyQuestionIds = <String>{};
   bool _isSavingQuestionChanges = false;
   bool _isDeletingCurrentQuestions = false;
+  bool _isDeletingClassificationDocument = false;
   bool _dirtyDocumentMeta = false;
-  bool _sourcePrivateMaterial = false;
-  bool _sourceSchoolPastExam = false;
-  bool _sourceMockPastExam = false;
+  String _selectedCurriculumCode = 'rev_2022';
+  String _selectedSourceTypeCode = 'school_past';
+  String _selectedCourseLabel = '';
   String _sourceSemester = '1학기';
   String _sourceExamTerm = '';
+  String _classificationCurriculumFilter = '';
+  String _classificationSourceTypeFilter = '';
+  String _classificationQuestionTypeFilter = '';
+  bool _isSearchingClassification = false;
+  List<_ClassificationDocumentResult> _classificationResults =
+      <_ClassificationDocumentResult>[];
   bool _isFigurePolling = false;
   String? _lastExtractStatus;
   String? _lastExportStatus;
@@ -182,15 +235,28 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
   @override
   void initState() {
     super.initState();
+    _topTabController = TabController(length: 2, vsync: this);
+    _topTabController.addListener(() {
+      if (_topTabController.indexIsChanging) return;
+      if (_topTabController.index == 1) {
+        unawaited(_runClassificationSearch());
+      }
+    });
     unawaited(_bootstrap());
   }
 
   @override
   void dispose() {
     _pollTimer?.cancel();
+    _topTabController.dispose();
     _sourceYearCtrl.dispose();
     _sourceSchoolCtrl.dispose();
     _sourceGradeCtrl.dispose();
+    _sourcePublisherCtrl.dispose();
+    _sourceMaterialCtrl.dispose();
+    _classificationYearFilterCtrl.dispose();
+    _classificationGradeFilterCtrl.dispose();
+    _classificationSchoolFilterCtrl.dispose();
     super.dispose();
   }
 
@@ -234,6 +300,23 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
     final parsed = int.tryParse(_selectedMaxQuestionsPerPage);
     if (parsed != null && options.contains(parsed)) return parsed;
     return options.last;
+  }
+
+  bool get _isSchoolPastSource => _selectedSourceTypeCode == 'school_past';
+
+  bool get _isPrivateSource =>
+      _selectedSourceTypeCode == 'market_book' ||
+      _selectedSourceTypeCode == 'lecture_book' ||
+      _selectedSourceTypeCode == 'ebs_book';
+
+  String _labelOfCurriculumCode(String code) => _curriculumLabels[code] ?? code;
+
+  String _labelOfSourceTypeCode(String code) => _sourceTypeLabels[code] ?? code;
+
+  int? _sourceExamYearValue() {
+    final text = _sourceYearCtrl.text.trim();
+    if (text.isEmpty) return null;
+    return int.tryParse(text.replaceAll(RegExp(r'[^0-9]'), ''));
   }
 
   void _setSelectedLayoutColumns(String value) {
@@ -307,26 +390,54 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
         ? naesinRaw.map((k, dynamic v) => MapEntry('$k', v))
         : const <String, dynamic>{};
 
-    _sourcePrivateMaterial = source['private_material'] == true;
-    _sourceSchoolPastExam = source['school_past_exam'] == true;
-    _sourceMockPastExam = source['mock_past_exam'] == true;
+    final fallbackSourceType = source['private_material'] == true
+        ? 'market_book'
+        : source['mock_past_exam'] == true
+            ? 'mock_past'
+            : source['school_past_exam'] == true
+                ? 'school_past'
+                : 'school_past';
 
-    _sourceYearCtrl.text = '${naesin['year'] ?? ''}'.trim();
-    _sourceSchoolCtrl.text = '${naesin['school_name'] ?? ''}'.trim();
-    _sourceGradeCtrl.text = '${naesin['grade'] ?? ''}'.trim();
+    final curriculumCode = (doc?.curriculumCode ?? '').trim();
+    _selectedCurriculumCode = _curriculumLabels.containsKey(curriculumCode)
+        ? curriculumCode
+        : 'rev_2022';
+    final sourceTypeCode = (doc?.sourceTypeCode ?? '').trim();
+    _selectedSourceTypeCode = _sourceTypeLabels.containsKey(sourceTypeCode)
+        ? sourceTypeCode
+        : fallbackSourceType;
+    _selectedCourseLabel = _courseLabelOptions.contains(doc?.courseLabel)
+        ? (doc?.courseLabel ?? '')
+        : '';
 
-    final semester = '${naesin['semester'] ?? ''}'.trim();
+    _sourceYearCtrl.text =
+        doc?.examYear?.toString() ?? '${naesin['year'] ?? ''}'.trim();
+    _sourceSchoolCtrl.text = (doc?.schoolName ?? '').trim().isNotEmpty
+        ? doc!.schoolName
+        : '${naesin['school_name'] ?? ''}'.trim();
+    _sourceGradeCtrl.text = (doc?.gradeLabel ?? '').trim().isNotEmpty
+        ? doc!.gradeLabel
+        : '${naesin['grade'] ?? ''}'.trim();
+    _sourcePublisherCtrl.text = doc?.publisherName ?? '';
+    _sourceMaterialCtrl.text = doc?.materialName ?? '';
+
+    final semester = (doc?.semesterLabel ?? '').trim().isNotEmpty
+        ? doc!.semesterLabel
+        : '${naesin['semester'] ?? ''}'.trim();
     _sourceSemester = semester == '2학기' || semester == '1학기' ? semester : '1학기';
-    final examTerm = '${naesin['exam_term'] ?? ''}'.trim();
+    final examTerm = (doc?.examTermLabel ?? '').trim().isNotEmpty
+        ? doc!.examTermLabel
+        : '${naesin['exam_term'] ?? ''}'.trim();
     _sourceExamTerm = examTerm == '중간' || examTerm == '기말' ? examTerm : '';
     _dirtyDocumentMeta = false;
   }
 
   Map<String, dynamic> _buildSourceClassificationMeta() {
+    final isPrivate = _isPrivateSource;
     return <String, dynamic>{
-      'private_material': _sourcePrivateMaterial,
-      'school_past_exam': _sourceSchoolPastExam,
-      'mock_past_exam': _sourceMockPastExam,
+      'private_material': isPrivate,
+      'school_past_exam': _selectedSourceTypeCode == 'school_past',
+      'mock_past_exam': _selectedSourceTypeCode == 'mock_past',
       'naesin': <String, dynamic>{
         'year': _sourceYearCtrl.text.trim(),
         'school_name': _sourceSchoolCtrl.text.trim(),
@@ -334,6 +445,14 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
         'semester': _sourceSemester,
         'exam_term': _sourceExamTerm,
       },
+    };
+  }
+
+  Map<String, dynamic> _buildClassificationDetailPayload() {
+    return <String, dynamic>{
+      'source_classification': _buildSourceClassificationMeta(),
+      'updated_from': 'manager',
+      'updated_at': DateTime.now().toUtc().toIso8601String(),
     };
   }
 
@@ -414,9 +533,12 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
     return '검수 필요';
   }
 
+  static const double _figureScaleMin = 0.3;
+  static const double _figureScaleMax = 2.2;
+
   double _normalizeFigureScale(double value) {
     if (!value.isFinite) return 1.0;
-    return value.clamp(0.7, 1.8).toDouble();
+    return value.clamp(_figureScaleMin, _figureScaleMax).toDouble();
   }
 
   Map<String, double> _figureRenderScaleMapOf(ProblemBankQuestion q) {
@@ -452,6 +574,54 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
       if (n != null && n > 0) return '그림 $n';
     }
     return '그림 $fallbackOrder';
+  }
+
+  String _figurePairKey(String keyA, String keyB) {
+    final a = keyA.trim();
+    final b = keyB.trim();
+    if (a.isEmpty || b.isEmpty || a == b) return '';
+    return a.compareTo(b) <= 0 ? '$a|$b' : '$b|$a';
+  }
+
+  List<String> _figurePairParts(String pairKey) {
+    final i = pairKey.indexOf('|');
+    if (i <= 0 || i >= pairKey.length - 1) return const <String>[];
+    final a = pairKey.substring(0, i).trim();
+    final b = pairKey.substring(i + 1).trim();
+    if (a.isEmpty || b.isEmpty || a == b) return const <String>[];
+    return <String>[a, b];
+  }
+
+  Set<String> _figureHorizontalPairKeysOf(ProblemBankQuestion q) {
+    final raw = q.meta['figure_horizontal_pairs'];
+    if (raw is! List) return const <String>{};
+    final out = <String>{};
+    for (final item in raw) {
+      if (item is! Map) continue;
+      final map =
+          Map<String, dynamic>.from(item.map((k, v) => MapEntry('$k', v)));
+      final key = _figurePairKey(
+        '${map['a'] ?? map['left'] ?? ''}',
+        '${map['b'] ?? map['right'] ?? ''}',
+      );
+      if (key.isNotEmpty) out.add(key);
+    }
+    return out;
+  }
+
+  List<Map<String, String>> _figureHorizontalPairsPayloadOf(
+      ProblemBankQuestion q) {
+    final pairs = _figureHorizontalPairKeysOf(q);
+    return pairs
+        .map((pairKey) {
+          final parts = _figurePairParts(pairKey);
+          return <String, String>{
+            'a': parts.isNotEmpty ? parts[0] : '',
+            'b': parts.length >= 2 ? parts[1] : '',
+          };
+        })
+        .where((e) => e['a']!.isNotEmpty && e['b']!.isNotEmpty)
+        .toList(growable: false);
   }
 
   double _figureRenderScaleOf(ProblemBankQuestion q) {
@@ -498,6 +668,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
     ProblemBankQuestion q,
     Map<String, double> scales, {
     double? globalScale,
+    Set<String>? horizontalPairKeys,
   }) {
     final cleanedMap = <String, dynamic>{};
     for (final e in scales.entries) {
@@ -513,10 +684,21 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
             scales.length);
     final normalizedGlobal = _normalizeFigureScale(globalScale ?? avg);
     final updatedMeta = Map<String, dynamic>.from(q.meta);
+    final nextPairKeys = horizontalPairKeys ?? _figureHorizontalPairKeysOf(q);
+    final cleanedPairPayload = nextPairKeys
+        .map((pairKey) => _figurePairParts(pairKey))
+        .where((parts) => parts.length == 2)
+        .map((parts) => <String, String>{'a': parts[0], 'b': parts[1]})
+        .toList(growable: false);
     if (cleanedMap.isEmpty) {
       updatedMeta.remove('figure_render_scales');
     } else {
       updatedMeta['figure_render_scales'] = cleanedMap;
+    }
+    if (cleanedPairPayload.isEmpty) {
+      updatedMeta.remove('figure_horizontal_pairs');
+    } else {
+      updatedMeta['figure_horizontal_pairs'] = cleanedPairPayload;
     }
     if ((normalizedGlobal - 1.0).abs() < 0.01) {
       updatedMeta.remove('figure_render_scale');
@@ -533,8 +715,11 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
       _dirtyQuestionIds.add(q.id);
     });
     final pct = (normalizedGlobal * 100).round();
+    final pairSuffix = cleanedPairPayload.isEmpty
+        ? ''
+        : ' · 가로묶음 ${cleanedPairPayload.length}쌍';
     _showSnack(
-      '${q.questionNumber}번 그림 크기를 저장했습니다. (기본 배율 $pct%) 상단 `서버 저장` 버튼으로 반영하세요.',
+      '${q.questionNumber}번 그림 설정을 저장했습니다. (기본 배율 $pct%$pairSuffix) 상단 `서버 저장` 버튼으로 반영하세요.',
     );
   }
 
@@ -554,12 +739,27 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
       final pct = (entry.value.value * 100).round();
       return '$label $pct%';
     }).join(', ');
+    final orderedAssets = _orderedFigureAssetsOf(q);
+    final keyLabelMap = <String, String>{};
+    for (var i = 0; i < orderedAssets.length; i += 1) {
+      final key = _figureScaleKeyForAsset(orderedAssets[i], i + 1);
+      keyLabelMap[key] = _figureScaleKeyLabel(key, i + 1);
+    }
+    final horizontalPairs = _figureHorizontalPairKeysOf(q)
+        .map((pairKey) => _figurePairParts(pairKey))
+        .where((parts) => parts.length == 2)
+        .map((parts) {
+      final left = keyLabelMap[parts[0]] ?? parts[0];
+      final right = keyLabelMap[parts[1]] ?? parts[1];
+      return '$left + $right';
+    }).join(', ');
     return [
       '추가 생성 제약:',
       '- 도형 내부 수식/숫자/문자 라벨의 시각 크기를 문제 본문 수식 크기와 동일하게 맞출 것.',
       '- 분수/근호/지수 등 2차원 수식도 본문 수식과 동일한 굵기와 비율을 유지할 것.',
       '- 수식 라벨 배율 힌트: ${_figureRenderScaleLabel(q)}',
       if (scaleHintText.isNotEmpty) '- 그림별 라벨 배율: $scaleHintText',
+      if (horizontalPairs.isNotEmpty) '- 가로 배치로 묶을 그림 쌍: $horizontalPairs',
       if (equations.isNotEmpty) '- 본문 수식 예시: ${equations.join(' | ')}',
     ].join('\n');
   }
@@ -656,8 +856,11 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
         forceRegenerate: true,
         promptText: _figurePromptHintForGeneration(q),
         options: <String, dynamic>{
+          'renderQuality': 'ultra',
+          'minSidePx': 3072,
           'figureRenderScale': _figureRenderScaleOf(q),
           'figureRenderScales': _figureRenderScaleMapOf(q),
+          'figureHorizontalPairs': _figureHorizontalPairsPayloadOf(q),
         },
       );
       for (var i = 0; i < 60; i += 1) {
@@ -819,6 +1022,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
         }
       });
       _appendPipelineLog('doc', '문서 목록 ${docs.length}건 갱신');
+      if (_topTabController.index == 1) {
+        unawaited(_runClassificationSearch());
+      }
     } on ProblemBankSchemaMissingException catch (e) {
       _appendPipelineLog('doc', e.message, error: true);
       if (!mounted) return;
@@ -1083,6 +1289,17 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
         bytes: bytes,
         originalName: fileName,
         examProfile: _templateToProfile(_selectedTemplate),
+        curriculumCode: _selectedCurriculumCode,
+        sourceTypeCode: _selectedSourceTypeCode,
+        courseLabel: _selectedCourseLabel,
+        gradeLabel: _sourceGradeCtrl.text.trim(),
+        examYear: _sourceExamYearValue(),
+        semesterLabel: _sourceSemester,
+        examTermLabel: _sourceExamTerm,
+        schoolName: _sourceSchoolCtrl.text.trim(),
+        publisherName: _sourcePublisherCtrl.text.trim(),
+        materialName: _sourceMaterialCtrl.text.trim(),
+        classificationDetail: _buildClassificationDetailPayload(),
       );
       _appendPipelineLog('upload', '업로드 완료: document=${uploaded.id}');
       final extractJob = await _service.createExtractJob(
@@ -1309,6 +1526,17 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
             ? 'manual_paste.txt'
             : payload.sourceName.trim(),
         examProfile: _templateToProfile(_selectedTemplate),
+        curriculumCode: _selectedCurriculumCode,
+        sourceTypeCode: _selectedSourceTypeCode,
+        courseLabel: _selectedCourseLabel,
+        gradeLabel: _sourceGradeCtrl.text.trim(),
+        examYear: _sourceExamYearValue(),
+        semesterLabel: _sourceSemester,
+        examTermLabel: _sourceExamTerm,
+        schoolName: _sourceSchoolCtrl.text.trim(),
+        publisherName: _sourcePublisherCtrl.text.trim(),
+        materialName: _sourceMaterialCtrl.text.trim(),
+        classificationDetail: _buildClassificationDetailPayload(),
       );
       _appendPipelineLog(
         'manual',
@@ -2074,14 +2302,24 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
       _showSnack('저장할 변경사항이 없습니다.');
       return;
     }
-    if (_dirtyDocumentMeta &&
-        _sourceSchoolPastExam &&
-        _sourceExamTerm.isEmpty) {
+    if (_dirtyDocumentMeta && _isSchoolPastSource && _sourceExamTerm.isEmpty) {
       _showSnack('내신 기출은 중간/기말 중 하나를 선택해주세요.', error: true);
       return;
     }
     final dirtyIds = _dirtyQuestionIds.toList(growable: false);
     final doc = _activeDocument;
+    final academyId = _academyId;
+    final curriculumCode = _selectedCurriculumCode;
+    final sourceTypeCode = _selectedSourceTypeCode;
+    final courseLabel = _selectedCourseLabel;
+    final gradeLabel = _sourceGradeCtrl.text.trim();
+    final examYear = _sourceExamYearValue();
+    final semesterLabel = _sourceSemester;
+    final examTermLabel = _sourceExamTerm;
+    final schoolName = _sourceSchoolCtrl.text.trim();
+    final publisherName = _sourcePublisherCtrl.text.trim();
+    final materialName = _sourceMaterialCtrl.text.trim();
+    final classificationDetail = _buildClassificationDetailPayload();
     if (!mounted) return;
     setState(() {
       _isSavingQuestionChanges = true;
@@ -2114,10 +2352,24 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
           subjectiveAnswer: q.subjectiveAnswer,
           objectiveGenerated: q.objectiveGenerated,
           equations: q.equations,
+          curriculumCode: curriculumCode,
+          sourceTypeCode: sourceTypeCode,
+          courseLabel: courseLabel,
+          gradeLabel: gradeLabel,
+          examYear: examYear,
+          semesterLabel: semesterLabel,
+          examTermLabel: examTermLabel,
+          schoolName: schoolName,
+          publisherName: publisherName,
+          materialName: materialName,
+          classificationDetail: classificationDetail,
           meta: mergedMeta,
         );
       }
       if (_dirtyDocumentMeta && doc != null) {
+        if (academyId == null || academyId.isEmpty) {
+          throw Exception('academy_id를 찾을 수 없습니다.');
+        }
         final mergedDocMeta = <String, dynamic>{
           ...doc.meta,
           'source_classification': _buildSourceClassificationMeta(),
@@ -2125,6 +2377,32 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
         await _service.updateDocumentMeta(
           documentId: doc.id,
           meta: mergedDocMeta,
+          curriculumCode: curriculumCode,
+          sourceTypeCode: sourceTypeCode,
+          courseLabel: courseLabel,
+          gradeLabel: gradeLabel,
+          examYear: examYear,
+          semesterLabel: semesterLabel,
+          examTermLabel: examTermLabel,
+          schoolName: schoolName,
+          publisherName: publisherName,
+          materialName: materialName,
+          classificationDetail: classificationDetail,
+        );
+        await _service.updateQuestionsClassificationForDocument(
+          academyId: academyId,
+          documentId: doc.id,
+          curriculumCode: curriculumCode,
+          sourceTypeCode: sourceTypeCode,
+          courseLabel: courseLabel,
+          gradeLabel: gradeLabel,
+          examYear: examYear,
+          semesterLabel: semesterLabel,
+          examTermLabel: examTermLabel,
+          schoolName: schoolName,
+          publisherName: publisherName,
+          materialName: materialName,
+          classificationDetail: classificationDetail,
         );
       }
       if (!mounted) return;
@@ -2843,6 +3121,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
     if (selectedQuestions.isEmpty) return pages;
     final maxPerPage = _selectedMaxQuestionsPerPageCount.clamp(1, 8);
     final columns = _selectedLayoutColumnCount;
+    final adaptiveTwoByTwoSpan = columns == 2 && maxPerPage == 4;
     final leftSlotCount = columns == 1 ? maxPerPage : (maxPerPage / 2).ceil();
     final rightSlotCount = columns == 1 ? 0 : (maxPerPage - leftSlotCount);
     final rowCount =
@@ -2873,6 +3152,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
           previewQuestion,
           rowCount: rowCount,
           pageHeight: pageSize.height,
+          twoByTwoAdaptiveSpan: adaptiveTwoByTwoSpan,
         );
         var placed = false;
 
@@ -2943,6 +3223,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
     ProblemBankQuestion previewQuestion, {
     required int rowCount,
     required double pageHeight,
+    bool twoByTwoAdaptiveSpan = false,
   }) {
     if (rowCount <= 1 || pageHeight <= 0) return 1;
     final baseHeight = _previewDialogHeight(
@@ -2965,6 +3246,10 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
             extraChoiceHeight) *
         1.15;
     final slotHeight = pageHeight / rowCount;
+    if (twoByTwoAdaptiveSpan) {
+      final ratio = (naturalHeight + 24.0) / slotHeight;
+      return ratio >= 1.28 ? 2 : 1;
+    }
     final span = ((naturalHeight + 24.0) / slotHeight).ceil();
     if (span < 1) return 1;
     if (span > rowCount) return rowCount;
@@ -3261,29 +3546,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
       builder: (context, constraints) {
         final slotWidth =
             constraints.maxWidth.isFinite ? constraints.maxWidth : 320.0;
-        final baseHeight = _previewDialogHeight(
-          previewQuestion,
-          const Size(1400, 2200),
-        );
-        final figureAssets = _orderedFigureAssetsOf(previewQuestion);
-        final figureCount =
-            math.max(figureAssets.length, previewQuestion.figureRefs.length);
-        final hasFigure = figureCount > 0;
-        final hasViewBlock =
-            _viewBlockPreviewLines(previewQuestion, max: 18).isNotEmpty;
-        final extraFigureHeight =
-            figureCount > 1 ? (figureCount - 1) * 110.0 : 0.0;
-        final extraChoiceHeight =
-            _previewChoicesOf(previewQuestion).isNotEmpty ? 24.0 : 0.0;
-        final naturalHeight = math.max(
-          (baseHeight +
-                  (hasFigure ? 150.0 : 0.0) +
-                  (hasViewBlock ? 48.0 : 34.0) +
-                  extraFigureHeight +
-                  extraChoiceHeight) *
-              1.15,
-          slotHeight + 24,
-        );
+        final naturalHeight = slotHeight + 24;
         return ClipRect(
           child: FittedBox(
             fit: BoxFit.contain,
@@ -3297,6 +3560,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
                 scrollable: false,
                 bordered: false,
                 shadow: false,
+                showQuestionNumberPrefix: true,
                 contentPadding:
                     const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
               ),
@@ -3782,6 +4046,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
     required String value,
     required List<String> values,
     required void Function(String value) onChanged,
+    Map<String, String>? displayLabels,
   }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -3816,7 +4081,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
                   .map(
                     (e) => DropdownMenuItem<String>(
                       value: e,
-                      child: Text(e),
+                      child: Text(displayLabels?[e] ?? e),
                     ),
                   )
                   .toList(),
@@ -3851,9 +4116,12 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
             subtitle: '내신/수능/모의고사 프로파일에 맞춰 PDF 생성',
           ),
           const SizedBox(height: 14),
-          Row(
+          Wrap(
+            spacing: 10,
+            runSpacing: 8,
             children: [
-              Expanded(
+              SizedBox(
+                width: 220,
                 child: _buildDropdownField(
                   label: '시험 양식',
                   value: _selectedTemplate,
@@ -3861,7 +4129,6 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
                   onChanged: (v) => setState(() => _selectedTemplate = v),
                 ),
               ),
-              const SizedBox(width: 10),
               SizedBox(
                 width: 120,
                 child: _buildDropdownField(
@@ -3871,7 +4138,6 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
                   onChanged: (v) => setState(() => _selectedPaper = v),
                 ),
               ),
-              const SizedBox(width: 10),
               SizedBox(
                 width: 140,
                 child: _buildDropdownField(
@@ -3884,7 +4150,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
             ],
           ),
           const SizedBox(height: 10),
-          Row(
+          Wrap(
+            spacing: 10,
+            runSpacing: 8,
             children: [
               SizedBox(
                 width: 120,
@@ -3895,7 +4163,6 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
                   onChanged: _setSelectedLayoutColumns,
                 ),
               ),
-              const SizedBox(width: 10),
               SizedBox(
                 width: 170,
                 child: _buildDropdownField(
@@ -3905,12 +4172,15 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
                   onChanged: _setSelectedMaxQuestionsPerPage,
                 ),
               ),
-              const Spacer(),
-              Text(
-                '$_selectedLayoutColumnCount열 · 최대 $_selectedMaxQuestionsPerPageCount문항/페이지',
-                style: const TextStyle(color: _textSub, fontSize: 11.4),
-              ),
             ],
+          ),
+          const SizedBox(height: 6),
+          Align(
+            alignment: Alignment.centerRight,
+            child: Text(
+              '$_selectedLayoutColumnCount열 · 최대 $_selectedMaxQuestionsPerPageCount문항/페이지',
+              style: const TextStyle(color: _textSub, fontSize: 11.4),
+            ),
           ),
           const SizedBox(height: 10),
           Row(
@@ -4466,17 +4736,31 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
 
   double _choicePreviewLineHeight(String raw) {
     final latex = _sanitizeLatexForMathTex(raw);
-    if (_containsNestedFractionExpression(latex)) return 1.84;
-    if (_containsFractionExpression(latex)) return 1.72;
-    return 1.52;
+    if (_containsNestedFractionExpression(latex)) return 1.94;
+    if (_containsFractionExpression(latex)) return 1.82;
+    return 1.60;
   }
 
-  double _denseMathLineHeight(String raw, {double normal = 1.58}) {
+  double _denseMathLineHeight(String raw, {double normal = 1.66}) {
     final latex = _sanitizeLatexForMathTex(raw);
-    if (_containsNestedFractionExpression(latex)) return normal + 0.30;
-    if (_containsFractionExpression(latex)) return normal + 0.18;
-    if (RegExp(r'[A-Za-z0-9]').hasMatch(latex)) return normal + 0.04;
+    if (_containsNestedFractionExpression(latex)) return normal + 0.32;
+    if (_containsFractionExpression(latex)) return normal + 0.20;
+    if (RegExp(r'[A-Za-z0-9]').hasMatch(latex)) return normal + 0.06;
     return normal;
+  }
+
+  double _mathSymmetricVerticalPadding(
+    String raw, {
+    bool compact = false,
+  }) {
+    final latex = _sanitizeLatexForMathTex(raw);
+    if (_containsNestedFractionExpression(latex)) {
+      return compact ? 1.6 : 2.4;
+    }
+    if (_containsFractionExpression(latex)) {
+      return compact ? 1.2 : 1.8;
+    }
+    return compact ? 0.25 : 0.35;
   }
 
   double? _scorePointOf(ProblemBankQuestion q) {
@@ -4984,24 +5268,110 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
   Widget _buildStemTextPreviewLine(
     String text, {
     double fontSize = 13.4,
-    double normalHeight = 1.58,
+    double normalHeight = 1.66,
   }) {
     final normalized = _normalizePreviewMultiline(
         text.replaceAll(_structuralMarkerRegex, ' '));
     final lineHeight = _denseMathLineHeight(normalized, normal: normalHeight);
-    return LatexTextRenderer(
-      _toPreviewMathMarkup(normalized, forceMathTokenWrap: true),
-      softWrap: true,
-      enableDisplayMath: true,
-      inlineMathScale: _previewMathScale,
-      fractionInlineMathScale: _previewFractionMathScale,
-      displayMathScale: _previewMathScale,
-      blockVerticalPadding: lineHeight >= 1.82 ? 1.8 : 1.0,
-      style: TextStyle(
-        fontSize: fontSize,
-        height: lineHeight,
-        color: const Color(0xFF232323),
-        fontFamily: _previewKoreanFontFamily,
+    final verticalPad = _mathSymmetricVerticalPadding(normalized);
+    return Padding(
+      padding: EdgeInsets.symmetric(vertical: verticalPad),
+      child: LatexTextRenderer(
+        _toPreviewMathMarkup(normalized, forceMathTokenWrap: true),
+        softWrap: true,
+        enableDisplayMath: true,
+        inlineMathScale: _previewMathScale,
+        fractionInlineMathScale: _previewFractionMathScale,
+        displayMathScale: _previewMathScale,
+        blockVerticalPadding: lineHeight >= 1.82 ? 1.8 : 1.0,
+        style: TextStyle(
+          fontSize: fontSize,
+          height: lineHeight,
+          color: const Color(0xFF232323),
+          fontFamily: _previewKoreanFontFamily,
+        ),
+      ),
+    );
+  }
+
+  int _figureOrderHintInOrderedAssets(
+    Map<String, dynamic>? asset,
+    List<Map<String, dynamic>> orderedAssets,
+  ) {
+    if (asset == null || orderedAssets.isEmpty) return 1;
+    final targetPath = '${asset['path'] ?? ''}'.trim();
+    final targetId = '${asset['id'] ?? ''}'.trim();
+    final targetIndex = int.tryParse('${asset['figure_index'] ?? ''}');
+    for (var i = 0; i < orderedAssets.length; i += 1) {
+      final candidate = orderedAssets[i];
+      final candidatePath = '${candidate['path'] ?? ''}'.trim();
+      if (targetPath.isNotEmpty && candidatePath == targetPath) return i + 1;
+      final candidateId = '${candidate['id'] ?? ''}'.trim();
+      if (targetId.isNotEmpty && candidateId == targetId) return i + 1;
+      final candidateIndex = int.tryParse('${candidate['figure_index'] ?? ''}');
+      if (targetIndex != null &&
+          candidateIndex != null &&
+          targetIndex == candidateIndex) {
+        return i + 1;
+      }
+    }
+    return 1;
+  }
+
+  Widget _buildInlineFigureVisual(
+    ProblemBankQuestion q, {
+    Map<String, dynamic>? asset,
+    bool expanded = false,
+    required int orderHint,
+  }) {
+    final assetPath = '${asset?['path'] ?? ''}'.trim();
+    final previewUrl = _figurePreviewUrlForPath(q.id, assetPath);
+    final hasFigureAsset = asset != null;
+    final figureHeight = (expanded ? 232.0 : 138.0) *
+        _figureRenderScaleForAsset(
+          q,
+          asset: asset,
+          order: orderHint,
+        );
+    if (previewUrl.isNotEmpty) {
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(4),
+        child: Image.network(
+          previewUrl,
+          fit: BoxFit.contain,
+          width: double.infinity,
+          height: figureHeight,
+          errorBuilder: (_, __, ___) => SizedBox(
+            height: figureHeight * 0.62,
+            child: const Center(
+              child: Text(
+                '그림 미리보기를 불러오지 못했습니다.',
+                style: TextStyle(color: Color(0xFF906060), fontSize: 11.8),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+    return Container(
+      alignment: Alignment.center,
+      height: figureHeight * 0.62,
+      decoration: BoxDecoration(
+        color: const Color(0xFFFDFDFE),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: const Color(0xFFE5E8EF)),
+      ),
+      child: Text(
+        _figureGenerating.contains(q.id) || _isFigurePolling
+            ? 'AI 그림 생성 중...'
+            : hasFigureAsset
+                ? '이미지 로딩 중...'
+                : '그림 생성본 없음',
+        style: const TextStyle(
+          color: Color(0xFF6F7C95),
+          fontSize: 11.8,
+          fontWeight: FontWeight.w600,
+        ),
       ),
     );
   }
@@ -5011,10 +5381,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
     Map<String, dynamic>? asset,
     bool expanded = false,
   }) {
+    final orderedAssets = _orderedFigureAssetsOf(q);
     final effectiveAsset = asset ?? _latestFigureAssetOf(q);
-    final assetPath = '${effectiveAsset?['path'] ?? ''}'.trim();
-    final previewUrl = _figurePreviewUrlForPath(q.id, assetPath);
-    final hasFigureAsset = effectiveAsset != null;
     final stemHead = _normalizePreviewLine(q.renderedStem)
         .replaceAll(_figureMarkerRegex, '')
         .trim();
@@ -5033,61 +5401,96 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
         .take(1)
         .toList(growable: false);
     final figureOrderHint =
-        int.tryParse('${effectiveAsset?['figure_index'] ?? ''}') ?? 1;
-    final figureHeight = (expanded ? 232.0 : 138.0) *
-        _figureRenderScaleForAsset(
-          q,
-          asset: effectiveAsset,
-          order: figureOrderHint,
+        _figureOrderHintInOrderedAssets(effectiveAsset, orderedAssets);
+    final currentKey = _figureScaleKeyForAsset(effectiveAsset, figureOrderHint);
+    final pairKeys = _figureHorizontalPairKeysOf(q);
+    final keyToAsset = <String, Map<String, dynamic>>{};
+    final keyToOrder = <String, int>{};
+    for (var i = 0; i < orderedAssets.length; i += 1) {
+      final item = orderedAssets[i];
+      final key = _figureScaleKeyForAsset(item, i + 1);
+      keyToAsset[key] = item;
+      keyToOrder[key] = i + 1;
+    }
+    String? partnerKey;
+    for (final pairKey in pairKeys) {
+      final parts = _figurePairParts(pairKey);
+      if (parts.length != 2) continue;
+      if (parts[0] == currentKey) {
+        partnerKey = parts[1];
+        break;
+      }
+      if (parts[1] == currentKey) {
+        partnerKey = parts[0];
+        break;
+      }
+    }
+    if (partnerKey != null) {
+      final partnerAsset = keyToAsset[partnerKey];
+      final currentOrder = keyToOrder[currentKey] ?? figureOrderHint;
+      final partnerOrder = keyToOrder[partnerKey] ?? (currentOrder + 1);
+      if (partnerAsset != null) {
+        if (partnerOrder < currentOrder) {
+          return const SizedBox.shrink();
+        }
+        return Container(
+          width: double.infinity,
+          margin: const EdgeInsets.symmetric(vertical: 6),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: _buildInlineFigureVisual(
+                      q,
+                      asset: effectiveAsset,
+                      expanded: expanded,
+                      orderHint: currentOrder,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: _buildInlineFigureVisual(
+                      q,
+                      asset: partnerAsset,
+                      expanded: expanded,
+                      orderHint: partnerOrder,
+                    ),
+                  ),
+                ],
+              ),
+              if (hint.isNotEmpty) ...[
+                const SizedBox(height: 5),
+                Text(
+                  hint.first,
+                  maxLines: expanded ? 3 : 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Color(0xFF5A6680),
+                    fontSize: 11.6,
+                    height: 1.32,
+                  ),
+                ),
+              ],
+            ],
+          ),
         );
+      }
+    }
     return Container(
       width: double.infinity,
       margin: const EdgeInsets.symmetric(vertical: 6),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (previewUrl.isNotEmpty)
-            ClipRRect(
-              borderRadius: BorderRadius.circular(4),
-              child: Image.network(
-                previewUrl,
-                fit: BoxFit.contain,
-                width: double.infinity,
-                height: figureHeight,
-                errorBuilder: (_, __, ___) => SizedBox(
-                  height: figureHeight * 0.62,
-                  child: const Center(
-                    child: Text(
-                      '그림 미리보기를 불러오지 못했습니다.',
-                      style:
-                          TextStyle(color: Color(0xFF906060), fontSize: 11.8),
-                    ),
-                  ),
-                ),
-              ),
-            )
-          else
-            Container(
-              alignment: Alignment.center,
-              height: figureHeight * 0.62,
-              decoration: BoxDecoration(
-                color: const Color(0xFFFDFDFE),
-                borderRadius: BorderRadius.circular(4),
-                border: Border.all(color: const Color(0xFFE5E8EF)),
-              ),
-              child: Text(
-                _figureGenerating.contains(q.id) || _isFigurePolling
-                    ? 'AI 그림 생성 중...'
-                    : hasFigureAsset
-                        ? '이미지 로딩 중...'
-                        : '그림 생성본 없음',
-                style: const TextStyle(
-                  color: Color(0xFF6F7C95),
-                  fontSize: 11.8,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
+          _buildInlineFigureVisual(
+            q,
+            asset: effectiveAsset,
+            expanded: expanded,
+            orderHint: figureOrderHint,
+          ),
           if (hint.isNotEmpty) ...[
             const SizedBox(height: 5),
             Text(
@@ -5138,51 +5541,63 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
       fontFamily: _previewKoreanFontFamily,
     );
     if (itemMatch == null) {
-      return LatexTextRenderer(
-        _toPreviewMathMarkup(normalized, forceMathTokenWrap: true),
-        softWrap: true,
-        enableDisplayMath: true,
-        inlineMathScale: _previewMathScale,
-        fractionInlineMathScale: _previewFractionMathScale,
-        displayMathScale: _previewMathScale,
-        blockVerticalPadding: lineHeight >= 1.9 ? 1.2 : 0.7,
-        style: style,
+      final verticalPad =
+          _mathSymmetricVerticalPadding(normalized, compact: true);
+      return Padding(
+        padding: EdgeInsets.symmetric(vertical: verticalPad),
+        child: LatexTextRenderer(
+          _toPreviewMathMarkup(normalized, forceMathTokenWrap: true),
+          softWrap: true,
+          enableDisplayMath: true,
+          inlineMathScale: _previewMathScale,
+          fractionInlineMathScale: _previewFractionMathScale,
+          displayMathScale: _previewMathScale,
+          blockVerticalPadding: lineHeight >= 1.9 ? 1.2 : 0.7,
+          style: style,
+        ),
       );
     }
     final rawLabel = (itemMatch.group(1) ?? '').trim();
     final content = (itemMatch.group(2) ?? '').trim();
     final labelText =
         RegExp(r'^[①②③④⑤⑥⑦⑧⑨⑩]$').hasMatch(rawLabel) ? rawLabel : '$rawLabel.';
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SizedBox(
-          width: expanded ? 24 : 22,
-          child: Text(
-            labelText,
-            style: style.copyWith(fontWeight: FontWeight.w500),
-          ),
-        ),
-        const SizedBox(width: 2),
-        Expanded(
-          child: LatexTextRenderer(
-            _toPreviewMathMarkup(content, forceMathTokenWrap: true),
-            softWrap: true,
-            enableDisplayMath: true,
-            inlineMathScale: _previewMathScale,
-            fractionInlineMathScale: _previewFractionMathScale,
-            displayMathScale: _previewMathScale,
-            blockVerticalPadding:
-                _denseMathLineHeight(content, normal: 1.76) >= 1.9 ? 1.2 : 0.7,
-            style: TextStyle(
-              color: style.color,
-              fontSize: style.fontSize,
-              height: _denseMathLineHeight(content, normal: 1.76),
-              fontFamily: _previewKoreanFontFamily,
+    final contentVerticalPad =
+        _mathSymmetricVerticalPadding(content, compact: true);
+    return Padding(
+      padding: EdgeInsets.symmetric(vertical: contentVerticalPad),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: expanded ? 24 : 22,
+            child: Text(
+              labelText,
+              style: style.copyWith(fontWeight: FontWeight.w500),
             ),
           ),
-        ),
-      ],
+          const SizedBox(width: 2),
+          Expanded(
+            child: LatexTextRenderer(
+              _toPreviewMathMarkup(content, forceMathTokenWrap: true),
+              softWrap: true,
+              enableDisplayMath: true,
+              inlineMathScale: _previewMathScale,
+              fractionInlineMathScale: _previewFractionMathScale,
+              displayMathScale: _previewMathScale,
+              blockVerticalPadding:
+                  _denseMathLineHeight(content, normal: 1.76) >= 1.9
+                      ? 1.2
+                      : 0.7,
+              style: TextStyle(
+                color: style.color,
+                fontSize: style.fontSize,
+                height: _denseMathLineHeight(content, normal: 1.76),
+                fontFamily: _previewKoreanFontFamily,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -5597,6 +6012,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
   Widget _buildChoicePreviewLine(ProblemBankQuestion q, ProblemBankChoice c) {
     final rendered = _normalizePreviewLine(q.renderChoiceText(c));
     final lineHeight = _choicePreviewLineHeight(rendered);
+    final symmetricPad = _mathSymmetricVerticalPadding(rendered);
     final previewText = _toPreviewMathMarkup(rendered,
         forceMathTokenWrap: true, compactFractions: true);
     const contentFontSize = 13.4;
@@ -5608,13 +6024,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
       fontFamily: _previewKoreanFontFamily,
     );
     return Padding(
-      padding: EdgeInsets.only(
-        bottom: lineHeight >= 1.80
-            ? 4.2
-            : lineHeight >= 1.70
-                ? 3.4
-                : 2.0,
-      ),
+      padding: EdgeInsets.symmetric(vertical: symmetricPad + 1.0),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
@@ -5729,6 +6139,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
   }) {
     final rendered = _normalizePreviewLine(q.renderChoiceText(c));
     final lineHeight = _choicePreviewLineHeight(rendered);
+    final symmetricPad = _mathSymmetricVerticalPadding(rendered, compact: true);
     final contentFontSize = expanded ? 13.6 : 13.4;
     final labelFontSize = contentFontSize + 1.6;
     final textStyle = TextStyle(
@@ -5737,7 +6148,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
       height: lineHeight,
       fontFamily: _previewKoreanFontFamily,
     );
-    return ClipRect(
+    return Padding(
+      padding: EdgeInsets.symmetric(vertical: symmetricPad),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.center,
@@ -5785,13 +6197,10 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
       if (i < rowChoices.length) {
         cells.add(
           Expanded(
-            child: Padding(
-              padding: EdgeInsets.only(bottom: expanded ? 1 : 0.6),
-              child: _buildChoiceInlineCell(
-                q,
-                rowChoices[i],
-                expanded: expanded,
-              ),
+            child: _buildChoiceInlineCell(
+              q,
+              rowChoices[i],
+              expanded: expanded,
             ),
           ),
         );
@@ -5879,10 +6288,32 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
   double _stemToChoiceGap({required bool expanded}) {
     // 본문 기본 줄간격(라인 높이 - 폰트 크기)을 기준으로,
     // 문제 본문과 5지선다 사이 간격을 정확히 2배로 맞춘다.
-    const stemLineHeight = 1.58;
+    const stemLineHeight = 1.66;
     final stemFontSize = expanded ? 13.8 : 13.4;
     final stemLineSpacing = stemFontSize * (stemLineHeight - 1.0);
     return stemLineSpacing * 2;
+  }
+
+  static const double _pdfQuestionNumberLaneWidth = 34.0;
+  static const double _pdfQuestionNumberGap = 8.0;
+  static const double _pdfQuestionNumberTopOffset = 2.0;
+
+  Widget _buildPdfQuestionNumberLabel(
+    ProblemBankQuestion q, {
+    bool expanded = false,
+  }) {
+    final number =
+        q.questionNumber.trim().isEmpty ? '?' : q.questionNumber.trim();
+    return Text(
+      '$number.',
+      style: TextStyle(
+        color: const Color(0xFF232323),
+        fontSize: (expanded ? 13.8 : 13.4) + 1.0,
+        fontWeight: FontWeight.w600,
+        height: 1.58,
+        fontFamily: _previewKoreanFontFamily,
+      ),
+    );
   }
 
   Widget _buildPdfPreviewPaperContent(
@@ -5891,6 +6322,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
     bool scrollable = true,
     bool bordered = true,
     bool shadow = true,
+    bool showQuestionNumberPrefix = false,
     EdgeInsetsGeometry contentPadding =
         const EdgeInsets.symmetric(horizontal: 9, vertical: 7),
   }) {
@@ -5901,6 +6333,53 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
     final previewChoices = _previewChoicesOf(q);
     final body = LayoutBuilder(
       builder: (context, constraints) {
+        final numberingInset = showQuestionNumberPrefix
+            ? (_pdfQuestionNumberLaneWidth + _pdfQuestionNumberGap)
+            : 0.0;
+        final choiceAvailableWidth =
+            math.max(120.0, constraints.maxWidth - numberingInset);
+        final contentChildren = <Widget>[
+          ...stemBlocks,
+          if (viewBlockLines.isNotEmpty) ...[
+            _buildViewBlockPanel(
+              viewBlockLines.take(expanded ? 18 : 6).toList(growable: false),
+              expanded: expanded,
+            ),
+          ],
+          if (previewChoices.isNotEmpty) ...[
+            SizedBox(height: _stemToChoiceGap(expanded: expanded)),
+            ..._buildChoicePreviewBlocks(
+              q,
+              expanded: expanded,
+              sourceChoices: previewChoices,
+              availableWidth: choiceAvailableWidth,
+            ),
+          ],
+        ];
+        Widget questionContent = Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: contentChildren,
+        );
+        if (showQuestionNumberPrefix) {
+          questionContent = Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Padding(
+                padding: EdgeInsets.only(left: numberingInset),
+                child: questionContent,
+              ),
+              Positioned(
+                left: 0,
+                top: _pdfQuestionNumberTopOffset,
+                width: _pdfQuestionNumberLaneWidth,
+                child: Align(
+                  alignment: Alignment.topRight,
+                  child: _buildPdfQuestionNumberLabel(q, expanded: expanded),
+                ),
+              ),
+            ],
+          );
+        }
         return DefaultTextStyle(
           style: const TextStyle(
             color: Color(0xFF232323),
@@ -5908,29 +6387,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
             height: 1.46,
             fontFamily: _previewKoreanFontFamily,
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              ...stemBlocks,
-              if (viewBlockLines.isNotEmpty) ...[
-                _buildViewBlockPanel(
-                  viewBlockLines
-                      .take(expanded ? 18 : 6)
-                      .toList(growable: false),
-                  expanded: expanded,
-                ),
-              ],
-              if (previewChoices.isNotEmpty) ...[
-                SizedBox(height: _stemToChoiceGap(expanded: expanded)),
-                ..._buildChoicePreviewBlocks(
-                  q,
-                  expanded: expanded,
-                  sourceChoices: previewChoices,
-                  availableWidth: constraints.maxWidth,
-                ),
-              ],
-            ],
-          ),
+          child: questionContent,
         );
       },
     );
@@ -6154,6 +6611,25 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
       labels[key] = label;
       previewUrls[key] = previewUrl;
     }
+    final availableFigureKeys = draftMap.keys.toList(growable: false);
+    final candidatePairKeys = <String>[];
+    final candidatePairLabels = <String, String>{};
+    for (var i = 0; i < availableFigureKeys.length; i += 1) {
+      for (var j = i + 1; j < availableFigureKeys.length; j += 1) {
+        final pairKey =
+            _figurePairKey(availableFigureKeys[i], availableFigureKeys[j]);
+        if (pairKey.isEmpty) continue;
+        candidatePairKeys.add(pairKey);
+        final left = labels[availableFigureKeys[i]] ?? '그림 ${i + 1}';
+        final right = labels[availableFigureKeys[j]] ?? '그림 ${j + 1}';
+        candidatePairLabels[pairKey] = '$left + $right';
+      }
+    }
+    final selectedPairKeys = _figureHorizontalPairKeysOf(q).where((pairKey) {
+      final parts = _figurePairParts(pairKey);
+      if (parts.length != 2) return false;
+      return draftMap.containsKey(parts[0]) && draftMap.containsKey(parts[1]);
+    }).toSet();
 
     final result = await showDialog<Map<String, double>>(
       context: context,
@@ -6233,9 +6709,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
                                   ],
                                   Slider(
                                     value: value,
-                                    min: 0.7,
-                                    max: 1.8,
-                                    divisions: 22,
+                                    min: _figureScaleMin,
+                                    max: _figureScaleMax,
+                                    divisions: 38,
                                     activeColor: _accent,
                                     onChanged: (v) {
                                       setLocalState(() {
@@ -6257,6 +6733,54 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
                             height: 1.4,
                           ),
                         ),
+                        if (candidatePairKeys.isNotEmpty) ...[
+                          const SizedBox(height: 10),
+                          const Text(
+                            '가로 묶음 (선택한 두 그림을 한 줄에 배치)',
+                            style: TextStyle(
+                              color: _textSub,
+                              fontSize: 11.6,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Wrap(
+                            spacing: 6,
+                            runSpacing: 6,
+                            children: [
+                              for (final pairKey in candidatePairKeys)
+                                FilterChip(
+                                  label: Text(
+                                    candidatePairLabels[pairKey] ?? pairKey,
+                                    style: const TextStyle(fontSize: 11),
+                                  ),
+                                  selected: selectedPairKeys.contains(pairKey),
+                                  onSelected: (selected) {
+                                    setLocalState(() {
+                                      final parts = _figurePairParts(pairKey);
+                                      if (parts.length != 2) return;
+                                      final a = parts[0];
+                                      final b = parts[1];
+                                      if (!selected) {
+                                        selectedPairKeys.remove(pairKey);
+                                        return;
+                                      }
+                                      // 한 그림이 여러 쌍에 동시에 들어가지 않도록 충돌쌍 제거
+                                      selectedPairKeys.removeWhere((existing) {
+                                        final p = _figurePairParts(existing);
+                                        if (p.length != 2) return false;
+                                        return p[0] == a ||
+                                            p[0] == b ||
+                                            p[1] == a ||
+                                            p[1] == b;
+                                      });
+                                      selectedPairKeys.add(pairKey);
+                                    });
+                                  },
+                                ),
+                            ],
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -6273,6 +6797,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
                       for (final key in draftMap.keys) {
                         draftMap[key] = 1.0;
                       }
+                      selectedPairKeys.clear();
                     });
                   },
                   child: const Text('기본값'),
@@ -6290,7 +6815,11 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
       },
     );
     if (result == null) return;
-    _setFigureRenderScales(q, result);
+    _setFigureRenderScales(
+      q,
+      result,
+      horizontalPairKeys: selectedPairKeys,
+    );
   }
 
   Future<void> _openAnswerReviewDialog(ProblemBankQuestion question) async {
@@ -6860,90 +7389,57 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               const Text(
-                '파일 출처',
+                '분류',
                 style: TextStyle(
                   color: _textSub,
                   fontSize: 12.5,
                   fontWeight: FontWeight.w700,
                 ),
               ),
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: Checkbox(
-                      value: _sourcePrivateMaterial,
-                      activeColor: _accent,
-                      visualDensity:
-                          const VisualDensity(horizontal: -4, vertical: -4),
-                      onChanged: (v) {
-                        setState(() {
-                          _sourcePrivateMaterial = v ?? false;
-                        });
-                        _markDocumentMetaDirty();
-                      },
-                    ),
-                  ),
-                  const SizedBox(width: 2),
-                  const Text(
-                    '사설 교재',
-                    style: TextStyle(color: _textSub, fontSize: 12),
-                  ),
-                ],
+              SizedBox(
+                width: 240,
+                child: _buildDropdownField(
+                  label: '교육과정',
+                  value: _selectedCurriculumCode,
+                  values: _curriculumLabels.keys.toList(growable: false),
+                  displayLabels: _curriculumLabels,
+                  onChanged: (v) {
+                    setState(() {
+                      _selectedCurriculumCode = v;
+                    });
+                    _markDocumentMetaDirty();
+                  },
+                ),
               ),
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: Checkbox(
-                      value: _sourceSchoolPastExam,
-                      activeColor: _accent,
-                      visualDensity:
-                          const VisualDensity(horizontal: -4, vertical: -4),
-                      onChanged: (v) {
-                        setState(() {
-                          _sourceSchoolPastExam = v ?? false;
-                        });
-                        _markDocumentMetaDirty();
-                      },
-                    ),
-                  ),
-                  const SizedBox(width: 2),
-                  const Text(
-                    '내신 기출',
-                    style: TextStyle(color: _textSub, fontSize: 12),
-                  ),
-                ],
+              SizedBox(
+                width: 180,
+                child: _buildDropdownField(
+                  label: '출처',
+                  value: _selectedSourceTypeCode,
+                  values: _sourceTypeLabels.keys.toList(growable: false),
+                  displayLabels: _sourceTypeLabels,
+                  onChanged: (v) {
+                    setState(() {
+                      _selectedSourceTypeCode = v;
+                    });
+                    _markDocumentMetaDirty();
+                  },
+                ),
               ),
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: Checkbox(
-                      value: _sourceMockPastExam,
-                      activeColor: _accent,
-                      visualDensity:
-                          const VisualDensity(horizontal: -4, vertical: -4),
-                      onChanged: (v) {
-                        setState(() {
-                          _sourceMockPastExam = v ?? false;
-                        });
-                        _markDocumentMetaDirty();
-                      },
-                    ),
-                  ),
-                  const SizedBox(width: 2),
-                  const Text(
-                    '모의 고사 기출',
-                    style: TextStyle(color: _textSub, fontSize: 12),
-                  ),
-                ],
+              SizedBox(
+                width: 120,
+                child: _buildDropdownField(
+                  label: '과정',
+                  value: _selectedCourseLabel,
+                  values: _courseLabelOptions,
+                  displayLabels: _courseLabelLabels,
+                  onChanged: (v) {
+                    setState(() {
+                      _selectedCourseLabel = v;
+                    });
+                    _markDocumentMetaDirty();
+                  },
+                ),
               ),
               if (_dirtyDocumentMeta)
                 Container(
@@ -6955,13 +7451,14 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
                     border: Border.all(color: _accent),
                   ),
                   child: const Text(
-                    '출처 저장대기',
+                    '분류 저장대기',
                     style: TextStyle(color: _accent, fontSize: 10.8),
                   ),
                 ),
             ],
           ),
-          if (_sourceSchoolPastExam) ...[
+          if (_isSchoolPastSource ||
+              _selectedSourceTypeCode == 'mock_past') ...[
             const SizedBox(height: 8),
             Row(
               children: [
@@ -7060,6 +7557,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
                 ),
               ],
             ),
+          ],
+          if (_isSchoolPastSource) ...[
             const SizedBox(height: 8),
             Row(
               children: [
@@ -7126,6 +7625,72 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
                     const Text('기말',
                         style: TextStyle(color: _textSub, fontSize: 12)),
                   ],
+                ),
+              ],
+            ),
+          ],
+          if (_isPrivateSource) ...[
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _sourcePublisherCtrl,
+                    style: const TextStyle(color: _text, fontSize: 12.4),
+                    decoration: InputDecoration(
+                      labelText: '출판사/브랜드',
+                      hintText: '예: 비상, 메가스터디',
+                      hintStyle: const TextStyle(color: _textSub, fontSize: 11),
+                      labelStyle:
+                          const TextStyle(color: _textSub, fontSize: 11),
+                      isDense: true,
+                      filled: true,
+                      fillColor: _field,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(color: _border),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(color: _border),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(color: _accent),
+                      ),
+                    ),
+                    onChanged: (_) => _markDocumentMetaDirty(),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: TextField(
+                    controller: _sourceMaterialCtrl,
+                    style: const TextStyle(color: _text, fontSize: 12.4),
+                    decoration: InputDecoration(
+                      labelText: '교재명',
+                      hintText: '예: 수학의 정석',
+                      hintStyle: const TextStyle(color: _textSub, fontSize: 11),
+                      labelStyle:
+                          const TextStyle(color: _textSub, fontSize: 11),
+                      isDense: true,
+                      filled: true,
+                      fillColor: _field,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(color: _border),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(color: _border),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(color: _accent),
+                      ),
+                    ),
+                    onChanged: (_) => _markDocumentMetaDirty(),
+                  ),
                 ),
               ],
             ),
@@ -7313,6 +7878,440 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
     );
   }
 
+  Future<void> _runClassificationSearch() async {
+    final academyId = _academyId;
+    if (academyId == null || academyId.isEmpty) return;
+    if (!mounted) return;
+    setState(() {
+      _isSearchingClassification = true;
+    });
+    try {
+      final docs = await _service.searchDocuments(
+        academyId: academyId,
+        curriculumCode: _classificationCurriculumFilter.trim().isEmpty
+            ? null
+            : _classificationCurriculumFilter,
+        sourceTypeCode: _classificationSourceTypeFilter.trim().isEmpty
+            ? null
+            : _classificationSourceTypeFilter,
+        gradeLabel: _classificationGradeFilterCtrl.text.trim(),
+        examYear: int.tryParse(_classificationYearFilterCtrl.text.trim()),
+        schoolName: _classificationSchoolFilterCtrl.text.trim(),
+        limit: 300,
+      );
+      final countByDocumentId = <String, int>{};
+      var filteredDocs = docs;
+      if (_classificationQuestionTypeFilter.trim().isNotEmpty) {
+        final matchedQuestions = await _service.searchQuestions(
+          academyId: academyId,
+          curriculumCode: _classificationCurriculumFilter.trim().isEmpty
+              ? null
+              : _classificationCurriculumFilter,
+          sourceTypeCode: _classificationSourceTypeFilter.trim().isEmpty
+              ? null
+              : _classificationSourceTypeFilter,
+          gradeLabel: _classificationGradeFilterCtrl.text.trim(),
+          examYear: int.tryParse(_classificationYearFilterCtrl.text.trim()),
+          schoolName: _classificationSchoolFilterCtrl.text.trim(),
+          questionType: _classificationQuestionTypeFilter,
+          limit: 400,
+        );
+        for (final q in matchedQuestions) {
+          countByDocumentId[q.documentId] =
+              (countByDocumentId[q.documentId] ?? 0) + 1;
+        }
+        final docIds = countByDocumentId.keys.toSet();
+        filteredDocs =
+            docs.where((d) => docIds.contains(d.id)).toList(growable: false);
+        if (filteredDocs.isEmpty && docIds.isNotEmpty) {
+          final recentDocs = await _service.listRecentDocuments(
+            academyId: academyId,
+            limit: 300,
+          );
+          filteredDocs = recentDocs
+              .where((d) => docIds.contains(d.id))
+              .toList(growable: false);
+        }
+      }
+      final results = filteredDocs
+          .map(
+            (doc) => _ClassificationDocumentResult(
+              document: doc,
+              matchedQuestionCount: countByDocumentId[doc.id] ?? -1,
+            ),
+          )
+          .toList(growable: false);
+      if (!mounted) return;
+      setState(() {
+        _classificationResults = results;
+      });
+    } catch (e) {
+      _showSnack('분류 검색 실패: $e', error: true);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSearchingClassification = false;
+        });
+      }
+    }
+  }
+
+  void _resetClassificationFilters() {
+    if (!mounted) return;
+    setState(() {
+      _classificationCurriculumFilter = '';
+      _classificationSourceTypeFilter = '';
+      _classificationQuestionTypeFilter = '';
+      _classificationYearFilterCtrl.clear();
+      _classificationGradeFilterCtrl.clear();
+      _classificationSchoolFilterCtrl.clear();
+      _classificationResults = <_ClassificationDocumentResult>[];
+    });
+    unawaited(_runClassificationSearch());
+  }
+
+  Future<void> _openDocumentFromClassification(ProblemBankDocument doc) async {
+    if (!mounted) return;
+    setState(() {
+      _activeDocument = doc;
+      _questions = <ProblemBankQuestion>[];
+      _dirtyQuestionIds.clear();
+      _applySourceMetaFromDocument(doc);
+      _scoreDrafts.clear();
+      _hasExtracted = false;
+    });
+    await _loadDocumentContext(doc.id);
+  }
+
+  Future<void> _deleteActiveDocumentInClassification() async {
+    if (_isDeletingClassificationDocument) return;
+    final academyId = _academyId;
+    final doc = _activeDocument;
+    if (academyId == null || academyId.isEmpty || doc == null) {
+      _showSnack('삭제할 문서를 먼저 선택해주세요.', error: true);
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            backgroundColor: _panel,
+            title: const Text('문서 삭제', style: TextStyle(color: _text)),
+            content: Text(
+              '${doc.sourceFilename}\n문서와 관련 추출 문항을 삭제합니다.',
+              style: const TextStyle(color: _textSub, fontSize: 13),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: const Text('취소'),
+              ),
+              FilledButton(
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFFDE6A73),
+                ),
+                onPressed: () => Navigator.of(context).pop(true),
+                child: const Text('삭제'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+    if (!confirmed) return;
+    if (!mounted) return;
+    setState(() {
+      _isDeletingClassificationDocument = true;
+    });
+    try {
+      await _service.deleteDocument(academyId: academyId, document: doc);
+      if (!mounted) return;
+      setState(() {
+        _questions = <ProblemBankQuestion>[];
+        _activeDocument = null;
+        _dirtyQuestionIds.clear();
+        _scoreDrafts.clear();
+        _hasExtracted = false;
+      });
+      await _refreshDocuments();
+      await _runClassificationSearch();
+      _showSnack('문서를 삭제했습니다.');
+    } catch (e) {
+      _showSnack('문서 삭제 실패: $e', error: true);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isDeletingClassificationDocument = false;
+        });
+      }
+    }
+  }
+
+  Widget _buildClassificationResultsPanel() {
+    return Expanded(
+      child: Container(
+        decoration: BoxDecoration(
+          color: _panel,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: _border),
+        ),
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Text(
+                  '검색 결과 ${_classificationResults.length}건',
+                  style: const TextStyle(
+                    color: _textSub,
+                    fontSize: 12.6,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const Spacer(),
+                OutlinedButton.icon(
+                  onPressed: _activeDocument == null ||
+                          _isDeletingClassificationDocument
+                      ? null
+                      : () =>
+                          unawaited(_deleteActiveDocumentInClassification()),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: const Color(0xFFDE6A73),
+                    side: const BorderSide(color: Color(0xFFDE6A73)),
+                    visualDensity:
+                        const VisualDensity(horizontal: -2, vertical: -2),
+                  ),
+                  icon: _isDeletingClassificationDocument
+                      ? const SizedBox(
+                          width: 12,
+                          height: 12,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 1.6,
+                            color: Color(0xFFDE6A73),
+                          ),
+                        )
+                      : const Icon(Icons.delete_outline, size: 14),
+                  label: const Text('선택 문서 삭제'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Expanded(
+              child: _classificationResults.isEmpty
+                  ? const Center(
+                      child: Text(
+                        '분류 검색 결과가 없습니다.',
+                        style: TextStyle(color: _textSub, fontSize: 12),
+                      ),
+                    )
+                  : ListView.separated(
+                      itemCount: _classificationResults.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 6),
+                      itemBuilder: (context, index) {
+                        final item = _classificationResults[index];
+                        final doc = item.document;
+                        final isActive = _activeDocument?.id == doc.id;
+                        final scoreText = item.matchedQuestionCount >= 0
+                            ? '매칭 ${item.matchedQuestionCount}문항'
+                            : '문서 기준';
+                        final yearText =
+                            doc.examYear == null ? '' : '${doc.examYear}';
+                        final subParts = <String>[
+                          if (yearText.isNotEmpty) yearText,
+                          if (doc.schoolName.trim().isNotEmpty)
+                            doc.schoolName.trim(),
+                          if (doc.gradeLabel.trim().isNotEmpty)
+                            '${doc.gradeLabel.trim()}학년',
+                        ];
+                        return InkWell(
+                          onTap: () =>
+                              unawaited(_openDocumentFromClassification(doc)),
+                          borderRadius: BorderRadius.circular(8),
+                          child: Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: isActive
+                                  ? _accent.withValues(alpha: 0.15)
+                                  : _field,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                color: isActive ? _accent : _border,
+                              ),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  doc.sourceFilename,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    color: _text,
+                                    fontSize: 12.4,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  '${_labelOfCurriculumCode(doc.curriculumCode)} · ${_labelOfSourceTypeCode(doc.sourceTypeCode)}',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    color: _textSub,
+                                    fontSize: 11.2,
+                                  ),
+                                ),
+                                if (subParts.isNotEmpty) ...[
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    subParts.join(' · '),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      color: _textSub,
+                                      fontSize: 11,
+                                    ),
+                                  ),
+                                ],
+                                const SizedBox(height: 4),
+                                Text(
+                                  scoreText,
+                                  style: const TextStyle(
+                                    color: _textSub,
+                                    fontSize: 10.8,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildUploadTabBody({
+    required bool step1Done,
+    required bool step2Done,
+    required bool step3Active,
+  }) {
+    return Column(
+      children: [
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            _buildStepChip(
+              index: 1,
+              title: '업로드/정규화',
+              active: _isUploading || _isExtracting,
+              done: step1Done,
+            ),
+            _buildStepChip(
+              index: 2,
+              title: '검수/선택',
+              active: !(_isUploading || _isExtracting) && !step2Done,
+              done: step2Done,
+            ),
+            _buildStepChip(
+              index: 3,
+              title: '양식 PDF 생성',
+              active: step3Active,
+              done: _hasExported && !step3Active,
+            ),
+          ],
+        ),
+        const SizedBox(height: 14),
+        Expanded(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SizedBox(
+                width: 380,
+                child: Column(
+                  children: [
+                    _buildUploadPanel(),
+                    const SizedBox(height: 12),
+                    _buildTemplatePanel(),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _buildQuestionTable(),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildClassificationTabBody() {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 380,
+          child: Column(
+            children: [
+              ProblemBankClassificationFilterPanel(
+                panelColor: _panel,
+                fieldColor: _field,
+                borderColor: _border,
+                textColor: _text,
+                textSubColor: _textSub,
+                accentColor: _accent,
+                curriculumLabels: <String, String>{
+                  '': '전체',
+                  ..._curriculumLabels,
+                },
+                sourceTypeLabels: <String, String>{
+                  '': '전체',
+                  ..._sourceTypeLabels,
+                },
+                questionTypeLabels: _questionTypeFilterLabels,
+                selectedCurriculumCode: _classificationCurriculumFilter,
+                selectedSourceTypeCode: _classificationSourceTypeFilter,
+                selectedQuestionType: _classificationQuestionTypeFilter,
+                yearController: _classificationYearFilterCtrl,
+                gradeController: _classificationGradeFilterCtrl,
+                schoolController: _classificationSchoolFilterCtrl,
+                isSearching: _isSearchingClassification,
+                onCurriculumChanged: (v) {
+                  setState(() {
+                    _classificationCurriculumFilter = v;
+                  });
+                },
+                onSourceTypeChanged: (v) {
+                  setState(() {
+                    _classificationSourceTypeFilter = v;
+                  });
+                },
+                onQuestionTypeChanged: (v) {
+                  setState(() {
+                    _classificationQuestionTypeFilter = v;
+                  });
+                },
+                onSearch: () => unawaited(_runClassificationSearch()),
+                onReset: _resetClassificationFilters,
+              ),
+              const SizedBox(height: 12),
+              _buildClassificationResultsPanel(),
+            ],
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: _buildQuestionTable(),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final bool step1Done = _hasExtracted &&
@@ -7414,49 +8413,25 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
                   ],
                 ),
                 const SizedBox(height: 16),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    _buildStepChip(
-                      index: 1,
-                      title: '업로드/정규화',
-                      active: _isUploading || _isExtracting,
-                      done: step1Done,
-                    ),
-                    _buildStepChip(
-                      index: 2,
-                      title: '검수/선택',
-                      active: !(_isUploading || _isExtracting) && !step2Done,
-                      done: step2Done,
-                    ),
-                    _buildStepChip(
-                      index: 3,
-                      title: '양식 PDF 생성',
-                      active: step3Active,
-                      done: _hasExported && !step3Active,
-                    ),
-                  ],
+                ProblemBankModeTabBar(
+                  controller: _topTabController,
+                  panelColor: _panel,
+                  borderColor: _border,
+                  textColor: _text,
+                  textSubColor: _textSub,
+                  accentColor: _accent,
                 ),
                 const SizedBox(height: 14),
                 Expanded(
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                  child: TabBarView(
+                    controller: _topTabController,
                     children: [
-                      SizedBox(
-                        width: 380,
-                        child: Column(
-                          children: [
-                            _buildUploadPanel(),
-                            const SizedBox(height: 12),
-                            _buildTemplatePanel(),
-                          ],
-                        ),
+                      _buildUploadTabBody(
+                        step1Done: step1Done,
+                        step2Done: step2Done,
+                        step3Active: step3Active,
                       ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: _buildQuestionTable(),
-                      ),
+                      _buildClassificationTabBody(),
                     ],
                   ),
                 ),
@@ -7464,6 +8439,16 @@ class _ProblemBankScreenState extends State<ProblemBankScreen> {
             ),
     );
   }
+}
+
+class _ClassificationDocumentResult {
+  const _ClassificationDocumentResult({
+    required this.document,
+    required this.matchedQuestionCount,
+  });
+
+  final ProblemBankDocument document;
+  final int matchedQuestionCount;
 }
 
 class _PipelineLogEntry {

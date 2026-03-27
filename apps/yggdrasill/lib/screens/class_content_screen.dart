@@ -59,11 +59,14 @@ class _ClassContentScreenState extends State<ClassContentScreen>
   @override
   void initState() {
     super.initState();
-    gradingModeActive.value = _isGradingMode;
-    homeBatchConfirmFabVisible.value = true;
-    homeBatchConfirmPendingCount.value = 0;
-    homeBatchConfirmAction = null;
     DataManager.instance.loadDeviceBindings();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      gradingModeActive.value = _isGradingMode;
+      homeBatchConfirmFabVisible.value = true;
+      homeBatchConfirmPendingCount.value = 0;
+      homeBatchConfirmAction = null;
+    });
     _uiAnimController = AnimationController(
         duration: const Duration(milliseconds: 1800), vsync: this)
       ..repeat();
@@ -216,6 +219,44 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                   ),
                                 ),
                                 if (_isGradingMode)
+                                  ValueListenableBuilder<bool>(
+                                    valueListenable: rightSideSheetOpen,
+                                    builder: (context, isOpen, _) {
+                                      return Tooltip(
+                                        message:
+                                            isOpen ? '오른쪽 시트 닫기' : '오른쪽 시트 열기',
+                                        child: SizedBox(
+                                          width: 36,
+                                          height: 36,
+                                          child: IconButton(
+                                            onPressed: () async {
+                                              blockRightSideSheetOpen.value =
+                                                  false;
+                                              final action =
+                                                  toggleRightSideSheetAction;
+                                              if (action != null) {
+                                                await action();
+                                              }
+                                            },
+                                            padding: EdgeInsets.zero,
+                                            splashRadius: 20,
+                                            visualDensity:
+                                                VisualDensity.compact,
+                                            icon: Icon(
+                                              isOpen
+                                                  ? Icons
+                                                      .keyboard_double_arrow_right_rounded
+                                                  : Icons
+                                                      .keyboard_double_arrow_left_rounded,
+                                              size: 20,
+                                              color: kDlgTextSub,
+                                            ),
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                  ),
+                                if (_isGradingMode)
                                   Tooltip(
                                     message: '채점 이력',
                                     child: SizedBox(
@@ -266,6 +307,16 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                           }
                                         });
                                         gradingModeActive.value = value;
+                                        if (value) {
+                                          blockRightSideSheetOpen.value = false;
+                                        } else {
+                                          blockRightSideSheetOpen.value = true;
+                                          final closeAction =
+                                              closeRightSideSheetAction;
+                                          if (closeAction != null) {
+                                            unawaited(closeAction());
+                                          }
+                                        }
                                       },
                                       activeColor: kDlgAccent,
                                     ),
@@ -2023,6 +2074,42 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       }
     }
 
+    final seenOverlayItemIds = <String>{};
+    final overlayEntries = <HomeworkAnswerOverlayEntry>[];
+    for (final key in keys) {
+      final item = HomeworkStore.instance.getById(key.studentId, key.itemId);
+      if (item == null) continue;
+      if (!seenOverlayItemIds.add(item.id)) continue;
+      final title =
+          item.title.trim().isEmpty ? '(제목 없음)' : item.title.trim();
+      final pageRaw = (item.page ?? '').trim();
+      final pageText = pageRaw.isEmpty ? '-' : 'p.$pageRaw';
+      final memoRaw = (item.memo ?? '').trim();
+      final memoText = memoRaw.isEmpty ? '-' : memoRaw;
+      overlayEntries.add(
+        HomeworkAnswerOverlayEntry(
+          title: title,
+          page: pageText,
+          memo: memoText,
+        ),
+      );
+    }
+    if (overlayEntries.isEmpty) {
+      final fallbackPage = (hw.page ?? '').trim();
+      final fallbackMemo = (hw.memo ?? '').trim();
+      overlayEntries.add(
+        HomeworkAnswerOverlayEntry(
+          title: hw.title.trim().isEmpty ? '(제목 없음)' : hw.title.trim(),
+          page: fallbackPage.isEmpty ? '-' : 'p.$fallbackPage',
+          memo: fallbackMemo.isEmpty ? '-' : fallbackMemo,
+        ),
+      );
+    }
+
+    final closeAction = closeRightSideSheetAction;
+    if (closeAction != null) {
+      await closeAction();
+    }
     final action = await openHomeworkAnswerViewerPage(
       context,
       filePath: answerPath,
@@ -2030,6 +2117,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       solutionFilePath: solutionPath,
       cacheKey: 'student:$studentId|answer:$answerPath',
       enableConfirm: true,
+      overlayEntries: overlayEntries,
     );
     if (!context.mounted) return;
     if (action == HomeworkAnswerViewerAction.complete) {
@@ -7882,6 +7970,10 @@ Future<void> _handleSubmittedChipTapWithAnswerViewer({
     }
   }
 
+  final closeAction = closeRightSideSheetAction;
+  if (closeAction != null) {
+    await closeAction();
+  }
   final action = await openHomeworkAnswerViewerPage(
     context,
     filePath: answerPath,
