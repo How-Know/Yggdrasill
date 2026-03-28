@@ -741,21 +741,24 @@ async function fetchQuestionsForJob(job) {
   const academyId = String(job.academy_id || '').trim();
   const documentId = String(job.document_id || '').trim();
   const selectedIds = Array.isArray(job.selected_question_ids)
-    ? job.selected_question_ids.map((e) => String(e))
+    ? job.selected_question_ids.map((e) => String(e).trim()).filter((e) => e.length > 0)
+    : [];
+  const options = job.options && typeof job.options === 'object' ? job.options : {};
+  const sourceDocumentIds = Array.isArray(options.sourceDocumentIds)
+    ? options.sourceDocumentIds.map((e) => String(e).trim()).filter((e) => e.length > 0)
     : [];
 
   let query = supa
     .from('pb_questions')
     .select(
-      'id,question_number,question_type,stem,choices,allow_objective,allow_subjective,objective_choices,objective_answer_key,subjective_answer,objective_generated,figure_refs,equations,confidence,flags,reviewer_notes,source_page,source_order,meta',
+      'id,document_id,question_number,question_type,stem,choices,allow_objective,allow_subjective,objective_choices,objective_answer_key,subjective_answer,objective_generated,figure_refs,equations,confidence,flags,reviewer_notes,source_page,source_order,meta',
     )
-    .eq('academy_id', academyId)
-    .eq('document_id', documentId);
+    .eq('academy_id', academyId);
 
   if (selectedIds.length > 0) {
     query = query.in('id', selectedIds);
   } else {
-    query = query.eq('is_checked', true);
+    query = query.eq('document_id', documentId).eq('is_checked', true);
   }
 
   const { data, error } = await query
@@ -764,31 +767,45 @@ async function fetchQuestionsForJob(job) {
   if (error) {
     throw new Error(`question_fetch_failed:${error.message}`);
   }
-  return (data || []).map((row) => ({
-        id: String(row.id || ''),
-        question_number: String(row.question_number || ''),
-        question_type: String(row.question_type || ''),
-        stem: String(row.stem || ''),
-        choices: normalizeChoiceRows(row.choices),
-        allow_objective: row.allow_objective !== false,
-        allow_subjective: row.allow_subjective !== false,
-        objective_choices: normalizeChoiceRows(row.objective_choices),
-        objective_answer_key: sanitizeAnswerText(row.objective_answer_key || ''),
-        subjective_answer: sanitizeAnswerText(row.subjective_answer || ''),
-        objective_generated: row.objective_generated === true,
-        figure_refs: Array.isArray(row.figure_refs)
-            ? row.figure_refs
-            : [],
-        equations: Array.isArray(row.equations)
-            ? row.equations
-            : [],
-        confidence: Number(row.confidence || 0),
-        flags: Array.isArray(row.flags) ? row.flags : [],
-        reviewer_notes: String(row.reviewer_notes || ''),
-        source_page: Number(row.source_page || 0),
-        source_order: Number(row.source_order || 0),
-        meta: row.meta && typeof row.meta === 'object' ? row.meta : {},
-      }));
+  const rows = (data || []).map((row) => ({
+    id: String(row.id || ''),
+    document_id: String(row.document_id || ''),
+    question_number: String(row.question_number || ''),
+    question_type: String(row.question_type || ''),
+    stem: String(row.stem || ''),
+    choices: normalizeChoiceRows(row.choices),
+    allow_objective: row.allow_objective !== false,
+    allow_subjective: row.allow_subjective !== false,
+    objective_choices: normalizeChoiceRows(row.objective_choices),
+    objective_answer_key: sanitizeAnswerText(row.objective_answer_key || ''),
+    subjective_answer: sanitizeAnswerText(row.subjective_answer || ''),
+    objective_generated: row.objective_generated === true,
+    figure_refs: Array.isArray(row.figure_refs) ? row.figure_refs : [],
+    equations: Array.isArray(row.equations) ? row.equations : [],
+    confidence: Number(row.confidence || 0),
+    flags: Array.isArray(row.flags) ? row.flags : [],
+    reviewer_notes: String(row.reviewer_notes || ''),
+    source_page: Number(row.source_page || 0),
+    source_order: Number(row.source_order || 0),
+    meta: row.meta && typeof row.meta === 'object' ? row.meta : {},
+  }));
+
+  if (selectedIds.length > 0) {
+    const selectedOrder = new Map(selectedIds.map((id, idx) => [id, idx]));
+    const docOrder = new Map(sourceDocumentIds.map((id, idx) => [id, idx]));
+    rows.sort((a, b) => {
+      const ai = selectedOrder.has(a.id) ? selectedOrder.get(a.id) : Number.MAX_SAFE_INTEGER;
+      const bi = selectedOrder.has(b.id) ? selectedOrder.get(b.id) : Number.MAX_SAFE_INTEGER;
+      if (ai !== bi) return ai - bi;
+      const ad = docOrder.has(a.document_id) ? docOrder.get(a.document_id) : Number.MAX_SAFE_INTEGER;
+      const bd = docOrder.has(b.document_id) ? docOrder.get(b.document_id) : Number.MAX_SAFE_INTEGER;
+      if (ad !== bd) return ad - bd;
+      if (a.source_page !== b.source_page) return a.source_page - b.source_page;
+      return a.source_order - b.source_order;
+    });
+  }
+
+  return rows;
 }
 
 async function renderPdf(job, questions) {
@@ -968,6 +985,11 @@ async function processOneJob(job) {
     ? rendered.exportQuestions
     : questions;
   const figureAppliedCount = exportQuestions.filter((q) => Boolean(q.figure_embed)).length;
+  const sourceDocumentCount = new Set(
+    exportQuestions
+      .map((q) => String(q.document_id || '').trim())
+      .filter((id) => id.length > 0),
+  ).size;
   const objectPath = `${job.academy_id}/${job.id}.pdf`;
 
   const { error: uploadErr } = await supa.storage
@@ -1004,6 +1026,7 @@ async function processOneJob(job) {
         maxQuestionsPerPage: rendered.maxQuestionsPerPage || 0,
         questionCount: exportQuestions.length,
         figureAppliedCount,
+        sourceDocumentCount,
       },
       finished_at: nowIso,
       updated_at: nowIso,

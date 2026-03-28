@@ -50,8 +50,22 @@ String unboundTopic;
 static uint32_t nextMqttReconnectMs = 0;
 static const char* kMqttHosts[] = { CFG_MQTT_HOST, "test.mosquitto.org", "broker.hivemq.com" };
 static int mqttHostIndex = 0;
+static uint8_t mqttConsecutiveDisconnects = 0;
 static char willPayloadBuf[128];
 static char willTopicBuf[128];
+
+// MQTT stale watchdog states
+static uint32_t g_last_mqtt_connect_ms = 0;
+static uint32_t g_last_mqtt_rx_any_ms = 0;
+static uint32_t g_last_mqtt_rx_ack_ms = 0;
+static uint32_t g_last_mqtt_rx_homeworks_ms = 0;
+static uint32_t g_last_mqtt_rx_student_info_ms = 0;
+static uint32_t g_last_watchdog_soft_ms = 0;
+static uint32_t g_last_watchdog_hard_ms = 0;
+static const uint32_t MQTT_STALE_SOFT_MS = 45000;
+static const uint32_t MQTT_STALE_HARD_MS = 180000;
+static const uint32_t MQTT_STALE_SOFT_COOLDOWN_MS = 15000;
+static const uint32_t MQTT_STALE_HARD_COOLDOWN_MS = 90000;
 
 // Deferred homework update (MQTT callback -> main loop)
 static portMUX_TYPE g_hw_mux = portMUX_INITIALIZER_UNLOCKED;
@@ -145,7 +159,9 @@ static void configureMqttServer() {
 void fw_publish_list_homeworks(const char* studentIdArg);
 
 void onMqttConnect(bool sessionPresent) {
-  (void)sessionPresent;
+  g_last_mqtt_connect_ms = millis();
+  g_last_mqtt_rx_any_ms = g_last_mqtt_connect_ms;
+  mqttConsecutiveDisconnects = 0;
   ackFilterPrefix = String("academies/") + academyId + "/ack/";
   String ackTopic = ackFilterPrefix + "+";
   mqtt.subscribe(ackTopic.c_str(), 1);
@@ -159,7 +175,7 @@ void onMqttConnect(bool sessionPresent) {
   mqtt.subscribe(unboundTopic.c_str(), 1);
   updateTopic = String("academies/") + academyId + "/devices/" + deviceId + "/update";
   mqtt.subscribe(updateTopic.c_str(), 1);
-  Serial.println("MQTT connected & subscribed");
+  Serial.printf("MQTT connected & subscribed (sessionPresent=%d)\n", sessionPresent ? 1 : 0);
 
   // Presence (retain)
   {
@@ -201,16 +217,24 @@ void onMqttDisconnect(AsyncMqttClientDisconnectReason reason) {
   Serial.print("MQTT disconnect reason: "); Serial.println((int)reason);
   // 3초 후 재시도
   nextMqttReconnectMs = millis() + 3000;
-  // 다음 호스트로 라운드로빈
-  mqttHostIndex = (mqttHostIndex + 1) % (sizeof(kMqttHosts)/sizeof(kMqttHosts[0]));
-  configureMqttServer();
+  // 짧은 끊김마다 호스트를 바꾸지 않고, 연속 실패가 누적될 때만 라운드로빈
+  mqttConsecutiveDisconnects++;
+  if (mqttConsecutiveDisconnects >= 3) {
+    mqttConsecutiveDisconnects = 0;
+    mqttHostIndex = (mqttHostIndex + 1) % (sizeof(kMqttHosts) / sizeof(kMqttHosts[0]));
+    Serial.println("[MQTT] rotating host after repeated disconnects");
+    configureMqttServer();
+  }
 }
 
 void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties properties, size_t len, size_t index, size_t total) {
   (void)properties; (void)index; (void)total;
   String t = String(topic);
+  const uint32_t nowMs = millis();
+  g_last_mqtt_rx_any_ms = nowMs;
   Serial.print("MSG "); Serial.print(t); Serial.print(" len="); Serial.println((int)len);
   if (t.startsWith(ackFilterPrefix)) {
+    g_last_mqtt_rx_ack_ms = nowMs;
     String body; body.reserve(len + 1);
     for (size_t i = 0; i < len; ++i) body += (char)payload[i];
     Serial.print("ACK: "); Serial.println(body);
@@ -249,6 +273,7 @@ void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties 
     g_hw_pending_json = hw_acc;
     g_hw_pending = true;
     portEXIT_CRITICAL(&g_hw_mux);
+    g_last_mqtt_rx_homeworks_ms = nowMs;
     hw_acc.remove(0);
   }
   if (t == updateTopic) {
@@ -258,6 +283,7 @@ void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties 
     Serial.print("UPDATE resp: "); Serial.println(body);
   }
   if (t == studentInfoTopic) {
+    g_last_mqtt_rx_student_info_ms = nowMs;
     DynamicJsonDocument doc(1024);
     DeserializationError err = deserializeJson(doc, payload, len);
     if (!err && doc.containsKey("info")) {
@@ -594,7 +620,36 @@ void loop() {
     mqtt.connect();
     Serial.println("MQTT reconnect...");
   }
-  // no periodic re-requests
+
+  // MQTT stale watchdog: 바인딩된 상태에서 수신 정체를 감지하면 재요청/재연결
+  if (mqtt.connected() && studentId.length() > 0) {
+    uint32_t lastInboundMs = g_last_mqtt_rx_any_ms;
+    if (g_last_mqtt_rx_homeworks_ms > lastInboundMs) lastInboundMs = g_last_mqtt_rx_homeworks_ms;
+    if (g_last_mqtt_rx_student_info_ms > lastInboundMs) lastInboundMs = g_last_mqtt_rx_student_info_ms;
+    if (g_last_mqtt_rx_ack_ms > lastInboundMs) lastInboundMs = g_last_mqtt_rx_ack_ms;
+    if (lastInboundMs == 0) lastInboundMs = g_last_mqtt_connect_ms;
+
+    if (lastInboundMs > 0) {
+      uint32_t staleMs = (now >= lastInboundMs) ? (now - lastInboundMs) : 0;
+      bool canSoftRecover =
+          (g_last_watchdog_soft_ms == 0) || ((now - g_last_watchdog_soft_ms) >= MQTT_STALE_SOFT_COOLDOWN_MS);
+      bool canHardRecover =
+          (g_last_watchdog_hard_ms == 0) || ((now - g_last_watchdog_hard_ms) >= MQTT_STALE_HARD_COOLDOWN_MS);
+
+      if (staleMs >= MQTT_STALE_HARD_MS && canHardRecover) {
+        g_last_watchdog_hard_ms = now;
+        Serial.printf("[MQTT][WATCHDOG] hard stale %lu ms -> disconnect/reconnect\n", (unsigned long)staleMs);
+        mqtt.disconnect();
+        nextMqttReconnectMs = now + 500;
+      } else if (staleMs >= MQTT_STALE_SOFT_MS && canSoftRecover) {
+        g_last_watchdog_soft_ms = now;
+        Serial.printf("[MQTT][WATCHDOG] soft stale %lu ms -> request student_info + list_homeworks\n", (unsigned long)staleMs);
+        fw_publish_student_info(studentId.c_str());
+        fw_publish_list_homeworks(studentId.c_str());
+      }
+    }
+  }
+
   if (now - lastPresence > 15000) {
     lastPresence = now;
     DynamicJsonDocument doc(128);

@@ -530,9 +530,53 @@ async function createExportJob(body, res) {
     return;
   }
 
-  const selectedQuestionIds = Array.isArray(body.selectedQuestionIds)
+  const selectedQuestionIdsRaw = Array.isArray(body.selectedQuestionIds)
     ? body.selectedQuestionIds.filter((v) => isUuid(v))
     : [];
+  let selectedQuestionIds = selectedQuestionIdsRaw;
+  let sourceDocumentIds = [];
+  if (selectedQuestionIdsRaw.length > 0) {
+    const { data: selectedRows, error: selectedErr } = await supa
+      .from('pb_questions')
+      .select('id,document_id')
+      .eq('academy_id', academyId)
+      .in('id', selectedQuestionIdsRaw);
+    if (selectedErr) {
+      sendJson(res, 500, {
+        ok: false,
+        error: `export_selected_questions_lookup_failed:${selectedErr.message}`,
+      });
+      return;
+    }
+    const rowById = new Map(
+      (selectedRows || []).map((row) => [String(row.id || ''), row]),
+    );
+    selectedQuestionIds = selectedQuestionIdsRaw.filter((id) => rowById.has(id));
+    if (selectedQuestionIds.length === 0) {
+      sendJson(res, 400, {
+        ok: false,
+        error: 'selected_question_ids_invalid',
+      });
+      return;
+    }
+    const seenDocIds = new Set();
+    for (const id of selectedQuestionIds) {
+      const row = rowById.get(id);
+      const docId = String(row?.document_id || '').trim();
+      if (!isUuid(docId) || seenDocIds.has(docId)) continue;
+      seenDocIds.add(docId);
+      sourceDocumentIds.push(docId);
+    }
+  }
+  if (!sourceDocumentIds.includes(documentId)) {
+    sourceDocumentIds = [documentId, ...sourceDocumentIds];
+  }
+  const options =
+    typeof body.options === 'object' && body.options
+      ? { ...body.options }
+      : {};
+  options.sourceDocumentIds = sourceDocumentIds;
+
   const payload = {
     academy_id: academyId,
     document_id: documentId,
@@ -543,7 +587,7 @@ async function createExportJob(body, res) {
     include_answer_sheet: normalizeBool(body.includeAnswerSheet, true),
     include_explanation: normalizeBool(body.includeExplanation, false),
     selected_question_ids: selectedQuestionIds,
-    options: typeof body.options === 'object' && body.options ? body.options : {},
+    options,
     output_storage_bucket: 'problem-exports',
     output_storage_path: '',
     output_url: '',

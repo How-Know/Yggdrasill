@@ -13,6 +13,15 @@ const MQTT_USER = process.env.MQTT_USERNAME;
 const MQTT_PASS = process.env.MQTT_PASSWORD;
 const MQTT_CA_PATH = process.env.MQTT_CA_PATH;
 const MQTT_CLIENT_ID = process.env.MQTT_CLIENT_ID || `ygg-gateway-${uuidv4()}`;
+const MQTT_KEEPALIVE_SEC = Number.parseInt(process.env.MQTT_KEEPALIVE_SEC ?? '15', 10);
+const MQTT_CONNECT_TIMEOUT_MS = Number.parseInt(process.env.MQTT_CONNECT_TIMEOUT_MS ?? '30000', 10);
+const MQTT_RECONNECT_PERIOD_MS = Number.parseInt(process.env.MQTT_RECONNECT_PERIOD_MS ?? '3000', 10);
+const MQTT_CLEAN_SESSION = String(process.env.MQTT_CLEAN_SESSION ?? 'false').toLowerCase() === 'true';
+const GW_HEALTH_INTERVAL_MS = Number.parseInt(process.env.GW_HEALTH_INTERVAL_MS ?? '10000', 10);
+const GW_STALE_WARN_MS = Number.parseInt(process.env.GW_STALE_WARN_MS ?? '90000', 10);
+const GW_STALE_HARD_RESET_MS = Number.parseInt(process.env.GW_STALE_HARD_RESET_MS ?? '180000', 10);
+const GW_STALE_ACTIVITY_WINDOW_MS = Number.parseInt(process.env.GW_STALE_ACTIVITY_WINDOW_MS ?? '600000', 10);
+const GW_RECOVERY_COOLDOWN_MS = Number.parseInt(process.env.GW_RECOVERY_COOLDOWN_MS ?? '60000', 10);
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE || !MQTT_URL) {
   console.error('[gateway] Missing envs');
@@ -24,6 +33,56 @@ const supa = createClient(SUPABASE_URL, SUPABASE_SERVICE);
 const schema = JSON.parse(readFileSync(new URL('../../infra/messaging/schemas/homework_command.v1.json', import.meta.url)));
 const ajv = new Ajv({ allErrors: true, strict: false });
 const validate = ajv.compile(schema);
+
+const nowMs = () => Date.now();
+const validInt = (value, fallback) =>
+  Number.isFinite(value) && value > 0 ? Math.trunc(value) : fallback;
+
+const cfg = {
+  keepaliveSec: validInt(MQTT_KEEPALIVE_SEC, 15),
+  connectTimeoutMs: validInt(MQTT_CONNECT_TIMEOUT_MS, 30000),
+  reconnectPeriodMs: validInt(MQTT_RECONNECT_PERIOD_MS, 3000),
+  cleanSession: MQTT_CLEAN_SESSION,
+  healthIntervalMs: validInt(GW_HEALTH_INTERVAL_MS, 10000),
+  staleWarnMs: validInt(GW_STALE_WARN_MS, 90000),
+  staleHardMs: validInt(GW_STALE_HARD_RESET_MS, 180000),
+  staleActivityWindowMs: validInt(GW_STALE_ACTIVITY_WINDOW_MS, 600000),
+  recoveryCooldownMs: validInt(GW_RECOVERY_COOLDOWN_MS, 60000)
+};
+
+function logEvent(level, message, payload = {}) {
+  const body = Object.keys(payload).length ? payload : undefined;
+  if (body) console[level](message, body);
+  else console[level](message);
+}
+
+const sampledLogState = new Map();
+function logSampled(key, intervalMs, level, message, payload = {}) {
+  const now = nowMs();
+  const prev = sampledLogState.get(key) || 0;
+  if (now - prev < intervalMs) return;
+  sampledLogState.set(key, now);
+  logEvent(level, message, payload);
+}
+
+const gatewayState = {
+  connected: false,
+  lastConnectTs: 0,
+  lastDisconnectTs: 0,
+  lastMessageTs: 0,
+  lastPublishTs: 0,
+  lastSoftRecoverTs: 0,
+  lastHardRecoverTs: 0,
+  softRecoveries: 0,
+  hardRecoveries: 0,
+  lastInboundTopic: ''
+};
+
+const BASE_SUBSCRIPTIONS = [
+  'academies/+/students/+/homework/+/command',
+  'academies/+/devices/+/command',
+  'academies/+/devices/+/presence'
+];
 
 const tlsOpts = {};
 if (MQTT_CA_PATH && existsSync(MQTT_CA_PATH)) {
@@ -39,24 +98,89 @@ const client = mqtt.connect(MQTT_URL, {
   username: MQTT_USER,
   password: MQTT_PASS,
   protocolVersion: 5,
-  clean: true,
+  clean: cfg.cleanSession,
   clientId: MQTT_CLIENT_ID,
-  keepalive: 30,
+  keepalive: cfg.keepaliveSec,
+  reconnectPeriod: cfg.reconnectPeriodMs,
+  connectTimeout: cfg.connectTimeoutMs,
   ...tlsOpts
 });
 
-client.on('connect', () => {
-  console.log('[gateway] connected', { clientId: MQTT_CLIENT_ID });
-  client.subscribe('academies/+/students/+/homework/+/command', { qos: 1 }, (err) => {
-    if (err) console.error('[gateway] subscribe error', err);
+const rawPublish = client.publish.bind(client);
+function publish(topic, payload, options = { qos: 1, retain: false }) {
+  gatewayState.lastPublishTs = nowMs();
+  rawPublish(topic, payload, options);
+}
+
+function subscribeBaseTopics(reason = 'connect') {
+  for (const topic of BASE_SUBSCRIPTIONS) {
+    client.subscribe(topic, { qos: 1 }, (err) => {
+      if (err) {
+        logEvent('error', '[gateway] subscribe error', { reason, topic, error: err.message ?? String(err) });
+      }
+    });
+  }
+}
+
+function softRecover(reason) {
+  const now = nowMs();
+  if (now - gatewayState.lastSoftRecoverTs < cfg.recoveryCooldownMs) return;
+  gatewayState.lastSoftRecoverTs = now;
+  gatewayState.softRecoveries += 1;
+  logEvent('warn', '[gateway] watchdog soft recover', {
+    reason,
+    lastMessageAgeMs: gatewayState.lastMessageTs ? now - gatewayState.lastMessageTs : null,
+    softRecoveries: gatewayState.softRecoveries
   });
-  client.subscribe('academies/+/devices/+/command', { qos: 1 }, (err) => {
-    if (err) console.error('[gateway] subscribe device command error', err);
+  subscribeBaseTopics(`watchdog:${reason}`);
+}
+
+function hardRecover(reason) {
+  const now = nowMs();
+  if (now - gatewayState.lastHardRecoverTs < cfg.recoveryCooldownMs) return;
+  gatewayState.lastHardRecoverTs = now;
+  gatewayState.hardRecoveries += 1;
+  logEvent('error', '[gateway] watchdog hard recover', {
+    reason,
+    lastMessageAgeMs: gatewayState.lastMessageTs ? now - gatewayState.lastMessageTs : null,
+    hardRecoveries: gatewayState.hardRecoveries
   });
-  // presence topics: retained online/offline
-  client.subscribe('academies/+/devices/+/presence', { qos: 1 }, (err) => {
-    if (err) console.error('[gateway] subscribe presence error', err);
+  try {
+    client.end(true, () => {
+      try {
+        client.reconnect();
+      } catch (e) {
+        logEvent('error', '[gateway] hard recover reconnect failed', { error: e?.message ?? String(e) });
+      }
+    });
+  } catch (e) {
+    logEvent('error', '[gateway] hard recover end failed', { error: e?.message ?? String(e) });
+    try {
+      client.reconnect();
+    } catch (ee) {
+      logEvent('error', '[gateway] hard recover fallback reconnect failed', { error: ee?.message ?? String(ee) });
+    }
+  }
+}
+
+function maybePublishAck(academyId, idempotencyKey, body) {
+  if (!idempotencyKey) {
+    logEvent('warn', '[gateway] missing idempotency key for ack', { academyId, action: body?.action });
+    return;
+  }
+  publish(`academies/${academyId}/ack/${idempotencyKey}`, JSON.stringify(body), { qos: 1, retain: false });
+}
+
+client.on('connect', (packet = {}) => {
+  gatewayState.connected = true;
+  gatewayState.lastConnectTs = nowMs();
+  logEvent('log', '[gateway] connected', {
+    clientId: MQTT_CLIENT_ID,
+    sessionPresent: !!packet.sessionPresent,
+    keepaliveSec: cfg.keepaliveSec,
+    cleanSession: cfg.cleanSession
   });
+  subscribeBaseTopics('connect');
 });
 
 // simple idempotency cache (10 minutes TTL)
@@ -66,6 +190,50 @@ setInterval(() => {
   const now = Date.now();
   for (const [k, ts] of processed.entries()) if (now - ts > IDEMP_TTL_MS) processed.delete(k);
 }, 60 * 1000);
+
+setInterval(() => {
+  const now = nowMs();
+  const lastActivityTs = Math.max(
+    gatewayState.lastConnectTs || 0,
+    gatewayState.lastMessageTs || 0,
+    gatewayState.lastPublishTs || 0
+  );
+
+  logEvent('log', '[gateway] health', {
+    connected: gatewayState.connected,
+    lastConnectAgeMs: gatewayState.lastConnectTs ? now - gatewayState.lastConnectTs : null,
+    lastMessageAgeMs: gatewayState.lastMessageTs ? now - gatewayState.lastMessageTs : null,
+    lastPublishAgeMs: gatewayState.lastPublishTs ? now - gatewayState.lastPublishTs : null,
+    softRecoveries: gatewayState.softRecoveries,
+    hardRecoveries: gatewayState.hardRecoveries,
+    lastInboundTopic: gatewayState.lastInboundTopic || null
+  });
+
+  if (!gatewayState.connected) return;
+  if (!gatewayState.lastMessageTs) return;
+  if (!lastActivityTs || now - lastActivityTs > cfg.staleActivityWindowMs) return;
+
+  const staleMs = now - gatewayState.lastMessageTs;
+  if (staleMs >= cfg.staleHardMs) {
+    hardRecover('inbound_message_stale_hard');
+    return;
+  }
+  if (staleMs >= cfg.staleWarnMs) {
+    softRecover('inbound_message_stale_soft');
+  }
+}, cfg.healthIntervalMs);
+
+logEvent('log', '[gateway] mqtt runtime config', {
+  cleanSession: cfg.cleanSession,
+  keepaliveSec: cfg.keepaliveSec,
+  reconnectPeriodMs: cfg.reconnectPeriodMs,
+  connectTimeoutMs: cfg.connectTimeoutMs,
+  healthIntervalMs: cfg.healthIntervalMs,
+  staleWarnMs: cfg.staleWarnMs,
+  staleHardMs: cfg.staleHardMs,
+  staleActivityWindowMs: cfg.staleActivityWindowMs,
+  recoveryCooldownMs: cfg.recoveryCooldownMs
+});
 
 async function publishHomeworksToBoundDevices(academy_id, student_id, source = 'unknown') {
   if (!academy_id || !student_id) return;
@@ -93,7 +261,7 @@ async function publishHomeworksToBoundDevices(academy_id, student_id, source = '
 
   for (const b of binds) {
     const device_id = b.device_id;
-    client.publish(
+    publish(
       `academies/${academy_id}/devices/${device_id}/homeworks`,
       JSON.stringify({ groups: groups || [] }),
       { qos: 1, retain: false }
@@ -102,6 +270,8 @@ async function publishHomeworksToBoundDevices(academy_id, student_id, source = '
 }
 
 client.on('message', async (topic, payload) => {
+  gatewayState.lastMessageTs = nowMs();
+  gatewayState.lastInboundTopic = topic;
   try {
     const msg = JSON.parse(payload.toString());
     const parts = topic.split('/');
@@ -138,11 +308,7 @@ client.on('message', async (topic, payload) => {
       const group_id = (msg.group_id || '').toString().trim();
       if (!group_id) {
         console.error('[gateway] group_transition missing group_id', { academy_id, student_id });
-        client.publish(
-          `academies/${academy_id}/ack/${idempotency_key}`,
-          JSON.stringify({ ok: false, action, error: 'missing_group_id' }),
-          { qos: 1, retain: false }
-        );
+        maybePublishAck(academy_id, idempotency_key, { ok: false, action, error: 'missing_group_id' });
         return;
       }
       const from_phase = msg.from_phase ? Number(msg.from_phase) : null;
@@ -152,11 +318,7 @@ client.on('message', async (topic, payload) => {
         p_from_phase: from_phase
       });
       if (error) console.error('[gateway] group_transition rpc error', error);
-      client.publish(
-        `academies/${academy_id}/ack/${idempotency_key}`,
-        JSON.stringify({ ok: !error, action, changed: data ?? 0 }),
-        { qos: 1, retain: false }
-      );
+      maybePublishAck(academy_id, idempotency_key, { ok: !error, action, changed: data ?? 0 });
       if (!error) {
         await publishHomeworksToBoundDevices(academy_id, student_id, 'group_transition');
       }
@@ -172,7 +334,7 @@ client.on('message', async (topic, payload) => {
     const { error } = await supa.rpc(rpc, params);
     if (error) console.error('[gateway] rpc error', error);
 
-    client.publish(`academies/${academy_id}/ack/${idempotency_key}`, JSON.stringify({ ok: !error, action }), { qos: 1, retain: false });
+    maybePublishAck(academy_id, idempotency_key, { ok: !error, action });
     if (!error) {
       await publishHomeworksToBoundDevices(academy_id, student_id, action);
     }
@@ -206,8 +368,8 @@ client.on('message', async (topic, payload) => {
         // after bind, ensure attendance and list homeworks
         const { data: groups, error: lerr } = await supa.rpc('m5_list_homework_groups', { p_academy_id: academy_id, p_student_id: student_id });
         if (lerr) console.error('[gateway] list_homework_groups error', lerr);
-        client.publish(`academies/${academy_id}/devices/${device_id}/homeworks`, JSON.stringify({ groups: groups || [] }), { qos: 1, retain: false });
-        client.publish(`academies/${academy_id}/devices/${device_id}/ack`, JSON.stringify({ ok: !error && !lerr, action: 'bind', error: error?.message || lerr?.message, student_id }), { qos: 1, retain: false });
+        publish(`academies/${academy_id}/devices/${device_id}/homeworks`, JSON.stringify({ groups: groups || [] }), { qos: 1, retain: false });
+        publish(`academies/${academy_id}/devices/${device_id}/ack`, JSON.stringify({ ok: !error && !lerr, action: 'bind', error: error?.message || lerr?.message, student_id }), { qos: 1, retain: false });
         return;
       }
       if (action === 'unbind') {
@@ -219,14 +381,14 @@ client.on('message', async (topic, payload) => {
         }
         const { error } = await supa.rpc('m5_unbind_device', { p_academy_id: academy_id, p_device_id: device_id });
         if (error) console.error('[gateway] unbind rpc error', error);
-        client.publish(`academies/${academy_id}/devices/${device_id}/ack`, JSON.stringify({ ok: !error, action: 'unbind', error: error?.message }), { qos: 1, retain: false });
+        publish(`academies/${academy_id}/devices/${device_id}/ack`, JSON.stringify({ ok: !error, action: 'unbind', error: error?.message }), { qos: 1, retain: false });
         return;
       }
       if (action === 'unbind_by_student') {
         const student_id = msg.student_id;
         const { error } = await supa.rpc('m5_unbind_by_student', { p_academy_id: academy_id, p_student_id: student_id });
         if (error) console.error('[gateway] unbind_by_student rpc error', error);
-        client.publish(`academies/${academy_id}/devices/${device_id}/ack`, JSON.stringify({ ok: !error, action: 'unbind_by_student', error: error?.message, student_id }), { qos: 1, retain: false });
+        publish(`academies/${academy_id}/devices/${device_id}/ack`, JSON.stringify({ ok: !error, action: 'unbind_by_student', error: error?.message, student_id }), { qos: 1, retain: false });
         return;
       }
       if (action === 'list_today') {
@@ -241,23 +403,23 @@ client.on('message', async (topic, payload) => {
           (binds || []).filter(b => b.device_id !== device_id).map(b => b.student_id)
         );
         const filtered = (data || []).filter(s => !boundToOther.has(s.student_id));
-        client.publish(`academies/${academy_id}/devices/${device_id}/students_today`, JSON.stringify({ students: filtered }), { qos: 1, retain: false });
-        client.publish(`academies/${academy_id}/devices/${device_id}/ack`, JSON.stringify({ ok: true, action: 'list_today', count: filtered.length }), { qos: 1, retain: false });
+        publish(`academies/${academy_id}/devices/${device_id}/students_today`, JSON.stringify({ students: filtered }), { qos: 1, retain: false });
+        publish(`academies/${academy_id}/devices/${device_id}/ack`, JSON.stringify({ ok: true, action: 'list_today', count: filtered.length }), { qos: 1, retain: false });
         return;
       }
       if (action === 'list_homeworks') {
         const student_id = msg.student_id;
         const { data: groups, error } = await supa.rpc('m5_list_homework_groups', { p_academy_id: academy_id, p_student_id: student_id });
         if (error) { console.error('[gateway] list_homework_groups error', error); return; }
-        client.publish(`academies/${academy_id}/devices/${device_id}/homeworks`, JSON.stringify({ groups: groups || [] }), { qos: 1, retain: false });
-        client.publish(`academies/${academy_id}/devices/${device_id}/ack`, JSON.stringify({ ok: true, action: 'list_homeworks', count: (groups||[]).length }), { qos: 1, retain: false });
+        publish(`academies/${academy_id}/devices/${device_id}/homeworks`, JSON.stringify({ groups: groups || [] }), { qos: 1, retain: false });
+        publish(`academies/${academy_id}/devices/${device_id}/ack`, JSON.stringify({ ok: true, action: 'list_homeworks', count: (groups||[]).length }), { qos: 1, retain: false });
         return;
       }
       if (action === 'student_info') {
         const student_id = msg.student_id;
         const { data, error } = await supa.rpc('m5_get_student_info', { p_academy_id: academy_id, p_student_id: student_id });
         if (error) { console.error('[gateway] student_info error', error); return; }
-        client.publish(`academies/${academy_id}/devices/${device_id}/student_info`, JSON.stringify({ info: data && data[0] ? data[0] : null }), { qos: 1, retain: false });
+        publish(`academies/${academy_id}/devices/${device_id}/student_info`, JSON.stringify({ info: data && data[0] ? data[0] : null }), { qos: 1, retain: false });
         return;
       }
       return;
@@ -267,10 +429,14 @@ client.on('message', async (topic, payload) => {
   }
 });
 
-client.on('error', (e) => console.error('[gateway] error', e));
-client.on('close', () => console.log('[gateway] close'));
-client.on('reconnect', () => console.log('[gateway] reconnecting...'));
-client.on('offline', () => console.log('[gateway] offline'));
+client.on('error', (e) => logEvent('error', '[gateway] error', { error: e?.message ?? String(e) }));
+client.on('close', () => {
+  gatewayState.connected = false;
+  gatewayState.lastDisconnectTs = nowMs();
+  logSampled('mqtt_close', 5000, 'warn', '[gateway] close');
+});
+client.on('reconnect', () => logSampled('mqtt_reconnect', 5000, 'warn', '[gateway] reconnecting'));
+client.on('offline', () => logSampled('mqtt_offline', 5000, 'warn', '[gateway] offline'));
 
 // extra realtime connection lifecycle logs
 try {
@@ -420,7 +586,7 @@ try {
               return;
             }
             console.log('[gateway] binding deactivated', { device_id: rec.device_id, student_id: rec.student_id });
-            client.publish(
+            publish(
               `academies/${rec.academy_id}/devices/${rec.device_id}/unbound`,
               JSON.stringify({ action: 'unbound', student_id: rec.student_id }),
               { qos: 1, retain: false }
@@ -436,5 +602,17 @@ try {
 } catch (e) {
   console.warn('[gateway] realtime m5_device_bindings subscribe failed', e);
 }
+
+function shutdown(signal) {
+  logEvent('warn', '[gateway] shutdown signal received', { signal });
+  try {
+    client.end(true, () => process.exit(0));
+  } catch (_) {
+    process.exit(0);
+  }
+}
+
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
 
 

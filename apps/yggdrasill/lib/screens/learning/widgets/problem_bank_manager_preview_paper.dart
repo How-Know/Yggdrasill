@@ -19,7 +19,7 @@ class ProblemBankManagerPreviewPaper extends StatelessWidget {
         const EdgeInsets.symmetric(horizontal: 9, vertical: 7),
   });
 
-  static const String _previewKoreanFontFamily = 'KakaoSmallSans';
+  static const String _previewKoreanFontFamily = 'HCRBatang';
   static const double _previewMathScale = 1.10;
   static const double _previewFractionMathScale = _previewMathScale;
 
@@ -671,12 +671,9 @@ class ProblemBankManagerPreviewPaper extends StatelessWidget {
     out = out.replaceAll(RegExp(r'\$1(?=<\s*보\s*기>)'), '');
     final qn = q.questionNumber.trim();
     if (qn.isNotEmpty) {
-      final escaped = RegExp.escape(qn);
       final lines = out.split('\n');
       if (lines.isNotEmpty) {
-        lines[0] = lines[0]
-            .replaceFirst(RegExp('^\\s*$escaped\\s*[\\.)．]\\s*'), '')
-            .replaceFirst(RegExp('^\\s*$escaped\\s+(?=[^\\s])'), '');
+        lines[0] = _stripLeadingQuestionNumberToken(lines[0], qn);
         out = lines
             .map((line) => line.trim())
             .where((line) => line.isNotEmpty)
@@ -872,6 +869,8 @@ class ProblemBankManagerPreviewPaper extends StatelessWidget {
         child: Image.network(
           previewUrl,
           fit: BoxFit.contain,
+          filterQuality: FilterQuality.high,
+          gaplessPlayback: true,
           width: double.infinity,
           height: figureHeight,
           errorBuilder: (_, __, ___) => SizedBox(
@@ -1164,12 +1163,11 @@ class ProblemBankManagerPreviewPaper extends StatelessWidget {
                 color: panelBgColor,
                 padding: EdgeInsets.zero,
                 child: const Text(
-                  '<보 기>',
+                  '<보기>',
                   style: TextStyle(
                     color: Color(0xFF232323),
                     fontSize: 13.6,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 0.8,
+                    fontWeight: FontWeight.w400,
                     fontFamily: _previewKoreanFontFamily,
                   ),
                 ),
@@ -1791,12 +1789,9 @@ class ProblemBankManagerPreviewPaper extends StatelessWidget {
     out = out.replaceFirst(RegExp(r'(\s*\[(문단|박스시작)\]\s*)+$'), '');
     final qn = q.questionNumber.trim();
     if (qn.isNotEmpty) {
-      final escaped = RegExp.escape(qn);
       final lines = out.split('\n');
       if (lines.isNotEmpty) {
-        lines[0] = lines[0]
-            .replaceFirst(RegExp('^\\s*$escaped\\s*[\\.)．]\\s*'), '')
-            .replaceFirst(RegExp('^\\s*$escaped\\s+(?=[^\\s])'), '');
+        lines[0] = _stripLeadingQuestionNumberToken(lines[0], qn);
         out = lines
             .map((line) => line.trim())
             .where((line) => line.isNotEmpty)
@@ -1811,6 +1806,25 @@ class ProblemBankManagerPreviewPaper extends StatelessWidget {
           markerNormalized.substring(0, lastMarker));
     }
     return _normalizePreviewMultiline(out);
+  }
+
+  String _stripLeadingQuestionNumberToken(String line, String questionNumber) {
+    if (line.trim().isEmpty) return line;
+    final escaped = RegExp.escape(questionNumber.trim());
+    if (escaped.isEmpty) return line;
+    return line
+        .replaceFirst(
+          RegExp('^\\s*$escaped\\s*번\\s*(?:[\\.)．])?\\s*'),
+          '',
+        )
+        .replaceFirst(
+          RegExp('^\\s*$escaped\\s*[\\.)．]\\s*'),
+          '',
+        )
+        .replaceFirst(
+          RegExp('^\\s*$escaped\\s+(?=[^\\s])'),
+          '',
+        );
   }
 
   double _stemToChoiceGap() {

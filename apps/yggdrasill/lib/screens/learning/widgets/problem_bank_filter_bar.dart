@@ -38,7 +38,7 @@ class ProblemBankFilterBar extends StatelessWidget {
 
   static const _panelBg = Color(0xFF151C21);
   static const _border = Color(0xFF223131);
-  static const _accent = Color(0xFF1B6B63);
+  static const double _controlHeight = 40;
 
   @override
   Widget build(BuildContext context) {
@@ -61,16 +61,24 @@ class ProblemBankFilterBar extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Align(
-            alignment: Alignment.centerLeft,
-            child: Wrap(
-              spacing: 12,
-              runSpacing: 10,
-              crossAxisAlignment: WrapCrossAlignment.center,
+          const Text(
+            '범위 선택',
+            style: TextStyle(
+              color: Color(0xFFEAF2F2),
+              fontSize: 15,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 10),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 _LabeledDropdown(
                   label: '교육과정',
                   titleStyle: titleStyle,
+                  width: 240,
                   child: _buildDropdown<String>(
                     value: selectedCurriculumCode,
                     items: curriculumLabels.entries
@@ -85,12 +93,20 @@ class ProblemBankFilterBar extends StatelessWidget {
                         )
                         .toList(growable: false),
                     onChanged: isBusy ? null : onCurriculumChanged,
-                    width: 210,
+                    width: 240,
                   ),
                 ),
+                const SizedBox(width: 12),
+                _LabeledSection(
+                  label: '초중고',
+                  titleStyle: titleStyle,
+                  child: _buildLevelSegmentSelector(),
+                ),
+                const SizedBox(width: 12),
                 _LabeledDropdown(
                   label: '세부 과정',
                   titleStyle: titleStyle,
+                  width: 220,
                   child: _buildDropdown<String>(
                     value: selectedCourse,
                     items: courseOptions
@@ -105,12 +121,14 @@ class ProblemBankFilterBar extends StatelessWidget {
                         )
                         .toList(growable: false),
                     onChanged: isBusy ? null : onCourseChanged,
-                    width: 180,
+                    width: 220,
                   ),
                 ),
+                const SizedBox(width: 12),
                 _LabeledDropdown(
                   label: '출처',
                   titleStyle: titleStyle,
+                  width: 190,
                   child: _buildDropdown<String>(
                     value: selectedSourceTypeCode,
                     items: sourceTypeLabels.entries
@@ -125,48 +143,38 @@ class ProblemBankFilterBar extends StatelessWidget {
                         )
                         .toList(growable: false),
                     onChanged: isBusy ? null : onSourceTypeChanged,
-                    width: 170,
+                    width: 190,
                   ),
                 ),
               ],
             ),
           ),
-          const SizedBox(height: 10),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                Text('초중고', style: titleStyle),
-                for (final level in levelOptions)
-                  ChoiceChip(
-                    label: Text(level),
-                    selected: selectedLevel == level,
-                    onSelected: isBusy
-                        ? null
-                        : (selected) {
-                            if (!selected) return;
-                            onLevelChanged(level);
-                          },
-                    selectedColor: const Color(0xFF173C36),
-                    backgroundColor: const Color(0xFF10171A),
-                    side: BorderSide(
-                      color: selectedLevel == level ? _accent : _border,
-                    ),
-                    labelStyle: TextStyle(
-                      color: selectedLevel == level
-                          ? const Color(0xFFBEE7D2)
-                          : const Color(0xFF9FB3B3),
-                      fontWeight: selectedLevel == level
-                          ? FontWeight.w700
-                          : FontWeight.w500,
-                    ),
-                  ),
-              ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLevelSegmentSelector() {
+    return Container(
+      height: _controlHeight,
+      padding: const EdgeInsets.all(3),
+      decoration: BoxDecoration(
+        color: const Color(0xFF10171A).withValues(alpha: 0.94),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: _border),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (final level in levelOptions) ...[
+            _LevelSegmentChip(
+              label: level,
+              selected: selectedLevel == level,
+              enabled: !isBusy,
+              onTap: () => onLevelChanged(level),
             ),
-          ),
+            if (level != levelOptions.last) const SizedBox(width: 4),
+          ],
         ],
       ),
     );
@@ -180,6 +188,7 @@ class ProblemBankFilterBar extends StatelessWidget {
   }) {
     return SizedBox(
       width: width,
+      height: _controlHeight,
       child: DecoratedBox(
         decoration: BoxDecoration(
           color: const Color(0xFF10171A),
@@ -208,8 +217,8 @@ class ProblemBankFilterBar extends StatelessWidget {
   }
 }
 
-class _LabeledDropdown extends StatelessWidget {
-  const _LabeledDropdown({
+class _LabeledSection extends StatelessWidget {
+  const _LabeledSection({
     required this.label,
     required this.titleStyle,
     required this.child,
@@ -221,8 +230,35 @@ class _LabeledDropdown extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(label, style: titleStyle),
+        const SizedBox(height: 4),
+        child,
+      ],
+    );
+  }
+}
+
+class _LabeledDropdown extends StatelessWidget {
+  const _LabeledDropdown({
+    required this.label,
+    required this.titleStyle,
+    required this.child,
+    this.width = 220,
+  });
+
+  final String label;
+  final TextStyle titleStyle;
+  final Widget child;
+  final double width;
+
+  @override
+  Widget build(BuildContext context) {
     return SizedBox(
-      width: 220,
+      width: width,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
@@ -231,6 +267,56 @@ class _LabeledDropdown extends StatelessWidget {
           const SizedBox(height: 4),
           child,
         ],
+      ),
+    );
+  }
+}
+
+class _LevelSegmentChip extends StatelessWidget {
+  const _LevelSegmentChip({
+    required this.label,
+    required this.selected,
+    required this.enabled,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final bool enabled;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 140),
+      curve: Curves.easeOut,
+      decoration: BoxDecoration(
+        color: selected ? const Color(0xFF173C36) : Colors.transparent,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(
+          color: selected ? const Color(0xFF2E7C70) : Colors.transparent,
+        ),
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(999),
+          onTap: enabled ? onTap : null,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+            child: Text(
+              label,
+              style: TextStyle(
+                color: selected
+                    ? const Color(0xFFBEE7D2)
+                    : const Color(0xFF9FB3B3),
+                fontSize: 12.5,
+                fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+                letterSpacing: 0.2,
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }

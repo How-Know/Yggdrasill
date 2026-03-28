@@ -1,3 +1,5 @@
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
 
 class ProblemBankBottomFabBar extends StatelessWidget {
@@ -25,68 +27,77 @@ class ProblemBankBottomFabBar extends StatelessWidget {
     final disabled = isBusy;
     return Align(
       alignment: Alignment.bottomCenter,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-        decoration: BoxDecoration(
-          color: const Color(0xFF151C21).withValues(alpha: 0.96),
-          borderRadius: BorderRadius.circular(999),
-          border: Border.all(color: const Color(0xFF223131)),
-          boxShadow: const [],
-        ),
-        child: SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Row(
-            children: [
-              _fab(
-                onPressed: disabled ? null : onSelectAll,
-                icon: Icons.done_all,
-                label: '전체 선택',
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(999),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 9, sigmaY: 9),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            decoration: BoxDecoration(
+              color: const Color(0xCC111A1D),
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(
+                color: const Color(0xFF355056).withValues(alpha: 0.75),
               ),
-              const SizedBox(width: 8),
-              _fab(
-                onPressed: disabled ? null : onClearSelection,
-                icon: Icons.remove_done,
-                label: '선택 해제',
-              ),
-              const SizedBox(width: 8),
-              _fab(
-                onPressed: disabled ? null : onPreview,
-                icon: Icons.preview,
-                label: '미리보기',
-              ),
-              const SizedBox(width: 8),
-              _fab(
-                onPressed: disabled ? null : onGeneratePdf,
-                icon: Icons.picture_as_pdf,
-                label: 'PDF 생성',
-                foregroundColor: const Color(0xFFC7F2D8),
-                backgroundColor: const Color(0xFF173C36),
-              ),
-              const SizedBox(width: 8),
-              _fab(
-                onPressed: disabled ? null : onCreatePlaceholder,
-                icon: Icons.auto_awesome,
-                label: '만들기',
-              ),
-              const SizedBox(width: 10),
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF10171A),
-                  borderRadius: BorderRadius.circular(999),
-                  border: Border.all(color: const Color(0xFF223131)),
-                ),
-                child: Text(
-                  '선택 $selectedCount개',
-                  style: const TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
-                    color: Color(0xFF9FB3B3),
+            ),
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  _fab(
+                    onPressed: disabled ? null : onSelectAll,
+                    icon: Icons.done_all,
+                    label: '전체 선택',
                   ),
-                ),
+                  const SizedBox(width: 8),
+                  _fab(
+                    onPressed: disabled ? null : onClearSelection,
+                    icon: Icons.remove_done,
+                    label: '선택 해제',
+                  ),
+                  const SizedBox(width: 8),
+                  _fab(
+                    onPressed: disabled ? null : onPreview,
+                    icon: Icons.preview,
+                    label: '미리보기',
+                  ),
+                  const SizedBox(width: 8),
+                  _fab(
+                    onPressed: disabled ? null : onGeneratePdf,
+                    icon: Icons.picture_as_pdf,
+                    label: 'PDF 생성',
+                    foregroundColor: const Color(0xFFC7F2D8),
+                    backgroundColor: const Color(0xFF173C36),
+                  ),
+                  const SizedBox(width: 8),
+                  _fab(
+                    onPressed: disabled ? null : onCreatePlaceholder,
+                    icon: Icons.auto_awesome,
+                    label: '만들기',
+                  ),
+                  const SizedBox(width: 10),
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                    decoration: BoxDecoration(
+                      color: const Color(0x9910171A),
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(
+                        color: const Color(0xFF223131).withValues(alpha: 0.9),
+                      ),
+                    ),
+                    child: Text(
+                      '선택 $selectedCount개',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFF9FB3B3),
+                      ),
+                    ),
+                  ),
+                ],
               ),
-            ],
+            ),
           ),
         ),
       ),
@@ -103,8 +114,9 @@ class ProblemBankBottomFabBar extends StatelessWidget {
     return FloatingActionButton.extended(
       heroTag: null,
       elevation: 0,
-      backgroundColor: backgroundColor ?? const Color(0xFF10171A),
+      backgroundColor: backgroundColor ?? const Color(0xE610171A),
       foregroundColor: foregroundColor ?? const Color(0xFF9FB3B3),
+      extendedPadding: const EdgeInsets.symmetric(horizontal: 14),
       onPressed: onPressed,
       icon: Icon(icon, size: 18),
       label: Text(

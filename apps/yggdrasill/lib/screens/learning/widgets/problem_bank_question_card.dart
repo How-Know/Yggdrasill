@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../services/learning_problem_bank_service.dart';
+import '../models/problem_bank_export_models.dart';
 import 'problem_bank_manager_preview_paper.dart';
 
 class ProblemBankQuestionCard extends StatelessWidget {
@@ -9,6 +10,8 @@ class ProblemBankQuestionCard extends StatelessWidget {
     required this.question,
     required this.selected,
     required this.onSelectedChanged,
+    required this.selectedMode,
+    this.onModeSelected,
     this.figureUrlsByPath = const <String, String>{},
     this.showSelectionControl = true,
     this.paperStyle = false,
@@ -17,6 +20,8 @@ class ProblemBankQuestionCard extends StatelessWidget {
   final LearningProblemQuestion question;
   final bool selected;
   final ValueChanged<bool> onSelectedChanged;
+  final String selectedMode;
+  final ValueChanged<String>? onModeSelected;
   final Map<String, String> figureUrlsByPath;
   final bool showSelectionControl;
   final bool paperStyle;
@@ -24,6 +29,10 @@ class ProblemBankQuestionCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = _palette(paperStyle: paperStyle, selected: selected);
+    final previewQuestion = questionForLayoutPreviewMode(
+      question,
+      selectedMode,
+    );
     return AnimatedContainer(
       duration: const Duration(milliseconds: 140),
       decoration: BoxDecoration(
@@ -42,50 +51,29 @@ class ProblemBankQuestionCard extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Expanded(
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color:
-                            paperStyle ? Colors.white : const Color(0xFF0E1518),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(
-                          color: paperStyle
-                              ? const Color(0xFFD5D5D5)
-                              : const Color(0xFF223131),
-                        ),
-                      ),
-                      padding: const EdgeInsets.all(8.5),
-                      child: ProblemBankManagerPreviewPaper(
-                        question: question,
-                        figureUrlsByPath: figureUrlsByPath,
-                        expanded: false,
-                        scrollable: true,
-                        bordered: true,
-                        shadow: true,
-                        showQuestionNumberPrefix: false,
-                      ),
+                  SizedBox(
+                    height: 340,
+                    child: ProblemBankManagerPreviewPaper(
+                      question: previewQuestion,
+                      figureUrlsByPath: figureUrlsByPath,
+                      expanded: false,
+                      scrollable: true,
+                      bordered: true,
+                      shadow: true,
+                      showQuestionNumberPrefix: false,
                     ),
                   ),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 6,
-                    runSpacing: 6,
-                    children: [
-                      if (question.schoolName.isNotEmpty)
-                        _metaChip('학교: ${question.schoolName}', color),
-                      if (question.examYear != null)
-                        _metaChip('년도: ${question.examYear}', color),
-                      if (question.gradeLabel.isNotEmpty)
-                        _metaChip('학년: ${question.gradeLabel}', color),
-                      if (question.semesterLabel.isNotEmpty)
-                        _metaChip('학기: ${question.semesterLabel}', color),
-                      if (question.examTermLabel.isNotEmpty)
-                        _metaChip('시험: ${question.examTermLabel}', color),
-                      if (question.documentSourceName.isNotEmpty)
-                        _metaChip('문서: ${question.documentSourceName}', color),
-                      if (question.sourcePage > 0)
-                        _metaChip('페이지: ${question.sourcePage}', color),
-                    ],
+                  const SizedBox(height: 10),
+                  Text(
+                    _metaSummaryText(),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: color.textMuted,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      height: 1.35,
+                    ),
                   ),
                 ],
               ),
@@ -97,10 +85,16 @@ class ProblemBankQuestionCard extends StatelessWidget {
   }
 
   Widget _buildHeader(_CardPalette color) {
-    final typeLabel = _questionTypeLabel(question.questionType);
+    final availableModes = selectableQuestionModesOf(question);
+    final originalMode = originalQuestionModeOf(question);
+    final effectiveSelected = normalizeQuestionModeSelection(
+      question,
+      selectedMode,
+    );
     return Padding(
       padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (showSelectionControl)
             Checkbox(
@@ -111,31 +105,37 @@ class ProblemBankQuestionCard extends StatelessWidget {
               onChanged: (v) => onSelectedChanged(v ?? false),
             ),
           Expanded(
-            child: Text(
-              '${question.displayQuestionNumber}번 문항',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: 15,
-                fontWeight: FontWeight.w800,
-                color: color.textPrimary,
+            child: Padding(
+              padding: const EdgeInsets.only(top: 3),
+              child: Text(
+                '${question.displayQuestionNumber}번 문항',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w800,
+                  color: color.textPrimary,
+                ),
               ),
             ),
           ),
           const SizedBox(width: 8),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
-            decoration: BoxDecoration(
-              color: color.badgeBg,
-              borderRadius: BorderRadius.circular(999),
-              border: Border.all(color: color.badgeBorder),
-            ),
-            child: Text(
-              typeLabel,
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-                color: color.badgeText,
+          Flexible(
+            child: Align(
+              alignment: Alignment.topRight,
+              child: Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                alignment: WrapAlignment.end,
+                children: [
+                  for (final mode in availableModes)
+                    _buildModeChip(
+                      mode,
+                      color: color,
+                      isOriginal: mode == originalMode,
+                      isSelected: mode == effectiveSelected,
+                    ),
+                ],
               ),
             ),
           ),
@@ -144,30 +144,71 @@ class ProblemBankQuestionCard extends StatelessWidget {
     );
   }
 
-  Widget _metaChip(String label, _CardPalette color) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: color.metaChipBg,
+  String _metaSummaryText() {
+    final originalNumber = question.questionNumber.trim().isNotEmpty
+        ? question.questionNumber.trim()
+        : question.displayQuestionNumber;
+    final parts = <String>[
+      if (question.schoolName.isNotEmpty) question.schoolName.trim(),
+      if (question.examYear != null) '${question.examYear}',
+      if (question.gradeLabel.isNotEmpty) question.gradeLabel.trim(),
+      if (question.semesterLabel.isNotEmpty) question.semesterLabel.trim(),
+      if (question.examTermLabel.isNotEmpty) question.examTermLabel.trim(),
+      if (originalNumber.isNotEmpty) '$originalNumber번',
+    ];
+    if (parts.isEmpty) return '-';
+    return parts.join(', ');
+  }
+
+  Widget _buildModeChip(
+    String mode, {
+    required _CardPalette color,
+    required bool isOriginal,
+    required bool isSelected,
+  }) {
+    final label = questionModeLabelOf(mode);
+    final enabled = onModeSelected != null && !paperStyle;
+    final bg = isOriginal ? color.badgeBg : Colors.transparent;
+    final borderColor = isSelected
+        ? color.accent
+        : (isOriginal ? color.badgeBorder : color.metaChipBorder);
+    final textColor = isOriginal ? color.badgeText : color.textMuted;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: color.metaChipBorder),
-      ),
-      child: Text(
-        label,
-        style: TextStyle(
-          color: color.textMuted,
-          fontSize: 11,
-          fontWeight: FontWeight.w600,
+        onTap: enabled ? () => onModeSelected?.call(mode) : null,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+          decoration: BoxDecoration(
+            color: bg,
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: borderColor),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (isSelected) ...[
+                Icon(
+                  Icons.check_rounded,
+                  size: 13,
+                  color: isOriginal ? color.badgeText : color.accent,
+                ),
+                const SizedBox(width: 3),
+              ],
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: textColor,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
-  }
-
-  String _questionTypeLabel(String value) {
-    if (value == 'objective') return '객관식';
-    if (value == 'subjective') return '주관식';
-    if (value == 'essay') return '서술형';
-    return value.isEmpty ? '유형 미정' : value;
   }
 }
 

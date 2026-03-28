@@ -1,3 +1,7 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
+import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class LearningProblemChoice {
@@ -50,6 +54,11 @@ class LearningProblemQuestion {
     required this.stem,
     required this.choices,
     required this.objectiveChoices,
+    required this.allowObjective,
+    required this.allowSubjective,
+    required this.objectiveAnswerKey,
+    required this.subjectiveAnswer,
+    required this.reviewerNotes,
     required this.equations,
     required this.sourcePage,
     required this.sourceOrder,
@@ -77,6 +86,11 @@ class LearningProblemQuestion {
   final String stem;
   final List<LearningProblemChoice> choices;
   final List<LearningProblemChoice> objectiveChoices;
+  final bool allowObjective;
+  final bool allowSubjective;
+  final String objectiveAnswerKey;
+  final String subjectiveAnswer;
+  final String reviewerNotes;
   final List<LearningProblemEquation> equations;
   final int sourcePage;
   final int sourceOrder;
@@ -105,6 +119,50 @@ class LearningProblemQuestion {
 
   List<LearningProblemChoice> get effectiveChoices =>
       objectiveChoices.isNotEmpty ? objectiveChoices : choices;
+
+  LearningProblemQuestion copyWith({
+    String? questionType,
+    List<LearningProblemChoice>? choices,
+    List<LearningProblemChoice>? objectiveChoices,
+    bool? allowObjective,
+    bool? allowSubjective,
+    String? objectiveAnswerKey,
+    String? subjectiveAnswer,
+    String? reviewerNotes,
+  }) {
+    return LearningProblemQuestion(
+      id: id,
+      documentId: documentId,
+      questionNumber: questionNumber,
+      questionType: questionType ?? this.questionType,
+      stem: stem,
+      choices: choices ?? this.choices,
+      objectiveChoices: objectiveChoices ?? this.objectiveChoices,
+      allowObjective: allowObjective ?? this.allowObjective,
+      allowSubjective: allowSubjective ?? this.allowSubjective,
+      objectiveAnswerKey: objectiveAnswerKey ?? this.objectiveAnswerKey,
+      subjectiveAnswer: subjectiveAnswer ?? this.subjectiveAnswer,
+      reviewerNotes: reviewerNotes ?? this.reviewerNotes,
+      equations: equations,
+      sourcePage: sourcePage,
+      sourceOrder: sourceOrder,
+      curriculumCode: curriculumCode,
+      sourceTypeCode: sourceTypeCode,
+      courseLabel: courseLabel,
+      gradeLabel: gradeLabel,
+      examYear: examYear,
+      semesterLabel: semesterLabel,
+      examTermLabel: examTermLabel,
+      schoolName: schoolName,
+      publisherName: publisherName,
+      materialName: materialName,
+      confidence: confidence,
+      figureRefs: figureRefs,
+      meta: meta,
+      createdAt: createdAt,
+      documentSourceName: documentSourceName,
+    );
+  }
 
   List<Map<String, dynamic>> get figureAssets {
     final raw = meta['figure_assets'];
@@ -161,6 +219,11 @@ class LearningProblemQuestion {
       stem: '${map['stem'] ?? ''}',
       choices: choices,
       objectiveChoices: objectiveChoices,
+      allowObjective: map['allow_objective'] != false,
+      allowSubjective: map['allow_subjective'] != false,
+      objectiveAnswerKey: '${map['objective_answer_key'] ?? ''}'.trim(),
+      subjectiveAnswer: '${map['subjective_answer'] ?? ''}'.trim(),
+      reviewerNotes: '${map['reviewer_notes'] ?? ''}'.trim(),
       equations: equations,
       sourcePage: _intOrZero(map['source_page']),
       sourceOrder: _intOrZero(map['source_order']),
@@ -183,12 +246,169 @@ class LearningProblemQuestion {
   }
 }
 
+class LearningProblemExportJob {
+  const LearningProblemExportJob({
+    required this.id,
+    required this.academyId,
+    required this.documentId,
+    required this.status,
+    required this.templateProfile,
+    required this.paperSize,
+    required this.includeAnswerSheet,
+    required this.includeExplanation,
+    required this.selectedQuestionIds,
+    required this.outputUrl,
+    required this.pageCount,
+    required this.errorCode,
+    required this.errorMessage,
+    required this.options,
+    required this.createdAt,
+    required this.updatedAt,
+    this.startedAt,
+    this.finishedAt,
+  });
+
+  final String id;
+  final String academyId;
+  final String documentId;
+  final String status;
+  final String templateProfile;
+  final String paperSize;
+  final bool includeAnswerSheet;
+  final bool includeExplanation;
+  final List<String> selectedQuestionIds;
+  final String outputUrl;
+  final int pageCount;
+  final String errorCode;
+  final String errorMessage;
+  final Map<String, dynamic> options;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+  final DateTime? startedAt;
+  final DateTime? finishedAt;
+
+  bool get isTerminal =>
+      status == 'completed' || status == 'failed' || status == 'cancelled';
+
+  factory LearningProblemExportJob.fromMap(Map<String, dynamic> map) {
+    return LearningProblemExportJob(
+      id: '${map['id'] ?? ''}',
+      academyId: '${map['academy_id'] ?? ''}',
+      documentId: '${map['document_id'] ?? ''}',
+      status: '${map['status'] ?? ''}',
+      templateProfile: '${map['template_profile'] ?? ''}',
+      paperSize: '${map['paper_size'] ?? ''}',
+      includeAnswerSheet: map['include_answer_sheet'] == true,
+      includeExplanation: map['include_explanation'] == true,
+      selectedQuestionIds:
+          _listOrEmpty(map['selected_question_ids']).map((e) => '$e').toList(),
+      outputUrl: '${map['output_url'] ?? ''}',
+      pageCount: _intOrZero(map['page_count']),
+      errorCode: '${map['error_code'] ?? ''}',
+      errorMessage: '${map['error_message'] ?? ''}',
+      options: _mapOrEmpty(map['options']),
+      createdAt: _dateTimeOrNull(map['created_at']) ?? DateTime.now(),
+      updatedAt: _dateTimeOrNull(map['updated_at']) ?? DateTime.now(),
+      startedAt: _dateTimeOrNull(map['started_at']),
+      finishedAt: _dateTimeOrNull(map['finished_at']),
+    );
+  }
+}
+
 class LearningProblemBankService {
   LearningProblemBankService({
     SupabaseClient? client,
-  }) : _client = client ?? Supabase.instance.client;
+    http.Client? httpClient,
+    String? gatewayBaseUrl,
+    String? gatewayApiKey,
+  })  : _client = client ?? Supabase.instance.client,
+        _http = httpClient ?? http.Client(),
+        _gatewayBaseUrl = (gatewayBaseUrl ??
+                const String.fromEnvironment('PB_GATEWAY_URL',
+                    defaultValue: ''))
+            .trim(),
+        _gatewayApiKey = (gatewayApiKey ??
+                const String.fromEnvironment('PB_GATEWAY_API_KEY',
+                    defaultValue: ''))
+            .trim();
 
   final SupabaseClient _client;
+  final http.Client _http;
+  final String _gatewayBaseUrl;
+  final String _gatewayApiKey;
+
+  bool get hasGateway => _gatewayBaseUrl.isNotEmpty;
+
+  Uri _gatewayUri(String path, [Map<String, String>? query]) {
+    final base = _gatewayBaseUrl.endsWith('/')
+        ? _gatewayBaseUrl.substring(0, _gatewayBaseUrl.length - 1)
+        : _gatewayBaseUrl;
+    final normalizedPath = path.startsWith('/') ? path : '/$path';
+    final uri = Uri.parse('$base$normalizedPath');
+    if (query == null || query.isEmpty) return uri;
+    return uri.replace(queryParameters: query);
+  }
+
+  Map<String, String> _gatewayHeaders() {
+    final out = <String, String>{
+      'Content-Type': 'application/json',
+    };
+    if (_gatewayApiKey.isNotEmpty) {
+      out['x-api-key'] = _gatewayApiKey;
+    }
+    return out;
+  }
+
+  Future<Map<String, dynamic>> _gatewayGet(
+    String path, {
+    Map<String, String>? query,
+  }) async {
+    final uri = _gatewayUri(path, query);
+    final res = await _http.get(uri, headers: _gatewayHeaders());
+    final decoded = _decodeJsonMap(res.body);
+    if (res.statusCode < 200 ||
+        res.statusCode >= 300 ||
+        decoded['ok'] != true) {
+      throw Exception(
+        'gateway_get_failed(${res.statusCode}): ${decoded['error'] ?? decoded['message'] ?? res.body}',
+      );
+    }
+    return decoded;
+  }
+
+  Future<Map<String, dynamic>> _gatewayPost(
+    String path, {
+    required Map<String, dynamic> body,
+  }) async {
+    final uri = _gatewayUri(path);
+    final res = await _http.post(
+      uri,
+      headers: _gatewayHeaders(),
+      body: jsonEncode(body),
+    );
+    final decoded = _decodeJsonMap(res.body);
+    if (res.statusCode < 200 ||
+        res.statusCode >= 300 ||
+        decoded['ok'] != true) {
+      throw Exception(
+        'gateway_post_failed(${res.statusCode}): ${decoded['error'] ?? decoded['message'] ?? res.body}',
+      );
+    }
+    return decoded;
+  }
+
+  Map<String, dynamic> _decodeJsonMap(String raw) {
+    try {
+      final value = jsonDecode(raw);
+      if (value is Map<String, dynamic>) return value;
+      if (value is Map) {
+        return value.map((k, dynamic v) => MapEntry('$k', v));
+      }
+      return <String, dynamic>{};
+    } catch (_) {
+      return <String, dynamic>{};
+    }
+  }
 
   Future<List<String>> listSchoolsForSchoolPast({
     required String academyId,
@@ -243,6 +463,11 @@ class LearningProblemBankService {
             'stem',
             'choices',
             'objective_choices',
+            'allow_objective',
+            'allow_subjective',
+            'objective_answer_key',
+            'subjective_answer',
+            'reviewer_notes',
             'equations',
             'source_page',
             'source_order',
@@ -315,6 +540,252 @@ class LearningProblemBankService {
           ),
         )
         .toList(growable: false);
+  }
+
+  Future<Map<String, int>> loadQuestionOrders({
+    required String academyId,
+    required String scopeKey,
+    required List<String> questionIds,
+  }) async {
+    final safeScope = scopeKey.trim();
+    final safeIds = questionIds
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    if (safeScope.isEmpty || safeIds.isEmpty) {
+      return const <String, int>{};
+    }
+    final rows = await _client
+        .from('learning_problem_bank_question_orders')
+        .select('question_id,order_index')
+        .eq('academy_id', academyId)
+        .eq('scope_key', safeScope)
+        .inFilter('question_id', safeIds);
+    final out = <String, int>{};
+    for (final item in (rows as List<dynamic>)) {
+      final row = _mapOrEmpty(item);
+      final questionId = '${row['question_id'] ?? ''}'.trim();
+      if (questionId.isEmpty) continue;
+      final order = _intOrZero(row['order_index']);
+      out[questionId] = order < 0 ? 0 : order;
+    }
+    return out;
+  }
+
+  Future<void> saveQuestionOrders({
+    required String academyId,
+    required String scopeKey,
+    required List<String> orderedQuestionIds,
+  }) async {
+    final safeScope = scopeKey.trim();
+    final safeIds = orderedQuestionIds
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toList(growable: false);
+    if (safeScope.isEmpty || safeIds.isEmpty) return;
+    final rows = safeIds
+        .asMap()
+        .entries
+        .map((entry) => <String, dynamic>{
+              'academy_id': academyId,
+              'scope_key': safeScope,
+              'question_id': entry.value,
+              'order_index': entry.key,
+            })
+        .toList(growable: false);
+    await _client
+        .from('learning_problem_bank_question_orders')
+        .upsert(rows, onConflict: 'academy_id,scope_key,question_id');
+  }
+
+  Future<LearningProblemExportJob> createExportJob({
+    required String academyId,
+    required String documentId,
+    required String templateProfile,
+    required String paperSize,
+    required bool includeAnswerSheet,
+    required bool includeExplanation,
+    required List<String> selectedQuestionIds,
+    Map<String, dynamic> options = const <String, dynamic>{},
+  }) async {
+    if (hasGateway) {
+      final json = await _gatewayPost(
+        '/pb/jobs/export',
+        body: {
+          'academyId': academyId,
+          'documentId': documentId,
+          'requestedBy': _client.auth.currentUser?.id,
+          'templateProfile': templateProfile,
+          'paperSize': paperSize,
+          'includeAnswerSheet': includeAnswerSheet,
+          'includeExplanation': includeExplanation,
+          'selectedQuestionIds': selectedQuestionIds,
+          'options': options,
+        },
+      );
+      return LearningProblemExportJob.fromMap(_mapOrEmpty(json['job']));
+    }
+
+    final row = await _client
+        .from('pb_exports')
+        .insert({
+          'academy_id': academyId,
+          'document_id': documentId,
+          'requested_by': _client.auth.currentUser?.id,
+          'status': 'queued',
+          'template_profile': templateProfile.trim(),
+          'paper_size': paperSize.trim(),
+          'include_answer_sheet': includeAnswerSheet,
+          'include_explanation': includeExplanation,
+          'selected_question_ids': selectedQuestionIds,
+          'options': options,
+          'output_storage_bucket': 'problem-exports',
+          'output_storage_path': '',
+          'output_url': '',
+          'page_count': 0,
+          'worker_name': '',
+          'error_code': '',
+          'error_message': '',
+        })
+        .select('*')
+        .single();
+    return LearningProblemExportJob.fromMap(
+      Map<String, dynamic>.from(row as Map<dynamic, dynamic>),
+    );
+  }
+
+  Future<LearningProblemExportJob?> getExportJob({
+    required String academyId,
+    required String jobId,
+  }) async {
+    if (hasGateway) {
+      try {
+        final json = await _gatewayGet(
+          '/pb/jobs/export/$jobId',
+          query: {'academyId': academyId},
+        );
+        return LearningProblemExportJob.fromMap(_mapOrEmpty(json['job']));
+      } catch (_) {
+        // fallback
+      }
+    }
+
+    final row = await _client
+        .from('pb_exports')
+        .select('*')
+        .eq('id', jobId)
+        .eq('academy_id', academyId)
+        .maybeSingle();
+    if (row == null) return null;
+    return LearningProblemExportJob.fromMap(
+      Map<String, dynamic>.from(row as Map<dynamic, dynamic>),
+    );
+  }
+
+  Future<List<LearningProblemExportJob>> listExportJobs({
+    required String academyId,
+    String? documentId,
+    String? status,
+    int limit = 40,
+  }) async {
+    final safeDocumentId = (documentId ?? '').trim();
+    final safeStatus = (status ?? '').trim();
+
+    if (hasGateway) {
+      try {
+        final query = <String, String>{
+          'academyId': academyId,
+          'limit': '$limit',
+          if (safeDocumentId.isNotEmpty) 'documentId': safeDocumentId,
+          if (safeStatus.isNotEmpty) 'status': safeStatus,
+        };
+        final json = await _gatewayGet('/pb/jobs/export', query: query);
+        return (json['jobs'] as List<dynamic>? ?? const <dynamic>[])
+            .map((e) => LearningProblemExportJob.fromMap(_mapOrEmpty(e)))
+            .toList(growable: false);
+      } catch (_) {
+        // fallback
+      }
+    }
+
+    var q = _client.from('pb_exports').select('*').eq('academy_id', academyId);
+    if (safeDocumentId.isNotEmpty) {
+      q = q.eq('document_id', safeDocumentId);
+    }
+    if (safeStatus.isNotEmpty) {
+      q = q.eq('status', safeStatus);
+    }
+    final rows = await q.order('created_at', ascending: false).limit(limit);
+    return (rows as List<dynamic>)
+        .map(
+          (e) => LearningProblemExportJob.fromMap(
+            Map<String, dynamic>.from(e as Map<dynamic, dynamic>),
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  Future<void> clearExportStorageArtifact({
+    required String academyId,
+    required String jobId,
+  }) async {
+    if (hasGateway) {
+      try {
+        await _gatewayPost(
+          '/pb/jobs/export/$jobId/cleanup',
+          body: {'academyId': academyId},
+        );
+        return;
+      } catch (_) {
+        // fallback
+      }
+    }
+
+    final row = await _client
+        .from('pb_exports')
+        .select('output_storage_bucket,output_storage_path')
+        .eq('academy_id', academyId)
+        .eq('id', jobId)
+        .maybeSingle();
+    if (row == null) return;
+    final map = Map<String, dynamic>.from(row as Map<dynamic, dynamic>);
+    final bucket = '${map['output_storage_bucket'] ?? ''}'.trim();
+    final path = '${map['output_storage_path'] ?? ''}'.trim();
+
+    if (bucket.isNotEmpty && path.isNotEmpty) {
+      try {
+        await _client.storage.from(bucket).remove([path]);
+      } catch (_) {
+        // ignore cleanup error
+      }
+    }
+
+    await _client
+        .from('pb_exports')
+        .update({
+          'output_storage_bucket': '',
+          'output_storage_path': '',
+          'output_url': '',
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
+        })
+        .eq('academy_id', academyId)
+        .eq('id', jobId);
+  }
+
+  Future<Uint8List> downloadPdfBytesFromUrl(String url) async {
+    final uri = Uri.tryParse(url.trim());
+    if (uri == null) {
+      throw Exception('유효한 PDF 다운로드 URL이 없습니다.');
+    }
+    final res = await _http.get(uri);
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      throw Exception('PDF 다운로드 실패(${res.statusCode})');
+    }
+    if (res.bodyBytes.isEmpty) {
+      throw Exception('다운로드한 PDF 데이터가 비어 있습니다.');
+    }
+    return res.bodyBytes;
   }
 
   Future<String> createStorageSignedUrl({

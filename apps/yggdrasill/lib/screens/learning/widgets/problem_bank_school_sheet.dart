@@ -90,7 +90,7 @@ class ProblemBankSchoolSheet extends StatelessWidget {
       );
     }
     return ListView.separated(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+      padding: const EdgeInsets.fromLTRB(8, 8, 8, 116),
       itemCount: schoolNames.length,
       separatorBuilder: (_, __) => const SizedBox(height: 6),
       itemBuilder: (context, index) {

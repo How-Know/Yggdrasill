@@ -78,6 +78,7 @@ dependencies:
       path: plugins/window_size
       ref: 6c66ad23ee79749f30a8eece542cf54eaf157ed8
   excel: ^4.0.6
+  screenshot: ^3.0.0
 
 dev_dependencies:
   flutter_test:
@@ -137,6 +138,11 @@ flutter:
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
   fonts:
+    - family: HCRBatang
+      fonts:
+        - asset: assets/fonts/hancom/HCRBatang.ttf
+        - asset: assets/fonts/hancom/HCRBatang-Bold.ttf
+          weight: 700
     - family: KakaoSmallSans
       fonts:
         - asset: assets/fonts/kakao/카카오작은글씨/TTF/KakaoSmallSans-Light.ttf
