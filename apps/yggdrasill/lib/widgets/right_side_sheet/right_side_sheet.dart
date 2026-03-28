@@ -693,13 +693,20 @@ class _RightSideSheetState extends State<RightSideSheet> {
       final title = normalizedGradeLabel.isEmpty
           ? titleBase
           : '$titleBase · $normalizedGradeLabel';
+      final solutionPath = await _resolveLinkedSolutionPath(
+        bookId: book.id,
+        gradeKey: normalizedGradeKey,
+        gradeLabel: normalizedGradeLabel,
+      );
       final cacheKey =
           'answerkey|$_answerKeyCategory|${book.id}|$normalizedGradeKey|$normalizedPath';
       try {
+        widget.onClose();
         await openHomeworkAnswerViewerPage(
           navCtx,
           filePath: normalizedPath,
           title: title,
+          solutionFilePath: solutionPath,
           cacheKey: cacheKey,
           enableConfirm: false,
         );
@@ -874,6 +881,53 @@ class _RightSideSheetState extends State<RightSideSheet> {
     if (trimmed.isEmpty) return '';
     final parts = trimmed.split(RegExp(r'[\\/]+'));
     return parts.isEmpty ? trimmed : parts.last;
+  }
+
+  bool _isWebUrl(String raw) {
+    final lower = raw.trim().toLowerCase();
+    return lower.startsWith('http://') || lower.startsWith('https://');
+  }
+
+  String _toLocalFilePath(String rawPath) {
+    final trimmed = rawPath.trim();
+    if (trimmed.isEmpty || _isWebUrl(trimmed)) return '';
+    if (trimmed.toLowerCase().startsWith('file://')) {
+      try {
+        return Uri.parse(trimmed).toFilePath(
+          windows: !kIsWeb && Platform.isWindows,
+        );
+      } catch (_) {
+        return '';
+      }
+    }
+    return trimmed;
+  }
+
+  Future<String?> _resolveLinkedSolutionPath({
+    required String bookId,
+    required String gradeKey,
+    required String gradeLabel,
+  }) async {
+    final normalizedBookId = bookId.trim();
+    if (normalizedBookId.isEmpty) return null;
+    try {
+      final links =
+          await DataManager.instance.loadResourceFileLinks(normalizedBookId);
+      final normalizedGradeLabel = gradeLabel.trim();
+      final normalizedGradeKey = gradeKey.trim();
+      final raw = (links['$normalizedGradeLabel#sol'] ??
+              links['$normalizedGradeKey#sol'] ??
+              '')
+          .trim();
+      if (raw.isEmpty) return null;
+      if (_isWebUrl(raw)) return raw;
+      final localPath = _toLocalFilePath(raw);
+      if (localPath.isEmpty || !localPath.toLowerCase().endsWith('.pdf')) {
+        return null;
+      }
+      if (await File(localPath).exists()) return localPath;
+    } catch (_) {}
+    return null;
   }
 
   Future<void> _savePdfLinkForBook({

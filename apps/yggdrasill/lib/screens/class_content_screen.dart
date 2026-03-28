@@ -55,6 +55,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
   final Set<String> _expandedHomeworkIds = {};
   String? _expandedReservedStudentId;
   bool _pendingConfirmFabSyncScheduled = false;
+  final Map<String, String> _favoriteTemplateBookNameById = <String, String>{};
 
   @override
   void initState() {
@@ -109,6 +110,37 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     });
   }
 
+  Widget _buildHeaderPillIconButton({
+    required IconData icon,
+    required String tooltip,
+    required VoidCallback onTap,
+    Color iconColor = const Color(0xFFD0DDDD),
+  }) {
+    const double controlHeight = 48;
+    return Tooltip(
+      message: tooltip,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          width: controlHeight,
+          height: controlHeight,
+          decoration: BoxDecoration(
+            color: const Color(0xFF2A2A2A),
+            borderRadius: BorderRadius.circular(controlHeight / 2),
+            border: Border.all(color: Colors.transparent),
+          ),
+          child: Center(
+            child: Icon(
+              icon,
+              color: iconColor,
+              size: 24,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     _scheduleHomeBatchConfirmFabSync();
@@ -136,7 +168,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                     builder: (context, homeworkRevision, _) {
                       final submittedCount = _countSubmittedHomeworkItems(list);
                       return Padding(
-                        padding: const EdgeInsets.fromLTRB(40, 16, 16, 0),
+                        padding: const EdgeInsets.fromLTRB(40, 8, 16, 0),
                         child: LayoutBuilder(
                           builder: (context, constraints) {
                             final bool stackedHeader =
@@ -186,117 +218,65 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                             final Widget controls = Wrap(
                               alignment: WrapAlignment.end,
                               crossAxisAlignment: WrapCrossAlignment.center,
-                              spacing: 8,
-                              runSpacing: 8,
+                              spacing: 12,
+                              runSpacing: 12,
                               children: [
-                                SizedBox(
-                                  height: 44,
-                                  child: OutlinedButton(
-                                    onPressed: () => unawaited(
-                                      _openHeaderHomeworkPrintFlow(
-                                        attendingStudents: list,
-                                      ),
+                                _buildHeaderPillIconButton(
+                                  icon: Icons.print,
+                                  tooltip: '인쇄',
+                                  iconColor: _printPickMode
+                                      ? const Color(0xFFEAF2F2)
+                                      : const Color(0xFFD0DDDD),
+                                  onTap: () => unawaited(
+                                    _openHeaderHomeworkPrintFlow(
+                                      attendingStudents: list,
                                     ),
-                                    style: OutlinedButton.styleFrom(
-                                      foregroundColor: _printPickMode
-                                          ? Colors.white
-                                          : Colors.white70,
-                                      side: BorderSide(
-                                        color: _printPickMode
-                                            ? kDlgAccent
-                                            : Colors.white24,
-                                      ),
-                                      shape: const StadiumBorder(),
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 16,
-                                        vertical: 16,
-                                      ),
-                                      backgroundColor: _printPickMode
-                                          ? const Color(0xFF132822)
-                                          : Colors.transparent,
-                                    ),
-                                    child: const Icon(Icons.print, size: 20),
                                   ),
                                 ),
                                 if (_isGradingMode)
                                   ValueListenableBuilder<bool>(
                                     valueListenable: rightSideSheetOpen,
                                     builder: (context, isOpen, _) {
-                                      return Tooltip(
-                                        message:
+                                      return _buildHeaderPillIconButton(
+                                        icon: isOpen
+                                            ? Icons
+                                                .keyboard_double_arrow_right_rounded
+                                            : Icons
+                                                .keyboard_double_arrow_left_rounded,
+                                        tooltip:
                                             isOpen ? '오른쪽 시트 닫기' : '오른쪽 시트 열기',
-                                        child: SizedBox(
-                                          width: 36,
-                                          height: 36,
-                                          child: IconButton(
-                                            onPressed: () async {
-                                              blockRightSideSheetOpen.value =
-                                                  false;
-                                              final action =
-                                                  toggleRightSideSheetAction;
-                                              if (action != null) {
-                                                await action();
-                                              }
-                                            },
-                                            padding: EdgeInsets.zero,
-                                            splashRadius: 20,
-                                            visualDensity:
-                                                VisualDensity.compact,
-                                            icon: Icon(
-                                              isOpen
-                                                  ? Icons
-                                                      .keyboard_double_arrow_right_rounded
-                                                  : Icons
-                                                      .keyboard_double_arrow_left_rounded,
-                                              size: 20,
-                                              color: kDlgTextSub,
-                                            ),
-                                          ),
-                                        ),
+                                        iconColor: const Color(0xFFD0DDDD),
+                                        onTap: () async {
+                                          blockRightSideSheetOpen.value = false;
+                                          final action =
+                                              toggleRightSideSheetAction;
+                                          if (action != null) {
+                                            await action();
+                                          }
+                                        },
                                       );
                                     },
                                   ),
                                 if (_isGradingMode)
-                                  Tooltip(
-                                    message: '채점 이력',
-                                    child: SizedBox(
-                                      width: 36,
-                                      height: 36,
-                                      child: IconButton(
-                                        onPressed: () {
-                                          unawaited(
-                                            _showGradingHistoryDialog(
-                                              context: context,
-                                              attendingStudentIds:
-                                                  attendingStudentIds,
-                                              studentNamesById:
-                                                  studentNamesById,
-                                            ),
-                                          );
-                                        },
-                                        padding: EdgeInsets.zero,
-                                        splashRadius: 20,
-                                        visualDensity: VisualDensity.compact,
-                                        icon: const Icon(
-                                          Icons.history_rounded,
-                                          size: 20,
-                                          color: kDlgTextSub,
+                                  _buildHeaderPillIconButton(
+                                    icon: Icons.history_rounded,
+                                    tooltip: '채점 이력',
+                                    iconColor: const Color(0xFFD0DDDD),
+                                    onTap: () {
+                                      unawaited(
+                                        _showGradingHistoryDialog(
+                                          context: context,
+                                          attendingStudentIds:
+                                              attendingStudentIds,
+                                          studentNamesById:
+                                              studentNamesById,
                                         ),
-                                      ),
-                                    ),
+                                      );
+                                    },
                                   ),
                                 Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    const Text(
-                                      '채점 모드',
-                                      style: TextStyle(
-                                        color: Colors.white70,
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.w700,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
                                     Switch(
                                       value: _isGradingMode,
                                       onChanged: (value) {
@@ -338,7 +318,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                               );
                             }
                             return Row(
-                              crossAxisAlignment: CrossAxisAlignment.center,
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Expanded(child: infoBlock),
                                 const SizedBox(width: 20),
@@ -446,7 +426,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                           )
                         : ListView.separated(
                             scrollDirection: Axis.horizontal,
-                            padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+                            padding: const EdgeInsets.fromLTRB(24, 0, 24, 0),
                             itemCount: list.length,
                             separatorBuilder: (_, __) => SizedBox(
                               width: 14.4,
@@ -546,6 +526,11 @@ class _ClassContentScreenState extends State<ClassContentScreen>
   Widget _buildStudentColumn(BuildContext context, _AttendingStudent student) {
     final isReservedExpanded = _expandedReservedStudentId == student.id;
     const panelWidth = ClassContentScreen._studentColumnContentWidth;
+    void toggleReservedPanel() {
+      setState(() {
+        _expandedReservedStudentId = isReservedExpanded ? null : student.id;
+      });
+    }
     final column = AnimatedContainer(
       duration: const Duration(milliseconds: 220),
       curve: Curves.easeInOutCubic,
@@ -564,6 +549,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                   name: student.name,
                   color: student.color,
                   arrivalTime: student.record.arrivalTime,
+                  onTap: toggleReservedPanel,
                   showHorizontalDivider: false,
                   width: ClassContentScreen._studentColumnContentWidth,
                   margin: EdgeInsets.zero,
@@ -596,12 +582,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                             width: 58,
                             height: 58,
                             child: IconButton(
-                              onPressed: () {
-                                setState(() {
-                                  _expandedReservedStudentId =
-                                      isReservedExpanded ? null : student.id;
-                                });
-                              },
+                              onPressed: toggleReservedPanel,
                               icon: Icon(
                                 isReservedExpanded
                                     ? Icons.inventory_2_rounded
@@ -725,23 +706,23 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                 final panelHeader = revealContent
                     ? _buildReservedHomeworkTitleReactiveForStudent(student.id)
                     : const SizedBox.shrink();
-                final panelBody = ClipRect(
-                  child: IgnorePointer(
-                    ignoring: !isReservedExpanded,
-                    child: AnimatedBuilder(
-                      animation: _uiAnimController,
-                      builder: (context, __) {
-                        final tick = _uiAnimController.value;
-                        return _buildReservedHomeworkSlidePanel(
-                          context: context,
-                          studentId: student.id,
-                          tick: tick,
-                          showContent: revealContent,
-                        );
-                      },
-                    ),
+                final panelBodyCore = IgnorePointer(
+                  ignoring: !isReservedExpanded,
+                  child: AnimatedBuilder(
+                    animation: _uiAnimController,
+                    builder: (context, __) {
+                      final tick = _uiAnimController.value;
+                      return _buildReservedHomeworkSlidePanel(
+                        context: context,
+                        studentId: student.id,
+                        tick: tick,
+                        showContent: revealContent,
+                      );
+                    },
                   ),
                 );
+                final panelBody =
+                    revealContent ? panelBodyCore : ClipRect(child: panelBodyCore);
                 if (!constraints.hasBoundedHeight) {
                   return Padding(
                     padding: const EdgeInsets.only(top: panelTopInset),
@@ -782,8 +763,23 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         ],
       ),
     );
-    if (_isGradingMode) return column;
-    return DragTarget<HomeworkRecentTemplate>(
+    if (_isGradingMode) {
+      return TapRegion(
+        onTapOutside: (_) {
+          if (_expandedReservedStudentId == student.id) {
+            setState(() => _expandedReservedStudentId = null);
+          }
+        },
+        child: column,
+      );
+    }
+    return TapRegion(
+      onTapOutside: (_) {
+        if (_expandedReservedStudentId == student.id) {
+          setState(() => _expandedReservedStudentId = null);
+        }
+      },
+      child: DragTarget<HomeworkRecentTemplate>(
       onWillAcceptWithDetails: (details) {
         return details.data.parts.isNotEmpty;
       },
@@ -798,19 +794,32 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       },
       builder: (context, candidateData, rejectedData) {
         final highlight = candidateData.isNotEmpty;
-        return AnimatedContainer(
-          duration: const Duration(milliseconds: 140),
-          curve: Curves.easeOutCubic,
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(14),
-            border: highlight
-                ? Border.all(color: kDlgAccent.withOpacity(0.85), width: 1.4)
-                : null,
-            color: highlight ? const Color(0x221B6B63) : Colors.transparent,
-          ),
-          child: column,
+        return Stack(
+          children: [
+            column,
+            Positioned.fill(
+              child: IgnorePointer(
+                child: AnimatedOpacity(
+                  duration: const Duration(milliseconds: 120),
+                  curve: Curves.easeOutCubic,
+                  opacity: highlight ? 1.0 : 0.0,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(
+                        color: kDlgAccent.withOpacity(0.85),
+                        width: 1.4,
+                      ),
+                      color: const Color(0x221B6B63),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
         );
       },
+    ),
     );
   }
 
@@ -940,23 +949,15 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       );
       if (!context.mounted) return;
       if (!linkStatus.linked) {
-        final bookName = bookId.trim().isEmpty ? '교재 없음' : bookId;
-        final shouldLink = await _confirmFavoriteTemplateLink(
+        final bookName = await _resolveFavoriteTemplateBookName(bookId);
+        if (!context.mounted) return;
+        await _confirmFavoriteTemplateLink(
           context: context,
           bookName: bookName,
           gradeLabel: gradeLabel,
         );
-        if (!context.mounted || !shouldLink) return;
-        final linkedFlowId = await _linkFavoriteTemplateBookToFlow(
-          context: context,
-          studentId: studentId,
-          bookId: bookId,
-          gradeLabel: gradeLabel,
-          bookName: bookName,
-          preferredFlowId: resolvedFlowId,
-        );
-        if (!context.mounted || linkedFlowId == null) return;
-        resolvedFlowId = linkedFlowId;
+        // 빠른 등록에서는 교재 미연결 시 안내만 하고 종료한다.
+        return;
       } else {
         final linkedFlowId = linkStatus.flowId.trim();
         if (linkedFlowId.isNotEmpty) {
@@ -1006,19 +1007,26 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       return false;
     }
 
-    final flowId = templateFlowId.trim();
-    if (flowId.isNotEmpty) {
+    final flows = await StudentFlowStore.instance.loadForStudent(studentId);
+    final enabledFlows = flows.where((f) => f.enabled).toList(growable: false);
+    final preferredFlowId = templateFlowId.trim();
+    // "해당 학생" 기준으로만 교재 연결 여부를 판정한다.
+    // 템플릿 출처 학생의 flowId가 들어와도 대상 학생에 없으면 무시한다.
+    if (preferredFlowId.isNotEmpty &&
+        enabledFlows.any((f) => f.id == preferredFlowId)) {
       try {
-        final rows = await DataManager.instance.loadFlowTextbookLinks(flowId);
+        final rows =
+            await DataManager.instance.loadFlowTextbookLinks(preferredFlowId);
         if (hasMatch(rows)) {
-          return _FavoriteTemplateLinkStatus(linked: true, flowId: flowId);
+          return _FavoriteTemplateLinkStatus(
+            linked: true,
+            flowId: preferredFlowId,
+          );
         }
       } catch (_) {}
     }
-
-    final flows = await StudentFlowStore.instance.loadForStudent(studentId);
-    final enabledFlows = flows.where((f) => f.enabled).toList(growable: false);
     for (final flow in enabledFlows) {
+      if (flow.id == preferredFlowId) continue;
       try {
         final rows = await DataManager.instance.loadFlowTextbookLinks(flow.id);
         if (hasMatch(rows)) {
@@ -1046,19 +1054,14 @@ class _ClassContentScreenState extends State<ClassContentScreen>
             style: TextStyle(color: kDlgText, fontWeight: FontWeight.w900),
           ),
           content: Text(
-            '$bookName ($gradeLabel)이(가) 연결되지 않았습니다.\n연결 후 과제를 낼까요?',
+            '$bookName ($gradeLabel)이(가) 연결되지 않은 학생입니다.\n해당 학생에 교재를 연결한 뒤 다시 시도해 주세요.',
             style: const TextStyle(color: kDlgTextSub, height: 1.35),
           ),
           actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(false),
-              style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
-              child: const Text('취소'),
-            ),
             FilledButton(
               onPressed: () => Navigator.of(ctx).pop(true),
               style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
-              child: const Text('연결'),
+              child: const Text('확인'),
             ),
           ],
         );
@@ -1289,6 +1292,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
             template.title.trim().isEmpty ? '그룹 과제' : template.title.trim(),
         flowId: normalizedFlowId.isEmpty ? null : normalizedFlowId,
         items: rows,
+        reserveAssignments: mode == _FavoriteIssueMode.reserve,
       );
       createdItems.addAll(generated);
       for (final item in generated) {
@@ -1325,19 +1329,45 @@ class _ClassContentScreenState extends State<ClassContentScreen>
 
     if (createdItems.isEmpty) return 0;
     if (mode == _FavoriteIssueMode.reserve) {
-      await HomeworkAssignmentStore.instance.recordAssignments(
-        studentId,
-        createdItems,
-        note: HomeworkAssignmentStore.reservationNote,
-        splitPartsByItem: splitMap,
-      );
+      final groupReserved = template.isGroup || template.parts.length > 1;
+      if (!groupReserved) {
+        await HomeworkStore.instance.persistItemsNow(
+          studentId,
+          createdItems,
+        );
+        await HomeworkAssignmentStore.instance.recordAssignments(
+          studentId,
+          createdItems,
+          note: HomeworkAssignmentStore.reservationNote,
+          splitPartsByItem: splitMap,
+        );
+      }
     } else {
-      HomeworkStore.instance.markItemsAsHomework(
+      HomeworkStore.instance.restoreItemsToWaiting(
         studentId,
         createdItems.map((e) => e.id).toList(growable: false),
       );
     }
     return createdItems.length;
+  }
+
+  Future<String> _resolveFavoriteTemplateBookName(String bookId) async {
+    final key = bookId.trim();
+    if (key.isEmpty) return '교재 없음';
+    final cached = (_favoriteTemplateBookNameById[key] ?? '').trim();
+    if (cached.isNotEmpty) return cached;
+    try {
+      final rows = await DataManager.instance.loadTextbooksWithMetadata();
+      for (final row in rows) {
+        final id = '${row['book_id'] ?? ''}'.trim();
+        final name = '${row['book_name'] ?? ''}'.trim();
+        if (id.isEmpty || name.isEmpty) continue;
+        _favoriteTemplateBookNameById[id] = name;
+      }
+    } catch (_) {}
+    final resolved = (_favoriteTemplateBookNameById[key] ?? '').trim();
+    if (resolved.isNotEmpty) return resolved;
+    return '교재 정보 없음';
   }
 
   Future<void> _onAddHomework(BuildContext context, String studentId) async {
@@ -1383,6 +1413,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
             groupTitle: (item['groupTitle'] as String?)?.trim() ?? '',
             flowId: (item['flowId'] as String?)?.trim(),
             items: entries,
+            reserveAssignments: isReserve,
           );
           if (createdItems.isEmpty) {
             if (!context.mounted) return;
@@ -1390,17 +1421,6 @@ class _ClassContentScreenState extends State<ClassContentScreen>
               const SnackBar(content: Text('그룹 과제 생성에 실패했어요.')),
             );
             return;
-          }
-          if (isReserve) {
-            await HomeworkAssignmentStore.instance.recordAssignments(
-              studentId,
-              createdItems,
-              note: HomeworkAssignmentStore.reservationNote,
-              splitPartsByItem: <String, int>{
-                for (final hw in createdItems)
-                  hw.id: hw.defaultSplitParts.clamp(1, 4).toInt(),
-              },
-            );
           }
           if (!context.mounted) return;
           final childCount = createdItems.length;
@@ -1463,6 +1483,10 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           createdItems.add(created);
         }
         if (isReserve && createdItems.isNotEmpty) {
+          await HomeworkStore.instance.persistItemsNow(
+            studentId,
+            createdItems,
+          );
           await HomeworkAssignmentStore.instance.recordAssignments(
             studentId,
             createdItems,
@@ -3461,13 +3485,22 @@ Future<void> _runHomeworkCheckDialogOnly({
     hw.id,
     activateFromHomework: true,
   );
-  await HomeworkStore.instance.submit(studentId, hw.id);
-  await HomeworkAssignmentStore.instance.clearActiveAssignmentsForItems(
-    studentId,
-    [hw.id],
-  );
-  if (!context.mounted) return;
-  _showHomeworkChipSnackBar(context, '숙제 검사 완료 — 제출 상태로 이동했어요.');
+  if (draft.progress >= 100) {
+    await HomeworkStore.instance.submit(studentId, hw.id);
+    await HomeworkAssignmentStore.instance.clearActiveAssignmentsForItems(
+      studentId,
+      [hw.id],
+    );
+    if (!context.mounted) return;
+    _showHomeworkChipSnackBar(context, '숙제 검사 완료 — 제출 상태로 이동했어요.');
+  } else {
+    await HomeworkStore.instance.waitPhase(studentId, hw.id);
+    if (!context.mounted) return;
+    _showHomeworkChipSnackBar(
+      context,
+      '완료율이 100% 미만이어서 대기 상태로 두었어요.',
+    );
+  }
 }
 
 Future<void> _runHomeworkCheckDialogForGroup({
@@ -3587,20 +3620,33 @@ Future<void> _runHomeworkCheckDialogForGroup({
       itemId,
       activateFromHomework: true,
     );
-    await HomeworkStore.instance.submit(studentId, itemId);
+    if (draft.progress >= 100) {
+      await HomeworkStore.instance.submit(studentId, itemId);
+    } else {
+      await HomeworkStore.instance.waitPhase(studentId, itemId);
+    }
   }
-  await HomeworkAssignmentStore.instance
-      .clearActiveAssignmentsForItems(studentId, savedItemIds);
+  if (draft.progress >= 100) {
+    await HomeworkAssignmentStore.instance
+        .clearActiveAssignmentsForItems(studentId, savedItemIds);
+  }
   if (!context.mounted) return;
   final groupTitle = (group?.title ?? '').trim();
   final summaryTitle = summary.title.trim();
   final prefix = groupTitle.isNotEmpty
       ? groupTitle
       : (summaryTitle.isNotEmpty ? summaryTitle : '그룹 숙제');
-  _showHomeworkChipSnackBar(
-    context,
-    '$prefix 검사 완료 — 하위 ${savedItemIds.length}개 과제를 제출 상태로 이동했어요.',
-  );
+  if (draft.progress >= 100) {
+    _showHomeworkChipSnackBar(
+      context,
+      '$prefix 검사 완료 — 하위 ${savedItemIds.length}개 과제를 제출 상태로 이동했어요.',
+    );
+  } else {
+    _showHomeworkChipSnackBar(
+      context,
+      '$prefix 검사 저장 — 완료율이 100% 미만이어서 하위 ${savedItemIds.length}개를 대기 상태로 두었어요.',
+    );
+  }
 }
 
 String _formatDateTime(DateTime dt) {
@@ -5368,6 +5414,7 @@ Widget _buildReservedHomeworkChipsReactiveForStudent(
                               return SingleChildScrollView(
                                 key: ValueKey('reserved_ui_$uiRevision'),
                                 physics: const BouncingScrollPhysics(),
+                                clipBehavior: Clip.none,
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: reservedSections,
@@ -5483,6 +5530,41 @@ Future<void> _activateReservedHomeworkGroup({
     final String message = convertedCount > 1
         ? '예약 그룹 과제 $convertedCount개를 대기 상태로 전환했어요.'
         : '예약 그룹 과제를 대기 상태로 전환했어요.';
+    _showHomeworkChipSnackBar(context, message);
+    if (_expandedReservedGroupKeyByStudent[studentId] == group.groupKey) {
+      _expandedReservedGroupKeyByStudent.remove(studentId);
+      _markReservedGroupUiDirty();
+    }
+  } finally {
+    if (_activatingReservedGroupActionKeys.remove(actionKey)) {
+      _markReservedGroupUiDirty();
+    }
+  }
+}
+
+Future<void> _deleteReservedHomeworkGroup({
+  required BuildContext context,
+  required String studentId,
+  required _ReservedHomeworkGroupSection group,
+}) async {
+  final actionKey = '$studentId|${group.groupKey}';
+  if (_activatingReservedGroupActionKeys.contains(actionKey)) return;
+  _activatingReservedGroupActionKeys.add(actionKey);
+  _markReservedGroupUiDirty();
+  try {
+    final deletedItemIds = <String>{};
+    for (final entry in group.entries) {
+      final hwId = entry.key.homeworkItemId.trim();
+      if (hwId.isEmpty || deletedItemIds.contains(hwId)) continue;
+      HomeworkStore.instance.remove(studentId, hwId);
+      deletedItemIds.add(hwId);
+    }
+    if (deletedItemIds.isEmpty) return;
+    if (!context.mounted) return;
+    final int deletedCount = deletedItemIds.length;
+    final String message = deletedCount > 1
+        ? '예약 그룹 과제 $deletedCount개를 삭제했어요.'
+        : '예약 그룹 과제를 삭제했어요.';
     _showHomeworkChipSnackBar(context, message);
     if (_expandedReservedGroupKeyByStudent[studentId] == group.groupKey) {
       _expandedReservedGroupKeyByStudent.remove(studentId);
@@ -5763,13 +5845,16 @@ List<Widget> _buildReservedHomeworkChipsForStudent(
       _SlideableHomeworkChip(
         key: ValueKey('reserved_group_chip_${studentId}_${group.groupKey}'),
         maxSlide: _homeworkChipMaxSlideFor(
-          isExpanded ? expandedReservedHeight : collapsedReservedHeight,
-        ),
-        canSlideDown: false,
+              isExpanded ? expandedReservedHeight : collapsedReservedHeight,
+            ) *
+            1.3,
+        canSlideDown: !isActivating,
         canSlideUp: !isActivating,
-        downLabel: '',
-        upLabel: isActivating ? '전환 중' : '진행 전환',
-        downColor: const Color(0xFF9FB3B3),
+        downLabel: isActivating ? '' : '삭제',
+        upLabel: '',
+        showUpArrowWhenLabelEmpty: true,
+        upSubLabel: '출제',
+        downColor: const Color(0xFFE57373),
         upColor: kDlgAccent,
         onTap: () {
           if (isActivating) return;
@@ -5783,7 +5868,15 @@ List<Widget> _buildReservedHomeworkChipsForStudent(
         },
         onLongPress: null,
         onDoubleTap: null,
-        onSlideDown: () {},
+        onSlideDown: () {
+          unawaited(
+            _deleteReservedHomeworkGroup(
+              context: context,
+              studentId: studentId,
+              group: group,
+            ),
+          );
+        },
         onSlideUp: () async {
           await _activateReservedHomeworkGroup(
             context: context,
@@ -6304,7 +6397,7 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
 
     final groupCard = _SlideableHomeworkChip(
       key: ValueKey('hw_group_chip_${group.id}'),
-      maxSlide: _homeworkChipMaxSlideFor(chipH),
+      maxSlide: _homeworkChipMaxSlideFor(_homeworkChipCollapsedHeight),
       canSlideDown: !printPickMode && groupCanSlideDown,
       canSlideUp: !printPickMode,
       downLabel: groupDownLabel,
@@ -9326,7 +9419,6 @@ Future<void> _showGradingHistoryDialog({
                                         });
                                         try {
                                           var rollbackCount = 0;
-                                          var restoredCount = 0;
                                           for (final itemId in entry.itemIds) {
                                             HomeworkStore.instance
                                                 .clearAutoCompleteOnNextWaiting(
@@ -9343,26 +9435,17 @@ Future<void> _showGradingHistoryDialog({
                                               rollbackCount +=
                                                   rollbackDecrement ?? 0;
                                             }
-                                            final latest = HomeworkStore
-                                                .instance
-                                                .getById(entry.studentId, itemId);
-                                            if (latest == null) continue;
-                                            if (latest.status ==
-                                                HomeworkStatus.completed) {
-                                              await HomeworkStore.instance
-                                                  .reviveCompletedToSubmitted(
-                                                entry.studentId,
-                                                itemId,
-                                              );
-                                              restoredCount += 1;
-                                              continue;
-                                            }
-                                            await HomeworkStore.instance.submit(
-                                              entry.studentId,
-                                              itemId,
-                                            );
-                                            restoredCount += 1;
                                           }
+                                          await HomeworkStore.instance
+                                              .reloadStudentHomework(
+                                            entry.studentId,
+                                          );
+                                          final restoredCount =
+                                              await HomeworkStore.instance
+                                                  .restoreItemsAfterGradingCancel(
+                                            entry.studentId,
+                                            entry.itemIds,
+                                          );
                                           if (!dialogContext.mounted) return;
                                           if (restoredCount == 0) {
                                             ScaffoldMessenger.of(dialogContext)
@@ -9380,8 +9463,8 @@ Future<void> _showGradingHistoryDialog({
                                             SnackBar(
                                               content: Text(
                                                 rollbackCount > 0
-                                                    ? '채점 ${restoredCount}건을 제출 단계로 되돌렸어요. 검사횟수도 복원했습니다.'
-                                                    : '채점 ${restoredCount}건을 제출 단계로 되돌렸어요.',
+                                                    ? '채점 ${restoredCount}건을 대기 상태로 되돌렸어요. 검사 기록도 조정했습니다.'
+                                                    : '채점 ${restoredCount}건을 대기 상태로 되돌렸어요.',
                                               ),
                                             ),
                                           );
@@ -9446,6 +9529,8 @@ class _SlideableHomeworkChip extends StatefulWidget {
   final Color downColor;
   final Color upColor;
   final double maxSlide;
+  final bool showUpArrowWhenLabelEmpty;
+  final String upSubLabel;
 
   const _SlideableHomeworkChip({
     super.key,
@@ -9462,6 +9547,8 @@ class _SlideableHomeworkChip extends StatefulWidget {
     required this.downColor,
     required this.upColor,
     required this.maxSlide,
+    this.showUpArrowWhenLabelEmpty = false,
+    this.upSubLabel = '',
   });
 
   @override
@@ -9518,6 +9605,7 @@ class _SlideableHomeworkChipState extends State<_SlideableHomeworkChip> {
     );
 
     return Stack(
+      clipBehavior: Clip.none,
       children: [
         Positioned.fill(
           child: ClipRRect(
@@ -9543,7 +9631,9 @@ class _SlideableHomeworkChipState extends State<_SlideableHomeworkChip> {
                         ),
                       ),
                     ),
-                  if (widget.upLabel.isNotEmpty && widget.canSlideUp)
+                  if (widget.canSlideUp &&
+                      (widget.upLabel.isNotEmpty ||
+                          widget.showUpArrowWhenLabelEmpty))
                     Align(
                       alignment: const Alignment(0.9, 0),
                       child: Transform.translate(
@@ -9552,14 +9642,38 @@ class _SlideableHomeworkChipState extends State<_SlideableHomeworkChip> {
                           opacity: isLeft
                               ? (0.2 + 0.8 * progress).clamp(0.0, 1.0)
                               : 0.0,
-                          child: Text(
-                            '← ${widget.upLabel}',
-                            style: labelStyle.copyWith(
-                              color: widget.upColor,
-                            ),
-                            maxLines: 1,
-                            softWrap: false,
-                          ),
+                          child: widget.upLabel.trim().isEmpty
+                              ? Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(
+                                      Icons.arrow_back_rounded,
+                                      size: 34,
+                                      color: widget.upColor,
+                                    ),
+                                    if (widget.upSubLabel.trim().isNotEmpty) ...[
+                                      const SizedBox(height: 3),
+                                      Text(
+                                        widget.upSubLabel.trim(),
+                                        style: labelStyle.copyWith(
+                                          color: widget.upColor,
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w800,
+                                        ),
+                                        maxLines: 1,
+                                        softWrap: false,
+                                      ),
+                                    ],
+                                  ],
+                                )
+                              : Text(
+                                  '← ${widget.upLabel}',
+                                  style: labelStyle.copyWith(
+                                    color: widget.upColor,
+                                  ),
+                                  maxLines: 1,
+                                  softWrap: false,
+                                ),
                         ),
                       ),
                     ),
@@ -9605,6 +9719,7 @@ class _AttendingButton extends StatelessWidget {
   final Color color;
   final String studentId;
   final DateTime? arrivalTime;
+  final VoidCallback? onTap;
   final bool showHorizontalDivider;
   final double width;
   final EdgeInsetsGeometry margin;
@@ -9613,6 +9728,7 @@ class _AttendingButton extends StatelessWidget {
     required this.name,
     required this.color,
     required this.arrivalTime,
+    this.onTap,
     this.showHorizontalDivider = false,
     this.width = ClassContentScreen._attendingCardWidth,
     this.margin = const EdgeInsets.only(left: 24),
@@ -9620,28 +9736,31 @@ class _AttendingButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () {},
-      child: Container(
-        width: width,
-        height: ClassContentScreen._attendingCardHeight,
-        margin: margin,
-        padding: const EdgeInsets.fromLTRB(22, 0, 12, 0),
-        decoration: BoxDecoration(
-          color: Colors.transparent,
-          border: showHorizontalDivider
-              ? const Border(
-                  bottom: BorderSide(color: kDlgBorder, width: 1),
-                )
-              : null,
-        ),
-        child: ValueListenableBuilder(
-            valueListenable: DataManager.instance.studentsNotifier,
-            builder: (context, _, __) => ValueListenableBuilder<int>(
-                valueListenable: DataManager.instance.deviceBindingsRevision,
-                builder: (context, _bindRev, __) => ValueListenableBuilder<int>(
-                      valueListenable: HomeworkStore.instance.revision,
-                      builder: (context, _rev, _) {
+    return MouseRegion(
+      cursor:
+          onTap == null ? SystemMouseCursors.basic : SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          width: width,
+          height: ClassContentScreen._attendingCardHeight,
+          margin: margin,
+          padding: const EdgeInsets.fromLTRB(22, 0, 12, 0),
+          decoration: BoxDecoration(
+            color: Colors.transparent,
+            border: showHorizontalDivider
+                ? const Border(
+                    bottom: BorderSide(color: kDlgBorder, width: 1),
+                  )
+                : null,
+          ),
+          child: ValueListenableBuilder(
+              valueListenable: DataManager.instance.studentsNotifier,
+              builder: (context, _, __) => ValueListenableBuilder<int>(
+                  valueListenable: DataManager.instance.deviceBindingsRevision,
+                  builder: (context, _bindRev, __) => ValueListenableBuilder<int>(
+                        valueListenable: HomeworkStore.instance.revision,
+                        builder: (context, _rev, _) {
                         // 과제 진행 상태 확인
                         final items = HomeworkStore.instance
                             .items(studentId)
@@ -9829,7 +9948,8 @@ class _AttendingButton extends StatelessWidget {
                           ],
                         );
                       },
-                    ))),
+                      ))),
+        ),
       ),
     );
   }

@@ -117,9 +117,13 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
     required String label,
     required bool selected,
     required VoidCallback onTap,
+    required double sheetScale,
   }) {
     return Padding(
-      padding: const EdgeInsets.only(right: 8, bottom: 8),
+      padding: EdgeInsets.only(
+        right: 8 * sheetScale,
+        bottom: 8 * sheetScale,
+      ),
       child: Material(
         color: Colors.transparent,
         child: InkWell(
@@ -128,7 +132,10 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 140),
             curve: Curves.easeOutCubic,
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+            padding: EdgeInsets.symmetric(
+              horizontal: 12 * sheetScale,
+              vertical: 7 * sheetScale,
+            ),
             decoration: BoxDecoration(
               color:
                   selected ? const Color(0x1F33A373) : const Color(0xFF151C1F),
@@ -146,7 +153,7 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
                 color: selected
                     ? const Color(0xFF9FE3C6)
                     : const Color(0xFF9FB3B3),
-                fontSize: 12.5,
+                fontSize: 14.5 * sheetScale,
                 fontWeight: FontWeight.w700,
               ),
             ),
@@ -159,6 +166,7 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
   Widget _buildTemplateCardSurface(
     HomeworkRecentTemplate template, {
     required double width,
+    required double sheetScale,
   }) {
     final title =
         template.title.trim().isEmpty ? '(제목 없음)' : template.title.trim();
@@ -168,16 +176,24 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
     final gradeText = grade.isEmpty ? '학년 미지정' : grade;
     final subtitle =
         template.isGroup ? '그룹 과제 · 하위 ${template.partCount}개' : '단일 과제';
+    final titleFontSize = (template.isGroup ? 20.0 : 16.0) * sheetScale;
+    final titleToMetaGap = (template.isGroup ? 7.5 : 5.0) * sheetScale;
     final previewParts = template.parts.take(3).toList(growable: false);
     final moreCount = template.parts.length - previewParts.length;
     return Container(
       width: width,
       decoration: BoxDecoration(
-        color: const Color(0xFF11181B),
+        // 홈메뉴 그룹과제 카드 배경 톤과 통일
+        color: const Color(0xFF15171C),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: const Color(0xFF2A3A3A)),
       ),
-      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      padding: EdgeInsets.fromLTRB(
+        18 * sheetScale,
+        14 * sheetScale,
+        18 * sheetScale,
+        14 * sheetScale,
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
@@ -186,37 +202,37 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
             title,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
+            style: TextStyle(
               color: kDlgText,
-              fontSize: 14,
-              fontWeight: FontWeight.w800,
+              fontSize: titleFontSize,
+              fontWeight: FontWeight.w600,
             ),
           ),
-          const SizedBox(height: 4),
+          SizedBox(height: titleToMetaGap),
           Text(
             '$bookText · $gradeText',
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
+            style: TextStyle(
               color: kDlgTextSub,
-              fontSize: 12.4,
+              fontSize: 14.5 * sheetScale,
               fontWeight: FontWeight.w600,
             ),
           ),
-          const SizedBox(height: 3),
+          SizedBox(height: 5 * sheetScale),
           Text(
             subtitle,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
+            style: TextStyle(
               color: Color(0xFF8FA3A3),
-              fontSize: 12.1,
+              fontSize: 14.5 * sheetScale,
               fontWeight: FontWeight.w700,
             ),
           ),
-          const SizedBox(height: 8),
+          SizedBox(height: 8 * sheetScale),
           for (int i = 0; i < previewParts.length; i++) ...[
-            if (i > 0) const SizedBox(height: 4),
+            if (i > 0) SizedBox(height: 4 * sheetScale),
             Row(
               children: [
                 Expanded(
@@ -224,22 +240,22 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
                     '${i + 1}. ${_partTitle(previewParts[i])}',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
+                    style: TextStyle(
                       color: Color(0xFFCAD2C5),
-                      fontSize: 12.1,
+                      fontSize: 14 * sheetScale,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
                 ),
-                const SizedBox(width: 8),
+                SizedBox(width: 8 * sheetScale),
                 Text(
                   _partRightMeta(previewParts[i]),
                   textAlign: TextAlign.right,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: Color(0xFF9FB3B3),
-                    fontSize: 11.8,
+                    fontSize: 13.5 * sheetScale,
                     fontWeight: FontWeight.w700,
                   ),
                 ),
@@ -247,14 +263,14 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
             ),
           ],
           if (moreCount > 0) ...[
-            const SizedBox(height: 4),
+            SizedBox(height: 4 * sheetScale),
             Text(
               '+ $moreCount개 더',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
+              style: TextStyle(
                 color: Color(0xFF7F8C8C),
-                fontSize: 11.8,
+                fontSize: 13.5 * sheetScale,
                 fontWeight: FontWeight.w700,
               ),
             ),
@@ -267,8 +283,13 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
   Widget _buildTemplateCard(
     HomeworkRecentTemplate template, {
     required double width,
+    required double sheetScale,
   }) {
-    final card = _buildTemplateCardSurface(template, width: width);
+    final card = _buildTemplateCardSurface(
+      template,
+      width: width,
+      sheetScale: sheetScale,
+    );
     return Draggable<HomeworkRecentTemplate>(
       data: template,
       maxSimultaneousDrags: 1,
@@ -280,6 +301,7 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
           child: _buildTemplateCardSurface(
             template,
             width: width,
+            sheetScale: sheetScale,
           ),
         ),
       ),
@@ -295,6 +317,9 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
   Widget build(BuildContext context) {
     final sheetScale =
         ((widget.containerWidth / 420.0).clamp(0.78, 1.0)).toDouble();
+    final headerTitleFont = 16.0 * sheetScale;
+    final headerHintFont = 14.5 * sheetScale;
+    final headerIconSize = 18.0 * sheetScale;
     final filteredTemplates = _filteredTemplates();
     final bookIds = _templates
         .map((e) => e.primaryBookId)
@@ -320,9 +345,9 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
         children: [
           Row(
             children: [
-              const Icon(Icons.star_rounded, size: 18, color: kDlgAccent),
-              const SizedBox(width: 8),
-              const Expanded(
+              Icon(Icons.star_rounded, size: headerIconSize, color: kDlgAccent),
+              SizedBox(width: 8 * sheetScale),
+              Expanded(
                 child: Text(
                   '최근 과제 즐겨찾기',
                   maxLines: 1,
@@ -330,39 +355,39 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
                   style: TextStyle(
                     color: kDlgText,
                     fontWeight: FontWeight.w900,
-                    fontSize: 15,
+                    fontSize: headerTitleFont,
                   ),
                 ),
               ),
               SizedBox(
-                width: 34,
-                height: 34,
+                width: 34 * sheetScale,
+                height: 34 * sheetScale,
                 child: IconButton(
                   onPressed:
                       _loading ? null : () => unawaited(_refreshTemplates()),
-                  icon: const Icon(
+                  icon: Icon(
                     Icons.refresh_rounded,
-                    size: 18,
+                    size: headerIconSize,
                     color: kDlgTextSub,
                   ),
                   tooltip: '새로고침',
                   padding: EdgeInsets.zero,
-                  splashRadius: 18,
+                  splashRadius: 18 * sheetScale,
                   visualDensity: VisualDensity.compact,
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 4),
-          const Text(
+          SizedBox(height: 4 * sheetScale),
+          Text(
             '카드를 드래그해 오른쪽 학생 카드에 드롭하세요.',
             style: TextStyle(
               color: Color(0xFF7F8C8C),
-              fontSize: 12,
+              fontSize: headerHintFont,
               fontWeight: FontWeight.w600,
             ),
           ),
-          const SizedBox(height: 10),
+          SizedBox(height: 10 * sheetScale),
           SingleChildScrollView(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -373,12 +398,14 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
                       label: '전체 교재',
                       selected: _bookFilter.isEmpty,
                       onTap: () => setState(() => _bookFilter = ''),
+                      sheetScale: sheetScale,
                     ),
                     for (final bookId in bookIds)
                       _buildFilterChip(
                         label: _bookName(bookId),
                         selected: _bookFilter == bookId,
                         onTap: () => setState(() => _bookFilter = bookId),
+                        sheetScale: sheetScale,
                       ),
                   ],
                 ),
@@ -388,19 +415,21 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
                       label: '전체 학년',
                       selected: _gradeFilter.isEmpty,
                       onTap: () => setState(() => _gradeFilter = ''),
+                      sheetScale: sheetScale,
                     ),
                     for (final grade in gradeLabels)
                       _buildFilterChip(
                         label: grade,
                         selected: _gradeFilter == grade,
                         onTap: () => setState(() => _gradeFilter = grade),
+                        sheetScale: sheetScale,
                       ),
                   ],
                 ),
               ],
             ),
           ),
-          const SizedBox(height: 8),
+          SizedBox(height: 8 * sheetScale),
           Expanded(
             child: LayoutBuilder(
               builder: (context, constraints) {
@@ -436,6 +465,7 @@ class _FavoriteTemplatesPanelState extends State<FavoriteTemplatesPanel> {
                     return _buildTemplateCard(
                       template,
                       width: cardWidth,
+                      sheetScale: sheetScale,
                     );
                   },
                 );

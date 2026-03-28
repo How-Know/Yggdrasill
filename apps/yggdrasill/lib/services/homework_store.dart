@@ -1779,6 +1779,17 @@ class HomeworkStore {
     return item;
   }
 
+  /// `add` 등에서 비동기 upsert 전에 예약 배정을 넣으면 행이 없어 실패할 수 있어,
+  /// 예약 `recordAssignments` 직전에 한 번에 기다린다.
+  Future<void> persistItemsNow(
+    String studentId,
+    List<HomeworkItem> items,
+  ) async {
+    for (final item in items) {
+      await _upsertItem(studentId, item);
+    }
+  }
+
   void edit(String studentId, HomeworkItem updated) {
     final list = _byStudentId[studentId];
     if (list == null) return;
@@ -2237,38 +2248,69 @@ class HomeworkStore {
     }
   }
 
-  Future<void> reviveCompletedToSubmitted(String studentId, String id) async {
-    final list = _byStudentId[studentId];
-    if (list == null) return;
-    final idx = list.indexWhere((e) => e.id == id);
-    if (idx == -1) return;
-    final item = list[idx];
-    clearAutoCompleteOnNextWaiting(id);
+  Future<void> reloadStudentHomework(String studentId) => _reloadStudent(studentId);
 
-    bool needsReopen = item.status == HomeworkStatus.completed ||
-        item.phase == 0 ||
-        item.completedAt != null;
-    if (needsReopen) {
-      final now = DateTime.now();
-      if (item.runStart != null) {
-        item.accumulatedMs += now.difference(item.runStart!).inMilliseconds;
-        item.runStart = null;
+  /// 채점 취소: 롤백·리로드 후 호출. 완료 과제는 `homework_reopen_completed_to_waiting`,
+  /// 그 외는 `homework_wait`로 대기(phase 1) 복귀. 마지막에 한 번 리로드한다.
+  Future<int> restoreItemsAfterGradingCancel(
+    String studentId,
+    List<String> itemIds,
+  ) async {
+    final ids = itemIds
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    if (ids.isEmpty) return 0;
+    try {
+      final String academyId =
+          (await TenantService.instance.getActiveAcademyId()) ??
+              await TenantService.instance.ensureActiveAcademy();
+      final String? updatedBy = Supabase.instance.client.auth.currentUser?.id;
+      var restored = 0;
+      for (final id in ids) {
+        final item = getById(studentId, id);
+        if (item == null) continue;
+        try {
+          if (item.status == HomeworkStatus.completed) {
+            await Supabase.instance.client.rpc(
+              'homework_reopen_completed_to_waiting',
+              params: {
+                'p_item_id': id,
+                'p_academy_id': academyId,
+                'p_updated_by': updatedBy,
+              },
+            );
+          } else {
+            await Supabase.instance.client.rpc(
+              'homework_wait',
+              params: {
+                'p_item_id': id,
+                'p_academy_id': academyId,
+                'p_updated_by': updatedBy,
+              },
+            );
+          }
+          restored++;
+        } catch (e) {
+          // ignore: avoid_print
+          print('[HW][grading_cancel_restore][ERROR] item=$id $e');
+        }
       }
-      item.status = HomeworkStatus.inProgress;
-      item.phase = 1;
-      item.waitingAt = now;
-      item.submittedAt = null;
-      item.confirmedAt = null;
-      item.completedAt = null;
-      item.updatedAt = now;
-      _bump();
-      try {
-        await _upsertItem(studentId, item);
-      } catch (_) {
-        await _reloadStudent(studentId);
+      await _reloadStudent(studentId);
+      for (final id in ids) {
+        final after = getById(studentId, id);
+        if (after != null) {
+          _maybeAutoCompleteOnWaiting(studentId, after);
+        }
       }
+      return restored;
+    } catch (e) {
+      // ignore: avoid_print
+      print('[HW][grading_cancel_restore][ERROR] $e');
+      await _reloadStudent(studentId);
+      return 0;
     }
-    await submit(studentId, id);
   }
 
   Future<void> confirm(
@@ -3326,14 +3368,22 @@ class HomeworkStore {
     }
   }
 
+  /// 예약 과제일 때 true: DB에 하위 항목이 반영된 직후 `recordAssignments`(예약 노트)를 호출한 뒤
+  /// `_reloadStudent`를 1회만 수행해, 활성 칩에 잠깐 노출되지 않게 한다.
   Future<List<HomeworkItem>> createGroupWithWaitingItems({
     required String studentId,
     required String groupTitle,
     String? flowId,
     required List<Map<String, dynamic>> items,
+    bool reserveAssignments = false,
   }) async {
     if (items.isEmpty) return const <HomeworkItem>[];
-    String asText(dynamic value) => (value as String?)?.trim() ?? '';
+    String asText(dynamic value) {
+      if (value == null) return '';
+      if (value is String) return value.trim();
+      // 즐겨찾기 드롭 경로에서는 count 등이 int/num으로 들어올 수 있다.
+      return '$value'.trim();
+    }
     String? asNullableText(dynamic value) {
       final v = asText(value);
       return v.isEmpty ? null : v;
@@ -3483,6 +3533,23 @@ class HomeworkStore {
         if (createdId != null && createdId.isNotEmpty) {
           createdIds.add(createdId);
         }
+      }
+
+      final createdBeforeReload = <HomeworkItem>[];
+      for (final id in createdIds) {
+        final item = getById(studentId, id);
+        if (item != null) createdBeforeReload.add(item);
+      }
+      if (reserveAssignments && createdBeforeReload.isNotEmpty) {
+        await HomeworkAssignmentStore.instance.recordAssignments(
+          studentId,
+          createdBeforeReload,
+          note: HomeworkAssignmentStore.reservationNote,
+          splitPartsByItem: <String, int>{
+            for (final hw in createdBeforeReload)
+              hw.id: hw.defaultSplitParts.clamp(1, 4).toInt(),
+          },
+        );
       }
 
       await _reloadStudent(studentId);

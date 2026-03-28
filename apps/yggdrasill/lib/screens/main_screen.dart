@@ -2127,6 +2127,13 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                           (trialWaitingByTime[k] ??= <ConsultTrialLessonSlot>[])
                               .add(s);
                         }
+                        final double sideSheetScale =
+                            ((containerWidth / 420.0).clamp(0.78, 1.0))
+                                .toDouble();
+                        final double actionIconSize =
+                            22.0 * 1.1 * sideSheetScale;
+                        final double actionButtonMinSize =
+                            44.0 * sideSheetScale;
 
                         return AnimatedContainer(
                           duration: const Duration(milliseconds: 160),
@@ -2140,9 +2147,9 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                               Column(
                                 children: [
                                   Padding(
-                                    padding: const EdgeInsets.fromLTRB(
+                                    padding: EdgeInsets.fromLTRB(
                                       24,
-                                      8,
+                                      10 * sideSheetScale,
                                       24,
                                       12,
                                     ),
@@ -2153,6 +2160,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                           children: [
                                             _SideSheetDateHeader(
                                               date: _sideSheetAnchorDate,
+                                              scale: sideSheetScale,
                                               onMoveToYesterday:
                                                   _moveSideSheetToYesterday,
                                               onMoveToToday:
@@ -2161,157 +2169,166 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                             const Spacer(),
                                           ],
                                         ),
-                                        const SizedBox(height: 14),
-                                        Align(
-                                          alignment: Alignment.center,
-                                          child: Row(
-                                            mainAxisSize: MainAxisSize.min,
-                                            children: [
-                                              Tooltip(
-                                                message: _sideSheetBottomView ==
-                                                        _SideSheetBottomView
-                                                            .allStudents
-                                                    ? '출석 페이지 보기'
-                                                    : '모든 학생 리스트 보기',
-                                                child: IconButton(
-                                                  icon: Icon(
-                                                    _sideSheetBottomView ==
-                                                            _SideSheetBottomView
-                                                                .allStudents
-                                                        ? Icons.groups
-                                                        : Icons.groups_outlined,
-                                                    color: _sideSheetBottomView ==
-                                                            _SideSheetBottomView
-                                                                .allStudents
-                                                        ? const Color(
-                                                            0xFF33A373,
-                                                          )
-                                                        : Colors.white70,
-                                                    size: 22,
+                                        SizedBox(height: 14 * sideSheetScale),
+                                        Padding(
+                                          padding: EdgeInsets.only(
+                                            top: 5 * sideSheetScale,
+                                          ),
+                                          child: Align(
+                                            alignment: Alignment.center,
+                                            child: Row(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                Tooltip(
+                                                  message: _sideSheetBottomView ==
+                                                          _SideSheetBottomView
+                                                              .allStudents
+                                                      ? '출석 페이지 보기'
+                                                      : '모든 학생 리스트 보기',
+                                                  child: IconButton(
+                                                    icon: Icon(
+                                                      _sideSheetBottomView ==
+                                                              _SideSheetBottomView
+                                                                  .allStudents
+                                                          ? Icons.groups
+                                                          : Icons.groups_outlined,
+                                                      color: _sideSheetBottomView ==
+                                                              _SideSheetBottomView
+                                                                  .allStudents
+                                                          ? const Color(
+                                                              0xFF33A373,
+                                                            )
+                                                          : Colors.white70,
+                                                      size: actionIconSize,
+                                                    ),
+                                                    padding: EdgeInsets.zero,
+                                                    constraints: BoxConstraints(
+                                                      minWidth:
+                                                          actionButtonMinSize,
+                                                      minHeight:
+                                                          actionButtonMinSize,
+                                                    ),
+                                                    onPressed:
+                                                        _toggleSideSheetBottomView,
                                                   ),
-                                                  padding: EdgeInsets.zero,
-                                                  constraints:
-                                                      const BoxConstraints(
-                                                    minWidth: 44,
-                                                    minHeight: 44,
-                                                  ),
-                                                  onPressed:
-                                                      _toggleSideSheetBottomView,
                                                 ),
-                                              ),
-                                              const SizedBox(width: 10),
-                                              Tooltip(
-                                                message: '보강 관리',
-                                                child: IconButton(
-                                                  icon: const Icon(
-                                                    Icons.event_repeat,
-                                                    color: Colors.white70,
-                                                    size: 22,
-                                                  ),
-                                                  padding: EdgeInsets.zero,
-                                                  constraints:
-                                                      const BoxConstraints(
-                                                    minWidth: 44,
-                                                    minHeight: 44,
-                                                  ),
-                                                  onPressed:
-                                                      _showMakeupManagementDialog,
+                                                SizedBox(
+                                                  width: 10 * sideSheetScale,
                                                 ),
-                                              ),
-                                              const SizedBox(width: 10),
-                                              Tooltip(
-                                                message: '수업 타임라인',
-                                                child: IconButton(
-                                                  icon: const Icon(
-                                                    Icons.timeline,
-                                                    color: Colors.white70,
-                                                    size: 22,
+                                                Tooltip(
+                                                  message: '보강 관리',
+                                                  child: IconButton(
+                                                    icon: Icon(
+                                                      Icons.event_repeat,
+                                                      color: Colors.white70,
+                                                      size: actionIconSize,
+                                                    ),
+                                                    padding: EdgeInsets.zero,
+                                                    constraints: BoxConstraints(
+                                                      minWidth:
+                                                          actionButtonMinSize,
+                                                      minHeight:
+                                                          actionButtonMinSize,
+                                                    ),
+                                                    onPressed:
+                                                        _showMakeupManagementDialog,
                                                   ),
-                                                  padding: EdgeInsets.zero,
-                                                  constraints:
-                                                      const BoxConstraints(
-                                                    minWidth: 44,
-                                                    minHeight: 44,
-                                                  ),
-                                                  onPressed: () async {
-                                                    await showDialog(
-                                                      context: context,
-                                                      builder: (_) =>
-                                                          const ClassContentEventsDialog(),
-                                                    );
-                                                  },
                                                 ),
-                                              ),
-                                              const SizedBox(width: 6),
-                                              Tooltip(
-                                                message: '하원 리스트',
-                                                child: IconButton(
-                                                  icon: const Icon(
-                                                    Icons.featured_play_list,
-                                                    color: Colors.white70,
-                                                    size: 22,
-                                                  ),
-                                                  padding: EdgeInsets.zero,
-                                                  constraints:
-                                                      const BoxConstraints(
-                                                    minWidth: 44,
-                                                    minHeight: 44,
-                                                  ),
-                                                  onPressed: () async {
-                                                    await _showLeavedStudentsDialog(
-                                                      leaved,
-                                                      arrivalBySet,
-                                                      departureBySet,
-                                                    );
-                                                  },
+                                                SizedBox(
+                                                  width: 10 * sideSheetScale,
                                                 ),
-                                              ),
-                                              const SizedBox(width: 10),
-                                              Tooltip(
-                                                message: _sideSheetBottomView ==
-                                                        _SideSheetBottomView
-                                                            .favoriteTemplates
-                                                    ? '즐겨찾기 닫기'
-                                                    : '즐겨찾기',
-                                                child: IconButton(
-                                                  icon: Icon(
-                                                    Icons.star_rounded,
-                                                    color: _sideSheetBottomView ==
-                                                            _SideSheetBottomView
-                                                                .favoriteTemplates
-                                                        ? const Color(
-                                                            0xFF33A373)
-                                                        : Colors.white70,
-                                                    size: 22,
+                                                Tooltip(
+                                                  message: '수업 타임라인',
+                                                  child: IconButton(
+                                                    icon: Icon(
+                                                      Icons.timeline,
+                                                      color: Colors.white70,
+                                                      size: actionIconSize,
+                                                    ),
+                                                    padding: EdgeInsets.zero,
+                                                    constraints: BoxConstraints(
+                                                      minWidth:
+                                                          actionButtonMinSize,
+                                                      minHeight:
+                                                          actionButtonMinSize,
+                                                    ),
+                                                    onPressed: () async {
+                                                      await showDialog(
+                                                        context: context,
+                                                        builder: (_) =>
+                                                            const ClassContentEventsDialog(),
+                                                      );
+                                                    },
                                                   ),
-                                                  padding: EdgeInsets.zero,
-                                                  constraints:
-                                                      const BoxConstraints(
-                                                    minWidth: 44,
-                                                    minHeight: 44,
-                                                  ),
-                                                  onPressed:
-                                                      _toggleFavoriteTemplatesSideSheetView,
                                                 ),
-                                              ),
-                                            ],
+                                                SizedBox(
+                                                  width: 6 * sideSheetScale,
+                                                ),
+                                                Tooltip(
+                                                  message: '하원 리스트',
+                                                  child: IconButton(
+                                                    icon: Icon(
+                                                      Icons.featured_play_list,
+                                                      color: Colors.white70,
+                                                      size: actionIconSize,
+                                                    ),
+                                                    padding: EdgeInsets.zero,
+                                                    constraints: BoxConstraints(
+                                                      minWidth:
+                                                          actionButtonMinSize,
+                                                      minHeight:
+                                                          actionButtonMinSize,
+                                                    ),
+                                                    onPressed: () async {
+                                                      await _showLeavedStudentsDialog(
+                                                        leaved,
+                                                        arrivalBySet,
+                                                        departureBySet,
+                                                      );
+                                                    },
+                                                  ),
+                                                ),
+                                                SizedBox(
+                                                  width: 10 * sideSheetScale,
+                                                ),
+                                                Tooltip(
+                                                  message: _sideSheetBottomView ==
+                                                          _SideSheetBottomView
+                                                              .favoriteTemplates
+                                                      ? '즐겨찾기 닫기'
+                                                      : '즐겨찾기',
+                                                  child: IconButton(
+                                                    icon: Icon(
+                                                      Icons.star_rounded,
+                                                      color: _sideSheetBottomView ==
+                                                              _SideSheetBottomView
+                                                                  .favoriteTemplates
+                                                          ? const Color(
+                                                              0xFF33A373)
+                                                          : Colors.white70,
+                                                      size: actionIconSize,
+                                                    ),
+                                                    padding: EdgeInsets.zero,
+                                                    constraints: BoxConstraints(
+                                                      minWidth:
+                                                          actionButtonMinSize,
+                                                      minHeight:
+                                                          actionButtonMinSize,
+                                                    ),
+                                                    onPressed:
+                                                        _toggleFavoriteTemplatesSideSheetView,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
                                           ),
                                         ),
                                       ],
                                     ),
                                   ),
-                                  const Padding(
-                                    padding: EdgeInsets.symmetric(
-                                      horizontal: 24.0,
-                                    ),
-                                    child: Divider(
-                                      height: 1,
-                                      thickness: 1,
-                                      color: Color(0xFF223131),
-                                    ),
-                                  ),
                                   if (_sideSheetBottomView ==
                                       _SideSheetBottomView.waiting) ...[
+                                    SizedBox(height: 5 * sideSheetScale),
                                     // 출석 박스
                                     Padding(
                                       padding: const EdgeInsets.symmetric(
@@ -2339,9 +2356,9 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                       .clamp(0.78, 1.0)) *
                                                   (_attendedMaxLines - 1),
                                         ),
-                                        // 내부 여백: 왼쪽/상단은 0으로(요청), 나머지는 유지
-                                        padding: const EdgeInsets.fromLTRB(
-                                          0,
+                                        // 내부 여백: 등원 리스트 가독성을 위해 왼쪽 여백을 소폭(+5px) 준다.
+                                        padding: EdgeInsets.fromLTRB(
+                                          5 * sideSheetScale,
                                           22.0,
                                           16.0,
                                           24.0,
@@ -2460,24 +2477,13 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                         ),
                                       ),
                                     ),
-                                    // 출석(등원한) 영역과 등원 예정 영역 구분선
-                                    const Padding(
-                                      padding: EdgeInsets.symmetric(
-                                        horizontal: 24.0,
-                                      ),
-                                      child: Divider(
-                                        height: 1,
-                                        thickness: 1,
-                                        color: Color(0xFF223131),
-                                      ),
-                                    ),
                                     // 출석 전 학생 리스트
                                     if (waitingByTime.isNotEmpty ||
                                         trialWaitingByTime.isNotEmpty)
                                       Expanded(
                                         child: Padding(
-                                          padding: const EdgeInsets.only(
-                                            top: 8,
+                                          padding: EdgeInsets.only(
+                                            top: 13 * sideSheetScale,
                                             left: 24.0,
                                             right: 24.0,
                                             bottom: 24.0,
@@ -3315,17 +3321,26 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
 
 class _SideSheetDateHeader extends StatelessWidget {
   final DateTime date;
+  final double scale;
   final VoidCallback onMoveToYesterday;
   final VoidCallback onMoveToToday;
 
   const _SideSheetDateHeader({
     required this.date,
+    required this.scale,
     required this.onMoveToYesterday,
     required this.onMoveToToday,
   });
 
   @override
   Widget build(BuildContext context) {
+    final s = scale.clamp(0.78, 1.0);
+    final dateFontSize = 30.0 * s;
+    // 아이콘이 시각적으로 작아 보이므로 날짜 폰트 대비 소폭 확대하고 아래로 보정한다.
+    final arrowSize = dateFontSize * 1.12;
+    final arrowVerticalOffset = 1.5 * s;
+    // 기존 13pt에서 +2pt 반영 (반응형 축소 포함).
+    final todayFontSize = 15.0 * s;
     final today = DateTime.now();
     final todayDate = DateTime(today.year, today.month, today.day);
     final isToday = date.year == todayDate.year &&
@@ -3343,39 +3358,51 @@ class _SideSheetDateHeader extends StatelessWidget {
           message: isYesterday ? '이미 어제 날짜를 보고 있어요' : '어제로 이동',
           child: IconButton(
             onPressed: isYesterday ? null : onMoveToYesterday,
-            icon: Icon(
-              Icons.chevron_left_rounded,
-              color: isYesterday ? Colors.white24 : Colors.white70,
-              size: 30,
+            icon: Transform.translate(
+              offset: Offset(0, arrowVerticalOffset),
+              child: Icon(
+                Icons.chevron_left_rounded,
+                color: isYesterday ? Colors.white24 : Colors.white70,
+                size: arrowSize,
+              ),
             ),
             visualDensity: VisualDensity.compact,
             padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(minWidth: 38, minHeight: 30),
+            constraints: BoxConstraints(
+              minWidth: 44 * s,
+              minHeight: 44 * s,
+            ),
           ),
         ),
-        const SizedBox(width: 6),
+        SizedBox(width: 6 * s),
         Text(
           _getTodayDateString(date),
-          style: const TextStyle(
+          style: TextStyle(
             color: Colors.white,
-            fontSize: 30,
+            fontSize: dateFontSize,
             fontWeight: FontWeight.w800,
             height: 1.0,
           ),
         ),
         if (!isToday) ...[
-          const SizedBox(width: 10),
+          SizedBox(width: 10 * s),
           TextButton(
             onPressed: onMoveToToday,
             style: TextButton.styleFrom(
               foregroundColor: Colors.white70,
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              padding: EdgeInsets.symmetric(
+                horizontal: 10 * s,
+                vertical: 4 * s,
+              ),
               minimumSize: Size.zero,
               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
             ),
-            child: const Text(
+            child: Text(
               '오늘',
-              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+              style: TextStyle(
+                fontSize: todayFontSize,
+                fontWeight: FontWeight.w700,
+              ),
             ),
           ),
         ],
@@ -3744,6 +3771,7 @@ extension on _MainScreenState {
             groupTitle: (result['groupTitle'] as String?)?.trim() ?? '',
             flowId: (result['flowId'] as String?)?.trim(),
             items: entries,
+            reserveAssignments: isReserve,
           );
           if (createdItems.isEmpty) {
             if (!context.mounted) return;
@@ -3751,17 +3779,6 @@ extension on _MainScreenState {
               context,
             ).showSnackBar(const SnackBar(content: Text('그룹 과제 생성에 실패했어요.')));
             return;
-          }
-          if (isReserve) {
-            await HomeworkAssignmentStore.instance.recordAssignments(
-              target.student.id,
-              createdItems,
-              note: HomeworkAssignmentStore.reservationNote,
-              splitPartsByItem: <String, int>{
-                for (final hw in createdItems)
-                  hw.id: hw.defaultSplitParts.clamp(1, 4).toInt(),
-              },
-            );
           }
           if (!context.mounted) return;
           final childCount = createdItems.length;
@@ -3826,6 +3843,10 @@ extension on _MainScreenState {
           createdItems.add(created);
         }
         if (isReserve && createdItems.isNotEmpty) {
+          await HomeworkStore.instance.persistItemsNow(
+            target.student.id,
+            createdItems,
+          );
           await HomeworkAssignmentStore.instance.recordAssignments(
             target.student.id,
             createdItems,

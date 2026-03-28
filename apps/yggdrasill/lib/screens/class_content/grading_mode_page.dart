@@ -90,11 +90,11 @@ class _GradingModePageState extends State<GradingModePage> {
                     final cardLayout = _resolveCardLayout(
                       constraints,
                       MediaQuery.of(context).size.height,
-                      submittedCount: submittedEntries.length,
-                      homeworkCount: homeworkEntries.length,
+                      hasSubmittedSection: submittedEntries.isNotEmpty,
+                      hasHomeworkSection: homeworkEntries.isNotEmpty,
                     );
                     return CustomScrollView(
-                      physics: const NeverScrollableScrollPhysics(),
+                      physics: const ClampingScrollPhysics(),
                       slivers: [
                         SliverPadding(
                           padding: _kGradingPagePadding,
@@ -151,59 +151,40 @@ class _GradingModePageState extends State<GradingModePage> {
   _GradingCardLayout _resolveCardLayout(
     BoxConstraints constraints,
     double fallbackViewportHeight, {
-    required int submittedCount,
-    required int homeworkCount,
-  }) {
-    final viewportWidth =
-        constraints.maxWidth.isFinite && constraints.maxWidth > 0
-            ? constraints.maxWidth
-            : MediaQuery.of(context).size.width;
+    required bool hasSubmittedSection,
+    required bool hasHomeworkSection,
+  }
+  ) {
     final viewportHeight =
         constraints.maxHeight.isFinite && constraints.maxHeight > 0
             ? constraints.maxHeight
             : fallbackViewportHeight;
-    final baseCardHeight = (viewportHeight * _kGradingCardHeightByViewport)
+    final baseCardHeightByViewport = (viewportHeight * _kGradingCardHeightByViewport)
         .clamp(_kGradingCardMinHeight, _kGradingCardMaxHeight)
         .toDouble();
-    final availableWidth =
-        (viewportWidth - _kGradingPagePadding.left - _kGradingPagePadding.right)
-            .clamp(140.0, viewportWidth)
+    final sectionCount =
+        (hasSubmittedSection ? 1 : 0) + (hasHomeworkSection ? 1 : 0);
+    final effectiveSectionCount = math.max(1, sectionCount);
+    final sectionOverhead = hasSubmittedSection && hasHomeworkSection
+        ? (_kGradingSectionGapTop +
+            1 +
+            _kGradingSectionGapBottom +
+            24 +
+            _kGradingSectionHeaderGap)
+        : 0.0;
+    final availableForCardRows = (viewportHeight -
+            _kGradingPagePadding.top -
+            _kGradingPagePadding.bottom -
+            sectionOverhead)
+        .clamp(_kGradingCardMinHeight.toDouble(), viewportHeight)
+        .toDouble();
+    final fitCardHeightByViewportSections =
+        (availableForCardRows / effectiveSectionCount)
+            .clamp(_kGradingCardMinHeight, _kGradingCardMaxHeight)
             .toDouble();
-    final fitLimit = math.max(0.0, viewportHeight - 8.0);
-
-    // 숙제 섹션이 잠시 비어도 카드가 과도하게 커지지 않도록 최소 1행 기준으로 안정화.
-    final effectiveHomeworkCount =
-        (homeworkCount == 0 && submittedCount > 0) ? 1 : homeworkCount;
-
-    final baseLayout = _layoutFromCardHeight(baseCardHeight);
-    final baseNeededHeight = _estimateTotalContentHeight(
-      cardLayout: baseLayout,
-      availableWidth: availableWidth,
-      submittedCount: submittedCount,
-      homeworkCount: effectiveHomeworkCount,
-    );
-    if (baseNeededHeight <= fitLimit) return baseLayout;
-
-    double low = _kGradingCardMinHeight;
-    double high = baseCardHeight;
-    var best = _layoutFromCardHeight(low);
-    for (int i = 0; i < 24; i++) {
-      final mid = (low + high) / 2;
-      final candidate = _layoutFromCardHeight(mid);
-      final neededHeight = _estimateTotalContentHeight(
-        cardLayout: candidate,
-        availableWidth: availableWidth,
-        submittedCount: submittedCount,
-        homeworkCount: effectiveHomeworkCount,
-      );
-      if (neededHeight <= fitLimit) {
-        best = candidate;
-        low = mid;
-      } else {
-        high = mid;
-      }
-    }
-    return best;
+    final resolvedCardHeight =
+        math.min(baseCardHeightByViewport, fitCardHeightByViewportSections);
+    return _layoutFromCardHeight(resolvedCardHeight);
   }
 
   _GradingCardLayout _layoutFromCardHeight(double cardHeight) {
@@ -228,54 +209,6 @@ class _GradingModePageState extends State<GradingModePage> {
       metaHeight: metaHeight,
       spacing: spacing,
     );
-  }
-
-  double _estimateWrapHeight({
-    required int itemCount,
-    required _GradingCardLayout cardLayout,
-    required double availableWidth,
-  }) {
-    if (itemCount <= 0) return 0;
-    final rawCols = ((availableWidth + cardLayout.spacing) /
-            (cardLayout.width + cardLayout.spacing))
-        .floor();
-    final cols = math.max(1, rawCols);
-    final rows = (itemCount + cols - 1) ~/ cols;
-    if (rows <= 0) return 0;
-    return rows * cardLayout.height + (rows - 1) * cardLayout.spacing;
-  }
-
-  double _estimateTotalContentHeight({
-    required _GradingCardLayout cardLayout,
-    required double availableWidth,
-    required int submittedCount,
-    required int homeworkCount,
-  }) {
-    double total = _kGradingPagePadding.top + _kGradingPagePadding.bottom;
-    if (submittedCount > 0) {
-      total += _estimateWrapHeight(
-        itemCount: submittedCount,
-        cardLayout: cardLayout,
-        availableWidth: availableWidth,
-      );
-    } else if (homeworkCount > 0) {
-      // 제출 섹션이 비어도 상단 공간을 유지해 숙제 섹션 위치를 고정한다.
-      total += _estimateWrapHeight(
-        itemCount: 1,
-        cardLayout: cardLayout,
-        availableWidth: availableWidth,
-      );
-    }
-    if (homeworkCount > 0) {
-      total += _kGradingSectionGapTop + 1 + _kGradingSectionGapBottom;
-      total += 24 + _kGradingSectionHeaderGap; // section header + gap
-      total += _estimateWrapHeight(
-        itemCount: homeworkCount,
-        cardLayout: cardLayout,
-        availableWidth: availableWidth,
-      );
-    }
-    return total;
   }
 
   Future<Map<String, List<HomeworkAssignmentDetail>>>
