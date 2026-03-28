@@ -2506,26 +2506,36 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
     }
     print('[DEBUG][cancelReplacement] target.id=${target.id} original=${target.originalClassDateTime} replacement=${target.replacementClassDateTime}');
 
-    // 원래 수업이 미래면 원래 일정 복구, 과거면 이번 회차 건너뛰기 처리
-    final originalDt = target.originalClassDateTime;
-    if (originalDt != null) {
-      final isPast = originalDt.isBefore(DateTime.now());
-      if (isPast) {
-        // skip planned 생성
-        await _applySkipOverride(ClassSession(
-          dateTime: originalDt,
-          className: replacementSession.className,
-          dayOfWeek: replacementSession.dayOfWeek,
-          duration: replacementSession.duration,
-          setId: replacementSession.setId,
-          weeklyOrder: replacementSession.weeklyOrder,
-          weekNumber: replacementSession.weekNumber,
-        ));
-      } else {
-        print('[DEBUG][cancelReplacement] original is future → just cancel replacement');
-      }
+    // 출석 완료된 보강은 취소 금지(데이터 정합성 보호)
+    final replacementRecord =
+        DataManager.instance.getAttendanceRecord(studentId, replacementSession.dateTime);
+    final bool replacementCompleted = replacementRecord != null &&
+        replacementRecord.arrivalTime != null &&
+        replacementRecord.departureTime != null;
+    if (replacementCompleted) {
+      await _showInfoDialog('이미 출석 완료된 보강은 취소할 수 없습니다.');
+      return;
     }
+
+    // replace 취소는 replace만 취소하고, 과거 원본은 "명시 결석"으로 복원한다.
+    final originalDt = target.originalClassDateTime;
     await DataManager.instance.cancelSessionOverride(target.id);
+    if (originalDt != null && originalDt.isBefore(DateTime.now())) {
+      final rawDuration = target.durationMinutes ?? replacementSession.duration;
+      final baseDuration = DataManager.instance.academySettings.lessonDuration;
+      final duration = rawDuration > 0 ? rawDuration : baseDuration;
+      final originalEnd = originalDt.add(Duration(minutes: duration));
+      await DataManager.instance.ensureExplicitAbsentAttendance(
+        studentId: studentId,
+        classDateTime: originalDt,
+        classEndTime: originalEnd,
+        className: replacementSession.className,
+        sessionTypeId: target.sessionTypeId,
+        setId: target.setId ?? replacementSession.setId,
+      );
+    } else {
+      print('[DEBUG][cancelReplacement] original is future → just cancel replacement');
+    }
     if (mounted) {
       // 데이터 소스 새로고침 유도
       await Future.delayed(const Duration(milliseconds: 50));
@@ -2717,11 +2727,6 @@ class _AttendanceCheckViewState extends State<AttendanceCheckView> {
       );
       await DataManager.instance.addSessionOverride(ov);
       if (isPast) {
-        // 과거 회차의 휴강: 기존 출석 기록이 있으면 제거하여 상태를 비움
-        final existing = DataManager.instance.getAttendanceRecord(studentId, session.dateTime);
-        if (existing != null && existing.id != null) {
-          await DataManager.instance.deleteAttendanceRecord(existing.id!);
-        }
         // 과거 회차의 휴강은 취소 불가 안내
         await _showInfoDialog('이미 지난 수업의 휴강은 취소할 수 없습니다.');
       }

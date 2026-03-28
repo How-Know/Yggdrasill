@@ -38,10 +38,12 @@ class StudentList extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _buildEducationLevelGroup('초등', EducationLevel.elementary, groupedStudents),
-          const Divider(color: Colors.white24, height: 48),
-          _buildEducationLevelGroup('중등', EducationLevel.middle, groupedStudents),
-          const Divider(color: Colors.white24, height: 48),
+          _buildEducationLevelGroup(
+              '초등', EducationLevel.elementary, groupedStudents),
+          const SizedBox(height: 52),
+          _buildEducationLevelGroup(
+              '중등', EducationLevel.middle, groupedStudents),
+          const SizedBox(height: 52),
           _buildEducationLevelGroup('고등', EducationLevel.high, groupedStudents),
         ],
       ),
@@ -54,43 +56,44 @@ class StudentList extends StatelessWidget {
     Map<EducationLevel, Map<int, List<Student>>> groupedStudents,
   ) {
     final students = groupedStudents[level]!;
-    final totalCount = students.values.fold<int>(0, (sum, list) => sum + list.length);
+    final totalCount =
+        students.values.fold<int>(0, (sum, list) => sum + list.length);
 
     final List<MapEntry<int, List<Student>>> sortedEntries = students.entries
         .where((entry) => entry.value.isNotEmpty)
         .toList()
       ..sort((a, b) => a.key.compareTo(b.key));
 
-    final List<Widget> gradeWidgets = sortedEntries
-        .map<Widget>((entry) {
-          final gradeStudents = entry.value;
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Padding(
-                padding: const EdgeInsets.only(top: 16, bottom: 8),
-                child: Text(
-                  '${entry.key}학년',
-                  style: const TextStyle(
-                    color: Colors.white70,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
+    final List<Widget> gradeWidgets = sortedEntries.map<Widget>((entry) {
+      final gradeStudents = entry.value;
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 16, bottom: 8),
+            child: Text(
+              '${entry.key}학년',
+              style: const TextStyle(
+                color: Colors.white70,
+                fontSize: 18,
+                fontWeight: FontWeight.w500,
               ),
-              Wrap(
-                spacing: 16,
-                runSpacing: 16,
-                children: gradeStudents.map((student) => StudentCard(
-                  student: student,
-                  onShowDetails: onStudentTap,
-                  onDelete: onStudentTap,
-                )).toList(),
-              ),
-            ],
-          );
-        })
-        .toList();
+            ),
+          ),
+          Wrap(
+            spacing: 16,
+            runSpacing: 16,
+            children: gradeStudents
+                .map((student) => StudentCard(
+                      student: student,
+                      onShowDetails: onStudentTap,
+                      onDelete: onStudentTap,
+                    ))
+                .toList(),
+          ),
+        ],
+      );
+    }).toList();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -120,4 +123,4 @@ class StudentList extends StatelessWidget {
       ],
     );
   }
-} 
+}

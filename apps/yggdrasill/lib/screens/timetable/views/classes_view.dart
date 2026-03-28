@@ -1589,7 +1589,7 @@ class _ClassesViewState extends State<ClassesView>
                           _estimatedSpecialCardCount(
                               selectedDayIdx, selectedBlockIdx));
                   const double timelineRowHeight = 58;
-                  const double timelineRowGap = 4;
+                  const double timelineRowGap = 0;
                   const double timelineVerticalPadding =
                       24; // panel top(16)+bottom(8)
                   const double timelineSafetyPadding = 8;

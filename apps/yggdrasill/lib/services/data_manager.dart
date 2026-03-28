@@ -1920,10 +1920,76 @@ class DataManager {
     try {
       final idx = _sessionOverrides.indexWhere((o) => o.id == id);
       if (idx == -1) return;
-      final canceled = _sessionOverrides[idx]
+      final target = _sessionOverrides[idx];
+
+      // 완료된 보강(등원+하원 기록 존재)은 취소하지 않는다.
+      if (target.overrideType == OverrideType.replace &&
+          target.replacementClassDateTime != null) {
+        final replacementRecord = getAttendanceRecord(
+          target.studentId,
+          target.replacementClassDateTime!,
+        );
+        final replacementCompleted = replacementRecord != null &&
+            replacementRecord.arrivalTime != null &&
+            replacementRecord.departureTime != null;
+        if (replacementCompleted) {
+          print(
+              '[INFO] cancelSessionOverride 차단: completed replacement id=${target.id}');
+          return;
+        }
+      }
+
+      final canceled = target
           .copyWith(status: OverrideStatus.canceled, updatedAt: DateTime.now());
       await updateSessionOverride(canceled);
       await _regeneratePlannedAttendanceForOverride(canceled);
+
+      // replace 취소 시 원본 회차가 과거라면 명시 결석으로 강제 복원한다.
+      final original = canceled.originalClassDateTime;
+      if (canceled.overrideType == OverrideType.replace &&
+          original != null &&
+          original.isBefore(DateTime.now())) {
+        final int rawDuration =
+            canceled.durationMinutes ?? _academySettings.lessonDuration;
+        final int safeDuration =
+            rawDuration > 0 ? rawDuration : _academySettings.lessonDuration;
+        final originalEnd = original.add(Duration(minutes: safeDuration));
+
+        final originalRecord = getAttendanceRecord(canceled.studentId, original);
+        final replacementRecord = canceled.replacementClassDateTime == null
+            ? null
+            : getAttendanceRecord(
+                canceled.studentId, canceled.replacementClassDateTime!);
+        final resolvedSessionTypeId = canceled.sessionTypeId ??
+            originalRecord?.sessionTypeId ??
+            replacementRecord?.sessionTypeId;
+        final resolvedSetId =
+            canceled.setId ?? originalRecord?.setId ?? replacementRecord?.setId;
+
+        String className = (originalRecord?.className ?? '').trim();
+        if (className.isEmpty) {
+          className = (replacementRecord?.className ?? '').trim();
+        }
+        if (className.isEmpty && resolvedSessionTypeId != null) {
+          try {
+            final cls = _classes.firstWhere((c) => c.id == resolvedSessionTypeId);
+            if (cls.name.trim().isNotEmpty) className = cls.name.trim();
+          } catch (_) {}
+        }
+        if (className.isEmpty) className = '수업';
+
+        await ensureExplicitAbsentAttendance(
+          studentId: canceled.studentId,
+          classDateTime: original,
+          classEndTime: originalEnd,
+          className: className,
+          sessionTypeId: resolvedSessionTypeId,
+          setId: resolvedSetId,
+          cycle: originalRecord?.cycle ?? replacementRecord?.cycle,
+          sessionOrder:
+              originalRecord?.sessionOrder ?? replacementRecord?.sessionOrder,
+        );
+      }
     } catch (e) {
       print('[ERROR] cancelSessionOverride 실패: $e');
       rethrow;
@@ -6665,6 +6731,30 @@ class DataManager {
         cycle: cycle,
         sessionOrder: sessionOrder,
         isPlanned: isPlanned,
+        snapshotId: snapshotId,
+        batchSessionId: batchSessionId,
+      );
+  Future<void> ensureExplicitAbsentAttendance({
+    required String studentId,
+    required DateTime classDateTime,
+    required DateTime classEndTime,
+    required String className,
+    String? sessionTypeId,
+    String? setId,
+    int? cycle,
+    int? sessionOrder,
+    String? snapshotId,
+    String? batchSessionId,
+  }) =>
+      AttendanceService.instance.ensureExplicitAbsentAttendance(
+        studentId: studentId,
+        classDateTime: classDateTime,
+        classEndTime: classEndTime,
+        className: className,
+        sessionTypeId: sessionTypeId,
+        setId: setId,
+        cycle: cycle,
+        sessionOrder: sessionOrder,
         snapshotId: snapshotId,
         batchSessionId: batchSessionId,
       );

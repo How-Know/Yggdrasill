@@ -45,16 +45,14 @@ class StudentSchoolView extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _buildEducationLevelSchoolGroup('초등', EducationLevel.elementary, groupedStudents),
-              if (groupedStudents[EducationLevel.elementary]!.isNotEmpty &&
-                  (groupedStudents[EducationLevel.middle]!.isNotEmpty ||
-                   groupedStudents[EducationLevel.high]!.isNotEmpty))
-                const Divider(color: Colors.white24, height: 48),
-              _buildEducationLevelSchoolGroup('중등', EducationLevel.middle, groupedStudents),
-              if (groupedStudents[EducationLevel.middle]!.isNotEmpty &&
-                  groupedStudents[EducationLevel.high]!.isNotEmpty)
-                const Divider(color: Colors.white24, height: 48),
-              _buildEducationLevelSchoolGroup('고등', EducationLevel.high, groupedStudents),
+              _buildEducationLevelSchoolGroup(
+                  '초등', EducationLevel.elementary, groupedStudents),
+              const SizedBox(height: 52),
+              _buildEducationLevelSchoolGroup(
+                  '중등', EducationLevel.middle, groupedStudents),
+              const SizedBox(height: 52),
+              _buildEducationLevelSchoolGroup(
+                  '고등', EducationLevel.high, groupedStudents),
             ],
           ),
         ),
@@ -119,4 +117,4 @@ class StudentSchoolView extends StatelessWidget {
       ],
     );
   }
-} 
+}

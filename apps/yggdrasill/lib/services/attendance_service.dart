@@ -4304,6 +4304,79 @@ class AttendanceService {
     }
   }
 
+  /// 해당 회차를 "명시 결석(is_planned=false, 미출석)"으로 강제 보장한다.
+  /// - replace 취소 후 과거 원본 회차가 리스트에서 사라지지 않도록 사용
+  Future<void> ensureExplicitAbsentAttendance({
+    required String studentId,
+    required DateTime classDateTime,
+    required DateTime classEndTime,
+    required String className,
+    String? sessionTypeId,
+    String? setId,
+    int? cycle,
+    int? sessionOrder,
+    String? snapshotId,
+    String? batchSessionId,
+  }) async {
+    await saveOrUpdateAttendance(
+      studentId: studentId,
+      classDateTime: classDateTime,
+      classEndTime: classEndTime,
+      className: className,
+      isPresent: false,
+      arrivalTime: null,
+      departureTime: null,
+      notes: null,
+      sessionTypeId: sessionTypeId,
+      setId: setId,
+      cycle: cycle,
+      sessionOrder: sessionOrder,
+      isPlanned: false,
+      snapshotId: snapshotId,
+      batchSessionId: batchSessionId,
+    );
+
+    AttendanceRecord? current = getAttendanceRecord(studentId, classDateTime);
+    if (current == null) return;
+
+    final bool shouldForceExplicit = current.isPlanned ||
+        current.isPresent ||
+        current.arrivalTime != null ||
+        current.departureTime != null;
+    if (!shouldForceExplicit) return;
+
+    Future<void> forceUpdate(AttendanceRecord base) async {
+      final forced = base.copyWith(
+        classEndTime: classEndTime,
+        className: className,
+        isPresent: false,
+        arrivalTime: null,
+        departureTime: null,
+        notes: null,
+        sessionTypeId: sessionTypeId ?? base.sessionTypeId,
+        setId: setId ?? base.setId,
+        cycle: cycle ?? base.cycle,
+        sessionOrder: sessionOrder ?? base.sessionOrder,
+        isPlanned: false,
+        snapshotId: snapshotId ?? base.snapshotId,
+        batchSessionId: batchSessionId ?? base.batchSessionId,
+        updatedAt: DateTime.now(),
+      );
+      await updateAttendanceRecord(forced);
+    }
+
+    try {
+      await forceUpdate(current);
+    } on StateError catch (e) {
+      if (e.message != 'CONFLICT_ATTENDANCE_VERSION') rethrow;
+      await loadAttendanceRecords();
+      final refreshed = getAttendanceRecord(studentId, classDateTime);
+      if (refreshed != null) {
+        await forceUpdate(refreshed);
+      }
+    }
+  }
+
   Future<void> _completePlannedOverrideFor({
     required String studentId,
     required DateTime replacementDateTime,
@@ -4371,21 +4444,68 @@ class AttendanceService {
     Future<void> _restoreOriginalPlannedIfPossible() async {
       if (original == null) return;
 
-      final now = DateTime.now();
-      final anchor = DateTime(now.year, now.month, now.day);
-      final end = anchor.add(const Duration(days: 15));
       final dateOnly = DateTime(original.year, original.month, original.day);
-      if (dateOnly.isBefore(anchor) || dateOnly.isAfter(end)) {
-        // planned 유지 범위(다음 15일) 밖은 글로벌 생성기에 맡김
-        return;
+      final allBlocks = _d.getStudentTimeBlocks();
+
+      String _resolveSetIdForRestore() {
+        final direct = (ov.setId ?? '').trim();
+        if (direct.isNotEmpty) return direct;
+
+        final hint = (ov.occurrenceId ?? '').trim();
+        if (hint.isNotEmpty) {
+          for (final it in _lessonOccurrences) {
+            if (it.id == hint) {
+              final sid = (it.setId ?? '').trim();
+              if (sid.isNotEmpty) return sid;
+              break;
+            }
+          }
+        }
+
+        for (final it in _lessonOccurrences) {
+          if (it.kind != 'regular') continue;
+          if (it.studentId != ov.studentId) continue;
+          final sameMinute = it.originalClassDateTime.year == original.year &&
+              it.originalClassDateTime.month == original.month &&
+              it.originalClassDateTime.day == original.day &&
+              it.originalClassDateTime.hour == original.hour &&
+              it.originalClassDateTime.minute == original.minute;
+          if (!sameMinute) continue;
+          final sid = (it.setId ?? '').trim();
+          if (sid.isNotEmpty) return sid;
+        }
+
+        final resolvedByBlock = (_resolveSetId(ov.studentId, original) ?? '').trim();
+        if (resolvedByBlock.isNotEmpty) return resolvedByBlock;
+
+        final dayIdx = original.weekday - 1;
+        final dayBlocks = allBlocks
+            .where((b) =>
+                b.studentId == ov.studentId &&
+                b.dayIndex == dayIdx &&
+                (b.setId ?? '').trim().isNotEmpty)
+            .toList();
+        if (dayBlocks.isNotEmpty) {
+          int target = original.hour * 60 + original.minute;
+          dayBlocks.sort((a, b) {
+            final am = a.startHour * 60 + a.startMinute;
+            final bm = b.startHour * 60 + b.startMinute;
+            final ad = (am - target).abs();
+            final bd = (bm - target).abs();
+            if (ad != bd) return ad.compareTo(bd);
+            return am.compareTo(bm);
+          });
+          final sid = (dayBlocks.first.setId ?? '').trim();
+          if (sid.isNotEmpty) return sid;
+        }
+
+        // 마지막 안전망: set_id가 없으면 복원 자체가 막히므로 override id를 사용한다.
+        return ov.id;
       }
 
-      final String? inferredSetId =
-          ov.setId ?? _resolveSetId(ov.studentId, original);
-      if (inferredSetId == null || inferredSetId.isEmpty) return;
+      final String inferredSetId = _resolveSetIdForRestore();
 
       final dayIdx = original.weekday - 1;
-      final allBlocks = _d.getStudentTimeBlocks();
       final cand = allBlocks
           .where((b) =>
               b.studentId == ov.studentId &&
@@ -4393,23 +4513,36 @@ class AttendanceService {
               b.dayIndex == dayIdx &&
               _isBlockActiveOnDate(b, dateOnly))
           .toList();
-      if (cand.isEmpty) return;
 
       DateTime? minStart;
       DateTime? maxEnd;
-      String? sessionTypeId;
-      for (final b in cand) {
-        final s = DateTime(dateOnly.year, dateOnly.month, dateOnly.day,
-            b.startHour, b.startMinute);
-        final e = s.add(b.duration);
-        if (minStart == null || s.isBefore(minStart)) minStart = s;
-        if (maxEnd == null || e.isAfter(maxEnd)) maxEnd = e;
-        sessionTypeId ??= b.sessionTypeId;
+      String? sessionTypeId = ov.sessionTypeId;
+      if (cand.isNotEmpty) {
+        for (final b in cand) {
+          final s = DateTime(dateOnly.year, dateOnly.month, dateOnly.day,
+              b.startHour, b.startMinute);
+          final e = s.add(b.duration);
+          if (minStart == null || s.isBefore(minStart)) minStart = s;
+          if (maxEnd == null || e.isAfter(maxEnd)) maxEnd = e;
+          sessionTypeId ??= b.sessionTypeId;
+        }
+      } else {
+        // 과거/스케줄 변경으로 현재 블록 매칭이 없더라도 취소 시 원수업을 복원한다.
+        minStart = DateTime(dateOnly.year, dateOnly.month, dateOnly.day,
+            original.hour, original.minute);
+        final fallbackDuration =
+            ov.durationMinutes ?? _d.getAcademySettings().lessonDuration;
+        final safeDuration = fallbackDuration <= 0
+            ? _d.getAcademySettings().lessonDuration
+            : fallbackDuration;
+        maxEnd = minStart.add(Duration(minutes: safeDuration));
       }
       if (minStart == null || maxEnd == null) return;
+      final DateTime restoredStart = minStart;
+      final DateTime restoredEnd = maxEnd;
 
       // 이미 실제 기록이 있으면 복원하지 않음
-      final existing = getAttendanceRecord(ov.studentId, minStart);
+      final existing = getAttendanceRecord(ov.studentId, restoredStart);
       if (existing != null &&
           (!existing.isPlanned ||
               existing.arrivalTime != null ||
@@ -4417,16 +4550,19 @@ class AttendanceService {
         return;
       }
 
-      // 중복 방지: 같은 set_id의 같은 날짜 planned가 이미 있으면 스킵
-      final minStartDateKey = _dateKey(minStart);
-      final hasPlannedSameDay = _attendanceRecords.any((r) =>
+      // 중복 방지: 같은 set_id의 같은 "분" planned가 이미 있으면 스킵
+      final hasPlannedSameMinute = _attendanceRecords.any((r) =>
           r.studentId == ov.studentId &&
           r.setId == inferredSetId &&
           r.isPlanned &&
           !r.isPresent &&
           r.arrivalTime == null &&
-          _dateKey(r.classDateTime) == minStartDateKey);
-      if (hasPlannedSameDay) return;
+          r.classDateTime.year == restoredStart.year &&
+          r.classDateTime.month == restoredStart.month &&
+          r.classDateTime.day == restoredStart.day &&
+          r.classDateTime.hour == restoredStart.hour &&
+          r.classDateTime.minute == restoredStart.minute);
+      if (hasPlannedSameMinute) return;
 
       // ✅ occurrence 매칭(원본 회차 고정)
       bool sameMinute(DateTime a, DateTime b) =>
@@ -4509,8 +4645,8 @@ class AttendanceService {
       final record = AttendanceRecord.create(
         studentId: ov.studentId,
         occurrenceId: occ?.id,
-        classDateTime: minStart,
-        classEndTime: maxEnd,
+        classDateTime: restoredStart,
+        classEndTime: restoredEnd,
         className: _resolveClassName(sessionTypeId),
         isPresent: false,
         arrivalTime: null,

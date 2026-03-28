@@ -17,7 +17,8 @@ class SchoolView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     // 교육과정별, 학교별로 학생들을 그룹화
-    final Map<EducationLevel, Map<String, List<StudentWithInfo>>> groupedStudents = {
+    final Map<EducationLevel, Map<String, List<StudentWithInfo>>>
+        groupedStudents = {
       EducationLevel.elementary: <String, List<StudentWithInfo>>{},
       EducationLevel.middle: <String, List<StudentWithInfo>>{},
       EducationLevel.high: <String, List<StudentWithInfo>>{},
@@ -52,16 +53,14 @@ class SchoolView extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _buildEducationLevelSchoolGroup('초등', EducationLevel.elementary, groupedStudents),
-            if (groupedStudents[EducationLevel.elementary]!.isNotEmpty &&
-                (groupedStudents[EducationLevel.middle]!.isNotEmpty ||
-                 groupedStudents[EducationLevel.high]!.isNotEmpty))
-              const Divider(color: Colors.white24, height: 48),
-            _buildEducationLevelSchoolGroup('중등', EducationLevel.middle, groupedStudents),
-            if (groupedStudents[EducationLevel.middle]!.isNotEmpty &&
-                groupedStudents[EducationLevel.high]!.isNotEmpty)
-              const Divider(color: Colors.white24, height: 48),
-            _buildEducationLevelSchoolGroup('고등', EducationLevel.high, groupedStudents),
+            _buildEducationLevelSchoolGroup(
+                '초등', EducationLevel.elementary, groupedStudents),
+            const SizedBox(height: 52),
+            _buildEducationLevelSchoolGroup(
+                '중등', EducationLevel.middle, groupedStudents),
+            const SizedBox(height: 52),
+            _buildEducationLevelSchoolGroup(
+                '고등', EducationLevel.high, groupedStudents),
           ],
         ),
       ),
@@ -124,4 +123,4 @@ class SchoolView extends StatelessWidget {
       ],
     );
   }
-} 
+}

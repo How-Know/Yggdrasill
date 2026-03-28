@@ -421,7 +421,7 @@ class TimetableGroupedStudentPanel extends StatelessWidget {
     }
 
     const double rowHeight = 58;
-    const double rowGap = 4;
+    const double rowGap = 0;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: List.generate(rowEntries.length, (index) {

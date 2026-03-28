@@ -561,6 +561,27 @@ class _PlannedTile extends StatelessWidget {
                     tooltip: '삭제',
                     color: const Color(0xFFE57373),
                     onTap: () async {
+                      final rep = item.replacementClassDateTime;
+                      if (rep != null) {
+                        final rec = DataManager.instance.getAttendanceRecord(
+                          item.studentId,
+                          rep,
+                        );
+                        final completed = rec != null &&
+                            rec.arrivalTime != null &&
+                            rec.departureTime != null;
+                        if (completed) {
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('이미 출석 완료된 보강은 취소할 수 없습니다.'),
+                                backgroundColor: Color(0xFFE57373),
+                              ),
+                            );
+                          }
+                          return;
+                        }
+                      }
                       await DataManager.instance.cancelSessionOverride(item.id);
                     },
                   ),
@@ -733,6 +754,27 @@ class _OverrideTile extends StatelessWidget {
                         tooltip: '취소',
                         color: const Color(0xFFE57373),
                         onTap: () async {
+                          final rep = item.replacementClassDateTime;
+                          if (rep != null) {
+                            final rec = DataManager.instance.getAttendanceRecord(
+                              item.studentId,
+                              rep,
+                            );
+                            final completed = rec != null &&
+                                rec.arrivalTime != null &&
+                                rec.departureTime != null;
+                            if (completed) {
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text('이미 출석 완료된 보강은 취소할 수 없습니다.'),
+                                    backgroundColor: Color(0xFFE57373),
+                                  ),
+                                );
+                              }
+                              return;
+                            }
+                          }
                           await DataManager.instance.cancelSessionOverride(
                             item.id,
                           );
