@@ -2207,6 +2207,12 @@ class HomeworkStore {
       item.accumulatedMs += now.difference(item.runStart!).inMilliseconds;
       item.runStart = null;
     }
+    _autoCompleteOnNextWaiting.remove(id);
+    if (item.status == HomeworkStatus.completed) {
+      item.status = HomeworkStatus.inProgress;
+    }
+    item.completedAt = null;
+    item.confirmedAt = null;
     item.phase = 3;
     item.submittedAt = now;
     item.updatedAt = now;
@@ -2229,6 +2235,40 @@ class HomeworkStore {
       // 서버 반영 실패 시 로컬 낙관적 업데이트를 정합 상태로 복구한다.
       unawaited(_reloadStudent(studentId));
     }
+  }
+
+  Future<void> reviveCompletedToSubmitted(String studentId, String id) async {
+    final list = _byStudentId[studentId];
+    if (list == null) return;
+    final idx = list.indexWhere((e) => e.id == id);
+    if (idx == -1) return;
+    final item = list[idx];
+    clearAutoCompleteOnNextWaiting(id);
+
+    bool needsReopen = item.status == HomeworkStatus.completed ||
+        item.phase == 0 ||
+        item.completedAt != null;
+    if (needsReopen) {
+      final now = DateTime.now();
+      if (item.runStart != null) {
+        item.accumulatedMs += now.difference(item.runStart!).inMilliseconds;
+        item.runStart = null;
+      }
+      item.status = HomeworkStatus.inProgress;
+      item.phase = 1;
+      item.waitingAt = now;
+      item.submittedAt = null;
+      item.confirmedAt = null;
+      item.completedAt = null;
+      item.updatedAt = now;
+      _bump();
+      try {
+        await _upsertItem(studentId, item);
+      } catch (_) {
+        await _reloadStudent(studentId);
+      }
+    }
+    await submit(studentId, id);
   }
 
   Future<void> confirm(
@@ -2269,6 +2309,70 @@ class HomeworkStore {
       // ignore: avoid_print
       print('[HW][confirm][ERROR] ' + e.toString());
       // 서버 반영 실패 시 로컬 낙관적 업데이트를 정합 상태로 복구한다.
+      unawaited(_reloadStudent(studentId));
+    }
+  }
+
+  Future<void> confirmBatch(
+    String studentId,
+    Iterable<String> ids, {
+    bool recordAssignmentCheck = true,
+  }) async {
+    final list = _byStudentId[studentId];
+    if (list == null || list.isEmpty) return;
+    final targetIds = ids
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    if (targetIds.isEmpty) return;
+    final byId = <String, HomeworkItem>{for (final item in list) item.id: item};
+    final now = DateTime.now();
+    final confirmedIds = <String>[];
+    bool changed = false;
+    for (final id in targetIds) {
+      final item = byId[id];
+      if (item == null || item.status == HomeworkStatus.completed) continue;
+      item.phase = 4;
+      item.confirmedAt = now;
+      item.completedAt = null;
+      item.runStart = null;
+      item.updatedAt = now;
+      changed = true;
+      confirmedIds.add(id);
+    }
+    if (confirmedIds.isEmpty) return;
+    if (changed) {
+      _bump();
+    }
+    try {
+      final String academyId =
+          (await TenantService.instance.getActiveAcademyId()) ??
+              await TenantService.instance.ensureActiveAcademy();
+      final String? updatedBy = Supabase.instance.client.auth.currentUser?.id;
+      await Future.wait(
+        confirmedIds.map(
+          (id) => Supabase.instance.client.rpc('homework_confirm', params: {
+            'p_item_id': id,
+            'p_academy_id': academyId,
+            'p_updated_by': updatedBy,
+          }),
+        ),
+      );
+      unawaited(_reloadStudent(studentId));
+      if (recordAssignmentCheck) {
+        for (final id in confirmedIds) {
+          unawaited(
+            HomeworkAssignmentStore.instance.recordAssignmentCheckForConfirm(
+              studentId: studentId,
+              homeworkItemId: id,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      // ignore: avoid_print
+      print('[HW][confirmBatch][ERROR] ' + e.toString());
       unawaited(_reloadStudent(studentId));
     }
   }
@@ -2353,6 +2457,10 @@ class HomeworkStore {
   // 제출 상태에서 더블클릭 시, 다음 '대기' 진입에 자동 완료되도록 표시
   void markAutoCompleteOnNextWaiting(String id) {
     _autoCompleteOnNextWaiting.add(id);
+  }
+
+  void clearAutoCompleteOnNextWaiting(String id) {
+    _autoCompleteOnNextWaiting.remove(id);
   }
 
   HomeworkItem continueAdd(
@@ -2588,7 +2696,9 @@ class HomeworkStore {
   // 홈 메뉴 숨김 기준(active assigned)에서도 해제한다.
   void restoreItemsToWaiting(
     String studentId,
-    List<String> itemIds,
+    List<String> itemIds, {
+    bool includeCompleted = false,
+  }
   ) {
     if (itemIds.isEmpty) return;
     final list = _byStudentId[studentId];
@@ -2603,12 +2713,17 @@ class HomeworkStore {
     }
 
     final idSet = itemIds.toSet();
+    if (includeCompleted) {
+      for (final id in idSet) {
+        _autoCompleteOnNextWaiting.remove(id);
+      }
+    }
     bool changed = false;
     final now = DateTime.now();
     final Map<String, HomeworkItem> toUpsert = {};
     for (final e in list) {
       if (!idSet.contains(e.id)) continue;
-      if (e.status == HomeworkStatus.completed) continue;
+      if (!includeCompleted && e.status == HomeworkStatus.completed) continue;
       bool updated = false;
       if (e.runStart != null) {
         e.accumulatedMs += now.difference(e.runStart!).inMilliseconds;
@@ -2620,6 +2735,11 @@ class HomeworkStore {
         e.waitingAt = now;
         e.submittedAt = null;
         e.confirmedAt = null;
+        e.completedAt = null;
+        updated = true;
+      }
+      if (e.completedAt != null) {
+        e.completedAt = null;
         updated = true;
       }
       if (e.status != HomeworkStatus.inProgress) {

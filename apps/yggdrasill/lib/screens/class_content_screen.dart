@@ -2024,6 +2024,111 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       return;
     }
 
+    var hasLinkedTextbook = _hasDirectHomeworkTextbookLink(hw);
+    if (!hasLinkedTextbook) {
+      for (final key in keys) {
+        final item = HomeworkStore.instance.getById(key.studentId, key.itemId);
+        if (item != null && _hasDirectHomeworkTextbookLink(item)) {
+          hasLinkedTextbook = true;
+          break;
+        }
+      }
+    }
+    if (!hasLinkedTextbook) {
+      Widget actionPill({
+        required String label,
+        required IconData icon,
+        required VoidCallback onTap,
+        bool filled = false,
+      }) {
+        return Material(
+          color: filled ? kDlgAccent : kDlgPanelBg.withValues(alpha: 0.92),
+          shape: StadiumBorder(
+            side: filled ? BorderSide.none : const BorderSide(color: kDlgBorder),
+          ),
+          child: InkWell(
+            customBorder: const StadiumBorder(),
+            onTap: onTap,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    icon,
+                    size: 28,
+                    color: filled ? Colors.white : kDlgText,
+                  ),
+                  const SizedBox(width: 10),
+                  Text(
+                    label,
+                    style: TextStyle(
+                      color: filled ? Colors.white : kDlgText,
+                      fontWeight: FontWeight.w800,
+                      fontSize: 20,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      }
+
+      final action = await showDialog<HomeworkAnswerViewerAction>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: const Color(0xFF1F1F1F),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          title: const Text(
+            '처리 선택',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 18,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          content: const Text(
+            '처리할 상태를 선택해 주세요.',
+            style: TextStyle(
+              color: Colors.white70,
+              fontSize: 14.5,
+              fontWeight: FontWeight.w600,
+              height: 1.35,
+            ),
+          ),
+          actions: [
+            actionPill(
+              label: '취소',
+              icon: Icons.close_rounded,
+              onTap: () => Navigator.of(ctx).pop(),
+            ),
+            actionPill(
+              label: '완료',
+              icon: Icons.task_alt_rounded,
+              onTap: () => Navigator.of(ctx).pop(
+                HomeworkAnswerViewerAction.complete,
+              ),
+            ),
+            actionPill(
+              label: '확인',
+              icon: Icons.check_rounded,
+              filled: true,
+              onTap: () =>
+                  Navigator.of(ctx).pop(HomeworkAnswerViewerAction.confirm),
+            ),
+          ],
+        ),
+      );
+      if (!context.mounted || action == null) return;
+      setState(() {
+        for (final key in keys) {
+          _pendingConfirms[key] = action == HomeworkAnswerViewerAction.complete;
+        }
+      });
+      return;
+    }
+
     final resolved = await _resolveHomeworkPdfLinks(
       hw,
       allowFlowFallback: true,
@@ -2321,89 +2426,74 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     BuildContext context,
     Map<({String studentId, String itemId}), bool> pending,
   ) async {
+    final confirmIdsByStudent = <String, Set<String>>{};
+    final checkTargetKeys = <({String studentId, String itemId})>{};
+    final fallbackEntries = <MapEntry<({String studentId, String itemId}), bool>>[];
+
     for (final entry in pending.entries) {
       final key = entry.key;
       final hw = HomeworkStore.instance.getById(key.studentId, key.itemId);
       if (hw == null) continue;
-
-      final isComplete = entry.value;
-
-      if (isComplete) {
+      if (entry.value) {
         HomeworkStore.instance.markAutoCompleteOnNextWaiting(key.itemId);
-        final target = await _resolveHomeworkCheckTarget(
-          key.studentId,
-          key.itemId,
-          includeHistory: false,
-        );
-        if (target != null) {
-          await HomeworkAssignmentStore.instance.saveAssignmentCheck(
-            assignmentId: target.assignmentId,
-            studentId: key.studentId,
-            homeworkItemId: key.itemId,
-            progress: target.progress,
-            issueType: null,
-            issueNote: null,
-            markCompleted: false,
-          );
-        }
-        if (hw.phase == 3) {
-          await HomeworkStore.instance.confirm(
-            key.studentId,
-            key.itemId,
-            recordAssignmentCheck: false,
-          );
-        }
-      } else if (hw.phase == 3) {
-        final target = await _resolveHomeworkCheckTarget(
-          key.studentId,
-          key.itemId,
-          includeHistory: false,
-        );
-        if (target != null) {
-          await HomeworkAssignmentStore.instance.saveAssignmentCheck(
-            assignmentId: target.assignmentId,
-            studentId: key.studentId,
-            homeworkItemId: key.itemId,
-            progress: target.progress,
-            issueType: null,
-            issueNote: null,
-            markCompleted: false,
-          );
-        }
-        await HomeworkStore.instance.confirm(
-          key.studentId,
-          key.itemId,
-          recordAssignmentCheck: false,
-        );
-      } else {
-        final target = await _resolveHomeworkCheckTarget(
-          key.studentId,
-          key.itemId,
-          includeHistory: false,
-        );
-        if (target != null) {
-          await HomeworkAssignmentStore.instance.saveAssignmentCheck(
-            assignmentId: target.assignmentId,
-            studentId: key.studentId,
-            homeworkItemId: key.itemId,
-            progress: target.progress,
-            issueType: null,
-            issueNote: null,
-            markCompleted: false,
-          );
-        }
-        HomeworkStore.instance
-            .restoreItemsToWaiting(key.studentId, [key.itemId]);
-        await HomeworkStore.instance.placeItemAtActiveTail(
-          key.studentId,
-          key.itemId,
-          activateFromHomework: true,
-        );
-        await HomeworkAssignmentStore.instance.clearActiveAssignmentsForItems(
-          key.studentId,
-          [key.itemId],
-        );
       }
+      checkTargetKeys.add(key);
+      if (hw.phase == 3) {
+        confirmIdsByStudent
+            .putIfAbsent(key.studentId, () => <String>{})
+            .add(key.itemId);
+      } else {
+        fallbackEntries.add(entry);
+      }
+    }
+
+    if (confirmIdsByStudent.isNotEmpty) {
+      await Future.wait(
+        confirmIdsByStudent.entries.map(
+          (entry) => HomeworkStore.instance.confirmBatch(
+            entry.key,
+            entry.value,
+            recordAssignmentCheck: false,
+          ),
+        ),
+      );
+    }
+
+    await Future.wait(
+      checkTargetKeys.map((key) async {
+        final target = await _resolveHomeworkCheckTarget(
+          key.studentId,
+          key.itemId,
+          includeHistory: false,
+        );
+        if (target == null) return;
+        await HomeworkAssignmentStore.instance.saveAssignmentCheck(
+          assignmentId: target.assignmentId,
+          studentId: key.studentId,
+          homeworkItemId: key.itemId,
+          progress: target.progress,
+          issueType: null,
+          issueNote: null,
+          markCompleted: false,
+        );
+      }),
+    );
+
+    for (final entry in fallbackEntries) {
+      final key = entry.key;
+      HomeworkStore.instance.restoreItemsToWaiting(
+        key.studentId,
+        [key.itemId],
+      );
+      await HomeworkStore.instance.placeItemAtActiveTail(
+        key.studentId,
+        key.itemId,
+        activateFromHomework: true,
+      );
+      await HomeworkAssignmentStore.instance.clearActiveAssignmentsForItems(
+        key.studentId,
+        [key.itemId],
+      );
     }
     if (mounted && context.mounted) {
       _showHomeworkChipSnackBar(context, '${pending.length}건의 과제를 일괄 처리했어요.');
@@ -6094,6 +6184,17 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
       if (pages.length <= 3) return pages.join(', ');
       return '${pages.take(3).join(', ')}, ...';
     }();
+    final normalizedChildTypes = <String>{
+      for (final child in children)
+        if ((child.type ?? '').trim().isNotEmpty) (child.type ?? '').trim(),
+    };
+    final sortedChildTypes = normalizedChildTypes.toList(growable: false)
+      ..sort();
+    final summaryType = sortedChildTypes.isEmpty
+        ? '${children.length}개 과제'
+        : (sortedChildTypes.length == 1
+            ? sortedChildTypes.first
+            : '${sortedChildTypes.first} 외 ${sortedChildTypes.length - 1}개');
     final DateTime? groupCycleStartedAt =
         group.cycleStartedAt ?? runningChild?.runStart;
     final int groupTotalMs = groupCycleBaseMs + groupCycleProgressMs;
@@ -6103,7 +6204,7 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
       body: first.body,
       color: first.color,
       flowId: group.flowId ?? first.flowId,
-      type: '${children.length}개 과제',
+      type: summaryType,
       page: pageSummary,
       count: totalCount > 0 ? totalCount : null,
       memo: first.memo,
@@ -8957,65 +9058,155 @@ class _HomeworkOverviewCompletedChildEntry {
 class _GradingHistoryEntry {
   final String studentId;
   final String studentName;
-  final HomeworkItem item;
+  final String displayTitle;
+  final String meta;
+  final DateTime eventAt;
+  final List<String> itemIds;
 
   const _GradingHistoryEntry({
     required this.studentId,
     required this.studentName,
-    required this.item,
+    required this.displayTitle,
+    required this.meta,
+    required this.eventAt,
+    required this.itemIds,
   });
-
-  DateTime get confirmedAt =>
-      item.confirmedAt ??
-      item.updatedAt ??
-      item.createdAt ??
-      DateTime.fromMillisecondsSinceEpoch(0);
 }
 
 List<_GradingHistoryEntry> _collectGradingHistoryEntries({
   required List<String> attendingStudentIds,
   required Map<String, String> studentNamesById,
 }) {
+  bool isHistoryCandidate(HomeworkItem hw) {
+    if (hw.phase == 4 && hw.status != HomeworkStatus.completed) return true;
+    if (hw.status == HomeworkStatus.completed) return true;
+    if (hw.phase == 1 && hw.confirmedAt != null) return true;
+    return false;
+  }
+
+  DateTime? historyEventAt(HomeworkItem hw) {
+    if (hw.phase == 4 && hw.status != HomeworkStatus.completed) {
+      return hw.confirmedAt ?? hw.updatedAt ?? hw.createdAt;
+    }
+    if (hw.status == HomeworkStatus.completed) {
+      return hw.completedAt ??
+          hw.waitingAt ??
+          hw.confirmedAt ??
+          hw.updatedAt ??
+          hw.createdAt;
+    }
+    if (hw.phase == 1 && hw.confirmedAt != null) {
+      return hw.waitingAt ?? hw.confirmedAt ?? hw.updatedAt ?? hw.createdAt;
+    }
+    return null;
+  }
+
+  String normalizeTitle(String raw, {String fallback = '(제목 없음)'}) {
+    final trimmed = raw.trim();
+    return trimmed.isEmpty ? fallback : trimmed;
+  }
+
+  final recentWindowStart = DateTime.now().subtract(const Duration(days: 7));
+  final mergedInfoByKey = <String, ({
+    String studentId,
+    String studentName,
+    String displayTitle,
+    DateTime eventAt,
+  })>{};
+  final mergedItemIdsByKey = <String, Set<String>>{};
+  final mergedTypesByKey = <String, Set<String>>{};
+  final mergedPagesByKey = <String, Set<String>>{};
+
   final entries = <_GradingHistoryEntry>[];
   for (final studentId in attendingStudentIds) {
     final studentName = studentNamesById[studentId] ?? '학생';
-    final confirmedItems = HomeworkStore.instance
-        .items(studentId)
-        .where((hw) => hw.status != HomeworkStatus.completed && hw.phase == 4)
-        .toList();
-    for (final hw in confirmedItems) {
-      entries.add(
-        _GradingHistoryEntry(
+    final items = HomeworkStore.instance.items(studentId);
+    for (final hw in items) {
+      if (!isHistoryCandidate(hw)) continue;
+      final eventAt = historyEventAt(hw);
+      if (eventAt == null || eventAt.isBefore(recentWindowStart)) {
+        continue;
+      }
+      final groupId = (HomeworkStore.instance.groupIdOfItem(hw.id) ?? '').trim();
+      final key = groupId.isEmpty
+          ? 'item:$studentId:${hw.id}'
+          : 'group:$studentId:$groupId';
+      final groupTitle = groupId.isEmpty
+          ? ''
+          : (HomeworkStore.instance.groupById(studentId, groupId)?.title ?? '')
+              .trim();
+      final displayTitle =
+          normalizeTitle(groupTitle.isEmpty ? hw.title : groupTitle);
+      mergedItemIdsByKey.putIfAbsent(key, () => <String>{}).add(hw.id);
+      final type = (hw.type ?? '').trim();
+      if (type.isNotEmpty) {
+        mergedTypesByKey.putIfAbsent(key, () => <String>{}).add(type);
+      }
+      final page = (hw.page ?? '').trim();
+      if (page.isNotEmpty) {
+        mergedPagesByKey.putIfAbsent(key, () => <String>{}).add(page);
+      }
+      final prev = mergedInfoByKey[key];
+      if (prev == null || eventAt.isAfter(prev.eventAt)) {
+        mergedInfoByKey[key] = (
           studentId: studentId,
           studentName: studentName,
-          item: hw,
-        ),
-      );
+          displayTitle: displayTitle,
+          eventAt: eventAt,
+        );
+      }
     }
   }
+
+  for (final entry in mergedInfoByKey.entries) {
+    final key = entry.key;
+    final info = entry.value;
+    final itemIds = (mergedItemIdsByKey[key] ?? const <String>{})
+        .toList(growable: false)
+      ..sort();
+    final itemCount = itemIds.length;
+    final typeSet = mergedTypesByKey[key] ?? const <String>{};
+    final pageSet = mergedPagesByKey[key] ?? const <String>{};
+    final types = typeSet.toList(growable: false)..sort();
+    final metaParts = <String>[];
+    if (itemCount > 1) {
+      metaParts.add('하위 ${itemCount}개');
+    }
+    if (types.isNotEmpty) {
+      if (types.length == 1) {
+        metaParts.add(types.first);
+      } else {
+        metaParts.add('유형 ${types.length}개');
+      }
+    }
+    if (pageSet.isNotEmpty) {
+      final pages = pageSet.toList(growable: false)..sort();
+      final preview = pages.take(2).map((e) => 'p.$e').join(', ');
+      if (pages.length <= 2) {
+        metaParts.add(preview);
+      } else {
+        metaParts.add('$preview 외 ${pages.length - 2}');
+      }
+    }
+    entries.add(
+      _GradingHistoryEntry(
+        studentId: info.studentId,
+        studentName: info.studentName,
+        displayTitle: info.displayTitle,
+        meta: metaParts.isEmpty ? '세부 정보 없음' : metaParts.join(' · '),
+        eventAt: info.eventAt,
+        itemIds: itemIds,
+      ),
+    );
+  }
   entries.sort((a, b) {
-    final timeCmp = b.confirmedAt.compareTo(a.confirmedAt);
+    final timeCmp = b.eventAt.compareTo(a.eventAt);
     if (timeCmp != 0) return timeCmp;
     final nameCmp = a.studentName.compareTo(b.studentName);
     if (nameCmp != 0) return nameCmp;
-    return a.item.id.compareTo(b.item.id);
+    return a.displayTitle.compareTo(b.displayTitle);
   });
   return entries;
-}
-
-String _gradingHistoryTitle(HomeworkItem hw) {
-  final title = hw.title.trim();
-  return title.isEmpty ? '(제목 없음)' : title;
-}
-
-String _gradingHistoryMeta(HomeworkItem hw) {
-  final parts = <String>[];
-  final type = (hw.type ?? '').trim();
-  final page = (hw.page ?? '').trim();
-  if (type.isNotEmpty) parts.add(type);
-  if (page.isNotEmpty) parts.add('p.$page');
-  if (hw.count != null) parts.add('${hw.count}문항');
-  return parts.isEmpty ? '세부 정보 없음' : parts.join(' · ');
 }
 
 Future<void> _showGradingHistoryDialog({
@@ -9055,7 +9246,7 @@ Future<void> _showGradingHistoryDialog({
                       height: 180,
                       child: Center(
                         child: Text(
-                          '이전에 채점한 과제가 없습니다.',
+                          '최근 7일 내 채점 이력이 없습니다.',
                           style: TextStyle(
                             color: kDlgTextSub,
                             fontSize: 14,
@@ -9074,7 +9265,8 @@ Future<void> _showGradingHistoryDialog({
                       separatorBuilder: (_, __) => const SizedBox(height: 10),
                       itemBuilder: (context, index) {
                         final entry = entries[index];
-                        final key = '${entry.studentId}|${entry.item.id}';
+                        final key =
+                            '${entry.studentId}|${entry.itemIds.join(',')}';
                         final isCancelling = cancellingKeys.contains(key);
                         return Container(
                           padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
@@ -9090,7 +9282,7 @@ Future<void> _showGradingHistoryDialog({
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Text(
-                                      _gradingHistoryTitle(entry.item),
+                                      entry.displayTitle,
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
                                       style: const TextStyle(
@@ -9101,7 +9293,7 @@ Future<void> _showGradingHistoryDialog({
                                     ),
                                     const SizedBox(height: 4),
                                     Text(
-                                      '${entry.studentName} · ${_formatDateTime(entry.confirmedAt)}',
+                                      '${entry.studentName} · ${_formatDateTime(entry.eventAt)}',
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
                                       style: const TextStyle(
@@ -9112,7 +9304,7 @@ Future<void> _showGradingHistoryDialog({
                                     ),
                                     const SizedBox(height: 3),
                                     Text(
-                                      _gradingHistoryMeta(entry.item),
+                                      entry.meta,
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
                                       style: const TextStyle(
@@ -9133,35 +9325,63 @@ Future<void> _showGradingHistoryDialog({
                                           cancellingKeys.add(key);
                                         });
                                         try {
-                                          final rollbackDecrement =
-                                              await HomeworkAssignmentStore
-                                                  .instance
-                                                  .rollbackLatestCheckForItem(
-                                            studentId: entry.studentId,
-                                            homeworkItemId: entry.item.id,
-                                          );
+                                          var rollbackCount = 0;
+                                          var restoredCount = 0;
+                                          for (final itemId in entry.itemIds) {
+                                            HomeworkStore.instance
+                                                .clearAutoCompleteOnNextWaiting(
+                                              itemId,
+                                            );
+                                            final rollbackDecrement =
+                                                await HomeworkAssignmentStore
+                                                    .instance
+                                                    .rollbackLatestCheckForItem(
+                                              studentId: entry.studentId,
+                                              homeworkItemId: itemId,
+                                            );
+                                            if ((rollbackDecrement ?? 0) > 0) {
+                                              rollbackCount +=
+                                                  rollbackDecrement ?? 0;
+                                            }
+                                            final latest = HomeworkStore
+                                                .instance
+                                                .getById(entry.studentId, itemId);
+                                            if (latest == null) continue;
+                                            if (latest.status ==
+                                                HomeworkStatus.completed) {
+                                              await HomeworkStore.instance
+                                                  .reviveCompletedToSubmitted(
+                                                entry.studentId,
+                                                itemId,
+                                              );
+                                              restoredCount += 1;
+                                              continue;
+                                            }
+                                            await HomeworkStore.instance.submit(
+                                              entry.studentId,
+                                              itemId,
+                                            );
+                                            restoredCount += 1;
+                                          }
                                           if (!dialogContext.mounted) return;
-                                          if (rollbackDecrement == null) {
+                                          if (restoredCount == 0) {
                                             ScaffoldMessenger.of(dialogContext)
                                                 .showSnackBar(
                                               const SnackBar(
                                                 content: Text(
-                                                  '검사 횟수 롤백에 실패했습니다. 다시 시도해 주세요.',
+                                                  '되돌릴 채점 대상을 찾지 못했습니다. 다시 시도해 주세요.',
                                                 ),
                                               ),
                                             );
                                             return;
                                           }
-                                          await HomeworkStore.instance.submit(
-                                              entry.studentId, entry.item.id);
-                                          if (!dialogContext.mounted) return;
                                           ScaffoldMessenger.of(dialogContext)
                                               .showSnackBar(
                                             SnackBar(
                                               content: Text(
-                                                rollbackDecrement > 0
-                                                    ? '채점을 취소하고 제출 단계로 되돌렸어요. 검사횟수도 복원했습니다.'
-                                                    : '채점을 취소하고 제출 단계로 되돌렸어요.',
+                                                rollbackCount > 0
+                                                    ? '채점 ${restoredCount}건을 제출 단계로 되돌렸어요. 검사횟수도 복원했습니다.'
+                                                    : '채점 ${restoredCount}건을 제출 단계로 되돌렸어요.',
                                               ),
                                             ),
                                           );

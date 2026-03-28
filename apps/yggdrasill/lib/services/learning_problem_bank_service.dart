@@ -64,6 +64,7 @@ class LearningProblemQuestion {
     required this.publisherName,
     required this.materialName,
     required this.confidence,
+    required this.figureRefs,
     required this.meta,
     required this.createdAt,
     required this.documentSourceName,
@@ -90,6 +91,7 @@ class LearningProblemQuestion {
   final String publisherName;
   final String materialName;
   final double confidence;
+  final List<String> figureRefs;
   final Map<String, dynamic> meta;
   final DateTime? createdAt;
   final String documentSourceName;
@@ -103,6 +105,29 @@ class LearningProblemQuestion {
 
   List<LearningProblemChoice> get effectiveChoices =>
       objectiveChoices.isNotEmpty ? objectiveChoices : choices;
+
+  List<Map<String, dynamic>> get figureAssets {
+    final raw = meta['figure_assets'];
+    if (raw is! List) return const <Map<String, dynamic>>[];
+    return raw
+        .map<Map<String, dynamic>>((e) => _mapOrEmpty(e))
+        .where((e) => e.isNotEmpty)
+        .toList(growable: false);
+  }
+
+  List<Map<String, dynamic>> get orderedFigureAssets {
+    final assets = figureAssets.toList(growable: true);
+    if (assets.isEmpty) return const <Map<String, dynamic>>[];
+    assets.sort((a, b) {
+      final ai = _intOrNull(a['figure_index']) ?? 1 << 20;
+      final bi = _intOrNull(b['figure_index']) ?? 1 << 20;
+      if (ai != bi) return ai.compareTo(bi);
+      final ad = '${a['created_at'] ?? ''}';
+      final bd = '${b['created_at'] ?? ''}';
+      return bd.compareTo(ad);
+    });
+    return assets;
+  }
 
   String get renderedStem => _renderTextWithEquation(stem, equations);
 
@@ -122,6 +147,10 @@ class LearningProblemQuestion {
         .toList(growable: false);
     final equations = _listOrEmpty(map['equations'])
         .map((e) => LearningProblemEquation.fromDynamic(e))
+        .toList(growable: false);
+    final figureRefs = _listOrEmpty(map['figure_refs'])
+        .map((e) => '$e'.trim())
+        .where((e) => e.isNotEmpty)
         .toList(growable: false);
     final meta = _mapOrEmpty(map['meta']);
     return LearningProblemQuestion(
@@ -146,6 +175,7 @@ class LearningProblemQuestion {
       publisherName: '${map['publisher_name'] ?? ''}',
       materialName: '${map['material_name'] ?? ''}',
       confidence: _doubleOrZero(map['confidence']),
+      figureRefs: figureRefs,
       meta: meta,
       createdAt: _dateTimeOrNull(map['created_at']),
       documentSourceName: documentSourceName,
@@ -227,6 +257,7 @@ class LearningProblemBankService {
             'publisher_name',
             'material_name',
             'confidence',
+            'figure_refs',
             'meta',
             'created_at',
           ].join(','),
@@ -284,6 +315,19 @@ class LearningProblemBankService {
           ),
         )
         .toList(growable: false);
+  }
+
+  Future<String> createStorageSignedUrl({
+    required String bucket,
+    required String path,
+    int expiresInSeconds = 60 * 60 * 24,
+  }) async {
+    final safeBucket = bucket.trim();
+    final safePath = path.trim();
+    if (safeBucket.isEmpty || safePath.isEmpty) return '';
+    return _client.storage
+        .from(safeBucket)
+        .createSignedUrl(safePath, expiresInSeconds);
   }
 }
 

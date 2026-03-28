@@ -382,7 +382,9 @@ class _GradingModePageState extends State<GradingModePage> {
                 return _resolveCoverPath(
                   bookId: coverSource.bookId,
                   gradeLabel: coverSource.gradeLabel,
-                  flowId: (entry.summary.flowId ?? '').trim(),
+                  flowId: coverSource.disableFlowFallback
+                      ? ''
+                      : (entry.summary.flowId ?? '').trim(),
                 );
               })(),
               onTap: onCardTap == null
@@ -402,20 +404,52 @@ class _GradingModePageState extends State<GradingModePage> {
     );
   }
 
-  ({String bookId, String gradeLabel}) _resolveEntryCoverSource(
+  ({String bookId, String gradeLabel, bool disableFlowFallback})
+      _resolveEntryCoverSource(
     _GradingGroupEntry entry,
   ) {
+    if (_isPrintCoverEntry(entry)) {
+      return (bookId: '', gradeLabel: '', disableFlowFallback: true);
+    }
     final summaryBookId = (entry.summary.bookId ?? '').trim();
     final summaryGrade = (entry.summary.gradeLabel ?? '').trim();
     if (summaryBookId.isNotEmpty) {
-      return (bookId: summaryBookId, gradeLabel: summaryGrade);
+      return (
+        bookId: summaryBookId,
+        gradeLabel: summaryGrade,
+        disableFlowFallback: false,
+      );
     }
     for (final child in entry.children) {
       final bookId = (child.bookId ?? '').trim();
       if (bookId.isEmpty) continue;
-      return (bookId: bookId, gradeLabel: (child.gradeLabel ?? '').trim());
+      return (
+        bookId: bookId,
+        gradeLabel: (child.gradeLabel ?? '').trim(),
+        disableFlowFallback: false,
+      );
     }
-    return (bookId: '', gradeLabel: summaryGrade);
+    return (
+      bookId: '',
+      gradeLabel: summaryGrade,
+      disableFlowFallback: false,
+    );
+  }
+
+  String _normalizedTypeLabel(HomeworkItem item) {
+    return (item.type ?? '').trim();
+  }
+
+  bool _isPrintCoverEntry(_GradingGroupEntry entry) {
+    if (_normalizedTypeLabel(entry.summary) == '프린트') return true;
+    var hasTypedChild = false;
+    for (final child in entry.children) {
+      final type = _normalizedTypeLabel(child);
+      if (type.isEmpty) continue;
+      hasTypedChild = true;
+      if (type != '프린트') return false;
+    }
+    return hasTypedChild;
   }
 
   List<_GradingGroupEntry> _buildSubmittedEntries(
@@ -738,6 +772,13 @@ class _GradingModePageState extends State<GradingModePage> {
       if (pages.length <= 3) return pages.join(', ');
       return '${pages.take(3).join(', ')}, ...';
     }();
+    final normalizedChildTypes = <String>{
+      for (final child in children)
+        if ((child.type ?? '').trim().isNotEmpty) (child.type ?? '').trim(),
+    };
+    final summaryType = normalizedChildTypes.length == 1
+        ? normalizedChildTypes.first
+        : '${children.length}개 과제';
 
     return HomeworkItem(
       id: (runningChild ?? first).id,
@@ -745,7 +786,7 @@ class _GradingModePageState extends State<GradingModePage> {
       body: displaySeed.body,
       color: first.color,
       flowId: group.flowId ?? first.flowId,
-      type: '${children.length}개 과제',
+      type: summaryType,
       page: pageSummary.isEmpty ? null : pageSummary,
       count: totalCount > 0 ? totalCount : first.count,
       memo: displaySeed.memo,
@@ -980,7 +1021,7 @@ class _SubmittedHomeworkCard extends StatelessWidget {
                                 .clamp(10.8, 20.4)
                                 .toDouble();
                             final line1Text = bookStr == '-' && courseStr == '-'
-                                ? '-'
+                                ? (line2.trim().isEmpty ? '-' : line2)
                                 : (bookStr != '-' && courseStr != '-'
                                     ? '$bookStr · $courseStr'
                                     : (bookStr != '-' ? bookStr : courseStr));
@@ -1102,21 +1143,37 @@ class _SubmittedHomeworkCard extends StatelessWidget {
         final provider = _coverImageProvider(snapshot.data ?? '');
         final hasImage = provider != null;
         final fallbackCoverColor = _coverColorForType(hw);
+        final isPrintCover = _isPrintCoverEntry(entry);
+        final useDarkOverlayText = isPrintCover ||
+            (!hasImage && fallbackCoverColor.computeLuminance() > 0.6);
         final overlayNameSize = (41.0 * scale).clamp(22.0, 41.0).toDouble();
         final overlayHorizontalPad = (14.0 * scale).clamp(8.0, 14.0).toDouble();
-        final overlayNameColor =
-            !hasImage && fallbackCoverColor.computeLuminance() > 0.6
-                ? Colors.black.withOpacity(0.82)
-                : Colors.white;
+        final overlayNameColor = useDarkOverlayText
+            ? Colors.black.withOpacity(0.82)
+            : Colors.white;
         final overlayTimeGap = (6.0 * scale).clamp(3.0, 6.0).toDouble();
         final overlayTimeSize = (overlayNameSize * 0.7).clamp(10.0, 29.0);
-        final overlayTextShadows = <Shadow>[
-          Shadow(
-            color: Colors.black.withOpacity(0.6),
-            blurRadius: (4.0 * scale).clamp(2.0, 4.0).toDouble(),
-            offset: Offset(0, (1.0 * scale).clamp(0.5, 1.0).toDouble()),
-          ),
-        ];
+        final overlayTextShadows = useDarkOverlayText
+            ? const <Shadow>[]
+            : <Shadow>[
+                Shadow(
+                  color: Colors.black.withOpacity(0.6),
+                  blurRadius: (4.0 * scale).clamp(2.0, 4.0).toDouble(),
+                  offset: Offset(0, (1.0 * scale).clamp(0.5, 1.0).toDouble()),
+                ),
+              ];
+        final overlayNameShadows = useDarkOverlayText
+            ? const <Shadow>[]
+            : <Shadow>[
+                Shadow(
+                  color: hasImage
+                      ? Colors.black87
+                      : Colors.black.withOpacity(0.26),
+                  blurRadius: (8.0 * scale).clamp(4.0, 8.0).toDouble(),
+                  offset:
+                      Offset(0, (2.0 * scale).clamp(1.0, 2.0).toDouble()),
+                ),
+              ];
         return Stack(
           fit: StackFit.expand,
           children: [
@@ -1169,17 +1226,7 @@ class _SubmittedHomeworkCard extends StatelessWidget {
                           fontSize: overlayNameSize,
                           fontWeight: FontWeight.w900,
                           letterSpacing: 0.3,
-                          shadows: [
-                            Shadow(
-                              color: hasImage
-                                  ? Colors.black87
-                                  : Colors.black.withOpacity(0.26),
-                              blurRadius:
-                                  (8.0 * scale).clamp(4.0, 8.0).toDouble(),
-                              offset: Offset(
-                                  0, (2.0 * scale).clamp(1.0, 2.0).toDouble()),
-                            ),
-                          ],
+                          shadows: overlayNameShadows,
                         ),
                       ),
                       if (line4 != '-') ...[
@@ -1300,6 +1347,18 @@ class _SubmittedHomeworkCard extends StatelessWidget {
 
   String _normalizedTypeLabel(HomeworkItem hw) {
     return (hw.type ?? '').trim();
+  }
+
+  bool _isPrintCoverEntry(_GradingGroupEntry entry) {
+    if (_normalizedTypeLabel(entry.summary) == '프린트') return true;
+    var hasTypedChild = false;
+    for (final child in entry.children) {
+      final type = _normalizedTypeLabel(child);
+      if (type.isEmpty) continue;
+      hasTypedChild = true;
+      if (type != '프린트') return false;
+    }
+    return hasTypedChild;
   }
 
   Color _coverColorForType(HomeworkItem hw) {

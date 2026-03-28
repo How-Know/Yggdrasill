@@ -28,16 +28,10 @@ class ProblemBankBottomFabBar extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
         decoration: BoxDecoration(
-          color: const Color(0xFFEFE8DC).withValues(alpha: 0.94),
+          color: const Color(0xFF151C21).withValues(alpha: 0.96),
           borderRadius: BorderRadius.circular(999),
-          border: Border.all(color: const Color(0xFFD5C8B6)),
-          boxShadow: const [
-            BoxShadow(
-              color: Color(0x22000000),
-              blurRadius: 12,
-              offset: Offset(0, 4),
-            ),
-          ],
+          border: Border.all(color: const Color(0xFF223131)),
+          boxShadow: const [],
         ),
         child: SingleChildScrollView(
           scrollDirection: Axis.horizontal,
@@ -65,8 +59,8 @@ class ProblemBankBottomFabBar extends StatelessWidget {
                 onPressed: disabled ? null : onGeneratePdf,
                 icon: Icons.picture_as_pdf,
                 label: 'PDF 생성',
-                foregroundColor: const Color(0xFF1B5E20),
-                backgroundColor: const Color(0xFFE8F5E9),
+                foregroundColor: const Color(0xFFC7F2D8),
+                backgroundColor: const Color(0xFF173C36),
               ),
               const SizedBox(width: 8),
               _fab(
@@ -79,16 +73,16 @@ class ProblemBankBottomFabBar extends StatelessWidget {
                 padding:
                     const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
                 decoration: BoxDecoration(
-                  color: const Color(0xFFF8F3EA),
+                  color: const Color(0xFF10171A),
                   borderRadius: BorderRadius.circular(999),
-                  border: Border.all(color: const Color(0xFFE1D4C3)),
+                  border: Border.all(color: const Color(0xFF223131)),
                 ),
                 child: Text(
                   '선택 $selectedCount개',
                   style: const TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w700,
-                    color: Color(0xFF6B6256),
+                    color: Color(0xFF9FB3B3),
                   ),
                 ),
               ),
@@ -109,8 +103,8 @@ class ProblemBankBottomFabBar extends StatelessWidget {
     return FloatingActionButton.extended(
       heroTag: null,
       elevation: 0,
-      backgroundColor: backgroundColor ?? const Color(0xFFF8F3EA),
-      foregroundColor: foregroundColor ?? const Color(0xFF5C5246),
+      backgroundColor: backgroundColor ?? const Color(0xFF10171A),
+      foregroundColor: foregroundColor ?? const Color(0xFF9FB3B3),
       onPressed: onPressed,
       icon: Icon(icon, size: 18),
       label: Text(

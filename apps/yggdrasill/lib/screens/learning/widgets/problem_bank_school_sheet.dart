@@ -16,10 +16,10 @@ class ProblemBankSchoolSheet extends StatelessWidget {
   final ValueChanged<String> onSchoolSelected;
   final bool isLoading;
 
-  static const _panelBg = Color(0xFFECEFF1);
-  static const _border = Color(0xFFCFD8DC);
-  static const _selectedBg = Color(0xFFD5E7DD);
-  static const _text = Color(0xFF37474F);
+  static const _panelBg = Color(0xFF151C21);
+  static const _border = Color(0xFF223131);
+  static const _selectedBg = Color(0xFF173C36);
+  static const _text = Color(0xFFEAF2F2);
 
   @override
   Widget build(BuildContext context) {
@@ -66,7 +66,7 @@ class ProblemBankSchoolSheet extends StatelessWidget {
             '내신 기출 출처에서만 학교 목록을 제공합니다.\n다른 출처는 추후 구현 예정입니다.',
             textAlign: TextAlign.center,
             style: TextStyle(
-              color: Color(0xFF607D8B),
+              color: Color(0xFF9FB3B3),
               fontSize: 13,
               fontWeight: FontWeight.w600,
               height: 1.4,
@@ -83,7 +83,7 @@ class ProblemBankSchoolSheet extends StatelessWidget {
         child: Text(
           '조건에 맞는 학교가 없습니다.',
           style: TextStyle(
-            color: Color(0xFF607D8B),
+            color: Color(0xFF9FB3B3),
             fontWeight: FontWeight.w600,
           ),
         ),
@@ -105,14 +105,16 @@ class ProblemBankSchoolSheet extends StatelessWidget {
               color: selected ? _selectedBg : Colors.transparent,
               borderRadius: BorderRadius.circular(10),
               border: Border.all(
-                color: selected ? const Color(0xFF9EC5AF) : Colors.transparent,
+                color: selected ? const Color(0xFF2B6B61) : Colors.transparent,
               ),
             ),
             child: Row(
               children: [
                 Icon(
                   selected ? Icons.folder_open : Icons.folder,
-                  color: const Color(0xFF607D8B),
+                  color: selected
+                      ? const Color(0xFFBEE7D2)
+                      : const Color(0xFF8AA5A5),
                   size: 20,
                 ),
                 const SizedBox(width: 8),
@@ -123,8 +125,8 @@ class ProblemBankSchoolSheet extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       color: selected
-                          ? const Color(0xFF1F5D3E)
-                          : const Color(0xFF455A64),
+                          ? const Color(0xFFD6ECEA)
+                          : const Color(0xFF9FB3B3),
                       fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
                     ),
                   ),

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
@@ -11,6 +12,7 @@ import '../../services/learning_problem_bank_service.dart';
 import '../../services/tenant_service.dart';
 import 'widgets/problem_bank_bottom_fab_bar.dart';
 import 'widgets/problem_bank_filter_bar.dart';
+import 'widgets/problem_bank_manager_preview_paper.dart';
 import 'widgets/problem_bank_question_card.dart';
 import 'widgets/problem_bank_school_sheet.dart';
 
@@ -22,9 +24,11 @@ class ProblemBankView extends StatefulWidget {
 }
 
 class _ProblemBankViewState extends State<ProblemBankView> {
-  static const _rsBg = Color(0xFFF3EEE6);
-  static const _rsPanelBg = Color(0xFFFBF7EE);
-  static const _rsBorder = Color(0xFFE2D8C7);
+  static const _rsBg = Color(0xFF0B1112);
+  static const _rsPanelBg = Color(0xFF151C21);
+  static const _rsBorder = Color(0xFF223131);
+  static const _rsTextPrimary = Color(0xFFEAF2F2);
+  static const _rsTextMuted = Color(0xFF9FB3B3);
 
   static const Map<String, String> _curriculumLabels = <String, String>{
     'legacy_1_6': '1차-6차 포괄',
@@ -63,6 +67,9 @@ class _ProblemBankViewState extends State<ProblemBankView> {
 
   List<LearningProblemQuestion> _questions = const <LearningProblemQuestion>[];
   final Set<String> _selectedQuestionIds = <String>{};
+  Map<String, Map<String, String>> _questionFigureUrlsByPath =
+      const <String, Map<String, String>>{};
+  int _figureLoadVersion = 0;
 
   @override
   void initState() {
@@ -256,14 +263,22 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       );
       if (!mounted) return;
       final aliveIds = questions.map((e) => e.id).toSet();
+      final currentFigureLoadVersion = ++_figureLoadVersion;
       setState(() {
         _questions = questions;
+        _questionFigureUrlsByPath = const <String, Map<String, String>>{};
         if (resetSelection) {
           _selectedQuestionIds.clear();
         } else {
           _selectedQuestionIds.removeWhere((id) => !aliveIds.contains(id));
         }
       });
+      unawaited(
+        _prefetchFigureSignedUrls(
+          questions,
+          loadVersion: currentFigureLoadVersion,
+        ),
+      );
     } catch (e) {
       _showSnack('문항 조회 실패: $e');
     } finally {
@@ -273,6 +288,40 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         });
       }
     }
+  }
+
+  Future<void> _prefetchFigureSignedUrls(
+    List<LearningProblemQuestion> questions, {
+    required int loadVersion,
+  }) async {
+    final updates = <String, Map<String, String>>{};
+    for (final question in questions) {
+      final pathMap = <String, String>{};
+      for (final asset in question.orderedFigureAssets) {
+        final bucket = '${asset['bucket'] ?? ''}'.trim();
+        final path = '${asset['path'] ?? ''}'.trim();
+        if (bucket.isEmpty || path.isEmpty) continue;
+        try {
+          final signed = await _service.createStorageSignedUrl(
+            bucket: bucket,
+            path: path,
+            expiresInSeconds: 60 * 60 * 24,
+          );
+          final safe = signed.trim();
+          if (safe.isNotEmpty) {
+            pathMap[path] = safe;
+          }
+        } catch (_) {
+          // 그림 preview URL은 실패해도 문항 로딩은 계속 진행한다.
+        }
+      }
+      updates[question.id] = pathMap;
+    }
+    if (!mounted) return;
+    if (loadVersion != _figureLoadVersion) return;
+    setState(() {
+      _questionFigureUrlsByPath = updates;
+    });
   }
 
   Future<void> _onCurriculumChanged(String? value) async {
@@ -360,10 +409,16 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       context: context,
       builder: (context) {
         return AlertDialog(
-          backgroundColor: const Color(0xFFF6F1E7),
+          backgroundColor: const Color(0xFF0B1112),
           shape:
               RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-          title: Text('선택 문항 미리보기 (${selected.length}개)'),
+          title: Text(
+            '선택 문항 미리보기 (${selected.length}개)',
+            style: const TextStyle(
+              color: _rsTextPrimary,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
           content: SizedBox(
             width: size.width * 0.82,
             height: size.height * 0.72,
@@ -372,14 +427,38 @@ class _ProblemBankViewState extends State<ProblemBankView> {
               separatorBuilder: (_, __) => const SizedBox(height: 10),
               itemBuilder: (context, index) {
                 final q = selected[index];
-                return SizedBox(
-                  height: 290,
-                  child: ProblemBankQuestionCard(
-                    question: q,
-                    selected: true,
-                    showSelectionControl: false,
-                    onSelectedChanged: (_) {},
-                  ),
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '${q.displayQuestionNumber}번 문항',
+                      style: const TextStyle(
+                        color: _rsTextPrimary,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Container(
+                      width: double.infinity,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF0E1518),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: _rsBorder),
+                      ),
+                      padding: const EdgeInsets.all(8.5),
+                      child: ProblemBankManagerPreviewPaper(
+                        question: q,
+                        figureUrlsByPath: _questionFigureUrlsByPath[q.id] ??
+                            const <String, String>{},
+                        expanded: true,
+                        scrollable: true,
+                        bordered: true,
+                        shadow: true,
+                        showQuestionNumberPrefix: false,
+                      ),
+                    ),
+                  ],
                 );
               },
             ),
@@ -387,7 +466,10 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(),
-              child: const Text('닫기'),
+              child: const Text(
+                '닫기',
+                style: TextStyle(color: _rsTextMuted),
+              ),
             ),
           ],
         );
@@ -664,7 +746,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                     '문항 ${_questions.length}개 · 선택 ${_selectedQuestionIds.length}개',
                     style: const TextStyle(
                       fontSize: 14,
-                      color: Color(0xFF6D6458),
+                      color: _rsTextMuted,
                       fontWeight: FontWeight.w800,
                     ),
                   ),
@@ -699,7 +781,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           '조건에 맞는 문항이 없습니다.\n필터나 학교를 변경해 주세요.',
           textAlign: TextAlign.center,
           style: TextStyle(
-            color: Color(0xFF8A8074),
+            color: _rsTextMuted,
             fontWeight: FontWeight.w700,
             height: 1.5,
           ),
@@ -724,6 +806,8 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           child: ProblemBankQuestionCard(
             question: question,
             selected: selected,
+            figureUrlsByPath: _questionFigureUrlsByPath[question.id] ??
+                const <String, String>{},
             onSelectedChanged: (next) {
               _toggleQuestionSelection(question.id, next);
             },

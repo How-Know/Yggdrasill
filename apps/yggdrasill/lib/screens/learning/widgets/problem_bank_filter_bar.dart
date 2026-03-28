@@ -36,18 +36,18 @@ class ProblemBankFilterBar extends StatelessWidget {
 
   final bool isBusy;
 
-  static const _panelBg = Color(0xFFFBF7EE);
-  static const _border = Color(0xFFE2D8C7);
-  static const _accent = Color(0xFF6EA68D);
+  static const _panelBg = Color(0xFF151C21);
+  static const _border = Color(0xFF223131);
+  static const _accent = Color(0xFF1B6B63);
 
   @override
   Widget build(BuildContext context) {
     final titleStyle = Theme.of(context).textTheme.labelMedium?.copyWith(
-              color: const Color(0xFF7A746A),
+              color: const Color(0xFF9FB3B3),
               fontWeight: FontWeight.w700,
             ) ??
         const TextStyle(
-          color: Color(0xFF7A746A),
+          color: Color(0xFF9FB3B3),
           fontWeight: FontWeight.w700,
           fontSize: 12,
         );
@@ -61,104 +61,111 @@ class ProblemBankFilterBar extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Wrap(
-            spacing: 12,
-            runSpacing: 10,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              _LabeledDropdown(
-                label: '교육과정',
-                titleStyle: titleStyle,
-                child: _buildDropdown<String>(
-                  value: selectedCurriculumCode,
-                  items: curriculumLabels.entries
-                      .map(
-                        (e) => DropdownMenuItem<String>(
-                          value: e.key,
-                          child: Text(
-                            e.value,
-                            overflow: TextOverflow.ellipsis,
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Wrap(
+              spacing: 12,
+              runSpacing: 10,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                _LabeledDropdown(
+                  label: '교육과정',
+                  titleStyle: titleStyle,
+                  child: _buildDropdown<String>(
+                    value: selectedCurriculumCode,
+                    items: curriculumLabels.entries
+                        .map(
+                          (e) => DropdownMenuItem<String>(
+                            value: e.key,
+                            child: Text(
+                              e.value,
+                              overflow: TextOverflow.ellipsis,
+                            ),
                           ),
-                        ),
-                      )
-                      .toList(growable: false),
-                  onChanged: isBusy ? null : onCurriculumChanged,
-                  width: 210,
+                        )
+                        .toList(growable: false),
+                    onChanged: isBusy ? null : onCurriculumChanged,
+                    width: 210,
+                  ),
                 ),
-              ),
-              _LabeledDropdown(
-                label: '세부 과정',
-                titleStyle: titleStyle,
-                child: _buildDropdown<String>(
-                  value: selectedCourse,
-                  items: courseOptions
-                      .map(
-                        (course) => DropdownMenuItem<String>(
-                          value: course,
-                          child: Text(
-                            course,
-                            overflow: TextOverflow.ellipsis,
+                _LabeledDropdown(
+                  label: '세부 과정',
+                  titleStyle: titleStyle,
+                  child: _buildDropdown<String>(
+                    value: selectedCourse,
+                    items: courseOptions
+                        .map(
+                          (course) => DropdownMenuItem<String>(
+                            value: course,
+                            child: Text(
+                              course,
+                              overflow: TextOverflow.ellipsis,
+                            ),
                           ),
-                        ),
-                      )
-                      .toList(growable: false),
-                  onChanged: isBusy ? null : onCourseChanged,
-                  width: 180,
+                        )
+                        .toList(growable: false),
+                    onChanged: isBusy ? null : onCourseChanged,
+                    width: 180,
+                  ),
                 ),
-              ),
-              _LabeledDropdown(
-                label: '출처',
-                titleStyle: titleStyle,
-                child: _buildDropdown<String>(
-                  value: selectedSourceTypeCode,
-                  items: sourceTypeLabels.entries
-                      .map(
-                        (e) => DropdownMenuItem<String>(
-                          value: e.key,
-                          child: Text(
-                            e.value,
-                            overflow: TextOverflow.ellipsis,
+                _LabeledDropdown(
+                  label: '출처',
+                  titleStyle: titleStyle,
+                  child: _buildDropdown<String>(
+                    value: selectedSourceTypeCode,
+                    items: sourceTypeLabels.entries
+                        .map(
+                          (e) => DropdownMenuItem<String>(
+                            value: e.key,
+                            child: Text(
+                              e.value,
+                              overflow: TextOverflow.ellipsis,
+                            ),
                           ),
-                        ),
-                      )
-                      .toList(growable: false),
-                  onChanged: isBusy ? null : onSourceTypeChanged,
-                  width: 170,
+                        )
+                        .toList(growable: false),
+                    onChanged: isBusy ? null : onSourceTypeChanged,
+                    width: 170,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
           const SizedBox(height: 10),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              Text('초중고', style: titleStyle),
-              for (final level in levelOptions)
-                ChoiceChip(
-                  label: Text(level),
-                  selected: selectedLevel == level,
-                  onSelected: isBusy
-                      ? null
-                      : (selected) {
-                          if (!selected) return;
-                          onLevelChanged(level);
-                        },
-                  selectedColor: _accent.withValues(alpha: 0.15),
-                  side: BorderSide(
-                    color: selectedLevel == level ? _accent : _border,
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                Text('초중고', style: titleStyle),
+                for (final level in levelOptions)
+                  ChoiceChip(
+                    label: Text(level),
+                    selected: selectedLevel == level,
+                    onSelected: isBusy
+                        ? null
+                        : (selected) {
+                            if (!selected) return;
+                            onLevelChanged(level);
+                          },
+                    selectedColor: const Color(0xFF173C36),
+                    backgroundColor: const Color(0xFF10171A),
+                    side: BorderSide(
+                      color: selectedLevel == level ? _accent : _border,
+                    ),
+                    labelStyle: TextStyle(
+                      color: selectedLevel == level
+                          ? const Color(0xFFBEE7D2)
+                          : const Color(0xFF9FB3B3),
+                      fontWeight: selectedLevel == level
+                          ? FontWeight.w700
+                          : FontWeight.w500,
+                    ),
                   ),
-                  labelStyle: TextStyle(
-                    color: selectedLevel == level
-                        ? const Color(0xFF2A6A4A)
-                        : const Color(0xFF6E6558),
-                    fontWeight: selectedLevel == level
-                        ? FontWeight.w700
-                        : FontWeight.w500,
-                  ),
-                ),
-            ],
+              ],
+            ),
           ),
         ],
       ),
@@ -175,13 +182,20 @@ class ProblemBankFilterBar extends StatelessWidget {
       width: width,
       child: DecoratedBox(
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: const Color(0xFF10171A),
           borderRadius: BorderRadius.circular(10),
           border: Border.all(color: _border),
         ),
         child: DropdownButtonHideUnderline(
           child: DropdownButton<T>(
             value: value,
+            style: const TextStyle(
+              color: Color(0xFFEAF2F2),
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+            ),
+            dropdownColor: const Color(0xFF151C21),
+            iconEnabledColor: const Color(0xFF9FB3B3),
             isDense: true,
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
             borderRadius: BorderRadius.circular(10),
