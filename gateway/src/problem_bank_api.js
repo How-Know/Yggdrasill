@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import http from 'node:http';
+import { createHash } from 'node:crypto';
 import { URL } from 'node:url';
 import { createClient } from '@supabase/supabase-js';
 
@@ -118,6 +119,206 @@ function normalizePaper(raw) {
   if (v === 'A4' || v === 'B4' || v === '8절') return v;
   if (v === '8K' || v === '8JEOL') return '8절';
   return 'A4';
+}
+
+function normalizeNumeric(raw, fallback, min, max) {
+  const n = Number.parseFloat(String(raw ?? ''));
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
+}
+
+function normalizeLayoutColumns(raw) {
+  const v = String(raw ?? '').trim();
+  if (v === '2' || v === '2단' || v.toLowerCase() === 'two') return 2;
+  return 1;
+}
+
+function normalizeMaxQuestionsPerPage(raw, columns) {
+  const defaults = columns === 2 ? 8 : 4;
+  const parsed = Number.parseInt(String(raw ?? ''), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return defaults;
+  const allowed = columns === 2 ? [1, 2, 4, 6, 8] : [1, 2, 3, 4];
+  if (allowed.includes(parsed)) return parsed;
+  return defaults;
+}
+
+function normalizeQuestionMode(raw) {
+  const v = String(raw || '').trim().toLowerCase();
+  if (v === 'objective' || v === '객관식' || v === 'mcq') return 'objective';
+  if (v === 'subjective' || v === '주관식') return 'subjective';
+  if (v === 'essay' || v === '서술형') return 'essay';
+  return 'original';
+}
+
+function normalizeQuestionModeMap(raw, selectedIds, fallbackMode = 'original') {
+  const out = {};
+  const src = raw && typeof raw === 'object' ? raw : {};
+  for (const id of selectedIds) {
+    const mode = normalizeQuestionMode(src[id] || fallbackMode);
+    out[id] = mode;
+  }
+  return out;
+}
+
+function normalizeSelectedQuestionIdsOrdered(raw, fallbackSelectedIds) {
+  const fallback = Array.isArray(fallbackSelectedIds)
+    ? fallbackSelectedIds.filter((v) => isUuid(v))
+    : [];
+  const src = Array.isArray(raw) ? raw.filter((v) => isUuid(v)) : [];
+  if (src.length === 0) return fallback;
+  const set = new Set(fallback);
+  const ordered = src.filter((id) => set.has(id));
+  const orderedSet = new Set(ordered);
+  for (const id of fallback) {
+    if (!orderedSet.has(id)) ordered.push(id);
+  }
+  return ordered;
+}
+
+function normalizeLayoutTuning(rawLayoutTuning, options = {}) {
+  const src = rawLayoutTuning && typeof rawLayoutTuning === 'object'
+    ? rawLayoutTuning
+    : {};
+  return {
+    pageMargin: normalizeNumeric(
+      src.pageMargin ?? options.pageMargin,
+      46,
+      20,
+      96,
+    ),
+    columnGap: normalizeNumeric(
+      src.columnGap ?? options.columnGap,
+      18,
+      0,
+      72,
+    ),
+    questionGap: normalizeNumeric(
+      src.questionGap ?? options.questionGap,
+      12,
+      0,
+      64,
+    ),
+    numberLaneWidth: normalizeNumeric(
+      src.numberLaneWidth ?? options.numberLaneWidth,
+      26,
+      10,
+      80,
+    ),
+    numberGap: normalizeNumeric(
+      src.numberGap ?? options.numberGap,
+      6,
+      0,
+      30,
+    ),
+    hangingIndent: normalizeNumeric(
+      src.hangingIndent ?? options.hangingIndent,
+      22,
+      0,
+      96,
+    ),
+    lineHeight: normalizeNumeric(
+      src.lineHeight ?? options.lineHeight,
+      15.4,
+      10,
+      32,
+    ),
+    choiceSpacing: normalizeNumeric(
+      src.choiceSpacing ?? options.choiceSpacing,
+      2.2,
+      0,
+      24,
+    ),
+  };
+}
+
+function normalizeFigureQuality(rawFigureQuality, options = {}) {
+  const src = rawFigureQuality && typeof rawFigureQuality === 'object'
+    ? rawFigureQuality
+    : {};
+  const targetDpi = Math.round(
+    normalizeNumeric(src.targetDpi ?? options.targetDpi, 450, 300, 1200),
+  );
+  const minDpi = Math.round(
+    normalizeNumeric(src.minDpi ?? options.minDpi, 300, 180, targetDpi),
+  );
+  return { targetDpi, minDpi };
+}
+
+function normalizeExportRenderConfig(options, selectedQuestionIds, defaults = {}) {
+  const src = options && typeof options === 'object' ? options : {};
+  const requestedRenderConfigVersion = String(
+    src.renderConfigVersion || '',
+  ).trim();
+  const layoutColumns = normalizeLayoutColumns(
+    src.layoutColumns ||
+      src.layout_columns ||
+      src.columnCount ||
+      src.columns ||
+      defaults.layoutColumns ||
+      1,
+  );
+  const maxQuestionsPerPage = normalizeMaxQuestionsPerPage(
+    src.maxQuestionsPerPage ||
+      src.max_questions_per_page ||
+      src.perPage ||
+      src.questionsPerPage ||
+      defaults.maxQuestionsPerPage ||
+      '',
+    layoutColumns,
+  );
+  const questionMode = normalizeQuestionMode(
+    src.questionMode || src.question_mode || src.mode || defaults.questionMode,
+  );
+  const selectedQuestionIdsOrdered = normalizeSelectedQuestionIdsOrdered(
+    src.selectedQuestionIdsOrdered,
+    selectedQuestionIds,
+  );
+  const questionModeByQuestionId = normalizeQuestionModeMap(
+    src.questionModeByQuestionId,
+    selectedQuestionIdsOrdered,
+    questionMode,
+  );
+  return {
+    // Force server-side renderer to latest stable path even if older app build
+    // sends a stale renderConfigVersion.
+    renderConfigVersion: 'pb_render_v25_bogi_choice_indent_gap',
+    layoutColumns,
+    maxQuestionsPerPage,
+    questionMode,
+    layoutTuning: normalizeLayoutTuning(src.layoutTuning, src),
+    figureQuality: normalizeFigureQuality(src.figureQuality, src),
+    font:
+      src.font && typeof src.font === 'object'
+        ? {
+            family: String(src.font.family || '').trim(),
+            size: normalizeNumeric(src.font.size, 11.3, 8, 28),
+          }
+        : {
+            family: '',
+            size: 11.3,
+          },
+    selectedQuestionIdsOrdered,
+    questionModeByQuestionId,
+  };
+}
+
+function canonicalizeJson(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => canonicalizeJson(item));
+  }
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const key of Object.keys(value).sort()) {
+      out[key] = canonicalizeJson(value[key]);
+    }
+    return out;
+  }
+  return value;
+}
+
+function computeRenderHash(renderPayload) {
+  const canonical = JSON.stringify(canonicalizeJson(renderPayload));
+  return createHash('sha256').update(canonical).digest('hex');
 }
 
 function isUuid(v) {
@@ -571,22 +772,81 @@ async function createExportJob(body, res) {
   if (!sourceDocumentIds.includes(documentId)) {
     sourceDocumentIds = [documentId, ...sourceDocumentIds];
   }
-  const options =
+  const rawOptions =
     typeof body.options === 'object' && body.options
       ? { ...body.options }
       : {};
-  options.sourceDocumentIds = sourceDocumentIds;
+  const templateProfile = normalizeTemplateProfile(body.templateProfile);
+  const paperSize = normalizePaper(body.paperSize);
+  const includeAnswerSheet = normalizeBool(body.includeAnswerSheet, true);
+  const includeExplanation = normalizeBool(body.includeExplanation, false);
+  const previewOnly = normalizeBool(
+    body.previewOnly,
+    normalizeBool(rawOptions.previewOnly, false),
+  );
+  const renderConfig = normalizeExportRenderConfig(rawOptions, selectedQuestionIds, {
+    questionMode: rawOptions.questionMode || rawOptions.question_mode || rawOptions.mode,
+    layoutColumns:
+      rawOptions.layoutColumns ||
+      rawOptions.layout_columns ||
+      rawOptions.columnCount ||
+      rawOptions.columns,
+    maxQuestionsPerPage:
+      rawOptions.maxQuestionsPerPage ||
+      rawOptions.max_questions_per_page ||
+      rawOptions.perPage ||
+      rawOptions.questionsPerPage,
+  });
+
+  const renderHashPayload = {
+    renderConfigVersion: renderConfig.renderConfigVersion,
+    templateProfile,
+    paperSize,
+    includeAnswerSheet,
+    includeExplanation,
+    layoutColumns: renderConfig.layoutColumns,
+    maxQuestionsPerPage: renderConfig.maxQuestionsPerPage,
+    questionMode: renderConfig.questionMode,
+    font: renderConfig.font,
+    layoutTuning: renderConfig.layoutTuning,
+    figureQuality: renderConfig.figureQuality,
+    selectedQuestionIdsOrdered: renderConfig.selectedQuestionIdsOrdered,
+    questionModeByQuestionId: renderConfig.questionModeByQuestionId,
+  };
+  const renderHash = computeRenderHash(renderHashPayload);
+
+  const options = {
+    ...rawOptions,
+    sourceDocumentIds,
+    renderConfigVersion: renderConfig.renderConfigVersion,
+    templateProfile,
+    paperSize,
+    includeAnswerSheet,
+    includeExplanation,
+    layoutColumns: renderConfig.layoutColumns,
+    maxQuestionsPerPage: renderConfig.maxQuestionsPerPage,
+    questionMode: renderConfig.questionMode,
+    layoutTuning: renderConfig.layoutTuning,
+    figureQuality: renderConfig.figureQuality,
+    font: renderConfig.font,
+    selectedQuestionIdsOrdered: renderConfig.selectedQuestionIdsOrdered,
+    questionModeByQuestionId: renderConfig.questionModeByQuestionId,
+    renderHash,
+    previewOnly,
+  };
 
   const payload = {
     academy_id: academyId,
     document_id: documentId,
     requested_by: isUuid(requestedBy) ? requestedBy : null,
     status: 'queued',
-    template_profile: normalizeTemplateProfile(body.templateProfile),
-    paper_size: normalizePaper(body.paperSize),
-    include_answer_sheet: normalizeBool(body.includeAnswerSheet, true),
-    include_explanation: normalizeBool(body.includeExplanation, false),
+    template_profile: templateProfile,
+    paper_size: paperSize,
+    include_answer_sheet: includeAnswerSheet,
+    include_explanation: includeExplanation,
     selected_question_ids: selectedQuestionIds,
+    render_hash: renderHash,
+    preview_only: previewOnly,
     options,
     output_storage_bucket: 'problem-exports',
     output_storage_path: '',
@@ -599,11 +859,21 @@ async function createExportJob(body, res) {
     finished_at: null,
   };
 
-  const { data: job, error } = await supa
+  let { data: job, error } = await supa
     .from('pb_exports')
     .insert(payload)
     .select('*')
     .maybeSingle();
+  if (error && /render_hash|preview_only/i.test(String(error.message || ''))) {
+    const fallbackPayload = { ...payload };
+    delete fallbackPayload.render_hash;
+    delete fallbackPayload.preview_only;
+    ({ data: job, error } = await supa
+      .from('pb_exports')
+      .insert(fallbackPayload)
+      .select('*')
+      .maybeSingle());
+  }
   if (error || !job) {
     sendJson(res, 500, {
       ok: false,
@@ -622,22 +892,65 @@ async function listExportJobs(url, res) {
   }
   const status = String(url.searchParams.get('status') || '').trim();
   const documentId = String(url.searchParams.get('documentId') || '').trim();
+  const renderHash = String(url.searchParams.get('renderHash') || '').trim();
+  const previewOnlyRaw = String(url.searchParams.get('previewOnly') || '').trim();
+  const previewOnlyFilter =
+    previewOnlyRaw.length > 0 ? normalizeBool(previewOnlyRaw, false) : null;
   const limit = normalizeLimit(url.searchParams.get('limit'), 30, 120);
-  let q = supa
-    .from('pb_exports')
-    .select('*')
-    .eq('academy_id', academyId)
-    .order('created_at', { ascending: false })
-    .limit(limit);
-  if (status) q = q.eq('status', status);
-  if (documentId) q = q.eq('document_id', documentId);
+  let data = null;
+  {
+    let q = supa
+      .from('pb_exports')
+      .select('*')
+      .eq('academy_id', academyId)
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    if (status) q = q.eq('status', status);
+    if (documentId) q = q.eq('document_id', documentId);
+    if (renderHash) q = q.eq('render_hash', renderHash);
+    if (previewOnlyFilter != null) q = q.eq('preview_only', previewOnlyFilter);
 
-  const { data, error } = await q;
-  if (error) {
-    sendJson(res, 500, { ok: false, error: `export_job_list_failed:${error.message}` });
-    return;
+    const result = await q;
+    if (result.error && /render_hash|preview_only/i.test(String(result.error.message || ''))) {
+      let fallback = supa
+        .from('pb_exports')
+        .select('*')
+        .eq('academy_id', academyId)
+        .order('created_at', { ascending: false })
+        .limit(limit);
+      if (status) fallback = fallback.eq('status', status);
+      if (documentId) fallback = fallback.eq('document_id', documentId);
+      const fallbackResult = await fallback;
+      if (fallbackResult.error) {
+        sendJson(res, 500, {
+          ok: false,
+          error: `export_job_list_failed:${fallbackResult.error.message}`,
+        });
+        return;
+      }
+      data = fallbackResult.data || [];
+    } else if (result.error) {
+      sendJson(res, 500, { ok: false, error: `export_job_list_failed:${result.error.message}` });
+      return;
+    } else {
+      data = result.data || [];
+    }
   }
-  sendJson(res, 200, { ok: true, jobs: data || [] });
+  let jobs = data || [];
+  if (renderHash) {
+    jobs = jobs.filter((job) => {
+      const rowHash = String(job?.render_hash || job?.options?.renderHash || '').trim();
+      return rowHash === renderHash;
+    });
+  }
+  if (previewOnlyFilter != null) {
+    jobs = jobs.filter((job) => {
+      const rowPreviewOnly =
+        job?.preview_only === true || job?.options?.previewOnly === true;
+      return rowPreviewOnly === previewOnlyFilter;
+    });
+  }
+  sendJson(res, 200, { ok: true, jobs });
 }
 
 async function getExportJob(jobId, url, res) {

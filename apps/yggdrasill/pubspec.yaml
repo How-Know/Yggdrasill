@@ -78,7 +78,7 @@ dependencies:
       path: plugins/window_size
       ref: 6c66ad23ee79749f30a8eece542cf54eaf157ed8
   excel: ^4.0.6
-  screenshot: ^3.0.0
+  crypto: ^3.0.7
 
 dev_dependencies:
   flutter_test:

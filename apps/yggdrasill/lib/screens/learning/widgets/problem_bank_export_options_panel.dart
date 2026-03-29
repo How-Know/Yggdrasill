@@ -20,6 +20,15 @@ class ProblemBankExportOptionsPanel extends StatelessWidget {
     required this.onFontSizeChanged,
     required this.onIncludeAnswerSheetChanged,
     required this.onIncludeExplanationChanged,
+    required this.onPageMarginChanged,
+    required this.onColumnGapChanged,
+    required this.onQuestionGapChanged,
+    required this.onNumberLaneWidthChanged,
+    required this.onNumberGapChanged,
+    required this.onHangingIndentChanged,
+    required this.onLineHeightChanged,
+    required this.onChoiceSpacingChanged,
+    required this.onTargetDpiChanged,
   });
 
   final LearningProblemExportSettings settings;
@@ -37,6 +46,15 @@ class ProblemBankExportOptionsPanel extends StatelessWidget {
   final ValueChanged<String> onFontSizeChanged;
   final ValueChanged<bool> onIncludeAnswerSheetChanged;
   final ValueChanged<bool> onIncludeExplanationChanged;
+  final ValueChanged<double> onPageMarginChanged;
+  final ValueChanged<double> onColumnGapChanged;
+  final ValueChanged<double> onQuestionGapChanged;
+  final ValueChanged<double> onNumberLaneWidthChanged;
+  final ValueChanged<double> onNumberGapChanged;
+  final ValueChanged<double> onHangingIndentChanged;
+  final ValueChanged<double> onLineHeightChanged;
+  final ValueChanged<double> onChoiceSpacingChanged;
+  final ValueChanged<int> onTargetDpiChanged;
 
   static const _panelBg = Color(0xFF151C21);
   static const _border = Color(0xFF223131);
@@ -213,6 +231,204 @@ class ProblemBankExportOptionsPanel extends StatelessWidget {
               ),
             ],
           ),
+          const SizedBox(height: 8),
+          Theme(
+            data: Theme.of(context).copyWith(
+              dividerColor: Colors.transparent,
+            ),
+            child: ExpansionTile(
+              tilePadding: EdgeInsets.zero,
+              childrenPadding: const EdgeInsets.fromLTRB(0, 0, 0, 2),
+              iconColor: _textMuted,
+              collapsedIconColor: _textMuted,
+              title: const Text(
+                '고급 레이아웃 미세조정',
+                style: TextStyle(
+                  color: _textMuted,
+                  fontSize: 12.2,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              children: [
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    _buildTuningStepper(
+                      label: '여백',
+                      valueText:
+                          settings.layoutTuning.pageMargin.toStringAsFixed(0),
+                      onMinus: disabled
+                          ? null
+                          : () => onPageMarginChanged(
+                                (settings.layoutTuning.pageMargin - 2)
+                                    .clamp(20, 96)
+                                    .toDouble(),
+                              ),
+                      onPlus: disabled
+                          ? null
+                          : () => onPageMarginChanged(
+                                (settings.layoutTuning.pageMargin + 2)
+                                    .clamp(20, 96)
+                                    .toDouble(),
+                              ),
+                    ),
+                    _buildTuningStepper(
+                      label: '단 간격',
+                      valueText:
+                          settings.layoutTuning.columnGap.toStringAsFixed(0),
+                      onMinus: disabled
+                          ? null
+                          : () => onColumnGapChanged(
+                                (settings.layoutTuning.columnGap - 1)
+                                    .clamp(0, 72)
+                                    .toDouble(),
+                              ),
+                      onPlus: disabled
+                          ? null
+                          : () => onColumnGapChanged(
+                                (settings.layoutTuning.columnGap + 1)
+                                    .clamp(0, 72)
+                                    .toDouble(),
+                              ),
+                    ),
+                    _buildTuningStepper(
+                      label: '문항 간격',
+                      valueText:
+                          settings.layoutTuning.questionGap.toStringAsFixed(0),
+                      onMinus: disabled
+                          ? null
+                          : () => onQuestionGapChanged(
+                                (settings.layoutTuning.questionGap - 1)
+                                    .clamp(0, 64)
+                                    .toDouble(),
+                              ),
+                      onPlus: disabled
+                          ? null
+                          : () => onQuestionGapChanged(
+                                (settings.layoutTuning.questionGap + 1)
+                                    .clamp(0, 64)
+                                    .toDouble(),
+                              ),
+                    ),
+                    _buildTuningStepper(
+                      label: '번호칸',
+                      valueText: settings.layoutTuning.numberLaneWidth
+                          .toStringAsFixed(0),
+                      onMinus: disabled
+                          ? null
+                          : () => onNumberLaneWidthChanged(
+                                (settings.layoutTuning.numberLaneWidth - 1)
+                                    .clamp(10, 80)
+                                    .toDouble(),
+                              ),
+                      onPlus: disabled
+                          ? null
+                          : () => onNumberLaneWidthChanged(
+                                (settings.layoutTuning.numberLaneWidth + 1)
+                                    .clamp(10, 80)
+                                    .toDouble(),
+                              ),
+                    ),
+                    _buildTuningStepper(
+                      label: '번호간격',
+                      valueText:
+                          settings.layoutTuning.numberGap.toStringAsFixed(0),
+                      onMinus: disabled
+                          ? null
+                          : () => onNumberGapChanged(
+                                (settings.layoutTuning.numberGap - 1)
+                                    .clamp(0, 30)
+                                    .toDouble(),
+                              ),
+                      onPlus: disabled
+                          ? null
+                          : () => onNumberGapChanged(
+                                (settings.layoutTuning.numberGap + 1)
+                                    .clamp(0, 30)
+                                    .toDouble(),
+                              ),
+                    ),
+                    _buildTuningStepper(
+                      label: '내어쓰기',
+                      valueText: settings.layoutTuning.hangingIndent
+                          .toStringAsFixed(0),
+                      onMinus: disabled
+                          ? null
+                          : () => onHangingIndentChanged(
+                                (settings.layoutTuning.hangingIndent - 1)
+                                    .clamp(0, 96)
+                                    .toDouble(),
+                              ),
+                      onPlus: disabled
+                          ? null
+                          : () => onHangingIndentChanged(
+                                (settings.layoutTuning.hangingIndent + 1)
+                                    .clamp(0, 96)
+                                    .toDouble(),
+                              ),
+                    ),
+                    _buildTuningStepper(
+                      label: '줄간격',
+                      valueText:
+                          settings.layoutTuning.lineHeight.toStringAsFixed(1),
+                      onMinus: disabled
+                          ? null
+                          : () => onLineHeightChanged(
+                                (settings.layoutTuning.lineHeight - 0.2)
+                                    .clamp(10, 32)
+                                    .toDouble(),
+                              ),
+                      onPlus: disabled
+                          ? null
+                          : () => onLineHeightChanged(
+                                (settings.layoutTuning.lineHeight + 0.2)
+                                    .clamp(10, 32)
+                                    .toDouble(),
+                              ),
+                    ),
+                    _buildTuningStepper(
+                      label: '보기간격',
+                      valueText: settings.layoutTuning.choiceSpacing
+                          .toStringAsFixed(1),
+                      onMinus: disabled
+                          ? null
+                          : () => onChoiceSpacingChanged(
+                                (settings.layoutTuning.choiceSpacing - 0.2)
+                                    .clamp(0, 24)
+                                    .toDouble(),
+                              ),
+                      onPlus: disabled
+                          ? null
+                          : () => onChoiceSpacingChanged(
+                                (settings.layoutTuning.choiceSpacing + 0.2)
+                                    .clamp(0, 24)
+                                    .toDouble(),
+                              ),
+                    ),
+                    _buildTuningStepper(
+                      label: '그림 DPI',
+                      valueText: '${settings.figureQuality.targetDpi}',
+                      onMinus: disabled
+                          ? null
+                          : () => onTargetDpiChanged(
+                                (settings.figureQuality.targetDpi - 50)
+                                    .clamp(300, 1200)
+                                    .toInt(),
+                              ),
+                      onPlus: disabled
+                          ? null
+                          : () => onTargetDpiChanged(
+                                (settings.figureQuality.targetDpi + 50)
+                                    .clamp(300, 1200)
+                                    .toInt(),
+                              ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
           if (activeJob != null) ...[
             const SizedBox(height: 8),
             Text(
@@ -269,6 +485,80 @@ class ProblemBankExportOptionsPanel extends StatelessWidget {
             onChanged: onChanged == null ? null : (v) => onChanged(v ?? value),
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildTuningStepper({
+    required String label,
+    required String valueText,
+    required VoidCallback? onMinus,
+    required VoidCallback? onPlus,
+  }) {
+    return Container(
+      width: 136,
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      decoration: BoxDecoration(
+        color: const Color(0xFF10171A),
+        borderRadius: BorderRadius.circular(9),
+        border: Border.all(color: _border),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: const TextStyle(
+                    color: _textMuted,
+                    fontSize: 10.8,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 1),
+                Text(
+                  valueText,
+                  style: const TextStyle(
+                    color: _textPrimary,
+                    fontSize: 12.4,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 4),
+          Column(
+            children: [
+              InkWell(
+                onTap: onPlus,
+                borderRadius: BorderRadius.circular(4),
+                child: const Padding(
+                  padding: EdgeInsets.all(2),
+                  child: Icon(
+                    Icons.keyboard_arrow_up,
+                    size: 16,
+                    color: _textMuted,
+                  ),
+                ),
+              ),
+              InkWell(
+                onTap: onMinus,
+                borderRadius: BorderRadius.circular(4),
+                child: const Padding(
+                  padding: EdgeInsets.all(2),
+                  child: Icon(
+                    Icons.keyboard_arrow_down,
+                    size: 16,
+                    color: _textMuted,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }

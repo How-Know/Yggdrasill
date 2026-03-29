@@ -258,9 +258,13 @@ class LearningProblemExportJob {
     required this.includeExplanation,
     required this.selectedQuestionIds,
     required this.outputUrl,
+    required this.outputStorageBucket,
+    required this.outputStoragePath,
     required this.pageCount,
     required this.errorCode,
     required this.errorMessage,
+    required this.renderHash,
+    required this.previewOnly,
     required this.options,
     required this.createdAt,
     required this.updatedAt,
@@ -278,9 +282,13 @@ class LearningProblemExportJob {
   final bool includeExplanation;
   final List<String> selectedQuestionIds;
   final String outputUrl;
+  final String outputStorageBucket;
+  final String outputStoragePath;
   final int pageCount;
   final String errorCode;
   final String errorMessage;
+  final String renderHash;
+  final bool previewOnly;
   final Map<String, dynamic> options;
   final DateTime createdAt;
   final DateTime updatedAt;
@@ -291,6 +299,7 @@ class LearningProblemExportJob {
       status == 'completed' || status == 'failed' || status == 'cancelled';
 
   factory LearningProblemExportJob.fromMap(Map<String, dynamic> map) {
+    final options = _mapOrEmpty(map['options']);
     return LearningProblemExportJob(
       id: '${map['id'] ?? ''}',
       academyId: '${map['academy_id'] ?? ''}',
@@ -303,10 +312,15 @@ class LearningProblemExportJob {
       selectedQuestionIds:
           _listOrEmpty(map['selected_question_ids']).map((e) => '$e').toList(),
       outputUrl: '${map['output_url'] ?? ''}',
+      outputStorageBucket: '${map['output_storage_bucket'] ?? ''}'.trim(),
+      outputStoragePath: '${map['output_storage_path'] ?? ''}'.trim(),
       pageCount: _intOrZero(map['page_count']),
       errorCode: '${map['error_code'] ?? ''}',
       errorMessage: '${map['error_message'] ?? ''}',
-      options: _mapOrEmpty(map['options']),
+      renderHash: '${map['render_hash'] ?? options['renderHash'] ?? ''}'.trim(),
+      previewOnly:
+          map['preview_only'] == true || options['previewOnly'] == true,
+      options: options,
       createdAt: _dateTimeOrNull(map['created_at']) ?? DateTime.now(),
       updatedAt: _dateTimeOrNull(map['updated_at']) ?? DateTime.now(),
       startedAt: _dateTimeOrNull(map['started_at']),
@@ -607,8 +621,11 @@ class LearningProblemBankService {
     required bool includeAnswerSheet,
     required bool includeExplanation,
     required List<String> selectedQuestionIds,
+    String renderHash = '',
+    bool previewOnly = false,
     Map<String, dynamic> options = const <String, dynamic>{},
   }) async {
+    final safeRenderHash = renderHash.trim();
     if (hasGateway) {
       final json = await _gatewayPost(
         '/pb/jobs/export',
@@ -621,35 +638,52 @@ class LearningProblemBankService {
           'includeAnswerSheet': includeAnswerSheet,
           'includeExplanation': includeExplanation,
           'selectedQuestionIds': selectedQuestionIds,
+          'renderHash': safeRenderHash,
+          'previewOnly': previewOnly,
           'options': options,
         },
       );
       return LearningProblemExportJob.fromMap(_mapOrEmpty(json['job']));
     }
 
-    final row = await _client
-        .from('pb_exports')
-        .insert({
-          'academy_id': academyId,
-          'document_id': documentId,
-          'requested_by': _client.auth.currentUser?.id,
-          'status': 'queued',
-          'template_profile': templateProfile.trim(),
-          'paper_size': paperSize.trim(),
-          'include_answer_sheet': includeAnswerSheet,
-          'include_explanation': includeExplanation,
-          'selected_question_ids': selectedQuestionIds,
-          'options': options,
-          'output_storage_bucket': 'problem-exports',
-          'output_storage_path': '',
-          'output_url': '',
-          'page_count': 0,
-          'worker_name': '',
-          'error_code': '',
-          'error_message': '',
-        })
-        .select('*')
-        .single();
+    final basePayload = <String, dynamic>{
+      'academy_id': academyId,
+      'document_id': documentId,
+      'requested_by': _client.auth.currentUser?.id,
+      'status': 'queued',
+      'template_profile': templateProfile.trim(),
+      'paper_size': paperSize.trim(),
+      'include_answer_sheet': includeAnswerSheet,
+      'include_explanation': includeExplanation,
+      'selected_question_ids': selectedQuestionIds,
+      'options': options,
+      'output_storage_bucket': 'problem-exports',
+      'output_storage_path': '',
+      'output_url': '',
+      'page_count': 0,
+      'worker_name': '',
+      'error_code': '',
+      'error_message': '',
+    };
+    final payloadWithHash = <String, dynamic>{
+      ...basePayload,
+      'render_hash': safeRenderHash,
+      'preview_only': previewOnly,
+    };
+    dynamic row;
+    try {
+      row = await _client
+          .from('pb_exports')
+          .insert(payloadWithHash)
+          .select('*')
+          .single();
+    } catch (_) {
+      row = await _client
+          .from('pb_exports')
+          .insert(basePayload)
+          .select('*')
+          .single();
+    }
     return LearningProblemExportJob.fromMap(
       Map<String, dynamic>.from(row as Map<dynamic, dynamic>),
     );
@@ -687,10 +721,13 @@ class LearningProblemBankService {
     required String academyId,
     String? documentId,
     String? status,
+    String? renderHash,
+    bool? previewOnly,
     int limit = 40,
   }) async {
     final safeDocumentId = (documentId ?? '').trim();
     final safeStatus = (status ?? '').trim();
+    final safeRenderHash = (renderHash ?? '').trim();
 
     if (hasGateway) {
       try {
@@ -699,6 +736,9 @@ class LearningProblemBankService {
           'limit': '$limit',
           if (safeDocumentId.isNotEmpty) 'documentId': safeDocumentId,
           if (safeStatus.isNotEmpty) 'status': safeStatus,
+          if (safeRenderHash.isNotEmpty) 'renderHash': safeRenderHash,
+          if (previewOnly != null)
+            'previewOnly': previewOnly ? 'true' : 'false',
         };
         final json = await _gatewayGet('/pb/jobs/export', query: query);
         return (json['jobs'] as List<dynamic>? ?? const <dynamic>[])
@@ -709,21 +749,70 @@ class LearningProblemBankService {
       }
     }
 
-    var q = _client.from('pb_exports').select('*').eq('academy_id', academyId);
-    if (safeDocumentId.isNotEmpty) {
-      q = q.eq('document_id', safeDocumentId);
+    dynamic rows;
+    try {
+      var q =
+          _client.from('pb_exports').select('*').eq('academy_id', academyId);
+      if (safeDocumentId.isNotEmpty) {
+        q = q.eq('document_id', safeDocumentId);
+      }
+      if (safeStatus.isNotEmpty) {
+        q = q.eq('status', safeStatus);
+      }
+      if (safeRenderHash.isNotEmpty) {
+        q = q.eq('render_hash', safeRenderHash);
+      }
+      if (previewOnly != null) {
+        q = q.eq('preview_only', previewOnly);
+      }
+      rows = await q.order('created_at', ascending: false).limit(limit);
+    } catch (_) {
+      var fallback =
+          _client.from('pb_exports').select('*').eq('academy_id', academyId);
+      if (safeDocumentId.isNotEmpty) {
+        fallback = fallback.eq('document_id', safeDocumentId);
+      }
+      if (safeStatus.isNotEmpty) {
+        fallback = fallback.eq('status', safeStatus);
+      }
+      rows = await fallback.order('created_at', ascending: false).limit(limit);
     }
-    if (safeStatus.isNotEmpty) {
-      q = q.eq('status', safeStatus);
-    }
-    final rows = await q.order('created_at', ascending: false).limit(limit);
-    return (rows as List<dynamic>)
+    var jobs = (rows as List<dynamic>)
         .map(
           (e) => LearningProblemExportJob.fromMap(
             Map<String, dynamic>.from(e as Map<dynamic, dynamic>),
           ),
         )
         .toList(growable: false);
+    if (safeRenderHash.isNotEmpty) {
+      jobs = jobs.where((e) => e.renderHash == safeRenderHash).toList();
+    }
+    if (previewOnly != null) {
+      jobs = jobs.where((e) => e.previewOnly == previewOnly).toList();
+    }
+    return jobs;
+  }
+
+  Future<LearningProblemExportJob?> findReusableCompletedExport({
+    required String academyId,
+    required String renderHash,
+    bool? previewOnly,
+  }) async {
+    final safeHash = renderHash.trim();
+    if (safeHash.isEmpty) return null;
+    final jobs = await listExportJobs(
+      academyId: academyId,
+      status: 'completed',
+      renderHash: safeHash,
+      previewOnly: previewOnly,
+      limit: 12,
+    );
+    for (final job in jobs) {
+      if (job.outputUrl.trim().isNotEmpty) {
+        return job;
+      }
+    }
+    return null;
   }
 
   Future<void> clearExportStorageArtifact({

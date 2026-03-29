@@ -1,5 +1,8 @@
 import 'dart:math' as math;
+import 'dart:convert';
 import 'dart:ui';
+
+import 'package:crypto/crypto.dart';
 
 import '../../../services/learning_problem_bank_service.dart';
 
@@ -15,6 +18,7 @@ const List<String> kLearningProblemQuestionModeOptions = <String>[
   '원본',
   '객관식',
   '주관식',
+  '서술형',
 ];
 
 const List<String> kLearningProblemLayoutColumnOptions = <String>['1단', '2단'];
@@ -45,6 +49,112 @@ const String kLearningQuestionModeOriginal = 'original';
 const String kLearningQuestionModeObjective = 'objective';
 const String kLearningQuestionModeSubjective = 'subjective';
 const String kLearningQuestionModeEssay = 'essay';
+const String kLearningRenderConfigVersion =
+    'pb_render_v25_bogi_choice_indent_gap';
+
+class LearningProblemLayoutTuning {
+  const LearningProblemLayoutTuning({
+    required this.pageMargin,
+    required this.columnGap,
+    required this.questionGap,
+    required this.numberLaneWidth,
+    required this.numberGap,
+    required this.hangingIndent,
+    required this.lineHeight,
+    required this.choiceSpacing,
+  });
+
+  factory LearningProblemLayoutTuning.defaults() {
+    return const LearningProblemLayoutTuning(
+      pageMargin: 46,
+      columnGap: 18,
+      questionGap: 12,
+      numberLaneWidth: 26,
+      numberGap: 6,
+      hangingIndent: 22,
+      lineHeight: 15.4,
+      choiceSpacing: 2.2,
+    );
+  }
+
+  final double pageMargin;
+  final double columnGap;
+  final double questionGap;
+  final double numberLaneWidth;
+  final double numberGap;
+  final double hangingIndent;
+  final double lineHeight;
+  final double choiceSpacing;
+
+  LearningProblemLayoutTuning copyWith({
+    double? pageMargin,
+    double? columnGap,
+    double? questionGap,
+    double? numberLaneWidth,
+    double? numberGap,
+    double? hangingIndent,
+    double? lineHeight,
+    double? choiceSpacing,
+  }) {
+    return LearningProblemLayoutTuning(
+      pageMargin: pageMargin ?? this.pageMargin,
+      columnGap: columnGap ?? this.columnGap,
+      questionGap: questionGap ?? this.questionGap,
+      numberLaneWidth: numberLaneWidth ?? this.numberLaneWidth,
+      numberGap: numberGap ?? this.numberGap,
+      hangingIndent: hangingIndent ?? this.hangingIndent,
+      lineHeight: lineHeight ?? this.lineHeight,
+      choiceSpacing: choiceSpacing ?? this.choiceSpacing,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return <String, dynamic>{
+      'pageMargin': pageMargin,
+      'columnGap': columnGap,
+      'questionGap': questionGap,
+      'numberLaneWidth': numberLaneWidth,
+      'numberGap': numberGap,
+      'hangingIndent': hangingIndent,
+      'lineHeight': lineHeight,
+      'choiceSpacing': choiceSpacing,
+    };
+  }
+}
+
+class LearningProblemFigureQuality {
+  const LearningProblemFigureQuality({
+    required this.targetDpi,
+    required this.minDpi,
+  });
+
+  factory LearningProblemFigureQuality.defaults() {
+    return const LearningProblemFigureQuality(
+      targetDpi: 450,
+      minDpi: 300,
+    );
+  }
+
+  final int targetDpi;
+  final int minDpi;
+
+  LearningProblemFigureQuality copyWith({
+    int? targetDpi,
+    int? minDpi,
+  }) {
+    return LearningProblemFigureQuality(
+      targetDpi: targetDpi ?? this.targetDpi,
+      minDpi: minDpi ?? this.minDpi,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return <String, dynamic>{
+      'targetDpi': targetDpi,
+      'minDpi': minDpi,
+    };
+  }
+}
 
 class LearningProblemExportSettings {
   const LearningProblemExportSettings({
@@ -55,12 +165,14 @@ class LearningProblemExportSettings {
     required this.maxQuestionsPerPageLabel,
     required this.fontFamilyLabel,
     required this.fontSizeLabel,
+    required this.layoutTuning,
+    required this.figureQuality,
     required this.includeAnswerSheet,
     required this.includeExplanation,
   });
 
   factory LearningProblemExportSettings.initial() {
-    return const LearningProblemExportSettings(
+    return LearningProblemExportSettings(
       templateLabel: '내신형',
       paperLabel: 'A4',
       questionModeLabel: '원본',
@@ -68,6 +180,8 @@ class LearningProblemExportSettings {
       maxQuestionsPerPageLabel: '4',
       fontFamilyLabel: '기본',
       fontSizeLabel: '기본',
+      layoutTuning: LearningProblemLayoutTuning.defaults(),
+      figureQuality: LearningProblemFigureQuality.defaults(),
       includeAnswerSheet: true,
       includeExplanation: false,
     );
@@ -80,6 +194,8 @@ class LearningProblemExportSettings {
   final String maxQuestionsPerPageLabel;
   final String fontFamilyLabel;
   final String fontSizeLabel;
+  final LearningProblemLayoutTuning layoutTuning;
+  final LearningProblemFigureQuality figureQuality;
   final bool includeAnswerSheet;
   final bool includeExplanation;
 
@@ -99,6 +215,50 @@ class LearningProblemExportSettings {
   String get templateProfile => templateToProfile(templateLabel);
   String get questionModeValue => questionModeToValue(questionModeLabel);
   Size get paperPointSize => paperPointSizeOf(paperLabel);
+  String get resolvedFontFamily {
+    final safe = fontFamilyLabel.trim();
+    if (safe.isEmpty || safe == '기본') return 'HCRBatang';
+    return safe;
+  }
+
+  double get resolvedFontSize {
+    final safe = fontSizeLabel.trim();
+    final parsed = double.tryParse(safe);
+    if (parsed == null || parsed <= 0) return 11.3;
+    return parsed;
+  }
+
+  Map<String, dynamic> toRenderConfig({
+    required List<String> selectedQuestionIdsOrdered,
+    required Map<String, String> questionModeByQuestionId,
+  }) {
+    final orderedIds = selectedQuestionIdsOrdered
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toList(growable: false);
+    final modeMap = <String, String>{};
+    for (final id in orderedIds) {
+      final mode = questionModeByQuestionId[id];
+      if (mode == null || mode.trim().isEmpty) continue;
+      modeMap[id] = mode.trim();
+    }
+    return <String, dynamic>{
+      'renderConfigVersion': kLearningRenderConfigVersion,
+      'templateProfile': templateProfile,
+      'paperSize': paperLabel.trim(),
+      'font': <String, dynamic>{
+        'family': resolvedFontFamily,
+        'size': resolvedFontSize,
+      },
+      'layoutColumns': layoutColumnCount,
+      'maxQuestionsPerPage': maxQuestionsPerPageCount,
+      'questionMode': questionModeValue,
+      'layoutTuning': layoutTuning.toJson(),
+      'figureQuality': figureQuality.toJson(),
+      'questionModeByQuestionId': modeMap,
+      'selectedQuestionIdsOrdered': orderedIds,
+    };
+  }
 
   LearningProblemExportSettings copyWith({
     String? templateLabel,
@@ -108,6 +268,8 @@ class LearningProblemExportSettings {
     String? maxQuestionsPerPageLabel,
     String? fontFamilyLabel,
     String? fontSizeLabel,
+    LearningProblemLayoutTuning? layoutTuning,
+    LearningProblemFigureQuality? figureQuality,
     bool? includeAnswerSheet,
     bool? includeExplanation,
   }) {
@@ -120,6 +282,8 @@ class LearningProblemExportSettings {
           maxQuestionsPerPageLabel ?? this.maxQuestionsPerPageLabel,
       fontFamilyLabel: fontFamilyLabel ?? this.fontFamilyLabel,
       fontSizeLabel: fontSizeLabel ?? this.fontSizeLabel,
+      layoutTuning: layoutTuning ?? this.layoutTuning,
+      figureQuality: figureQuality ?? this.figureQuality,
       includeAnswerSheet: includeAnswerSheet ?? this.includeAnswerSheet,
       includeExplanation: includeExplanation ?? this.includeExplanation,
     );
@@ -182,6 +346,8 @@ String questionModeToValue(String label) {
       return kLearningQuestionModeObjective;
     case '주관식':
       return kLearningQuestionModeSubjective;
+    case '서술형':
+      return kLearningQuestionModeEssay;
     case '원본':
     default:
       return kLearningQuestionModeOriginal;
@@ -615,4 +781,37 @@ String _sanitizeAnswerText(String input) {
 
 String _normalizePreviewLine(String raw) {
   return raw.replaceAll(RegExp(r'\s+'), ' ').trim();
+}
+
+String buildLearningRenderHash({
+  required LearningProblemExportSettings settings,
+  required List<String> selectedQuestionIdsOrdered,
+  required Map<String, String> questionModeByQuestionId,
+}) {
+  final renderConfig = settings.toRenderConfig(
+    selectedQuestionIdsOrdered: selectedQuestionIdsOrdered,
+    questionModeByQuestionId: questionModeByQuestionId,
+  );
+  final canonicalJson = _canonicalJsonEncode(renderConfig);
+  return sha256.convert(utf8.encode(canonicalJson)).toString();
+}
+
+String _canonicalJsonEncode(dynamic value) {
+  return jsonEncode(_canonicalizeJsonValue(value));
+}
+
+dynamic _canonicalizeJsonValue(dynamic value) {
+  if (value is Map) {
+    final sortedKeys = value.keys.map((e) => '$e').toList(growable: false)
+      ..sort();
+    final out = <String, dynamic>{};
+    for (final key in sortedKeys) {
+      out[key] = _canonicalizeJsonValue(value[key]);
+    }
+    return out;
+  }
+  if (value is Iterable) {
+    return value.map(_canonicalizeJsonValue).toList(growable: false);
+  }
+  return value;
 }

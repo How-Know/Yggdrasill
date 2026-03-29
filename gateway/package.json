@@ -20,6 +20,7 @@
     "worker:pb-figure:once": "node src/problem_bank_figure_worker.js --once",
     "worker:pb-export": "node src/problem_bank_export_worker.js",
     "worker:pb-export:once": "node src/problem_bank_export_worker.js --once",
+    "test:pb": "node --test test/problem_bank_export_render_contract.test.js",
     "quality:pb": "node src/problem_bank_quality_gate.js",
     "quality:pb:metrics": "node src/problem_bank_quality_metrics.js"
   },
@@ -31,8 +32,11 @@
     "dotenv": "^16.4.5",
     "fast-xml-parser": "^5.5.9",
     "he": "^1.2.0",
+    "mathjax-full": "^3.2.1",
     "mqtt": "^5.3.4",
     "pdf-lib": "^1.17.1",
+    "puppeteer-core": "^24.40.0",
+    "sharp": "^0.34.5",
     "uuid": "^9.0.1"
   }
 }

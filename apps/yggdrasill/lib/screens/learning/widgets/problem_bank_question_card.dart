@@ -53,14 +53,20 @@ class ProblemBankQuestionCard extends StatelessWidget {
                 children: [
                   SizedBox(
                     height: 340,
-                    child: ProblemBankManagerPreviewPaper(
-                      question: previewQuestion,
-                      figureUrlsByPath: figureUrlsByPath,
-                      expanded: false,
-                      scrollable: true,
-                      bordered: true,
-                      shadow: true,
-                      showQuestionNumberPrefix: false,
+                    child: Align(
+                      alignment: Alignment.topCenter,
+                      child: FractionallySizedBox(
+                        widthFactor: 0.8,
+                        child: ProblemBankManagerPreviewPaper(
+                          question: previewQuestion,
+                          figureUrlsByPath: figureUrlsByPath,
+                          expanded: false,
+                          scrollable: true,
+                          bordered: true,
+                          shadow: true,
+                          showQuestionNumberPrefix: false,
+                        ),
+                      ),
                     ),
                   ),
                   const SizedBox(height: 10),

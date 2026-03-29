@@ -625,6 +625,7 @@ async function processOneJob(job) {
     figure_index: output.figureIndex,
     reference_count: referenceImages.length,
     reference_entry: output.referenceEntry || '',
+    requested_min_side_px: requestedMinSidePx,
     created_at: nowIso,
   }));
   const nextAssets = [
@@ -666,6 +667,7 @@ async function processOneJob(job) {
     referenceEntry: referenceImages[0]?.entryName || '',
     referenceEntries: referenceImages.map((x) => x.entryName).filter(Boolean),
     generationMode,
+    requestedMinSidePx,
   };
   const { error: jobErr } = await supa
     .from('pb_figure_jobs')

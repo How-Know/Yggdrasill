@@ -1,13 +1,10 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
-import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:open_filex/open_filex.dart';
-import 'package:screenshot/screenshot.dart';
-import 'package:syncfusion_flutter_pdf/pdf.dart' as sf;
 
 import '../../services/data_manager.dart';
 import '../../services/learning_problem_bank_service.dart';
@@ -15,9 +12,8 @@ import '../../services/tenant_service.dart';
 import '../../widgets/animated_reorderable_grid.dart';
 import 'models/problem_bank_export_models.dart';
 import 'widgets/problem_bank_bottom_fab_bar.dart';
-import 'widgets/problem_bank_export_layout_preview_dialog.dart';
 import 'widgets/problem_bank_export_options_panel.dart';
-import 'widgets/problem_bank_export_pdf_question_page.dart';
+import 'widgets/problem_bank_export_server_preview_dialog.dart';
 import 'widgets/problem_bank_filter_bar.dart';
 import 'widgets/problem_bank_manager_preview_paper.dart';
 import 'widgets/problem_bank_question_card.dart';
@@ -629,20 +625,156 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     });
   }
 
+  List<String> _selectedQuestionIdsInCurrentOrder(
+    List<LearningProblemQuestion> selectedQuestions,
+  ) {
+    return selectedQuestions
+        .map((q) => q.id.trim())
+        .where((id) => id.isNotEmpty)
+        .toList(growable: false);
+  }
+
+  Map<String, dynamic> _buildRenderConfigForSelection(
+    List<LearningProblemQuestion> selectedQuestions,
+  ) {
+    final selectedModes = _selectedModeMapForQuestions(selectedQuestions);
+    final orderedIds = _selectedQuestionIdsInCurrentOrder(selectedQuestions);
+    return _exportSettings.toRenderConfig(
+      selectedQuestionIdsOrdered: orderedIds,
+      questionModeByQuestionId: selectedModes,
+    );
+  }
+
+  String _buildRenderHashForSelection(
+    List<LearningProblemQuestion> selectedQuestions,
+  ) {
+    final selectedModes = _selectedModeMapForQuestions(selectedQuestions);
+    final orderedIds = _selectedQuestionIdsInCurrentOrder(selectedQuestions);
+    return buildLearningRenderHash(
+      settings: _exportSettings,
+      selectedQuestionIdsOrdered: orderedIds,
+      questionModeByQuestionId: selectedModes,
+    );
+  }
+
+  Future<LearningProblemExportJob?> _waitForExportCompletion(
+    LearningProblemExportJob initialJob,
+  ) async {
+    final academyId = _academyId;
+    if (academyId == null || academyId.isEmpty) return null;
+    var current = initialJob;
+    if (mounted) {
+      setState(() {
+        _activeExportJob = current;
+      });
+    }
+    for (var attempt = 0; attempt < 240; attempt += 1) {
+      if (current.isTerminal) return current;
+      await Future<void>.delayed(const Duration(seconds: 2));
+      final latest = await _service.getExportJob(
+        academyId: academyId,
+        jobId: current.id,
+      );
+      if (latest == null) continue;
+      current = latest;
+      if (mounted) {
+        setState(() {
+          _activeExportJob = current;
+        });
+      }
+      if (current.isTerminal) return current;
+    }
+    return current;
+  }
+
+  Future<LearningProblemExportJob?> _ensureCompletedExportForSelection({
+    required List<LearningProblemQuestion> selectedQuestions,
+    required bool previewOnly,
+  }) async {
+    final academyId = _academyId;
+    if (academyId == null || academyId.isEmpty) return null;
+    if (selectedQuestions.isEmpty) return null;
+    final renderHash = _buildRenderHashForSelection(selectedQuestions);
+    final renderConfig = _buildRenderConfigForSelection(selectedQuestions);
+    // Always generate a fresh server render for preview so users can
+    // immediately see renderer/layout fixes without stale hash reuse.
+    final reusable = previewOnly
+        ? null
+        : await _service.findReusableCompletedExport(
+            academyId: academyId,
+            renderHash: renderHash,
+          );
+    if (reusable != null && reusable.outputUrl.trim().isNotEmpty) {
+      if (mounted) {
+        setState(() {
+          _activeExportJob = reusable;
+        });
+      }
+      return reusable;
+    }
+
+    final orderedIds = _selectedQuestionIdsInCurrentOrder(selectedQuestions);
+    final options = <String, dynamic>{
+      ...renderConfig,
+      'renderHash': renderHash,
+      'previewOnly': previewOnly,
+    };
+    final job = await _service.createExportJob(
+      academyId: academyId,
+      documentId: selectedQuestions.first.documentId,
+      templateProfile: _exportSettings.templateProfile,
+      paperSize: _exportSettings.paperLabel,
+      includeAnswerSheet: _exportSettings.includeAnswerSheet,
+      includeExplanation: _exportSettings.includeExplanation,
+      selectedQuestionIds: orderedIds,
+      renderHash: renderHash,
+      previewOnly: previewOnly,
+      options: options,
+    );
+    final completed = await _waitForExportCompletion(job);
+    return completed;
+  }
+
   Future<void> _openExportLayoutPreviewDialog() async {
     final selected = _selectedQuestions;
     if (selected.isEmpty) {
       _showSnack('레이아웃 미리보기할 문항을 먼저 선택해주세요.');
       return;
     }
-    final selectedModes = _selectedModeMapForQuestions(selected);
-    await ProblemBankExportLayoutPreviewDialog.open(
-      context,
-      selectedQuestions: selected,
-      settings: _exportSettings,
-      figureUrlsByQuestionId: _questionFigureUrlsByPath,
-      questionModeByQuestionId: selectedModes,
-    );
+    if (_isExporting || _isSavingExportLocally) return;
+    setState(() {
+      _isExporting = true;
+    });
+    try {
+      final completed = await _ensureCompletedExportForSelection(
+        selectedQuestions: selected,
+        previewOnly: true,
+      );
+      if (!mounted || completed == null) return;
+      if (completed.status != 'completed' ||
+          completed.outputUrl.trim().isEmpty) {
+        final err = completed.errorMessage.isNotEmpty
+            ? completed.errorMessage
+            : completed.errorCode;
+        _showSnack(
+          '미리보기 생성 실패: ${err.isEmpty ? completed.status : err}',
+        );
+        return;
+      }
+      await ProblemBankExportServerPreviewDialog.open(
+        context,
+        pdfUrl: completed.outputUrl,
+        titleText: '서버 PDF 미리보기 (${selected.length}문항)',
+      );
+    } catch (e) {
+      _showSnack('서버 미리보기 실패: $e');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isExporting = false;
+        });
+      }
+    }
   }
 
   Future<void> _createExportJob() async {
@@ -652,118 +784,30 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       return;
     }
     if (_isExporting || _isSavingExportLocally) return;
-
-    final savePathRaw = await FilePicker.platform.saveFile(
-      dialogTitle: 'PDF 저장 위치 선택',
-      fileName: _defaultLocalPdfFileNameForSelection(),
-      type: FileType.custom,
-      allowedExtensions: const ['pdf'],
-    );
-    if (savePathRaw == null || savePathRaw.trim().isEmpty) {
-      _showSnack('PDF 저장이 취소되었습니다.');
-      return;
-    }
-    final savePath = _normalizeSavePathWithPdfExtension(savePathRaw);
-    final pageSize = _exportSettings.paperPointSize;
-    final selectedModes = _selectedModeMapForQuestions(selected);
-
     setState(() {
       _isExporting = true;
-      _activeExportJob = null;
     });
-    _pollTimer?.cancel();
-    _pollTimer = null;
     try {
-      await _warmUpFigureImagesForExport(selected);
-      final layoutPages = buildQuestionLayoutPreviewPages(
-        selected,
-        settings: _exportSettings,
-        questionModeByQuestionId: selectedModes,
+      final completed = await _ensureCompletedExportForSelection(
+        selectedQuestions: selected,
+        previewOnly: false,
       );
-      final imagePages = <Uint8List>[];
-      var pageIndex = 1;
-      for (final page in layoutPages) {
-        imagePages.add(
-          await _capturePageWidgetAsPng(
-            ProblemBankExportPdfQuestionPage(
-              page: page,
-              settings: _exportSettings,
-              figureUrlsByQuestionId: _questionFigureUrlsByPath,
-              questionModeByQuestionId: selectedModes,
-            ),
-            pageSize: pageSize,
-          ),
-        );
-        pageIndex += 1;
+      if (completed == null) return;
+      if (completed.status != 'completed') {
+        final err = completed.errorMessage.isNotEmpty
+            ? completed.errorMessage
+            : completed.errorCode;
+        _showSnack('PDF 생성 실패: ${err.isEmpty ? completed.status : err}');
+        return;
       }
-
-      if (_exportSettings.includeAnswerSheet) {
-        imagePages.add(
-          await _capturePageWidgetAsPng(
-            _buildLocalAnswerPdfPageWidget(
-              questions: selected,
-              questionModeByQuestionId: selectedModes,
-              pageIndex: pageIndex,
-              pageSize: pageSize,
-            ),
-            pageSize: pageSize,
-          ),
-        );
-        pageIndex += 1;
-      }
-
-      if (_exportSettings.includeExplanation) {
-        imagePages.add(
-          await _capturePageWidgetAsPng(
-            _buildLocalExplanationPdfPageWidget(
-              questions: selected,
-              pageIndex: pageIndex,
-              pageSize: pageSize,
-            ),
-            pageSize: pageSize,
-          ),
-        );
-      }
-
-      final pdfBytes = _buildPdfBytesFromPageImages(
-        imagePages,
-        pageSize: pageSize,
-      );
-      final outFile = File(savePath);
-      await outFile.parent.create(recursive: true);
-      await outFile.writeAsBytes(pdfBytes, flush: true);
-      await OpenFilex.open(savePath);
-      if (!mounted) return;
-      setState(() {
-        _isExporting = false;
-      });
-      _showSnack('PDF 저장 완료: $savePath');
+      await _saveCompletedExportToLocal(completed);
     } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _isExporting = false;
-      });
       _showSnack('PDF 생성 실패: $e');
-    }
-  }
-
-  Future<void> _warmUpFigureImagesForExport(
-    List<LearningProblemQuestion> questions,
-  ) async {
-    final urls = <String>{};
-    for (final question in questions) {
-      final byPath =
-          _questionFigureUrlsByPath[question.id] ?? const <String, String>{};
-      for (final url in byPath.values) {
-        final safe = url.trim();
-        if (safe.isNotEmpty) urls.add(safe);
-      }
-    }
-    for (final url in urls) {
-      try {
-        await precacheImage(NetworkImage(url), context);
-      } catch (_) {
-        // 일부 이미지 예열 실패는 PDF 생성을 막지 않는다.
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isExporting = false;
+        });
       }
     }
   }
@@ -865,232 +909,6 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     }
   }
 
-  String _defaultLocalPdfFileNameForSelection() {
-    final selected = _selectedQuestions;
-    final sourceDocs = selected
-        .map((q) => q.documentId.trim())
-        .where((id) => id.isNotEmpty)
-        .toSet();
-    final sourceName = sourceDocs.length <= 1 && selected.isNotEmpty
-        ? selected.first.documentSourceName.trim()
-        : 'problem_set_multi';
-    final base = (sourceName.isEmpty ? 'problem_bank' : sourceName)
-        .replaceAll(RegExp(r'\.[^.]+$'), '');
-    final stamp = _todayStamp();
-    return '${base}_${_exportSettings.paperLabel}_$stamp.pdf';
-  }
-
-  Future<Uint8List> _capturePageWidgetAsPng(
-    Widget pageWidget, {
-    required Size pageSize,
-  }) async {
-    final capture = ScreenshotController();
-    final wrapped = Material(
-      color: Colors.white,
-      child: SizedBox(
-        width: pageSize.width,
-        height: pageSize.height,
-        child: pageWidget,
-      ),
-    );
-    Object? lastError;
-    for (final ratio in const <double>[8.0, 7.0, 6.0, 5.0]) {
-      try {
-        final png = await capture.captureFromWidget(
-          InheritedTheme.captureAll(context, wrapped),
-          delay: const Duration(milliseconds: 70),
-          context: context,
-          pixelRatio: ratio,
-        );
-        if (png.isNotEmpty) {
-          return png;
-        }
-      } catch (e) {
-        lastError = e;
-      }
-    }
-    if (lastError != null) {
-      throw Exception('페이지 캡처 실패: $lastError');
-    }
-    throw Exception('페이지 캡처 결과가 비어 있습니다.');
-  }
-
-  Widget _buildLocalAnswerPdfPageWidget({
-    required List<LearningProblemQuestion> questions,
-    required Map<String, String> questionModeByQuestionId,
-    required int pageIndex,
-    required Size pageSize,
-  }) {
-    return Container(
-      width: pageSize.width,
-      height: pageSize.height,
-      color: Colors.white,
-      padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Text(
-                '정답지 · ${_exportSettings.paperLabel}',
-                style: const TextStyle(
-                  color: Color(0xFF1A1A1A),
-                  fontSize: 13.2,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const Spacer(),
-              Text(
-                'p.$pageIndex',
-                style: const TextStyle(
-                  color: Color(0xFF585858),
-                  fontSize: 11.5,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Expanded(
-            child: Wrap(
-              spacing: 12,
-              runSpacing: 9,
-              children: questions.map((q) {
-                final mode = effectiveQuestionModeOf(
-                  q,
-                  questionModeByQuestionId: questionModeByQuestionId,
-                  fallbackMode: _exportSettings.questionModeValue,
-                );
-                final answer = previewAnswerForMode(q, mode).trim();
-                return SizedBox(
-                  width: 220,
-                  child: _buildNumberedWrappedText(
-                    numberText: '${q.displayQuestionNumber}.',
-                    valueText: answer.isEmpty ? '-' : answer,
-                    textStyle: const TextStyle(
-                      color: Color(0xFF2D2D2D),
-                      fontSize: 11.4,
-                      height: 1.34,
-                    ),
-                  ),
-                );
-              }).toList(growable: false),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildLocalExplanationPdfPageWidget({
-    required List<LearningProblemQuestion> questions,
-    required int pageIndex,
-    required Size pageSize,
-  }) {
-    return Container(
-      width: pageSize.width,
-      height: pageSize.height,
-      color: Colors.white,
-      padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Text(
-                '해설/검수 메모 · ${_exportSettings.paperLabel}',
-                style: const TextStyle(
-                  color: Color(0xFF1A1A1A),
-                  fontSize: 13.2,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const Spacer(),
-              Text(
-                'p.$pageIndex',
-                style: const TextStyle(
-                  color: Color(0xFF585858),
-                  fontSize: 11.5,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Expanded(
-            child: SingleChildScrollView(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  for (var i = 0; i < questions.length; i += 1) ...[
-                    _buildNumberedWrappedText(
-                      numberText: '${questions[i].displayQuestionNumber}.',
-                      valueText:
-                          explanationForPreview(questions[i]).trim().isEmpty
-                              ? '해설/메모 없음'
-                              : _ellipsizePreviewText(
-                                  explanationForPreview(questions[i]),
-                                  max: 220,
-                                ),
-                      textStyle: const TextStyle(
-                        color: Color(0xFF2D2D2D),
-                        fontSize: 11.4,
-                        height: 1.34,
-                      ),
-                    ),
-                    if (i < questions.length - 1) const SizedBox(height: 6),
-                  ],
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Uint8List _buildPdfBytesFromPageImages(
-    List<Uint8List> pageImages, {
-    required Size pageSize,
-  }) {
-    final document = sf.PdfDocument();
-    document.pageSettings.size = pageSize;
-    for (final bytes in pageImages) {
-      final page = document.pages.add();
-      final client = page.getClientSize();
-      page.graphics.drawImage(
-        sf.PdfBitmap(bytes),
-        Rect.fromLTWH(0, 0, client.width, client.height),
-      );
-    }
-    final saved = document.saveSync();
-    document.dispose();
-    return Uint8List.fromList(saved);
-  }
-
-  String _ellipsizePreviewText(String raw, {int max = 94}) {
-    final text = raw.replaceAll(RegExp(r'\s+'), ' ').trim();
-    if (text.length <= max) return text;
-    return '${text.substring(0, max)}...';
-  }
-
-  Widget _buildNumberedWrappedText({
-    required String numberText,
-    required String valueText,
-    required TextStyle textStyle,
-  }) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SizedBox(
-          width: 30,
-          child: Text(numberText, style: textStyle),
-        ),
-        Expanded(
-          child: Text(valueText, style: textStyle),
-        ),
-      ],
-    );
-  }
-
   String _defaultExportPdfFileName(LearningProblemExportJob job) {
     final selected = _selectedQuestions;
     final sourceDocs = selected
@@ -1113,9 +931,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
   }
 
   Future<void> _saveCompletedExportToLocal(LearningProblemExportJob job) async {
-    final academyId = _academyId;
     if (_isSavingExportLocally) return;
-    if (academyId == null || academyId.isEmpty) return;
     if (!mounted) return;
 
     setState(() {
@@ -1129,13 +945,35 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         allowedExtensions: const ['pdf'],
       );
       if (savePath == null || savePath.trim().isEmpty) {
-        _showSnack('로컬 저장이 취소되었습니다. 서버 파일은 정리합니다.');
+        _showSnack('로컬 저장이 취소되었습니다.');
       } else {
-        final rawUrl = job.outputUrl.trim();
-        if (rawUrl.isEmpty) {
-          throw Exception('서명된 PDF URL이 없어 로컬 저장을 진행할 수 없습니다.');
+        var rawUrl = job.outputUrl.trim();
+        if (rawUrl.isEmpty &&
+            job.outputStorageBucket.isNotEmpty &&
+            job.outputStoragePath.isNotEmpty) {
+          rawUrl = await _service.createStorageSignedUrl(
+            bucket: job.outputStorageBucket,
+            path: job.outputStoragePath,
+          );
         }
-        final bytes = await _service.downloadPdfBytesFromUrl(rawUrl);
+        if (rawUrl.isEmpty) {
+          throw Exception('PDF URL을 확보하지 못해 로컬 저장을 진행할 수 없습니다.');
+        }
+        late final List<int> bytes;
+        try {
+          bytes = await _service.downloadPdfBytesFromUrl(rawUrl);
+        } catch (_) {
+          if (job.outputStorageBucket.isEmpty ||
+              job.outputStoragePath.isEmpty) {
+            rethrow;
+          }
+          final refreshed = await _service.createStorageSignedUrl(
+            bucket: job.outputStorageBucket,
+            path: job.outputStoragePath,
+          );
+          if (refreshed.trim().isEmpty) rethrow;
+          bytes = await _service.downloadPdfBytesFromUrl(refreshed);
+        }
         final normalizedPath = _normalizeSavePathWithPdfExtension(savePath);
         final outFile = File(normalizedPath);
         await outFile.parent.create(recursive: true);
@@ -1146,14 +984,6 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     } catch (e) {
       _showSnack('로컬 저장 실패: $e');
     } finally {
-      try {
-        await _service.clearExportStorageArtifact(
-          academyId: academyId,
-          jobId: job.id,
-        );
-      } catch (e) {
-        _showSnack('서버 PDF 정리 실패: $e');
-      }
       if (mounted) {
         setState(() {
           _isSavingExportLocally = false;
@@ -1353,6 +1183,91 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                       setState(() {
                         _exportSettings = _exportSettings.copyWith(
                           includeExplanation: value,
+                        );
+                      });
+                    },
+                    onPageMarginChanged: (value) {
+                      setState(() {
+                        _exportSettings = _exportSettings.copyWith(
+                          layoutTuning: _exportSettings.layoutTuning.copyWith(
+                            pageMargin: value,
+                          ),
+                        );
+                      });
+                    },
+                    onColumnGapChanged: (value) {
+                      setState(() {
+                        _exportSettings = _exportSettings.copyWith(
+                          layoutTuning: _exportSettings.layoutTuning.copyWith(
+                            columnGap: value,
+                          ),
+                        );
+                      });
+                    },
+                    onQuestionGapChanged: (value) {
+                      setState(() {
+                        _exportSettings = _exportSettings.copyWith(
+                          layoutTuning: _exportSettings.layoutTuning.copyWith(
+                            questionGap: value,
+                          ),
+                        );
+                      });
+                    },
+                    onNumberLaneWidthChanged: (value) {
+                      setState(() {
+                        _exportSettings = _exportSettings.copyWith(
+                          layoutTuning: _exportSettings.layoutTuning.copyWith(
+                            numberLaneWidth: value,
+                          ),
+                        );
+                      });
+                    },
+                    onNumberGapChanged: (value) {
+                      setState(() {
+                        _exportSettings = _exportSettings.copyWith(
+                          layoutTuning: _exportSettings.layoutTuning.copyWith(
+                            numberGap: value,
+                          ),
+                        );
+                      });
+                    },
+                    onHangingIndentChanged: (value) {
+                      setState(() {
+                        _exportSettings = _exportSettings.copyWith(
+                          layoutTuning: _exportSettings.layoutTuning.copyWith(
+                            hangingIndent: value,
+                          ),
+                        );
+                      });
+                    },
+                    onLineHeightChanged: (value) {
+                      setState(() {
+                        _exportSettings = _exportSettings.copyWith(
+                          layoutTuning: _exportSettings.layoutTuning.copyWith(
+                            lineHeight: value,
+                          ),
+                        );
+                      });
+                    },
+                    onChoiceSpacingChanged: (value) {
+                      setState(() {
+                        _exportSettings = _exportSettings.copyWith(
+                          layoutTuning: _exportSettings.layoutTuning.copyWith(
+                            choiceSpacing: value,
+                          ),
+                        );
+                      });
+                    },
+                    onTargetDpiChanged: (value) {
+                      setState(() {
+                        _exportSettings = _exportSettings.copyWith(
+                          figureQuality: _exportSettings.figureQuality.copyWith(
+                            targetDpi: value,
+                            minDpi: math.min(
+                              _exportSettings.figureQuality.minDpi,
+                              value,
+                            ),
+                          ),
                         );
                       });
                     },
