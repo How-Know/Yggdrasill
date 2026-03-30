@@ -171,18 +171,31 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                         padding: const EdgeInsets.fromLTRB(40, 8, 16, 0),
                         child: LayoutBuilder(
                           builder: (context, constraints) {
-                            final bool stackedHeader =
-                                constraints.maxWidth < 1500;
-                            final bool compactHeader =
-                                constraints.maxWidth < 1240;
+                            // 인쇄·채점 컨트롤은 항상 1행 우측에 고정. 좌측만 날짜/통계 줄바꿈.
+                            final double controlsReserve =
+                                _isGradingMode ? 380 : 270;
+                            final double leftBudget = math.max(
+                              0.0,
+                              constraints.maxWidth -
+                                  controlsReserve -
+                                  56, // 좌우 패딩·간격 여유
+                            );
+                            final double headerScale =
+                                (constraints.maxWidth / 1680.0)
+                                    .clamp(0.68, 1.0);
                             final double dateTimeFontSize =
-                                compactHeader ? 38 : 50;
+                                (50 * headerScale).clamp(26.0, 50.0);
+                            final double statsFontSize =
+                                (38 * headerScale).clamp(18.0, 40.0);
                             final double weatherIconSize =
                                 dateTimeFontSize * 1.1;
-                            final Widget infoBlock = Wrap(
+                            // 한 줄에 날짜+통계까지 넣기에 부족하면 통계만 2번째 줄.
+                            final bool statsOnSecondLine =
+                                leftBudget < 920 * headerScale;
+                            final Widget dateLine = Wrap(
                               crossAxisAlignment: WrapCrossAlignment.center,
-                              spacing: compactHeader ? 14 : 24,
-                              runSpacing: compactHeader ? 6 : 0,
+                              spacing: 12 * headerScale,
+                              runSpacing: 4,
                               children: [
                                 HomeHeaderWeatherIcon(
                                   iconSize: weatherIconSize,
@@ -197,11 +210,18 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                     height: 1.0,
                                   ),
                                 ),
+                              ],
+                            );
+                            final Widget statsLine = Wrap(
+                              crossAxisAlignment: WrapCrossAlignment.center,
+                              spacing: 14 * headerScale,
+                              runSpacing: 4,
+                              children: [
                                 Text(
-                                  '등원중: ${list.length}명',
+                                  '등원: ${list.length}명',
                                   style: TextStyle(
                                     color: Colors.white60,
-                                    fontSize: compactHeader ? 30 : 40,
+                                    fontSize: statsFontSize,
                                     fontWeight: FontWeight.bold,
                                   ),
                                 ),
@@ -209,12 +229,60 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                   '제출: $submittedCount개',
                                   style: TextStyle(
                                     color: const Color(0xFF8FB3FF),
-                                    fontSize: compactHeader ? 30 : 40,
+                                    fontSize: statsFontSize,
                                     fontWeight: FontWeight.bold,
                                   ),
                                 ),
                               ],
                             );
+                            final Widget infoBlock = statsOnSecondLine
+                                ? Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      dateLine,
+                                      SizedBox(height: 6 * headerScale),
+                                      statsLine,
+                                    ],
+                                  )
+                                : Wrap(
+                                    crossAxisAlignment:
+                                        WrapCrossAlignment.center,
+                                    spacing: 18 * headerScale,
+                                    runSpacing: 6,
+                                    children: [
+                                      HomeHeaderWeatherIcon(
+                                        iconSize: weatherIconSize,
+                                        color: Colors.white70,
+                                      ),
+                                      Text(
+                                        _formatDateWithWeekdayAndTime(_now),
+                                        style: TextStyle(
+                                          color: Colors.white,
+                                          fontSize: dateTimeFontSize,
+                                          fontWeight: FontWeight.bold,
+                                          height: 1.0,
+                                        ),
+                                      ),
+                                      Text(
+                                        '등원: ${list.length}명',
+                                        style: TextStyle(
+                                          color: Colors.white60,
+                                          fontSize: statsFontSize,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                      Text(
+                                        '제출: $submittedCount개',
+                                        style: TextStyle(
+                                          color: const Color(0xFF8FB3FF),
+                                          fontSize: statsFontSize,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ],
+                                  );
                             final Widget controls = Wrap(
                               alignment: WrapAlignment.end,
                               crossAxisAlignment: WrapCrossAlignment.center,
@@ -304,19 +372,6 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                 ),
                               ],
                             );
-                            if (stackedHeader) {
-                              return Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  infoBlock,
-                                  const SizedBox(height: 10),
-                                  Align(
-                                    alignment: Alignment.centerRight,
-                                    child: controls,
-                                  ),
-                                ],
-                              );
-                            }
                             return Row(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
