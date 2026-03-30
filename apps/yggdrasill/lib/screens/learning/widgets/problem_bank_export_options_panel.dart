@@ -65,9 +65,10 @@ class ProblemBankExportOptionsPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final maxPerPageValues = settings.maxQuestionsPerPageOptions
-        .map((e) => '$e')
-        .toList(growable: false);
+    final maxPerPageValues = [
+      ...settings.maxQuestionsPerPageOptions.map((e) => '$e'),
+      '많이',
+    ];
     final disabled = isBusy || isSavingLocally;
 
     return Container(
@@ -139,7 +140,7 @@ class ProblemBankExportOptionsPanel extends StatelessWidget {
                 ),
                 const SizedBox(width: 10),
                 _LabeledDropdown(
-                  label: '페이지당 최대 문항',
+                  label: '문항 배치',
                   width: 160,
                   child: _buildDropdown(
                     value: settings.maxQuestionsPerPageLabel,
@@ -222,7 +223,7 @@ class ProblemBankExportOptionsPanel extends StatelessWidget {
                 ),
               ),
               Text(
-                '${settings.layoutColumnCount}열 · 최대 ${settings.maxQuestionsPerPageCount}문항/페이지 · 선택 $selectedCount문항',
+                '${settings.layoutColumnCount}열 · ${settings.maxQuestionsPerPageLabel == '많이' ? '많이 배치' : '최대 ${settings.maxQuestionsPerPageCount}문항/페이지'} · 선택 $selectedCount문항',
                 style: const TextStyle(
                   color: _textMuted,
                   fontSize: 11.8,

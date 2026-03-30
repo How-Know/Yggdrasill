@@ -99,7 +99,6 @@ function normalizeSvgForInline(svgMarkup) {
   const inlineStyle = [
     widthEm ? `width:${widthEm}` : '',
     heightEm ? `height:${heightEm}` : '',
-    verticalAlign ? `vertical-align:${verticalAlign}` : '',
   ].filter(Boolean).join(';');
 
   let svg = root.replace(
@@ -112,6 +111,22 @@ function normalizeSvgForInline(svgMarkup) {
       return cleaned.replace(/>$/, ` style="${inlineStyle}">`);
     },
   );
+
+  svg = svg.replace(/<rect\b([^>]*)>/gi, (m, attrs) => {
+    const hm = attrs.match(/\bheight="([\d.]+)"/);
+    if (!hm) return m;
+    const oldH = parseFloat(hm[1]);
+    if (!(oldH > 0 && oldH < 200)) return m;
+    const newH = oldH * 0.5;
+    const delta = (oldH - newH) / 2;
+    let patched = attrs.replace(/\bheight="[\d.]+"/, `height="${newH.toFixed(1)}"`);
+    const ym = patched.match(/\by="(-?[\d.]+)"/);
+    if (ym) {
+      const newY = parseFloat(ym[1]) + delta;
+      patched = patched.replace(/\by="-?[\d.]+"/, `y="${newY.toFixed(1)}"`);
+    }
+    return `<rect${patched}>`;
+  });
 
   return { svg, verticalAlign };
 }

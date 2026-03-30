@@ -25,6 +25,7 @@ function buildStyles({
   choiceGapPt,
   columns,
   columnGapPt,
+  perPage,
 }) {
   const paperMm = PAPER_MM[paper] || PAPER_MM.A4;
   const pageSizeCss = `${paperMm.width}mm ${paperMm.height}mm`;
@@ -49,6 +50,7 @@ function buildStyles({
       font-family: "YggMain", "HCR Batang", "Malgun Gothic", serif;
       font-size: calc(var(--stem-size-pt) * 1pt);
       line-height: calc(var(--line-height-pt) * 1pt);
+      word-spacing: 0.15em;
       color: #111;
       background: #fff;
     }
@@ -62,29 +64,29 @@ function buildStyles({
     .question-stream {
       columns: ${columns};
       column-gap: calc(var(--column-gap-pt) * 1pt);
+      overflow: visible;
     }
     .question {
       break-inside: avoid;
       margin-bottom: calc(var(--question-gap-pt) * 1pt);
-    }
-    .q-header {
-      display: flex;
-      align-items: baseline;
-      gap: 2pt;
+      overflow: visible;
     }
     .q-num {
+      font-family: "YggQNum", "YggMain", serif;
       font-weight: 700;
+      font-size: calc((var(--stem-size-pt) + 1) * 1pt);
+      -webkit-text-stroke: 0.3pt currentColor;
       white-space: nowrap;
-      flex-shrink: 0;
+      margin-right: 0.25em;
     }
-    .q-first-line { flex: 1; min-width: 0; }
-    .q-body {
-      min-width: 0;
+    .q-stem {
+      white-space: normal;
     }
-    .q-stem { white-space: normal; }
-    .stem-line { margin: 0; }
+    .bogi-box, .figure-container, .choice-list, .choice-grid-row1, .choice-grid-row2 {
+      text-indent: 0;
+    }
     .choice-list {
-      margin-top: calc(var(--line-height-pt) * 1.8 * 1pt - var(--line-height-pt) * 1pt);
+      margin-top: calc(var(--line-height-pt) * 0.3 * 1pt);
       display: grid;
       grid-template-columns: 1fr;
       row-gap: calc(var(--choice-gap-pt) * 1pt);
@@ -94,60 +96,77 @@ function buildStyles({
     }
     .choice {
       display: inline-flex;
-      align-items: baseline;
+      align-items: center;
       gap: 3pt;
       min-width: 0;
+      overflow: visible;
     }
-    .choice-label { white-space: nowrap; }
+    .choice-label {
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
     .choice-text {
       min-width: 0;
       overflow-wrap: anywhere;
       word-break: keep-all;
+      overflow: visible;
     }
     .choice-grid-row1 {
-      margin-top: calc(var(--line-height-pt) * 1.8 * 1pt - var(--line-height-pt) * 1pt);
+      margin-top: calc(var(--line-height-pt) * 0.3 * 1pt);
       display: grid;
       grid-template-columns: repeat(5, 1fr);
+      align-items: center;
       column-gap: 4pt;
       row-gap: calc(var(--choice-gap-pt) * 1pt);
+      overflow: visible;
     }
     .choice-grid-row2 {
-      margin-top: calc(var(--line-height-pt) * 1.8 * 1pt - var(--line-height-pt) * 1pt);
+      margin-top: calc(var(--line-height-pt) * 0.3 * 1pt);
+      overflow: visible;
     }
     .choice-grid-row2-top {
       display: grid;
       grid-template-columns: repeat(3, 1fr);
+      align-items: center;
       column-gap: 4pt;
       row-gap: calc(var(--choice-gap-pt) * 1pt);
+      overflow: visible;
     }
     .choice-grid-row2-bot {
       display: grid;
       grid-template-columns: repeat(3, 1fr);
+      align-items: center;
       column-gap: 4pt;
       row-gap: calc(var(--choice-gap-pt) * 1pt);
       margin-top: calc(var(--choice-gap-pt) * 1pt);
+      overflow: visible;
     }
     .math-inline {
       display: inline-block;
       line-height: 1;
       margin: 0 0.05em;
+      vertical-align: baseline;
+      overflow: visible;
+      padding-bottom: 0.06em;
     }
     .math-inline svg {
       display: block;
+      overflow: visible;
     }
     .math-inline.fraction {
-      margin-top: 0.15em;
-      margin-bottom: 0.15em;
+      padding-top: calc(var(--line-height-pt) * 0.25 * 1pt);
+      padding-bottom: calc(var(--line-height-pt) * 0.25 * 1pt);
     }
     .bogi-box {
-      margin: 8pt 0;
-      border: 0.8pt solid #333;
+      margin-top: calc(var(--line-height-pt) * 0.8 * 1pt);
+      margin-bottom: 8pt;
+      border: 0.15pt solid #333;
       padding: 10pt 12pt 8pt;
       position: relative;
     }
     .bogi-title {
       position: absolute;
-      top: -0.6em;
+      top: -0.55em;
       left: 50%;
       transform: translateX(-50%);
       font-size: calc(var(--stem-size-pt) * 1pt);
@@ -155,8 +174,18 @@ function buildStyles({
       white-space: nowrap;
       line-height: 1;
       background: #fff;
-      padding: 0 6pt;
-      letter-spacing: 0.15em;
+      padding: 0;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.15em;
+    }
+    .bogi-bracket {
+      display: block;
+      flex-shrink: 0;
+    }
+    .bogi-title-text {
+      letter-spacing: 0.25em;
+      margin-right: -0.25em;
     }
     .bogi-content {
       padding-top: 4pt;
@@ -185,7 +214,7 @@ function buildStyles({
     .figure-placeholder {
       margin: 6pt 0;
       padding: 8pt;
-      border: 0.8pt solid #bbb;
+      border: 0.3pt solid #bbb;
       border-radius: 2pt;
       color: #555;
       font-size: calc((var(--stem-size-pt) - 0.6) * 1pt);
@@ -266,8 +295,10 @@ export function buildDocumentHtml({
   includeExplanation,
   mathRenderer,
   fontFaceCss = '',
+  maxQuestionsPerPage = 99,
 }) {
   const columns = Number(layout?.layoutColumns || 1) === 2 ? 2 : 1;
+  const perPage = Math.max(1, Math.min(99, Number(maxQuestionsPerPage) || 99));
   const styles = buildStyles({
     paper,
     marginMm: Number(layout?.marginMm || 16.2),
@@ -276,15 +307,26 @@ export function buildDocumentHtml({
     lineHeightPt: Number(layout?.lineHeightPt || 15.0),
     numberLaneWidthPt: Number(layout?.numberLaneWidthPt || 26),
     numberGapPt: Number(layout?.numberGapPt || 6),
-    questionGapPt: Number(layout?.questionGapPt || 10),
+    questionGapPt: Number(layout?.questionGapPt || 30),
     choiceGapPt: Number(layout?.choiceGapPt || 2),
     columns,
     columnGapPt: Number(layout?.columnGapPt || 18),
+    perPage,
   });
 
-  const questionHtml = (questions || [])
-    .map((q) => renderQuestionBlock(q, mathRenderer))
-    .join('');
+  const allQ = (questions || []).map((q) => renderQuestionBlock(q, mathRenderer));
+  let questionHtml;
+  if (perPage >= 99 || allQ.length <= perPage) {
+    questionHtml = `<section class="question-stream">${allQ.join('')}</section>`;
+  } else {
+    const pages = [];
+    for (let i = 0; i < allQ.length; i += perPage) {
+      const chunk = allQ.slice(i, i + perPage);
+      const cls = i === 0 ? 'question-stream' : 'question-stream page-break';
+      pages.push(`<section class="${cls}">${chunk.join('')}</section>`);
+    }
+    questionHtml = pages.join('');
+  }
   const answerSheetHtml = includeAnswerSheet ? renderAnswerSheet(questions) : '';
   const explanationHtml = includeExplanation ? renderExplanationSection(questions) : '';
 
@@ -300,9 +342,7 @@ export function buildDocumentHtml({
       <body>
         <div class="paper-title">${escapeHtml(profileTitle(profile))}</div>
         <div class="profile-note"></div>
-        <section class="question-stream">
-          ${questionHtml}
-        </section>
+        ${questionHtml}
         ${answerSheetHtml}
         ${explanationHtml}
       </body>

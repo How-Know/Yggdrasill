@@ -281,7 +281,7 @@ function normalizeExportRenderConfig(options, selectedQuestionIds, defaults = {}
   return {
     // Force server-side renderer to latest stable path even if older app build
     // sends a stale renderConfigVersion.
-    renderConfigVersion: 'pb_render_v25_bogi_choice_indent_gap',
+    renderConfigVersion: 'pb_render_v26h_overlay_center_gap',
     layoutColumns,
     maxQuestionsPerPage,
     questionMode,

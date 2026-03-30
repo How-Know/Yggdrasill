@@ -31,15 +31,20 @@ export async function getBrowser() {
           'chrome_executable_not_found: set PB_CHROME_EXECUTABLE_PATH or install Chrome/Edge',
         );
       }
-      return puppeteer.launch({
+      const browser = await puppeteer.launch({
         executablePath,
         headless: true,
         args: [
           '--no-sandbox',
           '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
           '--font-render-hinting=none',
         ],
       });
+      browser.on('disconnected', () => {
+        browserPromise = null;
+      });
+      return browser;
     })();
   }
   return browserPromise;

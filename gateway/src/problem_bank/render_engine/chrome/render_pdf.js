@@ -1,11 +1,17 @@
 import { PDFDocument } from 'pdf-lib';
 
-import { getBrowser } from './browser_pool.js';
+import { closeBrowserPool, getBrowser } from './browser_pool.js';
 
-export async function renderHtmlToPdfBuffer(html) {
+function isConnectionClosedError(error) {
+  const msg = String(error?.message || error || '');
+  return /connection closed|target closed|session closed|browser has disconnected|protocol error/i.test(msg);
+}
+
+async function renderOnce(html) {
   const browser = await getBrowser();
-  const page = await browser.newPage();
+  let page = null;
   try {
+    page = await browser.newPage();
     await page.setContent(String(html || ''), {
       waitUntil: 'domcontentloaded',
       timeout: 120000,
@@ -30,6 +36,22 @@ export async function renderHtmlToPdfBuffer(html) {
       pageCount: pdfDoc.getPageCount(),
     };
   } finally {
-    await page.close();
+    if (page) {
+      try {
+        if (!page.isClosed()) await page.close();
+      } catch (_) {
+        // ignore close errors caused by disconnected browser
+      }
+    }
+  }
+}
+
+export async function renderHtmlToPdfBuffer(html) {
+  try {
+    return await renderOnce(html);
+  } catch (error) {
+    if (!isConnectionClosedError(error)) throw error;
+    await closeBrowserPool();
+    return renderOnce(html);
   }
 }

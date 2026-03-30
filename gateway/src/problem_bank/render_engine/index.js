@@ -20,15 +20,25 @@ function parseSafeBase64(path) {
   }
 }
 
-function buildFontFaceCss({ regularPath, boldPath }) {
+function fontFormatForPath(filePath) {
+  const lower = String(filePath || '').toLowerCase();
+  if (lower.endsWith('.otf')) return { mime: 'font/otf', format: 'opentype' };
+  if (lower.endsWith('.woff2')) return { mime: 'font/woff2', format: 'woff2' };
+  if (lower.endsWith('.woff')) return { mime: 'font/woff', format: 'woff' };
+  return { mime: 'font/ttf', format: 'truetype' };
+}
+
+function buildFontFaceCss({ regularPath, boldPath, qnumFontPath }) {
   const regularB64 = parseSafeBase64(regularPath);
   const boldB64 = parseSafeBase64(boldPath);
+  const qnumB64 = parseSafeBase64(qnumFontPath);
   const chunks = [];
   if (regularB64) {
+    const f = fontFormatForPath(regularPath);
     chunks.push(`
       @font-face {
         font-family: "YggMain";
-        src: url(data:font/ttf;base64,${regularB64}) format("truetype");
+        src: url(data:${f.mime};base64,${regularB64}) format("${f.format}");
         font-weight: 400;
         font-style: normal;
         font-display: swap;
@@ -36,10 +46,23 @@ function buildFontFaceCss({ regularPath, boldPath }) {
     `);
   }
   if (boldB64) {
+    const f = fontFormatForPath(boldPath);
     chunks.push(`
       @font-face {
         font-family: "YggMain";
-        src: url(data:font/ttf;base64,${boldB64}) format("truetype");
+        src: url(data:${f.mime};base64,${boldB64}) format("${f.format}");
+        font-weight: 700;
+        font-style: normal;
+        font-display: swap;
+      }
+    `);
+  }
+  if (qnumB64) {
+    const f = fontFormatForPath(qnumFontPath);
+    chunks.push(`
+      @font-face {
+        font-family: "YggQNum";
+        src: url(data:${f.mime};base64,${qnumB64}) format("${f.format}");
         font-weight: 700;
         font-style: normal;
         font-display: swap;
@@ -83,7 +106,7 @@ function buildHtmlLayout(renderConfig, baseLayout) {
     lineHeightPt,
     numberLaneWidthPt: Number(tuning.numberLaneWidth || 26),
     numberGapPt: Number(tuning.numberGap || 6),
-    questionGapPt: Number(tuning.questionGap || baseLayout.questionGap || 10),
+    questionGapPt: Number(tuning.questionGap || baseLayout.questionGap || 30),
     choiceGapPt: Number(tuning.choiceSpacing || 2),
     layoutColumns: Number(renderConfig?.layoutColumns || 1) === 2 ? 2 : 1,
     columnGapPt: Number(tuning.columnGap || 18),
@@ -151,6 +174,7 @@ export async function renderPdfWithHtmlEngine({
   fontFamilyResolved,
   fontRegularPath,
   fontBoldPath,
+  qnumFontPath,
   fontSize,
   baseLayout,
   supabaseClient,
@@ -170,7 +194,9 @@ export async function renderPdfWithHtmlEngine({
     fontFaceCss: buildFontFaceCss({
       regularPath: fontRegularPath,
       boldPath: fontBoldPath,
+      qnumFontPath: qnumFontPath || '',
     }),
+    maxQuestionsPerPage: maxQuestionsPerPage || 99,
   });
   const rendered = await renderHtmlToPdfBuffer(html);
   return {

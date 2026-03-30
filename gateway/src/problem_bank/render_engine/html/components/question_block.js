@@ -26,10 +26,8 @@ function cleanLine(line) {
 function renderOneLine(text, mathRenderer, equations) {
   if (!text) return null;
   const rendered = renderInlineMixedContent(text, mathRenderer, equations);
-  const klass = rendered.hasFraction ? 'stem-line has-fraction' : 'stem-line';
   return {
-    html: `<div class="${klass}">${rendered.html}</div>`,
-    rawHtml: rendered.html,
+    html: rendered.html,
     hasFraction: rendered.hasFraction,
   };
 }
@@ -80,32 +78,51 @@ function renderBogiItems(lines, mathRenderer, equations) {
 
 function renderStemWithBoxes(stem, mathRenderer, equations) {
   const lines = splitStemByNewline(stem);
-  const chunks = [];
+  const blocks = [];
   let hasFraction = false;
   let inBox = false;
   let boxLines = [];
-  let isFirstLine = true;
+  let inlineBuffer = [];
+
+  const flushInline = () => {
+    if (inlineBuffer.length === 0) return;
+    blocks.push({ type: 'inline', html: inlineBuffer.join(' ') });
+    inlineBuffer = [];
+  };
 
   const flushBox = () => {
     if (boxLines.length === 0) return;
+    flushInline();
     const hasBogi = boxLines.some((l) => BOGI_RE.test(l));
+    const bogiSvgLeft = '<svg class="bogi-bracket" viewBox="0 0 7 14" width="0.55em" height="1.05em"><path d="M7 0 L0 7 L7 14" fill="none" stroke="#333" stroke-width="0.35"/></svg>';
+    const bogiSvgRight = '<svg class="bogi-bracket" viewBox="0 0 7 14" width="0.55em" height="1.05em"><path d="M0 0 L7 7 L0 14" fill="none" stroke="#333" stroke-width="0.35"/></svg>';
     const title = hasBogi
-      ? '<div class="bogi-title"><span>&lt;보 기&gt;</span></div>'
+      ? `<div class="bogi-title">${bogiSvgLeft}<span class="bogi-title-text">보 기</span>${bogiSvgRight}</div>`
       : '';
     const innerHtml = renderBogiItems(boxLines, mathRenderer, equations);
     if (innerHtml) {
-      chunks.push(
-        `<div class="bogi-box">${title}<div class="bogi-content">${innerHtml}</div></div>`,
-      );
+      blocks.push({
+        type: 'block',
+        html: `<div class="bogi-box">${title}<div class="bogi-content">${innerHtml}</div></div>`,
+      });
     }
     boxLines = [];
   };
 
-  const result = { firstLineHtml: '', bodyHtml: '', hasFraction: false };
-
   for (const rawLine of lines) {
     const hasStart = BOX_START.test(rawLine);
     const hasEnd = BOX_END.test(rawLine);
+
+    if (hasEnd && !inBox && !hasStart) {
+      const clean = cleanLine(rawLine);
+      if (!clean) continue;
+      const r = renderOneLine(clean, mathRenderer, equations);
+      if (r) {
+        if (r.hasFraction) hasFraction = true;
+        inlineBuffer.push(r.html);
+      }
+      continue;
+    }
 
     if (hasStart && !inBox) {
       inBox = true;
@@ -126,20 +143,12 @@ function renderStemWithBoxes(stem, mathRenderer, equations) {
     const r = renderOneLine(clean, mathRenderer, equations);
     if (!r) continue;
     if (r.hasFraction) hasFraction = true;
-
-    if (isFirstLine) {
-      result.firstLineHtml = r.rawHtml;
-      result.hasFraction = r.hasFraction;
-      isFirstLine = false;
-    } else {
-      chunks.push(r.html);
-    }
+    inlineBuffer.push(r.html);
   }
   flushBox();
+  flushInline();
 
-  result.bodyHtml = chunks.join('');
-  result.hasFraction = result.hasFraction || hasFraction;
-  return result;
+  return { stemHtml: blocks.map((b) => b.html).join(''), hasFraction };
 }
 
 function renderFigures(question) {
@@ -154,10 +163,8 @@ function renderFigures(question) {
 
 function numIndentEm(numStr) {
   const digits = numStr.replace(/\D/g, '').length;
-  const dotWidth = 0.35;
-  const gapWidth = 0.15;
-  if (digits <= 1) return (0.55 + dotWidth + gapWidth).toFixed(2);
-  return (digits * 0.55 + dotWidth + gapWidth).toFixed(2);
+  if (digits <= 1) return '0.70';
+  return '1.10';
 }
 
 export function renderQuestionBlock(question, mathRenderer) {
@@ -178,16 +185,10 @@ export function renderQuestionBlock(question, mathRenderer) {
   const indent = numIndentEm(number);
 
   return `
-    <article class="${questionClass}">
-      <div class="q-header">
-        <span class="q-num">${escapeHtml(number)}.</span>
-        <span class="q-first-line">${stem.firstLineHtml}</span>
-      </div>
-      <div class="q-body" style="padding-left:${indent}em;">
-        <div class="q-stem">${stem.bodyHtml}</div>
-        ${renderFigures(question)}
-        ${choiceHtml}
-      </div>
+    <article class="${questionClass}" style="padding-left:${indent}em;text-indent:-${indent}em;">
+      <div class="q-stem"><span class="q-num">${escapeHtml(number)}.</span> ${stem.stemHtml}</div>
+      ${renderFigures(question)}
+      ${choiceHtml}
     </article>
   `;
 }

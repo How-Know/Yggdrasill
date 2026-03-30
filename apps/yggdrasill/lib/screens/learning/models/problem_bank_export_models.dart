@@ -34,11 +34,13 @@ const List<String> kLearningProblemFontFamilyOptions = <String>[
   'HCRBatang',
   'KakaoSmallSans',
   'NanumGothic',
+  'KoPubWorldBatangPro',
 ];
 
 const List<String> kLearningProblemFontSizeOptions = <String>[
   '기본',
   '10',
+  '10.5',
   '11',
   '12',
   '13',
@@ -50,7 +52,7 @@ const String kLearningQuestionModeObjective = 'objective';
 const String kLearningQuestionModeSubjective = 'subjective';
 const String kLearningQuestionModeEssay = 'essay';
 const String kLearningRenderConfigVersion =
-    'pb_render_v25_bogi_choice_indent_gap';
+    'pb_render_v27c_layout_stable_math';
 
 class LearningProblemLayoutTuning {
   const LearningProblemLayoutTuning({
@@ -68,7 +70,7 @@ class LearningProblemLayoutTuning {
     return const LearningProblemLayoutTuning(
       pageMargin: 46,
       columnGap: 18,
-      questionGap: 12,
+      questionGap: 30,
       numberLaneWidth: 26,
       numberGap: 6,
       hangingIndent: 22,
@@ -177,7 +179,7 @@ class LearningProblemExportSettings {
       paperLabel: 'A4',
       questionModeLabel: '원본',
       layoutColumnLabel: '1단',
-      maxQuestionsPerPageLabel: '4',
+      maxQuestionsPerPageLabel: '많이',
       fontFamilyLabel: '기본',
       fontSizeLabel: '기본',
       layoutTuning: LearningProblemLayoutTuning.defaults(),
@@ -205,6 +207,7 @@ class LearningProblemExportSettings {
       maxQuestionsPerPageOptionsOf(layoutColumnLabel);
 
   int get maxQuestionsPerPageCount {
+    if (maxQuestionsPerPageLabel.trim() == '많이') return 99;
     final parsed = int.tryParse(maxQuestionsPerPageLabel);
     if (parsed != null && maxQuestionsPerPageOptions.contains(parsed)) {
       return parsed;

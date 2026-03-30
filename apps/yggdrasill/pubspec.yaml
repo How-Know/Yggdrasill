@@ -151,6 +151,10 @@ flutter:
           weight: 400
         - asset: assets/fonts/kakao/카카오작은글씨/TTF/KakaoSmallSans-Bold.ttf
           weight: 700
+    - family: KoPubWorldBatangPro
+      fonts:
+        - asset: assets/fonts/kopub/KoPubWorldBatangProLight.otf
+          weight: 300
     - family: KakaoBigSans
       fonts:
         - asset: assets/fonts/kakao/카카오큰글씨/TTF/KakaoBigSans-Regular.ttf

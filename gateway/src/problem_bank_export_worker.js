@@ -42,7 +42,11 @@ const FONT_PATH_KAKAO_SMALL_BOLD =
 const FONT_PATH_NANUM_REGULAR = process.env.PB_PDF_FONT_NANUM_GOTHIC_PATH || '';
 const FONT_PATH_NANUM_BOLD =
   process.env.PB_PDF_FONT_NANUM_GOTHIC_BOLD_PATH || '';
-const RENDER_CONFIG_VERSION = 'pb_render_v25_bogi_choice_indent_gap';
+const FONT_PATH_KOPUB_BATANG_LIGHT =
+  process.env.PB_PDF_FONT_KOPUB_BATANG_LIGHT_PATH || '';
+const FONT_PATH_QNUM =
+  process.env.PB_PDF_FONT_QNUM_PATH || '';
+const RENDER_CONFIG_VERSION = 'pb_render_v27c_layout_stable_math';
 const FIGURE_REGEN_COOLDOWN_MIN = Math.max(
   2,
   Number.parseInt(process.env.PB_EXPORT_REGEN_COOLDOWN_MIN || '12', 10),
@@ -217,6 +221,26 @@ function resolveRequestedFontPaths(requestedFamilyRaw) {
       boldPath: pickExistingPath([
         FONT_PATH_NANUM_BOLD,
         'C:\\Windows\\Fonts\\NanumGothicBold.ttf',
+        FONT_PATH_BOLD,
+      ]),
+    };
+  }
+  if (key === 'kopubworldbatangpro') {
+    const repoKopubLight = repoAssetPath(
+      'apps', 'yggdrasill', 'assets', 'fonts', 'kopub',
+      'KoPubWorldBatangProLight.otf',
+    );
+    return {
+      requestedFamily,
+      resolvedFamily: 'KoPubWorldBatangPro',
+      regularPath: pickExistingPath([
+        FONT_PATH_KOPUB_BATANG_LIGHT,
+        repoKopubLight,
+        FONT_PATH_REGULAR,
+      ]),
+      boldPath: pickExistingPath([
+        FONT_PATH_KOPUB_BATANG_LIGHT,
+        repoKopubLight,
         FONT_PATH_BOLD,
       ]),
     };
@@ -2972,6 +2996,9 @@ async function renderPdf(job, questions, renderConfig) {
 
   const requestedFontFamilyHtml = normalizeFontFamily(renderConfig?.font?.family || '');
   const fontPathsHtml = resolveRequestedFontPaths(requestedFontFamilyHtml);
+  const repoQnumFont = repoAssetPath(
+    'apps', 'yggdrasill', 'assets', 'fonts', 'chosun', 'ChosunNm.ttf',
+  );
   return renderPdfWithHtmlEngine({
     questions: modeApplied.questions,
     renderConfig,
@@ -2987,6 +3014,7 @@ async function renderPdf(job, questions, renderConfig) {
     fontFamilyResolved: fontPathsHtml.resolvedFamily || requestedFontFamilyHtml,
     fontRegularPath: fontPathsHtml.regularPath || '',
     fontBoldPath: fontPathsHtml.boldPath || '',
+    qnumFontPath: pickExistingPath([FONT_PATH_QNUM, repoQnumFont]),
     fontSize: configuredFontSize,
     baseLayout,
     supabaseClient: supa,

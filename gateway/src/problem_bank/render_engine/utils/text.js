@@ -68,6 +68,7 @@ export function isHangulSyllableOrJamo(ch) {
 export function splitStemByNewline(stem) {
   return String(stem || '')
     .replace(/\r/g, '')
+    .replace(/\[문단\]/g, '\n')
     .split('\n');
 }
 

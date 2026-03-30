@@ -3,8 +3,13 @@ import { escapeHtml } from '../../utils/text.js';
 
 function visualLength(text) {
   const stripped = text
-    .replace(/\\[a-zA-Z]+/g, '')
-    .replace(/[{}^_$\\]/g, '')
+    .replace(/\\(?:times|div|cdot|pm|mp|leq|geq|neq|approx|equiv|sim|lt|gt|le|ge)\b/g, ' X ')
+    .replace(/\\(?:frac|over)\b/g, ' FRAC ')
+    .replace(/\\(?:left|right|mathrm|mathbf|mathit|text|operatorname)\b/g, '')
+    .replace(/\\[a-zA-Z]+/g, ' S ')
+    .replace(/[{}$\\]/g, '')
+    .replace(/\^/g, '')
+    .replace(/_/g, '')
     .replace(/\s+/g, ' ')
     .trim();
   let len = 0;
@@ -29,9 +34,11 @@ export function renderChoiceItem(choice, mathRenderer, equations) {
 export function chooseLayout(items) {
   if (items.length !== 5) return 'stack';
   const maxLen = Math.max(...items.map((it) => it.textLength));
-  const anyFrac = items.some((it) => it.hasFraction);
-  if (maxLen > 16) return 'stack';
-  if (anyFrac || maxLen > 6) return 'row2';
+  const totalLen = items.reduce((s, it) => s + it.textLength, 0);
+  if (maxLen > 22) return 'stack';
+  if (totalLen > 55) return 'stack';
+  if (maxLen > 12 || totalLen > 40) return 'row2';
+  if (maxLen > 6 || totalLen > 25) return 'row2';
   return 'row1';
 }
 

@@ -62,7 +62,7 @@ test('render config: legacy key alias and ordered ids', () => {
 
 test('render hash: deterministic for same semantic payload', () => {
   const configA = {
-    renderConfigVersion: 'pb_render_v25_bogi_choice_indent_gap',
+    renderConfigVersion: 'pb_render_v26h_overlay_center_gap',
     templateProfile: 'naesin',
     paperSize: 'A4',
     includeAnswerSheet: true,
