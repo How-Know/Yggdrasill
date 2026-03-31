@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -339,9 +340,19 @@ class ProblemBankService {
     if (aid.isEmpty) {
       throw Exception('academy_id가 없습니다.');
     }
+    final now = DateTime.now().toUtc();
+    final nowIso = now.toIso8601String();
+    final sourceSha256 = sha256.convert(bytes).toString();
     final safeName = _safeFileName(originalName);
-    final objectPath =
-        '$aid/${DateTime.now().millisecondsSinceEpoch}_$safeName';
+    final objectPath = '$aid/${now.millisecondsSinceEpoch}_$safeName';
+    final reusableDraft = await _findReusableDraftDocumentByHash(
+      academyId: aid,
+      sourceSha256: sourceSha256,
+    );
+
+    final oldStorageBucket = reusableDraft?.sourceStorageBucket.trim() ?? '';
+    final oldStoragePath = reusableDraft?.sourceStoragePath.trim() ?? '';
+
     await _client.storage.from('problem-documents').uploadBinary(
           objectPath,
           bytes,
@@ -352,40 +363,117 @@ class ProblemBankService {
           ),
         );
 
-    final row = await _client
-        .from('pb_documents')
-        .insert({
-          'academy_id': aid,
-          'created_by': _client.auth.currentUser?.id,
-          'source_filename': originalName,
-          'source_storage_bucket': 'problem-documents',
-          'source_storage_path': objectPath,
-          'source_size_bytes': bytes.length,
-          'status': 'uploaded',
-          'exam_profile': examProfile,
-          ..._buildClassificationColumns(
-            curriculumCode: curriculumCode,
-            sourceTypeCode: sourceTypeCode,
-            courseLabel: courseLabel,
-            gradeLabel: gradeLabel,
-            examYear: examYear,
-            semesterLabel: semesterLabel,
-            examTermLabel: examTermLabel,
-            schoolName: schoolName,
-            publisherName: publisherName,
-            materialName: materialName,
-            classificationDetail: classificationDetail,
-          ),
-          'meta': <String, dynamic>{
-            'uploaded_from': 'manager',
-            'uploaded_at': DateTime.now().toUtc().toIso8601String(),
-          },
-        })
-        .select('*')
-        .single();
-    return ProblemBankDocument.fromMap(
-      Map<String, dynamic>.from(row as Map<dynamic, dynamic>),
-    );
+    try {
+      final uploadMeta = <String, dynamic>{
+        'uploaded_from': 'manager',
+        'uploaded_at': nowIso,
+        'source_sha256': sourceSha256,
+        'source_hash_algo': 'sha256',
+        'reused_existing_draft': reusableDraft != null,
+      };
+      if (reusableDraft != null) {
+        await _cancelActivePipelineJobsForDocument(
+          academyId: aid,
+          documentId: reusableDraft.id,
+          nowIso: nowIso,
+          reason: 'reupload_superseded',
+        );
+        await _client
+            .from('pb_questions')
+            .delete()
+            .eq('academy_id', aid)
+            .eq('document_id', reusableDraft.id);
+
+        final mergedMeta = <String, dynamic>{
+          ...reusableDraft.meta,
+          ...uploadMeta,
+        }..remove('extraction');
+
+        final row = await _client
+            .from('pb_documents')
+            .update({
+              'source_filename': originalName,
+              'source_storage_bucket': 'problem-documents',
+              'source_storage_path': objectPath,
+              'source_size_bytes': bytes.length,
+              'status': 'uploaded',
+              'exam_profile': examProfile,
+              ..._buildClassificationColumns(
+                curriculumCode: curriculumCode,
+                sourceTypeCode: sourceTypeCode,
+                courseLabel: courseLabel,
+                gradeLabel: gradeLabel,
+                examYear: examYear,
+                semesterLabel: semesterLabel,
+                examTermLabel: examTermLabel,
+                schoolName: schoolName,
+                publisherName: publisherName,
+                materialName: materialName,
+                classificationDetail: classificationDetail,
+              ),
+              'meta': mergedMeta,
+              'updated_at': nowIso,
+            })
+            .eq('id', reusableDraft.id)
+            .select('*')
+            .single();
+
+        if (oldStorageBucket.isNotEmpty &&
+            oldStoragePath.isNotEmpty &&
+            (oldStorageBucket != 'problem-documents' ||
+                oldStoragePath != objectPath)) {
+          try {
+            await _client.storage
+                .from(oldStorageBucket)
+                .remove([oldStoragePath]);
+          } catch (_) {
+            // 이전 원본 삭제 실패는 업로드 성공을 막지 않는다.
+          }
+        }
+        return ProblemBankDocument.fromMap(
+          Map<String, dynamic>.from(row as Map<dynamic, dynamic>),
+        );
+      }
+
+      final row = await _client
+          .from('pb_documents')
+          .insert({
+            'academy_id': aid,
+            'created_by': _client.auth.currentUser?.id,
+            'source_filename': originalName,
+            'source_storage_bucket': 'problem-documents',
+            'source_storage_path': objectPath,
+            'source_size_bytes': bytes.length,
+            'status': 'uploaded',
+            'exam_profile': examProfile,
+            ..._buildClassificationColumns(
+              curriculumCode: curriculumCode,
+              sourceTypeCode: sourceTypeCode,
+              courseLabel: courseLabel,
+              gradeLabel: gradeLabel,
+              examYear: examYear,
+              semesterLabel: semesterLabel,
+              examTermLabel: examTermLabel,
+              schoolName: schoolName,
+              publisherName: publisherName,
+              materialName: materialName,
+              classificationDetail: classificationDetail,
+            ),
+            'meta': uploadMeta,
+          })
+          .select('*')
+          .single();
+      return ProblemBankDocument.fromMap(
+        Map<String, dynamic>.from(row as Map<dynamic, dynamic>),
+      );
+    } catch (e) {
+      try {
+        await _client.storage.from('problem-documents').remove([objectPath]);
+      } catch (_) {
+        // 업로드 실패 정리 중 스토리지 삭제 실패는 무시한다.
+      }
+      rethrow;
+    }
   }
 
   Future<ProblemBankManualImportResult> importPastedText({
@@ -567,7 +655,8 @@ class ProblemBankService {
     }
 
     await _client.from('pb_documents').update({
-      'status': lowConfidenceCount > 0 ? 'review_required' : 'ready',
+      'status':
+          lowConfidenceCount > 0 ? 'draft_review_required' : 'draft_ready',
       'exam_profile': examProfile,
       ..._buildClassificationColumns(
         curriculumCode: curriculumCode,
@@ -1112,6 +1201,7 @@ class ProblemBankService {
   Future<void> updateDocumentMeta({
     required String documentId,
     required Map<String, dynamic> meta,
+    String? status,
     String? curriculumCode,
     String? sourceTypeCode,
     String? courseLabel,
@@ -1127,6 +1217,7 @@ class ProblemBankService {
     final payload = <String, dynamic>{
       'meta': meta,
       'updated_at': DateTime.now().toUtc().toIso8601String(),
+      if (status != null && status.trim().isNotEmpty) 'status': status.trim(),
     };
     if (curriculumCode != null ||
         sourceTypeCode != null ||
@@ -1694,6 +1785,92 @@ class ProblemBankService {
       );
     }
     return out;
+  }
+
+  Future<ProblemBankDocument?> _findReusableDraftDocumentByHash({
+    required String academyId,
+    required String sourceSha256,
+  }) async {
+    final safeHash = sourceSha256.trim().toLowerCase();
+    if (academyId.trim().isEmpty || safeHash.isEmpty) return null;
+    final rows = await _client
+        .from('pb_documents')
+        .select('*')
+        .eq('academy_id', academyId)
+        .contains('meta', <String, dynamic>{'source_sha256': safeHash})
+        .order('updated_at', ascending: false)
+        .limit(40);
+    for (final row in (rows as List<dynamic>)) {
+      final doc = ProblemBankDocument.fromMap(_mapFromDynamic(row));
+      if (!_isPublishedDocumentStatus(doc.status)) {
+        return doc;
+      }
+    }
+    return null;
+  }
+
+  bool _isPublishedDocumentStatus(String status) {
+    return status.trim().toLowerCase() == 'ready';
+  }
+
+  Future<void> _cancelActivePipelineJobsForDocument({
+    required String academyId,
+    required String documentId,
+    required String nowIso,
+    String reason = 'cancelled',
+  }) async {
+    final safeReason = reason.trim().isEmpty ? 'cancelled' : reason.trim();
+    final safeMessage = safeReason == 'reupload_superseded'
+        ? '동일 파일 재업로드로 기존 작업이 취소되었습니다.'
+        : safeReason;
+    try {
+      await _client
+          .from('pb_extract_jobs')
+          .update({
+            'status': 'cancelled',
+            'error_code': safeReason,
+            'error_message': safeMessage,
+            'finished_at': nowIso,
+            'updated_at': nowIso,
+          })
+          .eq('academy_id', academyId)
+          .eq('document_id', documentId)
+          .inFilter('status', const <String>['queued', 'extracting']);
+    } catch (_) {
+      // 권한/스키마 차이로 실패할 수 있어 업로드는 계속 진행한다.
+    }
+    try {
+      await _client
+          .from('pb_exports')
+          .update({
+            'status': 'cancelled',
+            'error_code': safeReason,
+            'error_message': safeMessage,
+            'finished_at': nowIso,
+            'updated_at': nowIso,
+          })
+          .eq('academy_id', academyId)
+          .eq('document_id', documentId)
+          .inFilter('status', const <String>['queued', 'rendering']);
+    } catch (_) {
+      // 권한/스키마 차이로 실패할 수 있어 업로드는 계속 진행한다.
+    }
+    try {
+      await _client
+          .from('pb_figure_jobs')
+          .update({
+            'status': 'cancelled',
+            'error_code': safeReason,
+            'error_message': safeMessage,
+            'finished_at': nowIso,
+            'updated_at': nowIso,
+          })
+          .eq('academy_id', academyId)
+          .eq('document_id', documentId)
+          .inFilter('status', const <String>['queued', 'rendering']);
+    } catch (_) {
+      // 신규 스키마 미적용 환경에서는 무시한다.
+    }
   }
 
   String _safeFileName(String input) {

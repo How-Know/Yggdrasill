@@ -1,5 +1,6 @@
 import { renderQuestionBlock } from './components/question_block.js';
-import { escapeHtml } from '../utils/text.js';
+import { composeLineV1 } from './line_composer.js';
+import { escapeHtml, normalizeMathLatex, isFractionLatex } from '../utils/text.js';
 
 const PAPER_MM = {
   A4: { width: 210, height: 297 },
@@ -29,6 +30,8 @@ function buildStyles({
 }) {
   const paperMm = PAPER_MM[paper] || PAPER_MM.A4;
   const pageSizeCss = `${paperMm.width}mm ${paperMm.height}mm`;
+  const headerApproxMm = 22;
+  const grid4HeightMm = Math.max(100, paperMm.height - 2 * marginMm - headerApproxMm).toFixed(1);
   const title = profileTitle(profile);
   return `
     @page {
@@ -43,12 +46,17 @@ function buildStyles({
       --question-gap-pt: ${questionGapPt};
       --choice-gap-pt: ${choiceGapPt};
       --column-gap-pt: ${columnGapPt};
+      --lc-line-normal: calc(var(--line-height-pt) * 1pt);
+      --lc-line-fraction: calc((var(--line-height-pt) + 2.2) * 1pt);
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
+      max-width: ${(paperMm.width - 2 * marginMm).toFixed(1)}mm;
       font-family: "YggMain", "HCR Batang", "Malgun Gothic", serif;
       font-size: calc(var(--stem-size-pt) * 1pt);
+      font-weight: 300;
+      font-synthesis: none;
       line-height: calc(var(--line-height-pt) * 1pt);
       word-spacing: 0.15em;
       color: #111;
@@ -66,6 +74,33 @@ function buildStyles({
       column-gap: calc(var(--column-gap-pt) * 1pt);
       overflow: visible;
     }
+    .question-stream.question-stream-grid4 {
+      columns: auto;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      grid-template-rows: 1fr 1fr;
+      column-gap: calc(var(--column-gap-pt) * 1pt);
+      row-gap: 0;
+      height: ${grid4HeightMm}mm;
+      overflow: visible;
+    }
+    .question-stream-grid4 .question-slot {
+      min-width: 0;
+      overflow: hidden;
+    }
+    .question-stream-grid4 .question-slot-firstline {
+      display: block;
+      height: calc(var(--line-height-pt) * 1pt);
+      line-height: calc(var(--line-height-pt) * 1pt);
+      white-space: pre;
+    }
+    .question-stream-grid4 .question {
+      break-inside: initial;
+      margin-bottom: 0;
+    }
+    .question-stream-grid4 .question-slot-empty {
+      min-height: calc(var(--line-height-pt) * 1pt);
+    }
     .question {
       break-inside: avoid;
       margin-bottom: calc(var(--question-gap-pt) * 1pt);
@@ -76,11 +111,27 @@ function buildStyles({
       font-weight: 700;
       font-size: calc((var(--stem-size-pt) + 1) * 1pt);
       -webkit-text-stroke: 0.3pt currentColor;
+      display: inline;
+      line-height: 1;
+      vertical-align: baseline;
       white-space: nowrap;
       margin-right: 0.25em;
     }
     .q-stem {
       white-space: normal;
+    }
+    .lc-line {
+      display: inline;
+      line-height: var(--lc-line-normal);
+      -webkit-box-decoration-break: clone;
+      box-decoration-break: clone;
+    }
+    .lc-line.lc-fraction {
+      line-height: var(--lc-line-fraction);
+    }
+    .debug-first {
+      display: inline;
+      position: relative;
     }
     .bogi-box, .figure-container, .choice-list, .choice-grid-row1, .choice-grid-row2 {
       text-indent: 0;
@@ -97,9 +148,12 @@ function buildStyles({
     .choice {
       display: inline-flex;
       align-items: center;
-      gap: 3pt;
+      gap: 4.5pt;
       min-width: 0;
       overflow: visible;
+    }
+    .choice .math-inline {
+      transform: translateY(-1pt);
     }
     .choice-label {
       white-space: nowrap;
@@ -143,17 +197,26 @@ function buildStyles({
     }
     .math-inline {
       display: inline-block;
+      position: relative;
       line-height: 1;
       margin: 0 0.05em;
-      vertical-align: baseline;
+      vertical-align: middle;
       overflow: visible;
-      padding-bottom: 0.06em;
+    }
+    .math-inline::before {
+      right: 100%;
+      margin-right: 0.08em;
+    }
+    .math-inline::after {
+      left: 100%;
+      margin-left: 0.08em;
     }
     .math-inline svg {
       display: block;
       overflow: visible;
     }
     .math-inline.fraction {
+      vertical-align: middle;
       padding-top: calc(var(--line-height-pt) * 0.25 * 1pt);
       padding-bottom: calc(var(--line-height-pt) * 0.25 * 1pt);
     }
@@ -235,7 +298,19 @@ function buildStyles({
       gap: 6pt 12pt;
       font-size: calc((var(--stem-size-pt) - 0.6) * 1pt);
     }
-    .answer-item { white-space: nowrap; }
+    .answer-item {
+      white-space: nowrap;
+      display: inline-flex;
+      align-items: center;
+      gap: 4.5pt;
+      overflow: visible;
+    }
+    .answer-item .math-inline {
+      transform: translateY(-1pt);
+    }
+    .answer-num {
+      font-weight: 700;
+    }
     .explain-item {
       margin-bottom: 8pt;
       display: grid;
@@ -253,11 +328,27 @@ function buildStyles({
   `;
 }
 
-function renderAnswerSheet(questions) {
+function renderAnswerSheet(questions, mathRenderer) {
   if (!Array.isArray(questions) || questions.length === 0) return '';
+  const CIRCLED_RE = /^[①②③④⑤]$/;
   const rows = questions.map((q) => {
-    const answer = String(q?.export_answer || '').trim() || '(미기입)';
-    return `<div class="answer-item">${escapeHtml(String(q?.question_number || '?'))} ${escapeHtml(answer)}</div>`;
+    const raw = String(q?.export_answer || '').trim() || '(미기입)';
+    let answerHtml;
+    if (mathRenderer && raw !== '(미기입)' && !CIRCLED_RE.test(raw)) {
+      const latex = normalizeMathLatex(raw) || raw;
+      const result = mathRenderer.renderInline(latex);
+      if (result.ok && result.svg) {
+        const fraction = isFractionLatex(latex);
+        const klass = fraction ? 'math-inline fraction' : 'math-inline';
+        answerHtml = `<span class="${klass}" data-latex="${escapeHtml(latex)}">${result.svg}</span>`;
+      } else {
+        const composed = composeLineV1(raw, mathRenderer, q?.equations);
+        answerHtml = composed.html;
+      }
+    } else {
+      answerHtml = escapeHtml(raw);
+    }
+    return `<div class="answer-item"><span class="answer-num">${escapeHtml(String(q?.question_number || '?'))}.</span>${answerHtml}</div>`;
   });
   return `
     <section class="page-break">
@@ -315,19 +406,40 @@ export function buildDocumentHtml({
   });
 
   const allQ = (questions || []).map((q) => renderQuestionBlock(q, mathRenderer));
+  const useFourSplit = columns === 2 && perPage === 4;
+  const GRID4_POS = [
+    { row: 1, col: 1 },
+    { row: 2, col: 1 },
+    { row: 1, col: 2 },
+    { row: 2, col: 2 },
+  ];
+  const renderStreamSection = (chunk, cls) => {
+    if (!useFourSplit) {
+      return `<section class="${cls}">${chunk.join('')}</section>`;
+    }
+    const slots = [];
+    for (let i = 0; i < perPage; i += 1) {
+      const pos = GRID4_POS[i];
+      const one = chunk[i] || '<div class="question-slot-empty">&nbsp;</div>';
+      slots.push(
+        `<div class="question-slot" style="grid-row:${pos.row};grid-column:${pos.col}"><div class="question-slot-firstline" aria-hidden="true">&nbsp;</div>${one}</div>`,
+      );
+    }
+    return `<section class="${cls} question-stream-grid4">${slots.join('')}</section>`;
+  };
   let questionHtml;
   if (perPage >= 99 || allQ.length <= perPage) {
-    questionHtml = `<section class="question-stream">${allQ.join('')}</section>`;
+    questionHtml = renderStreamSection(allQ, 'question-stream');
   } else {
     const pages = [];
     for (let i = 0; i < allQ.length; i += perPage) {
       const chunk = allQ.slice(i, i + perPage);
       const cls = i === 0 ? 'question-stream' : 'question-stream page-break';
-      pages.push(`<section class="${cls}">${chunk.join('')}</section>`);
+      pages.push(renderStreamSection(chunk, cls));
     }
     questionHtml = pages.join('');
   }
-  const answerSheetHtml = includeAnswerSheet ? renderAnswerSheet(questions) : '';
+  const answerSheetHtml = includeAnswerSheet ? renderAnswerSheet(questions, mathRenderer) : '';
   const explanationHtml = includeExplanation ? renderExplanationSection(questions) : '';
 
   return `

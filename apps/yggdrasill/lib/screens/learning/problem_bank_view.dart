@@ -75,6 +75,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
   final ScrollController _questionGridScrollCtrl = ScrollController();
   Map<String, Map<String, String>> _questionFigureUrlsByPath =
       const <String, Map<String, String>>{};
+  Map<String, String> _questionPreviewUrls = const <String, String>{};
   int _figureLoadVersion = 0;
   LearningProblemExportSettings _exportSettings =
       LearningProblemExportSettings.initial();
@@ -302,6 +303,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           ..clear()
           ..addAll(nextQuestionModes);
         _questionFigureUrlsByPath = const <String, Map<String, String>>{};
+        _questionPreviewUrls = const <String, String>{};
         if (resetSelection) {
           _selectedQuestionIds.clear();
         } else {
@@ -314,6 +316,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           loadVersion: currentFigureLoadVersion,
         ),
       );
+      unawaited(_fetchQuestionPreviews(questions));
     } catch (e) {
       _showSnack('문항 조회 실패: $e');
     } finally {
@@ -447,6 +450,31 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     setState(() {
       _questionFigureUrlsByPath = updates;
     });
+  }
+
+  Future<void> _fetchQuestionPreviews(
+    List<LearningProblemQuestion> questions,
+  ) async {
+    if (_academyId == null || questions.isEmpty) return;
+    if (!_service.hasGateway) return;
+    try {
+      final ids = questions.map((q) => q.id).toList();
+      final urls = await _service.fetchQuestionPreviews(
+        academyId: _academyId!,
+        questionIds: ids,
+      );
+      if (!mounted) return;
+      if (urls.isNotEmpty) {
+        setState(() {
+          _questionPreviewUrls = {
+            ..._questionPreviewUrls,
+            ...urls,
+          };
+        });
+      }
+    } catch (_) {
+      // preview fetch failures are non-critical
+    }
   }
 
   Future<void> _onCurriculumChanged(String? value) async {
@@ -1305,10 +1333,12 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                   ),
                 ),
                 Positioned(
-                  left: 12,
-                  right: 12,
-                  bottom: 24,
-                  child: ProblemBankBottomFabBar(
+                  left: 0,
+                  right: 0,
+                  bottom: 16,
+                  child: IgnorePointer(
+                    ignoring: false,
+                    child: ProblemBankBottomFabBar(
                     selectedCount: _selectedQuestionIds.length,
                     isBusy: exportBusy,
                     onSelectAll: _selectAllQuestions,
@@ -1316,7 +1346,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                     onPreview: _openExportLayoutPreviewDialog,
                     onGeneratePdf: _createExportJob,
                     onCreatePlaceholder: _showCreatePlaceholder,
-                  ),
+                  )),
                 ),
               ],
             ),
@@ -1382,8 +1412,8 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     return LayoutBuilder(
       builder: (context, constraints) {
         const spacing = 10.0;
-        const maxCardWidth = 640.0;
-        const cardHeight = 620.0;
+        const maxCardWidth = 672.0;
+        const cardHeight = 468.0;
         final availableWidth =
             constraints.maxWidth.isFinite ? constraints.maxWidth : maxCardWidth;
         final cols = math.max(
@@ -1424,6 +1454,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                       figureUrlsByPath:
                           _questionFigureUrlsByPath[question.id] ??
                               const <String, String>{},
+                      previewImageUrl: _questionPreviewUrls[question.id],
                       onSelectedChanged: (next) {
                         _toggleQuestionSelection(question.id, next);
                       },
@@ -1441,6 +1472,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                     selectedMode: _selectedModeOfQuestion(question),
                     figureUrlsByPath: _questionFigureUrlsByPath[question.id] ??
                         const <String, String>{},
+                    previewImageUrl: _questionPreviewUrls[question.id],
                     onSelectedChanged: (_) {},
                     onModeSelected: null,
                   );

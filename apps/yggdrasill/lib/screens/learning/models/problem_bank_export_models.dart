@@ -52,7 +52,7 @@ const String kLearningQuestionModeObjective = 'objective';
 const String kLearningQuestionModeSubjective = 'subjective';
 const String kLearningQuestionModeEssay = 'essay';
 const String kLearningRenderConfigVersion =
-    'pb_render_v27c_layout_stable_math';
+    'pb_render_v30e_hide_markers_answer_fix';
 
 class LearningProblemLayoutTuning {
   const LearningProblemLayoutTuning({
@@ -180,7 +180,7 @@ class LearningProblemExportSettings {
       questionModeLabel: '원본',
       layoutColumnLabel: '1단',
       maxQuestionsPerPageLabel: '많이',
-      fontFamilyLabel: '기본',
+      fontFamilyLabel: 'KoPubWorldBatangPro',
       fontSizeLabel: '기본',
       layoutTuning: LearningProblemLayoutTuning.defaults(),
       figureQuality: LearningProblemFigureQuality.defaults(),
@@ -220,14 +220,14 @@ class LearningProblemExportSettings {
   Size get paperPointSize => paperPointSizeOf(paperLabel);
   String get resolvedFontFamily {
     final safe = fontFamilyLabel.trim();
-    if (safe.isEmpty || safe == '기본') return 'HCRBatang';
+    if (safe.isEmpty || safe == '기본') return 'KoPubWorldBatangPro';
     return safe;
   }
 
   double get resolvedFontSize {
     final safe = fontSizeLabel.trim();
     final parsed = double.tryParse(safe);
-    if (parsed == null || parsed <= 0) return 11.3;
+    if (parsed == null || parsed <= 0) return 11.0;
     return parsed;
   }
 

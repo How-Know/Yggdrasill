@@ -1,4 +1,4 @@
-import { renderInlineMixedContent } from '../render_inline.js';
+import { composeLineV1, composeLinesV1 } from '../line_composer.js';
 import { renderChoiceItem, chooseLayout, renderChoiceContainer } from './choice_block.js';
 import {
   escapeHtml,
@@ -25,7 +25,7 @@ function cleanLine(line) {
 
 function renderOneLine(text, mathRenderer, equations) {
   if (!text) return null;
-  const rendered = renderInlineMixedContent(text, mathRenderer, equations);
+  const rendered = composeLineV1(text, mathRenderer, equations);
   return {
     html: rendered.html,
     hasFraction: rendered.hasFraction,
@@ -48,6 +48,7 @@ function splitBogiItemsFromText(text) {
 
 function renderBogiItems(lines, mathRenderer, equations) {
   const allParts = [];
+  let hasFraction = false;
   for (const line of lines) {
     const items = splitBogiItemsFromText(line);
     if (items.length > 0) {
@@ -64,16 +65,23 @@ function renderBogiItems(lines, mathRenderer, equations) {
     if (match) {
       const label = match[1];
       const text = part.slice(match[0].length).trim();
-      const rendered = renderInlineMixedContent(text, mathRenderer, equations);
+      const rendered = composeLineV1(text, mathRenderer, equations);
+      if (rendered.hasFraction) hasFraction = true;
       result.push(
         `<div class="bogi-item"><span class="bogi-item-label">${escapeHtml(label)}.</span><span class="bogi-item-text">${rendered.html}</span></div>`,
       );
     } else {
       const r = renderOneLine(part, mathRenderer, equations);
-      if (r) result.push(r.html);
+      if (r) {
+        if (r.hasFraction) hasFraction = true;
+        result.push(r.html);
+      }
     }
   }
-  return result.join('');
+  return {
+    html: result.join(''),
+    hasFraction,
+  };
 }
 
 function renderStemWithBoxes(stem, mathRenderer, equations) {
@@ -86,7 +94,13 @@ function renderStemWithBoxes(stem, mathRenderer, equations) {
 
   const flushInline = () => {
     if (inlineBuffer.length === 0) return;
-    blocks.push({ type: 'inline', html: inlineBuffer.join(' ') });
+    const composed = composeLinesV1(inlineBuffer, mathRenderer, equations);
+    if (!composed.html) {
+      inlineBuffer = [];
+      return;
+    }
+    if (composed.hasFraction) hasFraction = true;
+    blocks.push({ type: 'inline', html: composed.html });
     inlineBuffer = [];
   };
 
@@ -99,7 +113,9 @@ function renderStemWithBoxes(stem, mathRenderer, equations) {
     const title = hasBogi
       ? `<div class="bogi-title">${bogiSvgLeft}<span class="bogi-title-text">보 기</span>${bogiSvgRight}</div>`
       : '';
-    const innerHtml = renderBogiItems(boxLines, mathRenderer, equations);
+    const inner = renderBogiItems(boxLines, mathRenderer, equations);
+    if (inner.hasFraction) hasFraction = true;
+    const innerHtml = inner.html;
     if (innerHtml) {
       blocks.push({
         type: 'block',
@@ -116,11 +132,7 @@ function renderStemWithBoxes(stem, mathRenderer, equations) {
     if (hasEnd && !inBox && !hasStart) {
       const clean = cleanLine(rawLine);
       if (!clean) continue;
-      const r = renderOneLine(clean, mathRenderer, equations);
-      if (r) {
-        if (r.hasFraction) hasFraction = true;
-        inlineBuffer.push(r.html);
-      }
+      inlineBuffer.push(clean);
       continue;
     }
 
@@ -140,10 +152,7 @@ function renderStemWithBoxes(stem, mathRenderer, equations) {
 
     const clean = cleanLine(rawLine);
     if (!clean) continue;
-    const r = renderOneLine(clean, mathRenderer, equations);
-    if (!r) continue;
-    if (r.hasFraction) hasFraction = true;
-    inlineBuffer.push(r.html);
+    inlineBuffer.push(clean);
   }
   flushBox();
   flushInline();

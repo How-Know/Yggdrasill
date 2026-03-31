@@ -3,6 +3,7 @@ import http from 'node:http';
 import { createHash } from 'node:crypto';
 import { URL } from 'node:url';
 import { createClient } from '@supabase/supabase-js';
+import { generateQuestionPreviews } from './problem_bank_preview_service.js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -1189,6 +1190,46 @@ async function listQuestions(url, res) {
   });
 }
 
+async function previewQuestions(res, req) {
+  let body;
+  try { body = await readJson(req); } catch (_) {
+    sendJson(res, 400, { ok: false, error: 'invalid_json' });
+    return;
+  }
+
+  const academyId = String(body?.academyId || '').trim();
+  const questionIds = Array.isArray(body?.questionIds) ? body.questionIds.map(String) : [];
+  const layout = body?.layout || {};
+
+  if (!academyId || questionIds.length === 0) {
+    sendJson(res, 400, { ok: false, error: 'academyId and questionIds[] required' });
+    return;
+  }
+
+  const { data: rows, error: fetchErr } = await supa
+    .from('pb_questions')
+    .select('*')
+    .eq('academy_id', academyId)
+    .in('id', questionIds);
+
+  if (fetchErr) {
+    sendJson(res, 500, { ok: false, error: `fetch_failed:${fetchErr.message}` });
+    return;
+  }
+
+  try {
+    const previews = await generateQuestionPreviews({
+      questions: rows || [],
+      academyId,
+      layout,
+      supabaseClient: supa,
+    });
+    sendJson(res, 200, { ok: true, previews });
+  } catch (err) {
+    sendJson(res, 500, { ok: false, error: `preview_failed:${compact(err?.message || err)}` });
+  }
+}
+
 async function handler(req, res) {
   if (req.method === 'OPTIONS') {
     sendJson(res, 200, { ok: true });
@@ -1285,6 +1326,11 @@ async function handler(req, res) {
 
     if (method === 'GET' && url.pathname === '/pb/questions') {
       await listQuestions(url, res);
+      return;
+    }
+
+    if (method === 'POST' && url.pathname === '/pb/preview/questions') {
+      await previewQuestions(res, req);
       return;
     }
 

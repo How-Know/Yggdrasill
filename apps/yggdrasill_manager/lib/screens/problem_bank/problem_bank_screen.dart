@@ -142,6 +142,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   bool _isDeletingCurrentQuestions = false;
   bool _isDeletingClassificationDocument = false;
   bool _dirtyDocumentMeta = false;
+  bool _needsPublish = false;
   String _selectedCurriculumCode = 'rev_2022';
   String _selectedSourceTypeCode = 'school_past';
   String _selectedCourseLabel = '';
@@ -193,6 +194,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     if (_isUploading) return 0.08;
     final extractStatus = _activeExtractJob?.status ?? '';
     final exportStatus = _activeExportJob?.status ?? '';
+    if (_activeDocument != null && extractStatus.isEmpty && !_hasExtracted) {
+      return 0.12;
+    }
     if (extractStatus == 'queued') return 0.18;
     if (extractStatus == 'extracting') return 0.46;
     if (extractStatus == 'review_required' || extractStatus == 'completed') {
@@ -213,6 +217,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     if (_isResetting) return '이전 작업 초기화 중...';
     if (_isSavingExportLocally) return 'PDF 로컬 저장 중...';
     if (_isUploading) return '업로드 중 (1/4)';
+    if (_activeDocument != null && extractStatus.isEmpty && !_hasExtracted) {
+      return '업로드 완료 · 자동 추출 준비 (1/4)';
+    }
     if (extractStatus == 'queued') {
       final elapsed = _extractQueuedElapsed;
       if (elapsed == null) return '추출 대기열 등록됨 (2/4)';
@@ -312,6 +319,35 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   String _labelOfCurriculumCode(String code) => _curriculumLabels[code] ?? code;
 
   String _labelOfSourceTypeCode(String code) => _sourceTypeLabels[code] ?? code;
+
+  bool _isDraftDocumentStatus(String status) {
+    final safe = status.trim().toLowerCase();
+    return safe.isNotEmpty && safe != 'ready';
+  }
+
+  String _labelOfDocumentStatus(String status) {
+    final safe = status.trim().toLowerCase();
+    switch (safe) {
+      case 'ready':
+        return '확정본';
+      case 'draft_ready':
+        return '작업본(업로드 대기)';
+      case 'draft_review_required':
+        return '작업본(검수 필요)';
+      case 'extract_queued':
+        return '작업본(추출 대기)';
+      case 'uploaded':
+        return '작업본(추출 전)';
+      case 'review_required':
+        return '작업본(검수 필요)';
+      case 'completed':
+        return '작업본(검수 전)';
+      case '':
+        return '상태 없음';
+      default:
+        return _isDraftDocumentStatus(safe) ? '작업본' : safe;
+    }
+  }
 
   int? _sourceExamYearValue() {
     final text = _sourceYearCtrl.text.trim();
@@ -719,7 +755,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         ? ''
         : ' · 가로묶음 ${cleanedPairPayload.length}쌍';
     _showSnack(
-      '${q.questionNumber}번 그림 설정을 저장했습니다. (기본 배율 $pct%$pairSuffix) 상단 `서버 저장` 버튼으로 반영하세요.',
+      '${q.questionNumber}번 그림 설정을 저장했습니다. (기본 배율 $pct%$pairSuffix) 상단 `업로드` 버튼으로 반영하세요.',
     );
   }
 
@@ -947,8 +983,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     });
     _showSnack(
       approved
-          ? '${q.questionNumber}번 AI 그림 승인 상태를 수정했습니다. `서버 저장` 버튼으로 반영하세요.'
-          : '${q.questionNumber}번 AI 그림 승인 해제 상태를 수정했습니다. `서버 저장` 버튼으로 반영하세요.',
+          ? '${q.questionNumber}번 AI 그림 승인 상태를 수정했습니다. `업로드` 버튼으로 반영하세요.'
+          : '${q.questionNumber}번 AI 그림 승인 해제 상태를 수정했습니다. `업로드` 버튼으로 반영하세요.',
     );
   }
 
@@ -1121,6 +1157,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         _isExtracting = false;
         _isExporting = false;
         _showLowConfidenceOnly = false;
+        _needsPublish = false;
         _queuedLongWaitWarned = false;
         _lastExtractStatus = null;
         _lastExportStatus = null;
@@ -1167,6 +1204,11 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       if (!mounted) return;
       final extractStatus = summary.latestExtractJob?.status ?? '';
       final exportStatus = summary.latestExportJob?.status ?? '';
+      final documentStatus = summary.document.status.trim();
+      final isDraftDocument = documentStatus.startsWith('draft_');
+      final draftStatusText = documentStatus == 'draft_review_required'
+          ? '저신뢰 문항 추출 완료 · 검수/수정 후 업로드 대기'
+          : '추출 완료 · 업로드 대기';
       final figureJobsQueuedHint = int.tryParse(
               '${summary.latestExtractJob?.resultSummary['figureJobsQueued'] ?? 0}') ??
           0;
@@ -1188,14 +1230,18 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
             extractStatus == 'queued' || extractStatus == 'extracting';
         _isExporting = exportStatus == 'queued' || exportStatus == 'rendering';
         _hasExported = exportStatus == 'completed';
+        _needsPublish =
+            questions.isNotEmpty && summary.document.status.trim() != 'ready';
         _lastExtractStatus = extractStatus.isEmpty ? null : extractStatus;
         _lastExportStatus = exportStatus.isEmpty ? null : exportStatus;
         _isFigurePolling = figureJobsQueuedHint > 0;
-        _statusText = _formatStatusText(
-          extractStatus: extractStatus,
-          exportStatus: exportStatus,
-          questionCount: questions.length,
-        );
+        _statusText = isDraftDocument && questions.isNotEmpty
+            ? draftStatusText
+            : _formatStatusText(
+                extractStatus: extractStatus,
+                exportStatus: exportStatus,
+                questionCount: questions.length,
+              );
       });
       _appendPipelineLog(
         'doc',
@@ -1226,6 +1272,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     }
     if (questionCount > 0) {
       return '추출 결과 $questionCount문항을 불러왔습니다.';
+    }
+    if (_activeDocument != null) {
+      return '업로드 완료. 자동 추출을 시작합니다...';
     }
     return '문서를 업로드하고 추출을 시작하세요.';
   }
@@ -1301,23 +1350,23 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         materialName: _sourceMaterialCtrl.text.trim(),
         classificationDetail: _buildClassificationDetailPayload(),
       );
-      _appendPipelineLog('upload', '업로드 완료: document=${uploaded.id}');
-      final extractJob = await _service.createExtractJob(
-        academyId: academyId,
-        documentId: uploaded.id,
-      );
+      final reusedDraft = uploaded.meta['reused_existing_draft'] == true;
       _appendPipelineLog(
-        'extract',
-        '추출 잡 생성: ${extractJob.id} (${extractJob.status})',
+        'upload',
+        reusedDraft
+            ? '기존 작업본 덮어쓰기 완료: document=${uploaded.id}'
+            : '업로드 완료: document=${uploaded.id}',
       );
       await _refreshDocuments();
       if (!mounted) return;
       setState(() {
         _activeDocument = uploaded;
-        _activeExtractJob = extractJob;
+        _activeExtractJob = null;
         _activeExportJob = null;
         _questions = <ProblemBankQuestion>[];
         _dirtyQuestionIds.clear();
+        _dirtyDocumentMeta = false;
+        _needsPublish = false;
         _applySourceMetaFromDocument(uploaded);
         _figurePreviewUrls.clear();
         _figurePreviewPaths.clear();
@@ -1326,13 +1375,20 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         _scoreDrafts.clear();
         _isFigurePolling = false;
         _isUploading = false;
-        _isExtracting = true;
-        _statusText = '추출 작업을 큐에 등록했습니다.';
+        _isExtracting = false;
+        _statusText = reusedDraft
+            ? '기존 작업본을 덮어썼습니다. 자동으로 추출을 시작합니다...'
+            : '업로드 완료. 자동으로 추출을 시작합니다...';
       });
       _ensurePolling();
-      _showSnack('업로드 및 추출 요청이 완료되었습니다.');
+      _showSnack(
+        reusedDraft
+            ? '같은 파일 작업본을 덮어썼습니다. 추출을 자동으로 시작합니다.'
+            : '업로드 완료. 추출을 자동으로 시작합니다.',
+      );
+      await _startExtractForActiveDocument();
     } catch (e) {
-      _appendPipelineLog('upload', '업로드/추출 요청 실패: $e', error: true);
+      _appendPipelineLog('upload', '업로드 요청 실패: $e', error: true);
       if (!mounted) return;
       setState(() {
         _isUploading = false;
@@ -1340,6 +1396,91 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         _statusText = '업로드 실패';
       });
       _showSnack('업로드 실패: $e', error: true);
+    }
+  }
+
+  Future<void> _startExtractForActiveDocument() async {
+    if (_isResetting ||
+        _isUploading ||
+        _isExtracting ||
+        _isExporting ||
+        _isSavingExportLocally) {
+      return;
+    }
+    if (_schemaMissing) {
+      _showSnack(
+        'DB 마이그레이션이 먼저 필요합니다: 20260324193000_problem_bank_pipeline.sql',
+        error: true,
+      );
+      return;
+    }
+    final academyId = _academyId;
+    if (academyId == null || academyId.isEmpty) {
+      _showSnack(
+        'academy_id를 찾을 수 없습니다. memberships 소속 정보를 확인해주세요.',
+        error: true,
+      );
+      return;
+    }
+    final doc = _activeDocument;
+    if (doc == null) {
+      _showSnack('먼저 HWPX를 업로드하고 문서를 선택해주세요.', error: true);
+      return;
+    }
+    final extract = _activeExtractJob;
+    if (extract != null &&
+        extract.documentId == doc.id &&
+        (extract.status == 'queued' || extract.status == 'extracting')) {
+      _showSnack('이미 추출 작업이 진행 중입니다.');
+      return;
+    }
+
+    _appendPipelineLog('extract', '추출 시작 요청: document=${doc.id}');
+    setState(() {
+      _isExtracting = true;
+      _hasExtracted = false;
+      _hasExported = false;
+      _queuedLongWaitWarned = false;
+      _statusText = '추출 작업을 큐에 등록 중...';
+    });
+    try {
+      final extractJob = await _service.createExtractJob(
+        academyId: academyId,
+        documentId: doc.id,
+      );
+      _appendPipelineLog(
+        'extract',
+        '추출 잡 생성: ${extractJob.id} (${extractJob.status})',
+      );
+      await _refreshDocuments();
+      if (!mounted) return;
+      setState(() {
+        _activeExtractJob = extractJob;
+        _activeExportJob = null;
+        _questions = <ProblemBankQuestion>[];
+        _dirtyQuestionIds.clear();
+        _dirtyDocumentMeta = false;
+        _needsPublish = false;
+        _figurePreviewUrls.clear();
+        _figurePreviewPaths.clear();
+        _figurePreviewUrlsByPath.clear();
+        _figureGenerating.clear();
+        _scoreDrafts.clear();
+        _isFigurePolling = false;
+        _isExtracting = true;
+        _lastExtractStatus = extractJob.status;
+        _statusText = '추출 작업을 큐에 등록했습니다.';
+      });
+      _ensurePolling();
+      _showSnack('추출 요청이 완료되었습니다.');
+    } catch (e) {
+      _appendPipelineLog('extract', '추출 요청 실패: $e', error: true);
+      if (!mounted) return;
+      setState(() {
+        _isExtracting = false;
+        _statusText = '추출 요청 실패';
+      });
+      _showSnack('추출 요청 실패: $e', error: true);
     }
   }
 
@@ -1549,6 +1690,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         _activeExtractJob = imported.extractJob;
         _activeExportJob = null;
         _dirtyQuestionIds.clear();
+        _dirtyDocumentMeta = false;
+        _needsPublish = imported.questionCount > 0;
         _applySourceMetaFromDocument(imported.document);
         _figurePreviewUrls.clear();
         _figurePreviewPaths.clear();
@@ -1562,7 +1705,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         _statusText = '수동 입력에서 ${imported.questionCount}문항을 생성했습니다.';
       });
       await _loadDocumentContext(imported.document.id);
-      _showSnack('복사/붙여넣기 문항 ${imported.questionCount}건을 등록했습니다.');
+      _showSnack(
+        '복사/붙여넣기 문항 ${imported.questionCount}건을 추출했습니다. 검수 후 `업로드`를 눌러 반영하세요.',
+      );
     } catch (e) {
       _appendPipelineLog('manual', '수동 입력 처리 실패: $e', error: true);
       if (!mounted) return;
@@ -2167,8 +2312,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
             nextStatusText = '추출 완료 · AI 그림 생성 대기 중';
           } else {
             nextStatusText = latest.status == 'review_required'
-                ? '저신뢰 문항이 있어 검수가 필요합니다.'
-                : '추출이 완료되었습니다.';
+                ? '저신뢰 문항 추출 완료 · 검수/수정 후 업로드 대기'
+                : '추출 완료 · 업로드 대기';
           }
         }
       }
@@ -2285,6 +2430,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         final ids = questions.map((q) => q.id).toSet();
         _scoreDrafts.removeWhere((id, _) => !ids.contains(id));
         _hasExtracted = questions.isNotEmpty;
+        final currentDocStatus = _activeDocument?.status.trim() ?? '';
+        _needsPublish = questions.isNotEmpty && currentDocStatus != 'ready';
         _isExtracting = false;
       });
       _appendPipelineLog('review', '문항 목록 갱신: ${questions.length}건');
@@ -2298,8 +2445,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
 
   Future<void> _saveQuestionsToServer() async {
     if (_isSavingQuestionChanges || _isDeletingCurrentQuestions) return;
-    if (_dirtyQuestionIds.isEmpty && !_dirtyDocumentMeta) {
-      _showSnack('저장할 변경사항이 없습니다.');
+    if (_dirtyQuestionIds.isEmpty && !_dirtyDocumentMeta && !_needsPublish) {
+      _showSnack('업로드할 변경사항이 없습니다.');
       return;
     }
     if (_dirtyDocumentMeta && _isSchoolPastSource && _sourceExamTerm.isEmpty) {
@@ -2366,55 +2513,66 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           meta: mergedMeta,
         );
       }
-      if (_dirtyDocumentMeta && doc != null) {
-        if (academyId == null || academyId.isEmpty) {
-          throw Exception('academy_id를 찾을 수 없습니다.');
-        }
-        final mergedDocMeta = <String, dynamic>{
-          ...doc.meta,
-          'source_classification': _buildSourceClassificationMeta(),
-        };
+      if (doc != null) {
+        final mergedDocMeta = _dirtyDocumentMeta
+            ? <String, dynamic>{
+                ...doc.meta,
+                'source_classification': _buildSourceClassificationMeta(),
+              }
+            : doc.meta;
         await _service.updateDocumentMeta(
           documentId: doc.id,
           meta: mergedDocMeta,
-          curriculumCode: curriculumCode,
-          sourceTypeCode: sourceTypeCode,
-          courseLabel: courseLabel,
-          gradeLabel: gradeLabel,
-          examYear: examYear,
-          semesterLabel: semesterLabel,
-          examTermLabel: examTermLabel,
-          schoolName: schoolName,
-          publisherName: publisherName,
-          materialName: materialName,
-          classificationDetail: classificationDetail,
+          status: 'ready',
+          curriculumCode: _dirtyDocumentMeta ? curriculumCode : null,
+          sourceTypeCode: _dirtyDocumentMeta ? sourceTypeCode : null,
+          courseLabel: _dirtyDocumentMeta ? courseLabel : null,
+          gradeLabel: _dirtyDocumentMeta ? gradeLabel : null,
+          examYear: _dirtyDocumentMeta ? examYear : null,
+          semesterLabel: _dirtyDocumentMeta ? semesterLabel : null,
+          examTermLabel: _dirtyDocumentMeta ? examTermLabel : null,
+          schoolName: _dirtyDocumentMeta ? schoolName : null,
+          publisherName: _dirtyDocumentMeta ? publisherName : null,
+          materialName: _dirtyDocumentMeta ? materialName : null,
+          classificationDetail:
+              _dirtyDocumentMeta ? classificationDetail : null,
         );
-        await _service.updateQuestionsClassificationForDocument(
-          academyId: academyId,
-          documentId: doc.id,
-          curriculumCode: curriculumCode,
-          sourceTypeCode: sourceTypeCode,
-          courseLabel: courseLabel,
-          gradeLabel: gradeLabel,
-          examYear: examYear,
-          semesterLabel: semesterLabel,
-          examTermLabel: examTermLabel,
-          schoolName: schoolName,
-          publisherName: publisherName,
-          materialName: materialName,
-          classificationDetail: classificationDetail,
-        );
+        if (_dirtyDocumentMeta) {
+          if (academyId == null || academyId.isEmpty) {
+            throw Exception('academy_id를 찾을 수 없습니다.');
+          }
+          await _service.updateQuestionsClassificationForDocument(
+            academyId: academyId,
+            documentId: doc.id,
+            curriculumCode: curriculumCode,
+            sourceTypeCode: sourceTypeCode,
+            courseLabel: courseLabel,
+            gradeLabel: gradeLabel,
+            examYear: examYear,
+            semesterLabel: semesterLabel,
+            examTermLabel: examTermLabel,
+            schoolName: schoolName,
+            publisherName: publisherName,
+            materialName: materialName,
+            classificationDetail: classificationDetail,
+          );
+        }
       }
       if (!mounted) return;
       setState(() {
         _dirtyQuestionIds.clear();
         _dirtyDocumentMeta = false;
+        _needsPublish = false;
         _scoreDrafts.clear();
       });
-      _showSnack('문항 변경사항을 서버에 저장했습니다.');
-      await _reloadQuestions();
+      _showSnack('문항을 확정 업로드했습니다. (학습 앱 반영)');
+      if (doc != null) {
+        await _loadDocumentContext(doc.id);
+      } else {
+        await _reloadQuestions();
+      }
     } catch (e) {
-      _showSnack('서버 저장 실패: $e', error: true);
+      _showSnack('업로드 저장 실패: $e', error: true);
     } finally {
       if (mounted) {
         setState(() {
@@ -2474,6 +2632,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         _dirtyQuestionIds.clear();
         _scoreDrafts.clear();
         _hasExtracted = false;
+        _needsPublish = false;
       });
       _showSnack('이번 문항을 모두 삭제했습니다.');
       await _loadDocumentContext(doc.id);
@@ -2949,7 +3108,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       },
     );
     if (result == true) {
-      _showSnack('검수 수정사항을 반영했습니다. 상단 `서버 저장` 버튼으로 저장하세요.');
+      _showSnack('검수 수정사항을 반영했습니다. 상단 `업로드` 버튼으로 저장하세요.');
     }
   }
 
@@ -3805,6 +3964,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                   _activeDocument = doc;
                   _questions = <ProblemBankQuestion>[];
                   _dirtyQuestionIds.clear();
+                  _needsPublish = false;
                   _applySourceMetaFromDocument(doc);
                   _scoreDrafts.clear();
                   _hasExtracted = false;
@@ -3919,8 +4079,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _buildSectionTitle(
-            '1) HWPX 업로드/추출',
-            subtitle: '원본 보존 + 문항/수식 정규화 + 비동기 추출 잡 실행',
+            '1) HWPX 업로드',
+            subtitle: '업로드 직후 자동으로 추출하고, 검수 후 업로드로 확정합니다.',
           ),
           const SizedBox(height: 12),
           _buildDocumentSelector(),
@@ -3948,7 +4108,40 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                       ),
                     )
                   : const Icon(Icons.upload_file_outlined, size: 17),
-              label: Text(_isUploading ? '업로드 중...' : 'HWPX 업로드/추출'),
+              label: Text(_isUploading ? '업로드 중...' : 'HWPX 업로드 (자동 추출)'),
+            ),
+          ),
+          const SizedBox(height: 8),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton.icon(
+              onPressed: (_isUploading ||
+                      _isResetting ||
+                      _isExtracting ||
+                      _schemaMissing ||
+                      _academyMissing ||
+                      _academyId == null ||
+                      _academyId!.isEmpty ||
+                      _activeDocument == null)
+                  ? null
+                  : () => unawaited(_startExtractForActiveDocument()),
+              style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFF2C8C66)),
+              icon: _isExtracting
+                  ? const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : const Icon(Icons.play_arrow_rounded, size: 18),
+              label: Text(
+                _isExtracting
+                    ? '추출 중...'
+                    : (_hasExtracted ? '재추출 시작' : '추출 다시 시작'),
+              ),
             ),
           ),
           const SizedBox(height: 8),
@@ -6970,7 +7163,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       },
     );
     if (saved == true) {
-      _showSnack('정답 수정사항을 반영했습니다. 상단 `서버 저장` 버튼으로 저장하세요.');
+      _showSnack('정답 수정사항을 반영했습니다. 상단 `업로드` 버튼으로 저장하세요.');
     }
   }
 
@@ -7762,7 +7955,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
               const Spacer(),
               OutlinedButton.icon(
                 onPressed: _activeDocument == null ||
-                        (_dirtyQuestionIds.isEmpty && !_dirtyDocumentMeta) ||
+                        (_dirtyQuestionIds.isEmpty &&
+                            !_dirtyDocumentMeta &&
+                            !_needsPublish) ||
                         _isSavingQuestionChanges ||
                         _isDeletingCurrentQuestions
                     ? null
@@ -7781,7 +7976,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                         ),
                       )
                     : const Icon(Icons.cloud_upload_outlined, size: 16),
-                label: const Text('서버 저장'),
+                label: const Text('업로드'),
               ),
               const SizedBox(width: 8),
               OutlinedButton.icon(
@@ -7976,6 +8171,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       _activeDocument = doc;
       _questions = <ProblemBankQuestion>[];
       _dirtyQuestionIds.clear();
+      _needsPublish = false;
       _applySourceMetaFromDocument(doc);
       _scoreDrafts.clear();
       _hasExtracted = false;
@@ -8030,6 +8226,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         _dirtyQuestionIds.clear();
         _scoreDrafts.clear();
         _hasExtracted = false;
+        _needsPublish = false;
       });
       await _refreshDocuments();
       await _runClassificationSearch();
@@ -8060,7 +8257,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
             Row(
               children: [
                 Text(
-                  '검색 결과 ${_classificationResults.length}건',
+                  '검색 결과 ${_classificationResults.length}건 · 작업본/확정본 포함',
                   style: const TextStyle(
                     color: _textSub,
                     fontSize: 12.6,
@@ -8110,6 +8307,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                         final item = _classificationResults[index];
                         final doc = item.document;
                         final isActive = _activeDocument?.id == doc.id;
+                        final statusLabel = _labelOfDocumentStatus(doc.status);
+                        final isDraftStatus =
+                            _isDraftDocumentStatus(doc.status);
                         final scoreText = item.matchedQuestionCount >= 0
                             ? '매칭 ${item.matchedQuestionCount}문항'
                             : '문서 기준';
@@ -8140,15 +8340,43 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(
-                                  doc.sourceFilename,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    color: _text,
-                                    fontSize: 12.4,
-                                    fontWeight: FontWeight.w700,
-                                  ),
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        doc.sourceFilename,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(
+                                          color: _text,
+                                          fontSize: 12.4,
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 6),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 6,
+                                        vertical: 2,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: isDraftStatus
+                                            ? const Color(0xFF7A5B2E)
+                                            : const Color(0xFF2C8C66),
+                                        borderRadius:
+                                            BorderRadius.circular(999),
+                                      ),
+                                      child: Text(
+                                        statusLabel,
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 10.2,
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
                                 ),
                                 const SizedBox(height: 2),
                                 Text(

@@ -15,6 +15,7 @@ class ProblemBankQuestionCard extends StatelessWidget {
     this.figureUrlsByPath = const <String, String>{},
     this.showSelectionControl = true,
     this.paperStyle = false,
+    this.previewImageUrl,
   });
 
   final LearningProblemQuestion question;
@@ -25,6 +26,7 @@ class ProblemBankQuestionCard extends StatelessWidget {
   final Map<String, String> figureUrlsByPath;
   final bool showSelectionControl;
   final bool paperStyle;
+  final String? previewImageUrl;
 
   @override
   Widget build(BuildContext context) {
@@ -47,29 +49,14 @@ class ProblemBankQuestionCard extends StatelessWidget {
           Divider(height: 1, color: color.divider),
           Expanded(
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+              padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  SizedBox(
-                    height: 340,
-                    child: Align(
-                      alignment: Alignment.topCenter,
-                      child: FractionallySizedBox(
-                        widthFactor: 0.8,
-                        child: ProblemBankManagerPreviewPaper(
-                          question: previewQuestion,
-                          figureUrlsByPath: figureUrlsByPath,
-                          expanded: false,
-                          scrollable: true,
-                          bordered: true,
-                          shadow: true,
-                          showQuestionNumberPrefix: false,
-                        ),
-                      ),
-                    ),
+                  Expanded(
+                    child: _buildPreviewContent(previewQuestion),
                   ),
-                  const SizedBox(height: 10),
+                  const SizedBox(height: 6),
                   Text(
                     _metaSummaryText(),
                     maxLines: 2,
@@ -87,6 +74,61 @@ class ProblemBankQuestionCard extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildPreviewContent(LearningProblemQuestion previewQuestion) {
+    final wrapper = Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: _buildPreviewInner(previewQuestion),
+    );
+    return wrapper;
+  }
+
+  Widget _buildPreviewInner(LearningProblemQuestion previewQuestion) {
+    if (previewImageUrl != null && previewImageUrl!.isNotEmpty) {
+      return SingleChildScrollView(
+        physics: const ClampingScrollPhysics(),
+        child: Image.network(
+          previewImageUrl!,
+          fit: BoxFit.fitWidth,
+          alignment: Alignment.topCenter,
+          loadingBuilder: (context, child, progress) {
+            if (progress == null) return child;
+            return const SizedBox(
+              height: 200,
+              child: Center(
+                child: SizedBox(
+                  width: 22,
+                  height: 22,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              ),
+            );
+          },
+          errorBuilder: (context, error, stack) {
+            return _buildNativeFallback(previewQuestion);
+          },
+        ),
+      );
+    }
+    return _buildNativeFallback(previewQuestion);
+  }
+
+  Widget _buildNativeFallback(LearningProblemQuestion previewQuestion) {
+    return ProblemBankManagerPreviewPaper(
+      question: previewQuestion,
+      figureUrlsByPath: figureUrlsByPath,
+      expanded: false,
+      scrollable: true,
+      bordered: false,
+      shadow: false,
+      showQuestionNumberPrefix: false,
     );
   }
 

@@ -46,7 +46,7 @@ const FONT_PATH_KOPUB_BATANG_LIGHT =
   process.env.PB_PDF_FONT_KOPUB_BATANG_LIGHT_PATH || '';
 const FONT_PATH_QNUM =
   process.env.PB_PDF_FONT_QNUM_PATH || '';
-const RENDER_CONFIG_VERSION = 'pb_render_v27c_layout_stable_math';
+const RENDER_CONFIG_VERSION = 'pb_render_v30e_hide_markers_answer_fix';
 const FIGURE_REGEN_COOLDOWN_MIN = Math.max(
   2,
   Number.parseInt(process.env.PB_EXPORT_REGEN_COOLDOWN_MIN || '12', 10),
@@ -136,7 +136,7 @@ function sleep(ms) {
 
 function normalizeFontFamily(value) {
   const safe = normalizeWhitespace(value || '');
-  if (!safe || safe === '기본') return 'HCRBatang';
+  if (!safe || safe === '기본') return 'KoPubWorldBatangPro';
   return safe;
 }
 

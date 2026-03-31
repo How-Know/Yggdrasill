@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
@@ -337,14 +338,25 @@ class LearningProblemBankService {
     String? gatewayApiKey,
   })  : _client = client ?? Supabase.instance.client,
         _http = httpClient ?? http.Client(),
-        _gatewayBaseUrl = (gatewayBaseUrl ??
-                const String.fromEnvironment('PB_GATEWAY_URL',
-                    defaultValue: ''))
-            .trim(),
+        _gatewayBaseUrl = _resolveGatewayUrl(gatewayBaseUrl),
         _gatewayApiKey = (gatewayApiKey ??
                 const String.fromEnvironment('PB_GATEWAY_API_KEY',
                     defaultValue: ''))
             .trim();
+
+  static String _resolveGatewayUrl(String? explicit) {
+    if (explicit != null && explicit.trim().isNotEmpty) {
+      return explicit.trim();
+    }
+    const dartDefine =
+        String.fromEnvironment('PB_GATEWAY_URL', defaultValue: '');
+    if (dartDefine.isNotEmpty) return dartDefine;
+    try {
+      final envValue = Platform.environment['PB_GATEWAY_URL'] ?? '';
+      if (envValue.isNotEmpty) return envValue;
+    } catch (_) {}
+    return 'http://localhost:8787';
+  }
 
   final SupabaseClient _client;
   final http.Client _http;
@@ -439,6 +451,7 @@ class LearningProblemBankService {
         .eq('academy_id', academyId)
         .eq('curriculum_code', curriculumCode)
         .eq('source_type_code', 'school_past')
+        .eq('status', 'ready')
         .limit(limit);
 
     final out = <String>{};
@@ -466,53 +479,115 @@ class LearningProblemBankService {
     String? schoolName,
     int limit = 400,
   }) async {
-    var q = _client
-        .from('pb_questions')
+    final safeSchoolName = (schoolName ?? '').trim();
+    final readyDocRows = await _client
+        .from('pb_documents')
         .select(
-          [
-            'id',
-            'document_id',
-            'question_number',
-            'question_type',
-            'stem',
-            'choices',
-            'objective_choices',
-            'allow_objective',
-            'allow_subjective',
-            'objective_answer_key',
-            'subjective_answer',
-            'reviewer_notes',
-            'equations',
-            'source_page',
-            'source_order',
-            'curriculum_code',
-            'source_type_code',
-            'course_label',
-            'grade_label',
-            'exam_year',
-            'semester_label',
-            'exam_term_label',
-            'school_name',
-            'publisher_name',
-            'material_name',
-            'confidence',
-            'figure_refs',
-            'meta',
-            'created_at',
-          ].join(','),
+          'id,source_filename,school_name,course_label,grade_label,curriculum_code,source_type_code',
         )
         .eq('academy_id', academyId)
         .eq('curriculum_code', curriculumCode)
-        .eq('source_type_code', sourceTypeCode);
+        .eq('source_type_code', sourceTypeCode)
+        .eq('status', 'ready')
+        .limit(4000);
 
-    final safeSchoolName = (schoolName ?? '').trim();
-    if (safeSchoolName.isNotEmpty) {
-      q = q.eq('school_name', safeSchoolName);
+    final readyDocIds = <String>{};
+    final documentNameMap = <String, String>{};
+    for (final item in (readyDocRows as List<dynamic>)) {
+      final row = _mapOrEmpty(item);
+      final docId = '${row['id'] ?? ''}'.trim();
+      if (docId.isEmpty) continue;
+      final docSchoolName = '${row['school_name'] ?? ''}'.trim();
+      if (safeSchoolName.isNotEmpty && docSchoolName != safeSchoolName) {
+        continue;
+      }
+      final courseLabel = '${row['course_label'] ?? ''}'.trim();
+      final gradeLabel = '${row['grade_label'] ?? ''}'.trim();
+      if (!_matchesLevel(schoolLevel, courseLabel, gradeLabel)) {
+        continue;
+      }
+      if (!_matchesDetailedCourse(detailedCourse, courseLabel, gradeLabel)) {
+        continue;
+      }
+      readyDocIds.add(docId);
+      documentNameMap[docId] = '${row['source_filename'] ?? ''}'.trim();
     }
 
-    final rows = await q.order('created_at', ascending: false).limit(limit);
-    final list =
-        (rows as List<dynamic>).map((e) => _mapOrEmpty(e)).where((row) {
+    if (readyDocIds.isEmpty) {
+      return const <LearningProblemQuestion>[];
+    }
+
+    final fetchedRows = <Map<String, dynamic>>[];
+    for (final docChunk
+        in _chunkStrings(readyDocIds.toList(growable: false), 250)) {
+      var q = _client
+          .from('pb_questions')
+          .select(
+            [
+              'id',
+              'document_id',
+              'question_number',
+              'question_type',
+              'stem',
+              'choices',
+              'objective_choices',
+              'allow_objective',
+              'allow_subjective',
+              'objective_answer_key',
+              'subjective_answer',
+              'reviewer_notes',
+              'equations',
+              'source_page',
+              'source_order',
+              'curriculum_code',
+              'source_type_code',
+              'course_label',
+              'grade_label',
+              'exam_year',
+              'semester_label',
+              'exam_term_label',
+              'school_name',
+              'publisher_name',
+              'material_name',
+              'confidence',
+              'figure_refs',
+              'meta',
+              'created_at',
+            ].join(','),
+          )
+          .eq('academy_id', academyId)
+          .eq('curriculum_code', curriculumCode)
+          .eq('source_type_code', sourceTypeCode)
+          .inFilter('document_id', docChunk);
+
+      if (safeSchoolName.isNotEmpty) {
+        q = q.eq('school_name', safeSchoolName);
+      }
+      final rows = await q.order('created_at', ascending: false).limit(limit);
+      fetchedRows.addAll((rows as List<dynamic>).map(_mapOrEmpty));
+    }
+
+    if (fetchedRows.isEmpty) return const <LearningProblemQuestion>[];
+
+    fetchedRows.sort((a, b) {
+      final left = _dateTimeOrNull(a['created_at']);
+      final right = _dateTimeOrNull(b['created_at']);
+      if (left == null && right == null) return 0;
+      if (left == null) return 1;
+      if (right == null) return -1;
+      return right.compareTo(left);
+    });
+
+    final deduped = <String, Map<String, dynamic>>{};
+    for (final row in fetchedRows) {
+      final id = '${row['id'] ?? ''}'.trim();
+      if (id.isEmpty || deduped.containsKey(id)) continue;
+      deduped[id] = row;
+    }
+
+    final list = deduped.values.where((row) {
+      final documentId = '${row['document_id'] ?? ''}'.trim();
+      if (!readyDocIds.contains(documentId)) return false;
       final courseLabel = '${row['course_label'] ?? ''}'.trim();
       final gradeLabel = '${row['grade_label'] ?? ''}'.trim();
       if (!_matchesLevel(schoolLevel, courseLabel, gradeLabel)) {
@@ -526,26 +601,8 @@ class LearningProblemBankService {
 
     if (list.isEmpty) return const <LearningProblemQuestion>[];
 
-    final docIds = list
-        .map((e) => '${e['document_id'] ?? ''}'.trim())
-        .where((e) => e.isNotEmpty)
-        .toSet()
-        .toList(growable: false);
-    final documentNameMap = <String, String>{};
-    if (docIds.isNotEmpty) {
-      final docRows = await _client
-          .from('pb_documents')
-          .select('id,source_filename')
-          .inFilter('id', docIds);
-      for (final item in (docRows as List<dynamic>)) {
-        final row = _mapOrEmpty(item);
-        final id = '${row['id'] ?? ''}'.trim();
-        if (id.isEmpty) continue;
-        documentNameMap[id] = '${row['source_filename'] ?? ''}'.trim();
-      }
-    }
-
-    return list
+    final limited = list.length > limit ? list.take(limit).toList() : list;
+    return limited
         .map(
           (row) => LearningProblemQuestion.fromMap(
             row,
@@ -889,6 +946,41 @@ class LearningProblemBankService {
         .from(safeBucket)
         .createSignedUrl(safePath, expiresInSeconds);
   }
+
+  Future<Map<String, String>> fetchQuestionPreviews({
+    required String academyId,
+    required List<String> questionIds,
+    Map<String, dynamic>? layout,
+  }) async {
+    if (!hasGateway || questionIds.isEmpty) return {};
+    try {
+      final body = <String, dynamic>{
+        'academyId': academyId,
+        'questionIds': questionIds,
+      };
+      if (layout != null && layout.isNotEmpty) body['layout'] = layout;
+
+      final result = await _gatewayPost(
+        '/pb/preview/questions',
+        body: body,
+      );
+
+      final previews = result['previews'];
+      if (previews is! List) return {};
+
+      final map = <String, String>{};
+      for (final entry in previews) {
+        if (entry is! Map) continue;
+        final qId = '${entry['questionId'] ?? ''}'.trim();
+        final url = '${entry['imageUrl'] ?? ''}'.trim();
+        if (qId.isNotEmpty && url.isNotEmpty) map[qId] = url;
+      }
+      return map;
+    } catch (e) {
+      // ignore preview fetch errors silently
+      return {};
+    }
+  }
 }
 
 bool _matchesLevel(String level, String courseLabel, String gradeLabel) {
@@ -972,6 +1064,18 @@ String _stripPotentialWatermarkText(String value) {
       .replaceAll(RegExp(r'수식입니다\.?'), '')
       .replaceAll(RegExp(r'무단\s*배포\s*금지'), '')
       .trim();
+  return out;
+}
+
+List<List<String>> _chunkStrings(List<String> input, int chunkSize) {
+  final safeChunkSize = chunkSize <= 0 ? 1 : chunkSize;
+  if (input.isEmpty) return const <List<String>>[];
+  final out = <List<String>>[];
+  for (var i = 0; i < input.length; i += safeChunkSize) {
+    final end =
+        (i + safeChunkSize > input.length) ? input.length : i + safeChunkSize;
+    out.add(input.sublist(i, end));
+  }
   return out;
 }
 

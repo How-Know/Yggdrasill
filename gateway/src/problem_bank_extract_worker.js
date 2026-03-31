@@ -375,6 +375,18 @@ function parseQuestionStart(line) {
       scorePoint: Number.isFinite(scorePoint) ? scorePoint : null,
     };
   }
+  // 일부 문서는 문항번호 없이 "[4.00점]" 라인만 먼저 나타난다.
+  // 이 경우는 buildQuestionRows에서 미주 정답번호(answerHintMap)와 순서 매칭한다.
+  const m6 = input.match(/^\[\s*(\d+(?:\.\d+)?)\s*점\s*\]\s*(.+)?$/);
+  if (m6) {
+    const scorePoint = Number.parseFloat(m6[1] || '');
+    return {
+      number: '',
+      rest: (m6[2] || '').trim(),
+      style: 'score_only',
+      scorePoint: Number.isFinite(scorePoint) ? scorePoint : null,
+    };
+  }
   // 일부 문서는 "5 다음..."처럼 점 없이 시작한다.
   const m4 = input.match(/^(\d{1,3})\s+(.+)$/);
   if (m4) {
@@ -393,6 +405,27 @@ function parseQuestionStart(line) {
     }
   }
   return null;
+}
+
+function looksLikePromptLineForImplicitSplit(line) {
+  const input = normalizeWhitespace(line);
+  if (!input || input.length < 8) return false;
+  if (!/[가-힣]/.test(input)) return false;
+  if (isSourceMarkerLine(input)) return false;
+  if (parseChoiceLine(input)) return false;
+  if (parseAnswerLine(input)) return false;
+  if (isViewBlockLine(input) || isFigureLine(input)) return false;
+  if (/^([ㄱ-ㅎ]|[①②③④⑤⑥⑦⑧⑨⑩])\s*[\.\)]/.test(input)) return false;
+  return /(다음|옳은|설명|구하|계산|고른|것은|값|함수|수열|부등식|넓이|확률|미분|적분|\?)/.test(
+    input,
+  );
+}
+
+function looksLikeQuestionTerminalLine(line) {
+  const input = normalizeWhitespace(line);
+  if (!input) return false;
+  if (/\?$/.test(input)) return true;
+  return /(구하시오|고르시오|쓰시오|값은|넓이는|옳은 것은)\.?$/.test(input);
 }
 
 function parseChoiceLine(line) {
@@ -917,8 +950,10 @@ function countScoreHeadersFromXml(xmlText) {
           .replace(/\s+/g, ' '),
       ),
   ).filter(Boolean);
-  return textNodes.filter((line) =>
-    /(\d{1,3})\s*\[\s*(\d+(?:\.\d+)?)\s*점\s*\]/.test(line),
+  return textNodes.filter(
+    (line) =>
+      /(\d{1,3})\s*\[\s*(\d+(?:\.\d+)?)\s*점\s*\]/.test(line) ||
+      /^\[\s*(\d+(?:\.\d+)?)\s*점\s*\]$/.test(line),
   ).length;
 }
 
@@ -2080,6 +2115,71 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
     equationRefs: 0,
     questionCount: 0,
   };
+  const hintedQuestionNumbers = Array.from(answerHintMap.keys())
+    .map((key) => Number.parseInt(String(key || ''), 10))
+    .filter((n) => Number.isFinite(n) && n > 0)
+    .sort((a, b) => a - b)
+    .map((n) => String(n));
+  let hintedCursor = 0;
+  const usedQuestionNumbers = new Set();
+
+  const reserveQuestionNumber = (preferred, { allowFallback = true } = {}) => {
+    const normalizedPreferred = normalizeWhitespace(String(preferred || ''));
+    if (/^\d{1,3}$/.test(normalizedPreferred)) {
+      usedQuestionNumbers.add(normalizedPreferred);
+      return normalizedPreferred;
+    }
+    while (hintedCursor < hintedQuestionNumbers.length) {
+      const candidate = hintedQuestionNumbers[hintedCursor++];
+      if (!candidate || usedQuestionNumbers.has(candidate)) continue;
+      usedQuestionNumbers.add(candidate);
+      return candidate;
+    }
+    if (!allowFallback) return '';
+    let seq = Math.max(1, questions.length + 1);
+    while (usedQuestionNumbers.has(String(seq))) {
+      seq += 1;
+    }
+    const fallback = String(seq);
+    usedQuestionNumbers.add(fallback);
+    return fallback;
+  };
+
+  const createQuestionSeed = ({
+    questionNumber,
+    row,
+    stemLines = [],
+    sourcePatterns = [],
+    scorePoint = null,
+  }) => ({
+    academy_id: academyId,
+    document_id: documentId,
+    extract_job_id: extractJobId,
+    source_page: Number(row.page || row.section + 1),
+    source_order: questions.length,
+    question_number: questionNumber,
+    question_type: '미분류',
+    stem: '',
+    stemLines: [...stemLines],
+    choices: [],
+    figure_refs: [],
+    equations: [],
+    source_anchors: {
+      section: row.section,
+      line_start: row.lineIndex,
+      line_end: row.lineIndex,
+    },
+    confidence: 0,
+    flags: [],
+    sourcePatterns: [...sourcePatterns],
+    score_point: scorePoint,
+    answer_key: '',
+    is_checked: false,
+    reviewed_by: null,
+    reviewed_at: null,
+    reviewer_notes: '',
+    meta: {},
+  });
 
   const flushCurrent = () => {
     if (!current) return;
@@ -2123,36 +2223,20 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
 
     const start = parseQuestionStart(line);
     if (start) {
+      const questionNumber = reserveQuestionNumber(start.number, {
+        allowFallback: start.style === 'score_only',
+      });
+      if (!questionNumber) {
+        continue;
+      }
       flushCurrent();
-      current = {
-        academy_id: academyId,
-        document_id: documentId,
-        extract_job_id: extractJobId,
-        source_page: Number(row.page || row.section + 1),
-        source_order: questions.length,
-        question_number: start.number,
-        question_type: '미분류',
-        stem: '',
+      current = createQuestionSeed({
+        questionNumber,
+        row,
         stemLines: start.rest ? [start.rest] : [],
-        choices: [],
-        figure_refs: [],
-        equations: [],
-        source_anchors: {
-          section: row.section,
-          line_start: row.lineIndex,
-          line_end: row.lineIndex,
-        },
-        confidence: 0,
-        flags: [],
         sourcePatterns: [start.style],
-        score_point: start.scorePoint ?? null,
-        answer_key: '',
-        is_checked: false,
-        reviewed_by: null,
-        reviewed_at: null,
-        reviewer_notes: '',
-        meta: {},
-      };
+        scorePoint: start.scorePoint ?? null,
+      });
       continue;
     }
 
@@ -2174,35 +2258,15 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
         !parseChoiceLine(firstLineCandidate) &&
         !parseAnswerLine(firstLineCandidate);
       if (looksPromptLike) {
-        current = {
-          academy_id: academyId,
-          document_id: documentId,
-          extract_job_id: extractJobId,
-          source_page: Number(row.page || row.section + 1),
-          source_order: questions.length,
-          question_number: '1',
-          question_type: '미분류',
-          stem: '',
+        const implicitQuestionNumber = reserveQuestionNumber('1', {
+          allowFallback: true,
+        });
+        current = createQuestionSeed({
+          questionNumber: implicitQuestionNumber,
+          row,
           stemLines: [firstLineCandidate],
-          choices: [],
-          figure_refs: [],
-          equations: [],
-          source_anchors: {
-            section: row.section,
-            line_start: row.lineIndex,
-            line_end: row.lineIndex,
-          },
-          confidence: 0,
-          flags: [],
           sourcePatterns: ['implicit_first'],
-          score_point: null,
-          answer_key: '',
-          is_checked: false,
-          reviewed_by: null,
-          reviewed_at: null,
-          reviewer_notes: '',
-          meta: {},
-        };
+        });
         continue;
       }
     }
@@ -2234,6 +2298,46 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
       current.sourcePatterns.push('watermark_line');
       continue;
     }
+    const hasEnoughChoices = meaningfulChoiceTextCount(current.choices || []) >= 4;
+    const previousStemLine = normalizeWhitespace(
+      current.stemLines.length > 0
+        ? current.stemLines[current.stemLines.length - 1]
+        : '',
+    );
+    const isChoiceLine = Boolean(parseChoiceLine(cleanedLine));
+    const parsedAnswerKey = parseAnswerLine(cleanedLine);
+    const isAnswerLine = Boolean(parsedAnswerKey);
+    const isSourceLine = isSourceMarkerLine(cleanedLine);
+    const isViewOrFigureLine =
+      isViewBlockLine(cleanedLine) || isFigureLine(cleanedLine);
+    const canSplitAfterChoices =
+      hasEnoughChoices &&
+      !isChoiceLine &&
+      !isAnswerLine &&
+      !isSourceLine &&
+      !isViewOrFigureLine &&
+      cleanedLine.length >= 8 &&
+      /[가-힣A-Za-z]/.test(cleanedLine) &&
+      !isLikelyKoreanPersonName(cleanedLine);
+    const canSplitAfterTerminal =
+      looksLikePromptLineForImplicitSplit(cleanedLine) &&
+      looksLikeQuestionTerminalLine(previousStemLine);
+    if (
+      canSplitAfterChoices ||
+      canSplitAfterTerminal
+    ) {
+      const implicitQuestionNumber = reserveQuestionNumber('', {
+        allowFallback: true,
+      });
+      flushCurrent();
+      current = createQuestionSeed({
+        questionNumber: implicitQuestionNumber,
+        row,
+        stemLines: [cleanedLine],
+        sourcePatterns: ['implicit_after_block'],
+      });
+      continue;
+    }
     if (
       isLikelyKoreanPersonName(cleanedLine) &&
       current.stemLines.some((lineText) => /<\s*보\s*기>/.test(String(lineText || '')))
@@ -2241,15 +2345,13 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
       current.sourcePatterns.push('watermark_line');
       continue;
     }
-
-    const answerKey = parseAnswerLine(cleanedLine);
-    if (answerKey) {
-      current.answer_key = answerKey;
+    if (parsedAnswerKey) {
+      current.answer_key = parsedAnswerKey;
       current.sourcePatterns.push('answer_key');
       continue;
     }
 
-    if (isSourceMarkerLine(cleanedLine)) {
+    if (isSourceLine) {
       current.sourcePatterns.push('source_marker');
       continue;
     }
@@ -2271,7 +2373,7 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
       continue;
     }
 
-    const choice = parseChoiceLine(cleanedLine);
+    const choice = isChoiceLine ? parseChoiceLine(cleanedLine) : null;
     if (choice) {
       if (
         choice.style === 'consonant' &&
@@ -2345,6 +2447,7 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
       ...stats,
       sourceLineCount,
       segmentedLineCount,
+      answerHintCount: hintedQuestionNumbers.length,
       lowConfidenceCount,
       examProfile,
     },
@@ -2799,7 +2902,8 @@ async function processOneJob(job) {
 
   const reviewRequired = stats.lowConfidenceCount > 0;
   const jobStatus = reviewRequired ? 'review_required' : 'completed';
-  const docStatus = reviewRequired ? 'review_required' : 'ready';
+  // Keep extraction output as draft; manager publish moves it to ready.
+  const docStatus = reviewRequired ? 'draft_review_required' : 'draft_ready';
 
   const resultSummary = {
     totalQuestions: questions.length,
@@ -2810,6 +2914,7 @@ async function processOneJob(job) {
     equationRefs: stats.equationRefs,
     sourceLineCount: stats.sourceLineCount,
     segmentedLineCount: stats.segmentedLineCount,
+    answerHintCount: Number(stats.answerHintCount || 0),
     scoreHeaderHint: Number(parsed?.hints?.scoreHeaderCount || 0),
     previewLineCount: Number(parsed?.hints?.previewLineCount || 0),
     parseMode,

@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 
 import { buildDocumentHtml } from './html/build_document_html.js';
-import { renderHtmlToPdfBuffer } from './chrome/render_pdf.js';
+import { buildPreviewHtml } from './html/build_preview_html.js';
+import { renderHtmlToPdfBuffer, renderHtmlToImageBuffer } from './chrome/render_pdf.js';
 import { createMathSvgRenderer } from './math/mathjax_svg_renderer.js';
 import { normalizeWhitespace } from './utils/text.js';
 
@@ -35,6 +36,15 @@ function buildFontFaceCss({ regularPath, boldPath, qnumFontPath }) {
   const chunks = [];
   if (regularB64) {
     const f = fontFormatForPath(regularPath);
+    chunks.push(`
+      @font-face {
+        font-family: "YggMain";
+        src: url(data:${f.mime};base64,${regularB64}) format("${f.format}");
+        font-weight: 300;
+        font-style: normal;
+        font-display: swap;
+      }
+    `);
     chunks.push(`
       @font-face {
         font-family: "YggMain";
@@ -97,7 +107,7 @@ function normalizeQuestionForHtml(question) {
 function buildHtmlLayout(renderConfig, baseLayout) {
   const tuning = renderConfig?.layoutTuning || {};
   const marginPt = Number(tuning.pageMargin || baseLayout.margin || 46);
-  const stemSizePt = Number(renderConfig?.font?.size || baseLayout.stemSize || 11.2);
+  const stemSizePt = Number(renderConfig?.font?.size || baseLayout.stemSize || 11.0);
   const baseLineHeight = Number(tuning.lineHeight || baseLayout.lineHeight || 15.0);
   const lineHeightPt = Math.round(baseLineHeight * 1.4 * 10) / 10;
   return {
@@ -227,4 +237,31 @@ export async function renderPdfWithHtmlEngine({
     },
     exportQuestions: htmlQuestions,
   };
+}
+
+export async function renderQuestionPreview({
+  question,
+  fontRegularPath,
+  boldPath,
+  qnumFontPath,
+  layout,
+  supabaseClient,
+  viewportWidth = 400,
+}) {
+  const mathRenderer = createMathSvgRenderer();
+  const q = normalizeQuestionForHtml(question);
+  await hydrateFiguresForHtml([q], supabaseClient);
+  const fontFaceCss = buildFontFaceCss({
+    regularPath: fontRegularPath,
+    boldPath: boldPath || '',
+    qnumFontPath: qnumFontPath || '',
+  });
+  const html = buildPreviewHtml({
+    question: q,
+    mathRenderer,
+    fontFaceCss,
+    layout: layout || {},
+  });
+  const pngBuffer = await renderHtmlToImageBuffer(html, viewportWidth);
+  return { pngBuffer, html };
 }

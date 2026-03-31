@@ -1,4 +1,4 @@
-import { renderInlineMixedContent } from '../render_inline.js';
+import { composeLineV1 } from '../line_composer.js';
 import { escapeHtml } from '../../utils/text.js';
 
 function visualLength(text) {
@@ -22,7 +22,7 @@ function visualLength(text) {
 export function renderChoiceItem(choice, mathRenderer, equations) {
   const label = String(choice?.label || '').trim() || '-';
   const text = String(choice?.text || '');
-  const rendered = renderInlineMixedContent(text, mathRenderer, equations);
+  const rendered = composeLineV1(text, mathRenderer, equations);
   return {
     label,
     html: rendered.html,

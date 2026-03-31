@@ -25,19 +25,18 @@ class ProblemBankBottomFabBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final disabled = isBusy;
-    return Align(
-      alignment: Alignment.bottomCenter,
+    return Center(
       child: ClipRRect(
         borderRadius: BorderRadius.circular(999),
         child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 9, sigmaY: 9),
+          filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
             decoration: BoxDecoration(
-              color: const Color(0xCC111A1D),
+              color: const Color(0xFF111A1D).withValues(alpha: 0.7),
               borderRadius: BorderRadius.circular(999),
               border: Border.all(
-                color: const Color(0xFF355056).withValues(alpha: 0.75),
+                color: const Color(0xFF355056).withValues(alpha: 0.6),
               ),
             ),
             child: SingleChildScrollView(

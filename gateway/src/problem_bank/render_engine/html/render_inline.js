@@ -53,11 +53,8 @@ export function renderInlineMixedContent(input, mathRenderer, equations) {
     const fraction = isFractionLatex(latex);
     if (fraction) hasFraction = true;
     const klass = fraction ? 'math-inline fraction' : 'math-inline';
-    const vaStyle = fraction
-      ? ' style="vertical-align:middle"'
-      : (rendered.verticalAlign ? ` style="vertical-align:${rendered.verticalAlign}"` : '');
     chunks.push(
-      `<span class="${klass}"${vaStyle} data-latex="${escapeHtml(latex)}">${rendered.svg}</span>`,
+      `<span class="${klass}" data-latex="${escapeHtml(latex)}">${rendered.svg}</span>`,
     );
   }
 
