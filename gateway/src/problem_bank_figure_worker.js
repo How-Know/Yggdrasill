@@ -267,6 +267,32 @@ function buildFigurePrompt(
   ].join('\n');
 }
 
+function buildSingleFigurePrompt(
+  question,
+  {
+    referenceImage = null,
+    figureIndex = 1,
+    totalFigures = 1,
+    customPrompt = '',
+    requestedMinSidePx = FIGURE_MIN_SIDE_PX,
+  } = {},
+) {
+  const safeCustomPrompt = normalizeWhitespace(customPrompt);
+  return [
+    '첨부된 이미지의 모든 요소를 빠짐없이 고해상도로 깔끔하게 다시 그려라.',
+    '',
+    '규칙:',
+    '- 첨부 이미지에 보이는 모든 것(도형, 선, 화살표, 괄호, 치수선, 라벨, 기호)을 빠짐없이 재현하라. 어떤 요소도 생략하지 마라.',
+    '- 첨부 이미지에 없는 것은 추가하지 마라.',
+    '- 형태, 비율, 방향, 위치를 원본과 동일하게 유지하라.',
+    '- 직선은 직선, 곡선은 곡선, 실선은 실선, 점선은 점선으로 유지하라. 선의 종류를 바꾸지 마라.',
+    '- 흰 배경, 검정 선, 시험지 인쇄 스타일. 선은 선명하고 일정한 굵기로 그려라.',
+    `- 짧은 변 기준 최소 ${requestedMinSidePx}px 고해상도.`,
+    totalFigures > 1 ? `- 이 문항에 그림이 ${totalFigures}개 있지만 지금은 ${figureIndex}번째만 그려라.` : '',
+    safeCustomPrompt || '',
+  ].filter(Boolean).join('\n');
+}
+
 function extensionFromMime(mimeType) {
   const m = String(mimeType || '').toLowerCase();
   if (m.includes('png')) return 'png';
@@ -554,8 +580,10 @@ async function processOneJob(job) {
     horizontalPairHint,
   });
   const modelName = normalizeWhitespace(job.model_name) || FIGURE_MODEL;
+  const forceRegen =
+    job.options?.forceRegenerate === true || job.force_regenerate === true;
   const shouldPassthrough =
-    FIGURE_REFERENCE_PASSTHROUGH && referenceImages.length > 0;
+    FIGURE_REFERENCE_PASSTHROUGH && referenceImages.length > 0 && !forceRegen;
   const generationMode = shouldPassthrough
     ? 'source_reference'
     : 'ai_generate';
@@ -567,16 +595,32 @@ async function processOneJob(job) {
       referenceEntry: ref.entryName || '',
       figureIndex: idx + 1,
     }));
-  } else {
+  } else if (referenceImages.length <= 1) {
     const generated = await callGeminiImage(promptText, modelName, referenceImages);
-    generatedOutputs = [
-      {
+    generatedOutputs.push({
+      mimeType: generated.mimeType,
+      bytes: generated.bytes,
+      referenceEntry: referenceImages[0]?.entryName || '',
+      figureIndex: 1,
+    });
+  } else {
+    for (let ri = 0; ri < referenceImages.length; ri++) {
+      const singleRef = [referenceImages[ri]];
+      const perFigurePrompt = buildSingleFigurePrompt(question, {
+        referenceImage: referenceImages[ri],
+        figureIndex: ri + 1,
+        totalFigures: referenceImages.length,
+        customPrompt: job.prompt_text,
+        requestedMinSidePx,
+      });
+      const generated = await callGeminiImage(perFigurePrompt, modelName, singleRef);
+      generatedOutputs.push({
         mimeType: generated.mimeType,
         bytes: generated.bytes,
-        referenceEntry: referenceImages[0]?.entryName || '',
-        figureIndex: 1,
-      },
-    ];
+        referenceEntry: referenceImages[ri]?.entryName || '',
+        figureIndex: ri + 1,
+      });
+    }
   }
   const uploaded = [];
   for (const output of generatedOutputs) {

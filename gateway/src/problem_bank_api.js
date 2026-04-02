@@ -250,6 +250,8 @@ function normalizeFigureQuality(rawFigureQuality, options = {}) {
   return { targetDpi, minDpi };
 }
 
+const EXPORT_RENDER_CONFIG_VERSION = 'pb_render_v31h_mock_template_header5';
+
 function normalizeExportRenderConfig(options, selectedQuestionIds, defaults = {}) {
   const src = options && typeof options === 'object' ? options : {};
   const requestedRenderConfigVersion = String(
@@ -287,7 +289,7 @@ function normalizeExportRenderConfig(options, selectedQuestionIds, defaults = {}
   return {
     // Force server-side renderer to latest stable path even if older app build
     // sends a stale renderConfigVersion.
-    renderConfigVersion: 'pb_render_v26h_overlay_center_gap',
+    renderConfigVersion: EXPORT_RENDER_CONFIG_VERSION,
     layoutColumns,
     maxQuestionsPerPage,
     questionMode,
@@ -598,7 +600,10 @@ async function createFigureJob(body, res) {
       status: 'queued',
       provider,
       model_name: modelName,
-      options: typeof body.options === 'object' && body.options ? body.options : {},
+      options: {
+        ...(typeof body.options === 'object' && body.options ? body.options : {}),
+        ...(forceRegenerate ? { forceRegenerate: true } : {}),
+      },
       prompt_text: String(body.promptText || '').trim(),
       worker_name: '',
       result_summary: {},

@@ -52,7 +52,7 @@ const String kLearningQuestionModeObjective = 'objective';
 const String kLearningQuestionModeSubjective = 'subjective';
 const String kLearningQuestionModeEssay = 'essay';
 final String kLearningRenderConfigVersion =
-    'pb_render_v30p_bogi_text_down_2click';
+    'pb_render_v31h_mock_template_header5';
 
 class LearningProblemLayoutTuning {
   const LearningProblemLayoutTuning({

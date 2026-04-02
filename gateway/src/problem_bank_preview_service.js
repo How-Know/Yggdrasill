@@ -24,7 +24,7 @@ const PREVIEW_BUCKET = 'problem-previews';
 const SIGNED_URL_EXPIRY_SECONDS = 3600;
 const PREVIEW_VIEWPORT_WIDTH = 520;
 const PREVIEW_DPR = 3;
-const PREVIEW_STYLE_VERSION = 'pv9_bogi_text_down_2click';
+const PREVIEW_STYLE_VERSION = 'pv17_mock_template_header5';
 
 function repoAssetPath(...segments) {
   return path.resolve(REPO_ROOT, ...segments);

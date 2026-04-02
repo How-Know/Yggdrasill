@@ -12,6 +12,7 @@ import 'package:syncfusion_flutter_pdf/pdf.dart';
 import '../../services/problem_bank_service.dart';
 import '../../widgets/latex_text_renderer.dart';
 import 'problem_bank_models.dart';
+import 'widgets/figure_compare_dialog.dart';
 import 'widgets/problem_bank_classification_filter_panel.dart';
 import 'widgets/problem_bank_mode_tab_bar.dart';
 
@@ -679,20 +680,6 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     return out;
   }
 
-  List<Map<String, String>> _figureHorizontalPairsPayloadOf(
-      ProblemBankQuestion q) {
-    final pairs = _figureHorizontalPairKeysOf(q);
-    return pairs
-        .map((pairKey) {
-          final parts = _figurePairParts(pairKey);
-          return <String, String>{
-            'a': parts.isNotEmpty ? parts[0] : '',
-            'b': parts.length >= 2 ? parts[1] : '',
-          };
-        })
-        .where((e) => e['a']!.isNotEmpty && e['b']!.isNotEmpty)
-        .toList(growable: false);
-  }
 
   double _figureRenderScaleOf(ProblemBankQuestion q) {
     final raw = q.meta['figure_render_scale'];
@@ -831,47 +818,6 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     _showSnack(
       '${q.questionNumber}번 그림 설정을 저장했습니다.$pairSuffix 상단 `업로드` 버튼으로 반영하세요.',
     );
-  }
-
-  String _figurePromptHintForGeneration(ProblemBankQuestion q) {
-    final equations = q.equations
-        .map((e) =>
-            _normalizePreviewLine((e.latex.isNotEmpty ? e.latex : e.raw)))
-        .where((e) => e.isNotEmpty)
-        .take(5)
-        .toList(growable: false);
-    final scaleMap = _figureRenderScaleMapOf(q);
-    final scaleMapHint = scaleMap.entries.toList(growable: false)
-      ..sort((a, b) => a.key.compareTo(b.key));
-    final scaleHintText = scaleMapHint.asMap().entries.map((entry) {
-      final key = entry.value.key;
-      final label = _figureScaleKeyLabel(key, entry.key + 1);
-      final pct = (entry.value.value * 100).round();
-      return '$label $pct%';
-    }).join(', ');
-    final orderedAssets = _orderedFigureAssetsOf(q);
-    final keyLabelMap = <String, String>{};
-    for (var i = 0; i < orderedAssets.length; i += 1) {
-      final key = _figureScaleKeyForAsset(orderedAssets[i], i + 1);
-      keyLabelMap[key] = _figureScaleKeyLabel(key, i + 1);
-    }
-    final horizontalPairs = _figureHorizontalPairKeysOf(q)
-        .map((pairKey) => _figurePairParts(pairKey))
-        .where((parts) => parts.length == 2)
-        .map((parts) {
-      final left = keyLabelMap[parts[0]] ?? parts[0];
-      final right = keyLabelMap[parts[1]] ?? parts[1];
-      return '$left + $right';
-    }).join(', ');
-    return [
-      '추가 생성 제약:',
-      '- 도형 내부 수식/숫자/문자 라벨의 시각 크기를 문제 본문 수식 크기와 동일하게 맞출 것.',
-      '- 분수/근호/지수 등 2차원 수식도 본문 수식과 동일한 굵기와 비율을 유지할 것.',
-      '- 수식 라벨 배율 힌트: ${_figureRenderScaleLabel(q)}',
-      if (scaleHintText.isNotEmpty) '- 그림별 라벨 배율: $scaleHintText',
-      if (horizontalPairs.isNotEmpty) '- 가로 배치로 묶을 그림 쌍: $horizontalPairs',
-      if (equations.isNotEmpty) '- 본문 수식 예시: ${equations.join(' | ')}',
-    ].join('\n');
   }
 
   Future<void> _prefetchFigurePreviewUrls(
@@ -1028,76 +974,80 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     }
   }
 
-  Future<void> _requestFigureGeneration(ProblemBankQuestion q) async {
+  Future<void> _openFigureCompareDialog(ProblemBankQuestion q) async {
     final academyId = _academyId;
+    if (academyId == null) return;
     final doc = _activeDocument;
-    if (academyId == null || doc == null) return;
-    if (_figureGenerating.contains(q.id)) return;
-    setState(() {
-      _figureGenerating.add(q.id);
-      _isFigurePolling = true;
-    });
-    _ensurePolling();
-    _appendPipelineLog('figure', '${q.questionNumber}번 AI 그림 생성 요청');
+    if (doc == null) return;
+
+    final originalAssets = List<Map<String, dynamic>>.from(
+      _figureAssetsOf(q).map((a) => Map<String, dynamic>.from(a)),
+    );
+
+    final orderedAssets = _orderedFigureAssetsOf(q);
+    final currentUrls = <int, String>{};
+    for (var i = 0; i < orderedAssets.length; i++) {
+      final path = '${orderedAssets[i]['path'] ?? ''}'.trim();
+      if (path.isEmpty) continue;
+      final url = _figurePreviewUrlForPath(q.id, path);
+      if (url.isNotEmpty) {
+        currentUrls[i] = url;
+      } else {
+        final bucket = '${orderedAssets[i]['bucket'] ?? ''}'.trim();
+        if (bucket.isNotEmpty) {
+          try {
+            final signed = await _service.createStorageSignedUrl(
+              bucket: bucket,
+              path: path,
+              expiresInSeconds: 3600,
+            );
+            if (signed.isNotEmpty) currentUrls[i] = signed;
+          } catch (_) {}
+        }
+      }
+    }
+
+    if (!mounted) return;
+    final result = await FigureCompareDialog.show(
+      context: context,
+      service: _service,
+      academyId: academyId,
+      documentId: doc.id,
+      question: q,
+      currentFigureUrls: currentUrls,
+    );
+
+    if (result == null) return;
+
+    if (!result.accepted) {
+      await _rollbackFigureAssets(q, originalAssets);
+      return;
+    }
+
+    await _reloadQuestions();
+    await _prefetchFigurePreviewUrls(
+      _questions.where((qq) => qq.id == q.id).toList(),
+    );
+    _appendPipelineLog(
+        'figure', '${q.questionNumber}번 AI 그림 적용 완료');
+    _showSnack('${q.questionNumber}번 AI 그림이 적용되었습니다.');
+  }
+
+  Future<void> _rollbackFigureAssets(
+    ProblemBankQuestion q,
+    List<Map<String, dynamic>> originalAssets,
+  ) async {
     try {
-      var job = await _service.createFigureJob(
-        academyId: academyId,
-        documentId: doc.id,
+      final currentMeta = Map<String, dynamic>.from(q.meta);
+      currentMeta['figure_assets'] = originalAssets;
+      await _service.updateQuestionMeta(
         questionId: q.id,
-        forceRegenerate: true,
-        promptText: _figurePromptHintForGeneration(q),
-        options: <String, dynamic>{
-          'renderQuality': 'ultra',
-          'minSidePx': 3072,
-          'figureRenderScale': _figureRenderScaleOf(q),
-          'figureRenderScales': _figureRenderScaleMapOf(q),
-          'figureHorizontalPairs': _figureHorizontalPairsPayloadOf(q),
-        },
+        meta: currentMeta,
       );
-      for (var i = 0; i < 60; i += 1) {
-        if (job.isTerminal) break;
-        await Future<void>.delayed(const Duration(seconds: 2));
-        final latest = await _service.getFigureJob(
-          academyId: academyId,
-          jobId: job.id,
-        );
-        if (latest == null) break;
-        job = latest;
-      }
-      if (!job.isTerminal) {
-        _appendPipelineLog(
-          'figure',
-          '${q.questionNumber}번 생성 작업이 대기열에 남아 있습니다. 잠시 후 자동 반영됩니다.',
-        );
-        _showSnack('${q.questionNumber}번 AI 그림 생성이 큐에 등록되었습니다.');
-        return;
-      }
-      if (job.status == 'failed') {
-        _appendPipelineLog(
-          'figure',
-          '${q.questionNumber}번 생성 실패: ${job.errorMessage.isNotEmpty ? job.errorMessage : job.errorCode}',
-          error: true,
-        );
-        _showSnack(
-          '${q.questionNumber}번 AI 그림 생성 실패: ${job.errorMessage.isNotEmpty ? job.errorMessage : job.errorCode}',
-          error: true,
-        );
-        return;
-      }
       await _reloadQuestions();
-      _appendPipelineLog(
-          'figure', '${q.questionNumber}번 생성 완료 (${job.status})');
-      _showSnack('${q.questionNumber}번 AI 그림 생성 완료');
     } catch (e) {
-      _appendPipelineLog('figure', '${q.questionNumber}번 생성 예외: $e',
-          error: true);
-      _showSnack('${q.questionNumber}번 AI 그림 생성 실패: $e', error: true);
-    } finally {
-      if (mounted) {
-        setState(() {
-          _figureGenerating.remove(q.id);
-        });
-      }
+      _appendPipelineLog(
+          'figure', '${q.questionNumber}번 원본 복원 실패: $e', error: true);
     }
   }
 
@@ -8189,13 +8139,13 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                 ],
                 const Spacer(),
                 IconButton(
-                  tooltip: 'AI 그림 생성',
+                  tooltip: 'AI 그림 비교/생성',
                   iconSize: 17,
                   visualDensity:
                       const VisualDensity(horizontal: -4, vertical: -4),
                   onPressed: figureGenerating
                       ? null
-                      : () => unawaited(_requestFigureGeneration(q)),
+                      : () => unawaited(_openFigureCompareDialog(q)),
                   icon: figureGenerating
                       ? const SizedBox(
                           width: 15,

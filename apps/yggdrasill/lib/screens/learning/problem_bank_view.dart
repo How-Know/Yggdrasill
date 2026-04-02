@@ -1160,9 +1160,18 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                     activeJob: _activeExportJob,
                     onTemplateChanged: (value) {
                       setState(() {
-                        _exportSettings = _exportSettings.copyWith(
-                          templateLabel: value,
-                        );
+                        if (value == '수능형') {
+                          _exportSettings = _exportSettings.copyWith(
+                            templateLabel: value,
+                            paperLabel: 'B4',
+                            layoutColumnLabel: '2단',
+                            maxQuestionsPerPageLabel: '4',
+                          );
+                        } else {
+                          _exportSettings = _exportSettings.copyWith(
+                            templateLabel: value,
+                          );
+                        }
                       });
                     },
                     onPaperChanged: (value) {

@@ -47,7 +47,7 @@ const FONT_PATH_KOPUB_BATANG_LIGHT =
   process.env.PB_PDF_FONT_KOPUB_BATANG_LIGHT_PATH || '';
 const FONT_PATH_QNUM =
   process.env.PB_PDF_FONT_QNUM_PATH || '';
-const RENDER_CONFIG_VERSION = 'pb_render_v30p_bogi_text_down_2click';
+const RENDER_CONFIG_VERSION = 'pb_render_v31h_mock_template_header5';
 const FIGURE_REGEN_COOLDOWN_MIN = Math.max(
   2,
   Number.parseInt(process.env.PB_EXPORT_REGEN_COOLDOWN_MIN || '12', 10),

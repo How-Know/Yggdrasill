@@ -90,8 +90,8 @@ function buildStyles({
     }
     .question-stream-grid4 .question-slot-firstline {
       display: block;
-      height: calc(var(--line-height-pt) * 1pt);
-      line-height: calc(var(--line-height-pt) * 1pt);
+      height: calc(var(--line-height-pt) * 0.5 * 1pt);
+      line-height: calc(var(--line-height-pt) * 0.5 * 1pt);
       white-space: pre;
     }
     .question-stream-grid4 .question {
@@ -344,6 +344,277 @@ function buildStyles({
       font-weight: 700;
       margin: 0 0 8pt;
     }
+
+    /* ── mock/csat exam-paper layout ── */
+    .mock-pages { display: none; }
+    body.profile-mock .paper-title,
+    body.profile-csat .paper-title,
+    body.profile-mock .profile-note,
+    body.profile-csat .profile-note {
+      display: none;
+    }
+    body.profile-mock .mock-pages,
+    body.profile-csat .mock-pages {
+      display: block;
+    }
+    .mock-page {
+      min-height: ${(paperMm.height - 2 * marginMm).toFixed(1)}mm;
+      display: flex;
+      flex-direction: column;
+      break-inside: avoid;
+      overflow: hidden;
+    }
+    .mock-page.mock-page-first .mock-header-first {
+      margin-bottom: 20pt;
+    }
+    .mock-page-first .mock-header-first-bottom {
+      transform: translateY(8pt);
+    }
+    .mock-header-first {
+      margin-bottom: 2pt;
+      display: flex;
+      flex-direction: column;
+      gap: 2.4pt;
+    }
+    .mock-header-first-top,
+    .mock-header-first-bottom,
+    .mock-header-simple {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      gap: 10pt;
+    }
+    .mock-header-first-top {
+      align-items: end;
+    }
+    .mock-header-first-bottom {
+      align-items: center;
+      margin-top: 8pt;
+    }
+    .mock-header-simple {
+      margin-bottom: 2pt;
+      align-items: end;
+    }
+    .mock-first-title {
+      grid-column: 2;
+      justify-self: center;
+      font-size: calc((var(--stem-size-pt) + 5.0) * 1pt);
+      font-weight: 700;
+      color: #111;
+      letter-spacing: 0.01em;
+      line-height: 1;
+      white-space: nowrap;
+    }
+    .mock-first-subject,
+    .mock-simple-subject {
+      grid-column: 2;
+      justify-self: center;
+      font-size: calc((var(--stem-size-pt) + 20.5) * 1pt);
+      font-weight: 900;
+      color: #111;
+      line-height: 0.9;
+      letter-spacing: -0.01em;
+      -webkit-text-stroke: 0.3pt #111;
+      white-space: nowrap;
+    }
+    .mock-simple-subject {
+      font-size: calc((var(--stem-size-pt) + 11.2) * 1pt);
+      font-weight: 900;
+      line-height: 0.96;
+      letter-spacing: 0;
+      -webkit-text-stroke: 0.16pt #111;
+    }
+    .mock-side-left { justify-self: start; text-align: left; }
+    .mock-side-right { justify-self: end; text-align: right; }
+    .mock-chip {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 0.8pt solid #111;
+      color: #111;
+      background: #fff;
+    }
+    .mock-chip-session {
+      min-height: 22.5pt;
+      padding: 0 7.5pt;
+      border-radius: 999pt;
+      font-size: calc((var(--stem-size-pt) + 1.4) * 1pt);
+      font-weight: 900;
+      -webkit-text-stroke: 0.14pt #111;
+      line-height: 1;
+    }
+    .mock-chip-condensed {
+      display: inline-block;
+      transform: scaleX(0.9);
+      transform-origin: center;
+    }
+    .mock-chip-type {
+      min-height: 35pt;
+      padding: 0 8.5pt;
+      border-radius: 4.6pt;
+      font-size: calc((var(--stem-size-pt) + 5.6) * 1pt);
+      font-weight: 900;
+      -webkit-text-stroke: 0.1pt #111;
+      line-height: 1;
+    }
+    .mock-chip-type-simple {
+      min-height: 24pt;
+      padding: 0 4.8pt;
+      border-radius: 3.8pt;
+      font-size: calc((var(--stem-size-pt) + 1.8) * 1pt);
+      font-weight: 800;
+      -webkit-text-stroke: 0.05pt #111;
+    }
+    .mock-first-type {
+      transform: translateY(8.8pt);
+    }
+    .mock-page-no {
+      display: inline-block;
+      font-size: calc((var(--stem-size-pt) + 15.8) * 1pt);
+      font-weight: 900;
+      color: #111;
+      line-height: 0.95;
+      min-width: 0.85em;
+      text-align: center;
+    }
+    .mock-page-no-first {
+      transform: translateY(4pt);
+    }
+    .mock-main {
+      flex: 1 1 0;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      position: relative;
+      border-top: 1pt solid #111;
+      padding-top: 0;
+    }
+    .mock-main::before {
+      content: '';
+      position: absolute;
+      left: 50%;
+      top: 0;
+      bottom: 3.2pt;
+      border-left: 1pt solid #111;
+      transform: translateX(-0.5pt);
+      pointer-events: none;
+    }
+    .mock-page-first .mock-main::before {
+      bottom: 22pt;
+    }
+    .mock-section-label {
+      display: inline-flex;
+      width: fit-content;
+      max-width: max-content;
+      align-self: flex-start;
+      white-space: nowrap;
+      justify-content: center;
+      align-items: center;
+      border: 0.7pt solid #111;
+      background: #fff;
+      color: #111;
+      padding: 1pt 8.5pt 0.8pt;
+      font-size: calc((var(--stem-size-pt) + 2.3) * 1pt);
+      font-weight: 700;
+      margin-top: 5pt;
+      margin-bottom: 4pt;
+      line-height: 1.2;
+      letter-spacing: 0.16em;
+    }
+    .mock-page-first .mock-section-label {
+      transform: translateY(8pt);
+    }
+    .mock-content {
+      position: relative;
+      padding-top: 0;
+      flex: 1 1 0;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      min-height: ${(paperMm.height - 2 * marginMm - 44).toFixed(1)}mm;
+    }
+    .mock-content .question-stream {
+      columns: 2;
+      column-gap: calc(var(--column-gap-pt) * 1pt);
+      overflow: visible;
+      flex: 1 1 auto;
+    }
+    .mock-page-first .mock-content .question-stream {
+      margin-top: -6pt;
+    }
+    .mock-page-first .question-stream-grid4 .question-slot-firstline {
+      height: calc(var(--line-height-pt) * 0.45 * 1pt);
+      line-height: calc(var(--line-height-pt) * 0.45 * 1pt);
+    }
+    .mock-page-first .mock-content .question-stream.question-stream-grid4 {
+      row-gap: calc(var(--question-gap-pt) * 0.32 * 1pt);
+    }
+    .mock-page-first .question-stream-grid4 .question-slot.slot-r1c2 {
+      margin-top: -8pt;
+    }
+    .mock-page:not(.mock-page-first) .mock-header-simple {
+      margin-bottom: 8pt;
+    }
+    .mock-page:not(.mock-page-first) .mock-content .question-stream {
+      margin-top: -2pt;
+    }
+    .mock-page:not(.mock-page-first) .question-stream-grid4 .question-slot-firstline {
+      height: calc(var(--line-height-pt) * 0.25 * 1pt);
+      line-height: calc(var(--line-height-pt) * 0.25 * 1pt);
+    }
+    .mock-content .question-stream.question-stream-grid4 {
+      columns: auto;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      grid-template-rows: repeat(2, minmax(0, 1fr));
+      column-gap: calc(var(--column-gap-pt) * 1pt);
+      row-gap: calc(var(--question-gap-pt) * 0.18 * 1pt);
+      height: 100%;
+      min-height: 0;
+      align-items: stretch;
+      overflow: visible;
+    }
+    .mock-footer-row {
+      margin-top: 6pt;
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      align-items: end;
+      gap: 8pt;
+    }
+    .mock-page-box {
+      position: relative;
+      width: 38pt;
+      height: 22pt;
+      border: 0.8pt solid #666;
+      color: #111;
+      font-weight: 700;
+      font-size: calc((var(--stem-size-pt) - 0.2) * 1pt);
+      overflow: hidden;
+      background: #fff;
+    }
+    .mock-page-box::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(to bottom right,
+        transparent calc(50% - 0.4pt),
+        #888 calc(50% - 0.1pt),
+        #888 calc(50% + 0.1pt),
+        transparent calc(50% + 0.4pt)
+      );
+      pointer-events: none;
+    }
+    .mock-page-box-cur {
+      position: absolute;
+      left: 4pt;
+      top: 2pt;
+      line-height: 1;
+    }
+    .mock-page-box-total {
+      position: absolute;
+      right: 4pt;
+      bottom: 2pt;
+      line-height: 1;
+    }
     .answer-grid {
       display: grid;
       grid-template-columns: repeat(3, 1fr);
@@ -474,26 +745,97 @@ export function buildDocumentHtml({
     for (let i = 0; i < perPage; i += 1) {
       const pos = GRID4_POS[i];
       const one = chunk[i] || '<div class="question-slot-empty">&nbsp;</div>';
+      const slotClass = `question-slot slot-r${pos.row}c${pos.col}`;
       slots.push(
-        `<div class="question-slot" style="grid-row:${pos.row};grid-column:${pos.col}"><div class="question-slot-firstline" aria-hidden="true">&nbsp;</div>${one}</div>`,
+        `<div class="${slotClass}" style="grid-row:${pos.row};grid-column:${pos.col}"><div class="question-slot-firstline" aria-hidden="true">&nbsp;</div>${one}</div>`,
       );
     }
     return `<section class="${cls} question-stream-grid4">${slots.join('')}</section>`;
   };
-  let questionHtml;
+  const questionChunks = [];
   if (perPage >= 99 || allQ.length <= perPage) {
-    questionHtml = renderStreamSection(allQ, 'question-stream');
+    questionChunks.push(allQ);
   } else {
-    const pages = [];
     for (let i = 0; i < allQ.length; i += perPage) {
-      const chunk = allQ.slice(i, i + perPage);
-      const cls = i === 0 ? 'question-stream' : 'question-stream page-break';
-      pages.push(renderStreamSection(chunk, cls));
+      questionChunks.push(allQ.slice(i, i + perPage));
     }
-    questionHtml = pages.join('');
+  }
+  if (questionChunks.length === 0) questionChunks.push([]);
+
+  const isMockStyle = profile === 'mock' || profile === 'csat';
+  let questionHtml;
+  if (isMockStyle) {
+    const totalPages = questionChunks.length;
+    const renderMockHeader = (pageNo) => {
+      if (pageNo === 1) {
+        return `
+          <header class="mock-header-first">
+            <div class="mock-header-first-top">
+              <div></div>
+              <div class="mock-first-title">2026학년도 대학수학능력시험 문제지</div>
+              <div class="mock-side-right"><span class="mock-page-no mock-page-no-first">${pageNo}</span></div>
+            </div>
+            <div class="mock-header-first-bottom">
+              <div class="mock-side-left">
+                <span class="mock-chip mock-chip-session"><span class="mock-chip-condensed">제 2 교시</span></span>
+              </div>
+              <div class="mock-first-subject">수학 영역</div>
+              <div class="mock-side-right">
+                <span class="mock-chip mock-chip-type mock-first-type">홀수형</span>
+              </div>
+            </div>
+          </header>
+        `;
+      }
+      const even = pageNo % 2 === 0;
+      const left = even
+        ? `<span class="mock-page-no">${pageNo}</span>`
+        : '<span class="mock-chip mock-chip-type mock-chip-type-simple">홀수형</span>';
+      const right = even
+        ? '<span class="mock-chip mock-chip-type mock-chip-type-simple">홀수형</span>'
+        : `<span class="mock-page-no">${pageNo}</span>`;
+      return `
+        <header class="mock-header-simple">
+          <div class="mock-side-left">${left}</div>
+          <div class="mock-simple-subject">수학 영역</div>
+          <div class="mock-side-right">${right}</div>
+        </header>
+      `;
+    };
+    questionHtml = `<div class="mock-pages">${questionChunks.map((chunk, idx) => {
+      const pageNo = idx + 1;
+      const stream = renderStreamSection(chunk, 'question-stream');
+      const pageBreak = idx === 0 ? '' : ' page-break';
+      const firstClass = idx === 0 ? ' mock-page-first' : '';
+      const sectionLabel = idx === 0 ? '<div class="mock-section-label">5지선다형</div>' : '';
+      return `
+        <section class="mock-page${firstClass}${pageBreak}">
+          ${renderMockHeader(pageNo)}
+          <div class="mock-main">
+            ${sectionLabel}
+            <div class="mock-content">${stream}</div>
+          </div>
+          <div class="mock-footer-row">
+            <div></div>
+            <div class="mock-page-box">
+              <span class="mock-page-box-cur">${pageNo}</span>
+              <span class="mock-page-box-total">${totalPages}</span>
+            </div>
+            <div></div>
+          </div>
+        </section>
+      `;
+    }).join('')}</div>`;
+  } else if (questionChunks.length === 1) {
+    questionHtml = renderStreamSection(questionChunks[0], 'question-stream');
+  } else {
+    questionHtml = questionChunks
+      .map((chunk, idx) => renderStreamSection(chunk, idx === 0 ? 'question-stream' : 'question-stream page-break'))
+      .join('');
   }
   const answerSheetHtml = includeAnswerSheet ? renderAnswerSheet(questions, mathRenderer) : '';
   const explanationHtml = includeExplanation ? renderExplanationSection(questions) : '';
+  const bodyClass = isMockStyle ? `profile-${profile}` : '';
 
   return `
     <!doctype html>
@@ -504,7 +846,7 @@ export function buildDocumentHtml({
         <style>${fontFaceCss}</style>
         <style>${styles}</style>
       </head>
-      <body>
+      <body class="${bodyClass}">
         <div class="paper-title">${escapeHtml(profileTitle(profile))}</div>
         <div class="profile-note"></div>
         ${questionHtml}

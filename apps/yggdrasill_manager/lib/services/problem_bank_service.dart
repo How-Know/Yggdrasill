@@ -1408,6 +1408,15 @@ class ProblemBankService {
     await _client.from('pb_questions').update(payload).eq('id', questionId);
   }
 
+  Future<void> updateQuestionMeta({
+    required String questionId,
+    required Map<String, dynamic> meta,
+  }) async {
+    await _client
+        .from('pb_questions')
+        .update({'meta': meta}).eq('id', questionId);
+  }
+
   Future<void> bulkSetChecked({
     required String academyId,
     required String documentId,
