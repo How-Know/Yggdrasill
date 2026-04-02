@@ -3540,17 +3540,20 @@ Future<void> _runHomeworkCheckDialogOnly({
     hw.id,
     activateFromHomework: true,
   );
-  if (draft.progress >= 100) {
+  final bool isCompletedProgress = draft.progress >= 100;
+  if (isCompletedProgress) {
     await HomeworkStore.instance.submit(studentId, hw.id);
-    await HomeworkAssignmentStore.instance.clearActiveAssignmentsForItems(
-      studentId,
-      [hw.id],
-    );
-    if (!context.mounted) return;
-    _showHomeworkChipSnackBar(context, '숙제 검사 완료 — 제출 상태로 이동했어요.');
   } else {
     await HomeworkStore.instance.waitPhase(studentId, hw.id);
-    if (!context.mounted) return;
+  }
+  await HomeworkAssignmentStore.instance.clearActiveAssignmentsForItems(
+    studentId,
+    [hw.id],
+  );
+  if (!context.mounted) return;
+  if (isCompletedProgress) {
+    _showHomeworkChipSnackBar(context, '숙제 검사 완료 — 제출 상태로 이동했어요.');
+  } else {
     _showHomeworkChipSnackBar(
       context,
       '완료율이 100% 미만이어서 대기 상태로 두었어요.',
@@ -3681,10 +3684,8 @@ Future<void> _runHomeworkCheckDialogForGroup({
       await HomeworkStore.instance.waitPhase(studentId, itemId);
     }
   }
-  if (draft.progress >= 100) {
-    await HomeworkAssignmentStore.instance
-        .clearActiveAssignmentsForItems(studentId, savedItemIds);
-  }
+  await HomeworkAssignmentStore.instance
+      .clearActiveAssignmentsForItems(studentId, savedItemIds);
   if (!context.mounted) return;
   final groupTitle = (group?.title ?? '').trim();
   final summaryTitle = summary.title.trim();
@@ -5014,6 +5015,20 @@ Future<void> _showHomeworkGroupTitleEditDialog({
       editableChildren.every((e) => e.phase == 1 && e.completedAt == null);
   if (!editableInWaiting) {
     _showHomeworkChipSnackBar(context, '대기 상태 그룹 과제만 제목을 수정할 수 있습니다.');
+    return;
+  }
+
+  final editableChildIds = editableChildren.map((e) => e.id).toSet();
+  final activeAssignments =
+      await HomeworkAssignmentStore.instance.loadActiveAssignments(studentId);
+  if (!context.mounted) return;
+  final hasUncheckedHomework = activeAssignments.any((assignment) {
+    if (_isReservationAssignment(assignment)) return false;
+    final itemId = assignment.homeworkItemId.trim();
+    return itemId.isNotEmpty && editableChildIds.contains(itemId);
+  });
+  if (hasUncheckedHomework) {
+    _showHomeworkChipSnackBar(context, '숙제 검사 전에는 그룹 과제명을 수정할 수 없습니다.');
     return;
   }
 
@@ -6598,7 +6613,9 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
               ),
             );
           },
-          onGroupTitleTap: groupIsWaiting && !printPickMode
+          onGroupTitleTap: groupIsWaiting &&
+                  !hasHomeworkAssignment &&
+                  !printPickMode
               ? () {
                   unawaited(
                     _showHomeworkGroupTitleEditDialog(

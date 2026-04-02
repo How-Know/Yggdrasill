@@ -1214,9 +1214,6 @@ int _estimateLearningMsForItemToday({
       totalMs += cap.difference(running).inMilliseconds;
     }
   }
-  if (totalMs <= 0 && hw.accumulatedMs > 0) {
-    totalMs = hw.accumulatedMs;
-  }
   return totalMs.clamp(0, 1000 * 60 * 60 * 24).toInt();
 }
 
@@ -1383,6 +1380,36 @@ int _sumTodayLearningMsByGroupPolicy({
     if (ms > 0) total += ms;
   }
   return total.clamp(0, 1000 * 60 * 60 * 24).toInt();
+}
+
+int _computeClassWindowMs({
+  required DateTime classDateTime,
+  required DateTime departureTime,
+  DateTime? arrivalTime,
+}) {
+  final dayStart =
+      DateTime(classDateTime.year, classDateTime.month, classDateTime.day);
+  final dayEnd = DateTime(
+    classDateTime.year,
+    classDateTime.month,
+    classDateTime.day,
+    23,
+    59,
+    59,
+    999,
+  );
+  final now = DateTime.now();
+  var capDeparture = departureTime;
+  if (capDeparture.isAfter(now)) capDeparture = now;
+  if (capDeparture.isAfter(dayEnd)) capDeparture = dayEnd;
+  var baseArrival = arrivalTime ?? classDateTime;
+  if (baseArrival.isBefore(dayStart)) baseArrival = dayStart;
+  if (!capDeparture.isAfter(baseArrival)) return 0;
+  return capDeparture
+      .difference(baseArrival)
+      .inMilliseconds
+      .clamp(0, 1000 * 60 * 60 * 24)
+      .toInt();
 }
 
 Future<_TodoSheetPayload> _prepareTodoSheetPayload({
@@ -1611,7 +1638,14 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
           ? groupObj.title.trim()
           : first.title.trim();
       final bookCourse = _formatBookAndCourseFromHomework(representative);
-      final totalMs = items.fold<int>(0, (s, e) => s + e.accumulatedMs);
+      final totalMs = items.fold<int>(
+        0,
+        (s, e) =>
+            s +
+            (todayLearningMsByItem[e.id.trim()] ?? 0)
+                .clamp(0, 1000 * 60 * 60 * 24)
+                .toInt(),
+      );
       final assignmentRoundIndexes = <int>{};
       final assignmentIdsFallback = <String>{};
       for (final item in items) {
@@ -1703,7 +1737,7 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
     todoEntries.add(const _TodoListEntry(primary: '• 숙제 없음'));
   }
 
-  final learningMs = _sumTodayLearningMsByGroupPolicy(
+  final rawLearningMs = _sumTodayLearningMsByGroupPolicy(
     studentId: studentId,
     itemMsById: todayLearningMsByItem,
   );
@@ -1737,6 +1771,28 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
   final resolvedSetId = explicitSetId.isNotEmpty
       ? explicitSetId
       : (matchedRecord?.setId ?? '').trim();
+  final classWindowMs = _computeClassWindowMs(
+    classDateTime: classDateTime,
+    departureTime: departureTime,
+    arrivalTime: resolvedArrival,
+  );
+  final learningMs =
+      classWindowMs > 0 ? math.min(rawLearningMs, classWindowMs) : rawLearningMs;
+  final normalizedCompletedSummaries = classWindowMs <= 0
+      ? completedSummaries
+      : completedSummaries
+          .map(
+            (entry) => _CompletedSummaryEntry(
+              groupTitle: entry.groupTitle,
+              bookAndCourse: entry.bookAndCourse,
+              totalMs: math.min(entry.totalMs, classWindowMs),
+              assignmentCount: entry.assignmentCount,
+              checkCount: entry.checkCount,
+              progressPct: entry.progressPct,
+              etaText: entry.etaText,
+            ),
+          )
+          .toList(growable: false);
 
   return _TodoSheetPayload(
     academyName: academyName,
@@ -1751,7 +1807,7 @@ Future<_TodoSheetPayload> _prepareTodoSheetPayload({
     learningTimeText: _formatDurationKorean(learningMs),
     learningMs: learningMs,
     checkRates: checkRates,
-    completedSummaries: completedSummaries,
+    completedSummaries: normalizedCompletedSummaries,
     classWorkEntries: classWorkEntries,
     completedEntries: completedEntries,
     todoEntries: todoEntries,

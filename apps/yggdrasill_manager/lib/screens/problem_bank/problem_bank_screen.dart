@@ -120,6 +120,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   ProblemBankExportJob? _activeExportJob;
   List<ProblemBankQuestion> _questions = <ProblemBankQuestion>[];
   final List<_PipelineLogEntry> _pipelineLogs = <_PipelineLogEntry>[];
+  final Map<String, String> _questionPreviewUrls = <String, String>{};
   final Map<String, String> _figurePreviewUrls = <String, String>{};
   final Map<String, String> _figurePreviewPaths = <String, String>{};
   final Map<String, Map<String, String>> _figurePreviewUrlsByPath =
@@ -571,6 +572,39 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
 
   static const double _figureScaleMin = 0.3;
   static const double _figureScaleMax = 2.2;
+  static const double _figureWidthEmMin = 5.0;
+  static const double _figureWidthEmMax = 30.0;
+  static const double _figureWidthEmDefault = 15.5;
+  static const double _defaultStemSizePt = 11.0;
+  static const double _defaultMaxHeightPt = 170.0;
+
+  static const List<String> _figurePositionOptions = <String>[
+    'below-stem',
+    'inline-right',
+    'inline-left',
+    'between-stem-choices',
+    'above-choices',
+  ];
+  static const Map<String, String> _figurePositionLabels = <String, String>{
+    'below-stem': '본문 아래',
+    'inline-right': '본문 오른쪽',
+    'inline-left': '본문 왼쪽',
+    'between-stem-choices': '본문-보기 사이',
+    'above-choices': '보기 위',
+  };
+
+  double _scaleToWidthEm(double scale) {
+    final safeScale = scale.clamp(_figureScaleMin, _figureScaleMax);
+    final maxHeightPt = _defaultMaxHeightPt * safeScale;
+    return (maxHeightPt / _defaultStemSizePt * 100).roundToDouble() / 100.0;
+  }
+
+  double _widthEmToScale(double widthEm) {
+    final widthPt = widthEm.clamp(_figureWidthEmMin, _figureWidthEmMax) *
+        _defaultStemSizePt;
+    final scale = widthPt / _defaultMaxHeightPt;
+    return scale.clamp(_figureScaleMin, _figureScaleMax);
+  }
 
   double _normalizeFigureScale(double value) {
     if (!value.isFinite) return 1.0;
@@ -702,46 +736,87 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
 
   void _setFigureRenderScales(
     ProblemBankQuestion q,
-    Map<String, double> scales, {
-    double? globalScale,
+    Map<String, double> widthEmMap, {
+    Map<String, String>? positionMap,
     Set<String>? horizontalPairKeys,
   }) {
-    final cleanedMap = <String, dynamic>{};
-    for (final e in scales.entries) {
+    final updatedMeta = Map<String, dynamic>.from(q.meta);
+
+    final items = <Map<String, dynamic>>[];
+    for (final e in widthEmMap.entries) {
       final key = e.key.trim();
       if (key.isEmpty) continue;
-      final normalized = _normalizeFigureScale(e.value);
-      if ((normalized - 1.0).abs() < 0.01) continue;
-      cleanedMap[key] = (normalized * 100).roundToDouble() / 100.0;
+      final wEm = e.value.clamp(_figureWidthEmMin, _figureWidthEmMax);
+      final pos = positionMap?[key] ?? 'below-stem';
+      items.add(<String, dynamic>{
+        'assetKey': key,
+        'widthEm': (wEm * 10).roundToDouble() / 10.0,
+        'position': pos,
+        'anchor': 'center',
+        'offsetXEm': 0,
+        'offsetYEm': 0,
+      });
     }
-    final avg = scales.isEmpty
-        ? (globalScale ?? 1.0)
-        : (scales.values.fold<double>(0.0, (sum, v) => sum + v) /
-            scales.length);
-    final normalizedGlobal = _normalizeFigureScale(globalScale ?? avg);
-    final updatedMeta = Map<String, dynamic>.from(q.meta);
+
     final nextPairKeys = horizontalPairKeys ?? _figureHorizontalPairKeysOf(q);
+    final groups = <Map<String, dynamic>>[];
+    for (final pairKey in nextPairKeys) {
+      final parts = _figurePairParts(pairKey);
+      if (parts.length != 2) continue;
+      groups.add(<String, dynamic>{
+        'type': 'horizontal',
+        'members': parts,
+        'gap': 0.5,
+      });
+    }
+
+    if (items.isNotEmpty) {
+      updatedMeta['figure_layout'] = <String, dynamic>{
+        'version': 1,
+        'items': items,
+        'groups': groups,
+      };
+    } else {
+      updatedMeta.remove('figure_layout');
+    }
+
+    final legacyScaleMap = <String, dynamic>{};
+    for (final e in widthEmMap.entries) {
+      final key = e.key.trim();
+      if (key.isEmpty) continue;
+      final scale = _widthEmToScale(e.value);
+      if ((scale - 1.0).abs() < 0.01) continue;
+      legacyScaleMap[key] = (scale * 100).roundToDouble() / 100.0;
+    }
+    if (legacyScaleMap.isEmpty) {
+      updatedMeta.remove('figure_render_scales');
+    } else {
+      updatedMeta['figure_render_scales'] = legacyScaleMap;
+    }
     final cleanedPairPayload = nextPairKeys
         .map((pairKey) => _figurePairParts(pairKey))
         .where((parts) => parts.length == 2)
         .map((parts) => <String, String>{'a': parts[0], 'b': parts[1]})
         .toList(growable: false);
-    if (cleanedMap.isEmpty) {
-      updatedMeta.remove('figure_render_scales');
-    } else {
-      updatedMeta['figure_render_scales'] = cleanedMap;
-    }
     if (cleanedPairPayload.isEmpty) {
       updatedMeta.remove('figure_horizontal_pairs');
     } else {
       updatedMeta['figure_horizontal_pairs'] = cleanedPairPayload;
     }
+    final avgScale = widthEmMap.isEmpty
+        ? 1.0
+        : widthEmMap.values
+                .map((w) => _widthEmToScale(w))
+                .fold<double>(0.0, (sum, v) => sum + v) /
+            widthEmMap.length;
+    final normalizedGlobal = _normalizeFigureScale(avgScale);
     if ((normalizedGlobal - 1.0).abs() < 0.01) {
       updatedMeta.remove('figure_render_scale');
     } else {
       updatedMeta['figure_render_scale'] =
           (normalizedGlobal * 100).roundToDouble() / 100.0;
     }
+
     if (!mounted) return;
     setState(() {
       _questions = _questions
@@ -750,12 +825,11 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           .toList(growable: false);
       _dirtyQuestionIds.add(q.id);
     });
-    final pct = (normalizedGlobal * 100).round();
     final pairSuffix = cleanedPairPayload.isEmpty
         ? ''
         : ' · 가로묶음 ${cleanedPairPayload.length}쌍';
     _showSnack(
-      '${q.questionNumber}번 그림 설정을 저장했습니다. (기본 배율 $pct%$pairSuffix) 상단 `업로드` 버튼으로 반영하세요.',
+      '${q.questionNumber}번 그림 설정을 저장했습니다.$pairSuffix 상단 `업로드` 버튼으로 반영하세요.',
     );
   }
 
@@ -871,6 +945,87 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         }
       }
     });
+  }
+
+  Future<void> _prefetchQuestionPreviewUrls(
+    List<ProblemBankQuestion> questions,
+  ) async {
+    final academyId = _academyId;
+    if (academyId == null || academyId.isEmpty) return;
+    final ids = questions
+        .map((q) => q.id.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet();
+    if (ids.isEmpty) {
+      if (!mounted) return;
+      setState(() {
+        _questionPreviewUrls.clear();
+      });
+      return;
+    }
+    final urls = await _service.fetchQuestionPreviews(
+      academyId: academyId,
+      questionIds: ids.toList(growable: false),
+    );
+    if (!mounted) return;
+    setState(() {
+      _questionPreviewUrls.removeWhere((id, _) => !ids.contains(id));
+      for (final id in ids) {
+        _questionPreviewUrls.remove(id);
+      }
+      for (final entry in urls.entries) {
+        final questionId = entry.key.trim();
+        final url = entry.value.trim();
+        if (questionId.isEmpty || url.isEmpty) continue;
+        _questionPreviewUrls[questionId] = url;
+      }
+    });
+  }
+
+  Future<String?> _saveAndRefreshPreview(ProblemBankQuestion q) async {
+    final academyId = _academyId;
+    if (academyId == null || academyId.isEmpty) return null;
+    final qId = q.id.trim();
+    if (qId.isEmpty) return null;
+    try {
+      final mergedMeta = Map<String, dynamic>.from(q.meta);
+      final parsedScore = _parseScoreDraft(_scoreDraftFor(q));
+      if (parsedScore == null) {
+        mergedMeta.remove('score_point');
+      } else {
+        final rounded = parsedScore.roundToDouble();
+        mergedMeta['score_point'] =
+            rounded == parsedScore ? rounded.toInt() : parsedScore;
+      }
+      await _service.updateQuestionReview(
+        questionId: qId,
+        isChecked: q.isChecked,
+        reviewerNotes: q.reviewerNotes,
+        questionType: q.questionType,
+        stem: q.stem,
+        choices: q.choices,
+        meta: mergedMeta,
+      );
+      if (!mounted) return null;
+      setState(() {
+        _dirtyQuestionIds.remove(qId);
+      });
+      final urls = await _service.triggerPreviewScreenshots(
+        academyId: academyId,
+        questionIds: [qId],
+        force: true,
+      );
+      final newUrl = (urls[qId] ?? '').trim();
+      if (newUrl.isNotEmpty && mounted) {
+        setState(() {
+          _questionPreviewUrls[qId] = newUrl;
+        });
+      }
+      return newUrl.isNotEmpty ? newUrl : null;
+    } catch (e) {
+      _showSnack('서버 미리보기 갱신 실패: $e', error: true);
+      return null;
+    }
   }
 
   Future<void> _requestFigureGeneration(ProblemBankQuestion q) async {
@@ -1145,6 +1300,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         _questions = <ProblemBankQuestion>[];
         _dirtyQuestionIds.clear();
         _applySourceMetaFromDocument(null);
+        _questionPreviewUrls.clear();
         _figurePreviewUrls.clear();
         _figurePreviewPaths.clear();
         _figurePreviewUrlsByPath.clear();
@@ -1219,6 +1375,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         _questions = questions;
         _dirtyQuestionIds.clear();
         _applySourceMetaFromDocument(summary.document);
+        _questionPreviewUrls.clear();
         _figurePreviewUrls.clear();
         _figurePreviewPaths.clear();
         _figurePreviewUrlsByPath.clear();
@@ -1247,6 +1404,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         'doc',
         '문서 로드 완료: 문항 ${questions.length}건, extract=$extractStatus, export=$exportStatus',
       );
+      unawaited(_prefetchQuestionPreviewUrls(questions));
       unawaited(_prefetchFigurePreviewUrls(questions));
       unawaited(_syncFigurePollingForActiveDocument());
       _ensurePolling();
@@ -1368,6 +1526,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         _dirtyDocumentMeta = false;
         _needsPublish = false;
         _applySourceMetaFromDocument(uploaded);
+        _questionPreviewUrls.clear();
         _figurePreviewUrls.clear();
         _figurePreviewPaths.clear();
         _figurePreviewUrlsByPath.clear();
@@ -1461,6 +1620,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         _dirtyQuestionIds.clear();
         _dirtyDocumentMeta = false;
         _needsPublish = false;
+        _questionPreviewUrls.clear();
         _figurePreviewUrls.clear();
         _figurePreviewPaths.clear();
         _figurePreviewUrlsByPath.clear();
@@ -1693,6 +1853,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         _dirtyDocumentMeta = false;
         _needsPublish = imported.questionCount > 0;
         _applySourceMetaFromDocument(imported.document);
+        _questionPreviewUrls.clear();
         _figurePreviewUrls.clear();
         _figurePreviewPaths.clear();
         _figurePreviewUrlsByPath.clear();
@@ -2427,6 +2588,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       setState(() {
         _questions = questions;
         _dirtyQuestionIds.clear();
+        _questionPreviewUrls.clear();
         final ids = questions.map((q) => q.id).toSet();
         _scoreDrafts.removeWhere((id, _) => !ids.contains(id));
         _hasExtracted = questions.isNotEmpty;
@@ -2435,6 +2597,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         _isExtracting = false;
       });
       _appendPipelineLog('review', '문항 목록 갱신: ${questions.length}건');
+      unawaited(_prefetchQuestionPreviewUrls(questions));
       unawaited(_prefetchFigurePreviewUrls(questions));
       unawaited(_syncFigurePollingForActiveDocument());
     } catch (e) {
@@ -2566,6 +2729,12 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         _scoreDrafts.clear();
       });
       _showSnack('문항을 확정 업로드했습니다. (학습 앱 반영)');
+      if (dirtyIds.isNotEmpty && academyId != null && academyId.isNotEmpty) {
+        unawaited(_service.triggerPreviewScreenshots(
+          academyId: academyId,
+          questionIds: dirtyIds,
+        ));
+      }
       if (doc != null) {
         await _loadDocumentContext(doc.id);
       } else {
@@ -2630,6 +2799,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       setState(() {
         _questions = <ProblemBankQuestion>[];
         _dirtyQuestionIds.clear();
+        _questionPreviewUrls.clear();
         _scoreDrafts.clear();
         _hasExtracted = false;
         _needsPublish = false;
@@ -3719,7 +3889,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                 scrollable: false,
                 bordered: false,
                 shadow: false,
-                showQuestionNumberPrefix: true,
+                showQuestionNumberPrefix: false,
                 contentPadding:
                     const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
               ),
@@ -3964,6 +4134,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                   _activeDocument = doc;
                   _questions = <ProblemBankQuestion>[];
                   _dirtyQuestionIds.clear();
+                  _questionPreviewUrls.clear();
                   _needsPublish = false;
                   _applySourceMetaFromDocument(doc);
                   _scoreDrafts.clear();
@@ -6611,8 +6782,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     );
   }
 
-  Widget _buildPdfPreviewThumbnail(
+  Widget _buildServerPdfPreviewThumbnail(
     ProblemBankQuestion q, {
+    required String previewUrl,
     bool expanded = false,
     double? fixedHeight,
   }) {
@@ -6625,13 +6797,135 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         border: Border.all(color: _border),
       ),
       padding: const EdgeInsets.all(8.5),
-      child: _buildPdfPreviewPaperContent(
-        q,
-        expanded: expanded,
-        scrollable: true,
-        bordered: true,
-        shadow: true,
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: const Color(0xFFD5D5D5)),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x1A000000),
+              blurRadius: 3,
+              offset: Offset(0, 1),
+            ),
+          ],
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final width =
+                constraints.maxWidth.isFinite ? constraints.maxWidth : 420.0;
+            return SingleChildScrollView(
+              physics: const ClampingScrollPhysics(),
+              child: Image.network(
+                previewUrl,
+                width: width,
+                fit: BoxFit.fitWidth,
+                alignment: Alignment.topCenter,
+                errorBuilder: (_, __, ___) => Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Center(
+                    child: Text(
+                      '이미지 로드 실패',
+                      style: TextStyle(
+                        color: Color(0xFF9C5A5A),
+                        fontSize: 12,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
       ),
+    );
+  }
+
+  Widget _buildPreviewPlaceholder({
+    bool expanded = false,
+    double? fixedHeight,
+    String message = '서버 미리보기 로딩 중...',
+    bool showSpinner = true,
+  }) {
+    return Container(
+      height: expanded ? null : (fixedHeight ?? 260),
+      width: double.infinity,
+      constraints: expanded
+          ? const BoxConstraints(minHeight: 120)
+          : null,
+      decoration: BoxDecoration(
+        color: const Color(0xFF0E1518),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: _border),
+      ),
+      padding: const EdgeInsets.all(8.5),
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: const Color(0xFFD5D5D5)),
+        ),
+        padding: const EdgeInsets.all(16),
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (showSpinner) ...[
+                const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Color(0xFF6E7E96),
+                  ),
+                ),
+                const SizedBox(height: 10),
+              ],
+              Text(
+                message,
+                style: const TextStyle(
+                  color: Color(0xFF6E7E96),
+                  fontSize: 12,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPdfPreviewThumbnail(
+    ProblemBankQuestion q, {
+    bool expanded = false,
+    double? fixedHeight,
+  }) {
+    final questionId = q.id.trim();
+    final dirty = _dirtyQuestionIds.contains(questionId);
+    final serverPreviewUrl =
+        dirty ? '' : (_questionPreviewUrls[questionId] ?? '').trim();
+    if (serverPreviewUrl.isNotEmpty) {
+      return _buildServerPdfPreviewThumbnail(
+        q,
+        previewUrl: serverPreviewUrl,
+        expanded: expanded,
+        fixedHeight: fixedHeight,
+      );
+    }
+    if (dirty) {
+      return _buildPreviewPlaceholder(
+        expanded: expanded,
+        fixedHeight: fixedHeight,
+        message: '변경사항이 있습니다.\n업로드 후 미리보기가 갱신됩니다.',
+        showSpinner: false,
+      );
+    }
+    return _buildPreviewPlaceholder(
+      expanded: expanded,
+      fixedHeight: fixedHeight,
     );
   }
 
@@ -6664,69 +6958,297 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     return preferred.toDouble();
   }
 
+  Map<String, dynamic> _buildDraftMeta(
+    ProblemBankQuestion q,
+    Map<String, double> draftMap,
+    Set<String> selectedPairKeys, {
+    Map<String, String>? positionMap,
+  }) {
+    final updatedMeta = Map<String, dynamic>.from(q.meta);
+
+    final items = <Map<String, dynamic>>[];
+    for (final e in draftMap.entries) {
+      final key = e.key.trim();
+      if (key.isEmpty) continue;
+      final wEm = e.value.clamp(_figureWidthEmMin, _figureWidthEmMax);
+      final pos = positionMap?[key] ?? 'below-stem';
+      items.add(<String, dynamic>{
+        'assetKey': key,
+        'widthEm': (wEm * 10).roundToDouble() / 10.0,
+        'position': pos,
+        'anchor': 'center',
+        'offsetXEm': 0,
+        'offsetYEm': 0,
+      });
+    }
+    final groups = <Map<String, dynamic>>[];
+    for (final pairKey in selectedPairKeys) {
+      final parts = _figurePairParts(pairKey);
+      if (parts.length != 2) continue;
+      groups.add(<String, dynamic>{
+        'type': 'horizontal',
+        'members': parts,
+        'gap': 0.5,
+      });
+    }
+    if (items.isNotEmpty) {
+      updatedMeta['figure_layout'] = <String, dynamic>{
+        'version': 1,
+        'items': items,
+        'groups': groups,
+      };
+    } else {
+      updatedMeta.remove('figure_layout');
+    }
+
+    final legacyScaleMap = <String, dynamic>{};
+    for (final e in draftMap.entries) {
+      final key = e.key.trim();
+      if (key.isEmpty) continue;
+      final scale = _widthEmToScale(e.value);
+      if ((scale - 1.0).abs() < 0.01) continue;
+      legacyScaleMap[key] = (scale * 100).roundToDouble() / 100.0;
+    }
+    if (legacyScaleMap.isEmpty) {
+      updatedMeta.remove('figure_render_scales');
+    } else {
+      updatedMeta['figure_render_scales'] = legacyScaleMap;
+    }
+    final cleanedPairPayload = selectedPairKeys
+        .map((pairKey) => _figurePairParts(pairKey))
+        .where((parts) => parts.length == 2)
+        .map((parts) => <String, String>{'a': parts[0], 'b': parts[1]})
+        .toList(growable: false);
+    if (cleanedPairPayload.isEmpty) {
+      updatedMeta.remove('figure_horizontal_pairs');
+    } else {
+      updatedMeta['figure_horizontal_pairs'] = cleanedPairPayload;
+    }
+    final avgScale = draftMap.isEmpty
+        ? 1.0
+        : draftMap.values
+                .map((w) => _widthEmToScale(w))
+                .fold<double>(0.0, (sum, v) => sum + v) /
+            draftMap.length;
+    final normalizedGlobal = _normalizeFigureScale(avgScale);
+    if ((normalizedGlobal - 1.0).abs() < 0.01) {
+      updatedMeta.remove('figure_render_scale');
+    } else {
+      updatedMeta['figure_render_scale'] =
+          (normalizedGlobal * 100).roundToDouble() / 100.0;
+    }
+    return updatedMeta;
+  }
+
   Future<void> _openPreviewZoomDialog(ProblemBankQuestion q) async {
     if (!mounted) return;
     final screen = MediaQuery.sizeOf(context);
+    final hasFigures = q.figureRefs.isNotEmpty;
     final dialogWidth = _previewDialogWidth(q, screen);
-    final dialogHeight = _previewDialogHeight(q, screen);
+    final baseHeight = _previewDialogHeight(q, screen);
+    final dialogHeight =
+        hasFigures ? (baseHeight + 180).clamp(500.0, screen.height - 40) : baseHeight;
+
+    final figureData = hasFigures ? _prepareFigureScaleData(q) : null;
+    final draftMap = figureData?.draftMap;
+    final positionMap = figureData?.positionMap;
+    final selectedPairKeys = figureData?.selectedPairKeys;
+    var refreshing = false;
+    final existingUrl =
+        (_questionPreviewUrls[q.id.trim()] ?? '').trim();
+    String? serverPreviewUrl =
+        existingUrl.isNotEmpty ? existingUrl : null;
+
     await showDialog<void>(
       context: context,
       builder: (ctx) {
-        return Dialog(
-          backgroundColor: _panel,
-          insetPadding:
-              const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
-          child: ConstrainedBox(
-            constraints: BoxConstraints(
-              maxWidth: dialogWidth,
-              maxHeight: dialogHeight,
-              minWidth: 560,
-              minHeight: 380,
-            ),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
+        return StatefulBuilder(
+          builder: (dialogContext, setLocalState) {
+            final draftMeta = (hasFigures && draftMap != null && selectedPairKeys != null)
+                ? _buildDraftMeta(q, draftMap, selectedPairKeys,
+                    positionMap: positionMap)
+                : q.meta;
+            final previewQ = hasFigures ? q.copyWith(meta: draftMeta) : q;
+
+            void applyAndRefresh() {
+              if (draftMap == null || positionMap == null || selectedPairKeys == null) return;
+              _setFigureRenderScales(
+                q,
+                Map<String, double>.from(draftMap),
+                positionMap: Map<String, String>.from(positionMap),
+                horizontalPairKeys: selectedPairKeys,
+              );
+              setLocalState(() {
+                refreshing = true;
+              });
+              () async {
+                final updatedQ = _questions
+                    .where((item) => item.id == q.id)
+                    .firstOrNull;
+                if (updatedQ != null) {
+                  final url = await _saveAndRefreshPreview(updatedQ);
+                  if (url != null) {
+                    serverPreviewUrl = url;
+                  }
+                }
+                if (ctx.mounted) {
+                  setLocalState(() {
+                    refreshing = false;
+                  });
+                }
+              }();
+            }
+
+            return Dialog(
+              backgroundColor: _panel,
+              insetPadding:
+                  const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxWidth: dialogWidth,
+                  maxHeight: dialogHeight.toDouble(),
+                  minWidth: 560,
+                  minHeight: 380,
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        '${q.questionNumber}번 확대 미리보기',
-                        style: const TextStyle(
-                          color: _text,
-                          fontSize: 15,
-                          fontWeight: FontWeight.w800,
-                        ),
+                      Row(
+                        children: [
+                          Text(
+                            '${q.questionNumber}번 확대 미리보기',
+                            style: const TextStyle(
+                              color: _text,
+                              fontSize: 15,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                          const Spacer(),
+                          if (refreshing)
+                            const Padding(
+                              padding: EdgeInsets.symmetric(horizontal: 8),
+                              child: SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: _accent,
+                                ),
+                              ),
+                            ),
+                          IconButton(
+                            tooltip: '닫기',
+                            onPressed: () => Navigator.of(ctx).pop(),
+                            icon: const Icon(Icons.close, color: _textSub),
+                          ),
+                        ],
                       ),
-                      const Spacer(),
-                      IconButton(
-                        tooltip: '닫기',
-                        onPressed: () => Navigator.of(ctx).pop(),
-                        icon: const Icon(Icons.close, color: _textSub),
+                      const SizedBox(height: 6),
+                      Expanded(
+                        child: SingleChildScrollView(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              if (serverPreviewUrl != null &&
+                                  serverPreviewUrl!.isNotEmpty)
+                                _buildServerPdfPreviewThumbnail(
+                                  previewQ,
+                                  previewUrl: serverPreviewUrl!,
+                                  expanded: true,
+                                )
+                              else
+                                _buildPreviewPlaceholder(
+                                  expanded: true,
+                                  message: refreshing
+                                      ? '서버 미리보기 갱신 중...'
+                                      : '서버 미리보기가 없습니다.\n그림 크기를 조정하면 자동으로 반영됩니다.',
+                                  showSpinner: refreshing,
+                                ),
+                              const SizedBox(height: 10),
+                              _buildAnswerPreviewThumbnail(q, expanded: true),
+                              if (hasFigures) ...[
+                                const SizedBox(height: 10),
+                                _buildFigurePreviewThumbnail(previewQ, expanded: true),
+                                const SizedBox(height: 14),
+                                Container(
+                                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
+                                  decoration: BoxDecoration(
+                                    color: _field,
+                                    borderRadius: BorderRadius.circular(10),
+                                    border: Border.all(color: _border),
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Row(
+                                        children: [
+                                          const Icon(Icons.tune, color: _textSub, size: 15),
+                                          const SizedBox(width: 6),
+                                          const Text(
+                                            '그림 크기 / 배치',
+                                            style: TextStyle(
+                                              color: _text,
+                                              fontSize: 12.6,
+                                              fontWeight: FontWeight.w800,
+                                            ),
+                                          ),
+                                          const Spacer(),
+                                          TextButton(
+                                            onPressed: () {
+                                              setLocalState(() {
+                                                for (final key in draftMap!.keys) {
+                                                  draftMap[key] = _figureWidthEmDefault;
+                                                }
+                                                if (positionMap != null) {
+                                                  for (final key in positionMap.keys) {
+                                                    positionMap[key] = 'below-stem';
+                                                  }
+                                                }
+                                                selectedPairKeys!.clear();
+                                              });
+                                              applyAndRefresh();
+                                            },
+                                            child: const Text(
+                                              '기본값',
+                                              style: TextStyle(fontSize: 11.4),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 6),
+                                      ..._buildFigureScaleSliders(
+                                        draftMap: draftMap!,
+                                        positionMap: positionMap!,
+                                        labels: figureData!.labels,
+                                        previewUrls: figureData.previewUrls,
+                                        setLocalState: setLocalState,
+                                        showPreviewImages: false,
+                                        onSettingChanged: applyAndRefresh,
+                                      ),
+                                      _buildHorizontalPairChips(
+                                        candidatePairKeys: figureData.candidatePairKeys,
+                                        candidatePairLabels:
+                                            figureData.candidatePairLabels,
+                                        selectedPairKeys: selectedPairKeys!,
+                                        setLocalState: setLocalState,
+                                        onSettingChanged: applyAndRefresh,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 6),
-                  Expanded(
-                    child: SingleChildScrollView(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          _buildPdfPreviewThumbnail(q, expanded: true),
-                          const SizedBox(height: 10),
-                          _buildAnswerPreviewThumbnail(q, expanded: true),
-                          if (q.figureRefs.isNotEmpty) ...[
-                            const SizedBox(height: 10),
-                            _buildFigurePreviewThumbnail(q, expanded: true),
-                          ],
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
+                ),
               ),
-            ),
-          ),
+            );
+          },
         );
       },
     );
@@ -6781,12 +7303,23 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     );
   }
 
-  Future<void> _openFigureScaleDialog(ProblemBankQuestion q) async {
+  ({
+    Map<String, double> draftMap,
+    Map<String, String> positionMap,
+    Map<String, String> labels,
+    Map<String, String> previewUrls,
+    List<String> candidatePairKeys,
+    Map<String, String> candidatePairLabels,
+    Set<String> selectedPairKeys,
+  }) _prepareFigureScaleData(ProblemBankQuestion q) {
     final assets = _orderedFigureAssetsOf(q);
     final fallbackCount =
         assets.isNotEmpty ? assets.length : math.max(1, q.figureRefs.length);
+
+    final existingLayout = _parseFigureLayout(q);
     final scaleMap = _figureRenderScaleMapOf(q);
     final draftMap = <String, double>{};
+    final positionMap = <String, String>{};
     final labels = <String, String>{};
     final previewUrls = <String, String>{};
 
@@ -6798,9 +7331,29 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       final label = _figureScaleKeyLabel(key, i + 1);
       final path = '${asset['path'] ?? ''}'.trim();
       final previewUrl = _figurePreviewUrlForPath(q.id, path);
-      final initial = scaleMap[key] ??
-          _figureRenderScaleForAsset(q, asset: asset, order: i + 1);
-      draftMap[key] = initial;
+
+      if (existingLayout != null) {
+        final layoutItem = (existingLayout['items'] as List?)
+            ?.cast<Map<String, dynamic>>()
+            .where((it) => it['assetKey'] == key)
+            .firstOrNull;
+        if (layoutItem != null) {
+          draftMap[key] = (layoutItem['widthEm'] as num?)?.toDouble() ??
+              _figureWidthEmDefault;
+          positionMap[key] =
+              '${layoutItem['position'] ?? 'below-stem'}'.trim();
+        } else {
+          final scale = scaleMap[key] ??
+              _figureRenderScaleForAsset(q, asset: asset, order: i + 1);
+          draftMap[key] = _scaleToWidthEm(scale);
+          positionMap[key] = 'below-stem';
+        }
+      } else {
+        final scale = scaleMap[key] ??
+            _figureRenderScaleForAsset(q, asset: asset, order: i + 1);
+        draftMap[key] = _scaleToWidthEm(scale);
+        positionMap[key] = 'below-stem';
+      }
       labels[key] = label;
       previewUrls[key] = previewUrl;
     }
@@ -6818,11 +7371,243 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         candidatePairLabels[pairKey] = '$left + $right';
       }
     }
-    final selectedPairKeys = _figureHorizontalPairKeysOf(q).where((pairKey) {
-      final parts = _figurePairParts(pairKey);
-      if (parts.length != 2) return false;
-      return draftMap.containsKey(parts[0]) && draftMap.containsKey(parts[1]);
-    }).toSet();
+
+    Set<String> selectedPairKeys;
+    if (existingLayout != null) {
+      final groups = (existingLayout['groups'] as List?)
+              ?.cast<Map<String, dynamic>>() ??
+          const <Map<String, dynamic>>[];
+      selectedPairKeys = <String>{};
+      for (final g in groups) {
+        if (g['type'] != 'horizontal') continue;
+        final members = (g['members'] as List?)?.cast<String>() ?? const <String>[];
+        for (var i = 0; i < members.length; i += 1) {
+          for (var j = i + 1; j < members.length; j += 1) {
+            final pk = _figurePairKey(members[i], members[j]);
+            if (pk.isNotEmpty) selectedPairKeys.add(pk);
+          }
+        }
+      }
+    } else {
+      selectedPairKeys = _figureHorizontalPairKeysOf(q).where((pairKey) {
+        final parts = _figurePairParts(pairKey);
+        if (parts.length != 2) return false;
+        return draftMap.containsKey(parts[0]) &&
+            draftMap.containsKey(parts[1]);
+      }).toSet();
+    }
+
+    return (
+      draftMap: draftMap,
+      positionMap: positionMap,
+      labels: labels,
+      previewUrls: previewUrls,
+      candidatePairKeys: candidatePairKeys,
+      candidatePairLabels: candidatePairLabels,
+      selectedPairKeys: selectedPairKeys,
+    );
+  }
+
+  Map<String, dynamic>? _parseFigureLayout(ProblemBankQuestion q) {
+    final raw = q.meta['figure_layout'];
+    if (raw is! Map) return null;
+    final items = raw['items'];
+    if (items is! List || items.isEmpty) return null;
+    return Map<String, dynamic>.from(raw.map((k, v) => MapEntry('$k', v)));
+  }
+
+  List<Widget> _buildFigureScaleSliders({
+    required Map<String, double> draftMap,
+    required Map<String, String> positionMap,
+    required Map<String, String> labels,
+    required Map<String, String> previewUrls,
+    required void Function(void Function()) setLocalState,
+    bool showPreviewImages = true,
+    VoidCallback? onSettingChanged,
+  }) {
+    return [
+      for (var i = 0; i < draftMap.length; i += 1)
+        () {
+          final key = draftMap.keys.elementAt(i);
+          final widthEm = draftMap[key] ?? _figureWidthEmDefault;
+          final label = labels[key] ?? '그림 ${i + 1}';
+          final position = positionMap[key] ?? 'below-stem';
+          final previewUrl = previewUrls[key] ?? '';
+          return Container(
+            margin:
+                EdgeInsets.only(bottom: i == draftMap.length - 1 ? 0 : 10),
+            padding: const EdgeInsets.fromLTRB(10, 9, 10, 7),
+            decoration: BoxDecoration(
+              color: _field,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: _border),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Text(
+                      '$label 너비',
+                      style: const TextStyle(
+                        color: _textSub,
+                        fontSize: 12.1,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const Spacer(),
+                    Text(
+                      '${widthEm.toStringAsFixed(1)}em',
+                      style: const TextStyle(
+                        color: _text,
+                        fontSize: 12.1,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+                if (showPreviewImages && previewUrl.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(4),
+                    child: Image.network(
+                      previewUrl,
+                      height: 74,
+                      width: double.infinity,
+                      fit: BoxFit.contain,
+                    ),
+                  ),
+                ],
+                Slider(
+                  value: widthEm.clamp(_figureWidthEmMin, _figureWidthEmMax),
+                  min: _figureWidthEmMin,
+                  max: _figureWidthEmMax,
+                  divisions: 50,
+                  activeColor: _accent,
+                  onChanged: (v) {
+                    setLocalState(() {
+                      draftMap[key] =
+                          (v * 10).roundToDouble() / 10.0;
+                    });
+                  },
+                  onChangeEnd: (_) => onSettingChanged?.call(),
+                ),
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    const Text(
+                      '위치',
+                      style: TextStyle(
+                        color: _textSub,
+                        fontSize: 11.4,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: DropdownButton<String>(
+                        value: _figurePositionOptions.contains(position)
+                            ? position
+                            : 'below-stem',
+                        isExpanded: true,
+                        isDense: true,
+                        style: const TextStyle(
+                          color: _text,
+                          fontSize: 11.4,
+                        ),
+                        underline: const SizedBox.shrink(),
+                        items: _figurePositionOptions
+                            .map((pos) => DropdownMenuItem<String>(
+                                  value: pos,
+                                  child: Text(
+                                    _figurePositionLabels[pos] ?? pos,
+                                  ),
+                                ))
+                            .toList(growable: false),
+                        onChanged: (v) {
+                          if (v == null) return;
+                          setLocalState(() {
+                            positionMap[key] = v;
+                          });
+                          onSettingChanged?.call();
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          );
+        }(),
+    ];
+  }
+
+  Widget _buildHorizontalPairChips({
+    required List<String> candidatePairKeys,
+    required Map<String, String> candidatePairLabels,
+    required Set<String> selectedPairKeys,
+    required void Function(void Function()) setLocalState,
+    VoidCallback? onSettingChanged,
+  }) {
+    if (candidatePairKeys.isEmpty) return const SizedBox.shrink();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 10),
+        const Text(
+          '가로 묶음 (선택한 두 그림을 한 줄에 배치)',
+          style: TextStyle(
+            color: _textSub,
+            fontSize: 11.6,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const SizedBox(height: 6),
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: [
+            for (final pairKey in candidatePairKeys)
+              FilterChip(
+                label: Text(
+                  candidatePairLabels[pairKey] ?? pairKey,
+                  style: const TextStyle(fontSize: 11),
+                ),
+                selected: selectedPairKeys.contains(pairKey),
+                onSelected: (selected) {
+                  setLocalState(() {
+                    final parts = _figurePairParts(pairKey);
+                    if (parts.length != 2) return;
+                    final a = parts[0];
+                    final b = parts[1];
+                    if (!selected) {
+                      selectedPairKeys.remove(pairKey);
+                    } else {
+                      selectedPairKeys.removeWhere((existing) {
+                        final p = _figurePairParts(existing);
+                        if (p.length != 2) return false;
+                        return p[0] == a ||
+                            p[0] == b ||
+                            p[1] == a ||
+                            p[1] == b;
+                      });
+                      selectedPairKeys.add(pairKey);
+                    }
+                  });
+                  onSettingChanged?.call();
+                },
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Future<void> _openFigureScaleDialog(ProblemBankQuestion q) async {
+    final data = _prepareFigureScaleData(q);
+    final draftMap = data.draftMap;
+    final positionMap = data.positionMap;
+    final selectedPairKeys = data.selectedPairKeys;
 
     final result = await showDialog<Map<String, double>>(
       context: context,
@@ -6836,7 +7621,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                 side: const BorderSide(color: _border),
               ),
               title: Text(
-                '${q.questionNumber}번 그림 크기 조절',
+                '${q.questionNumber}번 그림 크기 / 위치 조절',
                 style: const TextStyle(color: _text, fontSize: 15.5),
               ),
               content: SizedBox(
@@ -6848,132 +7633,28 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                       mainAxisSize: MainAxisSize.min,
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        for (var i = 0; i < draftMap.length; i += 1) ...[
-                          () {
-                            final key = draftMap.keys.elementAt(i);
-                            final value = draftMap[key] ?? 1.0;
-                            final label = labels[key] ?? '그림 ${i + 1}';
-                            final pct = (value * 100).round();
-                            final previewUrl = previewUrls[key] ?? '';
-                            return Container(
-                              margin: EdgeInsets.only(
-                                  bottom: i == draftMap.length - 1 ? 0 : 10),
-                              padding: const EdgeInsets.fromLTRB(10, 9, 10, 7),
-                              decoration: BoxDecoration(
-                                color: _field,
-                                borderRadius: BorderRadius.circular(8),
-                                border: Border.all(color: _border),
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
-                                    children: [
-                                      Text(
-                                        '$label 배율',
-                                        style: const TextStyle(
-                                          color: _textSub,
-                                          fontSize: 12.1,
-                                          fontWeight: FontWeight.w700,
-                                        ),
-                                      ),
-                                      const Spacer(),
-                                      Text(
-                                        '$pct%',
-                                        style: const TextStyle(
-                                          color: _text,
-                                          fontSize: 12.1,
-                                          fontWeight: FontWeight.w700,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  if (previewUrl.isNotEmpty) ...[
-                                    const SizedBox(height: 6),
-                                    ClipRRect(
-                                      borderRadius: BorderRadius.circular(4),
-                                      child: Image.network(
-                                        previewUrl,
-                                        height: 74,
-                                        width: double.infinity,
-                                        fit: BoxFit.contain,
-                                      ),
-                                    ),
-                                  ],
-                                  Slider(
-                                    value: value,
-                                    min: _figureScaleMin,
-                                    max: _figureScaleMax,
-                                    divisions: 38,
-                                    activeColor: _accent,
-                                    onChanged: (v) {
-                                      setLocalState(() {
-                                        draftMap[key] = v;
-                                      });
-                                    },
-                                  ),
-                                ],
-                              ),
-                            );
-                          }(),
-                        ],
+                        ..._buildFigureScaleSliders(
+                          draftMap: draftMap,
+                          positionMap: positionMap,
+                          labels: data.labels,
+                          previewUrls: data.previewUrls,
+                          setLocalState: setLocalState,
+                        ),
                         const SizedBox(height: 4),
                         const Text(
-                          '문제 본문/미리보기/PDF 렌더링에 반영됩니다. AI 재생성 시에도 배율 힌트로 전달됩니다.',
+                          '너비(em)는 글자 크기 기준 상대값입니다. 글자 크기가 변해도 비율이 유지됩니다.',
                           style: TextStyle(
                             color: _textSub,
                             fontSize: 11.2,
                             height: 1.4,
                           ),
                         ),
-                        if (candidatePairKeys.isNotEmpty) ...[
-                          const SizedBox(height: 10),
-                          const Text(
-                            '가로 묶음 (선택한 두 그림을 한 줄에 배치)',
-                            style: TextStyle(
-                              color: _textSub,
-                              fontSize: 11.6,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                          const SizedBox(height: 6),
-                          Wrap(
-                            spacing: 6,
-                            runSpacing: 6,
-                            children: [
-                              for (final pairKey in candidatePairKeys)
-                                FilterChip(
-                                  label: Text(
-                                    candidatePairLabels[pairKey] ?? pairKey,
-                                    style: const TextStyle(fontSize: 11),
-                                  ),
-                                  selected: selectedPairKeys.contains(pairKey),
-                                  onSelected: (selected) {
-                                    setLocalState(() {
-                                      final parts = _figurePairParts(pairKey);
-                                      if (parts.length != 2) return;
-                                      final a = parts[0];
-                                      final b = parts[1];
-                                      if (!selected) {
-                                        selectedPairKeys.remove(pairKey);
-                                        return;
-                                      }
-                                      // 한 그림이 여러 쌍에 동시에 들어가지 않도록 충돌쌍 제거
-                                      selectedPairKeys.removeWhere((existing) {
-                                        final p = _figurePairParts(existing);
-                                        if (p.length != 2) return false;
-                                        return p[0] == a ||
-                                            p[0] == b ||
-                                            p[1] == a ||
-                                            p[1] == b;
-                                      });
-                                      selectedPairKeys.add(pairKey);
-                                    });
-                                  },
-                                ),
-                            ],
-                          ),
-                        ],
+                        _buildHorizontalPairChips(
+                          candidatePairKeys: data.candidatePairKeys,
+                          candidatePairLabels: data.candidatePairLabels,
+                          selectedPairKeys: selectedPairKeys,
+                          setLocalState: setLocalState,
+                        ),
                       ],
                     ),
                   ),
@@ -6988,7 +7669,10 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                   onPressed: () {
                     setLocalState(() {
                       for (final key in draftMap.keys) {
-                        draftMap[key] = 1.0;
+                        draftMap[key] = _figureWidthEmDefault;
+                      }
+                      for (final key in positionMap.keys) {
+                        positionMap[key] = 'below-stem';
                       }
                       selectedPairKeys.clear();
                     });
@@ -7011,6 +7695,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     _setFigureRenderScales(
       q,
       result,
+      positionMap: Map<String, String>.from(positionMap),
       horizontalPairKeys: selectedPairKeys,
     );
   }
@@ -8171,6 +8856,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       _activeDocument = doc;
       _questions = <ProblemBankQuestion>[];
       _dirtyQuestionIds.clear();
+      _questionPreviewUrls.clear();
       _needsPublish = false;
       _applySourceMetaFromDocument(doc);
       _scoreDrafts.clear();
@@ -8224,6 +8910,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         _questions = <ProblemBankQuestion>[];
         _activeDocument = null;
         _dirtyQuestionIds.clear();
+        _questionPreviewUrls.clear();
         _scoreDrafts.clear();
         _hasExtracted = false;
         _needsPublish = false;

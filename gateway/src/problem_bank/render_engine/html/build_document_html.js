@@ -223,13 +223,22 @@ function buildStyles({
     .bogi-box {
       margin-top: calc(var(--line-height-pt) * 0.8 * 1pt);
       margin-bottom: 8pt;
-      border: 0.15pt solid #333;
+      border: none;
       padding: 10pt 12pt 8pt;
       position: relative;
     }
+    .bogi-box-border {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      display: block;
+      pointer-events: none;
+      z-index: 0;
+    }
     .bogi-title {
       position: absolute;
-      top: -0.55em;
+      top: -0.455em;
       left: 50%;
       transform: translateX(-50%);
       font-size: calc(var(--stem-size-pt) * 1pt);
@@ -241,17 +250,22 @@ function buildStyles({
       display: inline-flex;
       align-items: center;
       gap: 0.15em;
+      z-index: 1;
     }
     .bogi-bracket {
       display: block;
       flex-shrink: 0;
     }
     .bogi-title-text {
+      display: inline-block;
+      transform: translateY(0.04em);
       letter-spacing: 0.25em;
       margin-right: -0.25em;
     }
     .bogi-content {
       padding-top: 4pt;
+      position: relative;
+      z-index: 1;
     }
     .bogi-item {
       display: grid;
@@ -273,7 +287,45 @@ function buildStyles({
     .figure-img {
       max-width: 100%;
       height: auto;
+      display: block;
     }
+    .figure-anchor-center { text-align: center; }
+    .figure-anchor-center .figure-img { margin: 0 auto; }
+    .figure-anchor-left { text-align: left; }
+    .figure-anchor-right { text-align: right; }
+    .figure-anchor-right .figure-img { margin-left: auto; }
+    .figure-anchor-top { text-align: center; }
+    .figure-anchor-top .figure-img { margin: 0 auto; }
+    .figure-pos-inline-right {
+      float: right;
+      margin: 0 0 0.5em 0.5em;
+      clear: right;
+    }
+    .figure-pos-inline-left {
+      float: left;
+      margin: 0 0.5em 0.5em 0;
+      clear: left;
+    }
+    .figure-group-horizontal {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      align-items: flex-start;
+      margin: 6pt 0;
+    }
+    .figure-layout-item {
+      flex-shrink: 0;
+    }
+    .figure-layout-item .figure-img {
+      width: 100%;
+    }
+    .figure-inline-block { display: block; text-align: center; margin: 6pt 0; text-indent: 0; }
+    .figure-inline-block .figure-img { max-width: 100%; height: auto; }
+    .figure-inline-block.figure-anchor-left { text-align: left; }
+    .figure-inline-block.figure-anchor-right { text-align: right; }
+    .figure-inline-block.figure-group-horizontal { display: flex; flex-wrap: wrap; justify-content: center; align-items: flex-start; }
+    .figure-inline-block.figure-group-horizontal .figure-layout-item { flex-shrink: 0; }
+    .figure-inline-block.figure-group-horizontal .figure-layout-item .figure-img { width: 100%; }
     .figure-placeholder {
       margin: 6pt 0;
       padding: 8pt;
@@ -405,7 +457,8 @@ export function buildDocumentHtml({
     perPage,
   });
 
-  const allQ = (questions || []).map((q) => renderQuestionBlock(q, mathRenderer));
+  const stemSizePt = Number(layout?.stemSizePt || 11.0);
+  const allQ = (questions || []).map((q) => renderQuestionBlock(q, mathRenderer, { stemSizePt }));
   const useFourSplit = columns === 2 && perPage === 4;
   const GRID4_POS = [
     { row: 1, col: 1 },

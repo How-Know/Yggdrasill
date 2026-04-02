@@ -2,7 +2,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { renderQuestionPreview } from './problem_bank/render_engine/index.js';
+import {
+  renderQuestionPreview,
+  buildQuestionPreviewHtml,
+  buildDocumentPreviewHtml,
+} from './problem_bank/render_engine/index.js';
 
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(MODULE_DIR, '..', '..');
@@ -18,7 +22,9 @@ const FONT_PATH_QNUM =
 
 const PREVIEW_BUCKET = 'problem-previews';
 const SIGNED_URL_EXPIRY_SECONDS = 3600;
-const PREVIEW_VIEWPORT_WIDTH = 480;
+const PREVIEW_VIEWPORT_WIDTH = 520;
+const PREVIEW_DPR = 3;
+const PREVIEW_STYLE_VERSION = 'pv9_bogi_text_down_2click';
 
 function repoAssetPath(...segments) {
   return path.resolve(REPO_ROOT, ...segments);
@@ -48,12 +54,18 @@ function getDefaultFontPaths() {
 }
 
 function questionContentHash(question) {
+  const meta = question?.meta && typeof question.meta === 'object' ? question.meta : {};
   const payload = JSON.stringify({
+    style_version: PREVIEW_STYLE_VERSION,
     stem: question?.stem || '',
     choices: question?.choices || [],
     equations: question?.equations || [],
     figure_refs: question?.figure_refs || [],
-    meta_figure_assets: question?.meta?.figure_assets || [],
+    meta_figure_assets: meta.figure_assets || [],
+    meta_figure_layout: meta.figure_layout || null,
+    meta_figure_render_scales: meta.figure_render_scales || null,
+    meta_figure_horizontal_pairs: meta.figure_horizontal_pairs || null,
+    meta_figure_render_scale: meta.figure_render_scale ?? null,
   });
   return createHash('sha256').update(payload).digest('hex').slice(0, 16);
 }
@@ -78,6 +90,7 @@ export async function generateQuestionPreviews({
   academyId,
   layout,
   supabaseClient,
+  force = false,
 }) {
   if (!supabaseClient) throw new Error('supabaseClient is required');
   if (!Array.isArray(questions) || questions.length === 0) return [];
@@ -97,17 +110,19 @@ export async function generateQuestionPreviews({
     const hash = questionContentHash(question);
     const storagePath = `${academyId || 'global'}/q_${qId}_${hash}.png`;
 
-    try {
-      const { data: existing } = await supabaseClient.storage
-        .from(PREVIEW_BUCKET)
-        .createSignedUrl(storagePath, SIGNED_URL_EXPIRY_SECONDS);
+    if (!force) {
+      try {
+        const { data: existing } = await supabaseClient.storage
+          .from(PREVIEW_BUCKET)
+          .createSignedUrl(storagePath, SIGNED_URL_EXPIRY_SECONDS);
 
-      if (existing?.signedUrl) {
-        results.push({ questionId: qId, imageUrl: existing.signedUrl, cached: true });
-        continue;
+        if (existing?.signedUrl) {
+          results.push({ questionId: qId, imageUrl: existing.signedUrl, cached: true });
+          continue;
+        }
+      } catch (_) {
+        // no cached version
       }
-    } catch (_) {
-      // no cached version
     }
 
     try {
@@ -119,6 +134,7 @@ export async function generateQuestionPreviews({
         layout: layout || {},
         supabaseClient,
         viewportWidth: PREVIEW_VIEWPORT_WIDTH,
+        deviceScaleFactor: PREVIEW_DPR,
       });
 
       const { error: uploadErr } = await supabaseClient.storage
@@ -151,4 +167,78 @@ export async function generateQuestionPreviews({
   }
 
   return results;
+}
+
+export async function getStoredPreviewUrls({
+  questions,
+  academyId,
+  supabaseClient,
+}) {
+  if (!supabaseClient || !Array.isArray(questions) || questions.length === 0) return [];
+  const results = [];
+  for (const question of questions) {
+    const qId = String(question?.id || question?.question_id || '');
+    if (!qId) { results.push({ questionId: qId, imageUrl: null }); continue; }
+    const hash = questionContentHash(question);
+    const storagePath = `${academyId || 'global'}/q_${qId}_${hash}.png`;
+    try {
+      const { data } = await supabaseClient.storage
+        .from(PREVIEW_BUCKET)
+        .createSignedUrl(storagePath, SIGNED_URL_EXPIRY_SECONDS);
+      results.push({ questionId: qId, imageUrl: data?.signedUrl || null, cached: true });
+    } catch (_) {
+      results.push({ questionId: qId, imageUrl: null });
+    }
+  }
+  return results;
+}
+
+export async function buildPreviewHtmlBatch({
+  questions,
+  layout,
+  supabaseClient,
+}) {
+  const fontPaths = getDefaultFontPaths();
+  const results = [];
+  for (const question of questions) {
+    const qId = String(question?.id || question?.question_id || '');
+    try {
+      const html = await buildQuestionPreviewHtml({
+        question,
+        fontRegularPath: fontPaths.regularPath,
+        boldPath: fontPaths.boldPath,
+        qnumFontPath: fontPaths.qnumFontPath,
+        layout: layout || {},
+        supabaseClient,
+      });
+      results.push({ questionId: qId, html });
+    } catch (err) {
+      results.push({ questionId: qId, html: null, error: err.message });
+    }
+  }
+  return results;
+}
+
+export async function buildDocumentHtmlForPreview({
+  questions,
+  renderConfig,
+  profile,
+  paper,
+  baseLayout,
+  maxQuestionsPerPage,
+  supabaseClient,
+}) {
+  const fontPaths = getDefaultFontPaths();
+  return buildDocumentPreviewHtml({
+    questions,
+    renderConfig,
+    profile,
+    paper,
+    fontRegularPath: fontPaths.regularPath,
+    fontBoldPath: fontPaths.boldPath,
+    qnumFontPath: fontPaths.qnumFontPath,
+    baseLayout,
+    supabaseClient,
+    maxQuestionsPerPage,
+  });
 }

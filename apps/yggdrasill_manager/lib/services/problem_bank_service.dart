@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
@@ -57,14 +58,25 @@ class ProblemBankService {
     String? gatewayApiKey,
   })  : _client = client ?? Supabase.instance.client,
         _http = httpClient ?? http.Client(),
-        _gatewayBaseUrl = (gatewayBaseUrl ??
-                const String.fromEnvironment('PB_GATEWAY_URL',
-                    defaultValue: ''))
-            .trim(),
+        _gatewayBaseUrl = _resolveGatewayUrl(gatewayBaseUrl),
         _gatewayApiKey = (gatewayApiKey ??
                 const String.fromEnvironment('PB_GATEWAY_API_KEY',
                     defaultValue: ''))
             .trim();
+
+  static String _resolveGatewayUrl(String? explicit) {
+    if (explicit != null && explicit.trim().isNotEmpty) {
+      return explicit.trim();
+    }
+    const dartDefine =
+        String.fromEnvironment('PB_GATEWAY_URL', defaultValue: '');
+    if (dartDefine.isNotEmpty) return dartDefine;
+    try {
+      final envValue = Platform.environment['PB_GATEWAY_URL'] ?? '';
+      if (envValue.isNotEmpty) return envValue;
+    } catch (_) {}
+    return 'http://localhost:8787';
+  }
 
   final SupabaseClient _client;
   final http.Client _http;
@@ -1930,6 +1942,127 @@ class ProblemBankService {
     if (value is int) return value;
     if (value is num) return value.toInt();
     return int.tryParse('$value') ?? 0;
+  }
+
+  Future<Map<String, String>> triggerPreviewScreenshots({
+    required String academyId,
+    required List<String> questionIds,
+    bool force = false,
+  }) async {
+    if (!hasGateway || questionIds.isEmpty) return {};
+    try {
+      final result = await _gatewayPost(
+        '/pb/preview/questions',
+        body: <String, dynamic>{
+          'academyId': academyId,
+          'questionIds': questionIds,
+          if (force) 'force': true,
+        },
+      );
+      final map = <String, String>{};
+      final previews = result['previews'];
+      if (previews is List) {
+        for (final entry in previews) {
+          if (entry is! Map) continue;
+          final qId = '${entry['questionId'] ?? ''}'.trim();
+          final url = '${entry['imageUrl'] ?? ''}'.trim();
+          if (qId.isNotEmpty && url.isNotEmpty) map[qId] = url;
+        }
+      }
+      return map;
+    } catch (_) {
+      return {};
+    }
+  }
+
+  Future<Map<String, String>> fetchQuestionPreviews({
+    required String academyId,
+    required List<String> questionIds,
+    Map<String, dynamic>? layout,
+  }) async {
+    if (!hasGateway || questionIds.isEmpty) return {};
+    try {
+      final urlResult = await _gatewayPost(
+        '/pb/preview/urls',
+        body: <String, dynamic>{
+          'academyId': academyId,
+          'questionIds': questionIds,
+        },
+      );
+
+      final map = <String, String>{};
+      final missing = <String>[];
+      final previews = urlResult['previews'];
+      if (previews is List) {
+        for (final entry in previews) {
+          if (entry is! Map) continue;
+          final qId = '${entry['questionId'] ?? ''}'.trim();
+          final url = '${entry['imageUrl'] ?? ''}'.trim();
+          if (qId.isNotEmpty && url.isNotEmpty) {
+            map[qId] = url;
+          } else if (qId.isNotEmpty) {
+            missing.add(qId);
+          }
+        }
+      }
+
+      if (missing.isNotEmpty) {
+        final body = <String, dynamic>{
+          'academyId': academyId,
+          'questionIds': missing,
+        };
+        if (layout != null && layout.isNotEmpty) body['layout'] = layout;
+        final generated = await _gatewayPost(
+          '/pb/preview/questions',
+          body: body,
+        );
+        final generatedPreviews = generated['previews'];
+        if (generatedPreviews is List) {
+          for (final entry in generatedPreviews) {
+            if (entry is! Map) continue;
+            final qId = '${entry['questionId'] ?? ''}'.trim();
+            final url = '${entry['imageUrl'] ?? ''}'.trim();
+            if (qId.isNotEmpty && url.isNotEmpty) {
+              map[qId] = url;
+            }
+          }
+        }
+      }
+
+      return map;
+    } catch (_) {
+      return {};
+    }
+  }
+
+  Future<Map<String, String>> fetchPreviewHtmlBatch({
+    required String academyId,
+    required List<String> questionIds,
+    Map<String, dynamic>? layout,
+  }) async {
+    if (!hasGateway || questionIds.isEmpty) return {};
+    try {
+      final body = <String, dynamic>{
+        'academyId': academyId,
+        'questionIds': questionIds,
+      };
+      if (layout != null && layout.isNotEmpty) body['layout'] = layout;
+
+      final result = await _gatewayPost('/pb/preview/html', body: body);
+      final questions = result['questions'];
+      if (questions is! List) return {};
+
+      final map = <String, String>{};
+      for (final entry in questions) {
+        if (entry is! Map) continue;
+        final qId = '${entry['questionId'] ?? ''}'.trim();
+        final html = '${entry['html'] ?? ''}'.trim();
+        if (qId.isNotEmpty && html.isNotEmpty) map[qId] = html;
+      }
+      return map;
+    } catch (_) {
+      return {};
+    }
   }
 }
 

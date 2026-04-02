@@ -239,14 +239,13 @@ export async function renderPdfWithHtmlEngine({
   };
 }
 
-export async function renderQuestionPreview({
+export async function buildQuestionPreviewHtml({
   question,
   fontRegularPath,
   boldPath,
   qnumFontPath,
   layout,
   supabaseClient,
-  viewportWidth = 400,
 }) {
   const mathRenderer = createMathSvgRenderer();
   const q = normalizeQuestionForHtml(question);
@@ -256,12 +255,66 @@ export async function renderQuestionPreview({
     boldPath: boldPath || '',
     qnumFontPath: qnumFontPath || '',
   });
-  const html = buildPreviewHtml({
+  return buildPreviewHtml({
     question: q,
     mathRenderer,
     fontFaceCss,
     layout: layout || {},
   });
-  const pngBuffer = await renderHtmlToImageBuffer(html, viewportWidth);
+}
+
+export async function buildDocumentPreviewHtml({
+  questions,
+  renderConfig,
+  profile,
+  paper,
+  fontRegularPath,
+  fontBoldPath,
+  qnumFontPath,
+  baseLayout,
+  supabaseClient,
+  maxQuestionsPerPage,
+}) {
+  const mathRenderer = createMathSvgRenderer();
+  const htmlQuestions = (questions || []).map(normalizeQuestionForHtml);
+  await hydrateFiguresForHtml(htmlQuestions, supabaseClient);
+  const layout = buildHtmlLayout(renderConfig, baseLayout || {});
+  const columns = Number(layout.layoutColumns || 1) === 2 ? 2 : 1;
+  return buildDocumentHtml({
+    profile,
+    paper,
+    layout,
+    questions: htmlQuestions,
+    includeAnswerSheet: renderConfig?.includeAnswerSheet === true,
+    includeExplanation: renderConfig?.includeExplanation === true,
+    mathRenderer,
+    fontFaceCss: buildFontFaceCss({
+      regularPath: fontRegularPath,
+      boldPath: fontBoldPath || '',
+      qnumFontPath: qnumFontPath || '',
+    }),
+    maxQuestionsPerPage: maxQuestionsPerPage || 99,
+  });
+}
+
+export async function renderQuestionPreview({
+  question,
+  fontRegularPath,
+  boldPath,
+  qnumFontPath,
+  layout,
+  supabaseClient,
+  viewportWidth = 400,
+  deviceScaleFactor = 3,
+}) {
+  const html = await buildQuestionPreviewHtml({
+    question,
+    fontRegularPath,
+    boldPath,
+    qnumFontPath,
+    layout,
+    supabaseClient,
+  });
+  const pngBuffer = await renderHtmlToImageBuffer(html, viewportWidth, deviceScaleFactor);
   return { pngBuffer, html };
 }

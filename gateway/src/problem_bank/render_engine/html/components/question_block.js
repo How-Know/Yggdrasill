@@ -4,6 +4,7 @@ import {
   escapeHtml,
   splitStemByNewline,
 } from '../../utils/text.js';
+import { resolveFigureLayout } from '../../utils/figure_layout.js';
 
 const STRUCTURAL_STRIP = /\[(문단)\]/g;
 const BOX_START = /\[박스시작\]/;
@@ -21,6 +22,83 @@ function cleanLine(line) {
     .replace(FIGURE_MARKER_RE, '')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+/**
+ * Replace [그림]/[도형]/[도표]/[표] markers with {{FIG_N}} placeholders.
+ * Returns { text, count } where count is the number of markers replaced
+ * starting from `startIndex`.
+ */
+function replaceMarkersWithPlaceholders(line, startIndex) {
+  let idx = startIndex;
+  const text = line.replace(FIGURE_MARKER_RE, () => `{{FIG_${idx++}}}`);
+  return { text, count: idx - startIndex };
+}
+
+function buildSingleFigureHtml(url, layoutItem) {
+  if (!url) return '';
+  const w = layoutItem?.widthEm;
+  const anchor = layoutItem?.anchor || 'center';
+  const position = layoutItem?.position || 'below-stem';
+  const posClass = `figure-pos-${position}`;
+  const anchorClass = `figure-anchor-${anchor}`;
+  const widthStyle = w ? `width:${w}em;max-width:100%;` : 'max-width:100%;';
+  return `<div class="figure-inline-block ${posClass} ${anchorClass}">`
+    + `<img class="figure-img" src="${url}" style="${widthStyle}" />`
+    + `</div>`;
+}
+
+function buildGroupFigureHtml(members, dataUrls, layoutItems, gapEm) {
+  const innerHtml = members
+    .map((idx) => {
+      const url = dataUrls[idx];
+      if (!url) return '';
+      const item = layoutItems ? layoutItems[idx] : null;
+      const w = item?.widthEm;
+      const style = w ? `flex:0 0 ${w}em;max-width:${w}em;` : '';
+      return `<div class="figure-layout-item" style="${style}">`
+        + `<img class="figure-img" src="${url}" />`
+        + `</div>`;
+    })
+    .join('');
+  return `<div class="figure-inline-block figure-group-horizontal" style="gap:${gapEm}em;">${innerHtml}</div>`;
+}
+
+function replacePlaceholdersWithImages(html, dataUrls, layoutItems, figureLayout) {
+  const groups = figureLayout?.groups || [];
+  const indexToGroup = new Map();
+  for (const group of groups) {
+    if (group.type !== 'horizontal') continue;
+    const memberIndices = [];
+    for (const memberKey of group.members) {
+      const idx = layoutItems.findIndex((it) => it.assetKey === memberKey);
+      if (idx >= 0) memberIndices.push(idx);
+    }
+    if (memberIndices.length >= 2) {
+      for (const idx of memberIndices) {
+        indexToGroup.set(idx, { indices: memberIndices, gap: group.gap ?? 0.5 });
+      }
+    }
+  }
+
+  const rendered = new Set();
+  return html.replace(/\{\{FIG_(\d+)\}\}/g, (_, numStr) => {
+    const idx = parseInt(numStr, 10);
+    if (rendered.has(idx)) return '';
+    rendered.add(idx);
+
+    const groupInfo = indexToGroup.get(idx);
+    if (groupInfo && idx === groupInfo.indices[0]) {
+      groupInfo.indices.forEach((i) => rendered.add(i));
+      return buildGroupFigureHtml(groupInfo.indices, dataUrls, layoutItems, groupInfo.gap);
+    }
+    if (groupInfo) return '';
+
+    const url = dataUrls[idx];
+    if (!url) return '';
+    const item = layoutItems ? layoutItems[idx] : null;
+    return buildSingleFigureHtml(url, item);
+  });
 }
 
 function renderOneLine(text, mathRenderer, equations) {
@@ -84,13 +162,44 @@ function renderBogiItems(lines, mathRenderer, equations) {
   };
 }
 
-function renderStemWithBoxes(stem, mathRenderer, equations) {
+function countFigureMarkers(stem) {
+  const m = stem.match(FIGURE_MARKER_RE);
+  return m ? m.length : 0;
+}
+
+function cleanLineKeepingPlaceholders(line) {
+  return line
+    .replace(STRUCTURAL_STRIP, ' ')
+    .replace(BOX_START, '')
+    .replace(BOX_END, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function renderStemWithBoxes(stem, mathRenderer, equations, { dataUrls = [], layoutItems = [], figureLayout = null } = {}) {
+  const totalMarkers = countFigureMarkers(stem);
+  const hasInlineFigures = totalMarkers > 0 && dataUrls.length > 0;
+
   const lines = splitStemByNewline(stem);
   const blocks = [];
   let hasFraction = false;
   let inBox = false;
   let boxLines = [];
   let inlineBuffer = [];
+  let figureCounter = 0;
+
+  const prepareLine = (rawLine) => {
+    if (hasInlineFigures) {
+      let line = rawLine
+        .replace(STRUCTURAL_STRIP, ' ')
+        .replace(BOX_START, '')
+        .replace(BOX_END, '');
+      const result = replaceMarkersWithPlaceholders(line, figureCounter);
+      figureCounter += result.count;
+      return result.text.replace(/\s+/g, ' ').trim();
+    }
+    return cleanLine(rawLine);
+  };
 
   const flushInline = () => {
     if (inlineBuffer.length === 0) return;
@@ -108,6 +217,7 @@ function renderStemWithBoxes(stem, mathRenderer, equations) {
     if (boxLines.length === 0) return;
     flushInline();
     const hasBogi = boxLines.some((l) => BOGI_RE.test(l));
+    const boxSvg = '<svg class="bogi-box-border" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><rect x="0.5" y="0.5" width="99" height="99" fill="none" stroke="#333" stroke-width="0.5" vector-effect="non-scaling-stroke" shape-rendering="geometricPrecision"/></svg>';
     const bogiSvgLeft = '<svg class="bogi-bracket" viewBox="0 0 7 14" width="0.55em" height="1.05em"><path d="M7 0 L0 7 L7 14" fill="none" stroke="#333" stroke-width="0.35"/></svg>';
     const bogiSvgRight = '<svg class="bogi-bracket" viewBox="0 0 7 14" width="0.55em" height="1.05em"><path d="M0 0 L7 7 L0 14" fill="none" stroke="#333" stroke-width="0.35"/></svg>';
     const title = hasBogi
@@ -119,7 +229,7 @@ function renderStemWithBoxes(stem, mathRenderer, equations) {
     if (innerHtml) {
       blocks.push({
         type: 'block',
-        html: `<div class="bogi-box">${title}<div class="bogi-content">${innerHtml}</div></div>`,
+        html: `<div class="bogi-box">${boxSvg}${title}<div class="bogi-content">${innerHtml}</div></div>`,
       });
     }
     boxLines = [];
@@ -130,7 +240,7 @@ function renderStemWithBoxes(stem, mathRenderer, equations) {
     const hasEnd = BOX_END.test(rawLine);
 
     if (hasEnd && !inBox && !hasStart) {
-      const clean = cleanLine(rawLine);
+      const clean = prepareLine(rawLine);
       if (!clean) continue;
       inlineBuffer.push(clean);
       continue;
@@ -138,36 +248,98 @@ function renderStemWithBoxes(stem, mathRenderer, equations) {
 
     if (hasStart && !inBox) {
       inBox = true;
-      const clean = cleanLine(rawLine);
+      const clean = prepareLine(rawLine);
       if (clean) boxLines.push(clean);
       if (hasEnd) { inBox = false; flushBox(); }
       continue;
     }
     if (inBox) {
-      const clean = cleanLine(rawLine);
+      const clean = prepareLine(rawLine);
       if (clean) boxLines.push(clean);
       if (hasEnd) { inBox = false; flushBox(); }
       continue;
     }
 
-    const clean = cleanLine(rawLine);
+    const clean = prepareLine(rawLine);
     if (!clean) continue;
     inlineBuffer.push(clean);
   }
   flushBox();
   flushInline();
 
-  return { stemHtml: blocks.map((b) => b.html).join(''), hasFraction };
+  let stemHtml = blocks.map((b) => b.html).join('');
+  const inlineCount = hasInlineFigures ? Math.min(figureCounter, dataUrls.length) : 0;
+
+  if (inlineCount > 0) {
+    stemHtml = replacePlaceholdersWithImages(stemHtml, dataUrls, layoutItems, figureLayout);
+  }
+
+  return { stemHtml, hasFraction, inlineCount };
 }
 
-function renderFigures(question) {
+function renderFigures(question, { stemSizePt = 11, skipCount = 0 } = {}) {
   const dataUrls = Array.isArray(question?.figure_data_urls) ? question.figure_data_urls : [];
-  if (dataUrls.length > 0) {
-    return dataUrls
+  if (dataUrls.length === 0) return '';
+
+  const remainingUrls = skipCount > 0 ? dataUrls.slice(skipCount) : dataUrls;
+  if (remainingUrls.length === 0) return '';
+
+  const layout = resolveFigureLayout(question, stemSizePt);
+  if (!layout || layout.items.length === 0) {
+    return remainingUrls
       .map((url) => `<div class="figure-container"><img class="figure-img" src="${url}" /></div>`)
       .join('');
   }
-  return '';
+
+  const remainingItems = skipCount > 0 ? layout.items.slice(skipCount) : layout.items;
+
+  const urlByKey = new Map();
+  remainingItems.forEach((item, i) => {
+    const url = remainingUrls[i];
+    if (url) urlByKey.set(item.assetKey, { url, item });
+  });
+
+  const skippedKeys = new Set(layout.items.slice(0, skipCount).map((it) => it.assetKey));
+
+  const grouped = new Set();
+  const parts = [];
+
+  for (const group of layout.groups) {
+    if (group.type !== 'horizontal') continue;
+    const memberEntries = group.members
+      .filter((key) => !skippedKeys.has(key))
+      .map((key) => urlByKey.get(key))
+      .filter(Boolean);
+    if (memberEntries.length < 2) continue;
+    memberEntries.forEach((e) => grouped.add(e.item.assetKey));
+    const gapEm = Number.isFinite(group.gap) ? group.gap : 0.5;
+    const innerHtml = memberEntries
+      .map((e) => {
+        const w = e.item.widthEm;
+        return `<div class="figure-layout-item" style="flex:0 0 ${w}em;max-width:${w}em;">`
+          + `<img class="figure-img" src="${e.url}" />`
+          + `</div>`;
+      })
+      .join('');
+    parts.push(
+      `<div class="figure-group-horizontal" style="gap:${gapEm}em;">${innerHtml}</div>`,
+    );
+  }
+
+  for (const [key, entry] of urlByKey) {
+    if (grouped.has(key)) continue;
+    const { url, item } = entry;
+    const posClass = `figure-pos-${item.position}`;
+    const anchorClass = `figure-anchor-${item.anchor}`;
+    const widthStyle = `width:${item.widthEm}em;max-width:100%;`;
+    parts.push(
+      `<div class="figure-container ${posClass} ${anchorClass}">`
+      + `<img class="figure-img" src="${url}" style="${widthStyle}" />`
+      + `</div>`,
+    );
+  }
+
+  return parts.join('');
 }
 
 function numIndentEm(numStr) {
@@ -176,18 +348,30 @@ function numIndentEm(numStr) {
   return '1.10';
 }
 
-export function renderQuestionBlock(question, mathRenderer) {
+export function renderQuestionBlock(question, mathRenderer, { stemSizePt = 11 } = {}) {
   const number = String(question?.question_number || '?');
   const equations = Array.isArray(question?.equations) ? question.equations : [];
-  const stem = renderStemWithBoxes(question?.stem || '', mathRenderer, equations);
-  const choices = Array.isArray(question?.choices) ? question.choices : [];
+  const dataUrls = Array.isArray(question?.figure_data_urls) ? question.figure_data_urls : [];
 
+  const figureLayout = resolveFigureLayout(question, stemSizePt);
+  const layoutItems = figureLayout ? figureLayout.items : [];
+
+  const stem = renderStemWithBoxes(question?.stem || '', mathRenderer, equations, {
+    dataUrls,
+    layoutItems,
+    figureLayout,
+  });
+
+  const choices = Array.isArray(question?.choices) ? question.choices : [];
   let choiceHtml = '';
   if (choices.length > 0) {
     const items = choices.map((ch) => renderChoiceItem(ch, mathRenderer, equations));
     const layout = chooseLayout(items);
     choiceHtml = renderChoiceContainer(items, layout);
   }
+
+  const inlineCount = stem.inlineCount || 0;
+  const figureHtml = renderFigures(question, { stemSizePt, skipCount: inlineCount });
 
   const hasFraction = stem.hasFraction || choiceHtml.includes('has-fraction');
   const questionClass = hasFraction ? 'question has-fraction' : 'question';
@@ -196,7 +380,7 @@ export function renderQuestionBlock(question, mathRenderer) {
   return `
     <article class="${questionClass}" style="padding-left:${indent}em;text-indent:-${indent}em;">
       <div class="q-stem"><span class="q-num">${escapeHtml(number)}.</span> ${stem.stemHtml}</div>
-      ${renderFigures(question)}
+      ${figureHtml}
       ${choiceHtml}
     </article>
   `;

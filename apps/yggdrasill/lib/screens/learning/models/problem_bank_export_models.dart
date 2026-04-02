@@ -51,8 +51,8 @@ const String kLearningQuestionModeOriginal = 'original';
 const String kLearningQuestionModeObjective = 'objective';
 const String kLearningQuestionModeSubjective = 'subjective';
 const String kLearningQuestionModeEssay = 'essay';
-const String kLearningRenderConfigVersion =
-    'pb_render_v30e_hide_markers_answer_fix';
+final String kLearningRenderConfigVersion =
+    'pb_render_v30p_bogi_text_down_2click';
 
 class LearningProblemLayoutTuning {
   const LearningProblemLayoutTuning({

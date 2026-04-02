@@ -954,6 +954,65 @@ class LearningProblemBankService {
   }) async {
     if (!hasGateway || questionIds.isEmpty) return {};
     try {
+      final urlResult = await _gatewayPost(
+        '/pb/preview/urls',
+        body: <String, dynamic>{
+          'academyId': academyId,
+          'questionIds': questionIds,
+        },
+      );
+
+      final map = <String, String>{};
+      final missing = <String>[];
+      final previews = urlResult['previews'];
+      if (previews is List) {
+        for (final entry in previews) {
+          if (entry is! Map) continue;
+          final qId = '${entry['questionId'] ?? ''}'.trim();
+          final url = '${entry['imageUrl'] ?? ''}'.trim();
+          if (qId.isNotEmpty && url.isNotEmpty) {
+            map[qId] = url;
+          } else if (qId.isNotEmpty) {
+            missing.add(qId);
+          }
+        }
+      }
+
+      if (missing.isNotEmpty) {
+        final body = <String, dynamic>{
+          'academyId': academyId,
+          'questionIds': missing,
+        };
+        if (layout != null && layout.isNotEmpty) body['layout'] = layout;
+        final genResult = await _gatewayPost(
+          '/pb/preview/questions',
+          body: body,
+        );
+        final genPreviews = genResult['previews'];
+        if (genPreviews is List) {
+          for (final entry in genPreviews) {
+            if (entry is! Map) continue;
+            final qId = '${entry['questionId'] ?? ''}'.trim();
+            final url = '${entry['imageUrl'] ?? ''}'.trim();
+            if (qId.isNotEmpty && url.isNotEmpty) map[qId] = url;
+          }
+        }
+      }
+
+      return map;
+    } catch (e) {
+      // ignore preview fetch errors silently
+      return {};
+    }
+  }
+
+  Future<Map<String, String>> fetchPreviewHtmlBatch({
+    required String academyId,
+    required List<String> questionIds,
+    Map<String, dynamic>? layout,
+  }) async {
+    if (!hasGateway || questionIds.isEmpty) return {};
+    try {
       final body = <String, dynamic>{
         'academyId': academyId,
         'questionIds': questionIds,
@@ -961,24 +1020,52 @@ class LearningProblemBankService {
       if (layout != null && layout.isNotEmpty) body['layout'] = layout;
 
       final result = await _gatewayPost(
-        '/pb/preview/questions',
+        '/pb/preview/html',
         body: body,
       );
 
-      final previews = result['previews'];
-      if (previews is! List) return {};
+      final questions = result['questions'];
+      if (questions is! List) return {};
 
       final map = <String, String>{};
-      for (final entry in previews) {
+      for (final entry in questions) {
         if (entry is! Map) continue;
         final qId = '${entry['questionId'] ?? ''}'.trim();
-        final url = '${entry['imageUrl'] ?? ''}'.trim();
-        if (qId.isNotEmpty && url.isNotEmpty) map[qId] = url;
+        final html = '${entry['html'] ?? ''}'.trim();
+        if (qId.isNotEmpty && html.isNotEmpty) map[qId] = html;
       }
       return map;
     } catch (e) {
-      // ignore preview fetch errors silently
       return {};
+    }
+  }
+
+  Future<String?> fetchDocumentPreviewHtml({
+    required String academyId,
+    required List<String> questionIds,
+    Map<String, dynamic>? renderConfig,
+    String profile = 'naesin',
+    String paper = 'B4',
+    Map<String, dynamic>? baseLayout,
+    int maxQuestionsPerPage = 4,
+  }) async {
+    if (!hasGateway || questionIds.isEmpty) return null;
+    try {
+      final body = <String, dynamic>{
+        'academyId': academyId,
+        'questionIds': questionIds,
+        'mode': 'document',
+        'profile': profile,
+        'paper': paper,
+        'maxQuestionsPerPage': maxQuestionsPerPage,
+      };
+      if (renderConfig != null) body['renderConfig'] = renderConfig;
+      if (baseLayout != null) body['baseLayout'] = baseLayout;
+
+      final result = await _gatewayPost('/pb/preview/html', body: body);
+      return '${result['html'] ?? ''}'.trim();
+    } catch (e) {
+      return null;
     }
   }
 }

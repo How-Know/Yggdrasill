@@ -3,7 +3,12 @@ import http from 'node:http';
 import { createHash } from 'node:crypto';
 import { URL } from 'node:url';
 import { createClient } from '@supabase/supabase-js';
-import { generateQuestionPreviews } from './problem_bank_preview_service.js';
+import {
+  generateQuestionPreviews,
+  getStoredPreviewUrls,
+  buildPreviewHtmlBatch,
+  buildDocumentHtmlForPreview,
+} from './problem_bank_preview_service.js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -1200,6 +1205,7 @@ async function previewQuestions(res, req) {
   const academyId = String(body?.academyId || '').trim();
   const questionIds = Array.isArray(body?.questionIds) ? body.questionIds.map(String) : [];
   const layout = body?.layout || {};
+  const force = body?.force === true;
 
   if (!academyId || questionIds.length === 0) {
     sendJson(res, 400, { ok: false, error: 'academyId and questionIds[] required' });
@@ -1223,10 +1229,116 @@ async function previewQuestions(res, req) {
       academyId,
       layout,
       supabaseClient: supa,
+      force,
     });
     sendJson(res, 200, { ok: true, previews });
   } catch (err) {
     sendJson(res, 500, { ok: false, error: `preview_failed:${compact(err?.message || err)}` });
+  }
+}
+
+async function previewHtml(res, req) {
+  let body;
+  try { body = await readJson(req); } catch (_) {
+    sendJson(res, 400, { ok: false, error: 'invalid_json' });
+    return;
+  }
+
+  const academyId = String(body?.academyId || '').trim();
+  const questionIds = Array.isArray(body?.questionIds) ? body.questionIds.map(String) : [];
+  const layout = body?.layout || {};
+  const mode = String(body?.mode || 'single');
+
+  if (mode === 'document') {
+    try {
+      const { data: rows, error: fetchErr } = await supa
+        .from('pb_questions')
+        .select('*')
+        .eq('academy_id', academyId)
+        .in('id', questionIds);
+      if (fetchErr) {
+        sendJson(res, 500, { ok: false, error: `fetch_failed:${fetchErr.message}` });
+        return;
+      }
+      const html = await buildDocumentHtmlForPreview({
+        questions: rows || [],
+        renderConfig: body?.renderConfig || {},
+        profile: body?.profile || 'naesin',
+        paper: body?.paper || 'B4',
+        baseLayout: body?.baseLayout || {},
+        maxQuestionsPerPage: body?.maxQuestionsPerPage || 4,
+        supabaseClient: supa,
+      });
+      sendJson(res, 200, { ok: true, html });
+    } catch (err) {
+      sendJson(res, 500, { ok: false, error: `html_failed:${compact(err?.message || err)}` });
+    }
+    return;
+  }
+
+  if (!academyId || questionIds.length === 0) {
+    sendJson(res, 400, { ok: false, error: 'academyId and questionIds[] required' });
+    return;
+  }
+
+  const { data: rows, error: fetchErr } = await supa
+    .from('pb_questions')
+    .select('*')
+    .eq('academy_id', academyId)
+    .in('id', questionIds);
+
+  if (fetchErr) {
+    sendJson(res, 500, { ok: false, error: `fetch_failed:${fetchErr.message}` });
+    return;
+  }
+
+  try {
+    const results = await buildPreviewHtmlBatch({
+      questions: rows || [],
+      layout,
+      supabaseClient: supa,
+    });
+    sendJson(res, 200, { ok: true, questions: results });
+  } catch (err) {
+    sendJson(res, 500, { ok: false, error: `html_failed:${compact(err?.message || err)}` });
+  }
+}
+
+async function previewUrls(res, req) {
+  let body;
+  try { body = await readJson(req); } catch (_) {
+    sendJson(res, 400, { ok: false, error: 'invalid_json' });
+    return;
+  }
+
+  const academyId = String(body?.academyId || '').trim();
+  const questionIds = Array.isArray(body?.questionIds) ? body.questionIds.map(String) : [];
+
+  if (!academyId || questionIds.length === 0) {
+    sendJson(res, 400, { ok: false, error: 'academyId and questionIds[] required' });
+    return;
+  }
+
+  const { data: rows, error: fetchErr } = await supa
+    .from('pb_questions')
+    .select('id,stem,choices,equations,figure_refs,meta')
+    .eq('academy_id', academyId)
+    .in('id', questionIds);
+
+  if (fetchErr) {
+    sendJson(res, 500, { ok: false, error: `fetch_failed:${fetchErr.message}` });
+    return;
+  }
+
+  try {
+    const previews = await getStoredPreviewUrls({
+      questions: rows || [],
+      academyId,
+      supabaseClient: supa,
+    });
+    sendJson(res, 200, { ok: true, previews });
+  } catch (err) {
+    sendJson(res, 500, { ok: false, error: `urls_failed:${compact(err?.message || err)}` });
   }
 }
 
@@ -1331,6 +1443,16 @@ async function handler(req, res) {
 
     if (method === 'POST' && url.pathname === '/pb/preview/questions') {
       await previewQuestions(res, req);
+      return;
+    }
+
+    if (method === 'POST' && url.pathname === '/pb/preview/html') {
+      await previewHtml(res, req);
+      return;
+    }
+
+    if (method === 'POST' && url.pathname === '/pb/preview/urls') {
+      await previewUrls(res, req);
       return;
     }
 

@@ -3,6 +3,7 @@ import AdmZip from 'adm-zip';
 import { XMLParser } from 'fast-xml-parser';
 import hePkg from 'he';
 import { createClient } from '@supabase/supabase-js';
+import { generateQuestionPreviews } from './problem_bank_preview_service.js';
 
 const htmlDecode = hePkg.decode;
 
@@ -602,7 +603,8 @@ function normalizeAnswerKeyForQuestion(answerKey, question) {
 
 function renderAnswerEquationTokens(input, equationTokenMap) {
   let out = normalizeWhitespace(
-    String(input || '').replace(/\[\[PB_EQ_[^\]]+\]\]/g, (token) => {
+    String(input || '').replace(/\[\[PB_EQ_[^\]]+\]\] ?/g, (match) => {
+      const token = match.replace(/ $/, '');
       const eq = equationTokenMap.get(token);
       const rendered = normalizeWhitespace(eq?.latex || eq?.raw || '');
       return rendered || '[수식]';
@@ -2243,7 +2245,8 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
     if (!current && questions.length === 0) {
       const firstLineCandidate = stripPotentialWatermarkText(
         normalizeWhitespace(
-          line.replace(/\[\[PB_EQ_[^\]]+\]\]/g, (token) => {
+          line.replace(/\[\[PB_EQ_[^\]]+\]\] ?/g, (match) => {
+            const token = match.replace(/ $/, '');
             const eq = equationMap.get(token);
             const rendered = normalizeWhitespace(eq?.latex || eq?.raw || '');
             return rendered || '[수식]';
@@ -2286,7 +2289,8 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
 
     const cleanedLine = stripPotentialWatermarkText(
       normalizeWhitespace(
-        line.replace(/\[\[PB_EQ_[^\]]+\]\]/g, (token) => {
+        line.replace(/\[\[PB_EQ_[^\]]+\]\] ?/g, (match) => {
+          const token = match.replace(/ $/, '');
           const eq = equationMap.get(token);
           const rendered = normalizeWhitespace(eq?.latex || eq?.raw || '');
           return rendered || '[수식]';
@@ -2900,9 +2904,44 @@ async function processOneJob(job) {
     }
   }
 
+  let previewScreenshotCount = 0;
+  let previewScreenshotError = '';
+  if (questions.length > 0) {
+    try {
+      const { data: allInserted, error: fetchAllErr } = await supa
+        .from('pb_questions')
+        .select('*')
+        .eq('academy_id', job.academy_id)
+        .eq('document_id', job.document_id)
+        .eq('extract_job_id', job.id);
+      if (!fetchAllErr && allInserted && allInserted.length > 0) {
+        const results = await generateQuestionPreviews({
+          questions: allInserted,
+          academyId: job.academy_id,
+          layout: {},
+          supabaseClient: supa,
+        });
+        previewScreenshotCount = results.filter((r) => r.imageUrl).length;
+        console.log(
+          '[pb-extract-worker] preview_screenshots',
+          JSON.stringify({
+            jobId: job.id,
+            total: allInserted.length,
+            generated: previewScreenshotCount,
+          }),
+        );
+      }
+    } catch (err) {
+      previewScreenshotError = compact(err?.message || err);
+      console.warn(
+        '[pb-extract-worker] preview_screenshot_skip',
+        JSON.stringify({ jobId: job.id, message: previewScreenshotError }),
+      );
+    }
+  }
+
   const reviewRequired = stats.lowConfidenceCount > 0;
   const jobStatus = reviewRequired ? 'review_required' : 'completed';
-  // Keep extraction output as draft; manager publish moves it to ready.
   const docStatus = reviewRequired ? 'draft_review_required' : 'draft_ready';
 
   const resultSummary = {

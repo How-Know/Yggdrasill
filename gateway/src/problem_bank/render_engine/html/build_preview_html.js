@@ -22,13 +22,13 @@ function buildPreviewStyles({ stemSizePt, lineHeightPt, choiceGapPt }) {
       color: #111;
       background: #fff;
     }
-    .question {
+    article.question {
       overflow: visible;
       padding-left: 0 !important;
       text-indent: 0 !important;
     }
     .q-num { display: none; }
-    .q-stem { white-space: normal; }
+    .q-stem { white-space: normal; text-indent: 0 !important; }
     .lc-line {
       display: inline;
       line-height: var(--lc-line-normal);
@@ -109,13 +109,22 @@ function buildPreviewStyles({ stemSizePt, lineHeightPt, choiceGapPt }) {
     .bogi-box {
       margin-top: calc(var(--line-height-pt) * 0.8 * 1pt);
       margin-bottom: 8pt;
-      border: 0.15pt solid #333;
+      border: none;
       padding: 10pt 12pt 8pt;
       position: relative;
     }
+    .bogi-box-border {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      display: block;
+      pointer-events: none;
+      z-index: 0;
+    }
     .bogi-title {
       position: absolute;
-      top: -0.55em;
+      top: -0.455em;
       left: 50%;
       transform: translateX(-50%);
       font-size: calc(var(--stem-size-pt) * 1pt);
@@ -127,10 +136,19 @@ function buildPreviewStyles({ stemSizePt, lineHeightPt, choiceGapPt }) {
       display: inline-flex;
       align-items: center;
       gap: 0.15em;
+      z-index: 1;
     }
-    .bogi-bracket { display: block; flex-shrink: 0; }
-    .bogi-title-text { letter-spacing: 0.25em; margin-right: -0.25em; }
-    .bogi-content { padding-top: 4pt; }
+    .bogi-bracket {
+      display: block;
+      flex-shrink: 0;
+    }
+    .bogi-title-text {
+      display: inline-block;
+      transform: translateY(0.04em);
+      letter-spacing: 0.25em;
+      margin-right: -0.25em;
+    }
+    .bogi-content { padding-top: 4pt; position: relative; z-index: 1; }
     .bogi-item {
       display: grid;
       grid-template-columns: auto 1fr;
@@ -140,7 +158,29 @@ function buildPreviewStyles({ stemSizePt, lineHeightPt, choiceGapPt }) {
     .bogi-item-label { white-space: nowrap; font-weight: 400; }
     .bogi-item-text { min-width: 0; }
     .figure-container { margin: 6pt 0; text-align: center; }
-    .figure-img { max-width: 100%; height: auto; }
+    .figure-img { max-width: 100%; height: auto; display: block; }
+    .figure-anchor-center { text-align: center; }
+    .figure-anchor-center .figure-img { margin: 0 auto; }
+    .figure-anchor-left { text-align: left; }
+    .figure-anchor-right { text-align: right; }
+    .figure-anchor-right .figure-img { margin-left: auto; }
+    .figure-anchor-top { text-align: center; }
+    .figure-anchor-top .figure-img { margin: 0 auto; }
+    .figure-pos-inline-right { float: right; margin: 0 0 0.5em 0.5em; clear: right; }
+    .figure-pos-inline-left { float: left; margin: 0 0.5em 0.5em 0; clear: left; }
+    .figure-group-horizontal {
+      display: flex; flex-wrap: wrap; justify-content: center;
+      align-items: flex-start; margin: 6pt 0;
+    }
+    .figure-layout-item { flex-shrink: 0; }
+    .figure-layout-item .figure-img { width: 100%; }
+    .figure-inline-block { display: block; text-align: center; margin: 6pt 0; text-indent: 0; }
+    .figure-inline-block .figure-img { max-width: 100%; height: auto; }
+    .figure-inline-block.figure-anchor-left { text-align: left; }
+    .figure-inline-block.figure-anchor-right { text-align: right; }
+    .figure-inline-block.figure-group-horizontal { display: flex; flex-wrap: wrap; justify-content: center; align-items: flex-start; }
+    .figure-inline-block.figure-group-horizontal .figure-layout-item { flex-shrink: 0; }
+    .figure-inline-block.figure-group-horizontal .figure-layout-item .figure-img { width: 100%; }
     .figure-placeholder {
       margin: 6pt 0; padding: 8pt;
       border: 0.3pt solid #bbb; border-radius: 2pt;
@@ -155,7 +195,7 @@ export function buildPreviewHtml({ question, mathRenderer, fontFaceCss = '', lay
   const lineHeightPt = Number(layout.lineHeightPt || 15.0);
   const choiceGapPt = Number(layout.choiceGapPt || 2);
 
-  const qHtml = renderQuestionBlock(question, mathRenderer);
+  const qHtml = renderQuestionBlock(question, mathRenderer, { stemSizePt });
   const styles = buildPreviewStyles({ stemSizePt, lineHeightPt, choiceGapPt });
 
   return `<!doctype html>

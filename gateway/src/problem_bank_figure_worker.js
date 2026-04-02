@@ -638,9 +638,37 @@ async function processOneJob(job) {
       return true;
     }),
   ];
+  const figureLayoutItems = newAssets.map((asset) => {
+    const key = Number.isFinite(asset.figure_index) && asset.figure_index > 0
+      ? `idx:${asset.figure_index}`
+      : `ord:1`;
+    const isMultiple = newAssets.length >= 2;
+    const widthEm = isMultiple ? 12.0 : 20.0;
+    return {
+      assetKey: key,
+      widthEm,
+      position: 'below-stem',
+      anchor: 'center',
+      offsetXEm: 0,
+      offsetYEm: 0,
+    };
+  });
+  const figureLayoutGroups = [];
+  if (figureLayoutItems.length === 2) {
+    figureLayoutGroups.push({
+      type: 'horizontal',
+      members: figureLayoutItems.map((it) => it.assetKey),
+      gap: 0.5,
+    });
+  }
+  const figureLayout = prevMeta.figure_layout && typeof prevMeta.figure_layout === 'object'
+    ? prevMeta.figure_layout
+    : { version: 1, items: figureLayoutItems, groups: figureLayoutGroups };
+
   const nextMeta = {
     ...prevMeta,
     figure_assets: nextAssets,
+    figure_layout: figureLayout,
     figure_review_required: true,
     figure_last_generated_at: nowIso,
   };

@@ -14,6 +14,7 @@ import { SVG } from 'mathjax-full/js/output/svg.js';
 import { liteAdaptor } from 'mathjax-full/js/adaptors/liteAdaptor.js';
 import { RegisterHTMLHandler } from 'mathjax-full/js/handlers/html.js';
 import { renderPdfWithHtmlEngine } from './problem_bank/render_engine/index.js';
+import { resolveFigureLayout, figureLayoutToWidthPt } from './problem_bank/render_engine/utils/figure_layout.js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -46,7 +47,7 @@ const FONT_PATH_KOPUB_BATANG_LIGHT =
   process.env.PB_PDF_FONT_KOPUB_BATANG_LIGHT_PATH || '';
 const FONT_PATH_QNUM =
   process.env.PB_PDF_FONT_QNUM_PATH || '';
-const RENDER_CONFIG_VERSION = 'pb_render_v30e_hide_markers_answer_fix';
+const RENDER_CONFIG_VERSION = 'pb_render_v30p_bogi_text_down_2click';
 const FIGURE_REGEN_COOLDOWN_MIN = Math.max(
   2,
   Number.parseInt(process.env.PB_EXPORT_REGEN_COOLDOWN_MIN || '12', 10),
@@ -114,6 +115,7 @@ const PROFILE_LAYOUT = {
 };
 
 const STRUCTURAL_MARKER_REGEX = /\[(문단|박스시작|박스끝)\]/g;
+const FIGURE_MARKER_RE_PDF = /\[(?:그림|도형|도표|표)\]/g;
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(MODULE_DIR, '..', '..');
 
@@ -1072,12 +1074,33 @@ async function drawStemBlocks({
   textWidth,
   y,
   mathContext,
+  figureEmbeds = [],
+  figureLayout = null,
 }) {
   let curY = y;
   let cursorX = textStartX;
   let lineHeight = layout.lineHeight;
   let lineUsed = false;
+  let figureMarkerIndex = 0;
   const maxX = textStartX + textWidth;
+
+  const groupMap = new Map();
+  if (figureLayout?.groups) {
+    for (const group of figureLayout.groups) {
+      if (group.type !== 'horizontal') continue;
+      const memberIndices = [];
+      for (const memberKey of group.members) {
+        const idx = figureEmbeds.findIndex((e) => e?.assetKey === memberKey);
+        if (idx >= 0) memberIndices.push(idx);
+      }
+      if (memberIndices.length >= 2) {
+        for (const idx of memberIndices) {
+          groupMap.set(idx, { indices: memberIndices, gap: group.gap ?? 0.5 });
+        }
+      }
+    }
+  }
+
   const flushLine = (force = false) => {
     if (!force && !lineUsed) return;
     curY -= Math.max(layout.lineHeight, lineHeight);
@@ -1085,6 +1108,59 @@ async function drawStemBlocks({
     lineHeight = layout.lineHeight;
     lineUsed = false;
   };
+  const drawSingleInlineFigure = (embedEntry, widthPt, anchor) => {
+    if (!embedEntry?.embed) return;
+    const clampedWidth = Math.min(widthPt, textWidth);
+    const dims = embedEntry.embed.scale(1);
+    const aspect = dims && dims.height > 0 ? dims.height / dims.width : 1;
+    const height = clampedWidth * aspect;
+    flushLine();
+    let drawX = textStartX;
+    if (anchor === 'right') drawX += textWidth - clampedWidth;
+    else if (anchor !== 'left') drawX += (textWidth - clampedWidth) / 2;
+    page.drawImage(embedEntry.embed, {
+      x: drawX,
+      y: curY - height,
+      width: clampedWidth,
+      height,
+    });
+    curY -= height + 4;
+  };
+  const drawGroupInlineFigures = (indices, gapEm) => {
+    const stemSizePt = Number(layout.stemSize || 11);
+    const gapPt = gapEm * stemSizePt;
+    const totalGap = gapPt * (indices.length - 1);
+    const boxes = [];
+    let rowHeight = 0;
+    for (const idx of indices) {
+      const entry = figureEmbeds[idx];
+      if (!entry?.embed) continue;
+      const widthPt = entry.widthPt || stemSizePt * 15;
+      const clampedWidth = Math.min(widthPt, textWidth);
+      const dims = entry.embed.scale(1);
+      const aspect = dims && dims.height > 0 ? dims.height / dims.width : 1;
+      const height = clampedWidth * aspect;
+      if (height > rowHeight) rowHeight = height;
+      boxes.push({ embed: entry.embed, width: clampedWidth, height });
+    }
+    if (boxes.length === 0) return;
+    flushLine();
+    const totalWidth = boxes.reduce((s, b) => s + b.width, 0) + totalGap;
+    let offsetX = textStartX;
+    if (totalWidth < textWidth) offsetX += (textWidth - totalWidth) / 2;
+    for (let i = 0; i < boxes.length; i++) {
+      const b = boxes[i];
+      page.drawImage(b.embed, {
+        x: offsetX,
+        y: curY - b.height,
+        width: b.width,
+        height: b.height,
+      });
+      offsetX += b.width + gapPt;
+    }
+    curY -= rowHeight + 4;
+  };
+  const renderedGroupLeaders = new Set();
   const drawTextFlow = (raw) => {
     const plain = sanitizeTextPreserveLineBreaks(raw);
     if (!plain) return;
@@ -1111,10 +1187,42 @@ async function drawStemBlocks({
       }
     }
   };
+  const drawTextWithFigureMarkers = (raw) => {
+    const segments = raw.split(FIGURE_MARKER_RE_PDF);
+    const markers = raw.match(FIGURE_MARKER_RE_PDF) || [];
+    for (let s = 0; s < segments.length; s++) {
+      if (segments[s]) drawTextFlow(segments[s]);
+      if (s < markers.length) {
+        const idx = figureMarkerIndex;
+        figureMarkerIndex++;
+        const groupInfo = groupMap.get(idx);
+        if (groupInfo && idx === groupInfo.indices[0]) {
+          renderedGroupLeaders.add(idx);
+          drawGroupInlineFigures(groupInfo.indices, groupInfo.gap);
+        } else if (groupInfo) {
+          // skip: already rendered as part of group
+        } else {
+          const entry = figureEmbeds[idx];
+          if (entry?.embed) {
+            const stemSizePt = Number(layout.stemSize || 11);
+            const widthPt = entry.widthPt || stemSizePt * 15;
+            const anchor = entry.anchor || 'center';
+            drawSingleInlineFigure(entry, widthPt, anchor);
+          }
+        }
+      }
+    }
+  };
   const blocks = splitStemMathBlocks(question?.stem || '', question?.equations || []);
+  const hasFigureEmbeds = figureEmbeds.length > 0;
   for (const block of blocks) {
     if (block.type === 'text') {
-      drawTextFlow(block.text || '');
+      if (hasFigureEmbeds && FIGURE_MARKER_RE_PDF.test(block.text || '')) {
+        FIGURE_MARKER_RE_PDF.lastIndex = 0;
+        drawTextWithFigureMarkers(block.text || '');
+      } else {
+        drawTextFlow(block.text || '');
+      }
       continue;
     }
     if (block.type === 'math') {
@@ -1193,7 +1301,7 @@ async function drawStemBlocks({
     }
   }
   flushLine();
-  return curY;
+  return { curY, inlineFigureCount: figureMarkerIndex };
 }
 
 async function toBufferFromStorageData(data) {
@@ -2432,21 +2540,125 @@ function estimateQuestionHeight(question, fonts, layout, contentWidth, startX = 
   const textWidth = Math.max(36, contentWidth - numberLaneWidth - numberGap);
   let h = layout.lineHeight; // number line
   h += estimateStemMathBlocksHeight(question, fonts, layout, textWidth);
-  const figures = resolveFigurePairEntries(question);
-  if (figures.primary?.embed) {
-    if (figures.secondary?.embed) {
-      const gap = 8;
-      const cellWidth = Math.max(24, (textWidth - gap) / 2);
-      const leftBox = estimateFigureRenderBox(question, cellWidth, figures.primary);
-      const rightBox = estimateFigureRenderBox(question, cellWidth, figures.secondary);
-      const pairHeight = Math.max(leftBox?.height || 0, rightBox?.height || 0);
-      h += pairHeight + 8;
-    } else {
-      const figureBox = estimateFigureRenderBox(question, textWidth, figures.primary);
-      if (figureBox) h += figureBox.height + 8;
+  const stemSizePtEst = Number(layout.stemSize || 11);
+  const figLayoutEst = resolveFigureLayout(question, stemSizePtEst);
+  const entriesEst = normalizeFigureEntriesForQuestion(question);
+
+  const stemMarkerCountEst = ((question?.stem || '').match(FIGURE_MARKER_RE_PDF) || []).length;
+  FIGURE_MARKER_RE_PDF.lastIndex = 0;
+  const inlineSkipEst = Math.min(stemMarkerCountEst, entriesEst.length, figLayoutEst ? figLayoutEst.items.length : 0);
+
+  if (inlineSkipEst > 0 && figLayoutEst) {
+    const inlineGroupMap = new Map();
+    if (figLayoutEst.groups) {
+      for (const group of figLayoutEst.groups) {
+        if (group.type !== 'horizontal') continue;
+        const memberIndices = [];
+        for (const memberKey of group.members) {
+          const idx = figLayoutEst.items.findIndex((it) => it.assetKey === memberKey);
+          if (idx >= 0 && idx < inlineSkipEst) memberIndices.push(idx);
+        }
+        if (memberIndices.length >= 2) {
+          for (const idx of memberIndices) {
+            inlineGroupMap.set(idx, { indices: memberIndices });
+          }
+        }
+      }
     }
-  } else if (question.figure_refs.length > 0) {
-    h += 40;
+    const estimatedInlineGroups = new Set();
+    for (let i = 0; i < inlineSkipEst; i++) {
+      const entry = entriesEst[i];
+      const layoutItem = figLayoutEst.items[i];
+      if (!entry?.embed || !layoutItem) continue;
+      const groupInfo = inlineGroupMap.get(i);
+      if (groupInfo) {
+        if (estimatedInlineGroups.has(groupInfo.indices[0])) continue;
+        estimatedInlineGroups.add(groupInfo.indices[0]);
+        let rowHeight = 0;
+        for (const idx of groupInfo.indices) {
+          const ge = entriesEst[idx];
+          const gl = figLayoutEst.items[idx];
+          if (!ge?.embed || !gl) continue;
+          const wp = figureLayoutToWidthPt(gl.widthEm, stemSizePtEst);
+          const cw = Math.min(wp, textWidth);
+          const dims = ge.embed.scale(1);
+          const aspect = dims && dims.height > 0 ? dims.height / dims.width : 1;
+          const fh = cw * aspect;
+          if (fh > rowHeight) rowHeight = fh;
+        }
+        h += rowHeight + 4;
+      } else {
+        const widthPt = figureLayoutToWidthPt(layoutItem.widthEm, stemSizePtEst);
+        const clampedWidth = Math.min(widthPt, textWidth);
+        const dims = entry.embed.scale(1);
+        const aspect = dims && dims.height > 0 ? dims.height / dims.width : 1;
+        h += clampedWidth * aspect + 4;
+      }
+    }
+  }
+
+  const remainingEntries = entriesEst.slice(inlineSkipEst);
+  const remainingLayoutItems = figLayoutEst ? figLayoutEst.items.slice(inlineSkipEst) : [];
+  const skippedKeysEst = new Set(
+    (figLayoutEst ? figLayoutEst.items.slice(0, inlineSkipEst) : []).map((it) => it.assetKey),
+  );
+
+  const embedByKeyEst = new Map();
+  for (const entry of remainingEntries) {
+    if (entry?.embed) embedByKeyEst.set(String(entry.key || ''), entry);
+  }
+  if (figLayoutEst && remainingLayoutItems.length > 0 && embedByKeyEst.size > 0) {
+    const groupedEst = new Set();
+    for (const group of figLayoutEst.groups) {
+      if (group.type !== 'horizontal') continue;
+      const memberEntries = group.members
+        .filter((key) => !skippedKeysEst.has(key))
+        .map((key) => {
+          const entry = embedByKeyEst.get(key);
+          const item = remainingLayoutItems.find((it) => it.assetKey === key);
+          return entry && item ? { entry, item } : null;
+        })
+        .filter(Boolean);
+      if (memberEntries.length < 2) continue;
+      memberEntries.forEach((e) => groupedEst.add(e.item.assetKey));
+      let rowHeight = 0;
+      for (const e of memberEntries) {
+        const widthPt = figureLayoutToWidthPt(e.item.widthEm, stemSizePtEst);
+        const clampedWidth = Math.min(widthPt, textWidth);
+        const dims = e.entry.embed.scale(1);
+        const aspect = dims && dims.height > 0 ? dims.height / dims.width : 1;
+        const fh = clampedWidth * aspect;
+        if (fh > rowHeight) rowHeight = fh;
+      }
+      h += rowHeight + 8;
+    }
+    for (const layoutItem of remainingLayoutItems) {
+      if (groupedEst.has(layoutItem.assetKey)) continue;
+      const entry = embedByKeyEst.get(layoutItem.assetKey);
+      if (!entry?.embed) continue;
+      const widthPt = figureLayoutToWidthPt(layoutItem.widthEm, stemSizePtEst);
+      const clampedWidth = Math.min(widthPt, textWidth);
+      const dims = entry.embed.scale(1);
+      const aspect = dims && dims.height > 0 ? dims.height / dims.width : 1;
+      h += clampedWidth * aspect + 8;
+    }
+  } else {
+    const figures = resolveFigurePairEntries(question);
+    if (figures.primary?.embed) {
+      if (figures.secondary?.embed) {
+        const gap = 8;
+        const cellWidth = Math.max(24, (textWidth - gap) / 2);
+        const leftBox = estimateFigureRenderBox(question, cellWidth, figures.primary);
+        const rightBox = estimateFigureRenderBox(question, cellWidth, figures.secondary);
+        const pairHeight = Math.max(leftBox?.height || 0, rightBox?.height || 0);
+        h += pairHeight + 8;
+      } else {
+        const figureBox = estimateFigureRenderBox(question, textWidth, figures.primary);
+        if (figureBox) h += figureBox.height + 8;
+      }
+    } else if (question.figure_refs.length > 0) {
+      h += 40;
+    }
   }
   if (question.choices.length > 0) {
     const choiceSpacing = Math.max(0, Number(layout.choiceSpacing || 0));
@@ -2600,7 +2812,30 @@ async function drawQuestion({
   });
   curY -= layout.lineHeight;
 
-  curY = await drawStemBlocks({
+  const stemSizePt = Number(layout.stemSize || 11);
+  const allEntries = normalizeFigureEntriesForQuestion(question);
+  const figLayout = resolveFigureLayout(question, stemSizePt);
+
+  const stemFigureEmbeds = [];
+  const stemMarkerCount = ((question?.stem || '').match(FIGURE_MARKER_RE_PDF) || []).length;
+  FIGURE_MARKER_RE_PDF.lastIndex = 0;
+  if (stemMarkerCount > 0 && allEntries.length > 0 && figLayout && figLayout.items.length > 0) {
+    for (let i = 0; i < stemMarkerCount && i < allEntries.length; i++) {
+      const entry = allEntries[i];
+      const layoutItem = figLayout.items[i];
+      const widthPt = layoutItem
+        ? figureLayoutToWidthPt(layoutItem.widthEm, stemSizePt)
+        : stemSizePt * 15;
+      stemFigureEmbeds.push({
+        embed: entry?.embed || null,
+        widthPt,
+        assetKey: layoutItem?.assetKey || '',
+        anchor: layoutItem?.anchor || 'center',
+      });
+    }
+  }
+
+  const stemResult = await drawStemBlocks({
     page,
     question,
     fonts,
@@ -2609,33 +2844,125 @@ async function drawQuestion({
     textWidth,
     y: curY,
     mathContext,
+    figureEmbeds: stemFigureEmbeds,
+    figureLayout: figLayout,
   });
+  curY = stemResult.curY;
+  const inlineSkipCount = stemResult.inlineFigureCount || 0;
 
   if (question.figure_refs.length > 0 || question.figure_embed || question.figure_embeds) {
-    const figures = resolveFigurePairEntries(question);
-    if (figures.primary?.embed) {
-      if (figures.secondary?.embed) {
-        const gap = 8;
-        const cellWidth = Math.max(24, (textWidth - gap) / 2);
-        const leftBox = estimateFigureRenderBox(question, cellWidth, figures.primary);
-        const rightBox = estimateFigureRenderBox(question, cellWidth, figures.secondary);
-        if (leftBox && rightBox) {
-          const rowHeight = Math.max(leftBox.height, rightBox.height);
-          const leftX = textStartX + (cellWidth - leftBox.width) / 2;
-          const rightX = textStartX + cellWidth + gap + (cellWidth - rightBox.width) / 2;
-          page.drawImage(figures.primary.embed, {
-            x: leftX,
-            y: curY - leftBox.height,
-            width: leftBox.width,
-            height: leftBox.height,
+    const entries = allEntries.slice(inlineSkipCount);
+    const embedByKey = new Map();
+    for (const entry of entries) {
+      if (entry?.embed) embedByKey.set(String(entry.key || ''), entry);
+    }
+
+    const remainingLayoutItems = figLayout ? figLayout.items.slice(inlineSkipCount) : [];
+    const skippedKeys = new Set(
+      (figLayout ? figLayout.items.slice(0, inlineSkipCount) : []).map((it) => it.assetKey),
+    );
+
+    if (figLayout && remainingLayoutItems.length > 0 && embedByKey.size > 0) {
+      const grouped = new Set();
+      for (const group of figLayout.groups) {
+        if (group.type !== 'horizontal') continue;
+        const memberEntries = group.members
+          .filter((key) => !skippedKeys.has(key))
+          .map((key) => {
+            const entry = embedByKey.get(key);
+            const item = remainingLayoutItems.find((it) => it.assetKey === key);
+            return entry && item ? { entry, item } : null;
+          })
+          .filter(Boolean);
+        if (memberEntries.length < 2) continue;
+        memberEntries.forEach((e) => grouped.add(e.item.assetKey));
+        const gapPt = (group.gap || 0.5) * stemSizePt;
+        const totalGap = gapPt * (memberEntries.length - 1);
+        let rowHeight = 0;
+        const boxes = memberEntries.map((e) => {
+          const widthPt = figureLayoutToWidthPt(e.item.widthEm, stemSizePt);
+          const clampedWidth = Math.min(widthPt, textWidth);
+          const dims = e.entry.embed.scale(1);
+          const aspect = dims && dims.height > 0 ? dims.height / dims.width : 1;
+          const height = clampedWidth * aspect;
+          if (height > rowHeight) rowHeight = height;
+          return { entry: e.entry, item: e.item, width: clampedWidth, height };
+        });
+        const totalWidth = boxes.reduce((s, b) => s + b.width, 0) + totalGap;
+        let offsetX = textStartX;
+        if (totalWidth < textWidth) offsetX += (textWidth - totalWidth) / 2;
+        for (let i = 0; i < boxes.length; i++) {
+          const b = boxes[i];
+          page.drawImage(b.entry.embed, {
+            x: offsetX,
+            y: curY - b.height,
+            width: b.width,
+            height: b.height,
           });
-          page.drawImage(figures.secondary.embed, {
-            x: rightX,
-            y: curY - rightBox.height,
-            width: rightBox.width,
-            height: rightBox.height,
-          });
-          curY -= rowHeight + 8;
+          offsetX += b.width + gapPt;
+        }
+        curY -= rowHeight + 8;
+      }
+
+      for (const layoutItem of remainingLayoutItems) {
+        if (grouped.has(layoutItem.assetKey)) continue;
+        const entry = embedByKey.get(layoutItem.assetKey);
+        if (!entry?.embed) continue;
+        const widthPt = figureLayoutToWidthPt(layoutItem.widthEm, stemSizePt);
+        const clampedWidth = Math.min(widthPt, textWidth);
+        const dims = entry.embed.scale(1);
+        const aspect = dims && dims.height > 0 ? dims.height / dims.width : 1;
+        const height = clampedWidth * aspect;
+        let drawX = textStartX;
+        if (layoutItem.anchor === 'center') drawX += (textWidth - clampedWidth) / 2;
+        else if (layoutItem.anchor === 'right') drawX += textWidth - clampedWidth;
+        page.drawImage(entry.embed, {
+          x: drawX,
+          y: curY - height,
+          width: clampedWidth,
+          height,
+        });
+        curY -= height + 8;
+      }
+    } else {
+      const figures = resolveFigurePairEntries(question);
+      if (figures.primary?.embed) {
+        if (figures.secondary?.embed) {
+          const gap = 8;
+          const cellWidth = Math.max(24, (textWidth - gap) / 2);
+          const leftBox = estimateFigureRenderBox(question, cellWidth, figures.primary);
+          const rightBox = estimateFigureRenderBox(question, cellWidth, figures.secondary);
+          if (leftBox && rightBox) {
+            const rowHeight = Math.max(leftBox.height, rightBox.height);
+            const leftX = textStartX + (cellWidth - leftBox.width) / 2;
+            const rightX = textStartX + cellWidth + gap + (cellWidth - rightBox.width) / 2;
+            page.drawImage(figures.primary.embed, {
+              x: leftX,
+              y: curY - leftBox.height,
+              width: leftBox.width,
+              height: leftBox.height,
+            });
+            page.drawImage(figures.secondary.embed, {
+              x: rightX,
+              y: curY - rightBox.height,
+              width: rightBox.width,
+              height: rightBox.height,
+            });
+            curY -= rowHeight + 8;
+          } else {
+            const figureBox = estimateFigureRenderBox(question, textWidth, figures.primary);
+            if (figureBox) {
+              const drawX = textStartX + (textWidth - figureBox.width) / 2;
+              const drawY = curY - figureBox.height;
+              page.drawImage(figures.primary.embed, {
+                x: drawX,
+                y: drawY,
+                width: figureBox.width,
+                height: figureBox.height,
+              });
+              curY -= figureBox.height + 8;
+            }
+          }
         } else {
           const figureBox = estimateFigureRenderBox(question, textWidth, figures.primary);
           if (figureBox) {
@@ -2650,31 +2977,18 @@ async function drawQuestion({
             curY -= figureBox.height + 8;
           }
         }
-      } else {
-        const figureBox = estimateFigureRenderBox(question, textWidth, figures.primary);
-        if (figureBox) {
-          const drawX = textStartX + (textWidth - figureBox.width) / 2;
-          const drawY = curY - figureBox.height;
-          page.drawImage(figures.primary.embed, {
-            x: drawX,
-            y: drawY,
-            width: figureBox.width,
-            height: figureBox.height,
-          });
-          curY -= figureBox.height + 8;
-        }
+      } else if (question.figure_refs.length > 0) {
+        page.drawRectangle({
+          x: textStartX,
+          y: curY - 38,
+          width: textWidth,
+          height: 36,
+          borderColor: rgb(0.72, 0.72, 0.72),
+          borderWidth: 0.8,
+          color: rgb(0.97, 0.97, 0.97),
+        });
+        curY -= 42;
       }
-    } else if (question.figure_refs.length > 0) {
-      page.drawRectangle({
-        x: textStartX,
-        y: curY - 38,
-        width: textWidth,
-        height: 36,
-        borderColor: rgb(0.72, 0.72, 0.72),
-        borderWidth: 0.8,
-        color: rgb(0.97, 0.97, 0.97),
-      });
-      curY -= 42;
     }
   }
 
@@ -3139,6 +3453,9 @@ async function renderPdf(job, questions, renderConfig) {
       } else {
         rightColumnCountOnPage += 1;
       }
+    }
+    if (y < pageBottom) {
+      moveToNextColumnOrPage();
     }
   }
 
