@@ -1,5 +1,6 @@
 import { renderQuestionBlock } from './components/question_block.js';
 import { composeLineV1 } from './line_composer.js';
+import { buildSlotPlan } from './slot_plan.js';
 import { escapeHtml, normalizeMathLatex, isFractionLatex } from '../utils/text.js';
 
 const PAPER_MM = {
@@ -77,8 +78,8 @@ function buildStyles({
     .question-stream.question-stream-grid4 {
       columns: auto;
       display: grid;
-      grid-template-columns: 1fr 1fr;
-      grid-template-rows: 1fr 1fr;
+      grid-template-columns: repeat(var(--slot-grid-cols, 2), minmax(0, 1fr));
+      grid-template-rows: repeat(var(--slot-grid-rows, 2), minmax(0, 1fr));
       column-gap: calc(var(--column-gap-pt) * 1pt);
       row-gap: 0;
       height: ${grid4HeightMm}mm;
@@ -87,6 +88,30 @@ function buildStyles({
     .question-stream-grid4 .question-slot {
       min-width: 0;
       overflow: hidden;
+    }
+    .question-stream-grid4 .question-slot.question-slot-hidden {
+      visibility: hidden;
+    }
+    .question-stream-grid4 .question-slot[data-has-anchor="1"] {
+      position: relative;
+      overflow: visible;
+    }
+    .question-stream-grid4 .slot-label-overlay {
+      position: absolute;
+      left: 0;
+      top: var(--slot-label-top, 8pt);
+      z-index: 2;
+      pointer-events: none;
+    }
+    .question-stream-grid4 .slot-label-overlay .mock-section-label {
+      margin: 0;
+      min-height: 20pt;
+      padding-left: 9.35pt;
+      padding-right: 9.35pt;
+      transform: none;
+    }
+    .question-stream-grid4 .slot-anchor-body {
+      padding-top: var(--slot-anchor-pad-top, 46pt);
     }
     .question-stream-grid4 .question-slot-firstline {
       display: block;
@@ -520,9 +545,6 @@ function buildStyles({
       line-height: 1.2;
       letter-spacing: 0.16em;
     }
-    .mock-page-first .mock-section-label {
-      transform: translateY(8pt);
-    }
     .mock-content {
       position: relative;
       padding-top: 0;
@@ -545,11 +567,12 @@ function buildStyles({
       height: calc(var(--line-height-pt) * 0.45 * 1pt);
       line-height: calc(var(--line-height-pt) * 0.45 * 1pt);
     }
+    .mock-page-first .question-stream-grid4 .question-slot[data-slot-row="1"] .question-slot-firstline {
+      height: calc(var(--line-height-pt) * 0.45 * 1pt + 15pt);
+      line-height: calc(var(--line-height-pt) * 0.45 * 1pt + 15pt);
+    }
     .mock-page-first .mock-content .question-stream.question-stream-grid4 {
       row-gap: calc(var(--question-gap-pt) * 0.32 * 1pt);
-    }
-    .mock-page-first .question-stream-grid4 .question-slot.slot-r1c2 {
-      margin-top: -8pt;
     }
     .mock-page:not(.mock-page-first) .mock-header-simple {
       margin-bottom: 8pt;
@@ -564,8 +587,8 @@ function buildStyles({
     .mock-content .question-stream.question-stream-grid4 {
       columns: auto;
       display: grid;
-      grid-template-columns: 1fr 1fr;
-      grid-template-rows: repeat(2, minmax(0, 1fr));
+      grid-template-columns: repeat(var(--slot-grid-cols, 2), minmax(0, 1fr));
+      grid-template-rows: repeat(var(--slot-grid-rows, 2), minmax(0, 1fr));
       column-gap: calc(var(--column-gap-pt) * 1pt);
       row-gap: calc(var(--question-gap-pt) * 0.18 * 1pt);
       height: 100%;
@@ -730,27 +753,72 @@ export function buildDocumentHtml({
 
   const stemSizePt = Number(layout?.stemSizePt || 11.0);
   const allQ = (questions || []).map((q) => renderQuestionBlock(q, mathRenderer, { stemSizePt }));
-  const useFourSplit = columns === 2 && perPage === 4;
-  const GRID4_POS = [
-    { row: 1, col: 1 },
-    { row: 2, col: 1 },
-    { row: 1, col: 2 },
-    { row: 2, col: 2 },
-  ];
-  const renderStreamSection = (chunk, cls) => {
-    if (!useFourSplit) {
+  const renderStreamSection = (chunk, cls, options = {}) => {
+    const pageIndex = Number.isFinite(options?.pageIndex) ? Number(options.pageIndex) : 0;
+    const slotPlan = buildSlotPlan({
+      layoutMode: layout?.layoutMode || 'legacy',
+      layoutColumns: columns,
+      perPage,
+      chunkLength: chunk.length,
+      columnQuestionCounts: layout?.columnQuestionCounts,
+      columnLabelAnchors: layout?.columnLabelAnchors,
+      alignPolicy: layout?.alignPolicy,
+      profile,
+      pageIndex,
+    });
+    if (!slotPlan) {
       return `<section class="${cls}">${chunk.join('')}</section>`;
     }
-    const slots = [];
-    for (let i = 0; i < perPage; i += 1) {
-      const pos = GRID4_POS[i];
-      const one = chunk[i] || '<div class="question-slot-empty">&nbsp;</div>';
-      const slotClass = `question-slot slot-r${pos.row}c${pos.col}`;
-      slots.push(
-        `<div class="${slotClass}" style="grid-row:${pos.row};grid-column:${pos.col}"><div class="question-slot-firstline" aria-hidden="true">&nbsp;</div>${one}</div>`,
-      );
-    }
-    return `<section class="${cls} question-stream-grid4">${slots.join('')}</section>`;
+    const sectionStyle = [
+      `--slot-grid-cols:${slotPlan.columns}`,
+      `--slot-grid-rows:${slotPlan.rowCount}`,
+      `grid-template-columns:repeat(${slotPlan.columns}, minmax(0, 1fr))`,
+      `grid-template-rows:repeat(${slotPlan.rowCount}, minmax(0, 1fr))`,
+    ].join(';');
+    const slots = slotPlan.slots.map((slot) => {
+      const questionHtml = slot.hasQuestion && Number.isFinite(slot.questionOrder)
+        ? (chunk[slot.questionOrder] || '<div class="question-slot-empty">&nbsp;</div>')
+        : '<div class="question-slot-empty">&nbsp;</div>';
+      const slotClasses = [
+        'question-slot',
+        `slot-r${slot.row}c${slot.col}`,
+        slot.isHiddenPlaceholder ? 'question-slot-hidden' : '',
+      ].filter(Boolean).join(' ');
+      const slotStyleParts = [
+        `grid-row:${slot.row}`,
+        `grid-column:${slot.col}`,
+      ];
+      if (slot.anchorLabel) {
+        slotStyleParts.push(`--slot-label-top:${Number(slot.anchorTopPt || 8)}pt`);
+        slotStyleParts.push(`--slot-anchor-pad-top:${Number(slot.anchorPaddingTopPt || 46)}pt`);
+      }
+      const firstLine = slot.isHiddenPlaceholder
+        ? ''
+        : '<div class="question-slot-firstline" aria-hidden="true">&nbsp;</div>';
+      const slotBody = slot.anchorLabel && !slot.isHiddenPlaceholder
+        ? `<div class="slot-label-overlay"><div class="mock-section-label">${escapeHtml(slot.anchorLabel)}</div></div><div class="slot-anchor-body">${firstLine}${questionHtml}</div>`
+        : `${firstLine}${questionHtml}`;
+      return `
+        <div
+          class="${slotClasses}"
+          style="${slotStyleParts.join(';')}"
+          data-slot-row="${slot.row}"
+          data-slot-col="${slot.col}"
+          data-slot-index="${slot.slotIndex}"
+          data-slot-hidden="${slot.isHiddenPlaceholder ? 1 : 0}"
+          data-has-anchor="${slot.anchorLabel ? 1 : 0}"
+          data-row-has-anchor="${slot.rowHasAnchor ? 1 : 0}"
+        >${slotBody}</div>
+      `;
+    });
+    return `
+      <section
+        class="${cls} question-stream-grid4 question-stream-slotgrid"
+        style="${sectionStyle}"
+        data-pair-align="${slotPlan.pairAlignMode}"
+        data-skip-anchor-rows="${slotPlan.skipAnchorRows ? 1 : 0}"
+      >${slots.join('')}</section>
+    `;
   };
   const questionChunks = [];
   if (perPage >= 99 || allQ.length <= perPage) {
@@ -804,16 +872,16 @@ export function buildDocumentHtml({
     };
     questionHtml = `<div class="mock-pages">${questionChunks.map((chunk, idx) => {
       const pageNo = idx + 1;
-      const stream = renderStreamSection(chunk, 'question-stream');
       const pageBreak = idx === 0 ? '' : ' page-break';
       const firstClass = idx === 0 ? ' mock-page-first' : '';
-      const sectionLabel = idx === 0 ? '<div class="mock-section-label">5지선다형</div>' : '';
+      const contentHtml = renderStreamSection(chunk, 'question-stream', {
+        pageIndex: idx,
+      });
       return `
         <section class="mock-page${firstClass}${pageBreak}">
           ${renderMockHeader(pageNo)}
           <div class="mock-main">
-            ${sectionLabel}
-            <div class="mock-content">${stream}</div>
+            <div class="mock-content">${contentHtml}</div>
           </div>
           <div class="mock-footer-row">
             <div></div>
@@ -827,10 +895,14 @@ export function buildDocumentHtml({
       `;
     }).join('')}</div>`;
   } else if (questionChunks.length === 1) {
-    questionHtml = renderStreamSection(questionChunks[0], 'question-stream');
+    questionHtml = renderStreamSection(questionChunks[0], 'question-stream', { pageIndex: 0 });
   } else {
     questionHtml = questionChunks
-      .map((chunk, idx) => renderStreamSection(chunk, idx === 0 ? 'question-stream' : 'question-stream page-break'))
+      .map((chunk, idx) => renderStreamSection(
+        chunk,
+        idx === 0 ? 'question-stream' : 'question-stream page-break',
+        { pageIndex: idx },
+      ))
       .join('');
   }
   const answerSheetHtml = includeAnswerSheet ? renderAnswerSheet(questions, mathRenderer) : '';

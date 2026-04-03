@@ -52,7 +52,7 @@ const String kLearningQuestionModeObjective = 'objective';
 const String kLearningQuestionModeSubjective = 'subjective';
 const String kLearningQuestionModeEssay = 'essay';
 final String kLearningRenderConfigVersion =
-    'pb_render_v31h_mock_template_header5';
+    'pb_render_v32b_slot_anchor_spacing';
 
 class LearningProblemLayoutTuning {
   const LearningProblemLayoutTuning({
@@ -255,6 +255,13 @@ class LearningProblemExportSettings {
       },
       'layoutColumns': layoutColumnCount,
       'maxQuestionsPerPage': maxQuestionsPerPageCount,
+      'layoutMode': 'legacy',
+      'columnQuestionCounts': const <int>[],
+      'columnLabelAnchors': const <Map<String, dynamic>>[],
+      'alignPolicy': const <String, dynamic>{
+        'pairAlignment': 'row',
+        'skipAnchorRows': true,
+      },
       'questionMode': questionModeValue,
       'layoutTuning': layoutTuning.toJson(),
       'figureQuality': figureQuality.toJson(),

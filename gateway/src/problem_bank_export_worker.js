@@ -47,7 +47,7 @@ const FONT_PATH_KOPUB_BATANG_LIGHT =
   process.env.PB_PDF_FONT_KOPUB_BATANG_LIGHT_PATH || '';
 const FONT_PATH_QNUM =
   process.env.PB_PDF_FONT_QNUM_PATH || '';
-const RENDER_CONFIG_VERSION = 'pb_render_v31h_mock_template_header5';
+const RENDER_CONFIG_VERSION = 'pb_render_v32b_slot_anchor_spacing';
 const FIGURE_REGEN_COOLDOWN_MIN = Math.max(
   2,
   Number.parseInt(process.env.PB_EXPORT_REGEN_COOLDOWN_MIN || '12', 10),
@@ -1822,6 +1822,14 @@ function normalizeLayoutColumns(raw) {
   return 1;
 }
 
+function normalizeLayoutMode(raw) {
+  const v = String(raw ?? '').trim().toLowerCase();
+  if (v === 'custom_columns' || v === 'custom-columns' || v === 'custom') {
+    return 'custom_columns';
+  }
+  return 'legacy';
+}
+
 function normalizeMaxQuestionsPerPage(raw, columns) {
   const defaults = columns === 2 ? 8 : 4;
   const parsed = Number.parseInt(String(raw ?? ''), 10);
@@ -1829,6 +1837,63 @@ function normalizeMaxQuestionsPerPage(raw, columns) {
   const allowed = columns === 2 ? [1, 2, 4, 6, 8] : [1, 2, 3, 4];
   if (allowed.includes(parsed)) return parsed;
   return defaults;
+}
+
+function normalizeColumnQuestionCounts(raw, layoutColumns, maxQuestionsPerPage) {
+  if (!Array.isArray(raw)) return [];
+  const targetColumns = Math.max(1, Number(layoutColumns || 1));
+  const counts = raw
+    .slice(0, targetColumns)
+    .map((one) => Number.parseInt(String(one ?? ''), 10))
+    .filter((one) => Number.isFinite(one) && one > 0);
+  if (counts.length !== targetColumns) return [];
+  const total = counts.reduce((sum, one) => sum + one, 0);
+  if (total <= 0) return [];
+  if (Number.isFinite(maxQuestionsPerPage) && maxQuestionsPerPage > 0 && total !== maxQuestionsPerPage) {
+    return [];
+  }
+  return counts;
+}
+
+function normalizeAnchorPage(raw) {
+  const s = String(raw || '').trim().toLowerCase();
+  if (!s || s === 'first' || s === '1') return 'first';
+  if (s === 'all' || s === 'every') return 'all';
+  const n = Number.parseInt(s, 10);
+  if (Number.isFinite(n) && n >= 1) return n;
+  return 'first';
+}
+
+function normalizeColumnLabelAnchors(raw, layoutColumns) {
+  if (!Array.isArray(raw)) return [];
+  const maxColumns = Math.max(1, Number(layoutColumns || 1));
+  const out = [];
+  for (const one of raw) {
+    if (!one || typeof one !== 'object') continue;
+    const columnIndex = Number.parseInt(String(one.columnIndex ?? ''), 10);
+    if (!Number.isFinite(columnIndex) || columnIndex < 0 || columnIndex >= maxColumns) continue;
+    const label = normalizeWhitespace(one.label || one.text || '');
+    if (!label) continue;
+    const topPt = Number(one.topPt);
+    const paddingTopPt = Number(one.paddingTopPt);
+    out.push({
+      columnIndex,
+      label,
+      page: normalizeAnchorPage(one.page),
+      topPt: Number.isFinite(topPt) ? topPt : 8,
+      paddingTopPt: Number.isFinite(paddingTopPt) ? paddingTopPt : 46,
+    });
+  }
+  return out;
+}
+
+function normalizeAlignPolicy(raw) {
+  const src = raw && typeof raw === 'object' ? raw : {};
+  const pairRaw = String(src.pairAlignment || src.pairMode || '').trim().toLowerCase();
+  return {
+    pairAlignment: pairRaw === 'none' ? 'none' : 'row',
+    skipAnchorRows: src.skipAnchorRows !== false,
+  };
 }
 
 function normalizeNumeric(raw, fallback, min, max) {
@@ -1949,6 +2014,17 @@ function buildRenderConfigFromJob(job) {
       '',
     layoutColumns,
   );
+  const layoutMode = normalizeLayoutMode(options.layoutMode || 'legacy');
+  const columnQuestionCounts = normalizeColumnQuestionCounts(
+    options.columnQuestionCounts,
+    layoutColumns,
+    maxQuestionsPerPage,
+  );
+  const columnLabelAnchors = normalizeColumnLabelAnchors(
+    options.columnLabelAnchors,
+    layoutColumns,
+  );
+  const alignPolicy = normalizeAlignPolicy(options.alignPolicy);
   const questionMode = normalizeQuestionMode(
     options.questionMode || options.question_mode || options.mode || 'original',
   );
@@ -1980,6 +2056,10 @@ function buildRenderConfigFromJob(job) {
     includeExplanation: job.include_explanation === true,
     layoutColumns,
     maxQuestionsPerPage,
+    layoutMode,
+    columnQuestionCounts,
+    columnLabelAnchors,
+    alignPolicy,
     questionMode,
     layoutTuning: normalizeLayoutTuning(options.layoutTuning, options),
     figureQuality: normalizeFigureQuality(options.figureQuality, options),
@@ -2012,6 +2092,10 @@ function computeRenderHash(renderConfig) {
     includeExplanation: renderConfig.includeExplanation,
     layoutColumns: renderConfig.layoutColumns,
     maxQuestionsPerPage: renderConfig.maxQuestionsPerPage,
+    layoutMode: renderConfig.layoutMode,
+    columnQuestionCounts: renderConfig.columnQuestionCounts,
+    columnLabelAnchors: renderConfig.columnLabelAnchors,
+    alignPolicy: renderConfig.alignPolicy,
     questionMode: renderConfig.questionMode,
     layoutTuning: renderConfig.layoutTuning,
     figureQuality: renderConfig.figureQuality,

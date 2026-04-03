@@ -166,29 +166,49 @@ async function renderOnce(html) {
         });
       });
 
-      // Sync paired question-slot top spacers in grid4 so q-nums align horizontally
-      document.querySelectorAll('.question-stream-grid4').forEach(function (grid) {
-        var slots = grid.querySelectorAll('.question-slot');
-        var pairs = [[0, 2], [1, 3]];
-        pairs.forEach(function (pair) {
-          var slotA = slots[pair[0]];
-          var slotB = slots[pair[1]];
-          if (!slotA || !slotB) return;
-          var numA = slotA.querySelector('.q-num');
-          var numB = slotB.querySelector('.q-num');
-          if (!numA || !numB) return;
+      // Align slot-pair rows by metadata (anchor rows can be skipped)
+      document.querySelectorAll('.question-stream-slotgrid, .question-stream-grid4').forEach(function (grid) {
+        var pairAlign = String(grid.getAttribute('data-pair-align') || 'row').toLowerCase();
+        if (pairAlign === 'none') return;
+        var skipAnchorRows = String(grid.getAttribute('data-skip-anchor-rows') || '1') !== '0';
+        var slotNodes = Array.from(grid.querySelectorAll('.question-slot'));
+        if (!slotNodes.length) return;
 
-          var topA = numA.getBoundingClientRect().top;
-          var topB = numB.getBoundingClientRect().top;
-          var diff = Math.abs(topA - topB);
-          if (diff < 1) return;
+        var rows = new Map();
+        slotNodes.forEach(function (slot) {
+          var row = Number(slot.getAttribute('data-slot-row') || slot.dataset.slotRow || 0);
+          if (!Number.isFinite(row) || row <= 0) return;
+          var hidden = String(slot.getAttribute('data-slot-hidden') || '0') === '1';
+          if (hidden) return;
+          var num = slot.querySelector('.q-num');
+          if (!num) return;
+          var hasAnchor =
+            String(slot.getAttribute('data-has-anchor') || '0') === '1'
+            || String(slot.getAttribute('data-row-has-anchor') || '0') === '1';
+          if (!rows.has(row)) rows.set(row, { items: [], hasAnchor: false });
+          var bucket = rows.get(row);
+          bucket.items.push({ slot: slot, num: num });
+          bucket.hasAnchor = bucket.hasAnchor || hasAnchor;
+        });
 
-          var target = topA < topB ? slotA : slotB;
-          var spacer = target.querySelector('.question-slot-firstline');
-          if (spacer) {
+        Array.from(rows.keys()).sort(function (a, b) { return a - b; }).forEach(function (rowKey) {
+          var row = rows.get(rowKey);
+          if (!row || !row.items || row.items.length < 2) return;
+          if (skipAnchorRows && row.hasAnchor) return;
+
+          var tops = row.items.map(function (item) {
+            return item.num.getBoundingClientRect().top;
+          });
+          var targetTop = Math.max.apply(null, tops);
+          row.items.forEach(function (item) {
+            var top = item.num.getBoundingClientRect().top;
+            var diff = targetTop - top;
+            if (diff < 1) return;
+            var spacer = item.slot.querySelector('.question-slot-firstline');
+            if (!spacer) return;
             var cur = spacer.getBoundingClientRect().height;
             spacer.style.height = (cur + diff) + 'px';
-          }
+          });
         });
       });
     });

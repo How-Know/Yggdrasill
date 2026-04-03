@@ -10,6 +10,78 @@ function ptToMm(pt) {
   return Number(pt || 0) * 0.3527777778;
 }
 
+function normalizeLayoutMode(raw) {
+  const mode = String(raw || '').trim().toLowerCase();
+  if (mode === 'custom_columns' || mode === 'custom-columns' || mode === 'custom') {
+    return 'custom_columns';
+  }
+  return 'legacy';
+}
+
+function toSafeInt(raw, fallback = 0) {
+  const parsed = Number.parseInt(String(raw ?? ''), 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return parsed;
+}
+
+function normalizeColumnQuestionCounts(raw, layoutColumns, maxQuestionsPerPage) {
+  if (!Array.isArray(raw)) return [];
+  const targetColumns = Math.max(1, toSafeInt(layoutColumns, 1));
+  const counts = raw
+    .slice(0, targetColumns)
+    .map((v) => toSafeInt(v, 0))
+    .filter((v) => v > 0);
+  if (counts.length !== targetColumns) return [];
+  const total = counts.reduce((sum, one) => sum + one, 0);
+  if (total <= 0) return [];
+  if (Number.isFinite(maxQuestionsPerPage) && maxQuestionsPerPage > 0 && total !== maxQuestionsPerPage) {
+    return [];
+  }
+  return counts;
+}
+
+function normalizeAnchorPage(raw) {
+  const v = String(raw || '').trim().toLowerCase();
+  if (!v || v === 'first' || v === '1') return 'first';
+  if (v === 'all' || v === 'every') return 'all';
+  const n = Number.parseInt(v, 10);
+  if (Number.isFinite(n) && n >= 1) return n;
+  return 'first';
+}
+
+function normalizeColumnLabelAnchors(raw, layoutColumns) {
+  if (!Array.isArray(raw)) return [];
+  const maxColumns = Math.max(1, toSafeInt(layoutColumns, 1));
+  const out = [];
+  for (const one of raw) {
+    if (!one || typeof one !== 'object') continue;
+    const columnIndex = toSafeInt(one.columnIndex, -1);
+    if (columnIndex < 0 || columnIndex >= maxColumns) continue;
+    const label = normalizeWhitespace(one.label || one.text || '');
+    if (!label) continue;
+    const topPt = Number(one.topPt);
+    const paddingTopPt = Number(one.paddingTopPt);
+    out.push({
+      columnIndex,
+      label,
+      page: normalizeAnchorPage(one.page),
+      topPt: Number.isFinite(topPt) ? topPt : 8,
+      paddingTopPt: Number.isFinite(paddingTopPt) ? paddingTopPt : 46,
+    });
+  }
+  return out;
+}
+
+function normalizeAlignPolicy(raw) {
+  const src = raw && typeof raw === 'object' ? raw : {};
+  const pairAlignmentRaw = String(src.pairAlignment || src.pairMode || '').trim().toLowerCase();
+  const pairAlignment = pairAlignmentRaw === 'none' ? 'none' : 'row';
+  return {
+    pairAlignment,
+    skipAnchorRows: src.skipAnchorRows !== false,
+  };
+}
+
 function parseSafeBase64(path) {
   const safePath = String(path || '').trim();
   if (!safePath || !fs.existsSync(safePath)) return '';
@@ -110,6 +182,14 @@ function buildHtmlLayout(renderConfig, baseLayout) {
   const stemSizePt = Number(renderConfig?.font?.size || baseLayout.stemSize || 11.0);
   const baseLineHeight = Number(tuning.lineHeight || baseLayout.lineHeight || 15.0);
   const lineHeightPt = Math.round(baseLineHeight * 1.4 * 10) / 10;
+  const layoutColumns = Number(renderConfig?.layoutColumns || 1) === 2 ? 2 : 1;
+  const parsedMaxQuestionsPerPage = Number.parseInt(
+    String(renderConfig?.maxQuestionsPerPage || ''),
+    10,
+  );
+  const maxQuestionsPerPage = Number.isFinite(parsedMaxQuestionsPerPage) && parsedMaxQuestionsPerPage > 0
+    ? parsedMaxQuestionsPerPage
+    : 0;
   return {
     marginMm: Math.max(10, ptToMm(marginPt)),
     stemSizePt,
@@ -118,8 +198,19 @@ function buildHtmlLayout(renderConfig, baseLayout) {
     numberGapPt: Number(tuning.numberGap || 6),
     questionGapPt: Number(tuning.questionGap || baseLayout.questionGap || 30),
     choiceGapPt: Number(tuning.choiceSpacing || 2),
-    layoutColumns: Number(renderConfig?.layoutColumns || 1) === 2 ? 2 : 1,
+    layoutColumns,
     columnGapPt: Number(tuning.columnGap || 18),
+    layoutMode: normalizeLayoutMode(renderConfig?.layoutMode),
+    columnQuestionCounts: normalizeColumnQuestionCounts(
+      renderConfig?.columnQuestionCounts,
+      layoutColumns,
+      maxQuestionsPerPage > 0 ? maxQuestionsPerPage : undefined,
+    ),
+    columnLabelAnchors: normalizeColumnLabelAnchors(
+      renderConfig?.columnLabelAnchors,
+      layoutColumns,
+    ),
+    alignPolicy: normalizeAlignPolicy(renderConfig?.alignPolicy),
   };
 }
 

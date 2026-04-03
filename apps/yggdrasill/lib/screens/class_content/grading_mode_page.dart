@@ -26,6 +26,8 @@ const double _kGradingCardMaxWidth = 396.0;
 const double _kGradingSectionGapTop = 22.0;
 const double _kGradingSectionGapBottom = 18.0;
 const double _kGradingSectionHeaderGap = 12.0;
+/// `숙제 과제` 헤더(Text 20) 한 줄 높이에 맞춘 근사값(레이아웃 분배용)
+const double _kGradingHomeworkSectionTitleHeight = 26.0;
 const EdgeInsets _kGradingPagePadding = EdgeInsets.fromLTRB(24, 0, 24, 24);
 
 typedef GradingGroupTapCallback = Future<void> Function(
@@ -87,56 +89,62 @@ class _GradingModePageState extends State<GradingModePage> {
                 }
                 return LayoutBuilder(
                   builder: (context, constraints) {
-                    final cardLayout = _resolveCardLayout(
+                    final hasHomework = homeworkEntries.isNotEmpty;
+                    final cardLayout = _resolveCardLayoutHorizontal(
                       constraints,
                       MediaQuery.of(context).size.height,
-                      hasSubmittedSection: submittedEntries.isNotEmpty,
-                      hasHomeworkSection: homeworkEntries.isNotEmpty,
+                      hasHomeworkSection: hasHomework,
                     );
-                    return CustomScrollView(
-                      physics: const ClampingScrollPhysics(),
-                      slivers: [
-                        SliverPadding(
-                          padding: _kGradingPagePadding,
-                          sliver: SliverList(
-                            delegate: SliverChildListDelegate(
-                              [
-                                if (submittedEntries.isNotEmpty)
-                                  _buildEntryWrap(
-                                    submittedEntries,
-                                    cardLayout: cardLayout,
-                                    onCardTap: widget.onSubmittedCardTap,
-                                    canTapEntry: (entry) =>
-                                        entry.hasSubmittedChild,
-                                  )
-                                else if (homeworkEntries.isNotEmpty)
-                                  _buildSubmittedEmptyPlaceholder(
-                                    cardLayout: cardLayout,
-                                  ),
-                                if (homeworkEntries.isNotEmpty) ...[
-                                  const SizedBox(
-                                      height: _kGradingSectionGapTop),
-                                  const Divider(
-                                      height: 1, color: Color(0xFF2A3A3A)),
-                                  const SizedBox(
-                                      height: _kGradingSectionGapBottom),
-                                  _buildSectionHeader(
-                                    title: '숙제 과제',
-                                    count: homeworkEntries.length,
-                                  ),
-                                  const SizedBox(
-                                      height: _kGradingSectionHeaderGap),
-                                  _buildEntryWrap(
+                    return Padding(
+                      padding: _kGradingPagePadding,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Expanded(
+                            child: Align(
+                              alignment: Alignment.centerLeft,
+                              child: submittedEntries.isNotEmpty
+                                  ? SizedBox(
+                                      height: cardLayout.height,
+                                      child: _buildHorizontalEntryStrip(
+                                        submittedEntries,
+                                        cardLayout: cardLayout,
+                                        onCardTap: widget.onSubmittedCardTap,
+                                        canTapEntry: (entry) =>
+                                            entry.hasSubmittedChild,
+                                      ),
+                                    )
+                                  : _buildSubmittedEmptyPlaceholder(
+                                      cardLayout: cardLayout,
+                                    ),
+                            ),
+                          ),
+                          if (hasHomework) ...[
+                            const SizedBox(height: _kGradingSectionGapTop),
+                            const Divider(
+                                height: 1, color: Color(0xFF2A3A3A)),
+                            const SizedBox(height: _kGradingSectionGapBottom),
+                            _buildSectionHeader(
+                              title: '숙제 과제',
+                              count: homeworkEntries.length,
+                            ),
+                            const SizedBox(height: _kGradingSectionHeaderGap),
+                            Expanded(
+                              child: Align(
+                                alignment: Alignment.centerLeft,
+                                child: SizedBox(
+                                  height: cardLayout.height,
+                                  child: _buildHorizontalEntryStrip(
                                     homeworkEntries,
                                     cardLayout: cardLayout,
                                     onCardTap: widget.onHomeworkCardTap,
                                   ),
-                                ],
-                              ],
+                                ),
+                              ),
                             ),
-                          ),
-                        ),
-                      ],
+                          ],
+                        ],
+                      ),
                     );
                   },
                 );
@@ -148,43 +156,38 @@ class _GradingModePageState extends State<GradingModePage> {
     );
   }
 
-  _GradingCardLayout _resolveCardLayout(
+  /// 세로 스크롤 없이, 상·하(또는 상단 단독) 카드 줄 높이를 나눈다.
+  _GradingCardLayout _resolveCardLayoutHorizontal(
     BoxConstraints constraints,
     double fallbackViewportHeight, {
-    required bool hasSubmittedSection,
     required bool hasHomeworkSection,
-  }
-  ) {
+  }) {
     final viewportHeight =
         constraints.maxHeight.isFinite && constraints.maxHeight > 0
             ? constraints.maxHeight
             : fallbackViewportHeight;
-    final baseCardHeightByViewport = (viewportHeight * _kGradingCardHeightByViewport)
+    final inner = (viewportHeight - _kGradingPagePadding.vertical)
+        .clamp(_kGradingCardMinHeight, viewportHeight)
+        .toDouble();
+
+    final double rowHeight;
+    if (!hasHomeworkSection) {
+      rowHeight = inner.clamp(_kGradingCardMinHeight, _kGradingCardMaxHeight);
+    } else {
+      final middleOverhead = _kGradingSectionGapTop +
+          1 +
+          _kGradingSectionGapBottom +
+          _kGradingHomeworkSectionTitleHeight +
+          _kGradingSectionHeaderGap;
+      rowHeight = ((inner - middleOverhead) / 2)
+          .clamp(_kGradingCardMinHeight, _kGradingCardMaxHeight)
+          .toDouble();
+    }
+
+    final baseByViewport = (viewportHeight * _kGradingCardHeightByViewport)
         .clamp(_kGradingCardMinHeight, _kGradingCardMaxHeight)
         .toDouble();
-    final sectionCount =
-        (hasSubmittedSection ? 1 : 0) + (hasHomeworkSection ? 1 : 0);
-    final effectiveSectionCount = math.max(1, sectionCount);
-    final sectionOverhead = hasSubmittedSection && hasHomeworkSection
-        ? (_kGradingSectionGapTop +
-            1 +
-            _kGradingSectionGapBottom +
-            24 +
-            _kGradingSectionHeaderGap)
-        : 0.0;
-    final availableForCardRows = (viewportHeight -
-            _kGradingPagePadding.top -
-            _kGradingPagePadding.bottom -
-            sectionOverhead)
-        .clamp(_kGradingCardMinHeight.toDouble(), viewportHeight)
-        .toDouble();
-    final fitCardHeightByViewportSections =
-        (availableForCardRows / effectiveSectionCount)
-            .clamp(_kGradingCardMinHeight, _kGradingCardMaxHeight)
-            .toDouble();
-    final resolvedCardHeight =
-        math.min(baseCardHeightByViewport, fitCardHeightByViewportSections);
-    return _layoutFromCardHeight(resolvedCardHeight);
+    return _layoutFromCardHeight(math.min(baseByViewport, rowHeight));
   }
 
   _GradingCardLayout _layoutFromCardHeight(double cardHeight) {
@@ -288,52 +291,54 @@ class _GradingModePageState extends State<GradingModePage> {
     );
   }
 
-  Widget _buildEntryWrap(
+  Widget _buildHorizontalEntryStrip(
     List<_GradingGroupEntry> entries, {
     required _GradingCardLayout cardLayout,
     GradingGroupTapCallback? onCardTap,
     bool Function(_GradingGroupEntry entry)? canTapEntry,
   }) {
-    return Wrap(
-      alignment: WrapAlignment.start,
-      textDirection: TextDirection.rtl,
-      spacing: cardLayout.spacing,
-      runSpacing: cardLayout.spacing,
-      children: [
-        for (final entry in entries)
-          SizedBox(
-            width: cardLayout.width,
-            height: cardLayout.height,
-            child: _SubmittedHomeworkCard(
-              entry: entry,
-              cardHeight: cardLayout.height,
-              metaHeight: cardLayout.metaHeight,
-              isPendingConfirm: _isEntryPending(entry),
-              isCompleteCheckbox: _isEntryPendingComplete(entry),
-              coverPathFuture: (() {
-                final coverSource = _resolveEntryCoverSource(entry);
-                return _resolveCoverPath(
-                  bookId: coverSource.bookId,
-                  gradeLabel: coverSource.gradeLabel,
-                  flowId: coverSource.disableFlowFallback
-                      ? ''
-                      : (entry.summary.flowId ?? '').trim(),
-                );
-              })(),
-              onTap: onCardTap == null
-                  ? null
-                  : () async {
-                      if (canTapEntry != null && !canTapEntry(entry)) return;
-                      await onCardTap(
-                        entry.studentId,
-                        entry.group,
-                        entry.summary,
-                        entry.children,
-                      );
-                    },
-            ),
+    return ListView.separated(
+      scrollDirection: Axis.horizontal,
+      reverse: true,
+      physics: const BouncingScrollPhysics(),
+      padding: EdgeInsets.zero,
+      itemCount: entries.length,
+      separatorBuilder: (_, __) => SizedBox(width: cardLayout.spacing),
+      itemBuilder: (context, index) {
+        final entry = entries[index];
+        return SizedBox(
+          width: cardLayout.width,
+          height: cardLayout.height,
+          child: _SubmittedHomeworkCard(
+            entry: entry,
+            cardHeight: cardLayout.height,
+            metaHeight: cardLayout.metaHeight,
+            isPendingConfirm: _isEntryPending(entry),
+            isCompleteCheckbox: _isEntryPendingComplete(entry),
+            coverPathFuture: (() {
+              final coverSource = _resolveEntryCoverSource(entry);
+              return _resolveCoverPath(
+                bookId: coverSource.bookId,
+                gradeLabel: coverSource.gradeLabel,
+                flowId: coverSource.disableFlowFallback
+                    ? ''
+                    : (entry.summary.flowId ?? '').trim(),
+              );
+            })(),
+            onTap: onCardTap == null
+                ? null
+                : () async {
+                    if (canTapEntry != null && !canTapEntry(entry)) return;
+                    await onCardTap(
+                      entry.studentId,
+                      entry.group,
+                      entry.summary,
+                      entry.children,
+                    );
+                  },
           ),
-      ],
+        );
+      },
     );
   }
 

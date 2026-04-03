@@ -1021,12 +1021,25 @@ class _AllStudentsViewState extends State<AllStudentsView> {
                                     ),
                                   ),
                                   const SizedBox(width: 15),
-                                  Text(
-                                    ' ${widget.students.length}명',
-                                    style: const TextStyle(
-                                      color: _studentListMutedTextColor,
-                                      fontSize: 22,
-                                    ),
+                                  ValueListenableBuilder<int>(
+                                    valueListenable: DataManager
+                                        .instance.studentPausePeriodsRevision,
+                                    builder: (context, _, __) {
+                                      final activeCount = widget.students
+                                          .where((s) =>
+                                              DataManager.instance
+                                                  .getActivePauseForStudent(
+                                                      s.student.id) ==
+                                              null)
+                                          .length;
+                                      return Text(
+                                        ' $activeCount명',
+                                        style: const TextStyle(
+                                          color: _studentListMutedTextColor,
+                                          fontSize: 22,
+                                        ),
+                                      );
+                                    },
                                   ),
                                 ],
                               ),

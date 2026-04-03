@@ -139,6 +139,14 @@ function normalizeLayoutColumns(raw) {
   return 1;
 }
 
+function normalizeLayoutMode(raw) {
+  const v = String(raw ?? '').trim().toLowerCase();
+  if (v === 'custom_columns' || v === 'custom-columns' || v === 'custom') {
+    return 'custom_columns';
+  }
+  return 'legacy';
+}
+
 function normalizeMaxQuestionsPerPage(raw, columns) {
   const defaults = columns === 2 ? 8 : 4;
   const parsed = Number.parseInt(String(raw ?? ''), 10);
@@ -146,6 +154,63 @@ function normalizeMaxQuestionsPerPage(raw, columns) {
   const allowed = columns === 2 ? [1, 2, 4, 6, 8] : [1, 2, 3, 4];
   if (allowed.includes(parsed)) return parsed;
   return defaults;
+}
+
+function normalizeColumnQuestionCounts(raw, layoutColumns, maxQuestionsPerPage) {
+  if (!Array.isArray(raw)) return [];
+  const targetColumns = Math.max(1, Number(layoutColumns || 1));
+  const counts = raw
+    .slice(0, targetColumns)
+    .map((one) => Number.parseInt(String(one ?? ''), 10))
+    .filter((one) => Number.isFinite(one) && one > 0);
+  if (counts.length !== targetColumns) return [];
+  const total = counts.reduce((sum, one) => sum + one, 0);
+  if (total <= 0) return [];
+  if (Number.isFinite(maxQuestionsPerPage) && maxQuestionsPerPage > 0 && total !== maxQuestionsPerPage) {
+    return [];
+  }
+  return counts;
+}
+
+function normalizeAnchorPage(raw) {
+  const v = String(raw || '').trim().toLowerCase();
+  if (!v || v === 'first' || v === '1') return 'first';
+  if (v === 'all' || v === 'every') return 'all';
+  const n = Number.parseInt(v, 10);
+  if (Number.isFinite(n) && n >= 1) return n;
+  return 'first';
+}
+
+function normalizeColumnLabelAnchors(raw, layoutColumns) {
+  if (!Array.isArray(raw)) return [];
+  const maxColumns = Math.max(1, Number(layoutColumns || 1));
+  const out = [];
+  for (const one of raw) {
+    if (!one || typeof one !== 'object') continue;
+    const columnIndex = Number.parseInt(String(one.columnIndex ?? ''), 10);
+    if (!Number.isFinite(columnIndex) || columnIndex < 0 || columnIndex >= maxColumns) continue;
+    const label = String(one.label || one.text || '').replace(/\s+/g, ' ').trim();
+    if (!label) continue;
+    const topPt = Number.parseFloat(String(one.topPt ?? ''));
+    const paddingTopPt = Number.parseFloat(String(one.paddingTopPt ?? ''));
+    out.push({
+      columnIndex,
+      label,
+      page: normalizeAnchorPage(one.page),
+      topPt: Number.isFinite(topPt) ? topPt : 8,
+      paddingTopPt: Number.isFinite(paddingTopPt) ? paddingTopPt : 46,
+    });
+  }
+  return out;
+}
+
+function normalizeAlignPolicy(raw) {
+  const src = raw && typeof raw === 'object' ? raw : {};
+  const pairRaw = String(src.pairAlignment || src.pairMode || '').trim().toLowerCase();
+  return {
+    pairAlignment: pairRaw === 'none' ? 'none' : 'row',
+    skipAnchorRows: src.skipAnchorRows !== false,
+  };
 }
 
 function normalizeQuestionMode(raw) {
@@ -250,13 +315,10 @@ function normalizeFigureQuality(rawFigureQuality, options = {}) {
   return { targetDpi, minDpi };
 }
 
-const EXPORT_RENDER_CONFIG_VERSION = 'pb_render_v31h_mock_template_header5';
+const EXPORT_RENDER_CONFIG_VERSION = 'pb_render_v32b_slot_anchor_spacing';
 
 function normalizeExportRenderConfig(options, selectedQuestionIds, defaults = {}) {
   const src = options && typeof options === 'object' ? options : {};
-  const requestedRenderConfigVersion = String(
-    src.renderConfigVersion || '',
-  ).trim();
   const layoutColumns = normalizeLayoutColumns(
     src.layoutColumns ||
       src.layout_columns ||
@@ -274,6 +336,17 @@ function normalizeExportRenderConfig(options, selectedQuestionIds, defaults = {}
       '',
     layoutColumns,
   );
+  const layoutMode = normalizeLayoutMode(src.layoutMode || defaults.layoutMode || 'legacy');
+  const columnQuestionCounts = normalizeColumnQuestionCounts(
+    src.columnQuestionCounts,
+    layoutColumns,
+    maxQuestionsPerPage,
+  );
+  const columnLabelAnchors = normalizeColumnLabelAnchors(
+    src.columnLabelAnchors,
+    layoutColumns,
+  );
+  const alignPolicy = normalizeAlignPolicy(src.alignPolicy);
   const questionMode = normalizeQuestionMode(
     src.questionMode || src.question_mode || src.mode || defaults.questionMode,
   );
@@ -292,6 +365,10 @@ function normalizeExportRenderConfig(options, selectedQuestionIds, defaults = {}
     renderConfigVersion: EXPORT_RENDER_CONFIG_VERSION,
     layoutColumns,
     maxQuestionsPerPage,
+    layoutMode,
+    columnQuestionCounts,
+    columnLabelAnchors,
+    alignPolicy,
     questionMode,
     layoutTuning: normalizeLayoutTuning(src.layoutTuning, src),
     figureQuality: normalizeFigureQuality(src.figureQuality, src),
@@ -817,6 +894,10 @@ async function createExportJob(body, res) {
     includeExplanation,
     layoutColumns: renderConfig.layoutColumns,
     maxQuestionsPerPage: renderConfig.maxQuestionsPerPage,
+    layoutMode: renderConfig.layoutMode,
+    columnQuestionCounts: renderConfig.columnQuestionCounts,
+    columnLabelAnchors: renderConfig.columnLabelAnchors,
+    alignPolicy: renderConfig.alignPolicy,
     questionMode: renderConfig.questionMode,
     font: renderConfig.font,
     layoutTuning: renderConfig.layoutTuning,
@@ -836,6 +917,10 @@ async function createExportJob(body, res) {
     includeExplanation,
     layoutColumns: renderConfig.layoutColumns,
     maxQuestionsPerPage: renderConfig.maxQuestionsPerPage,
+    layoutMode: renderConfig.layoutMode,
+    columnQuestionCounts: renderConfig.columnQuestionCounts,
+    columnLabelAnchors: renderConfig.columnLabelAnchors,
+    alignPolicy: renderConfig.alignPolicy,
     questionMode: renderConfig.questionMode,
     layoutTuning: renderConfig.layoutTuning,
     figureQuality: renderConfig.figureQuality,
