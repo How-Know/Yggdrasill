@@ -1,5 +1,9 @@
 import { composeLineV1 } from '../line_composer.js';
-import { escapeHtml } from '../../utils/text.js';
+import {
+  escapeHtml,
+  normalizeMathLatex,
+  isFractionLatex,
+} from '../../utils/text.js';
 
 function visualLength(text) {
   const stripped = text
@@ -19,14 +23,52 @@ function visualLength(text) {
   return len;
 }
 
+function looksLikeNumericMathChoice(text) {
+  const value = String(text || '').trim();
+  if (!value) return false;
+  if (/[가-힣ㄱ-ㅎㅏ-ㅣA-Za-z]/.test(value)) return false;
+  // Pure number or simple numeric expression/parenthesized value.
+  if (/^[()\[\]{}0-9+\-−*/÷×·=<>≤≥≠±%.,:\s]+$/.test(value)) return true;
+  return false;
+}
+
+function wrapMathLine(svg, latex, hasFraction) {
+  const lineProfile = hasFraction ? 'fraction' : 'normal';
+  const mathClass = hasFraction ? 'math-inline fraction' : 'math-inline';
+  return `<span class="lc-line lc-${lineProfile}" data-lc-profile="${lineProfile}">`
+    + `<span class="${mathClass}" data-latex="${escapeHtml(latex)}">${svg}</span>`
+    + '</span>';
+}
+
 export function renderChoiceItem(choice, mathRenderer, equations) {
   const label = String(choice?.label || '').trim() || '-';
   const text = String(choice?.text || '');
-  const rendered = composeLineV1(text, mathRenderer, equations);
+  const forceNumericMath = looksLikeNumericMathChoice(text);
+  // Avoid partial equation-index matches (e.g. "1" in "10") on AI-generated
+  // objective choices by bypassing equation-token slicing for numeric options.
+  const rendered = composeLineV1(
+    text,
+    mathRenderer,
+    forceNumericMath ? [] : equations,
+  );
+  let html = rendered.html;
+  let hasFraction = rendered.hasFraction;
+  if (
+    mathRenderer
+    && !/class="math-inline\b/.test(html)
+    && forceNumericMath
+  ) {
+    const latex = normalizeMathLatex(text);
+    const math = latex ? mathRenderer.renderInline(latex) : { ok: false, svg: '' };
+    if (math.ok && math.svg) {
+      hasFraction = isFractionLatex(latex);
+      html = wrapMathLine(math.svg, latex, hasFraction);
+    }
+  }
   return {
     label,
-    html: rendered.html,
-    hasFraction: rendered.hasFraction,
+    html,
+    hasFraction,
     textLength: visualLength(text),
   };
 }

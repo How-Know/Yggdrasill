@@ -47,7 +47,9 @@ const FONT_PATH_KOPUB_BATANG_LIGHT =
   process.env.PB_PDF_FONT_KOPUB_BATANG_LIGHT_PATH || '';
 const FONT_PATH_QNUM =
   process.env.PB_PDF_FONT_QNUM_PATH || '';
-const RENDER_CONFIG_VERSION = 'pb_render_v32b_slot_anchor_spacing';
+const FONT_PATH_SUBJECT =
+  process.env.PB_PDF_FONT_SUBJECT_PATH || '';
+const RENDER_CONFIG_VERSION = 'pb_render_v32g_anchor_pair_ref';
 const FIGURE_REGEN_COOLDOWN_MIN = Math.max(
   2,
   Number.parseInt(process.env.PB_EXPORT_REGEN_COOLDOWN_MIN || '12', 10),
@@ -78,12 +80,12 @@ const supa =
 const PAPER_SIZE = {
   A4: { width: 595, height: 842 },
   B4: { width: 729, height: 1032 },
-  '8절': { width: 774, height: 1118 },
+  '8\uC808': { width: 774, height: 1118 },
 };
 
 const PROFILE_LAYOUT = {
   naesin: {
-    title: '내신형 시험지',
+    title: '\uB0B4\uC2E0\uD615 \uC2DC\uD5D8\uC9C0',
     margin: 46,
     headerHeight: 38,
     stemSize: 11.3,
@@ -93,7 +95,7 @@ const PROFILE_LAYOUT = {
     choiceIndent: 20,
   },
   csat: {
-    title: '수능형 시험지',
+    title: '\uC218\uB2A5\uD615 \uC2DC\uD5D8\uC9C0',
     margin: 44,
     headerHeight: 36,
     stemSize: 11.0,
@@ -103,7 +105,7 @@ const PROFILE_LAYOUT = {
     choiceIndent: 18,
   },
   mock: {
-    title: '모의고사형 시험지',
+    title: '\uBAA8\uC758\uACE0\uC0AC\uD615 \uC2DC\uD5D8\uC9C0',
     margin: 44,
     headerHeight: 36,
     stemSize: 11.0,
@@ -114,8 +116,8 @@ const PROFILE_LAYOUT = {
   },
 };
 
-const STRUCTURAL_MARKER_REGEX = /\[(문단|박스시작|박스끝)\]/g;
-const FIGURE_MARKER_RE_PDF = /\[(?:그림|도형|도표|표)\]/g;
+const STRUCTURAL_MARKER_REGEX = /\[(\uBB38\uB2E8|\uBC15\uC2A4\uC2DC\uC791|\uBC15\uC2A4\uB05D)\]/g;
+const FIGURE_MARKER_RE_PDF = /\[(?:\uADF8\uB9BC|\uB3C4\uD615|\uB3C4\uD45C|\uD45C)\]/g;
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(MODULE_DIR, '..', '..');
 
@@ -138,7 +140,7 @@ function sleep(ms) {
 
 function normalizeFontFamily(value) {
   const safe = normalizeWhitespace(value || '');
-  if (!safe || safe === '기본') return 'KoPubWorldBatangPro';
+  if (!safe || safe === '\uAE30\uBCF8') return 'KoPubWorldBatangPro';
   return safe;
 }
 
@@ -153,6 +155,18 @@ function pickExistingPath(candidates) {
     if (fs.existsSync(safe)) return safe;
   }
   return '';
+}
+
+function resolveSubjectFontPath() {
+  return pickExistingPath([
+    FONT_PATH_SUBJECT,
+    'C:\\Users\\harry\\Downloads\\apple\uC0B0\uB3CC\uACE0\uB515\uB124\uC6242\\apple\uC0B0\uB3CC\uACE0\uB515\uB124\uC6242\\AppleSDGothicNeoB.ttf',
+    'C:\\Users\\harry\\Downloads\\apple\uC0B0\uB3CC\uACE0\uB515\uB124\uC6242\\apple\uC0B0\uB3CC\uACE0\uB515\uB124\uC6242\\AppleSDGothicNeoH.ttf',
+    'C:\\Users\\harry\\Downloads\\apple\uC0B0\uB3CC\uACE0\uB515\uB124\uC6242\\apple\uC0B0\uB3CC\uACE0\uB515\uB124\uC6242\\AppleSDGothicNeoEB.ttf',
+    'C:\\Users\\harry\\Downloads\\apple\uC0B0\uB3CC\uACE0\uB515\uB124\uC6242\\apple\uC0B0\uB3CC\uACE0\uB515\uB124\uC6242\\AppleSDGothicNeoL.ttf',
+    FONT_PATH_BOLD,
+    FONT_PATH_REGULAR,
+  ]);
 }
 
 function resolveRequestedFontPaths(requestedFamilyRaw) {
@@ -180,7 +194,7 @@ function resolveRequestedFontPaths(requestedFamilyRaw) {
     'assets',
     'fonts',
     'kakao',
-    '카카오작은글씨',
+    '\uCE74\uCE74\uC624\uC791\uC740\uAE00\uC528',
     'TTF',
     'KakaoSmallSans-Regular.ttf',
   );
@@ -190,7 +204,7 @@ function resolveRequestedFontPaths(requestedFamilyRaw) {
     'assets',
     'fonts',
     'kakao',
-    '카카오작은글씨',
+    '\uCE74\uCE74\uC624\uC791\uC740\uAE00\uC528',
     'TTF',
     'KakaoSmallSans-Bold.ttf',
   );
@@ -332,21 +346,21 @@ function normalizeLatexToReadable(value) {
 
   out = out
     .replace(/\{([^{}]+)\}\s*\\over\s*\{([^{}]+)\}/g, '($1)/($2)')
-    .replace(/\\sqrt\s*\{([^{}]+)\}/g, '√($1)')
-    .replace(/\\times\b/g, '×')
-    .replace(/\\cdot\b/g, '·')
-    .replace(/\\div\b/g, '÷')
-    .replace(/\\leq?\b/g, '≤')
-    .replace(/\\geq?\b/g, '≥')
-    .replace(/\\neq\b/g, '≠')
-    .replace(/\\pm\b/g, '±')
-    .replace(/\\mp\b/g, '∓')
-    .replace(/\\infty\b/g, '∞')
-    .replace(/\\pi\b/g, 'π')
-    .replace(/\\theta\b/g, 'θ')
-    .replace(/\\alpha\b/g, 'α')
-    .replace(/\\beta\b/g, 'β')
-    .replace(/\\gamma\b/g, 'γ')
+    .replace(/\\sqrt\s*\{([^{}]+)\}/g, '\u221A($1)')
+    .replace(/\\times\b/g, '\u00D7')
+    .replace(/\\cdot\b/g, '\u00B7')
+    .replace(/\\div\b/g, '\u00F7')
+    .replace(/\\leq?\b/g, '\u2264')
+    .replace(/\\geq?\b/g, '\u2265')
+    .replace(/\\neq\b/g, '\u2260')
+    .replace(/\\pm\b/g, '\u00B1')
+    .replace(/\\mp\b/g, '\u2213')
+    .replace(/\\infty\b/g, '\u221E')
+    .replace(/\\pi\b/g, '\u03C0')
+    .replace(/\\theta\b/g, '\u03B8')
+    .replace(/\\alpha\b/g, '\u03B1')
+    .replace(/\\beta\b/g, '\u03B2')
+    .replace(/\\gamma\b/g, '\u03B3')
     .replace(/\\left\b/g, '')
     .replace(/\\right\b/g, '')
     .replace(/\\mathrm\s*\{([^{}]+)\}/g, '$1')
@@ -377,14 +391,14 @@ function normalizeMathLatex(value) {
     .replace(/^\\\(/, '')
     .replace(/\\\)$/, '')
     .replace(/`+/g, '')
-    .replace(/×/g, '\\times ')
-    .replace(/÷/g, '\\div ')
-    .replace(/·/g, '\\cdot ')
-    .replace(/−/g, '-')
-    .replace(/≤/g, '\\le ')
-    .replace(/≥/g, '\\ge ')
-    .replace(/≠/g, '\\ne ')
-    .replace(/π/g, '\\pi ')
+    .replace(/\u00D7/g, '\\times ')
+    .replace(/\u00F7/g, '\\div ')
+    .replace(/\u00B7/g, '\\cdot ')
+    .replace(/\u2212/g, '-')
+    .replace(/\u2264/g, '\\le ')
+    .replace(/\u2265/g, '\\ge ')
+    .replace(/\u2260/g, '\\ne ')
+    .replace(/\u03C0/g, '\\pi ')
     .replace(/\s+/g, ' ')
     .trim();
   const simpleFraction = out.match(/^([+-]?\d+)\s*\/\s*([+-]?\d+)$/);
@@ -411,7 +425,7 @@ function isSimpleNumericMathLatex(value) {
 }
 
 function isHangulSyllableOrJamo(ch) {
-  return /[가-힣ㄱ-ㅎㅏ-ㅣ]/.test(String(ch || ''));
+  return /[\uAC00-\uD7A3\u3131-\u314E\u314F-\u3163]/.test(String(ch || ''));
 }
 
 function isPunctuationLikeMathText(value) {
@@ -453,7 +467,7 @@ function hasRenderableMathFeature(value) {
   if (!src) return false;
   if (isPunctuationLikeMathText(src)) return false;
   if (/[A-Za-z0-9]/.test(src)) return true;
-  if (/[=<>+\-*/×÷^_]/.test(src)) return true;
+  if (/[=<>+\-*/\u00D7\u00F7\u00B7\u00B1^_]/.test(src)) return true;
   if (/\\[a-zA-Z]+/.test(src)) return true;
   return isFractionLikeLatex(src);
 }
@@ -704,7 +718,7 @@ function splitStemMathBlocks(stem, equations = []) {
   const hasMath = normalizedBlocks.some((b) => b.type === 'math');
   if (hasMath) return normalizedBlocks;
   const fallback = [];
-  const tokenRegex = /[^가-힣\s]+/g;
+  const tokenRegex = /[^?-?\s]+/g;
   let cursor2 = 0;
   let tokenMatch = null;
   while ((tokenMatch = tokenRegex.exec(src)) !== null) {
@@ -777,7 +791,7 @@ function pickChoiceMathLatex(question, choiceText) {
     const candidate = normalizeMathLatex(inline[1]);
     if (candidate) return candidate;
   }
-  const tokenRegex = /[^가-힣\s]+/g;
+  const tokenRegex = /[^?-?\s]+/g;
   const segments = String(choiceText || '').match(tokenRegex) || [];
   const bestToken = segments
     .map((one) => normalizeMathLatex(one))
@@ -1810,15 +1824,15 @@ function normalizeProfile(raw) {
 
 function normalizeQuestionMode(raw) {
   const v = String(raw || '').trim().toLowerCase();
-  if (v === 'objective' || v === '객관식' || v === 'mcq') return 'objective';
-  if (v === 'subjective' || v === '주관식') return 'subjective';
-  if (v === 'essay' || v === '서술형') return 'essay';
+  if (v === 'objective' || v === '\uAC1D\uAD00\uC2DD' || v === 'mcq') return 'objective';
+  if (v === 'subjective' || v === '\uC8FC\uAD00\uC2DD') return 'subjective';
+  if (v === 'essay' || v === '\uC11C\uC220\uD615') return 'essay';
   return 'original';
 }
 
 function normalizeLayoutColumns(raw) {
   const v = String(raw ?? '').trim();
-  if (v === '2' || v === '2단' || v.toLowerCase() === 'two') return 2;
+  if (v === '2' || v === '2\uB2E8' || v.toLowerCase() === 'two') return 2;
   return 1;
 }
 
@@ -1853,6 +1867,43 @@ function normalizeColumnQuestionCounts(raw, layoutColumns, maxQuestionsPerPage) 
     return [];
   }
   return counts;
+}
+
+function normalizePageColumnQuestionCounts(raw, layoutColumns) {
+  if (!Array.isArray(raw)) return [];
+  if (Number(layoutColumns || 1) !== 2) return [];
+  const out = [];
+  for (const one of raw) {
+    if (!one || typeof one !== 'object') continue;
+    const pageIndexRaw = Number.parseInt(
+      String(one.pageIndex ?? one.page ?? one.pageNo ?? one.pageNumber ?? ''),
+      10,
+    );
+    const leftRaw = Number.parseInt(
+      String(one.left ?? one.leftCount ?? one.col1 ?? one.l ?? ''),
+      10,
+    );
+    const rightRaw = Number.parseInt(
+      String(one.right ?? one.rightCount ?? one.col2 ?? one.r ?? ''),
+      10,
+    );
+    if (!Number.isFinite(leftRaw) || !Number.isFinite(rightRaw)) continue;
+    if (leftRaw < 0 || rightRaw < 0) continue;
+    const pageIndex = Number.isFinite(pageIndexRaw)
+      ? Math.max(0, pageIndexRaw - 1)
+      : out.length;
+    if (leftRaw + rightRaw <= 0) continue;
+    out.push({
+      pageIndex: pageIndex + 1,
+      left: leftRaw,
+      right: rightRaw,
+    });
+  }
+  const dedup = new Map();
+  for (const one of out) {
+    dedup.set(one.pageIndex, one);
+  }
+  return [...dedup.values()].sort((a, b) => a.pageIndex - b.pageIndex);
 }
 
 function normalizeAnchorPage(raw) {
@@ -2024,6 +2075,10 @@ function buildRenderConfigFromJob(job) {
     options.columnLabelAnchors,
     layoutColumns,
   );
+  const pageColumnQuestionCounts = normalizePageColumnQuestionCounts(
+    options.pageColumnQuestionCounts || options.pageColumnCounts,
+    layoutColumns,
+  );
   const alignPolicy = normalizeAlignPolicy(options.alignPolicy);
   const questionMode = normalizeQuestionMode(
     options.questionMode || options.question_mode || options.mode || 'original',
@@ -2047,6 +2102,8 @@ function buildRenderConfigFromJob(job) {
           family: '',
           size: 11.3,
         };
+  const subjectTitleText =
+    normalizeWhitespace(options.subjectTitleText || '\uC218\uD559 \uC601\uC5ED') || '\uC218\uD559 \uC601\uC5ED';
   return {
     // Always normalize to current renderer version on worker side.
     renderConfigVersion: RENDER_CONFIG_VERSION,
@@ -2058,6 +2115,7 @@ function buildRenderConfigFromJob(job) {
     maxQuestionsPerPage,
     layoutMode,
     columnQuestionCounts,
+    pageColumnQuestionCounts,
     columnLabelAnchors,
     alignPolicy,
     questionMode,
@@ -2066,6 +2124,7 @@ function buildRenderConfigFromJob(job) {
     selectedQuestionIdsOrdered,
     questionModeByQuestionId,
     font,
+    subjectTitleText,
   };
 }
 
@@ -2094,6 +2153,7 @@ function computeRenderHash(renderConfig) {
     maxQuestionsPerPage: renderConfig.maxQuestionsPerPage,
     layoutMode: renderConfig.layoutMode,
     columnQuestionCounts: renderConfig.columnQuestionCounts,
+    pageColumnQuestionCounts: renderConfig.pageColumnQuestionCounts,
     columnLabelAnchors: renderConfig.columnLabelAnchors,
     alignPolicy: renderConfig.alignPolicy,
     questionMode: renderConfig.questionMode,
@@ -2102,13 +2162,25 @@ function computeRenderHash(renderConfig) {
     selectedQuestionIdsOrdered: renderConfig.selectedQuestionIdsOrdered,
     questionModeByQuestionId: renderConfig.questionModeByQuestionId,
     font: renderConfig.font,
+    subjectTitleText: renderConfig.subjectTitleText,
   };
   const canonical = JSON.stringify(canonicalizeJson(payload));
   return createHash('sha256').update(canonical).digest('hex');
 }
 
 function choiceLabelByIndex(index) {
-  const table = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩'];
+  const table = [
+    '\u2460',
+    '\u2461',
+    '\u2462',
+    '\u2463',
+    '\u2464',
+    '\u2465',
+    '\u2466',
+    '\u2467',
+    '\u2468',
+    '\u2469',
+  ];
   return table[index] || String(index + 1);
 }
 
@@ -2130,7 +2202,7 @@ function normalizeChoiceRows(rawChoices) {
 
 function sanitizeAnswerText(value) {
   return normalizeWhitespace(
-    String(value || '').replace(/^\[?\s*정답\s*\]?\s*[:：]?\s*/i, ''),
+    String(value || '').replace(/^\[?\s*\uC815\uB2F5\s*\]?\s*[:\uFF1A]?\s*/i, ''),
   );
 }
 
@@ -2138,19 +2210,19 @@ function objectiveAnswerToSubjective(value) {
   const src = sanitizeAnswerText(value);
   if (!src) return '';
   return src.replaceAll(
-    /[①②③④⑤⑥⑦⑧⑨⑩]/g,
+    /[\u2460\u2461\u2462\u2463\u2464\u2465\u2466\u2467\u2468\u2469]/g,
     (ch) =>
       ({
-        '①': '1',
-        '②': '2',
-        '③': '3',
-        '④': '4',
-        '⑤': '5',
-        '⑥': '6',
-        '⑦': '7',
-        '⑧': '8',
-        '⑨': '9',
-        '⑩': '10',
+        '\u2460': '1',
+        '\u2461': '2',
+        '\u2462': '3',
+        '\u2463': '4',
+        '\u2464': '5',
+        '\u2465': '6',
+        '\u2466': '7',
+        '\u2467': '8',
+        '\u2468': '9',
+        '\u2469': '10',
       })[ch] || ch,
   );
 }
@@ -2182,14 +2254,14 @@ function looksObjectiveInOriginal(question, originalChoices = null) {
   const choices = Array.isArray(originalChoices)
     ? originalChoices
     : normalizeChoiceRows(question.choices);
-  return choices.length >= 2 || /객관식/.test(String(question.question_type || ''));
+  return choices.length >= 2 || /\uAC1D\uAD00\uC2DD/.test(String(question.question_type || ''));
 }
 
 function originalQuestionModeOf(question, originalChoices = null) {
   const type = String(question.question_type || '').trim();
-  if (/서술/.test(type)) return 'essay';
-  if (/객관식/.test(type)) return 'objective';
-  if (/주관식/.test(type)) return 'subjective';
+  if (/\uC11C\uC220/.test(type)) return 'essay';
+  if (/\uAC1D\uAD00\uC2DD/.test(type)) return 'objective';
+  if (/\uC8FC\uAD00\uC2DD/.test(type)) return 'subjective';
   const allowObjective = question.allow_objective !== false;
   const allowSubjective = question.allow_subjective !== false;
   if (allowObjective && !allowSubjective) return 'objective';
@@ -2204,7 +2276,7 @@ function selectableQuestionModes(question, originalChoices) {
   const originalMode = originalQuestionModeOf(question, originalChoices);
   if (allowObjective || originalMode === 'objective') out.push('objective');
   if (allowSubjective || originalMode === 'subjective') out.push('subjective');
-  if (/서술/.test(String(question.question_type || '')) || originalMode === 'essay') {
+  if (/\uC11C\uC220/.test(String(question.question_type || '')) || originalMode === 'essay') {
     out.push('essay');
   }
   if (out.length === 0) out.push(originalMode);
@@ -2252,7 +2324,7 @@ function applyQuestionModeForQuestion(question, selectedMode, fallbackMode = 'or
       mode,
       question: {
         ...out,
-        question_type: '객관식',
+        question_type: '\uAC1D\uAD00\uC2DD',
         choices: objectiveChoices,
         export_answer: objectiveAnswer,
       },
@@ -2266,7 +2338,10 @@ function applyQuestionModeForQuestion(question, selectedMode, fallbackMode = 'or
       mode,
       question: {
         ...out,
-        question_type: mode === 'essay' ? '서술형' : '주관식',
+        question_type:
+          mode === 'essay'
+            ? '\uC11C\uC220\uD615'
+            : '\uC8FC\uAD00\uC2DD',
         choices: [],
         export_answer: subjectiveAnswer,
       },
@@ -2281,7 +2356,7 @@ function applyQuestionModeForQuestion(question, selectedMode, fallbackMode = 'or
       choices: originalLooksObjective ? originalChoices : [],
       export_answer: originalLooksObjective ? objectiveAnswer : subjectiveAnswer,
       export_mode: originalLooksObjective ? 'objective' : 'subjective',
-      question_type: originalLooksObjective ? '객관식' : '주관식',
+      question_type: originalLooksObjective ? '\uAC1D\uAD00\uC2DD' : '\uC8FC\uAD00\uC2DD',
     },
   };
 }
@@ -2440,7 +2515,8 @@ function estimateChoiceRequiredWidth(choiceText) {
       /\([^()]*\([^()]+\)/.test(latex) ||
       /\[[^\[\]]*\[[^\[\]]+\]/.test(latex));
   const hasLongMath = /\\(?:sqrt|sum|int|overline|lim|log)/.test(latex);
-  const symbolCount = (raw.match(/[=+\-×÷<>^_]/g) || []).length;
+  const symbolCount =
+    (raw.match(/[=+\-<>\u00D7\u00F7\u00B7\u00B1^_]/g) || []).length;
   let width = 30 + visual * 7.2 + symbolCount * 2.4;
   if (hasFraction) width += 22;
   if (hasNestedFraction) width += 42;
@@ -2830,7 +2906,7 @@ function drawHeader({
 }) {
   const size = page.getSize();
   const topY = size.height - layout.margin + 12;
-  page.drawText(`${layout.title} · ${paperLabel}`, {
+  page.drawText(`${layout.title} \u00B7 ${paperLabel}`, {
     x: layout.margin,
     y: topY,
     size: 11,
@@ -2845,7 +2921,7 @@ function drawHeader({
     color: rgb(0.35, 0.35, 0.35),
   });
   if (profile === 'mock') {
-    page.drawText('전국연합학력평가 양식 참고', {
+    page.drawText('\uC804\uAD6D\uC5F0\uD569\uD559\uB825\uD3C9\uAC00 \uD615\uC2DD \uCC38\uACE0', {
       x: layout.margin,
       y: topY - 14,
       size: 9,
@@ -2853,7 +2929,7 @@ function drawHeader({
       color: rgb(0.4, 0.4, 0.4),
     });
   } else if (profile === 'csat') {
-    page.drawText('수능 스타일 레이아웃', {
+    page.drawText('\uC218\uB2A5 \uC2DC\uD5D8\uC9C0 \uB808\uC774\uC544\uC6C3', {
       x: layout.margin,
       y: topY - 14,
       size: 9,
@@ -2861,7 +2937,7 @@ function drawHeader({
       color: rgb(0.4, 0.4, 0.4),
     });
   } else {
-    page.drawText('학교 내신형 레이아웃', {
+    page.drawText('\uD559\uAD50 \uB0B4\uC2E0\uD615 \uB808\uC774\uC544\uC6C3', {
       x: layout.margin,
       y: topY - 14,
       size: 9,
@@ -3193,7 +3269,7 @@ function drawAnswerSheet({ pdfDoc, fonts, layout, questions, paperLabel }) {
   const size = page.getSize();
   const width = size.width - layout.margin * 2;
   let y = size.height - layout.margin - layout.headerHeight;
-  page.drawText('정답지', {
+  page.drawText('\uBE60\uB978 \uC815\uB2F5', {
     x: layout.margin,
     y,
     size: 15,
@@ -3211,7 +3287,7 @@ function drawAnswerSheet({ pdfDoc, fonts, layout, questions, paperLabel }) {
     const yy = y - row * rowHeight;
     if (yy < layout.margin) break;
     const answer = sanitizeAnswerText(questions[i].export_answer || '');
-    const answerText = answer ? compact(answer, 20) : '(미기입)';
+    const answerText = answer ? compact(answer, 20) : '(\uBBF8\uAE30\uC7AC)';
     const label = `${questions[i].question_number || '?'}  ${answerText}`;
     page.drawText(label, {
       x,
@@ -3239,7 +3315,7 @@ function drawExplanationPage({ pdfDoc, fonts, layout, questions, paperLabel }) {
   const size = page.getSize();
   const contentWidth = size.width - layout.margin * 2;
   let y = size.height - layout.margin - layout.headerHeight;
-  page.drawText('해설/검수 메모', {
+  page.drawText('\uD574\uC124/\uAC80\uD1A0 \uBA54\uBAA8', {
     x: layout.margin,
     y,
     size: 15,
@@ -3252,7 +3328,10 @@ function drawExplanationPage({ pdfDoc, fonts, layout, questions, paperLabel }) {
   const textWidth = Math.max(36, contentWidth - numberLaneWidth - numberGap);
   for (const q of questions) {
     const note = sanitizeText(q.reviewer_notes || '');
-    const merged = note.length === 0 ? '(검수 메모 없음)' : note;
+    const merged =
+      note.length === 0
+        ? '(\uAC80\uD1A0 \uBA54\uBAA8 \uC5C6\uC74C)'
+        : note;
     const numberText = `${q.question_number || '?'}`;
     const lines = wrapTextByWidth(merged, fonts.regular, 10.5, textWidth);
     const needed = Math.max(14, lines.length * 14) + 8;
@@ -3413,6 +3492,7 @@ async function renderPdf(job, questions, renderConfig) {
     fontRegularPath: fontPathsHtml.regularPath || '',
     fontBoldPath: fontPathsHtml.boldPath || '',
     qnumFontPath: pickExistingPath([FONT_PATH_QNUM, repoQnumFont]),
+    subjectFontPath: resolveSubjectFontPath(),
     fontSize: configuredFontSize,
     baseLayout,
     supabaseClient: supa,
@@ -3656,6 +3736,8 @@ async function processOneJob(job) {
         modeByQuestionId: rendered.modeByQuestionId || {},
         layoutColumns: rendered.layoutColumns || 1,
         maxQuestionsPerPage: rendered.maxQuestionsPerPage || 0,
+        pageColumnQuestionCounts: rendered.pageColumnQuestionCounts || [],
+        columnLabelAnchors: rendered.columnLabelAnchors || [],
         renderConfigVersion:
           rendered.renderConfigVersion || RENDER_CONFIG_VERSION,
         renderHash,
@@ -3698,6 +3780,8 @@ async function processOneJob(job) {
           modeByQuestionId: rendered.modeByQuestionId || {},
           layoutColumns: rendered.layoutColumns || 1,
           maxQuestionsPerPage: rendered.maxQuestionsPerPage || 0,
+          pageColumnQuestionCounts: rendered.pageColumnQuestionCounts || [],
+          columnLabelAnchors: rendered.columnLabelAnchors || [],
           renderConfigVersion:
             rendered.renderConfigVersion || RENDER_CONFIG_VERSION,
           renderHash,
@@ -3854,3 +3938,5 @@ if (IS_DIRECT_RUN) {
     process.exit(1);
   });
 }
+
+

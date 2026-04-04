@@ -122,8 +122,8 @@ function normalizeSourceTypeCode(raw, fallback = '') {
 
 function normalizePaper(raw) {
   const v = String(raw || '').trim().toUpperCase();
-  if (v === 'A4' || v === 'B4' || v === '8절') return v;
-  if (v === '8K' || v === '8JEOL') return '8절';
+  if (v === 'A4' || v === 'B4' || v === '8\uC808') return v;
+  if (v === '8K' || v === '8JEOL') return '8\uC808';
   return 'A4';
 }
 
@@ -135,7 +135,7 @@ function normalizeNumeric(raw, fallback, min, max) {
 
 function normalizeLayoutColumns(raw) {
   const v = String(raw ?? '').trim();
-  if (v === '2' || v === '2단' || v.toLowerCase() === 'two') return 2;
+  if (v === '2' || v === '2\uB2E8' || v.toLowerCase() === 'two') return 2;
   return 1;
 }
 
@@ -170,6 +170,43 @@ function normalizeColumnQuestionCounts(raw, layoutColumns, maxQuestionsPerPage) 
     return [];
   }
   return counts;
+}
+
+function normalizePageColumnQuestionCounts(raw, layoutColumns) {
+  if (!Array.isArray(raw)) return [];
+  if (Number(layoutColumns || 1) !== 2) return [];
+  const out = [];
+  for (const one of raw) {
+    if (!one || typeof one !== 'object') continue;
+    const pageIndexRaw = Number.parseInt(
+      String(one.pageIndex ?? one.page ?? one.pageNo ?? one.pageNumber ?? ''),
+      10,
+    );
+    const leftRaw = Number.parseInt(
+      String(one.left ?? one.leftCount ?? one.col1 ?? one.l ?? ''),
+      10,
+    );
+    const rightRaw = Number.parseInt(
+      String(one.right ?? one.rightCount ?? one.col2 ?? one.r ?? ''),
+      10,
+    );
+    if (!Number.isFinite(leftRaw) || !Number.isFinite(rightRaw)) continue;
+    if (leftRaw < 0 || rightRaw < 0) continue;
+    const pageIndex = Number.isFinite(pageIndexRaw)
+      ? Math.max(0, pageIndexRaw - 1)
+      : out.length;
+    if (leftRaw + rightRaw <= 0) continue;
+    out.push({
+      pageIndex: pageIndex + 1,
+      left: leftRaw,
+      right: rightRaw,
+    });
+  }
+  const dedup = new Map();
+  for (const one of out) {
+    dedup.set(one.pageIndex, one);
+  }
+  return [...dedup.values()].sort((a, b) => a.pageIndex - b.pageIndex);
 }
 
 function normalizeAnchorPage(raw) {
@@ -215,9 +252,9 @@ function normalizeAlignPolicy(raw) {
 
 function normalizeQuestionMode(raw) {
   const v = String(raw || '').trim().toLowerCase();
-  if (v === 'objective' || v === '객관식' || v === 'mcq') return 'objective';
-  if (v === 'subjective' || v === '주관식') return 'subjective';
-  if (v === 'essay' || v === '서술형') return 'essay';
+  if (v === 'objective' || v === '\uAC1D\uAD00\uC2DD' || v === 'mcq') return 'objective';
+  if (v === 'subjective' || v === '\uC8FC\uAD00\uC2DD') return 'subjective';
+  if (v === 'essay' || v === '\uC11C\uC220\uD615') return 'essay';
   return 'original';
 }
 
@@ -315,7 +352,7 @@ function normalizeFigureQuality(rawFigureQuality, options = {}) {
   return { targetDpi, minDpi };
 }
 
-const EXPORT_RENDER_CONFIG_VERSION = 'pb_render_v32b_slot_anchor_spacing';
+const EXPORT_RENDER_CONFIG_VERSION = 'pb_render_v32g_anchor_pair_ref';
 
 function normalizeExportRenderConfig(options, selectedQuestionIds, defaults = {}) {
   const src = options && typeof options === 'object' ? options : {};
@@ -346,6 +383,10 @@ function normalizeExportRenderConfig(options, selectedQuestionIds, defaults = {}
     src.columnLabelAnchors,
     layoutColumns,
   );
+  const pageColumnQuestionCounts = normalizePageColumnQuestionCounts(
+    src.pageColumnQuestionCounts || src.pageColumnCounts,
+    layoutColumns,
+  );
   const alignPolicy = normalizeAlignPolicy(src.alignPolicy);
   const questionMode = normalizeQuestionMode(
     src.questionMode || src.question_mode || src.mode || defaults.questionMode,
@@ -359,6 +400,10 @@ function normalizeExportRenderConfig(options, selectedQuestionIds, defaults = {}
     selectedQuestionIdsOrdered,
     questionMode,
   );
+  const subjectTitleText =
+    String(src.subjectTitleText || defaults.subjectTitleText || '\uC218\uD559 \uC601\uC5ED')
+      .replace(/\s+/g, ' ')
+      .trim() || '\uC218\uD559 \uC601\uC5ED';
   return {
     // Force server-side renderer to latest stable path even if older app build
     // sends a stale renderConfigVersion.
@@ -367,11 +412,13 @@ function normalizeExportRenderConfig(options, selectedQuestionIds, defaults = {}
     maxQuestionsPerPage,
     layoutMode,
     columnQuestionCounts,
+    pageColumnQuestionCounts,
     columnLabelAnchors,
     alignPolicy,
     questionMode,
     layoutTuning: normalizeLayoutTuning(src.layoutTuning, src),
     figureQuality: normalizeFigureQuality(src.figureQuality, src),
+    subjectTitleText,
     font:
       src.font && typeof src.font === 'object'
         ? {
@@ -896,8 +943,10 @@ async function createExportJob(body, res) {
     maxQuestionsPerPage: renderConfig.maxQuestionsPerPage,
     layoutMode: renderConfig.layoutMode,
     columnQuestionCounts: renderConfig.columnQuestionCounts,
+    pageColumnQuestionCounts: renderConfig.pageColumnQuestionCounts,
     columnLabelAnchors: renderConfig.columnLabelAnchors,
     alignPolicy: renderConfig.alignPolicy,
+    subjectTitleText: renderConfig.subjectTitleText,
     questionMode: renderConfig.questionMode,
     font: renderConfig.font,
     layoutTuning: renderConfig.layoutTuning,
@@ -919,8 +968,10 @@ async function createExportJob(body, res) {
     maxQuestionsPerPage: renderConfig.maxQuestionsPerPage,
     layoutMode: renderConfig.layoutMode,
     columnQuestionCounts: renderConfig.columnQuestionCounts,
+    pageColumnQuestionCounts: renderConfig.pageColumnQuestionCounts,
     columnLabelAnchors: renderConfig.columnLabelAnchors,
     alignPolicy: renderConfig.alignPolicy,
+    subjectTitleText: renderConfig.subjectTitleText,
     questionMode: renderConfig.questionMode,
     layoutTuning: renderConfig.layoutTuning,
     figureQuality: renderConfig.figureQuality,
@@ -1570,3 +1621,5 @@ server.listen(API_PORT, API_HOST, () => {
     }),
   );
 });
+
+

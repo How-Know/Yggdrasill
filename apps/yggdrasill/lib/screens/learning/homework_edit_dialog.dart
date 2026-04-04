@@ -27,12 +27,26 @@ class HomeworkEditDialog extends StatefulWidget {
 }
 
 class _HomeworkEditDialogState extends State<HomeworkEditDialog> {
+  static const List<String> _homeworkTypeValues = <String>[
+    '프린트',
+    '교재',
+    '학습',
+    '테스트',
+  ];
+
   late final TextEditingController _title;
   late final TextEditingController _content;
   late final TextEditingController _page;
   late final TextEditingController _count;
   late String _type;
   late Color _color;
+
+  String _normalizeHomeworkType(String raw) {
+    final t = raw.trim();
+    if (t == '문제집') return '교재';
+    if (_homeworkTypeValues.contains(t)) return t;
+    return '프린트';
+  }
 
   @override
   void initState() {
@@ -43,9 +57,13 @@ class _HomeworkEditDialogState extends State<HomeworkEditDialog> {
     _count = ImeAwareTextEditingController(
         text: widget.initialCount != null ? widget.initialCount.toString() : '');
     final initialType = (widget.initialType ?? '').trim();
-    _type = initialType.isNotEmpty
-        ? initialType
-        : (_inferTypeFromColor(widget.initialColor) ?? '프린트');
+    if (initialType.isNotEmpty) {
+      _type = _normalizeHomeworkType(initialType);
+    } else {
+      _type = _normalizeHomeworkType(
+        _inferTypeFromColor(widget.initialColor) ?? '프린트',
+      );
+    }
     _color = _colorForType(_type);
   }
 
@@ -91,7 +109,7 @@ class _HomeworkEditDialogState extends State<HomeworkEditDialog> {
       case '교재':
         return Colors.green;
       case '문제집':
-        return Colors.amber;
+        return Colors.green;
       case '학습':
         return Colors.purple;
       case '테스트':
@@ -104,7 +122,7 @@ class _HomeworkEditDialogState extends State<HomeworkEditDialog> {
   String? _inferTypeFromColor(Color color) {
     if (color.value == Colors.blue.value) return '프린트';
     if (color.value == Colors.green.value) return '교재';
-    if (color.value == Colors.amber.value) return '문제집';
+    if (color.value == Colors.amber.value) return '교재';
     if (color.value == Colors.purple.value) return '학습';
     if (color.value == Colors.red.value) return '테스트';
     return null;
@@ -137,13 +155,10 @@ class _HomeworkEditDialogState extends State<HomeworkEditDialog> {
           children: [
             const YggDialogSectionHeader(icon: Icons.task_alt, title: '과제 정보'),
             DropdownButtonFormField<String>(
-              value: _type,
-              items: const [
-                DropdownMenuItem(value: '프린트', child: Text('프린트')),
-                DropdownMenuItem(value: '교재', child: Text('교재')),
-                DropdownMenuItem(value: '문제집', child: Text('문제집')),
-                DropdownMenuItem(value: '학습', child: Text('학습')),
-                DropdownMenuItem(value: '테스트', child: Text('테스트')),
+              value: _homeworkTypeValues.contains(_type) ? _type : '프린트',
+              items: [
+                for (final t in _homeworkTypeValues)
+                  DropdownMenuItem<String>(value: t, child: Text(t)),
               ],
               onChanged: (v) => setState(() {
                 _type = v ?? '프린트';

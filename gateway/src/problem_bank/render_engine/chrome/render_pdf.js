@@ -166,7 +166,41 @@ async function renderOnce(html) {
         });
       });
 
-      // Align slot-pair rows by metadata (anchor rows can be skipped)
+      function rectCenterY(rect) {
+        return rect.top + rect.height / 2;
+      }
+
+      // Keep anchor-label geometry consistent with first-page baseline.
+      var baseAnchorGapPx = 16 * (96 / 72);
+      var baseAnchorCenterOffsetPx = 0;
+      (function calibrateAnchorBaselineFromFirstPage() {
+        var firstAnchor = document.querySelector('.mock-page-first .question-slot[data-has-anchor="1"]:not([data-slot-hidden="1"])');
+        if (!firstAnchor) return;
+        var firstLabel = firstAnchor.querySelector('.slot-label-overlay .mock-section-label');
+        var firstNum = firstAnchor.querySelector('.q-num');
+        if (firstLabel && firstNum) {
+          var firstGap = firstNum.getBoundingClientRect().top - firstLabel.getBoundingClientRect().bottom;
+          if (Number.isFinite(firstGap) && firstGap > 0.5) baseAnchorGapPx = firstGap;
+        }
+        var rowNo = Number(firstAnchor.getAttribute('data-slot-row') || firstAnchor.dataset.slotRow || 0);
+        if (!Number.isFinite(rowNo) || rowNo <= 0) return;
+        var grid = firstAnchor.closest('.question-stream-slotgrid, .question-stream-grid4');
+        if (!grid) return;
+        var pairSlot = Array.from(grid.querySelectorAll('.question-slot')).find(function (slot) {
+          if (slot === firstAnchor) return false;
+          if (String(slot.getAttribute('data-slot-hidden') || '0') === '1') return false;
+          var sr = Number(slot.getAttribute('data-slot-row') || slot.dataset.slotRow || 0);
+          if (sr !== rowNo) return false;
+          return Boolean(slot.querySelector('.q-num'));
+        });
+        if (!pairSlot || !firstLabel) return;
+        var pairNum = pairSlot.querySelector('.q-num');
+        if (!pairNum) return;
+        baseAnchorCenterOffsetPx =
+          rectCenterY(firstLabel.getBoundingClientRect()) - rectCenterY(pairNum.getBoundingClientRect());
+      })();
+
+      // Align slot-pair rows by metadata (anchor rows handled by anchor baseline)
       document.querySelectorAll('.question-stream-slotgrid, .question-stream-grid4').forEach(function (grid) {
         var pairAlign = String(grid.getAttribute('data-pair-align') || 'row').toLowerCase();
         if (pairAlign === 'none') return;
@@ -182,18 +216,60 @@ async function renderOnce(html) {
           if (hidden) return;
           var num = slot.querySelector('.q-num');
           if (!num) return;
+          var hasOwnAnchor = String(slot.getAttribute('data-has-anchor') || '0') === '1';
           var hasAnchor =
-            String(slot.getAttribute('data-has-anchor') || '0') === '1'
+            hasOwnAnchor
             || String(slot.getAttribute('data-row-has-anchor') || '0') === '1';
           if (!rows.has(row)) rows.set(row, { items: [], hasAnchor: false });
           var bucket = rows.get(row);
-          bucket.items.push({ slot: slot, num: num });
+          bucket.items.push({ slot: slot, num: num, hasOwnAnchor: hasOwnAnchor });
           bucket.hasAnchor = bucket.hasAnchor || hasAnchor;
         });
 
         Array.from(rows.keys()).sort(function (a, b) { return a - b; }).forEach(function (rowKey) {
           var row = rows.get(rowKey);
           if (!row || !row.items || row.items.length < 2) return;
+
+          if (row.hasAnchor) {
+            var refItems = row.items.filter(function (item) { return !item.hasOwnAnchor; });
+            if (!refItems.length) refItems = row.items;
+            var refTops = refItems.map(function (item) {
+              return item.num.getBoundingClientRect().top;
+            });
+            var refTop = Math.max.apply(null, refTops);
+            var ref = refItems.find(function (item) {
+              return Math.abs(item.num.getBoundingClientRect().top - refTop) < 0.8;
+            }) || refItems[0];
+            var refCenterY = rectCenterY(ref.num.getBoundingClientRect());
+
+            row.items.forEach(function (item) {
+              if (!item.hasOwnAnchor) return;
+              var overlay = item.slot.querySelector('.slot-label-overlay');
+              var label = item.slot.querySelector('.slot-label-overlay .mock-section-label');
+              var spacer = item.slot.querySelector('.question-slot-firstline');
+              if (!overlay || !label || !spacer) return;
+
+              var labelCenterY = rectCenterY(label.getBoundingClientRect());
+              var desiredLabelCenterY = refCenterY + baseAnchorCenterOffsetPx;
+              var deltaY = desiredLabelCenterY - labelCenterY;
+              if (Math.abs(deltaY) > 0.3) {
+                overlay.style.transform = 'translateY(' + deltaY.toFixed(2) + 'px)';
+              }
+
+              var adjustedLabelBottom = label.getBoundingClientRect().bottom;
+              var ownNumTop = item.num.getBoundingClientRect().top;
+              var currentGap = ownNumTop - adjustedLabelBottom;
+              var gapDiff = baseAnchorGapPx - currentGap;
+              if (Math.abs(gapDiff) > 0.8) {
+                var cur = spacer.getBoundingClientRect().height;
+                var next = Math.max(0, cur + gapDiff);
+                spacer.style.height = next + 'px';
+                spacer.style.lineHeight = next + 'px';
+              }
+            });
+            return;
+          }
+
           if (skipAnchorRows && row.hasAnchor) return;
 
           var tops = row.items.map(function (item) {

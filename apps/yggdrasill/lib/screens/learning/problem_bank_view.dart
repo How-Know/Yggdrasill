@@ -14,7 +14,6 @@ import 'models/problem_bank_export_models.dart';
 import 'widgets/problem_bank_bottom_fab_bar.dart';
 import 'widgets/problem_bank_export_options_panel.dart';
 import 'widgets/problem_bank_export_server_preview_dialog.dart';
-import 'widgets/problem_bank_webview_preview_dialog.dart';
 import 'widgets/problem_bank_filter_bar.dart';
 import 'widgets/problem_bank_manager_preview_paper.dart';
 import 'widgets/problem_bank_question_card.dart';
@@ -642,10 +641,13 @@ class _ProblemBankViewState extends State<ProblemBankView> {
 
   void _setExportLayoutColumns(String value) {
     final options = maxQuestionsPerPageOptionsOf(value);
-    final parsed = int.tryParse(_exportSettings.maxQuestionsPerPageLabel);
-    final nextMax = (parsed != null && options.contains(parsed))
-        ? '$parsed'
-        : '${options.last}';
+    final current = _exportSettings.maxQuestionsPerPageLabel.trim();
+    final parsed = int.tryParse(current);
+    final nextMax = (current == '많이')
+        ? '많이'
+        : (parsed != null && options.contains(parsed))
+            ? '$parsed'
+            : '${options.last}';
     setState(() {
       _exportSettings = _exportSettings.copyWith(
         layoutColumnLabel: value,
@@ -719,20 +721,19 @@ class _ProblemBankViewState extends State<ProblemBankView> {
   Future<LearningProblemExportJob?> _ensureCompletedExportForSelection({
     required List<LearningProblemQuestion> selectedQuestions,
     required bool previewOnly,
+    Map<String, dynamic> renderConfigPatch = const <String, dynamic>{},
   }) async {
     final academyId = _academyId;
     if (academyId == null || academyId.isEmpty) return null;
     if (selectedQuestions.isEmpty) return null;
     final renderHash = _buildRenderHashForSelection(selectedQuestions);
-    final renderConfig = _buildRenderConfigForSelection(selectedQuestions);
-    // Always generate a fresh server render for preview so users can
-    // immediately see renderer/layout fixes without stale hash reuse.
-    final reusable = previewOnly
-        ? null
-        : await _service.findReusableCompletedExport(
-            academyId: academyId,
-            renderHash: renderHash,
-          );
+    final renderConfig = <String, dynamic>{
+      ..._buildRenderConfigForSelection(selectedQuestions),
+      ...renderConfigPatch,
+    };
+    // Always generate a fresh server render so preview/PDF never picks
+    // up stale completed jobs from an older renderer process/version.
+    const reusable = null;
     if (reusable != null && reusable.outputUrl.trim().isNotEmpty) {
       if (mounted) {
         setState(() {
@@ -794,44 +795,128 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         context,
         pdfUrl: completed.outputUrl,
         titleText: '서버 PDF 미리보기 (${selected.length}문항)',
+        initialSubjectTitle: '수학 영역',
+        layoutColumns: _exportSettings.layoutColumnCount,
+        maxQuestionsPerPage: _exportSettings.maxQuestionsPerPageCount,
+        totalQuestionCount: selected.length,
+        initialPageColumnQuestionCounts: (() {
+          final dynamic raw =
+              completed.resultSummary['pageColumnQuestionCounts'];
+          final dynamic fallback =
+              completed.options['pageColumnQuestionCounts'];
+          final dynamic src = raw is List ? raw : fallback;
+          if (src is List) {
+            return src
+                .whereType<Map>()
+                .map((e) => e.map(
+                      (key, value) => MapEntry('$key', value),
+                    ))
+                .toList(growable: false);
+          }
+          return const <Map<String, dynamic>>[];
+        })(),
+        initialColumnLabelAnchors: (() {
+          final dynamic raw = completed.resultSummary['columnLabelAnchors'];
+          final dynamic fallback = completed.options['columnLabelAnchors'];
+          final dynamic src = raw is List ? raw : fallback;
+          if (src is List) {
+            return src
+                .whereType<Map>()
+                .map((e) => e.map(
+                      (key, value) => MapEntry('$key', value),
+                    ))
+                .toList(growable: false);
+          }
+          return const <Map<String, dynamic>>[];
+        })(),
+        onRefreshRequested: (request) async {
+          final renderPatch = <String, dynamic>{
+            'subjectTitleText': request.subjectTitleText.trim().isEmpty
+                ? '수학 영역'
+                : request.subjectTitleText.trim(),
+          };
+          if (_exportSettings.layoutColumnCount == 2) {
+            renderPatch['layoutMode'] = 'custom_columns';
+            renderPatch['pageColumnQuestionCounts'] =
+                request.pageColumnQuestionCounts;
+            renderPatch['columnLabelAnchors'] = request.columnLabelAnchors;
+          }
+          final refreshed = await _ensureCompletedExportForSelection(
+            selectedQuestions: selected,
+            previewOnly: true,
+            renderConfigPatch: renderPatch,
+          );
+          if (!mounted || refreshed == null) return null;
+          if (refreshed.status != 'completed' ||
+              refreshed.outputUrl.trim().isEmpty) {
+            final err = refreshed.errorMessage.isNotEmpty
+                ? refreshed.errorMessage
+                : refreshed.errorCode;
+            _showSnack(
+              '미리보기 생성 실패: ${err.isEmpty ? refreshed.status : err}',
+            );
+            return null;
+          }
+          final dynamic raw =
+              refreshed.resultSummary['pageColumnQuestionCounts'];
+          final dynamic fallback =
+              refreshed.options['pageColumnQuestionCounts'];
+          final dynamic src = raw is List ? raw : fallback;
+          final pageCounts = src is List
+              ? src
+                  .whereType<Map>()
+                  .map((e) => e.map((key, value) => MapEntry('$key', value)))
+                  .toList(growable: false)
+              : const <Map<String, dynamic>>[];
+          final dynamic rawAnchors =
+              refreshed.resultSummary['columnLabelAnchors'];
+          final dynamic fallbackAnchors =
+              refreshed.options['columnLabelAnchors'];
+          final dynamic srcAnchors =
+              rawAnchors is List ? rawAnchors : fallbackAnchors;
+          final anchorRows = srcAnchors is List
+              ? srcAnchors
+                  .whereType<Map>()
+                  .map((e) => e.map((key, value) => MapEntry('$key', value)))
+                  .toList(growable: false)
+              : const <Map<String, dynamic>>[];
+          return ProblemBankPreviewRefreshResult(
+            pdfUrl: refreshed.outputUrl,
+            pageColumnQuestionCounts: pageCounts,
+            columnLabelAnchors: anchorRows,
+          );
+        },
+        onGeneratePdfRequested: (request) async {
+          final renderPatch = <String, dynamic>{
+            'subjectTitleText': request.subjectTitleText.trim().isEmpty
+                ? '수학 영역'
+                : request.subjectTitleText.trim(),
+          };
+          if (_exportSettings.layoutColumnCount == 2) {
+            renderPatch['layoutMode'] = 'custom_columns';
+            renderPatch['pageColumnQuestionCounts'] =
+                request.pageColumnQuestionCounts;
+            renderPatch['columnLabelAnchors'] = request.columnLabelAnchors;
+          }
+          final completedPdf = await _ensureCompletedExportForSelection(
+            selectedQuestions: selected,
+            previewOnly: false,
+            renderConfigPatch: renderPatch,
+          );
+          if (!mounted || completedPdf == null) return;
+          if (completedPdf.status != 'completed' ||
+              completedPdf.outputUrl.trim().isEmpty) {
+            final err = completedPdf.errorMessage.isNotEmpty
+                ? completedPdf.errorMessage
+                : completedPdf.errorCode;
+            _showSnack('PDF 생성 실패: ${err.isEmpty ? completedPdf.status : err}');
+            return;
+          }
+          await _saveCompletedExportToLocal(completedPdf);
+        },
       );
     } catch (e) {
       _showSnack('서버 미리보기 실패: $e');
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isExporting = false;
-        });
-      }
-    }
-  }
-
-  Future<void> _createExportJob() async {
-    final selected = _selectedQuestions;
-    if (selected.isEmpty) {
-      _showSnack('PDF 생성할 문항을 먼저 선택해주세요.');
-      return;
-    }
-    if (_isExporting || _isSavingExportLocally) return;
-    setState(() {
-      _isExporting = true;
-    });
-    try {
-      final completed = await _ensureCompletedExportForSelection(
-        selectedQuestions: selected,
-        previewOnly: false,
-      );
-      if (completed == null) return;
-      if (completed.status != 'completed') {
-        final err = completed.errorMessage.isNotEmpty
-            ? completed.errorMessage
-            : completed.errorCode;
-        _showSnack('PDF 생성 실패: ${err.isEmpty ? completed.status : err}');
-        return;
-      }
-      await _saveCompletedExportToLocal(completed);
-    } catch (e) {
-      _showSnack('PDF 생성 실패: $e');
     } finally {
       if (mounted) {
         setState(() {
@@ -1347,16 +1432,15 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                   right: 0,
                   bottom: 16,
                   child: IgnorePointer(
-                    ignoring: false,
-                    child: ProblemBankBottomFabBar(
-                    selectedCount: _selectedQuestionIds.length,
-                    isBusy: exportBusy,
-                    onSelectAll: _selectAllQuestions,
-                    onClearSelection: _clearQuestionSelection,
-                    onPreview: _openExportLayoutPreviewDialog,
-                    onGeneratePdf: _createExportJob,
-                    onCreatePlaceholder: _showCreatePlaceholder,
-                  )),
+                      ignoring: false,
+                      child: ProblemBankBottomFabBar(
+                        selectedCount: _selectedQuestionIds.length,
+                        isBusy: exportBusy,
+                        onSelectAll: _selectAllQuestions,
+                        onClearSelection: _clearQuestionSelection,
+                        onPreview: _openExportLayoutPreviewDialog,
+                        onCreatePlaceholder: _showCreatePlaceholder,
+                      )),
                 ),
               ],
             ),

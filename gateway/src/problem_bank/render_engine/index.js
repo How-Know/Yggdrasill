@@ -40,6 +40,33 @@ function normalizeColumnQuestionCounts(raw, layoutColumns, maxQuestionsPerPage) 
   return counts;
 }
 
+function normalizePageColumnQuestionCounts(raw, layoutColumns) {
+  if (!Array.isArray(raw)) return [];
+  if (toSafeInt(layoutColumns, 1) !== 2) return [];
+  const out = [];
+  for (const one of raw) {
+    if (!one || typeof one !== 'object') continue;
+    const pageRaw = toSafeInt(
+      one.pageIndex ?? one.page ?? one.pageNo ?? one.pageNumber,
+      out.length + 1,
+    );
+    const left = toSafeInt(one.left ?? one.leftCount ?? one.col1 ?? one.l, -1);
+    const right = toSafeInt(one.right ?? one.rightCount ?? one.col2 ?? one.r, -1);
+    if (left < 0 || right < 0) continue;
+    if (left + right <= 0) continue;
+    out.push({
+      pageIndex: Math.max(1, pageRaw),
+      left,
+      right,
+    });
+  }
+  const dedup = new Map();
+  for (const one of out) {
+    dedup.set(one.pageIndex, one);
+  }
+  return [...dedup.values()].sort((a, b) => a.pageIndex - b.pageIndex);
+}
+
 function normalizeAnchorPage(raw) {
   const v = String(raw || '').trim().toLowerCase();
   if (!v || v === 'first' || v === '1') return 'first';
@@ -101,10 +128,11 @@ function fontFormatForPath(filePath) {
   return { mime: 'font/ttf', format: 'truetype' };
 }
 
-function buildFontFaceCss({ regularPath, boldPath, qnumFontPath }) {
+function buildFontFaceCss({ regularPath, boldPath, qnumFontPath, subjectFontPath }) {
   const regularB64 = parseSafeBase64(regularPath);
   const boldB64 = parseSafeBase64(boldPath);
   const qnumB64 = parseSafeBase64(qnumFontPath);
+  const subjectB64 = parseSafeBase64(subjectFontPath);
   const chunks = [];
   if (regularB64) {
     const f = fontFormatForPath(regularPath);
@@ -151,6 +179,18 @@ function buildFontFaceCss({ regularPath, boldPath, qnumFontPath }) {
       }
     `);
   }
+  if (subjectB64) {
+    const f = fontFormatForPath(subjectFontPath);
+    chunks.push(`
+      @font-face {
+        font-family: "YggSubject";
+        src: url(data:${f.mime};base64,${subjectB64}) format("${f.format}");
+        font-weight: 700;
+        font-style: normal;
+        font-display: swap;
+      }
+    `);
+  }
   return chunks.join('\n');
 }
 
@@ -190,6 +230,7 @@ function buildHtmlLayout(renderConfig, baseLayout) {
   const maxQuestionsPerPage = Number.isFinite(parsedMaxQuestionsPerPage) && parsedMaxQuestionsPerPage > 0
     ? parsedMaxQuestionsPerPage
     : 0;
+  const subjectTitleText = normalizeWhitespace(renderConfig?.subjectTitleText || '수학 영역') || '수학 영역';
   return {
     marginMm: Math.max(10, ptToMm(marginPt)),
     stemSizePt,
@@ -206,11 +247,16 @@ function buildHtmlLayout(renderConfig, baseLayout) {
       layoutColumns,
       maxQuestionsPerPage > 0 ? maxQuestionsPerPage : undefined,
     ),
+    pageColumnQuestionCounts: normalizePageColumnQuestionCounts(
+      renderConfig?.pageColumnQuestionCounts,
+      layoutColumns,
+    ),
     columnLabelAnchors: normalizeColumnLabelAnchors(
       renderConfig?.columnLabelAnchors,
       layoutColumns,
     ),
     alignPolicy: normalizeAlignPolicy(renderConfig?.alignPolicy),
+    subjectTitleText,
   };
 }
 
@@ -276,6 +322,7 @@ export async function renderPdfWithHtmlEngine({
   fontRegularPath,
   fontBoldPath,
   qnumFontPath,
+  subjectFontPath,
   fontSize,
   baseLayout,
   supabaseClient,
@@ -284,6 +331,7 @@ export async function renderPdfWithHtmlEngine({
   const htmlQuestions = (questions || []).map(normalizeQuestionForHtml);
   const figureStats = await hydrateFiguresForHtml(htmlQuestions, supabaseClient);
   const layout = buildHtmlLayout(renderConfig, baseLayout || {});
+  const layoutMeta = {};
   const html = buildDocumentHtml({
     profile,
     paper,
@@ -296,8 +344,10 @@ export async function renderPdfWithHtmlEngine({
       regularPath: fontRegularPath,
       boldPath: fontBoldPath,
       qnumFontPath: qnumFontPath || '',
+      subjectFontPath: subjectFontPath || '',
     }),
     maxQuestionsPerPage: maxQuestionsPerPage || 99,
+    layoutMeta,
   });
   const rendered = await renderHtmlToPdfBuffer(html);
   return {
@@ -326,6 +376,12 @@ export async function renderPdfWithHtmlEngine({
       regenerationQueuedCount: 0,
       effectiveDpiByQuestionId: {},
     },
+    columnLabelAnchors: Array.isArray(layout?.columnLabelAnchors)
+      ? layout.columnLabelAnchors
+      : [],
+    pageColumnQuestionCounts: Array.isArray(layoutMeta.pageColumnQuestionCounts)
+      ? layoutMeta.pageColumnQuestionCounts
+      : [],
     exportQuestions: htmlQuestions,
   };
 }
@@ -362,6 +418,7 @@ export async function buildDocumentPreviewHtml({
   fontRegularPath,
   fontBoldPath,
   qnumFontPath,
+  subjectFontPath,
   baseLayout,
   supabaseClient,
   maxQuestionsPerPage,
@@ -383,6 +440,7 @@ export async function buildDocumentPreviewHtml({
       regularPath: fontRegularPath,
       boldPath: fontBoldPath || '',
       qnumFontPath: qnumFontPath || '',
+      subjectFontPath: subjectFontPath || '',
     }),
     maxQuestionsPerPage: maxQuestionsPerPage || 99,
   });

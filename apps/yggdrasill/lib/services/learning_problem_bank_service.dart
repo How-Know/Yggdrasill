@@ -267,6 +267,7 @@ class LearningProblemExportJob {
     required this.renderHash,
     required this.previewOnly,
     required this.options,
+    required this.resultSummary,
     required this.createdAt,
     required this.updatedAt,
     this.startedAt,
@@ -291,6 +292,7 @@ class LearningProblemExportJob {
   final String renderHash;
   final bool previewOnly;
   final Map<String, dynamic> options;
+  final Map<String, dynamic> resultSummary;
   final DateTime createdAt;
   final DateTime updatedAt;
   final DateTime? startedAt;
@@ -301,6 +303,7 @@ class LearningProblemExportJob {
 
   factory LearningProblemExportJob.fromMap(Map<String, dynamic> map) {
     final options = _mapOrEmpty(map['options']);
+    final resultSummary = _mapOrEmpty(map['result_summary']);
     return LearningProblemExportJob(
       id: '${map['id'] ?? ''}',
       academyId: '${map['academy_id'] ?? ''}',
@@ -322,6 +325,7 @@ class LearningProblemExportJob {
       previewOnly:
           map['preview_only'] == true || options['previewOnly'] == true,
       options: options,
+      resultSummary: resultSummary,
       createdAt: _dateTimeOrNull(map['created_at']) ?? DateTime.now(),
       updatedAt: _dateTimeOrNull(map['updated_at']) ?? DateTime.now(),
       startedAt: _dateTimeOrNull(map['started_at']),

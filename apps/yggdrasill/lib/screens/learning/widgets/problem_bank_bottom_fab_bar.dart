@@ -10,7 +10,6 @@ class ProblemBankBottomFabBar extends StatelessWidget {
     required this.onSelectAll,
     required this.onClearSelection,
     required this.onPreview,
-    required this.onGeneratePdf,
     required this.onCreatePlaceholder,
   });
 
@@ -19,7 +18,6 @@ class ProblemBankBottomFabBar extends StatelessWidget {
   final VoidCallback onSelectAll;
   final VoidCallback onClearSelection;
   final VoidCallback onPreview;
-  final VoidCallback onGeneratePdf;
   final VoidCallback onCreatePlaceholder;
 
   @override
@@ -59,14 +57,6 @@ class ProblemBankBottomFabBar extends StatelessWidget {
                     onPressed: disabled ? null : onPreview,
                     icon: Icons.preview,
                     label: '미리보기',
-                  ),
-                  const SizedBox(width: 8),
-                  _fab(
-                    onPressed: disabled ? null : onGeneratePdf,
-                    icon: Icons.picture_as_pdf,
-                    label: 'PDF 생성',
-                    foregroundColor: const Color(0xFFC7F2D8),
-                    backgroundColor: const Color(0xFF173C36),
                   ),
                   const SizedBox(width: 8),
                   _fab(

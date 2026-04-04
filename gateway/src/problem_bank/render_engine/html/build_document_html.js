@@ -33,6 +33,8 @@ function buildStyles({
   const pageSizeCss = `${paperMm.width}mm ${paperMm.height}mm`;
   const headerApproxMm = 22;
   const grid4HeightMm = Math.max(100, paperMm.height - 2 * marginMm - headerApproxMm).toFixed(1);
+  const mockFirstSubjectPt = ((stemSizePt + 20.5) * 1.1).toFixed(2);
+  const mockSimpleSubjectPt = ((stemSizePt + 11.2) * 1.1).toFixed(2);
   const title = profileTitle(profile);
   return `
     @page {
@@ -49,6 +51,7 @@ function buildStyles({
       --column-gap-pt: ${columnGapPt};
       --lc-line-normal: calc(var(--line-height-pt) * 1pt);
       --lc-line-fraction: calc((var(--line-height-pt) + 2.2) * 1pt);
+      --last-note-box-height: 88pt;
     }
     * { box-sizing: border-box; }
     body {
@@ -99,19 +102,18 @@ function buildStyles({
     .question-stream-grid4 .slot-label-overlay {
       position: absolute;
       left: 0;
-      top: var(--slot-label-top, 8pt);
+      top: var(--slot-label-top, 9.2pt);
       z-index: 2;
       pointer-events: none;
     }
     .question-stream-grid4 .slot-label-overlay .mock-section-label {
       margin: 0;
-      min-height: 20pt;
-      padding-left: 9.35pt;
-      padding-right: 9.35pt;
+      min-height: 22pt;
+      padding: 1.1pt 10.3pt 0.88pt;
       transform: none;
     }
     .question-stream-grid4 .slot-anchor-body {
-      padding-top: var(--slot-anchor-pad-top, 46pt);
+      padding-top: var(--slot-anchor-pad-top, 35.8pt);
     }
     .question-stream-grid4 .question-slot-firstline {
       display: block;
@@ -433,7 +435,8 @@ function buildStyles({
     .mock-simple-subject {
       grid-column: 2;
       justify-self: center;
-      font-size: calc((var(--stem-size-pt) + 20.5) * 1pt);
+      font-family: "YggSubject", "YggMain", "HCR Batang", "Malgun Gothic", sans-serif;
+      font-size: ${mockFirstSubjectPt}pt;
       font-weight: 900;
       color: #111;
       line-height: 0.9;
@@ -442,7 +445,7 @@ function buildStyles({
       white-space: nowrap;
     }
     .mock-simple-subject {
-      font-size: calc((var(--stem-size-pt) + 11.2) * 1pt);
+      font-size: ${mockSimpleSubjectPt}pt;
       font-weight: 900;
       line-height: 0.96;
       letter-spacing: 0;
@@ -473,24 +476,36 @@ function buildStyles({
       transform-origin: center;
     }
     .mock-chip-type {
-      min-height: 35pt;
-      padding: 0 8.5pt;
-      border-radius: 4.6pt;
+      min-height: 32pt;
+      padding: 0 8.2pt;
+      border-radius: 4.4pt;
+      font-family: "YggSubject", "YggMain", "HCR Batang", "Malgun Gothic", sans-serif;
       font-size: calc((var(--stem-size-pt) + 5.6) * 1pt);
       font-weight: 900;
-      -webkit-text-stroke: 0.1pt #111;
+      -webkit-text-stroke: 0.13pt #111;
       line-height: 1;
     }
     .mock-chip-type-simple {
-      min-height: 24pt;
-      padding: 0 4.8pt;
-      border-radius: 3.8pt;
-      font-size: calc((var(--stem-size-pt) + 1.8) * 1pt);
-      font-weight: 800;
-      -webkit-text-stroke: 0.05pt #111;
+      min-height: 26.1pt;
+      padding: 0 5.0pt;
+      border-radius: 3.6pt;
+      font-family: "YggSubject", "YggMain", "HCR Batang", "Malgun Gothic", sans-serif;
+      font-size: calc((var(--stem-size-pt) + 3.6) * 1pt);
+      font-weight: 900;
+      -webkit-text-stroke: 0.1pt #111;
+      transform: translateY(1.2pt);
+    }
+    .mock-chip-type-text {
+      display: inline-block;
+      transform: scaleX(0.95);
+      transform-origin: center;
+    }
+    .mock-chip-type-text-first {
+      transform: translateY(1pt) scaleX(0.95);
+      transform-origin: center;
     }
     .mock-first-type {
-      transform: translateY(8.8pt);
+      transform: translateY(5.8pt);
     }
     .mock-page-no {
       display: inline-block;
@@ -524,7 +539,10 @@ function buildStyles({
       pointer-events: none;
     }
     .mock-page-first .mock-main::before {
-      bottom: 22pt;
+      bottom: 3.2pt;
+    }
+    .mock-page-last .mock-main::before {
+      bottom: 5pt;
     }
     .mock-section-label {
       display: inline-flex;
@@ -545,6 +563,13 @@ function buildStyles({
       line-height: 1.2;
       letter-spacing: 0.16em;
     }
+    .mock-section-label-text {
+      display: inline-block;
+      transform: translateY(0);
+    }
+    .mock-page-first .question-stream-grid4 .slot-label-overlay .mock-section-label-text {
+      transform: translateY(1pt);
+    }
     .mock-content {
       position: relative;
       padding-top: 0;
@@ -553,6 +578,9 @@ function buildStyles({
       display: flex;
       flex-direction: column;
       min-height: ${(paperMm.height - 2 * marginMm - 44).toFixed(1)}mm;
+    }
+    .mock-page-last .mock-content {
+      padding-bottom: calc(var(--last-note-box-height) + 6pt);
     }
     .mock-content .question-stream {
       columns: 2;
@@ -571,18 +599,26 @@ function buildStyles({
       height: calc(var(--line-height-pt) * 0.45 * 1pt + 15pt);
       line-height: calc(var(--line-height-pt) * 0.45 * 1pt + 15pt);
     }
+    .mock-page-first .question-stream-grid4 .question-slot.slot-r1c2 .question-slot-firstline {
+      height: calc(var(--line-height-pt) * 0.45 * 1pt + 11pt);
+      line-height: calc(var(--line-height-pt) * 0.45 * 1pt + 11pt);
+    }
     .mock-page-first .mock-content .question-stream.question-stream-grid4 {
       row-gap: calc(var(--question-gap-pt) * 0.32 * 1pt);
     }
     .mock-page:not(.mock-page-first) .mock-header-simple {
-      margin-bottom: 8pt;
+      margin-bottom: 6.4pt;
     }
     .mock-page:not(.mock-page-first) .mock-content .question-stream {
-      margin-top: -2pt;
+      margin-top: 0.8pt;
     }
     .mock-page:not(.mock-page-first) .question-stream-grid4 .question-slot-firstline {
-      height: calc(var(--line-height-pt) * 0.25 * 1pt);
-      line-height: calc(var(--line-height-pt) * 0.25 * 1pt);
+      height: calc(var(--line-height-pt) * 0.20 * 1pt);
+      line-height: calc(var(--line-height-pt) * 0.20 * 1pt);
+    }
+    .mock-page:not(.mock-page-first) .question-stream-grid4 .question-slot[data-slot-row="1"] .question-slot-firstline {
+      height: calc(var(--line-height-pt) * 0.20 * 1pt + 4.8pt);
+      line-height: calc(var(--line-height-pt) * 0.20 * 1pt + 4.8pt);
     }
     .mock-content .question-stream.question-stream-grid4 {
       columns: auto;
@@ -637,6 +673,60 @@ function buildStyles({
       right: 4pt;
       bottom: 2pt;
       line-height: 1;
+    }
+    .mock-page-note {
+      position: absolute;
+      right: 0;
+      bottom: 5pt;
+      width: calc(50% - (var(--column-gap-pt) * 0.5 * 1pt));
+      min-height: var(--last-note-box-height);
+      border: 0.8pt solid #7c7c7c;
+      background: #fff;
+      color: #111;
+      padding: 7.2pt 10pt 8pt;
+      font-size: calc((var(--stem-size-pt) - 1.45) * 1pt);
+      font-weight: 500;
+      line-height: 1.42;
+      z-index: 1;
+    }
+    .mock-page-note-title {
+      margin-bottom: 5pt;
+      font-weight: 700;
+      font-size: 1em;
+      line-height: 1.42;
+    }
+    .mock-page-note-star {
+      display: inline-block;
+      transform: translateY(0.16em);
+    }
+    .mock-page-note-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 3.2pt;
+    }
+    .mock-page-note-row + .mock-page-note-row {
+      margin-top: 8pt;
+    }
+    .mock-page-note-bullet {
+      flex: 0 0 auto;
+      font-size: 0.7em;
+      line-height: 1;
+      margin-top: 0.42em;
+      transform: none;
+    }
+    .mock-page-note-text {
+      flex: 1 1 auto;
+      min-width: 0;
+      white-space: normal;
+    }
+    .mock-page-note-emphasis {
+      display: inline-block;
+      font-weight: 900;
+      font-size: 1.04em;
+      -webkit-text-stroke: 0.18pt #111;
+      text-shadow:
+        0.18pt 0 0 #111,
+        -0.18pt 0 0 #111;
     }
     .answer-grid {
       display: grid;
@@ -723,6 +813,204 @@ function renderExplanationSection(questions) {
   `;
 }
 
+function computeQuestionVisualScore(question, renderedHtml) {
+  const q = question && typeof question === 'object' ? question : {};
+  const stemRaw = String(q.stem || '');
+  const stemTextLen = stemRaw.replace(/\s+/g, ' ').trim().length;
+  const stemBreaks = (stemRaw.match(/\n/g) || []).length;
+  const boxCount = (stemRaw.match(/\[박스시작\]/g) || []).length;
+  const choices = Array.isArray(q.choices) ? q.choices : [];
+  const choiceChars = choices.reduce((sum, one) => {
+    return sum + String(one?.text || '').replace(/\s+/g, ' ').trim().length;
+  }, 0);
+  const figureCount = Array.isArray(q.figure_data_urls)
+    ? q.figure_data_urls.length
+    : 0;
+
+  const html = String(renderedHtml || '');
+  const plain = html
+    .replace(/<svg[\s\S]*?<\/svg>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const htmlTextLen = plain.length;
+  const htmlBreaks = (html.match(/<br\s*\/?>/gi) || []).length;
+  const htmlChoiceRows = (html.match(/class="choice\b/g) || []).length;
+  const htmlBogiRows = (html.match(/class="bogi-item\b/g) || []).length;
+
+  const scoreFromRaw = stemTextLen
+    + Math.round(choiceChars * 0.9)
+    + stemBreaks * 26
+    + choices.length * 24
+    + figureCount * 140
+    + boxCount * 90;
+  const scoreFromHtml = htmlTextLen
+    + htmlBreaks * 24
+    + htmlChoiceRows * 20
+    + htmlBogiRows * 18;
+  return Math.max(scoreFromRaw, scoreFromHtml);
+}
+
+function isColumnLongQuestion(question, renderedHtml) {
+  const q = question && typeof question === 'object' ? question : {};
+  const score = computeQuestionVisualScore(q, renderedHtml);
+  const figureCount = Array.isArray(q.figure_data_urls) ? q.figure_data_urls.length : 0;
+  const stemBreaks = (String(q.stem || '').match(/\n/g) || []).length;
+  if (figureCount >= 2) return score >= 920;
+  if (figureCount === 1) return score >= 980;
+  if (stemBreaks >= 4) return score >= 900;
+  if (stemBreaks >= 2) return score >= 960;
+  return score >= 1050;
+}
+
+function normalizePageColumnQuestionCounts(raw) {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  for (const one of raw) {
+    if (!one) continue;
+    if (Array.isArray(one) && one.length >= 2) {
+      const left = Number.parseInt(String(one[0] ?? ''), 10);
+      const right = Number.parseInt(String(one[1] ?? ''), 10);
+      if (Number.isFinite(left) && Number.isFinite(right) && left >= 0 && right >= 0) {
+        out.push({
+          pageIndex: out.length,
+          counts: [left, right],
+        });
+      }
+      continue;
+    }
+    if (typeof one !== 'object') continue;
+    const rawPage = Number.parseInt(
+      String(
+        one.pageIndex
+        ?? one.page
+        ?? one.pageNo
+        ?? one.pageNumber
+        ?? '',
+      ),
+      10,
+    );
+    const pageIndex = Number.isFinite(rawPage) ? Math.max(0, rawPage - 1) : out.length;
+    const left = Number.parseInt(
+      String(one.left ?? one.leftCount ?? one.col1 ?? one.l ?? ''),
+      10,
+    );
+    const right = Number.parseInt(
+      String(one.right ?? one.rightCount ?? one.col2 ?? one.r ?? ''),
+      10,
+    );
+    if (!Number.isFinite(left) || !Number.isFinite(right)) continue;
+    if (left < 0 || right < 0) continue;
+    out.push({ pageIndex, counts: [left, right] });
+  }
+  const dedup = new Map();
+  for (const one of out) {
+    dedup.set(one.pageIndex, one.counts);
+  }
+  return [...dedup.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([pageIndex, counts]) => ({ pageIndex, counts }));
+}
+
+function buildQuestionChunks({
+  questions,
+  renderedQuestions,
+  perPage,
+  columns,
+  pageColumnQuestionCounts,
+  autoGuardLongQuestion = false,
+}) {
+  const safePerPage = Math.max(1, Math.min(99, Number(perPage) || 99));
+  const safeColumns = Number(columns || 1) === 2 ? 2 : 1;
+  const rendered = Array.isArray(renderedQuestions) ? renderedQuestions : [];
+  const sourceQuestions = Array.isArray(questions) ? questions : [];
+  if (rendered.length === 0) {
+    return {
+      chunks: [[]],
+      pageColumnCounts: safeColumns === 2 ? [[2, 2]] : [[safePerPage]],
+    };
+  }
+  if (safeColumns !== 2 || safePerPage >= 99) {
+    const chunks = [];
+    for (let i = 0; i < rendered.length; i += safePerPage) {
+      chunks.push(rendered.slice(i, i + safePerPage));
+    }
+    if (chunks.length === 0) chunks.push([]);
+    return {
+      chunks,
+      pageColumnCounts: chunks.map((chunk) => [chunk.length]),
+    };
+  }
+
+  const defaultLeft = Math.max(1, Math.ceil(safePerPage / 2));
+  const defaultRight = Math.max(0, safePerPage - defaultLeft);
+  const overrideMap = new Map();
+  for (const one of normalizePageColumnQuestionCounts(pageColumnQuestionCounts)) {
+    overrideMap.set(one.pageIndex, one.counts);
+  }
+
+  const chunks = [];
+  const pageColumnCounts = [];
+  let cursor = 0;
+  let pageIndex = 0;
+  while (cursor < rendered.length) {
+    const override = overrideMap.get(pageIndex) || null;
+    let leftCap = override ? Number(override[0]) : defaultLeft;
+    let rightCap = override ? Number(override[1]) : defaultRight;
+    if (!Number.isFinite(leftCap) || leftCap < 0) leftCap = defaultLeft;
+    if (!Number.isFinite(rightCap) || rightCap < 0) rightCap = defaultRight;
+    if (leftCap + rightCap <= 0) {
+      leftCap = 1;
+      rightCap = 0;
+    }
+
+    // Auto-guard mode: when the top question of a column is very long,
+    // reduce that column capacity by 1 to avoid clipping/overlap.
+    if (!override && autoGuardLongQuestion && leftCap > 1 && cursor < rendered.length) {
+      if (isColumnLongQuestion(sourceQuestions[cursor], rendered[cursor])) {
+        leftCap = 1;
+      }
+    }
+
+    const chunk = [];
+    let leftCount = 0;
+    for (let i = 0; i < leftCap && cursor < rendered.length; i += 1) {
+      chunk.push(rendered[cursor]);
+      cursor += 1;
+      leftCount += 1;
+    }
+
+    if (!override && autoGuardLongQuestion && rightCap > 1 && cursor < rendered.length) {
+      if (isColumnLongQuestion(sourceQuestions[cursor], rendered[cursor])) {
+        rightCap = 1;
+      }
+    }
+
+    let rightCount = 0;
+    for (let i = 0; i < rightCap && cursor < rendered.length; i += 1) {
+      chunk.push(rendered[cursor]);
+      cursor += 1;
+      rightCount += 1;
+    }
+
+    if (chunk.length === 0 && cursor < rendered.length) {
+      chunk.push(rendered[cursor]);
+      cursor += 1;
+      leftCount = 1;
+    }
+
+    chunks.push(chunk);
+    pageColumnCounts.push([leftCount, rightCount]);
+    pageIndex += 1;
+  }
+
+  return {
+    chunks: chunks.length > 0 ? chunks : [[]],
+    pageColumnCounts: pageColumnCounts.length > 0 ? pageColumnCounts : [[defaultLeft, defaultRight]],
+  };
+}
+
 export function buildDocumentHtml({
   profile,
   paper,
@@ -733,7 +1021,9 @@ export function buildDocumentHtml({
   mathRenderer,
   fontFaceCss = '',
   maxQuestionsPerPage = 99,
+  layoutMeta = null,
 }) {
+  const isMockStyle = profile === 'mock' || profile === 'csat';
   const columns = Number(layout?.layoutColumns || 1) === 2 ? 2 : 1;
   const perPage = Math.max(1, Math.min(99, Number(maxQuestionsPerPage) || 99));
   const styles = buildStyles({
@@ -747,20 +1037,31 @@ export function buildDocumentHtml({
     questionGapPt: Number(layout?.questionGapPt || 30),
     choiceGapPt: Number(layout?.choiceGapPt || 2),
     columns,
-    columnGapPt: Number(layout?.columnGapPt || 18),
+    columnGapPt: Number(layout?.columnGapPt || 18) * (isMockStyle ? 1.3 : 1),
     perPage,
   });
+  const subjectTitleText = escapeHtml(String(layout?.subjectTitleText || '수학 영역'));
 
   const stemSizePt = Number(layout?.stemSizePt || 11.0);
   const allQ = (questions || []).map((q) => renderQuestionBlock(q, mathRenderer, { stemSizePt }));
   const renderStreamSection = (chunk, cls, options = {}) => {
     const pageIndex = Number.isFinite(options?.pageIndex) ? Number(options.pageIndex) : 0;
+    const columnCountsOverride = Array.isArray(options?.columnQuestionCounts)
+      ? options.columnQuestionCounts
+      : null;
+    const perPageForSection = Math.max(
+      1,
+      Math.min(
+        99,
+        Number(options?.perPageOverride) || perPage,
+      ),
+    );
     const slotPlan = buildSlotPlan({
-      layoutMode: layout?.layoutMode || 'legacy',
+      layoutMode: columnCountsOverride ? 'custom_columns' : (layout?.layoutMode || 'legacy'),
       layoutColumns: columns,
-      perPage,
+      perPage: perPageForSection,
       chunkLength: chunk.length,
-      columnQuestionCounts: layout?.columnQuestionCounts,
+      columnQuestionCounts: columnCountsOverride ?? layout?.columnQuestionCounts,
       columnLabelAnchors: layout?.columnLabelAnchors,
       alignPolicy: layout?.alignPolicy,
       profile,
@@ -788,15 +1089,30 @@ export function buildDocumentHtml({
         `grid-row:${slot.row}`,
         `grid-column:${slot.col}`,
       ];
+      const columnQuestionCount = Number(
+        slotPlan.columnQuestionCounts?.[slot.columnIndex] || 0,
+      );
+      const isLastQuestionInColumn = slot.expectsQuestion
+        && slot.rowIndex === Math.max(0, columnQuestionCount - 1);
+      if (
+        isLastQuestionInColumn
+        && columnQuestionCount > 0
+        && columnQuestionCount < slotPlan.rowCount
+      ) {
+        const spanRows = slotPlan.rowCount - slot.rowIndex;
+        if (spanRows > 1) {
+          slotStyleParts.push(`grid-row:${slot.row} / span ${spanRows}`);
+        }
+      }
       if (slot.anchorLabel) {
-        slotStyleParts.push(`--slot-label-top:${Number(slot.anchorTopPt || 8)}pt`);
-        slotStyleParts.push(`--slot-anchor-pad-top:${Number(slot.anchorPaddingTopPt || 46)}pt`);
+        slotStyleParts.push(`--slot-label-top:${Number(slot.anchorTopPt || 9.2)}pt`);
+        slotStyleParts.push(`--slot-anchor-pad-top:${Number(slot.anchorPaddingTopPt || 35.8)}pt`);
       }
       const firstLine = slot.isHiddenPlaceholder
         ? ''
         : '<div class="question-slot-firstline" aria-hidden="true">&nbsp;</div>';
       const slotBody = slot.anchorLabel && !slot.isHiddenPlaceholder
-        ? `<div class="slot-label-overlay"><div class="mock-section-label">${escapeHtml(slot.anchorLabel)}</div></div><div class="slot-anchor-body">${firstLine}${questionHtml}</div>`
+        ? `<div class="slot-label-overlay"><div class="mock-section-label"><span class="mock-section-label-text">${escapeHtml(slot.anchorLabel)}</span></div></div><div class="slot-anchor-body">${firstLine}${questionHtml}</div>`
         : `${firstLine}${questionHtml}`;
       return `
         <div
@@ -820,20 +1136,42 @@ export function buildDocumentHtml({
       >${slots.join('')}</section>
     `;
   };
-  const questionChunks = [];
-  if (perPage >= 99 || allQ.length <= perPage) {
-    questionChunks.push(allQ);
-  } else {
-    for (let i = 0; i < allQ.length; i += perPage) {
-      questionChunks.push(allQ.slice(i, i + perPage));
-    }
+  const chunkPlan = buildQuestionChunks({
+    questions,
+    renderedQuestions: allQ,
+    perPage,
+    columns,
+    pageColumnQuestionCounts: layout?.pageColumnQuestionCounts,
+    autoGuardLongQuestion: isMockStyle && columns === 2 && perPage <= 8,
+  });
+  const questionChunks = chunkPlan.chunks;
+  const pageColumnCounts = chunkPlan.pageColumnCounts;
+  if (layoutMeta && typeof layoutMeta === 'object') {
+    layoutMeta.pageColumnQuestionCounts = Array.isArray(pageColumnCounts)
+      ? pageColumnCounts.map((counts, idx) => ({
+        pageIndex: idx + 1,
+        left: Number(counts?.[0] || 0),
+        right: Number(counts?.[1] || 0),
+      }))
+      : [];
+    layoutMeta.pageCount = questionChunks.length;
   }
-  if (questionChunks.length === 0) questionChunks.push([]);
-
-  const isMockStyle = profile === 'mock' || profile === 'csat';
   let questionHtml;
   if (isMockStyle) {
     const totalPages = questionChunks.length;
+    const renderLastPageNotice = () => `
+      <div class="mock-page-note">
+        <div class="mock-page-note-title"><span class="mock-page-note-star">*</span> 확인 사항</div>
+        <div class="mock-page-note-row">
+          <span class="mock-page-note-bullet">○</span>
+          <span class="mock-page-note-text">답안지의 해당란에 필요한 내용을 정확히 기입(표기) 했는지 확인하시오.</span>
+        </div>
+        <div class="mock-page-note-row">
+          <span class="mock-page-note-bullet">○</span>
+          <span class="mock-page-note-text">이어서, <span class="mock-page-note-emphasis">「선택과목(확률과 통계)」</span> 문제가 제시되오니, 자신이 선택한 과목인지 확인하시오.</span>
+        </div>
+      </div>
+    `;
     const renderMockHeader = (pageNo) => {
       if (pageNo === 1) {
         return `
@@ -847,9 +1185,9 @@ export function buildDocumentHtml({
               <div class="mock-side-left">
                 <span class="mock-chip mock-chip-session"><span class="mock-chip-condensed">제 2 교시</span></span>
               </div>
-              <div class="mock-first-subject">수학 영역</div>
+              <div class="mock-first-subject">${subjectTitleText}</div>
               <div class="mock-side-right">
-                <span class="mock-chip mock-chip-type mock-first-type">홀수형</span>
+                <span class="mock-chip mock-chip-type mock-first-type"><span class="mock-chip-type-text mock-chip-type-text-first">홀수형</span></span>
               </div>
             </div>
           </header>
@@ -858,14 +1196,14 @@ export function buildDocumentHtml({
       const even = pageNo % 2 === 0;
       const left = even
         ? `<span class="mock-page-no">${pageNo}</span>`
-        : '<span class="mock-chip mock-chip-type mock-chip-type-simple">홀수형</span>';
+        : '<span class="mock-chip mock-chip-type mock-chip-type-simple"><span class="mock-chip-type-text">홀수형</span></span>';
       const right = even
-        ? '<span class="mock-chip mock-chip-type mock-chip-type-simple">홀수형</span>'
+        ? '<span class="mock-chip mock-chip-type mock-chip-type-simple"><span class="mock-chip-type-text">홀수형</span></span>'
         : `<span class="mock-page-no">${pageNo}</span>`;
       return `
         <header class="mock-header-simple">
           <div class="mock-side-left">${left}</div>
-          <div class="mock-simple-subject">수학 영역</div>
+          <div class="mock-simple-subject">${subjectTitleText}</div>
           <div class="mock-side-right">${right}</div>
         </header>
       `;
@@ -874,14 +1212,25 @@ export function buildDocumentHtml({
       const pageNo = idx + 1;
       const pageBreak = idx === 0 ? '' : ' page-break';
       const firstClass = idx === 0 ? ' mock-page-first' : '';
+      const lastClass = idx === totalPages - 1 ? ' mock-page-last' : '';
+      const onePageCounts = columns === 2 && Array.isArray(pageColumnCounts[idx])
+        ? pageColumnCounts[idx]
+        : null;
+      const pagePerPage = onePageCounts
+        ? onePageCounts.reduce((sum, one) => sum + (Number(one) || 0), 0)
+        : perPage;
       const contentHtml = renderStreamSection(chunk, 'question-stream', {
         pageIndex: idx,
+        columnQuestionCounts: onePageCounts,
+        perPageOverride: pagePerPage,
       });
+      const pageNoteHtml = idx === totalPages - 1 ? renderLastPageNotice() : '';
       return `
-        <section class="mock-page${firstClass}${pageBreak}">
+        <section class="mock-page${firstClass}${lastClass}${pageBreak}">
           ${renderMockHeader(pageNo)}
           <div class="mock-main">
             <div class="mock-content">${contentHtml}</div>
+            ${pageNoteHtml}
           </div>
           <div class="mock-footer-row">
             <div></div>
@@ -895,13 +1244,31 @@ export function buildDocumentHtml({
       `;
     }).join('')}</div>`;
   } else if (questionChunks.length === 1) {
-    questionHtml = renderStreamSection(questionChunks[0], 'question-stream', { pageIndex: 0 });
+    const onePageCounts = columns === 2 && Array.isArray(pageColumnCounts[0])
+      ? pageColumnCounts[0]
+      : null;
+    const onePagePerPage = onePageCounts
+      ? onePageCounts.reduce((sum, one) => sum + (Number(one) || 0), 0)
+      : perPage;
+    questionHtml = renderStreamSection(questionChunks[0], 'question-stream', {
+      pageIndex: 0,
+      columnQuestionCounts: onePageCounts,
+      perPageOverride: onePagePerPage,
+    });
   } else {
     questionHtml = questionChunks
       .map((chunk, idx) => renderStreamSection(
         chunk,
         idx === 0 ? 'question-stream' : 'question-stream page-break',
-        { pageIndex: idx },
+        {
+          pageIndex: idx,
+          columnQuestionCounts: columns === 2 && Array.isArray(pageColumnCounts[idx])
+            ? pageColumnCounts[idx]
+            : null,
+          perPageOverride: columns === 2 && Array.isArray(pageColumnCounts[idx])
+            ? pageColumnCounts[idx].reduce((sum, one) => sum + (Number(one) || 0), 0)
+            : perPage,
+        },
       ))
       .join('');
   }

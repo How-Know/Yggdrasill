@@ -43,7 +43,8 @@ function normalizeColumnCounts(rawCounts, layoutColumns, perPage) {
     .slice(0, columns)
     .map((one) => toSafeInt(one, 0));
   if (counts.length !== columns) return null;
-  if (counts.some((one) => one <= 0)) return null;
+  if (counts.some((one) => one < 0)) return null;
+  if (counts.every((one) => one === 0)) return null;
   const total = counts.reduce((sum, one) => sum + one, 0);
   if (total !== perPage) return null;
   return counts;
@@ -70,8 +71,8 @@ function normalizeAnchors(rawAnchors, columns) {
       columnIndex,
       label,
       page: normalizeAnchorPage(one.page),
-      topPt: Number.isFinite(topPt) ? topPt : 8,
-      paddingTopPt: Number.isFinite(paddingTopPt) ? paddingTopPt : 46,
+      topPt: Number.isFinite(topPt) ? topPt : 9.2,
+      paddingTopPt: Number.isFinite(paddingTopPt) ? paddingTopPt : 35.8,
     });
   }
   return anchors;
@@ -80,14 +81,14 @@ function normalizeAnchors(rawAnchors, columns) {
 function defaultFirstPageAnchors({ profile, pageIndex, layoutColumns, perPage }) {
   const isMock = profile === 'mock' || profile === 'csat';
   if (!isMock || pageIndex !== 0) return [];
-  if (layoutColumns !== 2 || perPage !== 4) return [];
+  if (layoutColumns !== 2 || perPage < 1) return [];
   return [
     {
       columnIndex: 0,
       label: '5지선다형',
       page: 'first',
-      topPt: 21,
-      paddingTopPt: 34,
+      topPt: 16,
+      paddingTopPt: 27,
     },
   ];
 }
@@ -183,8 +184,8 @@ export function buildSlotPlan({
         isHiddenPlaceholder: !expectsQuestion,
         questionOrder: Number.isFinite(slotQuestionOrder) ? slotQuestionOrder : null,
         anchorLabel: anchor?.label || '',
-        anchorTopPt: anchor?.topPt ?? 8,
-        anchorPaddingTopPt: anchor?.paddingTopPt ?? 46,
+        anchorTopPt: anchor?.topPt ?? 9.2,
+        anchorPaddingTopPt: anchor?.paddingTopPt ?? 35.8,
       });
     }
   }

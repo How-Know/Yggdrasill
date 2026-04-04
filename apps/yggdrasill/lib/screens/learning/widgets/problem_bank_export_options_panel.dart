@@ -453,6 +453,9 @@ class ProblemBankExportOptionsPanel extends StatelessWidget {
     required ValueChanged<String>? onChanged,
     required double width,
   }) {
+    final safeValue = values.contains(value)
+        ? value
+        : (values.isNotEmpty ? values.first : null);
     return SizedBox(
       width: width,
       height: _controlHeight,
@@ -464,7 +467,7 @@ class ProblemBankExportOptionsPanel extends StatelessWidget {
         ),
         child: DropdownButtonHideUnderline(
           child: DropdownButton<String>(
-            value: value,
+            value: safeValue,
             style: const TextStyle(
               color: _textPrimary,
               fontSize: 13,
@@ -483,7 +486,9 @@ class ProblemBankExportOptionsPanel extends StatelessWidget {
                   ),
                 )
                 .toList(growable: false),
-            onChanged: onChanged == null ? null : (v) => onChanged(v ?? value),
+            onChanged: onChanged == null
+                ? null
+                : (v) => onChanged(v ?? safeValue ?? value),
           ),
         ),
       ),

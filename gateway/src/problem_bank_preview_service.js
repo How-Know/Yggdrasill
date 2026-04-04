@@ -19,12 +19,14 @@ const FONT_PATH_KOPUB_BATANG_LIGHT =
   process.env.PB_PDF_FONT_KOPUB_BATANG_LIGHT_PATH || '';
 const FONT_PATH_QNUM =
   process.env.PB_PDF_FONT_QNUM_PATH || '';
+const FONT_PATH_SUBJECT =
+  process.env.PB_PDF_FONT_SUBJECT_PATH || '';
 
 const PREVIEW_BUCKET = 'problem-previews';
 const SIGNED_URL_EXPIRY_SECONDS = 3600;
 const PREVIEW_VIEWPORT_WIDTH = 520;
 const PREVIEW_DPR = 3;
-const PREVIEW_STYLE_VERSION = 'pv30_slot_anchor_spacing';
+const PREVIEW_STYLE_VERSION = 'pv32g_anchor_pair_ref';
 
 function repoAssetPath(...segments) {
   return path.resolve(REPO_ROOT, ...segments);
@@ -50,6 +52,15 @@ function getDefaultFontPaths() {
     regularPath: pickExistingPath([FONT_PATH_KOPUB_BATANG_LIGHT, repoKopubLight, FONT_PATH_REGULAR]),
     boldPath: pickExistingPath([FONT_PATH_KOPUB_BATANG_LIGHT, repoKopubLight, FONT_PATH_BOLD]),
     qnumFontPath: pickExistingPath([FONT_PATH_QNUM, repoQnumFont]),
+    subjectFontPath: pickExistingPath([
+      FONT_PATH_SUBJECT,
+      'C:\\Users\\harry\\Downloads\\apple\uC0B0\uB3CC\uACE0\uB515\uB124\uC6242\\apple\uC0B0\uB3CC\uACE0\uB515\uB124\uC6242\\AppleSDGothicNeoB.ttf',
+      'C:\\Users\\harry\\Downloads\\apple\uC0B0\uB3CC\uACE0\uB515\uB124\uC6242\\apple\uC0B0\uB3CC\uACE0\uB515\uB124\uC6242\\AppleSDGothicNeoH.ttf',
+      'C:\\Users\\harry\\Downloads\\apple\uC0B0\uB3CC\uACE0\uB515\uB124\uC6242\\apple\uC0B0\uB3CC\uACE0\uB515\uB124\uC6242\\AppleSDGothicNeoEB.ttf',
+      'C:\\Users\\harry\\Downloads\\apple\uC0B0\uB3CC\uACE0\uB515\uB124\uC6242\\apple\uC0B0\uB3CC\uACE0\uB515\uB124\uC6242\\AppleSDGothicNeoL.ttf',
+      FONT_PATH_BOLD,
+      FONT_PATH_REGULAR,
+    ]),
   };
 }
 
@@ -237,8 +248,10 @@ export async function buildDocumentHtmlForPreview({
     fontRegularPath: fontPaths.regularPath,
     fontBoldPath: fontPaths.boldPath,
     qnumFontPath: fontPaths.qnumFontPath,
+    subjectFontPath: fontPaths.subjectFontPath,
     baseLayout,
     supabaseClient,
     maxQuestionsPerPage,
   });
 }
+

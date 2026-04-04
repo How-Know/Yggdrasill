@@ -5058,8 +5058,9 @@ class TimetableContentViewState extends State<TimetableContentView> {
       selectedDate: startTime,
       includeOverlappingBlocks: true,
     );
-    final DateTime day =
-        DateTime(startTime.year, startTime.month, startTime.day);
+    // 패널/특수카드와 동일: 그리드 요일의 실제 날짜로 휴원 판정 (selectedCellStartTime 날짜는 _selectedDate라 어긋날 수 있음)
+    final cellYmd = _cellDateOnlyForDayIndex(dayIdx);
+    final DateTime day = DateTime(cellYmd.year, cellYmd.month, cellYmd.day);
     final Set<String> visibleStudentIds = <String>{};
     for (final s in resolved.cellStudents) {
       final id = s.student.id;

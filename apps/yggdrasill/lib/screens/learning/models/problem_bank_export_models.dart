@@ -7,30 +7,37 @@ import 'package:crypto/crypto.dart';
 import '../../../services/learning_problem_bank_service.dart';
 
 const List<String> kLearningProblemTemplateOptions = <String>[
-  '내신형',
-  '수능형',
-  '모의고사형',
+  '\uB0B4\uC2E0\uD615',
+  '\uC218\uB2A5\uD615',
+  '\uBAA8\uC758\uACE0\uC0AC\uD615',
 ];
 
-const List<String> kLearningProblemPaperOptions = <String>['A4', 'B4', '8절'];
+const List<String> kLearningProblemPaperOptions = <String>[
+  'A4',
+  'B4',
+  '8\uC808',
+];
 
 const List<String> kLearningProblemQuestionModeOptions = <String>[
-  '원본',
-  '객관식',
-  '주관식',
-  '서술형',
+  '\uAE30\uBCF8',
+  '\uAC1D\uAD00\uC2DD',
+  '\uC8FC\uAD00\uC2DD',
+  '\uC11C\uC220\uD615',
 ];
 
-const List<String> kLearningProblemLayoutColumnOptions = <String>['1단', '2단'];
+const List<String> kLearningProblemLayoutColumnOptions = <String>[
+  '1\uB2E8',
+  '2\uB2E8',
+];
 
 const Map<String, List<int>> kLearningProblemMaxPerPageOptionsByLayout =
     <String, List<int>>{
-  '1단': <int>[1, 2, 3, 4],
-  '2단': <int>[1, 2, 4, 6, 8],
+  '1\uB2E8': <int>[1, 2, 3, 4],
+  '2\uB2E8': <int>[1, 2, 4, 6, 8],
 };
 
 const List<String> kLearningProblemFontFamilyOptions = <String>[
-  '기본',
+  '\uAE30\uBCF8',
   'HCRBatang',
   'KakaoSmallSans',
   'NanumGothic',
@@ -38,7 +45,7 @@ const List<String> kLearningProblemFontFamilyOptions = <String>[
 ];
 
 const List<String> kLearningProblemFontSizeOptions = <String>[
-  '기본',
+  '\uAE30\uBCF8',
   '10',
   '10.5',
   '11',
@@ -51,8 +58,7 @@ const String kLearningQuestionModeOriginal = 'original';
 const String kLearningQuestionModeObjective = 'objective';
 const String kLearningQuestionModeSubjective = 'subjective';
 const String kLearningQuestionModeEssay = 'essay';
-final String kLearningRenderConfigVersion =
-    'pb_render_v32b_slot_anchor_spacing';
+const String kLearningRenderConfigVersion = 'pb_render_v32g_anchor_pair_ref';
 
 class LearningProblemLayoutTuning {
   const LearningProblemLayoutTuning({
@@ -175,13 +181,13 @@ class LearningProblemExportSettings {
 
   factory LearningProblemExportSettings.initial() {
     return LearningProblemExportSettings(
-      templateLabel: '내신형',
+      templateLabel: '\uB0B4\uC2E0\uD615',
       paperLabel: 'A4',
-      questionModeLabel: '원본',
-      layoutColumnLabel: '1단',
-      maxQuestionsPerPageLabel: '많이',
+      questionModeLabel: '\uAE30\uBCF8',
+      layoutColumnLabel: '1\uB2E8',
+      maxQuestionsPerPageLabel: '4',
       fontFamilyLabel: 'KoPubWorldBatangPro',
-      fontSizeLabel: '기본',
+      fontSizeLabel: '\uAE30\uBCF8',
       layoutTuning: LearningProblemLayoutTuning.defaults(),
       figureQuality: LearningProblemFigureQuality.defaults(),
       includeAnswerSheet: true,
@@ -207,8 +213,9 @@ class LearningProblemExportSettings {
       maxQuestionsPerPageOptionsOf(layoutColumnLabel);
 
   int get maxQuestionsPerPageCount {
-    if (maxQuestionsPerPageLabel.trim() == '많이') return 99;
-    final parsed = int.tryParse(maxQuestionsPerPageLabel);
+    final raw = maxQuestionsPerPageLabel.trim();
+    if (raw == '\uB9CE\uC774' || raw == '\uAE30\uBCF8') return 99;
+    final parsed = int.tryParse(raw);
     if (parsed != null && maxQuestionsPerPageOptions.contains(parsed)) {
       return parsed;
     }
@@ -220,7 +227,7 @@ class LearningProblemExportSettings {
   Size get paperPointSize => paperPointSizeOf(paperLabel);
   String get resolvedFontFamily {
     final safe = fontFamilyLabel.trim();
-    if (safe.isEmpty || safe == '기본') return 'KoPubWorldBatangPro';
+    if (safe.isEmpty || safe == '\uAE30\uBCF8') return 'KoPubWorldBatangPro';
     return safe;
   }
 
@@ -257,11 +264,13 @@ class LearningProblemExportSettings {
       'maxQuestionsPerPage': maxQuestionsPerPageCount,
       'layoutMode': 'legacy',
       'columnQuestionCounts': const <int>[],
+      'pageColumnQuestionCounts': const <Map<String, dynamic>>[],
       'columnLabelAnchors': const <Map<String, dynamic>>[],
       'alignPolicy': const <String, dynamic>{
         'pairAlignment': 'row',
         'skipAnchorRows': true,
       },
+      'subjectTitleText': '\uC218\uD559 \uC601\uC5ED',
       'questionMode': questionModeValue,
       'layoutTuning': layoutTuning.toJson(),
       'figureQuality': figureQuality.toJson(),
@@ -340,11 +349,11 @@ class LearningProblemLayoutSlot {
 
 String templateToProfile(String template) {
   switch (template.trim()) {
-    case '수능형':
+    case '\uC218\uB2A5\uD615':
       return 'csat';
-    case '모의고사형':
+    case '\uBAA8\uC758\uACE0\uC0AC\uD615':
       return 'mock';
-    case '내신형':
+    case '\uB0B4\uC2E0\uD615':
     default:
       return 'naesin';
   }
@@ -352,13 +361,13 @@ String templateToProfile(String template) {
 
 String questionModeToValue(String label) {
   switch (label.trim()) {
-    case '객관식':
+    case '\uAC1D\uAD00\uC2DD':
       return kLearningQuestionModeObjective;
-    case '주관식':
+    case '\uC8FC\uAD00\uC2DD':
       return kLearningQuestionModeSubjective;
-    case '서술형':
+    case '\uC11C\uC220\uD615':
       return kLearningQuestionModeEssay;
-    case '원본':
+    case '\uAE30\uBCF8':
     default:
       return kLearningQuestionModeOriginal;
   }
@@ -367,27 +376,31 @@ String questionModeToValue(String label) {
 String questionModeLabelOf(String mode) {
   switch (mode.trim()) {
     case kLearningQuestionModeObjective:
-      return '객관식';
+      return '\uAC1D\uAD00\uC2DD';
     case kLearningQuestionModeSubjective:
-      return '주관식';
+      return '\uC8FC\uAD00\uC2DD';
     case kLearningQuestionModeEssay:
-      return '서술형';
+      return '\uC11C\uC220\uD615';
     case kLearningQuestionModeOriginal:
     default:
-      return '원본';
+      return '\uAE30\uBCF8';
   }
 }
 
 bool allowEssayOf(LearningProblemQuestion question) {
   return question.meta['allow_essay'] == true ||
-      question.questionType.contains('서술');
+      question.questionType.contains('\uC11C\uC220');
 }
 
 String originalQuestionModeOf(LearningProblemQuestion question) {
   final type = question.questionType.trim();
-  if (type.contains('서술')) return kLearningQuestionModeEssay;
-  if (type.contains('객관식')) return kLearningQuestionModeObjective;
-  if (type.contains('주관식')) return kLearningQuestionModeSubjective;
+  if (type.contains('\uC11C\uC220')) return kLearningQuestionModeEssay;
+  if (type.contains('\uAC1D\uAD00\uC2DD')) {
+    return kLearningQuestionModeObjective;
+  }
+  if (type.contains('\uC8FC\uAD00\uC2DD')) {
+    return kLearningQuestionModeSubjective;
+  }
   if (question.allowObjective && !question.allowSubjective) {
     return kLearningQuestionModeObjective;
   }
@@ -445,19 +458,19 @@ String effectiveQuestionModeOf(
   );
 }
 
-int layoutColumnsToCount(String label) => label.trim() == '2단' ? 2 : 1;
+int layoutColumnsToCount(String label) => label.trim() == '2\uB2E8' ? 2 : 1;
 
 List<int> maxQuestionsPerPageOptionsOf(String layoutLabel) {
   final options = kLearningProblemMaxPerPageOptionsByLayout[layoutLabel];
   if (options != null && options.isNotEmpty) return options;
-  return kLearningProblemMaxPerPageOptionsByLayout['1단']!;
+  return kLearningProblemMaxPerPageOptionsByLayout['1\uB2E8']!;
 }
 
 Size paperPointSizeOf(String paperLabel) {
   switch (paperLabel.trim()) {
     case 'B4':
       return const Size(729, 1032);
-    case '8절':
+    case '8\uC808':
       return const Size(774, 1118);
     case 'A4':
     default:
@@ -594,21 +607,21 @@ LearningProblemQuestion questionForLayoutPreviewMode(
   if (questionMode == kLearningQuestionModeObjective) {
     final choices = question.effectiveChoices;
     return question.copyWith(
-      questionType: '객관식',
+      questionType: '\uAC1D\uAD00\uC2DD',
       choices: choices,
       objectiveChoices: choices,
     );
   }
   if (questionMode == kLearningQuestionModeSubjective) {
     return question.copyWith(
-      questionType: '주관식',
+      questionType: '\uC8FC\uAD00\uC2DD',
       choices: const <LearningProblemChoice>[],
       objectiveChoices: const <LearningProblemChoice>[],
     );
   }
   if (questionMode == kLearningQuestionModeEssay) {
     return question.copyWith(
-      questionType: '서술형',
+      questionType: '\uC11C\uC220\uD615',
       choices: const <LearningProblemChoice>[],
       objectiveChoices: const <LearningProblemChoice>[],
     );
@@ -618,13 +631,13 @@ LearningProblemQuestion questionForLayoutPreviewMode(
         ? question.effectiveChoices
         : const <LearningProblemChoice>[];
     return question.copyWith(
-      questionType: '객관식',
+      questionType: '\uAC1D\uAD00\uC2DD',
       choices: choices,
       objectiveChoices: choices,
     );
   }
   return question.copyWith(
-    questionType: '주관식',
+    questionType: '\uC8FC\uAD00\uC2DD',
     choices: const <LearningProblemChoice>[],
     objectiveChoices: const <LearningProblemChoice>[],
   );
@@ -632,7 +645,7 @@ LearningProblemQuestion questionForLayoutPreviewMode(
 
 bool looksObjectiveInOriginalMode(LearningProblemQuestion question) {
   return question.effectiveChoices.length >= 2 ||
-      question.questionType.contains('객관식');
+      question.questionType.contains('\uAC1D\uAD00\uC2DD');
 }
 
 String previewAnswerForMode(
@@ -762,16 +775,16 @@ String _subjectiveFromObjectiveChoiceText(
 
 int? _answerTokenToChoiceIndex(String token) {
   const circled = <String, int>{
-    '①': 0,
-    '②': 1,
-    '③': 2,
-    '④': 3,
-    '⑤': 4,
-    '⑥': 5,
-    '⑦': 6,
-    '⑧': 7,
-    '⑨': 8,
-    '⑩': 9,
+    '\u2460': 0,
+    '\u2461': 1,
+    '\u2462': 2,
+    '\u2463': 3,
+    '\u2464': 4,
+    '\u2465': 5,
+    '\u2466': 6,
+    '\u2467': 7,
+    '\u2468': 8,
+    '\u2469': 9,
   };
   final trimmed = token.trim();
   if (trimmed.isEmpty) return null;

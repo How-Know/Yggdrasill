@@ -1304,9 +1304,8 @@ class _SubmittedHomeworkCard extends StatelessWidget {
       case '프린트':
         return Colors.white;
       case '교재':
-        return const Color(0xFF2E7D32);
       case '문제집':
-        return const Color(0xFFF9A825);
+        return const Color(0xFF2E7D32);
       case '학습':
         return const Color(0xFF6A1B9A);
       case '테스트':

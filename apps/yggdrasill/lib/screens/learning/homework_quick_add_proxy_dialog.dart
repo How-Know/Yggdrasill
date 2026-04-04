@@ -54,8 +54,9 @@ class HomeworkQuickAddProxyDialogState
   late final TextEditingController _count;
   late final TextEditingController _memo;
   late final TextEditingController _groupTitle;
-  late Color _color;
   String _type = '프린트';
+  /// 연결 교재로 과제를 만들 때 사용하는 유형 (기본 교재).
+  String _linkedHomeworkType = '교재';
   late String _flowId;
   bool _loadingFlowTextbooks = false;
   bool _loadingAllFlowTextbooks = false;
@@ -72,7 +73,6 @@ class HomeworkQuickAddProxyDialogState
       const <Map<String, dynamic>>[];
   bool _rangeAiLoading = false;
   int _rangeAiRequestId = 0;
-  String _selectedLinkedTextbookType = '';
   int _selectedSplitParts = 1;
   final List<_DraftGroupItem> _draftGroupItems = <_DraftGroupItem>[];
   int _draftGroupItemSeq = 0;
@@ -122,7 +122,6 @@ class HomeworkQuickAddProxyDialogState
     _groupTitle = ImeAwareTextEditingController(
       text: initialGroupTitle.isEmpty ? '그룹 과제' : initialGroupTitle,
     );
-    _color = _colorForType(_type);
     final initial = widget.initialFlowId;
     if (initial != null && widget.flows.any((f) => f.id == initial)) {
       _flowId = initial;
@@ -177,6 +176,13 @@ class HomeworkQuickAddProxyDialogState
     );
   }
 
+  static const List<String> _homeworkTypeValues = <String>[
+    '프린트',
+    '교재',
+    '학습',
+    '테스트',
+  ];
+
   Color _colorForType(String type) {
     switch (type) {
       case '프린트':
@@ -184,7 +190,7 @@ class HomeworkQuickAddProxyDialogState
       case '교재':
         return Colors.green;
       case '문제집':
-        return Colors.amber;
+        return Colors.green;
       case '학습':
         return Colors.purple;
       case '테스트':
@@ -192,19 +198,6 @@ class HomeworkQuickAddProxyDialogState
       default:
         return Colors.blue;
     }
-  }
-
-  String _sanitizeTextbookType(dynamic value) {
-    final raw = (value as String?)?.trim() ?? '';
-    if (raw == '개념서' || raw == '문제집') return raw;
-    return '';
-  }
-
-  String _effectiveLinkedHomeworkType() {
-    if (_selectedLinkedTextbookType == '문제집') return '문제집';
-    final bookName = (_selectedLinkedBook?.bookName ?? '').trim();
-    if (bookName.contains('문제집')) return '문제집';
-    return '교재';
   }
 
   String _composeBodyValues({
@@ -303,7 +296,6 @@ class HomeworkQuickAddProxyDialogState
       setState(() {
         _linkedTextbooks = const <_LinkedTextbook>[];
         _selectedLinkedBookKey = null;
-        _selectedLinkedTextbookType = '';
         _units = const <_BigUnitSelectionNode>[];
         _expandedBigKey = null;
         _expandedMidKey = null;
@@ -323,7 +315,6 @@ class HomeworkQuickAddProxyDialogState
       } else if (preferredLinkedBookKey != null) {
         _selectedLinkedBookKey = preferredLinkedBookKey;
       }
-      _selectedLinkedTextbookType = '';
       _units = const <_BigUnitSelectionNode>[];
       _expandedBigKey = null;
       _expandedMidKey = null;
@@ -357,7 +348,6 @@ class HomeworkQuickAddProxyDialogState
         if (mounted) {
           setState(() {
             _units = const <_BigUnitSelectionNode>[];
-            _selectedLinkedTextbookType = '';
             _expandedBigKey = null;
             _expandedMidKey = null;
           });
@@ -369,7 +359,6 @@ class HomeworkQuickAddProxyDialogState
       setState(() {
         _linkedTextbooks = const <_LinkedTextbook>[];
         _selectedLinkedBookKey = null;
-        _selectedLinkedTextbookType = '';
         _units = const <_BigUnitSelectionNode>[];
         _expandedBigKey = null;
         _expandedMidKey = null;
@@ -388,7 +377,6 @@ class HomeworkQuickAddProxyDialogState
       if (!mounted) return;
       setState(() {
         _units = const <_BigUnitSelectionNode>[];
-        _selectedLinkedTextbookType = '';
         _expandedBigKey = null;
         _expandedMidKey = null;
       });
@@ -407,7 +395,6 @@ class HomeworkQuickAddProxyDialogState
         row?['payload'],
         pageOffset: pageOffset,
       );
-      final textbookType = _sanitizeTextbookType(row?['textbook_type']);
       try {
         await HomeworkStore.instance.loadAll();
       } catch (_) {}
@@ -429,7 +416,6 @@ class HomeworkQuickAddProxyDialogState
       );
       setState(() {
         _units = parsed;
-        _selectedLinkedTextbookType = textbookType;
         _expandedBigKey = null;
         _expandedMidKey = null;
       });
@@ -438,7 +424,6 @@ class HomeworkQuickAddProxyDialogState
       if (!mounted) return;
       setState(() {
         _units = const <_BigUnitSelectionNode>[];
-        _selectedLinkedTextbookType = '';
         _expandedBigKey = null;
         _expandedMidKey = null;
       });
@@ -1545,22 +1530,37 @@ class HomeworkQuickAddProxyDialogState
     }
   }
 
+  Widget _buildLinkedHomeworkTypeDropdown() {
+    final safe =
+        _homeworkTypeValues.contains(_linkedHomeworkType) ? _linkedHomeworkType : '교재';
+    return DropdownButtonFormField<String>(
+      value: safe,
+      items: [
+        for (final t in _homeworkTypeValues)
+          DropdownMenuItem<String>(value: t, child: Text(t)),
+      ],
+      onChanged: (v) => setState(() {
+        _linkedHomeworkType = v ?? '교재';
+      }),
+      decoration: _inputDecoration('과제 유형'),
+      dropdownColor: kDlgPanelBg,
+      style: const TextStyle(color: kDlgText, fontWeight: FontWeight.w600),
+      iconEnabledColor: kDlgTextSub,
+    );
+  }
+
   Widget _buildUnlinkedFlowMode() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         DropdownButtonFormField<String>(
-          value: _type,
-          items: const [
-            DropdownMenuItem(value: '프린트', child: Text('프린트')),
-            DropdownMenuItem(value: '교재', child: Text('교재')),
-            DropdownMenuItem(value: '문제집', child: Text('문제집')),
-            DropdownMenuItem(value: '학습', child: Text('학습')),
-            DropdownMenuItem(value: '테스트', child: Text('테스트')),
+          value: _homeworkTypeValues.contains(_type) ? _type : '프린트',
+          items: [
+            for (final t in _homeworkTypeValues)
+              DropdownMenuItem<String>(value: t, child: Text(t)),
           ],
           onChanged: (v) => setState(() {
             _type = v ?? '프린트';
-            _color = _colorForType(_type);
           }),
           decoration: _inputDecoration('과제 유형'),
           dropdownColor: kDlgPanelBg,
@@ -1744,8 +1744,8 @@ class HomeworkQuickAddProxyDialogState
     final content =
         useRangeDraft ? _rangeContent.text.trim() : _content.text.trim();
     final memo = _memo.text.trim();
-    final type = useRangeDraft ? _effectiveLinkedHomeworkType() : _type;
-    final color = useRangeDraft ? _colorForType(type) : _color;
+    final type = selectedBook != null ? _linkedHomeworkType : _type;
+    final color = _colorForType(type);
     final unitMappings = selectedBook == null
         ? const <Map<String, dynamic>>[]
         : List<Map<String, dynamic>>.from(
@@ -1878,16 +1878,15 @@ class HomeworkQuickAddProxyDialogState
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     DropdownButtonFormField<String>(
-                      value: type,
-                      items: const [
-                        DropdownMenuItem(value: '프린트', child: Text('프린트')),
-                        DropdownMenuItem(value: '교재', child: Text('교재')),
-                        DropdownMenuItem(value: '문제집', child: Text('문제집')),
-                        DropdownMenuItem(value: '학습', child: Text('학습')),
-                        DropdownMenuItem(value: '테스트', child: Text('테스트')),
+                      value: _homeworkTypeValues.contains(type)
+                          ? type
+                          : '교재',
+                      items: [
+                        for (final t in _homeworkTypeValues)
+                          DropdownMenuItem<String>(value: t, child: Text(t)),
                       ],
                       onChanged: (v) => setDialogState(() {
-                        type = v ?? '프린트';
+                        type = v ?? '교재';
                       }),
                       decoration: _inputDecoration('과제 유형'),
                       dropdownColor: kDlgPanelBg,
@@ -2736,7 +2735,7 @@ class HomeworkQuickAddProxyDialogState
     }
 
     if (_manualPageMode) {
-      final linkedType = _effectiveLinkedHomeworkType();
+      final linkedType = _linkedHomeworkType;
       final page = _page.text.trim();
       final count = _count.text.trim();
       var content = _content.text.trim();
@@ -2805,7 +2804,7 @@ class HomeworkQuickAddProxyDialogState
       return;
     }
 
-    final linkedType = _effectiveLinkedHomeworkType();
+    final linkedType = _linkedHomeworkType;
     Navigator.pop(context, {
       'studentId': widget.studentId,
       'flowId': _flowId,
@@ -2893,6 +2892,7 @@ class HomeworkQuickAddProxyDialogState
                 setState(() {
                   _flowId = link.flowId;
                   _selectedLinkedBookKey = link.key;
+                  _linkedHomeworkType = '교재';
                 });
                 await _handleFlowChanged(
                   preferredLinkedBookKey: link.key,
@@ -3014,6 +3014,8 @@ class HomeworkQuickAddProxyDialogState
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          _buildLinkedHomeworkTypeDropdown(),
+          const SizedBox(height: 12),
           TextField(
             controller: _title,
             style: const TextStyle(
@@ -3027,7 +3029,14 @@ class HomeworkQuickAddProxyDialogState
         ],
       );
     }
-    return _buildRangeInlineEditors();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildLinkedHomeworkTypeDropdown(),
+        const SizedBox(height: 12),
+        _buildRangeInlineEditors(),
+      ],
+    );
   }
 
   @override
