@@ -1356,6 +1356,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     } else {
       final part = template.parts.first;
       final fallbackFlowId = (part.flowId ?? '').trim();
+      final reserveSingle = mode == _FavoriteIssueMode.reserve;
       final created = HomeworkStore.instance.add(
         studentId,
         title: part.title,
@@ -1377,6 +1378,8 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                 part.unitMappings!.map((e) => Map<String, dynamic>.from(e)),
               ),
         defaultSplitParts: part.defaultSplitParts.clamp(1, 4).toInt(),
+        deferBump: reserveSingle,
+        deferPersist: reserveSingle,
       );
       createdItems.add(created);
       splitMap[created.id] = created.defaultSplitParts.clamp(1, 4).toInt();
@@ -1386,16 +1389,30 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     if (mode == _FavoriteIssueMode.reserve) {
       final groupReserved = template.isGroup || template.parts.length > 1;
       if (!groupReserved) {
-        await HomeworkStore.instance.persistItemsNow(
+        HomeworkAssignmentStore.instance.applyOptimisticReservedAssignments(
           studentId,
           createdItems,
         );
-        await HomeworkAssignmentStore.instance.recordAssignments(
-          studentId,
-          createdItems,
-          note: HomeworkAssignmentStore.reservationNote,
+        HomeworkStore.instance.bumpRevision();
+        final ok =
+            await HomeworkStore.instance.commitReservedHomeworkBundleRpc(
+          studentId: studentId,
+          group: null,
+          items: createdItems,
           splitPartsByItem: splitMap,
         );
+        if (!ok) {
+          for (final hw in createdItems.reversed) {
+            HomeworkStore.instance.remove(studentId, hw.id);
+          }
+          HomeworkAssignmentStore.instance
+              .revertOptimisticReservedAssignmentsForItems(
+            studentId,
+            createdItems.map((e) => e.id),
+          );
+          HomeworkStore.instance.bumpRevision();
+          return 0;
+        }
       }
     } else {
       HomeworkStore.instance.restoreItemsToWaiting(
@@ -1534,23 +1551,43 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                   )
                 : null,
             defaultSplitParts: splitParts,
+            deferBump: isReserve,
+            deferPersist: isReserve,
           );
           createdItems.add(created);
         }
         if (isReserve && createdItems.isNotEmpty) {
-          await HomeworkStore.instance.persistItemsNow(
+          HomeworkAssignmentStore.instance.applyOptimisticReservedAssignments(
             studentId,
             createdItems,
           );
-          await HomeworkAssignmentStore.instance.recordAssignments(
-            studentId,
-            createdItems,
-            note: HomeworkAssignmentStore.reservationNote,
+          HomeworkStore.instance.bumpRevision();
+          final ok =
+              await HomeworkStore.instance.commitReservedHomeworkBundleRpc(
+            studentId: studentId,
+            group: null,
+            items: createdItems,
             splitPartsByItem: <String, int>{
               for (final hw in createdItems)
                 hw.id: hw.defaultSplitParts.clamp(1, 4).toInt(),
             },
           );
+          if (!ok) {
+            for (final hw in createdItems.reversed) {
+              HomeworkStore.instance.remove(studentId, hw.id);
+            }
+            HomeworkAssignmentStore.instance
+                .revertOptimisticReservedAssignmentsForItems(
+              studentId,
+              createdItems.map((e) => e.id),
+            );
+            HomeworkStore.instance.bumpRevision();
+            if (!context.mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('예약 과제 저장에 실패했어요.')),
+            );
+            return;
+          }
         }
         final String msg = isReserve
             ? (entries.length > 1
@@ -5193,7 +5230,7 @@ double _homeworkGroupExpandedHeightForChildCount(int childCount) {
   // 상단 정보와 하위 리스트를 충분히 분리하고,
   // 하위 과제 수에 비례해 카드 높이가 늘어나도록 계산한다.
   const double groupSectionHeaderHeight = 58;
-  const double perChildRowHeight = 78;
+  const double perChildRowHeight = 102;
   final double overflowSafetyPadding =
       childCount >= 7 ? 18 : (childCount >= 5 ? 12 : (childCount >= 3 ? 8 : 4));
   return _homeworkChipExpandedHeight +
@@ -5301,9 +5338,24 @@ Widget _buildHomeworkChipsReactiveForStudent(
               final assignmentCounts = snapshot.data ?? const <String, int>{};
               return FutureBuilder<List<HomeworkAssignmentDetail>>(
                 future: activeAssignmentsFuture,
+                initialData: HomeworkAssignmentStore.instance
+                    .peekCachedActiveAssignments(studentId),
                 builder: (context, assignmentsSnapshot) {
-                  final activeAssignments = assignmentsSnapshot.data ??
-                      const <HomeworkAssignmentDetail>[];
+                  final assignStore = HomeworkAssignmentStore.instance;
+                  final cachePeek =
+                      assignStore.peekCachedActiveAssignments(studentId);
+                  final loadedOnce =
+                      assignStore.hasCompletedActiveAssignmentLoad(studentId);
+                  final waiting = assignmentsSnapshot.connectionState ==
+                      ConnectionState.waiting;
+                  if (!loadedOnce && waiting && cachePeek == null) {
+                    return const SizedBox(height: 32);
+                  }
+                  final activeAssignments = assignmentsSnapshot.connectionState ==
+                          ConnectionState.done
+                      ? (assignmentsSnapshot.data ??
+                          const <HomeworkAssignmentDetail>[])
+                      : (cachePeek ?? const <HomeworkAssignmentDetail>[]);
                   final hiddenItemIds = <String>{};
                   final assignmentDueByGroupId = <String, DateTime?>{};
                   final assignmentDueByItemId = <String, DateTime?>{};
@@ -5330,6 +5382,10 @@ Widget _buildHomeworkChipsReactiveForStudent(
                       dueDateOnly,
                     );
                   }
+                  hiddenItemIds.addAll(
+                    HomeworkAssignmentStore.instance
+                        .peekPendingReservedHomeworkItemIds(studentId),
+                  );
                   return FutureBuilder<
                       Map<String, HomeworkAssignmentCycleMeta>>(
                     future: assignmentCycleMetaFuture,
@@ -5445,6 +5501,8 @@ Widget _buildReservedHomeworkChipsReactiveForStudent(
               final assignmentCounts = snapshot.data ?? const <String, int>{};
               return FutureBuilder<List<HomeworkAssignmentDetail>>(
                 future: activeAssignmentsFuture,
+                initialData: HomeworkAssignmentStore.instance
+                    .peekCachedActiveAssignments(studentId),
                 builder: (context, assignmentsSnapshot) {
                   final activeAssignments = assignmentsSnapshot.data ??
                       const <HomeworkAssignmentDetail>[];
@@ -5523,6 +5581,8 @@ Widget _buildReservedHomeworkTitleReactiveForStudent(String studentId) {
       );
       return FutureBuilder<List<HomeworkAssignmentDetail>>(
         future: activeAssignmentsFuture,
+        initialData: HomeworkAssignmentStore.instance
+            .peekCachedActiveAssignments(studentId),
         builder: (context, assignmentsSnapshot) {
           final activeAssignments =
               assignmentsSnapshot.data ?? const <HomeworkAssignmentDetail>[];
@@ -8684,11 +8744,21 @@ Widget _buildHomeworkChipVisual(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  '${index + 1}. ${groupChildLabel(child)}',
-                  style: groupChildTitleStyle,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '${index + 1}. ',
+                      style: groupChildTitleStyle,
+                    ),
+                    Expanded(
+                      child: LatexTextRenderer(
+                        groupChildLabel(child),
+                        style: groupChildTitleStyle,
+                        softWrap: true,
+                      ),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 4),
                 GestureDetector(

@@ -31,6 +31,7 @@ void ui_port_force_unbind(void);
 // 펌웨어 측 MQTT publish 콜백(메인에서 구현)
 void fw_publish_bind(const char* studentId);
 void fw_publish_unbind();
+void fw_clear_local_binding_state(void);
 void fw_publish_student_info(const char* studentId);
 void fw_publish_homework_action(const char* action, const char* itemId);
 void fw_publish_group_transition(const char* groupId, int from_phase = 0);

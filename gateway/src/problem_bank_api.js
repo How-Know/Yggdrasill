@@ -209,6 +209,55 @@ function normalizePageColumnQuestionCounts(raw, layoutColumns) {
   return [...dedup.values()].sort((a, b) => a.pageIndex - b.pageIndex);
 }
 
+function normalizeTitlePageIndices(raw) {
+  const out = new Set([1]);
+  if (Array.isArray(raw)) {
+    for (const one of raw) {
+      const page = Number.parseInt(String(one ?? ''), 10);
+      if (!Number.isFinite(page) || page < 1) continue;
+      out.add(page);
+    }
+  }
+  return [...out].sort((a, b) => a - b);
+}
+
+function normalizeTitlePageHeaders(raw, titlePageIndices, fallbackTitle = '수학 영역') {
+  const titlePages = normalizeTitlePageIndices(titlePageIndices);
+  const titlePageSet = new Set(titlePages);
+  const out = new Map();
+  if (Array.isArray(raw)) {
+    for (const one of raw) {
+      if (!one || typeof one !== 'object') continue;
+      const page = Number.parseInt(
+        String(one.page ?? one.pageIndex ?? one.pageNo ?? one.pageNumber ?? ''),
+        10,
+      );
+      if (!Number.isFinite(page) || page < 1) continue;
+      if (!titlePageSet.has(page)) continue;
+      const title = String(one.title ?? one.subjectTitleText ?? '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      const subtitle = String(one.subtitle ?? one.subTitle ?? one.sub ?? '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (!title && !subtitle) continue;
+      out.set(page, { page, title, subtitle });
+    }
+  }
+  const defaultTitle = String(fallbackTitle || '수학 영역').replace(/\s+/g, ' ').trim() || '수학 영역';
+  const pageOneTitle = out.get(1)?.title || defaultTitle;
+  for (const page of titlePages) {
+    const prev = out.get(page);
+    const title = String(prev?.title || '').trim() || pageOneTitle;
+    out.set(page, {
+      page,
+      title,
+      subtitle: String(prev?.subtitle || '').replace(/\s+/g, ' ').trim(),
+    });
+  }
+  return [...out.values()].sort((a, b) => a.page - b.page);
+}
+
 function normalizeAnchorPage(raw) {
   const v = String(raw || '').trim().toLowerCase();
   if (!v || v === 'first' || v === '1') return 'first';
@@ -352,7 +401,7 @@ function normalizeFigureQuality(rawFigureQuality, options = {}) {
   return { targetDpi, minDpi };
 }
 
-const EXPORT_RENDER_CONFIG_VERSION = 'pb_render_v32g_anchor_pair_ref';
+const EXPORT_RENDER_CONFIG_VERSION = 'pb_render_v32l_cover_preview_sync';
 
 function normalizeExportRenderConfig(options, selectedQuestionIds, defaults = {}) {
   const src = options && typeof options === 'object' ? options : {};
@@ -387,6 +436,9 @@ function normalizeExportRenderConfig(options, selectedQuestionIds, defaults = {}
     src.pageColumnQuestionCounts || src.pageColumnCounts,
     layoutColumns,
   );
+  const titlePageIndices = normalizeTitlePageIndices(
+    src.titlePageIndices || src.titlePages,
+  );
   const alignPolicy = normalizeAlignPolicy(src.alignPolicy);
   const questionMode = normalizeQuestionMode(
     src.questionMode || src.question_mode || src.mode || defaults.questionMode,
@@ -404,6 +456,15 @@ function normalizeExportRenderConfig(options, selectedQuestionIds, defaults = {}
     String(src.subjectTitleText || defaults.subjectTitleText || '\uC218\uD559 \uC601\uC5ED')
       .replace(/\s+/g, ' ')
       .trim() || '\uC218\uD559 \uC601\uC5ED';
+  const includeCoverPage = normalizeBool(
+    src.includeCoverPage ?? src.coverPage,
+    normalizeBool(defaults.includeCoverPage, false),
+  );
+  const titlePageHeaders = normalizeTitlePageHeaders(
+    src.titlePageHeaders || src.titleHeaders,
+    titlePageIndices,
+    subjectTitleText,
+  );
   return {
     // Force server-side renderer to latest stable path even if older app build
     // sends a stale renderConfigVersion.
@@ -414,6 +475,9 @@ function normalizeExportRenderConfig(options, selectedQuestionIds, defaults = {}
     columnQuestionCounts,
     pageColumnQuestionCounts,
     columnLabelAnchors,
+    titlePageIndices,
+    titlePageHeaders,
+    includeCoverPage,
     alignPolicy,
     questionMode,
     layoutTuning: normalizeLayoutTuning(src.layoutTuning, src),
@@ -939,12 +1003,15 @@ async function createExportJob(body, res) {
     paperSize,
     includeAnswerSheet,
     includeExplanation,
+    includeCoverPage: renderConfig.includeCoverPage,
     layoutColumns: renderConfig.layoutColumns,
     maxQuestionsPerPage: renderConfig.maxQuestionsPerPage,
     layoutMode: renderConfig.layoutMode,
     columnQuestionCounts: renderConfig.columnQuestionCounts,
     pageColumnQuestionCounts: renderConfig.pageColumnQuestionCounts,
     columnLabelAnchors: renderConfig.columnLabelAnchors,
+    titlePageIndices: renderConfig.titlePageIndices,
+    titlePageHeaders: renderConfig.titlePageHeaders,
     alignPolicy: renderConfig.alignPolicy,
     subjectTitleText: renderConfig.subjectTitleText,
     questionMode: renderConfig.questionMode,
@@ -964,12 +1031,15 @@ async function createExportJob(body, res) {
     paperSize,
     includeAnswerSheet,
     includeExplanation,
+    includeCoverPage: renderConfig.includeCoverPage,
     layoutColumns: renderConfig.layoutColumns,
     maxQuestionsPerPage: renderConfig.maxQuestionsPerPage,
     layoutMode: renderConfig.layoutMode,
     columnQuestionCounts: renderConfig.columnQuestionCounts,
     pageColumnQuestionCounts: renderConfig.pageColumnQuestionCounts,
     columnLabelAnchors: renderConfig.columnLabelAnchors,
+    titlePageIndices: renderConfig.titlePageIndices,
+    titlePageHeaders: renderConfig.titlePageHeaders,
     alignPolicy: renderConfig.alignPolicy,
     subjectTitleText: renderConfig.subjectTitleText,
     questionMode: renderConfig.questionMode,

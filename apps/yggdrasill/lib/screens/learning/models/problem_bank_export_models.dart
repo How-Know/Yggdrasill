@@ -58,7 +58,7 @@ const String kLearningQuestionModeOriginal = 'original';
 const String kLearningQuestionModeObjective = 'objective';
 const String kLearningQuestionModeSubjective = 'subjective';
 const String kLearningQuestionModeEssay = 'essay';
-const String kLearningRenderConfigVersion = 'pb_render_v32g_anchor_pair_ref';
+const String kLearningRenderConfigVersion = 'pb_render_v32l_cover_preview_sync';
 
 class LearningProblemLayoutTuning {
   const LearningProblemLayoutTuning({
@@ -266,6 +266,14 @@ class LearningProblemExportSettings {
       'columnQuestionCounts': const <int>[],
       'pageColumnQuestionCounts': const <Map<String, dynamic>>[],
       'columnLabelAnchors': const <Map<String, dynamic>>[],
+      'titlePageIndices': const <int>[1],
+      'titlePageHeaders': const <Map<String, dynamic>>[
+        <String, dynamic>{
+          'page': 1,
+          'title': '수학 영역',
+          'subtitle': '',
+        },
+      ],
       'alignPolicy': const <String, dynamic>{
         'pairAlignment': 'row',
         'skipAnchorRows': true,

@@ -78,9 +78,9 @@ function normalizeAnchors(rawAnchors, columns) {
   return anchors;
 }
 
-function defaultFirstPageAnchors({ profile, pageIndex, layoutColumns, perPage }) {
+function defaultTitlePageAnchors({ profile, isTitlePage, layoutColumns, perPage }) {
   const isMock = profile === 'mock' || profile === 'csat';
-  if (!isMock || pageIndex !== 0) return [];
+  if (!isMock || isTitlePage !== true) return [];
   if (layoutColumns !== 2 || perPage < 1) return [];
   return [
     {
@@ -117,6 +117,7 @@ export function buildSlotPlan({
   alignPolicy,
   profile,
   pageIndex = 0,
+  isTitlePage = false,
 }) {
   const safeColumns = Math.max(1, toSafeInt(layoutColumns, 1));
   const safePerPage = Math.max(1, toSafeInt(perPage, 1));
@@ -131,16 +132,9 @@ export function buildSlotPlan({
 
   const rowCount = Math.max(1, ...resolvedCounts);
   const normalizedAnchors = normalizeAnchors(columnLabelAnchors, safeColumns);
-  const anchorsToUse = normalizedAnchors.length > 0
-    ? normalizedAnchors
-    : defaultFirstPageAnchors({
-      profile,
-      pageIndex,
-      layoutColumns: safeColumns,
-      perPage: safePerPage,
-    });
   const anchorByKey = new Map();
-  for (const anchor of anchorsToUse) {
+  let hasExplicitAnchorForPage = false;
+  for (const anchor of normalizedAnchors) {
     if (!shouldApplyAnchorOnPage(anchor.page, pageIndex)) continue;
     const columnIndex = anchor.columnIndex;
     if (!Number.isFinite(columnIndex) || columnIndex < 0 || columnIndex >= safeColumns) continue;
@@ -148,7 +142,25 @@ export function buildSlotPlan({
     // Current contract: label anchor is always attached to the top question slot of a column.
     const rowIndex = 0;
     const key = `${rowIndex}:${columnIndex}`;
-    if (!anchorByKey.has(key)) anchorByKey.set(key, anchor);
+    if (!anchorByKey.has(key)) {
+      anchorByKey.set(key, anchor);
+      hasExplicitAnchorForPage = true;
+    }
+  }
+  if (!hasExplicitAnchorForPage) {
+    for (const anchor of defaultTitlePageAnchors({
+      profile,
+      isTitlePage,
+      layoutColumns: safeColumns,
+      perPage: safePerPage,
+    })) {
+      const columnIndex = anchor.columnIndex;
+      if (!Number.isFinite(columnIndex) || columnIndex < 0 || columnIndex >= safeColumns) continue;
+      if (resolvedCounts[columnIndex] <= 0) continue;
+      const rowIndex = 0;
+      const key = `${rowIndex}:${columnIndex}`;
+      if (!anchorByKey.has(key)) anchorByKey.set(key, anchor);
+    }
   }
 
   const slotQuestionOrderByColumn = Array.from({ length: safeColumns }, () => []);

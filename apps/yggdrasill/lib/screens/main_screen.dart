@@ -424,6 +424,39 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     _departureBySetCache = departureBySet;
     _waitingByTimeCache = waitingByTime;
     _sideSheetDataDirty = false;
+    _prewarmActiveAssignmentsForSideSheetStudents(
+      waiting: waiting,
+      attended: attended,
+      leaved: leaved,
+    );
+  }
+
+  /// 출석 사이드시트에 뜨는 학생 칩이 그려지기 전에 배정을 미리 로드해,
+  /// 예약 과제가 한 프레임 현행 칩에 비치는 현상을 줄인다.
+  void _prewarmActiveAssignmentsForSideSheetStudents({
+    required List<_AttendanceTarget> waiting,
+    required List<_AttendanceTarget> attended,
+    required List<_AttendanceTarget> leaved,
+  }) {
+    final store = HomeworkAssignmentStore.instance;
+    final rev = store.revision.value;
+    final seen = <String>{};
+    void schedule(_AttendanceTarget t) {
+      final id = t.student.id.trim();
+      if (id.isEmpty || seen.contains(id)) return;
+      seen.add(id);
+      _homeworkChipAssignRevisionByStudent[id] = rev;
+      _activeAssignmentsFutureByStudent[id] = store.loadActiveAssignments(id);
+    }
+    for (final t in waiting) {
+      schedule(t);
+    }
+    for (final t in attended) {
+      schedule(t);
+    }
+    for (final t in leaved) {
+      schedule(t);
+    }
   }
 
   // 출석/하원 시간 기록용
@@ -3121,14 +3154,32 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         );
         return FutureBuilder<List<HomeworkAssignmentDetail>>(
           future: assignmentsFuture,
+          initialData: HomeworkAssignmentStore.instance
+              .peekCachedActiveAssignments(studentId),
           builder: (context, snapshot) {
-            final assignments =
-                snapshot.data ?? const <HomeworkAssignmentDetail>[];
-            final hiddenAssignedItemIds = assignments
-                .where(_isReservationAssignment)
-                .map((a) => a.homeworkItemId.trim())
-                .where((id) => id.isNotEmpty)
-                .toSet();
+            final assignStore = HomeworkAssignmentStore.instance;
+            final cachePeek =
+                assignStore.peekCachedActiveAssignments(studentId);
+            final loadedOnce =
+                assignStore.hasCompletedActiveAssignmentLoad(studentId);
+            final waiting =
+                snapshot.connectionState == ConnectionState.waiting;
+            // 첫 로드: 배정 응답이 오기 전에는 과제 칩을 그리지 않음(예약 과제가 한 프레임 현행으로 비침 방지).
+            if (!loadedOnce && waiting && cachePeek == null) {
+              return const SizedBox(height: 32);
+            }
+            final assignments = snapshot.connectionState ==
+                    ConnectionState.done
+                ? (snapshot.data ?? const <HomeworkAssignmentDetail>[])
+                : (cachePeek ?? const <HomeworkAssignmentDetail>[]);
+            final hiddenAssignedItemIds = <String>{
+              ...assignments
+                  .where(_isReservationAssignment)
+                  .map((a) => a.homeworkItemId.trim())
+                  .where((id) => id.isNotEmpty),
+              ...HomeworkAssignmentStore.instance
+                  .peekPendingReservedHomeworkItemIds(studentId),
+            };
             final Map<String, String> groupTitleById = <String, String>{};
             for (final assignment in assignments) {
               final groupId = (assignment.groupId ?? '').trim();
@@ -3839,23 +3890,43 @@ extension on _MainScreenState {
                   )
                 : null,
             defaultSplitParts: splitParts,
+            deferBump: isReserve,
+            deferPersist: isReserve,
           );
           createdItems.add(created);
         }
         if (isReserve && createdItems.isNotEmpty) {
-          await HomeworkStore.instance.persistItemsNow(
+          HomeworkAssignmentStore.instance.applyOptimisticReservedAssignments(
             target.student.id,
             createdItems,
           );
-          await HomeworkAssignmentStore.instance.recordAssignments(
-            target.student.id,
-            createdItems,
-            note: HomeworkAssignmentStore.reservationNote,
+          HomeworkStore.instance.bumpRevision();
+          final ok =
+              await HomeworkStore.instance.commitReservedHomeworkBundleRpc(
+            studentId: target.student.id,
+            group: null,
+            items: createdItems,
             splitPartsByItem: <String, int>{
               for (final hw in createdItems)
                 hw.id: hw.defaultSplitParts.clamp(1, 4).toInt(),
             },
           );
+          if (!ok) {
+            for (final hw in createdItems.reversed) {
+              HomeworkStore.instance.remove(target.student.id, hw.id);
+            }
+            HomeworkAssignmentStore.instance
+                .revertOptimisticReservedAssignmentsForItems(
+              target.student.id,
+              createdItems.map((e) => e.id),
+            );
+            HomeworkStore.instance.bumpRevision();
+            if (!context.mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('예약 과제 저장에 실패했어요.')),
+            );
+            return;
+          }
         }
         final String msg = isReserve
             ? (entries.length > 1

@@ -26,7 +26,7 @@ const PREVIEW_BUCKET = 'problem-previews';
 const SIGNED_URL_EXPIRY_SECONDS = 3600;
 const PREVIEW_VIEWPORT_WIDTH = 520;
 const PREVIEW_DPR = 3;
-const PREVIEW_STYLE_VERSION = 'pv32g_anchor_pair_ref';
+const PREVIEW_STYLE_VERSION = 'pv32l_cover_preview_sync';
 
 function repoAssetPath(...segments) {
   return path.resolve(REPO_ROOT, ...segments);

@@ -1530,6 +1530,17 @@ class HomeworkQuickAddProxyDialogState
     }
   }
 
+  void _syncLinkedHomeworkTypeToLinkedDraftItems(String type) {
+    final color = _colorForType(type);
+    for (var i = 0; i < _draftGroupItems.length; i++) {
+      final e = _draftGroupItems[i];
+      final key = e.linkedBookKey;
+      if (key != null && key.isNotEmpty) {
+        _draftGroupItems[i] = e.copyWith(type: type, color: color);
+      }
+    }
+  }
+
   Widget _buildLinkedHomeworkTypeDropdown() {
     final safe =
         _homeworkTypeValues.contains(_linkedHomeworkType) ? _linkedHomeworkType : '교재';
@@ -1539,9 +1550,13 @@ class HomeworkQuickAddProxyDialogState
         for (final t in _homeworkTypeValues)
           DropdownMenuItem<String>(value: t, child: Text(t)),
       ],
-      onChanged: (v) => setState(() {
-        _linkedHomeworkType = v ?? '교재';
-      }),
+      onChanged: (v) {
+        final next = v ?? '교재';
+        setState(() {
+          _linkedHomeworkType = next;
+          _syncLinkedHomeworkTypeToLinkedDraftItems(next);
+        });
+      },
       decoration: _inputDecoration('과제 유형'),
       dropdownColor: kDlgPanelBg,
       style: const TextStyle(color: kDlgText, fontWeight: FontWeight.w600),
@@ -1854,6 +1869,8 @@ class HomeworkQuickAddProxyDialogState
     final memoController = ImeAwareTextEditingController(text: source.memo);
     final contentController =
         ImeAwareTextEditingController(text: source.content);
+    final isLinkedDraft = source.linkedBookKey != null &&
+        source.linkedBookKey!.trim().isNotEmpty;
     var type = source.type;
     var splitParts = source.splitParts;
 
@@ -1877,26 +1894,47 @@ class HomeworkQuickAddProxyDialogState
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    DropdownButtonFormField<String>(
-                      value: _homeworkTypeValues.contains(type)
-                          ? type
-                          : '교재',
-                      items: [
-                        for (final t in _homeworkTypeValues)
-                          DropdownMenuItem<String>(value: t, child: Text(t)),
-                      ],
-                      onChanged: (v) => setDialogState(() {
-                        type = v ?? '교재';
-                      }),
-                      decoration: _inputDecoration('과제 유형'),
-                      dropdownColor: kDlgPanelBg,
-                      style: const TextStyle(
-                        color: kDlgText,
-                        fontWeight: FontWeight.w600,
+                    if (isLinkedDraft) ...[
+                      Text(
+                        '과제 유형: ${_homeworkTypeValues.contains(_linkedHomeworkType) ? _linkedHomeworkType : '교재'}',
+                        style: const TextStyle(
+                          color: kDlgText,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 14,
+                        ),
                       ),
-                      iconEnabledColor: kDlgTextSub,
-                    ),
-                    const SizedBox(height: 10),
+                      const SizedBox(height: 4),
+                      const Text(
+                        '연결 교재 그룹은 오른쪽 「그룹 과제 정보」에서 과제 유형을 바꿀 수 있습니다.',
+                        style: TextStyle(
+                          color: kDlgTextSub,
+                          fontSize: 12.3,
+                          height: 1.35,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                    ] else ...[
+                      DropdownButtonFormField<String>(
+                        value: _homeworkTypeValues.contains(type)
+                            ? type
+                            : '프린트',
+                        items: [
+                          for (final t in _homeworkTypeValues)
+                            DropdownMenuItem<String>(value: t, child: Text(t)),
+                        ],
+                        onChanged: (v) => setDialogState(() {
+                          type = v ?? '프린트';
+                        }),
+                        decoration: _inputDecoration('과제 유형'),
+                        dropdownColor: kDlgPanelBg,
+                        style: const TextStyle(
+                          color: kDlgText,
+                          fontWeight: FontWeight.w600,
+                        ),
+                        iconEnabledColor: kDlgTextSub,
+                      ),
+                      const SizedBox(height: 10),
+                    ],
                     TextField(
                       controller: titleController,
                       style: const TextStyle(
@@ -2009,15 +2047,20 @@ class HomeworkQuickAddProxyDialogState
     final count = countController.text.trim();
     final memo = memoController.text.trim();
     final content = contentController.text.trim();
+    final resolvedType = isLinkedDraft
+        ? (_homeworkTypeValues.contains(_linkedHomeworkType)
+            ? _linkedHomeworkType
+            : '교재')
+        : type;
     final updated = source.copyWith(
-      type: type,
+      type: resolvedType,
       title: title,
       page: page,
       count: count,
       memo: memo,
       content: content,
       body: _composeBodyValues(page: page, count: count, content: content),
-      color: _colorForType(type),
+      color: _colorForType(resolvedType),
       splitParts: splitParts.clamp(1, 4).toInt(),
     );
     final otherPages = _draftUsedPages(excludingDraftKey: source.key);
@@ -2123,15 +2166,16 @@ class HomeworkQuickAddProxyDialogState
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Expanded(
-                          child: Text(
+                          child: LatexTextRenderer(
                             title,
                             style: const TextStyle(
                               color: kDlgText,
                               fontWeight: FontWeight.w700,
                             ),
-                            overflow: TextOverflow.ellipsis,
+                            softWrap: true,
                           ),
                         ),
                         if (page.isNotEmpty)
@@ -2156,28 +2200,30 @@ class HomeworkQuickAddProxyDialogState
                     ),
                     if (memo.isNotEmpty) ...[
                       const SizedBox(height: 4),
-                      Text(
+                      LatexTextRenderer(
                         '메모: $memo',
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
                           color: kDlgTextSub,
                           fontSize: 12.2,
                           height: 1.25,
                         ),
+                        softWrap: true,
+                        maxLines: 4,
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ],
                     if (content.isNotEmpty) ...[
                       const SizedBox(height: 4),
-                      Text(
+                      LatexTextRenderer(
                         content,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
                           color: kDlgTextSub,
                           fontSize: 12.2,
                           height: 1.25,
                         ),
+                        softWrap: true,
+                        maxLines: 4,
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ],
                   ],
@@ -2253,6 +2299,10 @@ class HomeworkQuickAddProxyDialogState
                 const TextStyle(color: kDlgText, fontWeight: FontWeight.w700),
             decoration: _inputDecoration('그룹 제목', hint: '예: 3월 1주차 과제'),
           ),
+        if (_selectedLinkedBook != null) ...[
+          const SizedBox(height: 10),
+          _buildLinkedHomeworkTypeDropdown(),
+        ],
         const SizedBox(height: 8),
         Container(
           width: double.infinity,
@@ -2647,6 +2697,8 @@ class HomeworkQuickAddProxyDialogState
                                       ),
                                     ),
                                     child: Row(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
                                       children: [
                                         _buildTreeCheckbox(
                                           value: small.selected,
@@ -2672,9 +2724,7 @@ class HomeworkQuickAddProxyDialogState
                                               fontSize: 12.5,
                                               height: 1.2,
                                             ),
-                                            maxLines: 1,
-                                            softWrap: false,
-                                            overflow: TextOverflow.ellipsis,
+                                            softWrap: true,
                                           ),
                                         ),
                                         const SizedBox(width: 8),
@@ -2893,6 +2943,7 @@ class HomeworkQuickAddProxyDialogState
                   _flowId = link.flowId;
                   _selectedLinkedBookKey = link.key;
                   _linkedHomeworkType = '교재';
+                  _syncLinkedHomeworkTypeToLinkedDraftItems('교재');
                 });
                 await _handleFlowChanged(
                   preferredLinkedBookKey: link.key,
@@ -3014,8 +3065,6 @@ class HomeworkQuickAddProxyDialogState
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _buildLinkedHomeworkTypeDropdown(),
-          const SizedBox(height: 12),
           TextField(
             controller: _title,
             style: const TextStyle(
@@ -3032,8 +3081,6 @@ class HomeworkQuickAddProxyDialogState
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _buildLinkedHomeworkTypeDropdown(),
-        const SizedBox(height: 12),
         _buildRangeInlineEditors(),
       ],
     );

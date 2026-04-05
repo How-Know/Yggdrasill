@@ -8,11 +8,21 @@ class ProblemBankPreviewRefreshRequest {
     required this.subjectTitleText,
     required this.pageColumnQuestionCounts,
     required this.columnLabelAnchors,
+    required this.titlePageIndices,
+    required this.titlePageHeaders,
+    required this.includeCoverPage,
+    required this.includeAnswerSheet,
+    required this.includeExplanation,
   });
 
   final String subjectTitleText;
   final List<Map<String, dynamic>> pageColumnQuestionCounts;
   final List<Map<String, dynamic>> columnLabelAnchors;
+  final List<int> titlePageIndices;
+  final List<Map<String, dynamic>> titlePageHeaders;
+  final bool includeCoverPage;
+  final bool includeAnswerSheet;
+  final bool includeExplanation;
 }
 
 class ProblemBankPreviewRefreshResult {
@@ -20,11 +30,21 @@ class ProblemBankPreviewRefreshResult {
     required this.pdfUrl,
     this.pageColumnQuestionCounts = const <Map<String, dynamic>>[],
     this.columnLabelAnchors = const <Map<String, dynamic>>[],
+    this.titlePageIndices = const <int>[],
+    this.titlePageHeaders = const <Map<String, dynamic>>[],
+    this.includeCoverPage = false,
+    this.includeAnswerSheet = true,
+    this.includeExplanation = false,
   });
 
   final String pdfUrl;
   final List<Map<String, dynamic>> pageColumnQuestionCounts;
   final List<Map<String, dynamic>> columnLabelAnchors;
+  final List<int> titlePageIndices;
+  final List<Map<String, dynamic>> titlePageHeaders;
+  final bool includeCoverPage;
+  final bool includeAnswerSheet;
+  final bool includeExplanation;
 }
 
 typedef ProblemBankPreviewRefreshCallback
@@ -47,6 +67,11 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
     this.totalQuestionCount = 0,
     this.initialPageColumnQuestionCounts = const <Map<String, dynamic>>[],
     this.initialColumnLabelAnchors = const <Map<String, dynamic>>[],
+    this.initialTitlePageIndices = const <int>[],
+    this.initialTitlePageHeaders = const <Map<String, dynamic>>[],
+    this.initialIncludeCoverPage = false,
+    this.initialIncludeAnswerSheet = true,
+    this.initialIncludeExplanation = false,
     this.onRefreshRequested,
     this.onGeneratePdfRequested,
   });
@@ -59,6 +84,11 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
   final int totalQuestionCount;
   final List<Map<String, dynamic>> initialPageColumnQuestionCounts;
   final List<Map<String, dynamic>> initialColumnLabelAnchors;
+  final List<int> initialTitlePageIndices;
+  final List<Map<String, dynamic>> initialTitlePageHeaders;
+  final bool initialIncludeCoverPage;
+  final bool initialIncludeAnswerSheet;
+  final bool initialIncludeExplanation;
   final ProblemBankPreviewRefreshCallback? onRefreshRequested;
   final ProblemBankPreviewGeneratePdfCallback? onGeneratePdfRequested;
 
@@ -74,6 +104,12 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
         const <Map<String, dynamic>>[],
     List<Map<String, dynamic>> initialColumnLabelAnchors =
         const <Map<String, dynamic>>[],
+    List<int> initialTitlePageIndices = const <int>[],
+    List<Map<String, dynamic>> initialTitlePageHeaders =
+        const <Map<String, dynamic>>[],
+    bool initialIncludeCoverPage = false,
+    bool initialIncludeAnswerSheet = true,
+    bool initialIncludeExplanation = false,
     ProblemBankPreviewRefreshCallback? onRefreshRequested,
     ProblemBankPreviewGeneratePdfCallback? onGeneratePdfRequested,
   }) async {
@@ -103,6 +139,11 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
               totalQuestionCount: totalQuestionCount,
               initialPageColumnQuestionCounts: initialPageColumnQuestionCounts,
               initialColumnLabelAnchors: initialColumnLabelAnchors,
+              initialTitlePageIndices: initialTitlePageIndices,
+              initialTitlePageHeaders: initialTitlePageHeaders,
+              initialIncludeCoverPage: initialIncludeCoverPage,
+              initialIncludeAnswerSheet: initialIncludeAnswerSheet,
+              initialIncludeExplanation: initialIncludeExplanation,
               onRefreshRequested: onRefreshRequested,
               onGeneratePdfRequested: onGeneratePdfRequested,
             ),
@@ -142,11 +183,21 @@ class _ProblemBankExportServerPreviewDialogState
   int _viewerRevision = 0;
   bool _isRefreshing = false;
   bool _isGeneratingPdf = false;
+  late bool _includeCoverPage;
+  late bool _includeAnswerSheet;
+  late bool _includeExplanation;
   late Map<int, List<int>> _pageOverrides;
   late List<List<int>> _computedPageColumnCounts;
   late Map<String, Map<String, dynamic>> _columnLabelAnchorMap;
+  late Set<int> _labelPanelPageSet;
+  late Set<int> _titlePageIndexSet;
+  late Map<int, Map<String, String>> _titlePageHeaderMap;
   final Map<String, TextEditingController> _labelControllers =
       <String, TextEditingController>{};
+  final Map<int, TextEditingController> _titleControllers =
+      <int, TextEditingController>{};
+  final Map<int, TextEditingController> _subtitleControllers =
+      <int, TextEditingController>{};
 
   @override
   void initState() {
@@ -154,9 +205,19 @@ class _ProblemBankExportServerPreviewDialogState
     _currentPdfUrl = widget.pdfUrl;
     _subjectController =
         TextEditingController(text: widget.initialSubjectTitle);
+    _includeCoverPage = widget.initialIncludeCoverPage;
+    _includeAnswerSheet = widget.initialIncludeAnswerSheet;
+    _includeExplanation = widget.initialIncludeExplanation;
     _pageOverrides = _readInitialPageOverrides();
     _computedPageColumnCounts = _recomputePageColumnCounts();
     _columnLabelAnchorMap = _readInitialColumnLabelAnchors();
+    _titlePageHeaderMap = _readInitialTitlePageHeaders();
+    _labelPanelPageSet = <int>{};
+    _titlePageIndexSet = _normalizeTitlePageIndices(<dynamic>[
+      ...widget.initialTitlePageIndices,
+      ..._titlePageHeaderMap.keys,
+    ]);
+    _syncPageScopedUiState();
   }
 
   @override
@@ -164,11 +225,231 @@ class _ProblemBankExportServerPreviewDialogState
     for (final controller in _labelControllers.values) {
       controller.dispose();
     }
+    for (final controller in _titleControllers.values) {
+      controller.dispose();
+    }
+    for (final controller in _subtitleControllers.values) {
+      controller.dispose();
+    }
     _subjectController.dispose();
     super.dispose();
   }
 
   bool get _isTwoColumnLayout => widget.layoutColumns == 2;
+
+  int get _maxEditablePageCount {
+    if (_isTwoColumnLayout) {
+      return math.max(1, _computedPageColumnCounts.length);
+    }
+    return math.max(1, _pageCount);
+  }
+
+  Set<int> _normalizeTitlePageIndices(Iterable<dynamic>? source) {
+    final maxPage = _maxEditablePageCount;
+    final out = <int>{1};
+    if (source != null) {
+      for (final one in source) {
+        final page = int.tryParse('$one');
+        if (page == null || page <= 0) continue;
+        if (page > maxPage) continue;
+        out.add(page);
+      }
+    }
+    return out;
+  }
+
+  void _syncPageScopedUiState() {
+    final maxPage = _maxEditablePageCount;
+    _labelPanelPageSet = _labelPanelPageSet
+        .where((page) => page >= 1 && page <= maxPage)
+        .toSet();
+    _titlePageIndexSet = _titlePageIndexSet
+        .where((page) => page >= 1 && page <= maxPage)
+        .toSet()
+      ..add(1);
+    _titlePageHeaderMap = Map<int, Map<String, String>>.fromEntries(
+      _titlePageHeaderMap.entries
+          .where((entry) => entry.key >= 1 && entry.key <= maxPage)
+          .map((entry) => MapEntry(
+                entry.key,
+                <String, String>{
+                  'title': entry.value['title'] ?? '',
+                  'subtitle': entry.value['subtitle'] ?? '',
+                },
+              )),
+    );
+    for (final pageNo in _titlePageIndexSet) {
+      _ensureTitleHeaderForPage(pageNo);
+    }
+    _syncTitleHeaderControllers();
+    final pageOneTitle = (_titlePageHeaderMap[1]?['title'] ?? '').trim();
+    if (pageOneTitle.isNotEmpty && _subjectController.text != pageOneTitle) {
+      _subjectController.text = pageOneTitle;
+    }
+  }
+
+  Map<int, Map<String, String>> _parseTitlePageHeaders(
+    List<Map<String, dynamic>> source,
+  ) {
+    final maxPage = _maxEditablePageCount;
+    final out = <int, Map<String, String>>{};
+    for (final one in source) {
+      final pageRaw = int.tryParse(
+        '${one['page'] ?? one['pageIndex'] ?? one['pageNo'] ?? one['pageNumber'] ?? ''}',
+      );
+      if (pageRaw == null || pageRaw <= 0 || pageRaw > maxPage) continue;
+      final title = '${one['title'] ?? one['subjectTitleText'] ?? ''}'
+          .replaceAll(RegExp(r'\s+'), ' ')
+          .trim();
+      final subtitle = '${one['subtitle'] ?? one['subTitle'] ?? one['sub'] ?? ''}'
+          .replaceAll(RegExp(r'\s+'), ' ')
+          .trim();
+      if (title.isEmpty && subtitle.isEmpty) continue;
+      out[pageRaw] = <String, String>{
+        'title': title,
+        'subtitle': subtitle,
+      };
+    }
+    return out;
+  }
+
+  Map<int, Map<String, String>> _readInitialTitlePageHeaders() {
+    final parsed = _parseTitlePageHeaders(widget.initialTitlePageHeaders);
+    if (!parsed.containsKey(1)) {
+      final initialTitle = widget.initialSubjectTitle.trim().isNotEmpty
+          ? widget.initialSubjectTitle.trim()
+          : '수학 영역';
+      parsed[1] = <String, String>{
+        'title': initialTitle,
+        'subtitle': '',
+      };
+    }
+    return parsed;
+  }
+
+  void _ensureTitleHeaderForPage(int pageNo) {
+    final fallback = (_titlePageHeaderMap[1]?['title'] ?? _subjectController.text)
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    final baseTitle = fallback.isNotEmpty ? fallback : '수학 영역';
+    final existing = _titlePageHeaderMap[pageNo];
+    if (existing == null) {
+      _titlePageHeaderMap[pageNo] = <String, String>{
+        'title': baseTitle,
+        'subtitle': '',
+      };
+      return;
+    }
+    final currentTitle = (existing['title'] ?? '').trim();
+    if (currentTitle.isEmpty) {
+      _titlePageHeaderMap[pageNo] = <String, String>{
+        'title': baseTitle,
+        'subtitle': existing['subtitle'] ?? '',
+      };
+    }
+  }
+
+  void _syncTitleHeaderControllers() {
+    final validPages = _titlePageHeaderMap.keys.toSet();
+    final staleTitlePages = _titleControllers.keys
+        .where((pageNo) => !validPages.contains(pageNo))
+        .toList(growable: false);
+    for (final pageNo in staleTitlePages) {
+      _titleControllers.remove(pageNo)?.dispose();
+    }
+    final staleSubtitlePages = _subtitleControllers.keys
+        .where((pageNo) => !validPages.contains(pageNo))
+        .toList(growable: false);
+    for (final pageNo in staleSubtitlePages) {
+      _subtitleControllers.remove(pageNo)?.dispose();
+    }
+    for (final pageNo in validPages) {
+      final header = _titlePageHeaderMap[pageNo] ?? const <String, String>{};
+      final title = header['title'] ?? '';
+      final subtitle = header['subtitle'] ?? '';
+      final titleController = _titleControllers[pageNo];
+      if (titleController != null && titleController.text != title) {
+        titleController.text = title;
+      }
+      final subtitleController = _subtitleControllers[pageNo];
+      if (subtitleController != null && subtitleController.text != subtitle) {
+        subtitleController.text = subtitle;
+      }
+    }
+  }
+
+  bool _isLabelPanelVisible(int pageNo) => _labelPanelPageSet.contains(pageNo);
+
+  void _toggleLabelPanel(int pageNo) {
+    if (pageNo <= 0) return;
+    setState(() {
+      if (_labelPanelPageSet.contains(pageNo)) {
+        _labelPanelPageSet.remove(pageNo);
+      } else {
+        _labelPanelPageSet.add(pageNo);
+      }
+      _syncPageScopedUiState();
+    });
+  }
+
+  bool _isTitlePage(int pageNo) => _titlePageIndexSet.contains(pageNo);
+
+  void _toggleTitlePage(int pageNo) {
+    if (pageNo <= 1) return;
+    setState(() {
+      if (_titlePageIndexSet.contains(pageNo)) {
+        _titlePageIndexSet.remove(pageNo);
+        _titlePageHeaderMap.remove(pageNo);
+        _titleControllers.remove(pageNo)?.dispose();
+        _subtitleControllers.remove(pageNo)?.dispose();
+      } else {
+        _titlePageIndexSet.add(pageNo);
+        _ensureTitleHeaderForPage(pageNo);
+      }
+      _syncPageScopedUiState();
+    });
+  }
+
+  TextEditingController _titleControllerForPage(int pageNo) {
+    final existing = _titleControllers[pageNo];
+    if (existing != null) return existing;
+    _ensureTitleHeaderForPage(pageNo);
+    final controller = TextEditingController(
+      text: _titlePageHeaderMap[pageNo]?['title'] ?? '',
+    );
+    _titleControllers[pageNo] = controller;
+    return controller;
+  }
+
+  TextEditingController _subtitleControllerForPage(int pageNo) {
+    final existing = _subtitleControllers[pageNo];
+    if (existing != null) return existing;
+    _ensureTitleHeaderForPage(pageNo);
+    final controller = TextEditingController(
+      text: _titlePageHeaderMap[pageNo]?['subtitle'] ?? '',
+    );
+    _subtitleControllers[pageNo] = controller;
+    return controller;
+  }
+
+  void _setTitleHeader({
+    required int pageNo,
+    String? title,
+    String? subtitle,
+  }) {
+    _ensureTitleHeaderForPage(pageNo);
+    final prev = _titlePageHeaderMap[pageNo] ?? const <String, String>{};
+    final normalizedTitle = (title ?? prev['title'] ?? '')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    final normalizedSubtitle = (subtitle ?? prev['subtitle'] ?? '')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    _titlePageHeaderMap[pageNo] = <String, String>{
+      'title': normalizedTitle,
+      'subtitle': normalizedSubtitle,
+    };
+  }
 
   List<int> get _baseColumnCounts {
     if (!_isTwoColumnLayout) return const <int>[1, 0];
@@ -425,6 +706,7 @@ class _ProblemBankExportServerPreviewDialogState
     _pageOverrides[pageIndex] = <int>[left, right];
     setState(() {
       _computedPageColumnCounts = _recomputePageColumnCounts();
+      _syncPageScopedUiState();
     });
   }
 
@@ -447,11 +729,48 @@ class _ProblemBankExportServerPreviewDialogState
         .toList(growable: false);
   }
 
+  List<int> _titlePageIndicesPayload() {
+    final maxPage = _maxEditablePageCount;
+    final pages = _titlePageIndexSet
+        .where((page) => page >= 1 && page <= maxPage)
+        .toSet()
+      ..add(1);
+    final out = pages.toList(growable: false)..sort();
+    return out;
+  }
+
+  List<Map<String, dynamic>> _titlePageHeadersPayload() {
+    final pageNos = _titlePageIndicesPayload();
+    final out = <Map<String, dynamic>>[];
+    for (final pageNo in pageNos) {
+      _ensureTitleHeaderForPage(pageNo);
+      final row = _titlePageHeaderMap[pageNo] ?? const <String, String>{};
+      final fallback = (_titlePageHeaderMap[1]?['title'] ?? _subjectController.text)
+          .replaceAll(RegExp(r'\s+'), ' ')
+          .trim();
+      final title = (row['title'] ?? '').trim().isNotEmpty
+          ? (row['title'] ?? '').trim()
+          : (fallback.isNotEmpty ? fallback : '수학 영역');
+      final subtitle = (row['subtitle'] ?? '').trim();
+      out.add(<String, dynamic>{
+        'page': pageNo,
+        'title': title,
+        'subtitle': subtitle,
+      });
+    }
+    return out;
+  }
+
   ProblemBankPreviewRefreshRequest _buildRequestPayload() {
     return ProblemBankPreviewRefreshRequest(
       subjectTitleText: _subjectController.text.trim(),
       pageColumnQuestionCounts: _pageColumnPayload(),
       columnLabelAnchors: _columnLabelAnchorsPayload(),
+      titlePageIndices: _titlePageIndicesPayload(),
+      titlePageHeaders: _titlePageHeadersPayload(),
+      includeCoverPage: _includeCoverPage,
+      includeAnswerSheet: _includeAnswerSheet,
+      includeExplanation: _includeExplanation,
     );
   }
 
@@ -536,12 +855,19 @@ class _ProblemBankExportServerPreviewDialogState
         _pageNumber = 1;
         _pageCount = 0;
         _viewerRevision += 1;
+        _includeCoverPage = refreshed.includeCoverPage;
+        _includeAnswerSheet = refreshed.includeAnswerSheet;
+        _includeExplanation = refreshed.includeExplanation;
         if (_isTwoColumnLayout) {
           _pageOverrides =
               _parsePageOverrides(refreshed.pageColumnQuestionCounts);
           _computedPageColumnCounts = _recomputePageColumnCounts();
           _columnLabelAnchorMap =
               _parseColumnLabelAnchors(refreshed.columnLabelAnchors);
+          final refreshedTitles = refreshed.titlePageIndices.isNotEmpty
+              ? refreshed.titlePageIndices
+              : _titlePageIndexSet.toList(growable: false);
+          _titlePageIndexSet = _normalizeTitlePageIndices(refreshedTitles);
           for (final entry in _labelControllers.entries) {
             final updated =
                 '${_columnLabelAnchorMap[entry.key]?['label'] ?? ''}'.trim();
@@ -549,6 +875,7 @@ class _ProblemBankExportServerPreviewDialogState
               entry.value.text = updated;
             }
           }
+          _syncPageScopedUiState();
         }
       });
     } finally {
@@ -598,6 +925,63 @@ class _ProblemBankExportServerPreviewDialogState
           child,
           const SizedBox(height: 10),
           const Divider(height: 1, color: Color(0xFF213037)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTitleSwitchTile({
+    required String label,
+    required String description,
+    required bool value,
+    required ValueChanged<bool> onChanged,
+  }) {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0F171C),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFF223137)),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: const TextStyle(
+                    color: _textPrimary,
+                    fontSize: 12.8,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  description,
+                  style: const TextStyle(
+                    color: _textMuted,
+                    fontSize: 11.4,
+                    fontWeight: FontWeight.w600,
+                    height: 1.3,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Switch(
+            value: value,
+            onChanged: onChanged,
+            activeThumbColor: const Color(0xFFC7F2D8),
+            activeTrackColor: const Color(0xFF1E6B55),
+            inactiveThumbColor: const Color(0xFF8EA0A8),
+            inactiveTrackColor: const Color(0xFF25333A),
+            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
         ],
       ),
     );
@@ -661,6 +1045,39 @@ class _ProblemBankExportServerPreviewDialogState
               ],
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPageCardPill({
+    required String label,
+    required bool selected,
+    required VoidCallback? onPressed,
+  }) {
+    return SizedBox(
+      height: 26,
+      child: TextButton(
+        onPressed: onPressed,
+        style: TextButton.styleFrom(
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          minimumSize: const Size(0, 26),
+          shape: const StadiumBorder(),
+          foregroundColor: selected ? const Color(0xFFC7F2D8) : _textMuted,
+          backgroundColor:
+              selected ? const Color(0xFF173C36) : const Color(0xFF131E24),
+          side: BorderSide(
+            color: selected ? const Color(0xFF2A6D5F) : const Color(0xFF2A3841),
+            width: 1,
+          ),
+          visualDensity: VisualDensity.compact,
+        ),
+        child: Text(
+          label,
+          style: const TextStyle(
+            fontSize: 11.2,
+            fontWeight: FontWeight.w800,
+          ),
         ),
       ),
     );
@@ -765,6 +1182,99 @@ class _ProblemBankExportServerPreviewDialogState
     );
   }
 
+  Widget _buildTitleHeaderEditor(int pageNo) {
+    final titleController = _titleControllerForPage(pageNo);
+    final subtitleController = _subtitleControllerForPage(pageNo);
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0C1418),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFF213037)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          TextField(
+            controller: titleController,
+            style: const TextStyle(
+              color: _textPrimary,
+              fontSize: 12.6,
+              fontWeight: FontWeight.w700,
+            ),
+            cursorColor: _textPrimary,
+            onChanged: (value) => _setTitleHeader(pageNo: pageNo, title: value),
+            decoration: InputDecoration(
+              isDense: true,
+              filled: true,
+              fillColor: _panelSectionBg,
+              labelText: '제목 페이지 타이틀',
+              labelStyle: const TextStyle(
+                color: _textMuted,
+                fontSize: 11.8,
+                fontWeight: FontWeight.w700,
+              ),
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+                borderSide: const BorderSide(color: Color(0xFF213037)),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+                borderSide: const BorderSide(color: _accent, width: 1.1),
+              ),
+            ),
+          ),
+          const SizedBox(height: 6),
+          TextField(
+            controller: subtitleController,
+            style: const TextStyle(
+              color: _textPrimary,
+              fontSize: 12.2,
+              fontWeight: FontWeight.w700,
+            ),
+            cursorColor: _textPrimary,
+            onChanged: (value) =>
+                _setTitleHeader(pageNo: pageNo, subtitle: value),
+            decoration: InputDecoration(
+              isDense: true,
+              filled: true,
+              fillColor: _panelSectionBg,
+              labelText: '부제 (괄호 없이 입력)',
+              labelStyle: const TextStyle(
+                color: _textMuted,
+                fontSize: 11.6,
+                fontWeight: FontWeight.w700,
+              ),
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+                borderSide: const BorderSide(color: Color(0xFF213037)),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+                borderSide: const BorderSide(color: _accent, width: 1.1),
+              ),
+            ),
+          ),
+          const SizedBox(height: 5),
+          const Text(
+            '렌더 형식: 타이틀(부제) / 부제는 타이틀보다 10% 작게 렌더됩니다.',
+            style: TextStyle(
+              color: Color(0xFF8DA3A6),
+              fontSize: 11.0,
+              fontWeight: FontWeight.w600,
+              height: 1.3,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildPageLayoutCards() {
     if (!_isTwoColumnLayout) {
       return const Text(
@@ -791,7 +1301,7 @@ class _ProblemBankExportServerPreviewDialogState
     return Column(
       children: [
         const Text(
-          '자동 배치 결과를 기준으로 페이지별 좌/우 문항 수를 조정합니다. 값 변경 시 뒤 페이지가 자동 재배치되며, 단별 라벨(5지선다형)도 편집할 수 있습니다.',
+          '자동 배치 결과를 기준으로 페이지별 좌/우 문항 수를 조정합니다. 라벨/제목 버튼으로 각 페이지의 라벨 편집 영역과 제목 페이지 양식을 토글할 수 있습니다.',
           style: TextStyle(
             color: Color(0xFF8DA3A6),
             fontSize: 11.4,
@@ -802,9 +1312,12 @@ class _ProblemBankExportServerPreviewDialogState
         const SizedBox(height: 8),
         ..._computedPageColumnCounts.asMap().entries.map((entry) {
           final index = entry.key;
+          final pageNo = index + 1;
           final counts = entry.value;
           final left = counts[0];
           final right = counts[1];
+          final labelVisible = _isLabelPanelVisible(pageNo);
+          final titleSelected = _isTitlePage(pageNo);
           return Container(
             width: double.infinity,
             margin: const EdgeInsets.only(bottom: 8),
@@ -817,13 +1330,30 @@ class _ProblemBankExportServerPreviewDialogState
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  '${index + 1}페이지',
-                  style: const TextStyle(
-                    color: _textPrimary,
-                    fontSize: 12.4,
-                    fontWeight: FontWeight.w800,
-                  ),
+                Row(
+                  children: [
+                    Text(
+                      '$pageNo페이지',
+                      style: const TextStyle(
+                        color: _textPrimary,
+                        fontSize: 12.4,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const Spacer(),
+                    _buildPageCardPill(
+                      label: '라벨',
+                      selected: labelVisible,
+                      onPressed: () => _toggleLabelPanel(pageNo),
+                    ),
+                    const SizedBox(width: 6),
+                    _buildPageCardPill(
+                      label: '제목',
+                      selected: titleSelected,
+                      onPressed:
+                          pageNo == 1 ? null : () => _toggleTitlePage(pageNo),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 6),
                 Row(
@@ -859,18 +1389,24 @@ class _ProblemBankExportServerPreviewDialogState
                     ),
                   ],
                 ),
-                const SizedBox(height: 8),
-                _buildAnchorEditor(
-                  pageIndex: index,
-                  columnIndex: 0,
-                  title: '왼쪽 단',
-                ),
-                const SizedBox(height: 6),
-                _buildAnchorEditor(
-                  pageIndex: index,
-                  columnIndex: 1,
-                  title: '오른쪽 단',
-                ),
+                if (labelVisible) ...[
+                  const SizedBox(height: 8),
+                  _buildAnchorEditor(
+                    pageIndex: index,
+                    columnIndex: 0,
+                    title: '왼쪽 단',
+                  ),
+                  const SizedBox(height: 6),
+                  _buildAnchorEditor(
+                    pageIndex: index,
+                    columnIndex: 1,
+                    title: '오른쪽 단',
+                  ),
+                ],
+                if (titleSelected) ...[
+                  const SizedBox(height: 8),
+                  _buildTitleHeaderEditor(pageNo),
+                ],
               ],
             ),
           );
@@ -1110,52 +1646,45 @@ class _ProblemBankExportServerPreviewDialogState
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                TextField(
-                                  controller: _subjectController,
-                                  style: const TextStyle(
-                                    color: _textPrimary,
-                                    fontSize: 13.2,
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                  cursorColor: _textPrimary,
-                                  decoration: InputDecoration(
-                                    isDense: true,
-                                    filled: true,
-                                    fillColor: _panelSectionBg,
-                                    hintText: '예: 수학 영역',
-                                    hintStyle: const TextStyle(
-                                      color: Color(0xFF5F787C),
-                                      fontSize: 12.6,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                    labelText: '중앙 타이틀',
-                                    labelStyle: const TextStyle(
-                                      color: _textMuted,
-                                      fontSize: 12.4,
-                                      fontWeight: FontWeight.w700,
-                                    ),
-                                    enabledBorder: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(8),
-                                      borderSide: const BorderSide(
-                                        color: _panelBorder,
-                                      ),
-                                    ),
-                                    focusedBorder: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(8),
-                                      borderSide: const BorderSide(
-                                        color: _accent,
-                                        width: 1.2,
-                                      ),
-                                    ),
-                                  ),
+                                _buildTitleSwitchTile(
+                                  label: '표지',
+                                  description:
+                                      'ON 시 맨 앞에 표지 1페이지 + 빈 페이지 1페이지를 추가합니다.',
+                                  value: _includeCoverPage,
+                                  onChanged: (value) {
+                                    setState(() {
+                                      _includeCoverPage = value;
+                                    });
+                                  },
                                 ),
-                                const SizedBox(height: 6),
+                                _buildTitleSwitchTile(
+                                  label: '빠른정답',
+                                  description: '정답지(빠른정답) 페이지를 포함합니다.',
+                                  value: _includeAnswerSheet,
+                                  onChanged: (value) {
+                                    setState(() {
+                                      _includeAnswerSheet = value;
+                                    });
+                                  },
+                                ),
+                                _buildTitleSwitchTile(
+                                  label: '해설',
+                                  description: '해설/검수 메모 페이지를 포함합니다.',
+                                  value: _includeExplanation,
+                                  onChanged: (value) {
+                                    setState(() {
+                                      _includeExplanation = value;
+                                    });
+                                  },
+                                ),
+                                const SizedBox(height: 4),
                                 const Text(
-                                  '입력값은 첫 페이지/이후 페이지 중앙 타이틀에 반영됩니다.',
+                                  '중앙 타이틀 입력은 페이지 카드 하단의 `제목` 편집에서 페이지별로 설정합니다.\n1페이지는 기본 제목 페이지이며, 제목 페이지로 지정된 카드에서 타이틀/부제를 각각 입력할 수 있습니다.',
                                   style: TextStyle(
-                                    color: Color(0xFF8DA3A6),
-                                    fontSize: 11.6,
+                                    color: Color(0xFF9FB3B3),
+                                    fontSize: 12.0,
                                     fontWeight: FontWeight.w600,
+                                    height: 1.38,
                                   ),
                                 ),
                               ],
@@ -1164,9 +1693,9 @@ class _ProblemBankExportServerPreviewDialogState
                           const SizedBox(height: 16),
                           _buildSectionCard(
                             title: '문제와 답안',
-                            child: const Text(
-                              '문항/답안 표시 방식은 현재 문제은행 설정을 사용합니다.',
-                              style: TextStyle(
+                            child: Text(
+                              '현재 설정: 빠른정답 ${_includeAnswerSheet ? 'ON' : 'OFF'} · 해설 ${_includeExplanation ? 'ON' : 'OFF'}',
+                              style: const TextStyle(
                                 color: Color(0xFF9FB3B3),
                                 fontSize: 12.2,
                                 fontWeight: FontWeight.w600,

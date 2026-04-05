@@ -374,15 +374,291 @@ function buildStyles({
 
     /* ── mock/csat exam-paper layout ── */
     .mock-pages { display: none; }
+    .mock-cover-pages { display: none; }
     body.profile-mock .paper-title,
     body.profile-csat .paper-title,
     body.profile-mock .profile-note,
     body.profile-csat .profile-note {
       display: none;
     }
+    body.profile-mock .mock-cover-pages,
+    body.profile-csat .mock-cover-pages {
+      display: block;
+    }
     body.profile-mock .mock-pages,
     body.profile-csat .mock-pages {
       display: block;
+    }
+    .mock-cover-page,
+    .mock-cover-blank {
+      min-height: ${(paperMm.height - 2 * marginMm).toFixed(1)}mm;
+      break-inside: avoid;
+      overflow: hidden;
+      background: #fff;
+    }
+    .mock-cover-page {
+      padding: 3pt 2pt 0;
+      display: flex;
+    }
+    .mock-cover-blank {
+      break-after: page;
+    }
+    .mock-cover-sheet {
+      width: 100%;
+      min-height: 100%;
+      flex: 1 1 auto;
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      color: #111;
+      font-family: "YggMain", "HCR Batang", "Malgun Gothic", serif;
+    }
+    .mock-cover-top-row {
+      margin-top: 2pt;
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      align-items: end;
+      column-gap: 14pt;
+    }
+    .mock-cover-chip-left {
+      justify-self: start;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 28.2pt;
+      min-width: 84pt;
+      border: 0.6pt solid #777;
+      border-radius: 999pt;
+      padding: 0 13pt;
+      margin-left: 10pt;
+      align-self: end;
+      font-size: calc((var(--stem-size-pt) + 1.9) * 1pt);
+      font-weight: 700;
+      line-height: 1;
+      color: #333;
+      letter-spacing: 0.01em;
+      white-space: nowrap;
+    }
+    .mock-cover-top-title {
+      justify-self: center;
+      font-size: calc((var(--stem-size-pt) + 4.6) * 1pt);
+      font-weight: 700;
+      line-height: 1.05;
+      letter-spacing: 0;
+      color: #202020;
+      white-space: nowrap;
+    }
+    .mock-cover-top-empty {
+      justify-self: end;
+      width: 1px;
+      height: 1px;
+    }
+    .mock-cover-subject-row {
+      margin-top: 10pt;
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      align-items: center;
+      column-gap: 14pt;
+    }
+    .mock-cover-chip-right {
+      justify-self: end;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 42pt;
+      min-width: 88pt;
+      border: 0.9pt solid #999;
+      border-radius: 4pt;
+      padding: 0 8.4pt;
+      font-size: calc((var(--stem-size-pt) + 8.2) * 1pt);
+      font-weight: 900;
+      line-height: 1;
+      color: #111;
+      letter-spacing: -0.01em;
+      -webkit-text-stroke: 0.18pt #111;
+      white-space: nowrap;
+    }
+    .mock-cover-subject {
+      display: flex;
+      align-items: baseline;
+      justify-content: center;
+      gap: 0;
+      font-family: "YggSubject", "YggMain", "HCR Batang", "Malgun Gothic", sans-serif;
+      line-height: 1;
+      white-space: nowrap;
+      color: #111;
+    }
+    .mock-cover-subject-main {
+      font-size: calc((var(--stem-size-pt) + 33.8) * 1pt);
+      font-weight: 900;
+      letter-spacing: -0.01em;
+      -webkit-text-stroke: 0.24pt #111;
+    }
+    .mock-cover-subject-sub {
+      font-size: calc((var(--stem-size-pt) + 30.42) * 1pt);
+      font-weight: 800;
+      letter-spacing: -0.01em;
+      -webkit-text-stroke: 0.17pt #111;
+    }
+    .mock-cover-id-row {
+      margin: 20pt auto 0;
+      width: calc(100% - 40pt);
+      display: grid;
+      grid-template-columns: 1fr 1.9fr;
+      column-gap: 9pt;
+      align-items: stretch;
+    }
+    .mock-cover-id-box {
+      border: 0.8pt solid #8d8d8d;
+      display: flex;
+      align-items: stretch;
+      min-height: 30pt;
+      background: #fff;
+    }
+    .mock-cover-id-label {
+      flex: 0 0 auto;
+      border-right: 0.8pt solid #8d8d8d;
+      min-width: 48pt;
+      padding: 0 6pt;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: calc((var(--stem-size-pt) + 1.0) * 1pt);
+      font-weight: 500;
+      color: #444;
+      white-space: nowrap;
+    }
+    .mock-cover-id-fill {
+      flex: 1 1 auto;
+    }
+    .mock-cover-id-number-grid {
+      flex: 1 1 auto;
+      display: grid;
+      grid-template-columns: repeat(10, minmax(0, 1fr));
+      align-items: stretch;
+    }
+    .mock-cover-id-number-cell {
+      border-left: 0.7pt dotted #8f8f8f;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #666;
+      font-size: calc((var(--stem-size-pt) + 0.6) * 1pt);
+      line-height: 1;
+    }
+    .mock-cover-id-number-cell:first-child {
+      border-left: 0;
+    }
+    .mock-cover-info-box {
+      margin: 14pt auto 0;
+      width: calc(100% - 40pt);
+      border: 0.8pt solid #a2a2a2;
+      padding: 12pt 14pt 10pt;
+      color: #3b3b3b;
+      font-size: calc((var(--stem-size-pt) + 0.45) * 1pt);
+      line-height: 1.56;
+    }
+    .mock-cover-info-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 4.4pt;
+    }
+    .mock-cover-info-row + .mock-cover-info-row {
+      margin-top: 2pt;
+    }
+    .mock-cover-info-bullet {
+      flex: 0 0 auto;
+      font-size: 1em;
+      line-height: 1.5;
+      margin-top: 0.05em;
+    }
+    .mock-cover-info-text {
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+    .mock-cover-phrase-box {
+      width: 56%;
+      margin: 6pt 0 6pt 24pt;
+      border: 0.8pt solid #9d9d9d;
+      background: #e8e8e8;
+      text-align: center;
+      padding: 4.4pt 7pt;
+      color: #333;
+      font-size: calc((var(--stem-size-pt) + 0.2) * 1pt);
+      font-weight: 600;
+      line-height: 1.2;
+      white-space: nowrap;
+    }
+    .mock-cover-subject-box {
+      margin: 12pt auto 0;
+      width: calc(100% - 40pt);
+      border: 0.8pt solid #a2a2a2;
+      padding: 9pt 12pt 9pt;
+      color: #333;
+      font-size: calc((var(--stem-size-pt) + 0.35) * 1pt);
+      line-height: 1.42;
+    }
+    .mock-cover-subject-head {
+      display: flex;
+      align-items: center;
+      gap: 4pt;
+      margin-bottom: 2pt;
+      white-space: nowrap;
+    }
+    .mock-cover-subject-line {
+      display: flex;
+      align-items: baseline;
+      gap: 5pt;
+      min-width: 0;
+      white-space: nowrap;
+    }
+    .mock-cover-subject-line + .mock-cover-subject-line {
+      margin-top: 2pt;
+    }
+    .mock-cover-subject-indent {
+      margin-left: 20pt;
+    }
+    .mock-cover-subject-item {
+      flex: 0 0 auto;
+    }
+    .mock-cover-dots {
+      flex: 1 1 auto;
+      min-width: 24pt;
+      border-bottom: 0.8pt dotted #8f8f8f;
+      transform: translateY(-2pt);
+    }
+    .mock-cover-page-range {
+      flex: 0 0 auto;
+      min-width: 54pt;
+      text-align: right;
+      white-space: nowrap;
+    }
+    .mock-cover-warning {
+      margin: 16pt auto 0;
+      width: calc(100% - 40pt);
+      min-height: 38pt;
+      border: 0.8pt solid #a2a2a2;
+      background: #ededed;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0 8pt;
+      color: #222;
+      font-size: calc((var(--stem-size-pt) + 2.0) * 1pt);
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .mock-cover-org {
+      margin-top: auto;
+      padding-top: 16pt;
+      padding-bottom: 2pt;
+      text-align: center;
+      color: #111;
+      font-size: calc((var(--stem-size-pt) + 8.4) * 1pt);
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      line-height: 1.05;
+      white-space: nowrap;
     }
     .mock-page {
       min-height: ${(paperMm.height - 2 * marginMm).toFixed(1)}mm;
@@ -391,10 +667,10 @@ function buildStyles({
       break-inside: avoid;
       overflow: hidden;
     }
-    .mock-page.mock-page-first .mock-header-first {
+    .mock-page.mock-page-title .mock-header-first {
       margin-bottom: 20pt;
     }
-    .mock-page-first .mock-header-first-bottom {
+    .mock-page-title .mock-header-first-bottom {
       transform: translateY(8pt);
     }
     .mock-header-first {
@@ -443,6 +719,25 @@ function buildStyles({
       letter-spacing: -0.01em;
       -webkit-text-stroke: 0.3pt #111;
       white-space: nowrap;
+    }
+    .mock-first-subject,
+    .mock-simple-subject {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 0;
+    }
+    .mock-first-subject .mock-title-main,
+    .mock-simple-subject .mock-title-main {
+      display: inline-block;
+      line-height: 1;
+    }
+    .mock-first-subject .mock-title-sub,
+    .mock-simple-subject .mock-title-sub {
+      display: inline-block;
+      font-size: 0.9em;
+      line-height: 1;
+      letter-spacing: 0;
+      -webkit-text-stroke: 0.14pt #111;
     }
     .mock-simple-subject {
       font-size: ${mockSimpleSubjectPt}pt;
@@ -567,7 +862,7 @@ function buildStyles({
       display: inline-block;
       transform: translateY(0);
     }
-    .mock-page-first .question-stream-grid4 .slot-label-overlay .mock-section-label-text {
+    .mock-page-title .question-stream-grid4 .slot-label-overlay .mock-section-label-text {
       transform: translateY(1pt);
     }
     .mock-content {
@@ -579,8 +874,8 @@ function buildStyles({
       flex-direction: column;
       min-height: ${(paperMm.height - 2 * marginMm - 44).toFixed(1)}mm;
     }
-    .mock-page-last .mock-content {
-      padding-bottom: calc(var(--last-note-box-height) + 6pt);
+    .mock-page-with-note .mock-content {
+      padding-bottom: calc(var(--page-note-box-height, var(--last-note-box-height)) + 6pt);
     }
     .mock-content .question-stream {
       columns: 2;
@@ -588,35 +883,35 @@ function buildStyles({
       overflow: visible;
       flex: 1 1 auto;
     }
-    .mock-page-first .mock-content .question-stream {
-      margin-top: -6pt;
+    .mock-page-title .mock-content .question-stream {
+      margin-top: -8pt;
     }
-    .mock-page-first .question-stream-grid4 .question-slot-firstline {
+    .mock-page-title .question-stream-grid4 .question-slot-firstline {
       height: calc(var(--line-height-pt) * 0.45 * 1pt);
       line-height: calc(var(--line-height-pt) * 0.45 * 1pt);
     }
-    .mock-page-first .question-stream-grid4 .question-slot[data-slot-row="1"] .question-slot-firstline {
+    .mock-page-title .question-stream-grid4 .question-slot[data-slot-row="1"] .question-slot-firstline {
       height: calc(var(--line-height-pt) * 0.45 * 1pt + 15pt);
       line-height: calc(var(--line-height-pt) * 0.45 * 1pt + 15pt);
     }
-    .mock-page-first .question-stream-grid4 .question-slot.slot-r1c2 .question-slot-firstline {
+    .mock-page-title .question-stream-grid4 .question-slot.slot-r1c2 .question-slot-firstline {
       height: calc(var(--line-height-pt) * 0.45 * 1pt + 11pt);
       line-height: calc(var(--line-height-pt) * 0.45 * 1pt + 11pt);
     }
-    .mock-page-first .mock-content .question-stream.question-stream-grid4 {
+    .mock-page-title .mock-content .question-stream.question-stream-grid4 {
       row-gap: calc(var(--question-gap-pt) * 0.32 * 1pt);
     }
-    .mock-page:not(.mock-page-first) .mock-header-simple {
+    .mock-page:not(.mock-page-title) .mock-header-simple {
       margin-bottom: 6.4pt;
     }
-    .mock-page:not(.mock-page-first) .mock-content .question-stream {
+    .mock-page:not(.mock-page-title) .mock-content .question-stream {
       margin-top: 0.8pt;
     }
-    .mock-page:not(.mock-page-first) .question-stream-grid4 .question-slot-firstline {
+    .mock-page:not(.mock-page-title) .question-stream-grid4 .question-slot-firstline {
       height: calc(var(--line-height-pt) * 0.20 * 1pt);
       line-height: calc(var(--line-height-pt) * 0.20 * 1pt);
     }
-    .mock-page:not(.mock-page-first) .question-stream-grid4 .question-slot[data-slot-row="1"] .question-slot-firstline {
+    .mock-page:not(.mock-page-title) .question-stream-grid4 .question-slot[data-slot-row="1"] .question-slot-firstline {
       height: calc(var(--line-height-pt) * 0.20 * 1pt + 4.8pt);
       line-height: calc(var(--line-height-pt) * 0.20 * 1pt + 4.8pt);
     }
@@ -679,7 +974,7 @@ function buildStyles({
       right: 0;
       bottom: 5pt;
       width: calc(50% - (var(--column-gap-pt) * 0.5 * 1pt));
-      min-height: var(--last-note-box-height);
+      min-height: var(--page-note-box-height, var(--last-note-box-height));
       border: 0.8pt solid #7c7c7c;
       background: #fff;
       color: #111;
@@ -688,6 +983,13 @@ function buildStyles({
       font-weight: 500;
       line-height: 1.42;
       z-index: 1;
+    }
+    .mock-page-note.mock-page-note-compact {
+      padding: 6.6pt 10pt 7pt;
+      line-height: 1.4;
+    }
+    .mock-page-note.mock-page-note-compact .mock-page-note-title {
+      margin-bottom: 4.2pt;
     }
     .mock-page-note-title {
       margin-bottom: 5pt;
@@ -1011,6 +1313,64 @@ function buildQuestionChunks({
   };
 }
 
+function normalizeTitlePageIndices(rawIndices, pageCount) {
+  const maxPage = Number.isFinite(pageCount)
+    ? Math.max(1, Number(pageCount))
+    : Number.POSITIVE_INFINITY;
+  const out = new Set([1]);
+  if (Array.isArray(rawIndices)) {
+    for (const one of rawIndices) {
+      const parsed = Number.parseInt(String(one ?? ''), 10);
+      if (!Number.isFinite(parsed) || parsed < 1) continue;
+      if (parsed > maxPage) continue;
+      out.add(parsed);
+    }
+  }
+  return [...out].sort((a, b) => a - b);
+}
+
+function normalizeTitlePageHeaders(rawHeaders, titlePageIndices, fallbackTitle) {
+  const titlePages = normalizeTitlePageIndices(titlePageIndices, Number.POSITIVE_INFINITY);
+  const titlePageSet = new Set(titlePages);
+  const out = new Map();
+  if (Array.isArray(rawHeaders)) {
+    for (const one of rawHeaders) {
+      if (!one || typeof one !== 'object') continue;
+      const page = Number.parseInt(
+        String(one.page ?? one.pageIndex ?? one.pageNo ?? one.pageNumber ?? ''),
+        10,
+      );
+      if (!Number.isFinite(page) || page < 1) continue;
+      if (!titlePageSet.has(page)) continue;
+      const title = String(one.title ?? one.subjectTitleText ?? '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      const subtitle = String(one.subtitle ?? one.subTitle ?? one.sub ?? '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (!title && !subtitle) continue;
+      out.set(page, {
+        page,
+        title,
+        subtitle,
+      });
+    }
+  }
+  const defaultTitle = String(fallbackTitle || '수학 영역')
+    .replace(/\s+/g, ' ')
+    .trim() || '수학 영역';
+  const pageOneTitle = out.get(1)?.title || defaultTitle;
+  for (const page of titlePages) {
+    const prev = out.get(page);
+    out.set(page, {
+      page,
+      title: String(prev?.title || '').trim() || pageOneTitle,
+      subtitle: String(prev?.subtitle || '').replace(/\s+/g, ' ').trim(),
+    });
+  }
+  return [...out.values()].sort((a, b) => a.page - b.page);
+}
+
 export function buildDocumentHtml({
   profile,
   paper,
@@ -1037,15 +1397,19 @@ export function buildDocumentHtml({
     questionGapPt: Number(layout?.questionGapPt || 30),
     choiceGapPt: Number(layout?.choiceGapPt || 2),
     columns,
-    columnGapPt: Number(layout?.columnGapPt || 18) * (isMockStyle ? 1.3 : 1),
+    columnGapPt: Number(layout?.columnGapPt || 18) * (isMockStyle ? 1.69 : 1),
     perPage,
   });
-  const subjectTitleText = escapeHtml(String(layout?.subjectTitleText || '수학 영역'));
+  const subjectTitleText = String(layout?.subjectTitleText || '수학 영역')
+    .replace(/\s+/g, ' ')
+    .trim() || '수학 영역';
+  const includeCoverPage = isMockStyle && layout?.includeCoverPage === true;
 
   const stemSizePt = Number(layout?.stemSizePt || 11.0);
   const allQ = (questions || []).map((q) => renderQuestionBlock(q, mathRenderer, { stemSizePt }));
   const renderStreamSection = (chunk, cls, options = {}) => {
     const pageIndex = Number.isFinite(options?.pageIndex) ? Number(options.pageIndex) : 0;
+    const isTitlePage = options?.isTitlePage === true;
     const columnCountsOverride = Array.isArray(options?.columnQuestionCounts)
       ? options.columnQuestionCounts
       : null;
@@ -1066,6 +1430,7 @@ export function buildDocumentHtml({
       alignPolicy: layout?.alignPolicy,
       profile,
       pageIndex,
+      isTitlePage,
     });
     if (!slotPlan) {
       return `<section class="${cls}">${chunk.join('')}</section>`;
@@ -1146,6 +1511,19 @@ export function buildDocumentHtml({
   });
   const questionChunks = chunkPlan.chunks;
   const pageColumnCounts = chunkPlan.pageColumnCounts;
+  const titlePageIndices = normalizeTitlePageIndices(
+    layout?.titlePageIndices,
+    questionChunks.length,
+  );
+  const titlePageHeaders = normalizeTitlePageHeaders(
+    layout?.titlePageHeaders,
+    titlePageIndices,
+    subjectTitleText,
+  );
+  const titlePageHeaderMap = new Map(
+    titlePageHeaders.map((one) => [Number(one.page || 1), one]),
+  );
+  const titlePageSet = new Set(titlePageIndices);
   if (layoutMeta && typeof layoutMeta === 'object') {
     layoutMeta.pageColumnQuestionCounts = Array.isArray(pageColumnCounts)
       ? pageColumnCounts.map((counts, idx) => ({
@@ -1155,25 +1533,179 @@ export function buildDocumentHtml({
       }))
       : [];
     layoutMeta.pageCount = questionChunks.length;
+    layoutMeta.titlePageIndices = titlePageIndices;
+    layoutMeta.titlePageHeaders = titlePageHeaders;
   }
+  let coverHtml = '';
   let questionHtml;
   if (isMockStyle) {
     const totalPages = questionChunks.length;
-    const renderLastPageNotice = () => `
-      <div class="mock-page-note">
+    const additionalTitlePages = titlePageIndices
+      .map((one) => Number.parseInt(String(one ?? ''), 10))
+      .filter((one) => Number.isFinite(one) && one > 1 && one <= totalPages);
+    const hasAdditionalTitlePages = additionalTitlePages.length > 0;
+    const preTitleNoticePages = new Set(
+      additionalTitlePages
+        .map((one) => one - 1)
+        .filter((one) => one >= 1 && one < totalPages),
+    );
+    const resolveNextTitleSubtitle = (pageNo) => {
+      const nextRow = titlePageHeaderMap.get(Number(pageNo || 0) + 1);
+      const subtitle = String(nextRow?.subtitle || '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      return subtitle || '확률과 통계';
+    };
+    const renderNoticeBox = ({ compact = false, electiveSubtitle = '' } = {}) => {
+      const safeElectiveSubtitle = escapeHtml(
+        String(electiveSubtitle || '').replace(/\s+/g, ' ').trim() || '확률과 통계',
+      );
+      return `
+      <div class="mock-page-note${compact ? ' mock-page-note-compact' : ''}">
         <div class="mock-page-note-title"><span class="mock-page-note-star">*</span> 확인 사항</div>
         <div class="mock-page-note-row">
           <span class="mock-page-note-bullet">○</span>
           <span class="mock-page-note-text">답안지의 해당란에 필요한 내용을 정확히 기입(표기) 했는지 확인하시오.</span>
         </div>
-        <div class="mock-page-note-row">
-          <span class="mock-page-note-bullet">○</span>
-          <span class="mock-page-note-text">이어서, <span class="mock-page-note-emphasis">「선택과목(확률과 통계)」</span> 문제가 제시되오니, 자신이 선택한 과목인지 확인하시오.</span>
-        </div>
+        ${compact
+          ? ''
+          : `
+            <div class="mock-page-note-row">
+              <span class="mock-page-note-bullet">○</span>
+              <span class="mock-page-note-text">이어서, <span class="mock-page-note-emphasis">「선택과목(${safeElectiveSubtitle})」</span> 문제가 제시되오니, 자신이 선택한 과목인지 확인하시오.</span>
+            </div>
+          `}
       </div>
     `;
-    const renderMockHeader = (pageNo) => {
-      if (pageNo === 1) {
+    };
+    const renderTitleLine = (pageNo) => {
+      const row = titlePageHeaderMap.get(pageNo) || titlePageHeaderMap.get(1);
+      const title = escapeHtml(
+        String(row?.title || subjectTitleText).replace(/\s+/g, ' ').trim() || '수학 영역',
+      );
+      const subtitle = escapeHtml(
+        String(row?.subtitle || '').replace(/\s+/g, ' ').trim(),
+      );
+      if (!subtitle) {
+        return `<span class="mock-title-main">${title}</span>`;
+      }
+      return `<span class="mock-title-main">${title}</span><span class="mock-title-sub">(${subtitle})</span>`;
+    };
+    const renderSimpleTitleLine = () => {
+      const row = titlePageHeaderMap.get(1);
+      const title = escapeHtml(
+        String(row?.title || subjectTitleText).replace(/\s+/g, ' ').trim() || '수학 영역',
+      );
+      return `<span class="mock-title-main">${title}</span>`;
+    };
+    const renderCoverSubjectLine = () => {
+      const row = titlePageHeaderMap.get(1);
+      const title = escapeHtml(
+        String(row?.title || subjectTitleText).replace(/\s+/g, ' ').trim() || '수학 영역',
+      );
+      const subtitle = escapeHtml(
+        String(row?.subtitle || '').replace(/\s+/g, ' ').trim(),
+      );
+      if (!subtitle) {
+        return `<span class="mock-cover-subject-main">${title}</span>`;
+      }
+      return `<span class="mock-cover-subject-main">${title}</span><span class="mock-cover-subject-sub">(${subtitle})</span>`;
+    };
+    const renderCoverPages = () => `
+      <div class="mock-cover-pages">
+        <section class="mock-cover-page">
+          <div class="mock-cover-sheet">
+            <div class="mock-cover-top-row">
+              <span class="mock-cover-chip-left">제 1교시</span>
+              <div class="mock-cover-top-title">2026학년도 대학수학능력시험 문제지</div>
+              <span class="mock-cover-top-empty" aria-hidden="true"></span>
+            </div>
+            <div class="mock-cover-subject-row">
+              <span class="mock-cover-top-empty" aria-hidden="true"></span>
+              <div class="mock-cover-subject">${renderCoverSubjectLine()}</div>
+              <span class="mock-cover-chip-right">홀수형</span>
+            </div>
+            <div class="mock-cover-id-row">
+              <div class="mock-cover-id-box">
+                <span class="mock-cover-id-label">성명</span>
+                <span class="mock-cover-id-fill"></span>
+              </div>
+              <div class="mock-cover-id-box">
+                <span class="mock-cover-id-label">수험 번호</span>
+                <div class="mock-cover-id-number-grid">
+                  <span class="mock-cover-id-number-cell"></span>
+                  <span class="mock-cover-id-number-cell"></span>
+                  <span class="mock-cover-id-number-cell"></span>
+                  <span class="mock-cover-id-number-cell"></span>
+                  <span class="mock-cover-id-number-cell"></span>
+                  <span class="mock-cover-id-number-cell">—</span>
+                  <span class="mock-cover-id-number-cell"></span>
+                  <span class="mock-cover-id-number-cell"></span>
+                  <span class="mock-cover-id-number-cell"></span>
+                  <span class="mock-cover-id-number-cell"></span>
+                </div>
+              </div>
+            </div>
+            <div class="mock-cover-info-box">
+              <div class="mock-cover-info-row">
+                <span class="mock-cover-info-bullet">○</span>
+                <span class="mock-cover-info-text">문제지의 해당란에 성명과 수험 번호를 정확히 쓰시오.</span>
+              </div>
+              <div class="mock-cover-info-row">
+                <span class="mock-cover-info-bullet">○</span>
+                <span class="mock-cover-info-text">답안지의 필적 확인란에 다음의 문구를 정자로 기재하시오.</span>
+              </div>
+              <div class="mock-cover-phrase-box">너만 보인단 말이야</div>
+              <div class="mock-cover-info-row">
+                <span class="mock-cover-info-bullet">○</span>
+                <span class="mock-cover-info-text">답안지의 해당란에 성명과 수험 번호를 쓰고, 또 수험 번호, 문형(홀수/짝수), 답을 정확히 표시하시오.</span>
+              </div>
+              <div class="mock-cover-info-row">
+                <span class="mock-cover-info-bullet">○</span>
+                <span class="mock-cover-info-text">단답형 답의 숫자에 '0'이 포함되면 그 '0'도 답란에 반드시 표시하시오.</span>
+              </div>
+              <div class="mock-cover-info-row">
+                <span class="mock-cover-info-bullet">○</span>
+                <span class="mock-cover-info-text">문항에 따라 배점이 다르니, 각 물음의 끝에 표시된 배점을 참고하시오. 배점은 2점, 3점 또는 4점입니다.</span>
+              </div>
+              <div class="mock-cover-info-row">
+                <span class="mock-cover-info-bullet">○</span>
+                <span class="mock-cover-info-text">계산은 문제지의 여백을 활용하시오.</span>
+              </div>
+            </div>
+            <div class="mock-cover-subject-box">
+              <div class="mock-cover-subject-head">
+                <span>※</span>
+                <span>공통과목 및 자신이 선택한 과목의 문제지를 확인하고, 답을 정확히 표시하시오.</span>
+              </div>
+              <div class="mock-cover-subject-line">
+                <span class="mock-cover-subject-item">○ 공통과목</span>
+                <span class="mock-cover-dots"></span>
+                <span class="mock-cover-page-range">1~12쪽</span>
+              </div>
+              <div class="mock-cover-subject-line">
+                <span class="mock-cover-subject-item">○ 선택과목</span>
+              </div>
+              <div class="mock-cover-subject-line mock-cover-subject-indent">
+                <span class="mock-cover-subject-item">화법과 작문</span>
+                <span class="mock-cover-dots"></span>
+                <span class="mock-cover-page-range">13~16쪽</span>
+              </div>
+              <div class="mock-cover-subject-line mock-cover-subject-indent">
+                <span class="mock-cover-subject-item">언어와 매체</span>
+                <span class="mock-cover-dots"></span>
+                <span class="mock-cover-page-range">17~20쪽</span>
+              </div>
+            </div>
+            <div class="mock-cover-warning">※ 시험이 시작되기 전까지 표지를 넘기지 마시오.</div>
+            <div class="mock-cover-org">한국교육과정평가원</div>
+          </div>
+        </section>
+        <section class="mock-cover-blank page-break"></section>
+      </div>
+    `;
+    const renderMockHeader = (pageNo, isTitlePage) => {
+      if (isTitlePage) {
         return `
           <header class="mock-header-first">
             <div class="mock-header-first-top">
@@ -1185,7 +1717,7 @@ export function buildDocumentHtml({
               <div class="mock-side-left">
                 <span class="mock-chip mock-chip-session"><span class="mock-chip-condensed">제 2 교시</span></span>
               </div>
-              <div class="mock-first-subject">${subjectTitleText}</div>
+              <div class="mock-first-subject">${renderTitleLine(pageNo)}</div>
               <div class="mock-side-right">
                 <span class="mock-chip mock-chip-type mock-first-type"><span class="mock-chip-type-text mock-chip-type-text-first">홀수형</span></span>
               </div>
@@ -1203,15 +1735,18 @@ export function buildDocumentHtml({
       return `
         <header class="mock-header-simple">
           <div class="mock-side-left">${left}</div>
-          <div class="mock-simple-subject">${subjectTitleText}</div>
+          <div class="mock-simple-subject">${renderSimpleTitleLine()}</div>
           <div class="mock-side-right">${right}</div>
         </header>
       `;
     };
+    coverHtml = includeCoverPage ? renderCoverPages() : '';
     questionHtml = `<div class="mock-pages">${questionChunks.map((chunk, idx) => {
       const pageNo = idx + 1;
+      const isTitlePage = titlePageSet.has(pageNo);
       const pageBreak = idx === 0 ? '' : ' page-break';
       const firstClass = idx === 0 ? ' mock-page-first' : '';
+      const titleClass = isTitlePage ? ' mock-page-title' : '';
       const lastClass = idx === totalPages - 1 ? ' mock-page-last' : '';
       const onePageCounts = columns === 2 && Array.isArray(pageColumnCounts[idx])
         ? pageColumnCounts[idx]
@@ -1223,11 +1758,31 @@ export function buildDocumentHtml({
         pageIndex: idx,
         columnQuestionCounts: onePageCounts,
         perPageOverride: pagePerPage,
+        isTitlePage,
       });
-      const pageNoteHtml = idx === totalPages - 1 ? renderLastPageNotice() : '';
+      const isLastPage = idx === totalPages - 1;
+      const noticeMode = isLastPage
+        ? 'compact'
+        : ((hasAdditionalTitlePages && preTitleNoticePages.has(pageNo))
+          ? 'full'
+          : 'none');
+      const pageNoteHtml = noticeMode === 'none'
+        ? ''
+        : renderNoticeBox({
+          compact: noticeMode === 'compact',
+          electiveSubtitle: noticeMode === 'full'
+            ? resolveNextTitleSubtitle(pageNo)
+            : '',
+        });
+      const pageHasNote = noticeMode !== 'none';
+      const noteClass = pageHasNote ? ' mock-page-with-note' : '';
+      const noteBoxHeightPt = noticeMode === 'compact' ? 58 : 88;
+      const sectionStyle = pageHasNote
+        ? ` style="--page-note-box-height:${noteBoxHeightPt}pt;"`
+        : '';
       return `
-        <section class="mock-page${firstClass}${lastClass}${pageBreak}">
-          ${renderMockHeader(pageNo)}
+        <section class="mock-page${firstClass}${titleClass}${lastClass}${noteClass}${pageBreak}"${sectionStyle}>
+          ${renderMockHeader(pageNo, isTitlePage)}
           <div class="mock-main">
             <div class="mock-content">${contentHtml}</div>
             ${pageNoteHtml}
@@ -1288,6 +1843,7 @@ export function buildDocumentHtml({
       <body class="${bodyClass}">
         <div class="paper-title">${escapeHtml(profileTitle(profile))}</div>
         <div class="profile-note"></div>
+        ${coverHtml}
         ${questionHtml}
         ${answerSheetHtml}
         ${explanationHtml}

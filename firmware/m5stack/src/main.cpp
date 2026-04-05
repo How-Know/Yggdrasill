@@ -158,6 +158,18 @@ static void configureMqttServer() {
 
 void fw_publish_list_homeworks(const char* studentIdArg);
 
+// 서버 하원(unbound) 또는 로컬 로그아웃 시 공통: NVS 추적용 studentId + LittleFS 정리 (MQTT 송신 없음)
+void fw_clear_local_binding_state(void) {
+  if (LittleFS.begin()) {
+    if (LittleFS.exists("/student_id.txt")) {
+      LittleFS.remove("/student_id.txt");
+      Serial.println("[BIND] Cleared student_id.txt (local binding cleared)");
+    }
+    LittleFS.end();
+  }
+  studentId = "";
+}
+
 void onMqttConnect(bool sessionPresent) {
   g_last_mqtt_connect_ms = millis();
   g_last_mqtt_rx_any_ms = g_last_mqtt_connect_ms;
@@ -293,6 +305,7 @@ void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties 
   }
   if (t == unboundTopic) {
     Serial.println("[MQTT] unbound received – returning to student list");
+    fw_clear_local_binding_state();
     ui_port_force_unbind();
   }
 }
@@ -344,17 +357,8 @@ void fw_publish_unbind() {
   String payload; serializeJson(doc, payload);
   String topic = String("academies/") + academyId + "/devices/" + deviceId + "/command";
   mqtt.publish(topic.c_str(), 1, false, payload.c_str());
-  
-  // LittleFS에서 바인딩 정보 삭제
-  if (LittleFS.begin()) {
-    if (LittleFS.exists("/student_id.txt")) {
-      LittleFS.remove("/student_id.txt");
-      Serial.println("[UNBIND] Removed student_id.txt");
-    }
-    LittleFS.end();
-  }
-  
-  studentId = ""; // clear tracked student
+  fw_clear_local_binding_state();
+  Serial.println("[UNBIND] local binding cleared after publish");
 }
 
 void fw_publish_student_info(const char* studentIdArg) {

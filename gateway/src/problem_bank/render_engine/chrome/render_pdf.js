@@ -173,6 +173,7 @@ async function renderOnce(html) {
       // Keep anchor-label geometry consistent with first-page baseline.
       var baseAnchorGapPx = 16 * (96 / 72);
       var baseAnchorCenterOffsetPx = 0;
+      var anchorCenterlineNudgePx = 0.8 * (96 / 72);
       (function calibrateAnchorBaselineFromFirstPage() {
         var firstAnchor = document.querySelector('.mock-page-first .question-slot[data-has-anchor="1"]:not([data-slot-hidden="1"])');
         if (!firstAnchor) return;
@@ -182,22 +183,6 @@ async function renderOnce(html) {
           var firstGap = firstNum.getBoundingClientRect().top - firstLabel.getBoundingClientRect().bottom;
           if (Number.isFinite(firstGap) && firstGap > 0.5) baseAnchorGapPx = firstGap;
         }
-        var rowNo = Number(firstAnchor.getAttribute('data-slot-row') || firstAnchor.dataset.slotRow || 0);
-        if (!Number.isFinite(rowNo) || rowNo <= 0) return;
-        var grid = firstAnchor.closest('.question-stream-slotgrid, .question-stream-grid4');
-        if (!grid) return;
-        var pairSlot = Array.from(grid.querySelectorAll('.question-slot')).find(function (slot) {
-          if (slot === firstAnchor) return false;
-          if (String(slot.getAttribute('data-slot-hidden') || '0') === '1') return false;
-          var sr = Number(slot.getAttribute('data-slot-row') || slot.dataset.slotRow || 0);
-          if (sr !== rowNo) return false;
-          return Boolean(slot.querySelector('.q-num'));
-        });
-        if (!pairSlot || !firstLabel) return;
-        var pairNum = pairSlot.querySelector('.q-num');
-        if (!pairNum) return;
-        baseAnchorCenterOffsetPx =
-          rectCenterY(firstLabel.getBoundingClientRect()) - rectCenterY(pairNum.getBoundingClientRect());
       })();
 
       // Align slot-pair rows by metadata (anchor rows handled by anchor baseline)
@@ -250,7 +235,8 @@ async function renderOnce(html) {
               if (!overlay || !label || !spacer) return;
 
               var labelCenterY = rectCenterY(label.getBoundingClientRect());
-              var desiredLabelCenterY = refCenterY + baseAnchorCenterOffsetPx;
+              var desiredLabelCenterY =
+                refCenterY + baseAnchorCenterOffsetPx + anchorCenterlineNudgePx;
               var deltaY = desiredLabelCenterY - labelCenterY;
               if (Math.abs(deltaY) > 0.3) {
                 overlay.style.transform = 'translateY(' + deltaY.toFixed(2) + 'px)';

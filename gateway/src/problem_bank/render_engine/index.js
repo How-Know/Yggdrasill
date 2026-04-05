@@ -67,6 +67,49 @@ function normalizePageColumnQuestionCounts(raw, layoutColumns) {
   return [...dedup.values()].sort((a, b) => a.pageIndex - b.pageIndex);
 }
 
+function normalizeTitlePageIndices(raw) {
+  const out = new Set([1]);
+  if (Array.isArray(raw)) {
+    for (const one of raw) {
+      const page = toSafeInt(one, 0);
+      if (page < 1) continue;
+      out.add(page);
+    }
+  }
+  return [...out].sort((a, b) => a - b);
+}
+
+function normalizeTitlePageHeaders(raw, titlePageIndices, fallbackTitle = '수학 영역') {
+  const titlePages = normalizeTitlePageIndices(titlePageIndices);
+  const titlePageSet = new Set(titlePages);
+  const out = new Map();
+  if (Array.isArray(raw)) {
+    for (const one of raw) {
+      if (!one || typeof one !== 'object') continue;
+      const page = toSafeInt(
+        one.page ?? one.pageIndex ?? one.pageNo ?? one.pageNumber,
+        0,
+      );
+      if (page < 1 || !titlePageSet.has(page)) continue;
+      const title = normalizeWhitespace(one.title || one.subjectTitleText || '');
+      const subtitle = normalizeWhitespace(one.subtitle || one.subTitle || one.sub || '');
+      if (!title && !subtitle) continue;
+      out.set(page, { page, title, subtitle });
+    }
+  }
+  const defaultTitle = normalizeWhitespace(fallbackTitle || '수학 영역') || '수학 영역';
+  const pageOneTitle = out.get(1)?.title || defaultTitle;
+  for (const page of titlePages) {
+    const prev = out.get(page);
+    out.set(page, {
+      page,
+      title: normalizeWhitespace(prev?.title || '') || pageOneTitle,
+      subtitle: normalizeWhitespace(prev?.subtitle || ''),
+    });
+  }
+  return [...out.values()].sort((a, b) => a.page - b.page);
+}
+
 function normalizeAnchorPage(raw) {
   const v = String(raw || '').trim().toLowerCase();
   if (!v || v === 'first' || v === '1') return 'first';
@@ -231,6 +274,15 @@ function buildHtmlLayout(renderConfig, baseLayout) {
     ? parsedMaxQuestionsPerPage
     : 0;
   const subjectTitleText = normalizeWhitespace(renderConfig?.subjectTitleText || '수학 영역') || '수학 영역';
+  const titlePageIndices = normalizeTitlePageIndices(
+    renderConfig?.titlePageIndices || renderConfig?.titlePages,
+  );
+  const titlePageHeaders = normalizeTitlePageHeaders(
+    renderConfig?.titlePageHeaders || renderConfig?.titleHeaders,
+    titlePageIndices,
+    subjectTitleText,
+  );
+  const includeCoverPage = renderConfig?.includeCoverPage === true;
   return {
     marginMm: Math.max(10, ptToMm(marginPt)),
     stemSizePt,
@@ -255,6 +307,9 @@ function buildHtmlLayout(renderConfig, baseLayout) {
       renderConfig?.columnLabelAnchors,
       layoutColumns,
     ),
+    titlePageIndices,
+    titlePageHeaders,
+    includeCoverPage,
     alignPolicy: normalizeAlignPolicy(renderConfig?.alignPolicy),
     subjectTitleText,
   };
@@ -359,6 +414,9 @@ export async function renderPdfWithHtmlEngine({
     modeByQuestionId: modeByQuestionId || {},
     layoutColumns,
     maxQuestionsPerPage,
+    includeAnswerSheet: renderConfig?.includeAnswerSheet === true,
+    includeExplanation: renderConfig?.includeExplanation === true,
+    includeCoverPage: layout?.includeCoverPage === true,
     renderConfigVersion,
     fontFamily: fontFamilyResolved || fontFamilyRequested || '',
     fontFamilyRequested: fontFamilyRequested || '',
@@ -379,6 +437,16 @@ export async function renderPdfWithHtmlEngine({
     columnLabelAnchors: Array.isArray(layout?.columnLabelAnchors)
       ? layout.columnLabelAnchors
       : [],
+    titlePageIndices: Array.isArray(layoutMeta.titlePageIndices)
+      ? layoutMeta.titlePageIndices
+      : (Array.isArray(layout?.titlePageIndices)
+        ? layout.titlePageIndices
+        : [1]),
+    titlePageHeaders: Array.isArray(layoutMeta.titlePageHeaders)
+      ? layoutMeta.titlePageHeaders
+      : (Array.isArray(layout?.titlePageHeaders)
+        ? layout.titlePageHeaders
+        : []),
     pageColumnQuestionCounts: Array.isArray(layoutMeta.pageColumnQuestionCounts)
       ? layoutMeta.pageColumnQuestionCounts
       : [],

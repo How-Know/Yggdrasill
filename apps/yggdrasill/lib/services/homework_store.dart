@@ -1740,6 +1740,8 @@ class HomeworkStore {
     String? sourceUnitPath,
     List<Map<String, dynamic>>? unitMappings,
     int defaultSplitParts = 1,
+    bool deferBump = false,
+    bool deferPersist = false,
   }) {
     final id = const Uuid().v4();
     final orderIndex = _nextActiveOrderIndex(studentId);
@@ -1774,9 +1776,119 @@ class HomeworkStore {
     list.add(item);
     _sortStudentList(list);
     _applyFallbackGroupsForStudent(studentId);
-    _bump();
-    unawaited(_upsertItem(studentId, item));
+    if (!deferBump) {
+      _bump();
+    }
+    if (!deferPersist) {
+      unawaited(_upsertItem(studentId, item));
+    }
     return item;
+  }
+
+  void bumpRevision() {
+    _bump();
+  }
+
+  Map<String, dynamic> _homeworkItemToReservedRpcPayload(
+    HomeworkItem item, {
+    required int itemOrderIndex,
+    required int splitParts,
+  }) {
+    final sp = splitParts.clamp(1, 4).toInt();
+    return <String, dynamic>{
+      'id': item.id,
+      'title': item.title,
+      'body': item.body,
+      'color': item.color.value,
+      'flow_id': item.flowId ?? '',
+      'type': item.type ?? '',
+      'page': item.page ?? '',
+      'count': item.count,
+      if (item.memo != null) 'memo': item.memo,
+      'content': item.content ?? '',
+      'book_id': item.bookId ?? '',
+      'grade_label': item.gradeLabel ?? '',
+      'source_unit_level': item.sourceUnitLevel ?? '',
+      'source_unit_path': item.sourceUnitPath ?? '',
+      'default_split_parts': item.defaultSplitParts.clamp(1, 4).toInt(),
+      'order_index': item.orderIndex,
+      'check_count': item.checkCount,
+      'status': item.status.index,
+      'phase': item.phase,
+      'accumulated_ms': item.accumulatedMs,
+      'run_start': item.runStart?.toUtc().toIso8601String(),
+      'completed_at': item.completedAt?.toUtc().toIso8601String(),
+      'first_started_at': item.firstStartedAt?.toUtc().toIso8601String(),
+      'submitted_at': item.submittedAt?.toUtc().toIso8601String(),
+      'confirmed_at': item.confirmedAt?.toUtc().toIso8601String(),
+      'waiting_at': item.waitingAt?.toUtc().toIso8601String(),
+      'item_order_index': itemOrderIndex,
+      'split_parts': sp,
+    };
+  }
+
+  /// 단일 트랜잭션 RPC로 예약 과제(항목 + 그룹 링크 + 예약 배정)를 커밋한다.
+  Future<bool> commitReservedHomeworkBundleRpc({
+    required String studentId,
+    HomeworkGroup? group,
+    required List<HomeworkItem> items,
+    required Map<String, int> splitPartsByItem,
+  }) async {
+    if (items.isEmpty) return false;
+    try {
+      final academyId = (await TenantService.instance.getActiveAcademyId()) ??
+          await TenantService.instance.ensureActiveAcademy();
+      final supa = Supabase.instance.client;
+      final payloadItems = <Map<String, dynamic>>[];
+      for (var i = 0; i < items.length; i++) {
+        final it = items[i];
+        final sp = (splitPartsByItem[it.id] ?? it.defaultSplitParts).clamp(1, 4).toInt();
+        payloadItems.add(
+          _homeworkItemToReservedRpcPayload(
+            it,
+            itemOrderIndex: i,
+            splitParts: sp,
+          ),
+        );
+      }
+      final Map<String, dynamic>? pGroup = group == null
+          ? null
+          : <String, dynamic>{
+              'id': group.id,
+              'title': group.title,
+              'flow_id': group.flowId ?? '',
+              'order_index': group.orderIndex,
+            };
+      await supa.rpc(
+        'homework_create_reserved_homework_bundle',
+        params: <String, dynamic>{
+          'p_academy_id': academyId,
+          'p_student_id': studentId,
+          'p_group': pGroup,
+          'p_items': payloadItems,
+        },
+      );
+      for (final it in items) {
+        await _syncUnitMappings(
+          academyId: academyId,
+          studentId: studentId,
+          item: it,
+        );
+        await _syncPageMappings(
+          academyId: academyId,
+          studentId: studentId,
+          item: it,
+        );
+      }
+      await HomeworkAssignmentStore.instance
+          .normalizeActiveAssignedOrderForNullDue(studentId);
+      await HomeworkAssignmentStore.instance.loadActiveAssignments(studentId);
+      await _reloadStudent(studentId);
+      return true;
+    } catch (e, st) {
+      print('[HW][commitReservedHomeworkBundleRpc][ERROR] $e\n$st');
+      return false;
+    }
   }
 
   /// `add` 등에서 비동기 upsert 전에 예약 배정을 넣으면 행이 없어 실패할 수 있어,
@@ -3184,6 +3296,7 @@ class HomeworkStore {
     int? itemOrderIndexOverride,
     bool deferReload = false,
     bool deferBump = false,
+    bool localOnly = false,
   }) async {
     final cleanedGroupId = groupId.trim();
     if (cleanedGroupId.isEmpty) return null;
@@ -3294,6 +3407,10 @@ class HomeworkStore {
       _bump();
     }
 
+    if (localOnly) {
+      return item.id;
+    }
+
     try {
       final academyId = (await TenantService.instance.getActiveAcademyId()) ??
           await TenantService.instance.ensureActiveAcademy();
@@ -3368,8 +3485,8 @@ class HomeworkStore {
     }
   }
 
-  /// 예약 과제일 때 true: DB에 하위 항목이 반영된 직후 `recordAssignments`(예약 노트)를 호출한 뒤
-  /// `_reloadStudent`를 1회만 수행해, 활성 칩에 잠깐 노출되지 않게 한다.
+  /// `reserveAssignments`: 로컬 스테이징 후 낙관적 예약 배정 캐시 + `homework_create_reserved_homework_bundle` RPC로
+  /// 그룹·항목·예약 배정을 한 트랜잭션에 반영한다.
   Future<List<HomeworkItem>> createGroupWithWaitingItems({
     required String studentId,
     required String groupTitle,
@@ -3482,18 +3599,21 @@ class HomeworkStore {
       final academyId = (await TenantService.instance.getActiveAcademyId()) ??
           await TenantService.instance.ensureActiveAcademy();
       final supa = Supabase.instance.client;
-      await supa.from('homework_groups').insert({
-        'id': groupId,
-        'academy_id': academyId,
-        'student_id': studentId,
-        'title': cleanedGroupTitle,
-        'flow_id': cleanedFlowId.isEmpty ? null : cleanedFlowId,
-        'order_index': group.orderIndex,
-        'status': 'active',
-        'created_at': now.toUtc().toIso8601String(),
-        'updated_at': now.toUtc().toIso8601String(),
-        'version': 1,
-      });
+
+      if (!reserveAssignments) {
+        await supa.from('homework_groups').insert({
+          'id': groupId,
+          'academy_id': academyId,
+          'student_id': studentId,
+          'title': cleanedGroupTitle,
+          'flow_id': cleanedFlowId.isEmpty ? null : cleanedFlowId,
+          'order_index': group.orderIndex,
+          'status': 'active',
+          'created_at': now.toUtc().toIso8601String(),
+          'updated_at': now.toUtc().toIso8601String(),
+          'version': 1,
+        });
+      }
 
       final pendingCreates = <Future<String?>>[];
       for (int idx = 0; idx < normalized.length; idx++) {
@@ -3520,15 +3640,15 @@ class HomeworkStore {
             itemOrderIndexOverride: idx,
             deferReload: true,
             deferBump: true,
+            localOnly: reserveAssignments,
           ),
         );
       }
-      if (pendingCreates.isNotEmpty) {
-        // UI를 먼저 완성된 그룹 형태로 반영한 뒤 서버 동기화를 진행한다.
+      if (pendingCreates.isNotEmpty && !reserveAssignments) {
         _bump();
       }
-      final createdIds = <String>[];
       final createdResults = await Future.wait(pendingCreates);
+      final createdIds = <String>[];
       for (final createdId in createdResults) {
         if (createdId != null && createdId.isNotEmpty) {
           createdIds.add(createdId);
@@ -3540,16 +3660,45 @@ class HomeworkStore {
         final item = getById(studentId, id);
         if (item != null) createdBeforeReload.add(item);
       }
+
       if (reserveAssignments && createdBeforeReload.isNotEmpty) {
-        await HomeworkAssignmentStore.instance.recordAssignments(
+        HomeworkAssignmentStore.instance.applyOptimisticReservedAssignments(
           studentId,
           createdBeforeReload,
-          note: HomeworkAssignmentStore.reservationNote,
-          splitPartsByItem: <String, int>{
-            for (final hw in createdBeforeReload)
-              hw.id: hw.defaultSplitParts.clamp(1, 4).toInt(),
-          },
+          groupId: groupId,
+          groupTitleSnapshot: cleanedGroupTitle,
         );
+        _bump();
+        final splitMap = <String, int>{
+          for (final hw in createdBeforeReload)
+            hw.id: hw.defaultSplitParts.clamp(1, 4).toInt(),
+        };
+        final ok = await commitReservedHomeworkBundleRpc(
+          studentId: studentId,
+          group: group,
+          items: createdBeforeReload,
+          splitPartsByItem: splitMap,
+        );
+        if (!ok) {
+          for (final id in createdIds.reversed) {
+            remove(studentId, id);
+          }
+          _groupsByStudentId[studentId]?.removeWhere((g) => g.id == groupId);
+          _groupItemsByGroupId.remove(groupId);
+          for (final id in createdIds) {
+            _groupIdByItemId.remove(id);
+          }
+          HomeworkAssignmentStore.instance
+              .revertOptimisticReservedAssignmentsForItems(studentId, createdIds);
+          await _reloadStudent(studentId);
+          return const <HomeworkItem>[];
+        }
+        final createdItems = <HomeworkItem>[];
+        for (final id in createdIds) {
+          final item = getById(studentId, id);
+          if (item != null) createdItems.add(item);
+        }
+        return createdItems;
       }
 
       await _reloadStudent(studentId);

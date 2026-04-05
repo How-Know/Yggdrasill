@@ -127,13 +127,216 @@ class HomeworkAssignmentStore {
   static final HomeworkAssignmentStore instance =
       HomeworkAssignmentStore._internal();
   static const String reservationNote = '__reserved_homework__';
+  /// Synthetic assignment ids merged into [loadActiveAssignments] until the server row exists.
+  static const String optimisticReservedAssignmentIdPrefix = '__opt_resv__:';
   final ValueNotifier<int> revision = ValueNotifier<int>(0);
+  /// Stale-while-revalidate: last successful [loadActiveAssignments] per student.
+  final Map<String, List<HomeworkAssignmentDetail>> _activeAssignmentsCacheByStudent =
+      {};
+  /// Students for whom [loadActiveAssignments] has finished at least once (success or handled error).
+  /// Used so UI does not paint "current" chips from [HomeworkStore] alone before assignment rows are known.
+  final Set<String> _activeAssignmentsLoadCompletedForStudent = <String>{};
+  /// Item ids that must stay off "current" chip rows until server reservation row is seen.
+  final Map<String, Set<String>> _pendingReservedHomeworkItemIdsByStudent = {};
   RealtimeChannel? _rtAssignments;
   RealtimeChannel? _rtChecks;
   String? _rtAcademyId;
 
   void _bump() {
     revision.value++;
+  }
+
+  /// For [FutureBuilder.initialData] / first paint before the network returns.
+  /// Empty list is a valid cache entry; missing key returns null.
+  List<HomeworkAssignmentDetail>? peekCachedActiveAssignments(String studentId) {
+    final key = studentId.trim();
+    if (key.isEmpty) return null;
+    return _activeAssignmentsCacheByStudent[key];
+  }
+
+  bool hasCompletedActiveAssignmentLoad(String studentId) {
+    final key = studentId.trim();
+    if (key.isEmpty) return false;
+    return _activeAssignmentsLoadCompletedForStudent.contains(key);
+  }
+
+  void clearActiveAssignmentsCache() {
+    _activeAssignmentsCacheByStudent.clear();
+    _pendingReservedHomeworkItemIdsByStudent.clear();
+    _activeAssignmentsLoadCompletedForStudent.clear();
+  }
+
+  Set<String> peekPendingReservedHomeworkItemIds(String studentId) {
+    final key = studentId.trim();
+    if (key.isEmpty) return const <String>{};
+    final s = _pendingReservedHomeworkItemIdsByStudent[key];
+    if (s == null || s.isEmpty) return const <String>{};
+    return Set<String>.unmodifiable(s);
+  }
+
+  void _addPendingReservedHomeworkItemIds(String studentId, Set<String> ids) {
+    final key = studentId.trim();
+    if (key.isEmpty || ids.isEmpty) return;
+    final bucket =
+        _pendingReservedHomeworkItemIdsByStudent.putIfAbsent(key, () => <String>{});
+    bucket.addAll(ids);
+  }
+
+  void _removePendingReservedHomeworkItemIds(String studentId, Iterable<String> ids) {
+    final key = studentId.trim();
+    if (key.isEmpty) return;
+    final bucket = _pendingReservedHomeworkItemIdsByStudent[key];
+    if (bucket == null || bucket.isEmpty) return;
+    for (final raw in ids) {
+      final id = raw.trim();
+      if (id.isNotEmpty) bucket.remove(id);
+    }
+    if (bucket.isEmpty) {
+      _pendingReservedHomeworkItemIdsByStudent.remove(key);
+    }
+  }
+
+  /// Drops pending ids once [mergedAssignments] includes a reservation row for that item.
+  bool _prunePendingReservedAfterLoad(
+    String studentId,
+    List<HomeworkAssignmentDetail> mergedAssignments,
+  ) {
+    final key = studentId.trim();
+    if (key.isEmpty) return false;
+    final bucket = _pendingReservedHomeworkItemIdsByStudent[key];
+    if (bucket == null || bucket.isEmpty) return false;
+    var changed = false;
+    for (final a in mergedAssignments) {
+      if ((a.note ?? '').trim() != reservationNote) continue;
+      final hid = a.homeworkItemId.trim();
+      if (hid.isEmpty) continue;
+      if (bucket.remove(hid)) {
+        changed = true;
+      }
+    }
+    if (bucket.isEmpty) {
+      _pendingReservedHomeworkItemIdsByStudent.remove(key);
+    }
+    if (changed) {
+      _bump();
+    }
+    return changed;
+  }
+
+  List<HomeworkAssignmentDetail> _mergeServerActiveWithOptimisticReservations(
+    String studentId,
+    List<HomeworkAssignmentDetail> server,
+  ) {
+    final key = studentId.trim();
+    if (key.isEmpty) return server;
+    final prev = _activeAssignmentsCacheByStudent[key];
+    if (prev == null || prev.isEmpty) return server;
+    final optimistic = prev
+        .where(
+          (a) => a.id.startsWith(optimisticReservedAssignmentIdPrefix),
+        )
+        .toList(growable: false);
+    if (optimistic.isEmpty) return server;
+    final serverItemIds = <String>{
+      for (final a in server)
+        a.homeworkItemId.trim(),
+    };
+    final kept = optimistic
+        .where((o) => !serverItemIds.contains(o.homeworkItemId.trim()))
+        .toList(growable: false);
+    if (kept.isEmpty) return server;
+    return <HomeworkAssignmentDetail>[...server, ...kept];
+  }
+
+  void applyOptimisticReservedAssignments(
+    String studentId,
+    List<HomeworkItem> items, {
+    String? groupId,
+    String? groupTitleSnapshot,
+  }) {
+    final key = studentId.trim();
+    if (key.isEmpty || items.isEmpty) return;
+    final idSet = items.map((e) => e.id.trim()).where((e) => e.isNotEmpty).toSet();
+    if (idSet.isEmpty) return;
+    _addPendingReservedHomeworkItemIds(key, idSet);
+    final now = DateTime.now();
+    final gid = (groupId ?? '').trim();
+    final snap = (groupTitleSnapshot ?? '').trim();
+    final base = List<HomeworkAssignmentDetail>.from(
+      peekCachedActiveAssignments(key) ?? const <HomeworkAssignmentDetail>[],
+    );
+    base.removeWhere(
+      (a) =>
+          a.id.startsWith(optimisticReservedAssignmentIdPrefix) &&
+          idSet.contains(a.homeworkItemId.trim()),
+    );
+    for (final item in items) {
+      final iid = item.id.trim();
+      if (iid.isEmpty) continue;
+      final sp = item.defaultSplitParts.clamp(1, 4).toInt();
+      base.add(
+        HomeworkAssignmentDetail(
+          id: '$optimisticReservedAssignmentIdPrefix$item.id',
+          homeworkItemId: item.id,
+          groupId: gid.isEmpty ? null : gid,
+          groupTitleSnapshot: snap.isEmpty ? null : snap,
+          assignedAt: now,
+          dueDate: null,
+          orderIndex: 0,
+          status: 'assigned',
+          note: reservationNote,
+          progress: 0,
+          issueType: null,
+          issueNote: null,
+          title: item.title,
+          type: item.type,
+          page: item.page,
+          count: item.count,
+          content: item.content,
+          flowId: item.flowId,
+          repeatIndex: 1,
+          splitParts: sp,
+          splitRound: 1,
+        ),
+      );
+    }
+    _activeAssignmentsCacheByStudent[key] =
+        List<HomeworkAssignmentDetail>.unmodifiable(base);
+    _bump();
+  }
+
+  void revertOptimisticReservedAssignmentsForItems(
+    String studentId,
+    Iterable<String> homeworkItemIds,
+  ) {
+    final key = studentId.trim();
+    final idSet = homeworkItemIds.map((e) => e.trim()).where((e) => e.isNotEmpty).toSet();
+    if (key.isEmpty || idSet.isEmpty) return;
+    final cur = peekCachedActiveAssignments(key);
+    if (cur == null || cur.isEmpty) return;
+    final next = cur
+        .where(
+          (a) =>
+              !a.id.startsWith(optimisticReservedAssignmentIdPrefix) ||
+              !idSet.contains(a.homeworkItemId.trim()),
+        )
+        .toList(growable: false);
+    _activeAssignmentsCacheByStudent[key] =
+        List<HomeworkAssignmentDetail>.unmodifiable(next);
+    _removePendingReservedHomeworkItemIds(key, idSet);
+    _bump();
+  }
+
+  Future<void> normalizeActiveAssignedOrderForNullDue(String studentId) async {
+    try {
+      final academyId = await TenantService.instance.getActiveAcademyId() ??
+          await TenantService.instance.ensureActiveAcademy();
+      await _normalizeAssignedOrderForDueDateIso(
+        academyId: academyId,
+        studentId: studentId.trim(),
+        dueDateIso: _dueDateIso(null),
+      );
+    } catch (_) {}
   }
 
   void _ensureRealtimeForAcademy(String academyId) {
@@ -861,8 +1064,25 @@ class HomeworkAssignmentStore {
           ),
         );
       }
-      return list;
+      final merged =
+          _mergeServerActiveWithOptimisticReservations(studentId, list);
+      _prunePendingReservedAfterLoad(studentId, merged);
+      final key = studentId.trim();
+      if (key.isNotEmpty) {
+        _activeAssignmentsCacheByStudent[key] =
+            List<HomeworkAssignmentDetail>.unmodifiable(
+          List<HomeworkAssignmentDetail>.from(merged),
+        );
+        _activeAssignmentsLoadCompletedForStudent.add(key);
+      }
+      return List<HomeworkAssignmentDetail>.from(merged);
     } catch (_) {
+      final key = studentId.trim();
+      if (key.isNotEmpty) {
+        _activeAssignmentsLoadCompletedForStudent.add(key);
+        _activeAssignmentsCacheByStudent[key] =
+            const <HomeworkAssignmentDetail>[];
+      }
       return <HomeworkAssignmentDetail>[];
     }
   }

@@ -103,6 +103,8 @@ static lv_coord_t s_drag_start_sheet_y = 240;
 struct HwCacheEntry { char id[64]; int phase; int acc; };
 static HwCacheEntry s_hw_cache[16];
 static uint8_t s_hw_cache_cnt = 0;
+static volatile bool s_hw_updating = false;
+static bool s_hw_refresh_pending = false;
 
 // 그룹 과제 children 메모리 저장 (상세 페이지용)
 struct HwChildEntry {
@@ -1670,7 +1672,9 @@ void ui_before_screensaver(void) {
 }
 
 void ui_port_force_unbind(void) {
+  s_hw_refresh_pending = false;
   if (!s_homeworks_mode) return;
+  s_hw_updating = false;
   extern void screensaver_dismiss(void);
   screensaver_dismiss();
   build_student_list_ui();
@@ -2558,10 +2562,8 @@ static void parse_groups_from_json(const JsonArray& groups) {
   }
 }
 
-static volatile bool s_hw_updating = false;
-static bool s_hw_refresh_pending = false;
-
 void ui_port_update_homeworks(const JsonArray& groups) {
+  if (studentId.length() == 0) return;
   if (s_hw_updating) {
     s_hw_refresh_pending = true;
     return;

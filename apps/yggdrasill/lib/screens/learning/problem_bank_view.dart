@@ -791,6 +791,23 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         );
         return;
       }
+      bool readBoolFlag(
+        dynamic primary,
+        dynamic fallback,
+        bool defaultValue,
+      ) {
+        dynamic value = primary;
+        value ??= fallback;
+        if (value is bool) return value;
+        final text = '$value'.trim().toLowerCase();
+        if (text == 'true' || text == '1' || text == 'yes' || text == 'y') {
+          return true;
+        }
+        if (text == 'false' || text == '0' || text == 'no' || text == 'n') {
+          return false;
+        }
+        return defaultValue;
+      }
       await ProblemBankExportServerPreviewDialog.open(
         context,
         pdfUrl: completed.outputUrl,
@@ -829,17 +846,71 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           }
           return const <Map<String, dynamic>>[];
         })(),
+        initialTitlePageIndices: (() {
+          final dynamic raw = completed.resultSummary['titlePageIndices'];
+          final dynamic fallback = completed.options['titlePageIndices'];
+          final dynamic src = raw is List ? raw : fallback;
+          if (src is List) {
+            return src
+                .map((e) => int.tryParse('$e'))
+                .whereType<int>()
+                .where((e) => e > 0)
+                .toList(growable: false);
+          }
+          return const <int>[1];
+        })(),
+        initialTitlePageHeaders: (() {
+          final dynamic raw = completed.resultSummary['titlePageHeaders'];
+          final dynamic fallback = completed.options['titlePageHeaders'];
+          final dynamic src = raw is List ? raw : fallback;
+          if (src is List) {
+            return src
+                .whereType<Map>()
+                .map((e) => e.map(
+                      (key, value) => MapEntry('$key', value),
+                    ))
+                .toList(growable: false);
+          }
+          return const <Map<String, dynamic>>[];
+        })(),
+        initialIncludeCoverPage: readBoolFlag(
+          completed.resultSummary['includeCoverPage'],
+          completed.options['includeCoverPage'],
+          false,
+        ),
+        initialIncludeAnswerSheet: readBoolFlag(
+          completed.resultSummary['includeAnswerSheet'],
+          completed.options['includeAnswerSheet'],
+          _exportSettings.includeAnswerSheet,
+        ),
+        initialIncludeExplanation: readBoolFlag(
+          completed.resultSummary['includeExplanation'],
+          completed.options['includeExplanation'],
+          _exportSettings.includeExplanation,
+        ),
         onRefreshRequested: (request) async {
+          if (_exportSettings.includeAnswerSheet != request.includeAnswerSheet ||
+              _exportSettings.includeExplanation != request.includeExplanation) {
+            setState(() {
+              _exportSettings = _exportSettings.copyWith(
+                includeAnswerSheet: request.includeAnswerSheet,
+                includeExplanation: request.includeExplanation,
+              );
+            });
+          }
           final renderPatch = <String, dynamic>{
             'subjectTitleText': request.subjectTitleText.trim().isEmpty
                 ? '수학 영역'
                 : request.subjectTitleText.trim(),
+            'includeCoverPage': request.includeCoverPage,
           };
           if (_exportSettings.layoutColumnCount == 2) {
             renderPatch['layoutMode'] = 'custom_columns';
             renderPatch['pageColumnQuestionCounts'] =
                 request.pageColumnQuestionCounts;
             renderPatch['columnLabelAnchors'] = request.columnLabelAnchors;
+            renderPatch['titlePageIndices'] = request.titlePageIndices;
+            renderPatch['titlePageHeaders'] = request.titlePageHeaders;
           }
           final refreshed = await _ensureCompletedExportForSelection(
             selectedQuestions: selected,
@@ -880,23 +951,81 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                   .map((e) => e.map((key, value) => MapEntry('$key', value)))
                   .toList(growable: false)
               : const <Map<String, dynamic>>[];
+          final dynamic rawTitlePages =
+              refreshed.resultSummary['titlePageIndices'];
+          final dynamic fallbackTitlePages =
+              refreshed.options['titlePageIndices'];
+          final dynamic srcTitlePages =
+              rawTitlePages is List ? rawTitlePages : fallbackTitlePages;
+          final titlePages = srcTitlePages is List
+              ? srcTitlePages
+                  .map((e) => int.tryParse('$e'))
+                  .whereType<int>()
+                  .where((e) => e > 0)
+                  .toList(growable: false)
+              : const <int>[1];
+          final dynamic rawTitleHeaders =
+              refreshed.resultSummary['titlePageHeaders'];
+          final dynamic fallbackTitleHeaders =
+              refreshed.options['titlePageHeaders'];
+          final dynamic srcTitleHeaders = rawTitleHeaders is List
+              ? rawTitleHeaders
+              : fallbackTitleHeaders;
+          final titlePageHeaders = srcTitleHeaders is List
+              ? srcTitleHeaders
+                  .whereType<Map>()
+                  .map((e) => e.map((key, value) => MapEntry('$key', value)))
+                  .toList(growable: false)
+              : const <Map<String, dynamic>>[];
+          final includeCoverPage = readBoolFlag(
+            refreshed.resultSummary['includeCoverPage'],
+            refreshed.options['includeCoverPage'],
+            request.includeCoverPage,
+          );
+          final includeAnswerSheet = readBoolFlag(
+            refreshed.resultSummary['includeAnswerSheet'],
+            refreshed.options['includeAnswerSheet'],
+            request.includeAnswerSheet,
+          );
+          final includeExplanation = readBoolFlag(
+            refreshed.resultSummary['includeExplanation'],
+            refreshed.options['includeExplanation'],
+            request.includeExplanation,
+          );
           return ProblemBankPreviewRefreshResult(
             pdfUrl: refreshed.outputUrl,
             pageColumnQuestionCounts: pageCounts,
             columnLabelAnchors: anchorRows,
+            titlePageIndices: titlePages,
+            titlePageHeaders: titlePageHeaders,
+            includeCoverPage: includeCoverPage,
+            includeAnswerSheet: includeAnswerSheet,
+            includeExplanation: includeExplanation,
           );
         },
         onGeneratePdfRequested: (request) async {
+          if (_exportSettings.includeAnswerSheet != request.includeAnswerSheet ||
+              _exportSettings.includeExplanation != request.includeExplanation) {
+            setState(() {
+              _exportSettings = _exportSettings.copyWith(
+                includeAnswerSheet: request.includeAnswerSheet,
+                includeExplanation: request.includeExplanation,
+              );
+            });
+          }
           final renderPatch = <String, dynamic>{
             'subjectTitleText': request.subjectTitleText.trim().isEmpty
                 ? '수학 영역'
                 : request.subjectTitleText.trim(),
+            'includeCoverPage': request.includeCoverPage,
           };
           if (_exportSettings.layoutColumnCount == 2) {
             renderPatch['layoutMode'] = 'custom_columns';
             renderPatch['pageColumnQuestionCounts'] =
                 request.pageColumnQuestionCounts;
             renderPatch['columnLabelAnchors'] = request.columnLabelAnchors;
+            renderPatch['titlePageIndices'] = request.titlePageIndices;
+            renderPatch['titlePageHeaders'] = request.titlePageHeaders;
           }
           final completedPdf = await _ensureCompletedExportForSelection(
             selectedQuestions: selected,

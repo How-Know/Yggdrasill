@@ -114,28 +114,39 @@ class LatexTextRenderer extends StatelessWidget {
       if (formula.isEmpty) {
         spans.add(TextSpan(text: fullMatch));
       } else {
-        final fractionFormula = _isFractionFormula(formula);
-        final nestedFraction =
-            fractionFormula && RegExp(r'\\left|\\right').hasMatch(formula);
-        final inlineMathTextStyle = _scaleMathTextStyle(
+        final useDisplayLayout = _latexFormulaPrefersDisplay(formula);
+        final fractionFormula =
+            !useDisplayLayout && _isFractionFormula(formula);
+        final nestedFraction = !useDisplayLayout &&
+            fractionFormula &&
+            RegExp(r'\\left|\\right').hasMatch(formula);
+        final scaledStyle = _scaleMathTextStyle(
           effectiveStyle,
-          fractionFormula ? fractionInlineMathScale : inlineMathScale,
+          useDisplayLayout
+              ? displayMathScale
+              : (fractionFormula ? fractionInlineMathScale : inlineMathScale),
         );
-        final baselineShift = nestedFraction ? -0.4 : _inlineMathBaselineShift;
+        final baselineShift = useDisplayLayout
+            ? 0.0
+            : (nestedFraction ? -0.4 : _inlineMathBaselineShift);
+        final mathStyle =
+            useDisplayLayout ? MathStyle.display : MathStyle.text;
         spans.add(
           WidgetSpan(
-            alignment: PlaceholderAlignment.baseline,
+            alignment: useDisplayLayout
+                ? PlaceholderAlignment.middle
+                : PlaceholderAlignment.baseline,
             baseline: TextBaseline.alphabetic,
             child: Transform.translate(
               offset: Offset(0, baselineShift),
               child: Math.tex(
                 formula,
-                textStyle: inlineMathTextStyle,
-                mathStyle: MathStyle.text,
+                textStyle: scaledStyle,
+                mathStyle: mathStyle,
                 onErrorFallback: (dynamic _) => _buildMathFallback(
                   formula,
-                  inlineMathTextStyle,
-                  mathStyle: MathStyle.text,
+                  scaledStyle,
+                  mathStyle: mathStyle,
                 ),
               ),
             ),
@@ -334,6 +345,26 @@ class LatexTextRenderer extends StatelessWidget {
     return formula.contains(r'\frac') ||
         formula.contains(r'\dfrac') ||
         RegExp(r'(^|[^\\])\d+\s*/\s*\d+').hasMatch(formula);
+  }
+
+  /// Inline `\(...\)` 로 들어와도 행렬·다줄 환경은 [MathStyle.display]로 그려야 가로로 눌리지 않는다.
+  bool _latexFormulaPrefersDisplay(String formula) {
+    if (formula.isEmpty) return false;
+    final f = formula.toLowerCase();
+    return f.contains(r'\begin{matrix') ||
+        f.contains(r'\begin{pmatrix') ||
+        f.contains(r'\begin{bmatrix') ||
+        f.contains(r'\begin{vmatrix') ||
+        f.contains(r'\begin{Vmatrix') ||
+        f.contains(r'\begin{array') ||
+        f.contains(r'\begin{aligned') ||
+        f.contains(r'\begin{align') ||
+        f.contains(r'\begin{cases') ||
+        f.contains(r'\begin{split') ||
+        f.contains(r'\begin{gather') ||
+        f.contains(r'\begin{multline') ||
+        f.contains(r'\substack') ||
+        (f.contains(r'\begin{') && f.contains(r'\\'));
   }
 }
 
