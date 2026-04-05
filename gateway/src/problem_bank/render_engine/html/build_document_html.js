@@ -397,7 +397,7 @@ function buildStyles({
       background: #fff;
     }
     .mock-cover-page {
-      padding: 3pt 2pt 0;
+      padding: 33pt 17pt 30pt;
       display: flex;
     }
     .mock-cover-blank {
@@ -425,23 +425,24 @@ function buildStyles({
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      min-height: 28.2pt;
+      min-height: 30.3pt;
       min-width: 84pt;
       border: 0.6pt solid #777;
       border-radius: 999pt;
-      padding: 0 13pt;
+      padding: 0 11pt;
       margin-left: 10pt;
       align-self: end;
-      font-size: calc((var(--stem-size-pt) + 1.9) * 1pt);
-      font-weight: 700;
-      line-height: 1;
+      font-size: calc((var(--stem-size-pt) + 1.9) * 1.1 * 1pt);
+      font-weight: 800;
+      line-height: 0.96;
       color: #333;
       letter-spacing: 0.01em;
       white-space: nowrap;
+      transform: translateY(-10pt);
     }
     .mock-cover-top-title {
       justify-self: center;
-      font-size: calc((var(--stem-size-pt) + 4.6) * 1pt);
+      font-size: calc((var(--stem-size-pt) + 4.6) * 1.1 * 1pt);
       font-weight: 700;
       line-height: 1.05;
       letter-spacing: 0;
@@ -454,10 +455,10 @@ function buildStyles({
       height: 1px;
     }
     .mock-cover-subject-row {
-      margin-top: 10pt;
+      margin-top: 20pt;
       display: grid;
       grid-template-columns: 1fr auto 1fr;
-      align-items: center;
+      align-items: baseline;
       column-gap: 14pt;
     }
     .mock-cover-chip-right {
@@ -470,13 +471,18 @@ function buildStyles({
       border: 0.9pt solid #999;
       border-radius: 4pt;
       padding: 0 8.4pt;
-      font-size: calc((var(--stem-size-pt) + 8.2) * 1pt);
-      font-weight: 900;
-      line-height: 1;
+      align-self: baseline;
+      font-size: calc((var(--stem-size-pt) + 13.5) * 1pt);
+      font-weight: 950;
+      line-height: 0.95;
       color: #111;
       letter-spacing: -0.01em;
-      -webkit-text-stroke: 0.18pt #111;
+      -webkit-text-stroke: 0.32pt #111;
+      text-shadow:
+        0.24pt 0 0 #111,
+        -0.24pt 0 0 #111;
       white-space: nowrap;
+      transform: translateY(1pt);
     }
     .mock-cover-subject {
       display: flex;
@@ -489,20 +495,20 @@ function buildStyles({
       color: #111;
     }
     .mock-cover-subject-main {
-      font-size: calc((var(--stem-size-pt) + 33.8) * 1pt);
+      font-size: calc((var(--stem-size-pt) + 33.8) * 1.05 * 1pt);
       font-weight: 900;
       letter-spacing: -0.01em;
       -webkit-text-stroke: 0.24pt #111;
     }
     .mock-cover-subject-sub {
-      font-size: calc((var(--stem-size-pt) + 30.42) * 1pt);
+      font-size: calc((var(--stem-size-pt) + 30.42) * 1.05 * 1pt);
       font-weight: 800;
       letter-spacing: -0.01em;
       -webkit-text-stroke: 0.17pt #111;
     }
     .mock-cover-id-row {
       margin: 20pt auto 0;
-      width: calc(100% - 40pt);
+      width: 92.5%;
       display: grid;
       grid-template-columns: 1fr 1.9fr;
       column-gap: 9pt;
@@ -512,7 +518,7 @@ function buildStyles({
       border: 0.8pt solid #8d8d8d;
       display: flex;
       align-items: stretch;
-      min-height: 30pt;
+      min-height: 30.9pt;
       background: #fff;
     }
     .mock-cover-id-label {
@@ -523,7 +529,7 @@ function buildStyles({
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      font-size: calc((var(--stem-size-pt) + 1.0) * 1pt);
+      font-size: calc((var(--stem-size-pt) + 1.0) * 1.2 * 1pt);
       font-weight: 500;
       color: #444;
       white-space: nowrap;
@@ -550,27 +556,27 @@ function buildStyles({
       border-left: 0;
     }
     .mock-cover-info-box {
-      margin: 14pt auto 0;
-      width: calc(100% - 40pt);
+      margin: 24pt auto 0;
+      width: 92.5%;
       border: 0.8pt solid #a2a2a2;
-      padding: 12pt 14pt 10pt;
+      padding: 12pt 22pt 10pt;
       color: #3b3b3b;
-      font-size: calc((var(--stem-size-pt) + 0.45) * 1pt);
-      line-height: 1.56;
+      font-size: calc((var(--stem-size-pt) + 0.45) * 1.3034 * 1pt);
+      line-height: 1.962;
     }
     .mock-cover-info-row {
       display: flex;
-      align-items: flex-start;
+      align-items: baseline;
       gap: 4.4pt;
     }
     .mock-cover-info-row + .mock-cover-info-row {
-      margin-top: 2pt;
+      margin-top: 2.8pt;
     }
     .mock-cover-info-bullet {
       flex: 0 0 auto;
       font-size: 1em;
-      line-height: 1.5;
-      margin-top: 0.05em;
+      line-height: 1.35;
+      margin-top: 0.12em;
     }
     .mock-cover-info-text {
       flex: 1 1 auto;
@@ -584,25 +590,28 @@ function buildStyles({
       text-align: center;
       padding: 4.4pt 7pt;
       color: #333;
-      font-size: calc((var(--stem-size-pt) + 0.2) * 1pt);
+      font-size: calc((var(--stem-size-pt) + 0.2) * 1.3034 * 1pt);
       font-weight: 600;
-      line-height: 1.2;
+      line-height: 1.646;
       white-space: nowrap;
     }
     .mock-cover-subject-box {
-      margin: 12pt auto 0;
-      width: calc(100% - 40pt);
+      margin: 19.2pt auto 0;
+      width: 92.5%;
       border: 0.8pt solid #a2a2a2;
-      padding: 9pt 12pt 9pt;
+      padding: 9pt 20pt 9pt;
       color: #333;
-      font-size: calc((var(--stem-size-pt) + 0.35) * 1pt);
-      line-height: 1.42;
+      font-size: calc((var(--stem-size-pt) + 0.35) * 1.3034 * 1pt);
+      line-height: 1.791;
     }
     .mock-cover-subject-head {
       display: flex;
       align-items: center;
       gap: 4pt;
       margin-bottom: 2pt;
+      margin-left: -15pt;
+      margin-right: -15pt;
+      padding: 0 5pt;
       white-space: nowrap;
     }
     .mock-cover-subject-line {
@@ -613,13 +622,18 @@ function buildStyles({
       white-space: nowrap;
     }
     .mock-cover-subject-line + .mock-cover-subject-line {
-      margin-top: 2pt;
+      margin-top: 2.8pt;
     }
     .mock-cover-subject-indent {
       margin-left: 20pt;
     }
     .mock-cover-subject-item {
       flex: 0 0 auto;
+    }
+    .mock-cover-subject-item-major {
+      font-size: 1.11em;
+      font-weight: 800;
+      -webkit-text-stroke: 0.1pt #222;
     }
     .mock-cover-dots {
       flex: 1 1 auto;
@@ -633,29 +647,33 @@ function buildStyles({
       text-align: right;
       white-space: nowrap;
     }
+    .mock-cover-bottom-stack {
+      margin-top: 25pt;
+      width: 100%;
+    }
     .mock-cover-warning {
-      margin: 16pt auto 0;
-      width: calc(100% - 40pt);
-      min-height: 38pt;
+      margin: 0 auto;
+      width: 92.5%;
+      min-height: 49.4pt;
       border: 0.8pt solid #a2a2a2;
       background: #ededed;
       display: flex;
       align-items: center;
       justify-content: center;
-      padding: 0 8pt;
+      padding: 0 16pt;
       color: #222;
-      font-size: calc((var(--stem-size-pt) + 2.0) * 1pt);
+      font-size: calc((var(--stem-size-pt) + 6.0) * 0.931 * 1pt);
       font-weight: 600;
       white-space: nowrap;
     }
     .mock-cover-org {
-      margin-top: auto;
-      padding-top: 16pt;
-      padding-bottom: 2pt;
+      margin-top: 19.2pt;
+      padding-top: 0;
+      padding-bottom: 0;
       text-align: center;
       color: #111;
-      font-size: calc((var(--stem-size-pt) + 8.4) * 1pt);
-      font-weight: 600;
+      font-size: calc((var(--stem-size-pt) + 8.4) * 1.62 * 1pt);
+      font-weight: 700;
       letter-spacing: -0.01em;
       line-height: 1.05;
       white-space: nowrap;
@@ -1658,7 +1676,7 @@ export function buildDocumentHtml({
               <div class="mock-cover-phrase-box">너만 보인단 말이야</div>
               <div class="mock-cover-info-row">
                 <span class="mock-cover-info-bullet">○</span>
-                <span class="mock-cover-info-text">답안지의 해당란에 성명과 수험 번호를 쓰고, 또 수험 번호, 문형(홀수/짝수), 답을 정확히 표시하시오.</span>
+                <span class="mock-cover-info-text">답안지의 해당란에 성명과 수험 번호를 쓰고, 또 수험 번호,<br/>문형(홀수/짝수), 답을 정확히 표시하시오.</span>
               </div>
               <div class="mock-cover-info-row">
                 <span class="mock-cover-info-bullet">○</span>
@@ -1679,26 +1697,33 @@ export function buildDocumentHtml({
                 <span>공통과목 및 자신이 선택한 과목의 문제지를 확인하고, 답을 정확히 표시하시오.</span>
               </div>
               <div class="mock-cover-subject-line">
-                <span class="mock-cover-subject-item">○ 공통과목</span>
+                <span class="mock-cover-subject-item mock-cover-subject-item-major">○ 공통과목</span>
                 <span class="mock-cover-dots"></span>
                 <span class="mock-cover-page-range">1~12쪽</span>
               </div>
               <div class="mock-cover-subject-line">
-                <span class="mock-cover-subject-item">○ 선택과목</span>
+                <span class="mock-cover-subject-item mock-cover-subject-item-major">○ 선택과목</span>
               </div>
               <div class="mock-cover-subject-line mock-cover-subject-indent">
-                <span class="mock-cover-subject-item">화법과 작문</span>
+                <span class="mock-cover-subject-item">확률과 통계</span>
+                <span class="mock-cover-dots"></span>
+                <span class="mock-cover-page-range">9~12쪽</span>
+              </div>
+              <div class="mock-cover-subject-line mock-cover-subject-indent">
+                <span class="mock-cover-subject-item">미적분</span>
                 <span class="mock-cover-dots"></span>
                 <span class="mock-cover-page-range">13~16쪽</span>
               </div>
               <div class="mock-cover-subject-line mock-cover-subject-indent">
-                <span class="mock-cover-subject-item">언어와 매체</span>
+                <span class="mock-cover-subject-item">기하</span>
                 <span class="mock-cover-dots"></span>
                 <span class="mock-cover-page-range">17~20쪽</span>
               </div>
             </div>
-            <div class="mock-cover-warning">※ 시험이 시작되기 전까지 표지를 넘기지 마시오.</div>
-            <div class="mock-cover-org">한국교육과정평가원</div>
+            <div class="mock-cover-bottom-stack">
+              <div class="mock-cover-warning">※ 시험이 시작되기 전까지 표지를 넘기지 마시오.</div>
+              <div class="mock-cover-org">한국교육과정평가원</div>
+            </div>
           </div>
         </section>
         <section class="mock-cover-blank page-break"></section>
