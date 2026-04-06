@@ -58,7 +58,7 @@ const String kLearningQuestionModeOriginal = 'original';
 const String kLearningQuestionModeObjective = 'objective';
 const String kLearningQuestionModeSubjective = 'subjective';
 const String kLearningQuestionModeEssay = 'essay';
-const String kLearningRenderConfigVersion = 'pb_render_v32l_cover_preview_sync';
+const String kLearningRenderConfigVersion = 'pb_render_v32m_cover_text_inputs';
 
 class LearningProblemLayoutTuning {
   const LearningProblemLayoutTuning({

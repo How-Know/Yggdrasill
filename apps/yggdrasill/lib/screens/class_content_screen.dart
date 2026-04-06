@@ -28,6 +28,7 @@ import '../widgets/flow_setup_dialog.dart';
 import '../widgets/pdf/homework_answer_viewer_dialog.dart';
 import '../widgets/latex_text_renderer.dart';
 import '../widgets/home_header_weather_icon.dart';
+import '../utils/homework_page_text.dart';
 import 'class_content/grading_mode_page.dart';
 
 /// 수업 내용 관리 6번째 페이지 (구조만 정의, 기능 미구현)
@@ -6956,74 +6957,8 @@ void _showHomeworkChipSnackBar(BuildContext context, String message) {
   ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
 }
 
-Set<int> _parsePageNumbersForGroupAction(String raw) {
-  final cleaned = raw.trim();
-  if (cleaned.isEmpty) return <int>{};
-  var normalized = cleaned
-      .replaceAll(RegExp(r'p\.', caseSensitive: false), '')
-      .replaceAll('페이지', '')
-      .replaceAll('쪽', '')
-      .replaceAll('~', '-')
-      .replaceAll('–', '-')
-      .replaceAll('—', '-');
-  normalized = normalized.replaceAll(RegExp(r'[^0-9,\-]+'), ',');
-  normalized = normalized.replaceAll(RegExp(r',+'), ',');
-  normalized = normalized.replaceAll(RegExp(r'^,+|,+$'), '');
-  if (normalized.isEmpty) return <int>{};
-  final out = <int>{};
-  for (final token in normalized.split(',')) {
-    final t = token.trim();
-    if (t.isEmpty) continue;
-    if (t.contains('-')) {
-      final parts = t.split('-');
-      if (parts.length != 2) continue;
-      final start = int.tryParse(parts[0]);
-      final end = int.tryParse(parts[1]);
-      if (start == null || end == null) continue;
-      var a = start;
-      var b = end;
-      if (a > b) {
-        final temp = a;
-        a = b;
-        b = temp;
-      }
-      for (int p = a; p <= b; p++) {
-        if (p > 0) out.add(p);
-      }
-      continue;
-    }
-    final value = int.tryParse(t);
-    if (value != null && value > 0) out.add(value);
-  }
-  return out;
-}
-
-String _compressPageNumbersForGroupAction(Set<int> pages) {
-  if (pages.isEmpty) return '';
-  final sorted = pages.toList()..sort();
-  final out = <String>[];
-  int start = sorted.first;
-  int prev = sorted.first;
-  for (int i = 1; i < sorted.length; i++) {
-    final value = sorted[i];
-    if (value == prev + 1) {
-      prev = value;
-      continue;
-    }
-    out.add(start == prev ? '$start' : '$start-$prev');
-    start = value;
-    prev = value;
-  }
-  out.add(start == prev ? '$start' : '$start-$prev');
-  return out.join(',');
-}
-
 String _mergeGroupPageText(List<HomeworkItem> items) {
-  final pages = <int>{};
-  for (final item in items) {
-    pages.addAll(_parsePageNumbersForGroupAction(item.page ?? ''));
-  }
-  return _compressPageNumbersForGroupAction(pages);
+  return mergeHomeworkPageRawStrings(items.map((e) => e.page));
 }
 
 List<HomeworkSplitPartInput> _parseSplitPartInputsFromRaw({

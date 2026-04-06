@@ -808,6 +808,12 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         }
         return defaultValue;
       }
+      Map<String, dynamic> readCoverPageTexts(dynamic primary, dynamic fallback) {
+        final source = primary is Map
+            ? primary
+            : (fallback is Map ? fallback : const <String, dynamic>{});
+        return source.map((key, value) => MapEntry('$key', value));
+      }
       await ProblemBankExportServerPreviewDialog.open(
         context,
         pdfUrl: completed.outputUrl,
@@ -888,6 +894,10 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           completed.options['includeExplanation'],
           _exportSettings.includeExplanation,
         ),
+        initialCoverPageTexts: readCoverPageTexts(
+          completed.resultSummary['coverPageTexts'],
+          completed.options['coverPageTexts'],
+        ),
         onRefreshRequested: (request) async {
           if (_exportSettings.includeAnswerSheet != request.includeAnswerSheet ||
               _exportSettings.includeExplanation != request.includeExplanation) {
@@ -903,6 +913,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                 ? '수학 영역'
                 : request.subjectTitleText.trim(),
             'includeCoverPage': request.includeCoverPage,
+            'coverPageTexts': request.coverPageTexts,
           };
           if (_exportSettings.layoutColumnCount == 2) {
             renderPatch['layoutMode'] = 'custom_columns';
@@ -992,12 +1003,17 @@ class _ProblemBankViewState extends State<ProblemBankView> {
             refreshed.options['includeExplanation'],
             request.includeExplanation,
           );
+          final coverPageTexts = readCoverPageTexts(
+            refreshed.resultSummary['coverPageTexts'],
+            refreshed.options['coverPageTexts'],
+          );
           return ProblemBankPreviewRefreshResult(
             pdfUrl: refreshed.outputUrl,
             pageColumnQuestionCounts: pageCounts,
             columnLabelAnchors: anchorRows,
             titlePageIndices: titlePages,
             titlePageHeaders: titlePageHeaders,
+            coverPageTexts: coverPageTexts,
             includeCoverPage: includeCoverPage,
             includeAnswerSheet: includeAnswerSheet,
             includeExplanation: includeExplanation,
@@ -1018,6 +1034,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                 ? '수학 영역'
                 : request.subjectTitleText.trim(),
             'includeCoverPage': request.includeCoverPage,
+            'coverPageTexts': request.coverPageTexts,
           };
           if (_exportSettings.layoutColumnCount == 2) {
             renderPatch['layoutMode'] = 'custom_columns';

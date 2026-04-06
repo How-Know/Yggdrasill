@@ -482,7 +482,7 @@ function buildStyles({
         0.24pt 0 0 #111,
         -0.24pt 0 0 #111;
       white-space: nowrap;
-      transform: translateY(1pt);
+      transform: translate(10pt, -2pt);
     }
     .mock-cover-subject {
       display: flex;
@@ -556,7 +556,7 @@ function buildStyles({
       border-left: 0;
     }
     .mock-cover-info-box {
-      margin: 24pt auto 0;
+      margin: 30pt auto 0;
       width: 92.5%;
       border: 0.8pt solid #a2a2a2;
       padding: 12pt 22pt 10pt;
@@ -591,7 +591,8 @@ function buildStyles({
       padding: 4.4pt 7pt;
       color: #333;
       font-size: calc((var(--stem-size-pt) + 0.2) * 1.3034 * 1pt);
-      font-weight: 600;
+      font-weight: 800;
+      -webkit-text-stroke: 0.12pt #333;
       line-height: 1.646;
       white-space: nowrap;
     }
@@ -635,6 +636,9 @@ function buildStyles({
       font-weight: 800;
       -webkit-text-stroke: 0.1pt #222;
     }
+    .mock-cover-subject-item-under {
+      margin-left: 1ch;
+    }
     .mock-cover-dots {
       flex: 1 1 auto;
       min-width: 24pt;
@@ -663,7 +667,8 @@ function buildStyles({
       padding: 0 16pt;
       color: #222;
       font-size: calc((var(--stem-size-pt) + 6.0) * 0.931 * 1pt);
-      font-weight: 600;
+      font-weight: 800;
+      -webkit-text-stroke: 0.16pt #222;
       white-space: nowrap;
     }
     .mock-cover-org {
@@ -1389,6 +1394,39 @@ function normalizeTitlePageHeaders(rawHeaders, titlePageIndices, fallbackTitle) 
   return [...out.values()].sort((a, b) => a.page - b.page);
 }
 
+function normalizeCoverPageTexts(raw) {
+  const src = raw && typeof raw === 'object' ? raw : {};
+  const fallbackItems = [
+    { name: '확률과 통계', pages: '9~12쪽' },
+    { name: '미적분', pages: '13~16쪽' },
+    { name: '기하', pages: '17~20쪽' },
+  ];
+  const rawItems = Array.isArray(src.electiveItems) ? src.electiveItems : [];
+  const electiveItems = fallbackItems.map((fallback, index) => {
+    const row = rawItems[index] && typeof rawItems[index] === 'object'
+      ? rawItems[index]
+      : {};
+    const name = String(row.name || '').replace(/\s+/g, ' ').trim() || fallback.name;
+    const pages = String(row.pages || row.pageRange || '').replace(/\s+/g, ' ').trim() || fallback.pages;
+    return { name, pages };
+  });
+  return {
+    topTitle:
+      String(src.topTitle || '').replace(/\s+/g, ' ').trim() || '2026학년도 대학수학능력시험 문제지',
+    subjectTitle:
+      String(src.subjectTitle || '').replace(/\s+/g, ' ').trim() || '수학 영역',
+    handwritingPhrase:
+      String(src.handwritingPhrase || '').replace(/\s+/g, ' ').trim() || '이 많은 별빛이 내린 언덕 위에',
+    commonLabel:
+      String(src.commonLabel || '').replace(/\s+/g, ' ').trim() || '공통과목',
+    electiveLabel:
+      String(src.electiveLabel || '').replace(/\s+/g, ' ').trim() || '선택과목',
+    electiveItems,
+    organization:
+      String(src.organization || src.organizationName || '').replace(/\s+/g, ' ').trim() || '한국교육과정평가원',
+  };
+}
+
 export function buildDocumentHtml({
   profile,
   paper,
@@ -1422,6 +1460,7 @@ export function buildDocumentHtml({
     .replace(/\s+/g, ' ')
     .trim() || '수학 영역';
   const includeCoverPage = isMockStyle && layout?.includeCoverPage === true;
+  const coverPageTexts = normalizeCoverPageTexts(layout?.coverPageTexts);
 
   const stemSizePt = Number(layout?.stemSizePt || 11.0);
   const allQ = (questions || []).map((q) => renderQuestionBlock(q, mathRenderer, { stemSizePt }));
@@ -1617,25 +1656,25 @@ export function buildDocumentHtml({
       return `<span class="mock-title-main">${title}</span>`;
     };
     const renderCoverSubjectLine = () => {
-      const row = titlePageHeaderMap.get(1);
       const title = escapeHtml(
-        String(row?.title || subjectTitleText).replace(/\s+/g, ' ').trim() || '수학 영역',
+        String(coverPageTexts.subjectTitle || '수학 영역').replace(/\s+/g, ' ').trim() || '수학 영역',
       );
-      const subtitle = escapeHtml(
-        String(row?.subtitle || '').replace(/\s+/g, ' ').trim(),
-      );
-      if (!subtitle) {
-        return `<span class="mock-cover-subject-main">${title}</span>`;
-      }
-      return `<span class="mock-cover-subject-main">${title}</span><span class="mock-cover-subject-sub">(${subtitle})</span>`;
+      return `<span class="mock-cover-subject-main">${title}</span>`;
     };
+    const coverElectiveItemLines = (coverPageTexts.electiveItems || []).map((row) => `
+      <div class="mock-cover-subject-line mock-cover-subject-indent">
+        <span class="mock-cover-subject-item mock-cover-subject-item-major mock-cover-subject-item-under">${escapeHtml(String(row?.name || ''))}</span>
+        <span class="mock-cover-dots"></span>
+        <span class="mock-cover-page-range">${escapeHtml(String(row?.pages || ''))}</span>
+      </div>
+    `).join('');
     const renderCoverPages = () => `
       <div class="mock-cover-pages">
         <section class="mock-cover-page">
           <div class="mock-cover-sheet">
             <div class="mock-cover-top-row">
               <span class="mock-cover-chip-left">제 1교시</span>
-              <div class="mock-cover-top-title">2026학년도 대학수학능력시험 문제지</div>
+              <div class="mock-cover-top-title">${escapeHtml(coverPageTexts.topTitle)}</div>
               <span class="mock-cover-top-empty" aria-hidden="true"></span>
             </div>
             <div class="mock-cover-subject-row">
@@ -1673,7 +1712,7 @@ export function buildDocumentHtml({
                 <span class="mock-cover-info-bullet">○</span>
                 <span class="mock-cover-info-text">답안지의 필적 확인란에 다음의 문구를 정자로 기재하시오.</span>
               </div>
-              <div class="mock-cover-phrase-box">너만 보인단 말이야</div>
+              <div class="mock-cover-phrase-box">${escapeHtml(coverPageTexts.handwritingPhrase)}</div>
               <div class="mock-cover-info-row">
                 <span class="mock-cover-info-bullet">○</span>
                 <span class="mock-cover-info-text">답안지의 해당란에 성명과 수험 번호를 쓰고, 또 수험 번호,<br/>문형(홀수/짝수), 답을 정확히 표시하시오.</span>
@@ -1697,32 +1736,18 @@ export function buildDocumentHtml({
                 <span>공통과목 및 자신이 선택한 과목의 문제지를 확인하고, 답을 정확히 표시하시오.</span>
               </div>
               <div class="mock-cover-subject-line">
-                <span class="mock-cover-subject-item mock-cover-subject-item-major">○ 공통과목</span>
+                <span class="mock-cover-subject-item mock-cover-subject-item-major">○ ${escapeHtml(coverPageTexts.commonLabel)}</span>
                 <span class="mock-cover-dots"></span>
                 <span class="mock-cover-page-range">1~12쪽</span>
               </div>
               <div class="mock-cover-subject-line">
-                <span class="mock-cover-subject-item mock-cover-subject-item-major">○ 선택과목</span>
+                <span class="mock-cover-subject-item mock-cover-subject-item-major">○ ${escapeHtml(coverPageTexts.electiveLabel)}</span>
               </div>
-              <div class="mock-cover-subject-line mock-cover-subject-indent">
-                <span class="mock-cover-subject-item">확률과 통계</span>
-                <span class="mock-cover-dots"></span>
-                <span class="mock-cover-page-range">9~12쪽</span>
-              </div>
-              <div class="mock-cover-subject-line mock-cover-subject-indent">
-                <span class="mock-cover-subject-item">미적분</span>
-                <span class="mock-cover-dots"></span>
-                <span class="mock-cover-page-range">13~16쪽</span>
-              </div>
-              <div class="mock-cover-subject-line mock-cover-subject-indent">
-                <span class="mock-cover-subject-item">기하</span>
-                <span class="mock-cover-dots"></span>
-                <span class="mock-cover-page-range">17~20쪽</span>
-              </div>
+              ${coverElectiveItemLines}
             </div>
             <div class="mock-cover-bottom-stack">
               <div class="mock-cover-warning">※ 시험이 시작되기 전까지 표지를 넘기지 마시오.</div>
-              <div class="mock-cover-org">한국교육과정평가원</div>
+              <div class="mock-cover-org">${escapeHtml(coverPageTexts.organization)}</div>
             </div>
           </div>
         </section>

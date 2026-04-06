@@ -10,6 +10,7 @@ class ProblemBankPreviewRefreshRequest {
     required this.columnLabelAnchors,
     required this.titlePageIndices,
     required this.titlePageHeaders,
+    required this.coverPageTexts,
     required this.includeCoverPage,
     required this.includeAnswerSheet,
     required this.includeExplanation,
@@ -20,6 +21,7 @@ class ProblemBankPreviewRefreshRequest {
   final List<Map<String, dynamic>> columnLabelAnchors;
   final List<int> titlePageIndices;
   final List<Map<String, dynamic>> titlePageHeaders;
+  final Map<String, dynamic> coverPageTexts;
   final bool includeCoverPage;
   final bool includeAnswerSheet;
   final bool includeExplanation;
@@ -32,6 +34,7 @@ class ProblemBankPreviewRefreshResult {
     this.columnLabelAnchors = const <Map<String, dynamic>>[],
     this.titlePageIndices = const <int>[],
     this.titlePageHeaders = const <Map<String, dynamic>>[],
+    this.coverPageTexts = const <String, dynamic>{},
     this.includeCoverPage = false,
     this.includeAnswerSheet = true,
     this.includeExplanation = false,
@@ -42,6 +45,7 @@ class ProblemBankPreviewRefreshResult {
   final List<Map<String, dynamic>> columnLabelAnchors;
   final List<int> titlePageIndices;
   final List<Map<String, dynamic>> titlePageHeaders;
+  final Map<String, dynamic> coverPageTexts;
   final bool includeCoverPage;
   final bool includeAnswerSheet;
   final bool includeExplanation;
@@ -69,6 +73,7 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
     this.initialColumnLabelAnchors = const <Map<String, dynamic>>[],
     this.initialTitlePageIndices = const <int>[],
     this.initialTitlePageHeaders = const <Map<String, dynamic>>[],
+    this.initialCoverPageTexts = const <String, dynamic>{},
     this.initialIncludeCoverPage = false,
     this.initialIncludeAnswerSheet = true,
     this.initialIncludeExplanation = false,
@@ -86,6 +91,7 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
   final List<Map<String, dynamic>> initialColumnLabelAnchors;
   final List<int> initialTitlePageIndices;
   final List<Map<String, dynamic>> initialTitlePageHeaders;
+  final Map<String, dynamic> initialCoverPageTexts;
   final bool initialIncludeCoverPage;
   final bool initialIncludeAnswerSheet;
   final bool initialIncludeExplanation;
@@ -107,6 +113,7 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
     List<int> initialTitlePageIndices = const <int>[],
     List<Map<String, dynamic>> initialTitlePageHeaders =
         const <Map<String, dynamic>>[],
+    Map<String, dynamic> initialCoverPageTexts = const <String, dynamic>{},
     bool initialIncludeCoverPage = false,
     bool initialIncludeAnswerSheet = true,
     bool initialIncludeExplanation = false,
@@ -141,6 +148,7 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
               initialColumnLabelAnchors: initialColumnLabelAnchors,
               initialTitlePageIndices: initialTitlePageIndices,
               initialTitlePageHeaders: initialTitlePageHeaders,
+              initialCoverPageTexts: initialCoverPageTexts,
               initialIncludeCoverPage: initialIncludeCoverPage,
               initialIncludeAnswerSheet: initialIncludeAnswerSheet,
               initialIncludeExplanation: initialIncludeExplanation,
@@ -175,6 +183,14 @@ class _ProblemBankExportServerPreviewDialogState
 
   final PdfViewerController _viewerController = PdfViewerController();
   late final TextEditingController _subjectController;
+  late final TextEditingController _coverTopTitleController;
+  late final TextEditingController _coverSubjectTitleController;
+  late final TextEditingController _coverPhraseController;
+  late final TextEditingController _coverCommonLabelController;
+  late final TextEditingController _coverElectiveLabelController;
+  late final TextEditingController _coverOrganizationController;
+  late final List<TextEditingController> _coverElectiveNameControllers;
+  late final List<TextEditingController> _coverElectivePageControllers;
 
   late String _currentPdfUrl;
   int _pageNumber = 1;
@@ -205,6 +221,19 @@ class _ProblemBankExportServerPreviewDialogState
     _currentPdfUrl = widget.pdfUrl;
     _subjectController =
         TextEditingController(text: widget.initialSubjectTitle);
+    _coverTopTitleController = TextEditingController();
+    _coverSubjectTitleController = TextEditingController();
+    _coverPhraseController = TextEditingController();
+    _coverCommonLabelController = TextEditingController();
+    _coverElectiveLabelController = TextEditingController();
+    _coverOrganizationController = TextEditingController();
+    _coverElectiveNameControllers =
+        List<TextEditingController>.generate(3, (_) => TextEditingController());
+    _coverElectivePageControllers =
+        List<TextEditingController>.generate(3, (_) => TextEditingController());
+    _syncCoverPageTextControllers(
+      _normalizeCoverPageTexts(widget.initialCoverPageTexts),
+    );
     _includeCoverPage = widget.initialIncludeCoverPage;
     _includeAnswerSheet = widget.initialIncludeAnswerSheet;
     _includeExplanation = widget.initialIncludeExplanation;
@@ -232,6 +261,18 @@ class _ProblemBankExportServerPreviewDialogState
       controller.dispose();
     }
     _subjectController.dispose();
+    _coverTopTitleController.dispose();
+    _coverSubjectTitleController.dispose();
+    _coverPhraseController.dispose();
+    _coverCommonLabelController.dispose();
+    _coverElectiveLabelController.dispose();
+    _coverOrganizationController.dispose();
+    for (final controller in _coverElectiveNameControllers) {
+      controller.dispose();
+    }
+    for (final controller in _coverElectivePageControllers) {
+      controller.dispose();
+    }
     super.dispose();
   }
 
@@ -761,6 +802,136 @@ class _ProblemBankExportServerPreviewDialogState
     return out;
   }
 
+  Map<String, dynamic> _defaultCoverPageTexts() {
+    return <String, dynamic>{
+      'topTitle': '2026학년도 대학수학능력시험 문제지',
+      'subjectTitle': '수학 영역',
+      'handwritingPhrase': '이 많은 별빛이 내린 언덕 위에',
+      'commonLabel': '공통과목',
+      'electiveLabel': '선택과목',
+      'electiveItems': const <Map<String, dynamic>>[
+        <String, dynamic>{'name': '확률과 통계', 'pages': '9~12쪽'},
+        <String, dynamic>{'name': '미적분', 'pages': '13~16쪽'},
+        <String, dynamic>{'name': '기하', 'pages': '17~20쪽'},
+      ],
+      'organization': '한국교육과정평가원',
+    };
+  }
+
+  String _normalizeCoverTextValue(
+    dynamic raw,
+    String fallback,
+  ) {
+    final text = '$raw'.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (text.isEmpty) return fallback;
+    return text;
+  }
+
+  Map<String, dynamic> _normalizeCoverPageTexts(dynamic source) {
+    final defaults = _defaultCoverPageTexts();
+    final src = source is Map ? source : const <String, dynamic>{};
+    final rawItems = src['electiveItems'];
+    final normalizedItems = List<Map<String, dynamic>>.generate(3, (index) {
+      final fallback = (defaults['electiveItems'] as List<Map<String, dynamic>>)[index];
+      final row = rawItems is List && rawItems.length > index && rawItems[index] is Map
+          ? rawItems[index] as Map
+          : const <String, dynamic>{};
+      return <String, dynamic>{
+        'name': _normalizeCoverTextValue(row['name'], '${fallback['name'] ?? ''}'),
+        'pages': _normalizeCoverTextValue(row['pages'], '${fallback['pages'] ?? ''}'),
+      };
+    });
+    return <String, dynamic>{
+      'topTitle': _normalizeCoverTextValue(
+        src['topTitle'],
+        '${defaults['topTitle'] ?? ''}',
+      ),
+      'subjectTitle': _normalizeCoverTextValue(
+        src['subjectTitle'],
+        '${defaults['subjectTitle'] ?? ''}',
+      ),
+      'handwritingPhrase': _normalizeCoverTextValue(
+        src['handwritingPhrase'],
+        '${defaults['handwritingPhrase'] ?? ''}',
+      ),
+      'commonLabel': _normalizeCoverTextValue(
+        src['commonLabel'],
+        '${defaults['commonLabel'] ?? ''}',
+      ),
+      'electiveLabel': _normalizeCoverTextValue(
+        src['electiveLabel'],
+        '${defaults['electiveLabel'] ?? ''}',
+      ),
+      'electiveItems': normalizedItems,
+      'organization': _normalizeCoverTextValue(
+        src['organization'],
+        '${defaults['organization'] ?? ''}',
+      ),
+    };
+  }
+
+  void _syncCoverPageTextControllers(Map<String, dynamic> config) {
+    final normalized = _normalizeCoverPageTexts(config);
+    _coverTopTitleController.text = '${normalized['topTitle'] ?? ''}';
+    _coverSubjectTitleController.text = '${normalized['subjectTitle'] ?? ''}';
+    _coverPhraseController.text = '${normalized['handwritingPhrase'] ?? ''}';
+    _coverCommonLabelController.text = '${normalized['commonLabel'] ?? ''}';
+    _coverElectiveLabelController.text = '${normalized['electiveLabel'] ?? ''}';
+    _coverOrganizationController.text = '${normalized['organization'] ?? ''}';
+    final items = (normalized['electiveItems'] as List<dynamic>)
+        .whereType<Map>()
+        .toList(growable: false);
+    for (var i = 0; i < 3; i += 1) {
+      final row = i < items.length ? items[i] : const <String, dynamic>{};
+      _coverElectiveNameControllers[i].text = '${row['name'] ?? ''}';
+      _coverElectivePageControllers[i].text = '${row['pages'] ?? ''}';
+    }
+  }
+
+  Map<String, dynamic> _coverPageTextsPayload() {
+    final defaults = _defaultCoverPageTexts();
+    final defaultItems = defaults['electiveItems'] as List<Map<String, dynamic>>;
+    final items = List<Map<String, dynamic>>.generate(3, (index) {
+      return <String, dynamic>{
+        'name': _normalizeCoverTextValue(
+          _coverElectiveNameControllers[index].text,
+          '${defaultItems[index]['name'] ?? ''}',
+        ),
+        'pages': _normalizeCoverTextValue(
+          _coverElectivePageControllers[index].text,
+          '${defaultItems[index]['pages'] ?? ''}',
+        ),
+      };
+    });
+    return <String, dynamic>{
+      'topTitle': _normalizeCoverTextValue(
+        _coverTopTitleController.text,
+        '${defaults['topTitle'] ?? ''}',
+      ),
+      'subjectTitle': _normalizeCoverTextValue(
+        _coverSubjectTitleController.text,
+        '${defaults['subjectTitle'] ?? ''}',
+      ),
+      'handwritingPhrase': _normalizeCoverTextValue(
+        _coverPhraseController.text,
+        '${defaults['handwritingPhrase'] ?? ''}',
+      ),
+      'commonLabel': _normalizeCoverTextValue(
+        _coverCommonLabelController.text,
+        '${defaults['commonLabel'] ?? ''}',
+      ),
+      'electiveLabel': _normalizeCoverTextValue(
+        _coverElectiveLabelController.text,
+        '${defaults['electiveLabel'] ?? ''}',
+      ),
+      'electiveItems': items,
+      'organization': _normalizeCoverTextValue(
+        _coverOrganizationController.text,
+        '${defaults['organization'] ?? ''}',
+      ),
+    };
+  }
+
   ProblemBankPreviewRefreshRequest _buildRequestPayload() {
     return ProblemBankPreviewRefreshRequest(
       subjectTitleText: _subjectController.text.trim(),
@@ -768,6 +939,7 @@ class _ProblemBankExportServerPreviewDialogState
       columnLabelAnchors: _columnLabelAnchorsPayload(),
       titlePageIndices: _titlePageIndicesPayload(),
       titlePageHeaders: _titlePageHeadersPayload(),
+      coverPageTexts: _coverPageTextsPayload(),
       includeCoverPage: _includeCoverPage,
       includeAnswerSheet: _includeAnswerSheet,
       includeExplanation: _includeExplanation,
@@ -858,6 +1030,7 @@ class _ProblemBankExportServerPreviewDialogState
         _includeCoverPage = refreshed.includeCoverPage;
         _includeAnswerSheet = refreshed.includeAnswerSheet;
         _includeExplanation = refreshed.includeExplanation;
+        _syncCoverPageTextControllers(refreshed.coverPageTexts);
         if (_isTwoColumnLayout) {
           _pageOverrides =
               _parsePageOverrides(refreshed.pageColumnQuestionCounts);
@@ -981,6 +1154,162 @@ class _ProblemBankExportServerPreviewDialogState
             inactiveThumbColor: const Color(0xFF8EA0A8),
             inactiveTrackColor: const Color(0xFF25333A),
             materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCoverTextField({
+    required String label,
+    required TextEditingController controller,
+    String? hintText,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: TextField(
+        controller: controller,
+        style: const TextStyle(
+          color: _textPrimary,
+          fontSize: 12.6,
+          fontWeight: FontWeight.w700,
+        ),
+        decoration: InputDecoration(
+          labelText: label,
+          hintText: hintText,
+          isDense: true,
+          filled: true,
+          fillColor: const Color(0xFF0E161B),
+          labelStyle: const TextStyle(
+            color: _textMuted,
+            fontSize: 12.0,
+            fontWeight: FontWeight.w700,
+          ),
+          hintStyle: const TextStyle(
+            color: Color(0xFF708188),
+            fontSize: 11.8,
+            fontWeight: FontWeight.w600,
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: const BorderSide(color: Color(0xFF263740)),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: const BorderSide(color: Color(0xFF357D68), width: 1.1),
+          ),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCoverPageTextEditor() {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(top: 4),
+      padding: const EdgeInsets.fromLTRB(10, 9, 10, 9),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0C1419),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFF23333B)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            '표지 문구',
+            style: TextStyle(
+              color: _textPrimary,
+              fontSize: 12.4,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 4),
+          const Text(
+            '표지 ON일 때만 반영되며, 표지 과목명은 본문 1페이지 제목과 분리됩니다.',
+            style: TextStyle(
+              color: _textMuted,
+              fontSize: 11.2,
+              fontWeight: FontWeight.w600,
+              height: 1.35,
+            ),
+          ),
+          const SizedBox(height: 8),
+          _buildCoverTextField(
+            label: '상단 제목',
+            controller: _coverTopTitleController,
+            hintText: '2026학년도 대학수학능력시험 문제지',
+          ),
+          _buildCoverTextField(
+            label: '표지 과목명 (cover-only)',
+            controller: _coverSubjectTitleController,
+            hintText: '수학 영역',
+          ),
+          _buildCoverTextField(
+            label: '필적확인 문구',
+            controller: _coverPhraseController,
+            hintText: '이 많은 별빛이 내린 언덕 위에',
+          ),
+          Row(
+            children: [
+              Expanded(
+                child: _buildCoverTextField(
+                  label: '공통과목 라벨',
+                  controller: _coverCommonLabelController,
+                  hintText: '공통과목',
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _buildCoverTextField(
+                  label: '선택과목 라벨',
+                  controller: _coverElectiveLabelController,
+                  hintText: '선택과목',
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 2),
+          const Text(
+            '선택과목 하위 항목',
+            style: TextStyle(
+              color: _textMuted,
+              fontSize: 11.4,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 6),
+          for (var i = 0; i < 3; i += 1)
+            Row(
+              children: [
+                Expanded(
+                  flex: 3,
+                  child: _buildCoverTextField(
+                    label: '과목 ${i + 1}',
+                    controller: _coverElectiveNameControllers[i],
+                    hintText: i == 0
+                        ? '확률과 통계'
+                        : (i == 1 ? '미적분' : '기하'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  flex: 2,
+                  child: _buildCoverTextField(
+                    label: '페이지',
+                    controller: _coverElectivePageControllers[i],
+                    hintText: i == 0
+                        ? '9~12쪽'
+                        : (i == 1 ? '13~16쪽' : '17~20쪽'),
+                  ),
+                ),
+              ],
+            ),
+          _buildCoverTextField(
+            label: '기관명',
+            controller: _coverOrganizationController,
+            hintText: '한국교육과정평가원',
           ),
         ],
       ),
@@ -1677,6 +2006,7 @@ class _ProblemBankExportServerPreviewDialogState
                                     });
                                   },
                                 ),
+                                if (_includeCoverPage) _buildCoverPageTextEditor(),
                                 const SizedBox(height: 4),
                                 const Text(
                                   '중앙 타이틀 입력은 페이지 카드 하단의 `제목` 편집에서 페이지별로 설정합니다.\n1페이지는 기본 제목 페이지이며, 제목 페이지로 지정된 카드에서 타이틀/부제를 각각 입력할 수 있습니다.',

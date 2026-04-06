@@ -258,6 +258,62 @@ function normalizeTitlePageHeaders(raw, titlePageIndices, fallbackTitle = '수�
   return [...out.values()].sort((a, b) => a.page - b.page);
 }
 
+function normalizeCoverPageTexts(raw, defaults = {}) {
+  const src = raw && typeof raw === 'object' ? raw : {};
+  const seed = defaults && typeof defaults === 'object' ? defaults : {};
+  const defaultItemsSrc = Array.isArray(seed.electiveItems) ? seed.electiveItems : [];
+  const fallbackItems = [0, 1, 2].map((index) => {
+    const item = defaultItemsSrc[index] && typeof defaultItemsSrc[index] === 'object'
+      ? defaultItemsSrc[index]
+      : {};
+    const fallbackName =
+      index === 0 ? '확률과 통계' : (index === 1 ? '미적분' : '기하');
+    const fallbackPages =
+      index === 0 ? '9~12쪽' : (index === 1 ? '13~16쪽' : '17~20쪽');
+    return {
+      name: normalizeWhitespace(item.name || fallbackName) || fallbackName,
+      pages: normalizeWhitespace(item.pages || fallbackPages) || fallbackPages,
+    };
+  });
+  const rawItems = Array.isArray(src.electiveItems) ? src.electiveItems : [];
+  const electiveItems = fallbackItems.map((fallback, index) => {
+    const item = rawItems[index] && typeof rawItems[index] === 'object'
+      ? rawItems[index]
+      : {};
+    return {
+      name: normalizeWhitespace(item.name || '') || fallback.name,
+      pages: normalizeWhitespace(item.pages || item.pageRange || '') || fallback.pages,
+    };
+  });
+  const topTitle = normalizeWhitespace(
+    src.topTitle || seed.topTitle || '2026학년도 대학수학능력시험 문제지',
+  ) || '2026학년도 대학수학능력시험 문제지';
+  const subjectTitle = normalizeWhitespace(
+    src.subjectTitle || seed.subjectTitle || '수학 영역',
+  ) || '수학 영역';
+  const handwritingPhrase = normalizeWhitespace(
+    src.handwritingPhrase || seed.handwritingPhrase || '이 많은 별빛이 내린 언덕 위에',
+  ) || '이 많은 별빛이 내린 언덕 위에';
+  const commonLabel = normalizeWhitespace(
+    src.commonLabel || seed.commonLabel || '공통과목',
+  ) || '공통과목';
+  const electiveLabel = normalizeWhitespace(
+    src.electiveLabel || seed.electiveLabel || '선택과목',
+  ) || '선택과목';
+  const organization = normalizeWhitespace(
+    src.organization || src.organizationName || seed.organization || '한국교육과정평가원',
+  ) || '한국교육과정평가원';
+  return {
+    topTitle,
+    subjectTitle,
+    handwritingPhrase,
+    commonLabel,
+    electiveLabel,
+    electiveItems,
+    organization,
+  };
+}
+
 function normalizeAnchorPage(raw) {
   const v = String(raw || '').trim().toLowerCase();
   if (!v || v === 'first' || v === '1') return 'first';
@@ -401,7 +457,7 @@ function normalizeFigureQuality(rawFigureQuality, options = {}) {
   return { targetDpi, minDpi };
 }
 
-const EXPORT_RENDER_CONFIG_VERSION = 'pb_render_v32l_cover_preview_sync';
+const EXPORT_RENDER_CONFIG_VERSION = 'pb_render_v32m_cover_text_inputs';
 
 function normalizeExportRenderConfig(options, selectedQuestionIds, defaults = {}) {
   const src = options && typeof options === 'object' ? options : {};
@@ -460,6 +516,10 @@ function normalizeExportRenderConfig(options, selectedQuestionIds, defaults = {}
     src.includeCoverPage ?? src.coverPage,
     normalizeBool(defaults.includeCoverPage, false),
   );
+  const coverPageTexts = normalizeCoverPageTexts(
+    src.coverPageTexts || src.coverTexts || src.coverPageTextConfig,
+    defaults.coverPageTexts,
+  );
   const titlePageHeaders = normalizeTitlePageHeaders(
     src.titlePageHeaders || src.titleHeaders,
     titlePageIndices,
@@ -478,6 +538,7 @@ function normalizeExportRenderConfig(options, selectedQuestionIds, defaults = {}
     titlePageIndices,
     titlePageHeaders,
     includeCoverPage,
+    coverPageTexts,
     alignPolicy,
     questionMode,
     layoutTuning: normalizeLayoutTuning(src.layoutTuning, src),
@@ -1004,6 +1065,7 @@ async function createExportJob(body, res) {
     includeAnswerSheet,
     includeExplanation,
     includeCoverPage: renderConfig.includeCoverPage,
+    coverPageTexts: renderConfig.coverPageTexts,
     layoutColumns: renderConfig.layoutColumns,
     maxQuestionsPerPage: renderConfig.maxQuestionsPerPage,
     layoutMode: renderConfig.layoutMode,
@@ -1032,6 +1094,7 @@ async function createExportJob(body, res) {
     includeAnswerSheet,
     includeExplanation,
     includeCoverPage: renderConfig.includeCoverPage,
+    coverPageTexts: renderConfig.coverPageTexts,
     layoutColumns: renderConfig.layoutColumns,
     maxQuestionsPerPage: renderConfig.maxQuestionsPerPage,
     layoutMode: renderConfig.layoutMode,

@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import '../../services/data_manager.dart';
 import '../../services/homework_assignment_store.dart';
 import '../../services/homework_store.dart';
+import '../../utils/homework_page_text.dart';
 import '../../widgets/dialog_tokens.dart';
 
 const double _kGradingBaseCardWidth = 288.0;
@@ -1228,23 +1229,38 @@ class _SubmittedHomeworkCard extends StatelessWidget {
   }
 
   List<String> _buildOverlayPageLines(_GradingGroupEntry entry) {
-    final seen = <String>{};
-    final out = <String>[];
+    final pages = <int>{};
+    final nonEmptyRaws = <String>[];
+    final seenRaw = <String>{};
     for (final child in entry.children) {
       final raw = (child.page ?? '').trim();
       if (raw.isEmpty) continue;
-      final pageLabel = 'p.$raw';
-      if (!seen.add(pageLabel)) continue;
-      out.add(pageLabel);
-    }
-    if (out.isEmpty) {
-      final fallback = (entry.summary.page ?? '').trim();
-      if (fallback.isNotEmpty) {
-        out.add('p.$fallback');
+      pages.addAll(parseHomeworkPageNumbers(raw));
+      if (seenRaw.add(raw)) {
+        nonEmptyRaws.add(raw);
       }
     }
-    if (out.length <= 4) return out;
-    return <String>[...out.take(4), '...'];
+    if (pages.isNotEmpty) {
+      final compressed = compressHomeworkPageNumbers(pages);
+      if (compressed.isNotEmpty) {
+        return <String>['p.$compressed'];
+      }
+    }
+    if (nonEmptyRaws.isNotEmpty) {
+      final out = nonEmptyRaws.map((r) => 'p.$r').toList(growable: false);
+      if (out.length <= 4) return out;
+      return <String>[...out.take(4), '...'];
+    }
+    final fallback = (entry.summary.page ?? '').trim();
+    if (fallback.isEmpty) return const <String>[];
+    final fp = parseHomeworkPageNumbers(fallback);
+    if (fp.isNotEmpty) {
+      final c = compressHomeworkPageNumbers(fp);
+      if (c.isNotEmpty) {
+        return <String>['p.$c'];
+      }
+    }
+    return <String>['p.$fallback'];
   }
 
   String _extractBookName(HomeworkItem hw) {
