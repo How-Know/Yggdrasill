@@ -63,12 +63,15 @@ function normalizeAnchors(rawAnchors, columns) {
     if (!one || typeof one !== 'object') continue;
     const columnIndex = toSafeInt(one.columnIndex, -1);
     if (columnIndex < 0 || columnIndex >= maxColumns) continue;
+    const parsedRowIndex = toSafeInt(one.rowIndex, 0);
+    const rowIndex = parsedRowIndex >= 0 ? parsedRowIndex : 0;
     const label = String(one.label || one.text || '').replace(/\s+/g, ' ').trim();
     if (!label) continue;
     const topPt = Number(one.topPt);
     const paddingTopPt = Number(one.paddingTopPt);
     anchors.push({
       columnIndex,
+      rowIndex,
       label,
       page: normalizeAnchorPage(one.page),
       topPt: Number.isFinite(topPt) ? topPt : 9.2,
@@ -139,8 +142,9 @@ export function buildSlotPlan({
     const columnIndex = anchor.columnIndex;
     if (!Number.isFinite(columnIndex) || columnIndex < 0 || columnIndex >= safeColumns) continue;
     if (resolvedCounts[columnIndex] <= 0) continue;
-    // Current contract: label anchor is always attached to the top question slot of a column.
-    const rowIndex = 0;
+    // rowIndex is optional; defaults to top row (0) for backward compatibility.
+    const rowIndex = Number.isFinite(anchor.rowIndex) ? anchor.rowIndex : 0;
+    if (rowIndex < 0 || rowIndex >= resolvedCounts[columnIndex]) continue;
     const key = `${rowIndex}:${columnIndex}`;
     if (!anchorByKey.has(key)) {
       anchorByKey.set(key, anchor);
@@ -173,6 +177,7 @@ export function buildSlotPlan({
   }
 
   const rowHasAnchor = Array.from({ length: rowCount }, () => false);
+  const rowAnchorCount = Array.from({ length: rowCount }, () => 0);
   const slots = [];
   for (let row = 0; row < rowCount; row += 1) {
     for (let col = 0; col < safeColumns; col += 1) {
@@ -184,7 +189,10 @@ export function buildSlotPlan({
         && Number.isFinite(slotQuestionOrder)
         && slotQuestionOrder < safeChunkLength;
       const anchor = anchorByKey.get(`${row}:${col}`) || null;
-      if (anchor) rowHasAnchor[row] = true;
+      if (anchor) {
+        rowHasAnchor[row] = true;
+        rowAnchorCount[row] += 1;
+      }
       slots.push({
         slotIndex: slots.length,
         row: row + 1,
@@ -204,6 +212,7 @@ export function buildSlotPlan({
 
   for (const slot of slots) {
     slot.rowHasAnchor = rowHasAnchor[slot.rowIndex] === true;
+    slot.rowAnchorCount = Number(rowAnchorCount[slot.rowIndex] || 0);
   }
 
   return {

@@ -34,6 +34,8 @@ LV_IMG_DECLARE(battery_android_frame_full_32dp_999999_FILL0_wght400_GRAD0_opsz40
 LV_IMG_DECLARE(format_list_bulleted_90dp_999999_FILL0_wght400_GRAD0_opsz48);
 LV_IMG_DECLARE(timer_90dp_999999_FILL0_wght400_GRAD0_opsz48);
 LV_IMG_DECLARE(info_i_90dp_999999_FILL0_wght400_GRAD0_opsz48);
+LV_IMG_DECLARE(bottom_sheet_question_64);
+LV_IMG_DECLARE(bottom_sheet_add_64);
 LV_IMG_DECLARE(settings_90dp_999999_FILL0_wght400_GRAD0_opsz48);
 LV_IMG_DECLARE(pause_circle_90dp_999999_FILL0_wght400_GRAD0_opsz48);
 LV_IMG_DECLARE(play_arrow_100dp_999999_FILL0_wght400_GRAD0_opsz48);
@@ -56,6 +58,7 @@ static lv_obj_t* s_empty_label = nullptr;
 static lv_obj_t* s_empty_overlay = nullptr;
 static lv_obj_t* s_volume_popup = nullptr;
 static lv_obj_t* s_bind_confirm_popup = nullptr;
+static lv_obj_t* s_question_sent_popup = nullptr;
 static lv_obj_t* s_entry_hub = nullptr;
 static lv_obj_t* s_entry_name_label = nullptr;
 static lv_obj_t* s_hub_clock_label = nullptr;
@@ -122,6 +125,7 @@ struct HwGroupData {
   char group_title[40];
   char book_name[64];
   char page_summary[32];
+  char item_type[24];
   int8_t phase; int32_t accumulated; int32_t cycle_elapsed; int16_t check_count; int16_t total_count;
   uint32_t color;
   int64_t run_start_epoch;
@@ -223,6 +227,9 @@ static bool s_phase4_alarm_muted = false;
 static uint8_t s_prev_p4_count = 0;
 static uint32_t s_snackbar_click_enable_after_ms = 0;
 static uint32_t s_tap_suppress_until_ms = 0;
+static lv_obj_t* s_hw_add_menu_screen = nullptr;
+static char s_pending_detail_group_id[40] = "";
+static bool s_screensaver_hid_hw_add_menu = false;
 static const uint32_t SCROLL_TAP_SUPPRESS_MS = 180;
 static const lv_coord_t TAP_MOVE_SLOP_PX = 8;
 
@@ -247,6 +254,8 @@ static void close_volume_popup(void);
 static void show_brightness_popup(void);
 static void close_brightness_popup(void);
 static void close_bind_confirm_popup(void);
+static void close_question_sent_popup(void);
+static void show_question_sent_popup(void);
 static void show_entry_hub_overlay(void);
 static void close_student_info_screen(bool show_entry_hub);
 static void show_student_info_screen(void);
@@ -262,6 +271,10 @@ static void update_battery_widget(void);
 static void update_hub_battery(void);
 static void hub_clock_timer_cb(lv_timer_t* timer);
 static void hide_snackbar(void);
+static void show_hw_add_menu_page(void);
+static void close_hw_add_menu_page(void);
+static void close_hw_add_menu_page_animated(void);
+static void ui_port_try_open_pending_homework_detail(void);
 static void snackbar_clicked_cb(lv_event_t* e) {
   (void)e;
   if (s_snackbar_type == 1) {
@@ -556,7 +569,7 @@ static void bottom_sheet_drag_cb(lv_event_t* e) {
   if (is_entry_hub_visible()) return;
   lv_event_code_t code = lv_event_get_code(e);
 
-  // 자식 버튼(홈/설정/일시정지) 클릭 시 드래그 가로채기 방지
+  // 자식 버튼(홈/추가/질문) 클릭 시 드래그 가로채기 방지
   lv_obj_t* target = lv_event_get_target(e);
   lv_obj_t* current = lv_event_get_current_target(e);
   if (target != current && target != s_bottom_handle && target != s_bottom_sheet) {
@@ -605,6 +618,150 @@ void toggle_bottom_sheet(void) {
   if (!s_bottom_sheet || !s_bottom_handle) return;
   if (is_entry_hub_visible()) return;
   animate_bottom_sheet_to(!g_bottom_sheet_open);
+}
+
+static void add_menu_close_ready_cb(lv_anim_t* a) {
+  (void)a;
+  if (s_hw_add_menu_screen && lv_obj_is_valid(s_hw_add_menu_screen)) {
+    lv_obj_del(s_hw_add_menu_screen);
+  }
+  s_hw_add_menu_screen = nullptr;
+}
+
+static void close_hw_add_menu_page(void) {
+  if (s_hw_add_menu_screen && lv_obj_is_valid(s_hw_add_menu_screen)) {
+    lv_anim_del(s_hw_add_menu_screen, (lv_anim_exec_xcb_t)lv_obj_set_x);
+    lv_obj_del(s_hw_add_menu_screen);
+  }
+  s_hw_add_menu_screen = nullptr;
+}
+
+static void close_hw_add_menu_page_animated(void) {
+  if (!s_hw_add_menu_screen || !lv_obj_is_valid(s_hw_add_menu_screen)) return;
+  lv_anim_del(s_hw_add_menu_screen, (lv_anim_exec_xcb_t)lv_obj_set_x);
+  lv_anim_t a;
+  lv_anim_init(&a);
+  lv_anim_set_var(&a, s_hw_add_menu_screen);
+  lv_anim_set_values(&a, lv_obj_get_x(s_hw_add_menu_screen), 320);
+  lv_anim_set_time(&a, 220);
+  lv_anim_set_exec_cb(&a, (lv_anim_exec_xcb_t)lv_obj_set_x);
+  lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+  lv_anim_set_ready_cb(&a, add_menu_close_ready_cb);
+  lv_anim_start(&a);
+}
+
+static void show_hw_add_menu_page(void) {
+  if (!s_stage || !lv_obj_is_valid(s_stage)) return;
+  if (!s_homeworks_mode) return;
+  if (s_hw_add_menu_screen && lv_obj_is_valid(s_hw_add_menu_screen)) {
+    lv_obj_move_foreground(s_hw_add_menu_screen);
+    return;
+  }
+  s_hw_add_menu_screen = lv_obj_create(s_stage);
+  lv_obj_set_size(s_hw_add_menu_screen, 320, 240);
+  lv_obj_set_pos(s_hw_add_menu_screen, 320, 0);
+  lv_obj_set_style_bg_color(s_hw_add_menu_screen, lv_color_hex(0x0B1112), 0);
+  lv_obj_set_style_bg_opa(s_hw_add_menu_screen, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(s_hw_add_menu_screen, 0, 0);
+  lv_obj_set_style_radius(s_hw_add_menu_screen, 0, 0);
+  lv_obj_set_style_pad_all(s_hw_add_menu_screen, 0, 0);
+  lv_obj_set_scrollbar_mode(s_hw_add_menu_screen, LV_SCROLLBAR_MODE_OFF);
+  lv_obj_clear_flag(s_hw_add_menu_screen, LV_OBJ_FLAG_SCROLLABLE);
+  if (s_global_font) lv_obj_set_style_text_font(s_hw_add_menu_screen, s_global_font, 0);
+
+  lv_obj_t* header = lv_obj_create(s_hw_add_menu_screen);
+  lv_obj_set_size(header, 320, 40);
+  lv_obj_set_pos(header, 0, 0);
+  lv_obj_set_style_bg_opa(header, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(header, 0, 0);
+  lv_obj_set_style_pad_all(header, 0, 0);
+
+  lv_obj_t* back_btn = lv_btn_create(header);
+  lv_obj_set_size(back_btn, 38, 38);
+  lv_obj_set_pos(back_btn, 8, 1);
+  lv_obj_set_style_radius(back_btn, 10, 0);
+  lv_obj_set_style_bg_color(back_btn, lv_color_hex(0x1E1E1E), 0);
+  lv_obj_set_style_border_width(back_btn, 0, 0);
+  lv_obj_set_style_shadow_width(back_btn, 0, 0);
+  lv_obj_t* back_lbl = lv_label_create(back_btn);
+  lv_obj_set_style_text_font(back_lbl, &kakao_kr_16, 0);
+  lv_obj_set_style_text_color(back_lbl, lv_color_hex(0xE6E6E6), 0);
+  lv_label_set_text(back_lbl, "<");
+  lv_obj_center(back_lbl);
+  lv_obj_add_event_cb(back_btn, [](lv_event_t* e) {
+    (void)e;
+    close_hw_add_menu_page_animated();
+  }, LV_EVENT_CLICKED, NULL);
+
+  lv_obj_t* title = lv_label_create(header);
+  lv_obj_set_style_text_font(title, &kakao_kr_16, 0);
+  lv_obj_set_style_text_color(title, lv_color_hex(0xFFFFFF), 0);
+  lv_label_set_text(title, u8"과제추가");
+  lv_obj_align(title, LV_ALIGN_LEFT_MID, 56, 1);
+
+  lv_obj_t* grid = lv_obj_create(s_hw_add_menu_screen);
+  lv_obj_set_size(grid, 320, 200);
+  lv_obj_set_pos(grid, 0, 40);
+  lv_obj_set_style_bg_opa(grid, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(grid, 0, 0);
+  lv_obj_set_style_pad_all(grid, 0, 0);
+  lv_obj_clear_flag(grid, LV_OBJ_FLAG_SCROLLABLE);
+
+  const lv_coord_t r = 37;
+  const lv_coord_t d = r * 2;
+  const lv_coord_t col_gap = 18;
+  const lv_coord_t row_gap = 16;
+  const lv_coord_t block_w = 3 * d + 2 * col_gap;
+  const lv_coord_t block_h = 2 * d + row_gap;
+  const lv_coord_t x0 = (320 - block_w) / 2;
+  const lv_coord_t y0 = (lv_coord_t)((200 - block_h) / 2) - 4;
+  int slot = 0;
+  for (int row = 0; row < 2; row++) {
+    for (int col = 0; col < 3; col++) {
+      lv_coord_t cx = x0 + col * (d + col_gap);
+      lv_coord_t cy = y0 + row * (d + row_gap);
+      if (slot == 0) {
+        lv_obj_t* b = lv_btn_create(grid);
+        lv_obj_set_size(b, r * 2, r * 2);
+        lv_obj_set_pos(b, cx, cy);
+        lv_obj_set_style_radius(b, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_color(b, lv_color_hex(0x2A4A5C), 0);
+        lv_obj_set_style_border_width(b, 0, 0);
+        lv_obj_set_style_shadow_width(b, 0, 0);
+        lv_obj_t* lb = lv_label_create(b);
+        lv_obj_set_style_text_font(lb, &kakao_kr_16, 0);
+        lv_obj_set_style_text_color(lb, lv_color_hex(0xE6E6E6), 0);
+        lv_label_set_text(lb, u8"서술");
+        lv_obj_center(lb);
+        lv_obj_add_event_cb(b, [](lv_event_t* e) {
+          (void)e;
+          close_hw_add_menu_page();
+          fw_publish_create_descriptive_writing();
+        }, LV_EVENT_CLICKED, NULL);
+      } else {
+        lv_obj_t* ph = lv_obj_create(grid);
+        lv_obj_set_size(ph, r * 2, r * 2);
+        lv_obj_set_pos(ph, cx, cy);
+        lv_obj_set_style_radius(ph, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_color(ph, lv_color_hex(0x2A2A2A), 0);
+        lv_obj_set_style_bg_opa(ph, LV_OPA_40, 0);
+        lv_obj_set_style_border_width(ph, 0, 0);
+        lv_obj_clear_flag(ph, LV_OBJ_FLAG_CLICKABLE);
+      }
+      slot++;
+    }
+  }
+
+  lv_anim_t a;
+  lv_anim_init(&a);
+  lv_anim_set_var(&a, s_hw_add_menu_screen);
+  lv_anim_set_values(&a, 320, 0);
+  lv_anim_set_time(&a, 220);
+  lv_anim_set_exec_cb(&a, (lv_anim_exec_xcb_t)lv_obj_set_x);
+  lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+  lv_anim_start(&a);
+
+  screensaver_attach_activity(s_hw_add_menu_screen);
 }
 
 static void create_base_container() {
@@ -660,6 +817,65 @@ static void close_bind_confirm_popup(void) {
   s_bind_confirm_popup = nullptr;
   s_pending_bind_student_id = "";
   s_pending_bind_student_name = "";
+}
+
+static void close_question_sent_popup(void) {
+  if (s_question_sent_popup && lv_obj_is_valid(s_question_sent_popup)) {
+    lv_obj_del(s_question_sent_popup);
+  }
+  s_question_sent_popup = nullptr;
+}
+
+static void show_question_sent_popup(void) {
+  if (s_question_sent_popup && lv_obj_is_valid(s_question_sent_popup)) return;
+  s_question_sent_popup = lv_obj_create(lv_scr_act());
+  lv_obj_set_size(s_question_sent_popup, 276, 132);
+  lv_obj_center(s_question_sent_popup);
+  lv_obj_set_style_bg_color(s_question_sent_popup, lv_color_hex(0x202020), 0);
+  lv_obj_set_style_bg_opa(s_question_sent_popup, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(s_question_sent_popup, 1, 0);
+  lv_obj_set_style_border_color(s_question_sent_popup, lv_color_hex(0x3A3A3A), 0);
+  lv_obj_set_style_radius(s_question_sent_popup, 14, 0);
+  lv_obj_set_style_pad_all(s_question_sent_popup, 12, 0);
+  lv_obj_set_style_pad_row(s_question_sent_popup, 10, 0);
+  lv_obj_clear_flag(s_question_sent_popup, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_flex_flow(s_question_sent_popup, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_flex_align(s_question_sent_popup, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+  lv_obj_t* msg = lv_label_create(s_question_sent_popup);
+  lv_obj_set_width(msg, 248);
+  lv_obj_set_style_text_align(msg, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_set_style_text_font(msg, &kakao_kr_16, 0);
+  lv_obj_set_style_text_color(msg, lv_color_hex(0xD0D0D0), 0);
+  lv_label_set_long_mode(msg, LV_LABEL_LONG_WRAP);
+  lv_label_set_text(msg, u8"질문 신청했습니다");
+
+  lv_obj_t* row = lv_obj_create(s_question_sent_popup);
+  lv_obj_set_width(row, lv_pct(100));
+  lv_obj_set_height(row, 50);
+  lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(row, 0, 0);
+  lv_obj_set_style_pad_all(row, 0, 0);
+  lv_obj_set_scrollbar_mode(row, LV_SCROLLBAR_MODE_OFF);
+  lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+  lv_obj_t* ok_btn = lv_btn_create(row);
+  lv_obj_set_size(ok_btn, 248, 40);
+  lv_obj_set_style_radius(ok_btn, 10, 0);
+  lv_obj_set_style_bg_color(ok_btn, lv_color_hex(0x1FA95B), 0);
+  lv_obj_set_style_border_width(ok_btn, 0, 0);
+  lv_obj_t* ok_lbl = lv_label_create(ok_btn);
+  lv_obj_set_style_text_font(ok_lbl, &kakao_kr_16, 0);
+  lv_label_set_text(ok_lbl, u8"확인");
+  lv_obj_center(ok_lbl);
+  lv_obj_add_event_cb(ok_btn, [](lv_event_t* e) {
+    (void)e;
+    close_question_sent_popup();
+  }, LV_EVENT_CLICKED, NULL);
+
+  screensaver_attach_activity(s_question_sent_popup);
 }
 
 static void close_student_info_screen(bool show_entry_hub) {
@@ -1331,6 +1547,7 @@ static void show_bind_confirm_popup(const char* student_id, const char* student_
 static void build_student_list_ui() {
   create_base_container();
   close_bind_confirm_popup();
+  close_question_sent_popup();
   if (s_hub_clock_timer) { lv_timer_del(s_hub_clock_timer); s_hub_clock_timer = nullptr; }
   if (s_entry_hub && lv_obj_is_valid(s_entry_hub)) { lv_obj_del(s_entry_hub); s_entry_hub = nullptr; s_entry_name_label = nullptr; s_hub_clock_label = nullptr; s_hub_battery_widget = nullptr; s_hub_battery_label = nullptr; }
   if (s_student_info_screen && lv_obj_is_valid(s_student_info_screen)) { lv_obj_del(s_student_info_screen); s_student_info_screen = nullptr; }
@@ -1387,6 +1604,7 @@ static void build_student_list_ui() {
 static void build_homeworks_ui_internal() {
   create_base_container();
   close_bind_confirm_popup();
+  close_question_sent_popup();
   if (s_hub_clock_timer) { lv_timer_del(s_hub_clock_timer); s_hub_clock_timer = nullptr; }
   if (s_entry_hub && lv_obj_is_valid(s_entry_hub)) { lv_obj_del(s_entry_hub); s_entry_hub = nullptr; s_entry_name_label = nullptr; s_hub_clock_label = nullptr; s_hub_battery_widget = nullptr; s_hub_battery_label = nullptr; }
   if (s_student_info_screen && lv_obj_is_valid(s_student_info_screen)) { lv_obj_del(s_student_info_screen); s_student_info_screen = nullptr; }
@@ -1483,19 +1701,25 @@ static void build_homeworks_ui_internal() {
   lv_obj_add_event_cb(s_bottom_sheet, bottom_sheet_drag_cb, LV_EVENT_RELEASED, NULL);
   lv_obj_add_event_cb(s_bottom_sheet, bottom_sheet_drag_cb, LV_EVENT_PRESS_LOST, NULL);
 
-  lv_obj_t* pause_btn = lv_btn_create(s_bottom_sheet);
-  lv_obj_set_size(pause_btn, 50, 50);
-  lv_obj_set_style_radius(pause_btn, 10, 0);
-  lv_obj_set_style_bg_opa(pause_btn, LV_OPA_TRANSP, 0);
-  lv_obj_set_style_border_width(pause_btn, 0, 0);
-  lv_obj_set_style_shadow_width(pause_btn, 0, 0);
-  lv_obj_t* pause_img = lv_img_create(pause_btn);
-  lv_img_set_src(pause_img, &pause_circle_90dp_999999_FILL0_wght400_GRAD0_opsz48);
-  lv_obj_set_style_img_recolor(pause_img, lv_color_hex(0xC0C0C0), 0);
-  lv_obj_set_style_img_recolor_opa(pause_img, LV_OPA_COVER, 0);
-  lv_img_set_zoom(pause_img, 142);
-  lv_obj_center(pause_img);
-  lv_obj_add_event_cb(pause_btn, [](lv_event_t* e){ (void)e; fw_publish_pause_all(); show_snackbar_rest(); }, LV_EVENT_CLICKED, NULL);
+  lv_obj_t* question_btn = lv_btn_create(s_bottom_sheet);
+  lv_obj_set_size(question_btn, 50, 50);
+  lv_obj_set_style_radius(question_btn, 10, 0);
+  lv_obj_set_style_bg_opa(question_btn, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(question_btn, 0, 0);
+  lv_obj_set_style_shadow_width(question_btn, 0, 0);
+  lv_obj_set_style_translate_x(question_btn, -2, 0);
+  lv_obj_t* question_img = lv_img_create(question_btn);
+  lv_img_set_src(question_img, &bottom_sheet_question_64);
+  lv_obj_set_style_img_recolor(question_img, lv_color_hex(0xC0C0C0), 0);
+  lv_obj_set_style_img_recolor_opa(question_img, LV_OPA_COVER, 0);
+  lv_img_set_zoom(question_img, 200);
+  lv_obj_center(question_img);
+  lv_obj_add_event_cb(question_btn, [](lv_event_t* e) {
+    (void)e;
+    animate_bottom_sheet_to(false);
+    fw_publish_raise_question();
+    show_question_sent_popup();
+  }, LV_EVENT_CLICKED, NULL);
 
   // home button
   lv_obj_t* home_btn = lv_btn_create(s_bottom_sheet);
@@ -1504,8 +1728,7 @@ static void build_homeworks_ui_internal() {
   lv_obj_set_style_bg_opa(home_btn, LV_OPA_TRANSP, 0);
   lv_obj_set_style_border_width(home_btn, 0, 0);
   lv_obj_set_style_shadow_width(home_btn, 0, 0);
-  // 왼쪽으로 3px 이동
-  lv_obj_set_style_translate_x(home_btn, -3, 0);
+  lv_obj_set_style_translate_x(home_btn, 0, 0);
   lv_obj_t* home_img = lv_img_create(home_btn);
   lv_img_set_src(home_img, &home_64dp_E3E3E3_FILL0_wght400_GRAD0_opsz48);
   lv_obj_set_style_img_recolor(home_img, lv_color_hex(0xC0C0C0), 0);
@@ -1514,20 +1737,25 @@ static void build_homeworks_ui_internal() {
   lv_obj_center(home_img);
   lv_obj_add_event_cb(home_btn, [](lv_event_t* e){ (void)e; show_entry_hub_overlay(); }, LV_EVENT_CLICKED, NULL);
 
-  // settings button
-  lv_obj_t* settings_btn = lv_btn_create(s_bottom_sheet);
-  lv_obj_set_size(settings_btn, 50, 50);
-  lv_obj_set_style_radius(settings_btn, 10, 0);
-  lv_obj_set_style_bg_opa(settings_btn, LV_OPA_TRANSP, 0);
-  lv_obj_set_style_border_width(settings_btn, 0, 0);
-  lv_obj_set_style_shadow_width(settings_btn, 0, 0);
-  lv_obj_t* set_img = lv_img_create(settings_btn);
-  lv_img_set_src(set_img, &settings_64dp_E3E3E3_FILL0_wght400_GRAD0_opsz48);
-  lv_obj_set_style_img_recolor(set_img, lv_color_hex(0xC0C0C0), 0);
-  lv_obj_set_style_img_recolor_opa(set_img, LV_OPA_COVER, 0);
-  lv_img_set_zoom(set_img, 200);
-  lv_obj_center(set_img);
-  lv_obj_add_event_cb(settings_btn, [](lv_event_t* e){ (void)e; ui_port_show_settings(FIRMWARE_VERSION); }, LV_EVENT_CLICKED, NULL);
+  // 추가 (설정은 엔트리 허브에서 유지)
+  lv_obj_t* add_btn = lv_btn_create(s_bottom_sheet);
+  lv_obj_set_size(add_btn, 50, 50);
+  lv_obj_set_style_radius(add_btn, 10, 0);
+  lv_obj_set_style_bg_opa(add_btn, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(add_btn, 0, 0);
+  lv_obj_set_style_shadow_width(add_btn, 0, 0);
+  lv_obj_set_style_translate_x(add_btn, 2, 0);
+  lv_obj_t* add_img = lv_img_create(add_btn);
+  lv_img_set_src(add_img, &bottom_sheet_add_64);
+  lv_obj_set_style_img_recolor(add_img, lv_color_hex(0xC0C0C0), 0);
+  lv_obj_set_style_img_recolor_opa(add_img, LV_OPA_COVER, 0);
+  lv_img_set_zoom(add_img, 200);
+  lv_obj_center(add_img);
+  lv_obj_add_event_cb(add_btn, [](lv_event_t* e) {
+    (void)e;
+    animate_bottom_sheet_to(false);
+    show_hw_add_menu_page();
+  }, LV_EVENT_CLICKED, NULL);
 
   s_fab = nullptr;
 
@@ -1645,8 +1873,10 @@ void ui_before_screen_change(void) {
     toggle_bottom_sheet();
   }
   close_bind_confirm_popup();
+  close_question_sent_popup();
   close_student_info_screen(false);
   close_stopwatch_screen(false);
+  close_hw_add_menu_page();
   if (s_hub_clock_timer) { lv_timer_del(s_hub_clock_timer); s_hub_clock_timer = nullptr; }
   close_volume_popup();
   close_brightness_popup();
@@ -1656,6 +1886,7 @@ void ui_before_screen_change(void) {
 void ui_before_screensaver(void) {
   if (g_bottom_sheet_open) toggle_bottom_sheet();
   close_bind_confirm_popup();
+  close_question_sent_popup();
   close_volume_popup();
   close_brightness_popup();
   if (s_hub_clock_timer) { lv_timer_del(s_hub_clock_timer); s_hub_clock_timer = nullptr; }
@@ -1669,10 +1900,16 @@ void ui_before_screensaver(void) {
     lv_obj_add_flag(s_stopwatch_screen, LV_OBJ_FLAG_HIDDEN);
     s_screensaver_hid_stopwatch = true;
   }
+  s_screensaver_hid_hw_add_menu = false;
+  if (s_hw_add_menu_screen && lv_obj_is_valid(s_hw_add_menu_screen)) {
+    lv_obj_add_flag(s_hw_add_menu_screen, LV_OBJ_FLAG_HIDDEN);
+    s_screensaver_hid_hw_add_menu = true;
+  }
 }
 
 void ui_port_force_unbind(void) {
   s_hw_refresh_pending = false;
+  close_hw_add_menu_page();
   if (!s_homeworks_mode) return;
   s_hw_updating = false;
   extern void screensaver_dismiss(void);
@@ -1690,6 +1927,10 @@ void ui_after_screensaver_wake(void) {
     lv_obj_clear_flag(s_stopwatch_screen, LV_OBJ_FLAG_HIDDEN);
   }
   s_screensaver_hid_stopwatch = false;
+  if (s_screensaver_hid_hw_add_menu && s_hw_add_menu_screen && lv_obj_is_valid(s_hw_add_menu_screen)) {
+    lv_obj_clear_flag(s_hw_add_menu_screen, LV_OBJ_FLAG_HIDDEN);
+  }
+  s_screensaver_hid_hw_add_menu = false;
 }
 
 static void volume_slider_cb(lv_event_t* e) {
@@ -2363,21 +2604,33 @@ static lv_obj_t* create_hw_card(lv_obj_t* parent, int group_idx) {
       lv_obj_add_flag(tl, LV_OBJ_FLAG_EVENT_BUBBLE);
     }
   } else {
-    char page_count_buf[64] = {0};
-    const char* page = g.page_summary;
-    int count = g.total_count;
-    if (*page && count > 0) snprintf(page_count_buf, sizeof(page_count_buf), "p.%s · %d%s", page, count, u8"문항");
-    else if (*page) snprintf(page_count_buf, sizeof(page_count_buf), "p.%s", page);
-    else if (count > 0) snprintf(page_count_buf, sizeof(page_count_buf), "%d%s", count, u8"문항");
-    if (page_count_buf[0]) {
+    const bool learning_group = (strcmp(g.item_type, u8"학습") == 0);
+    if (learning_group && g.group_title[0]) {
       lv_obj_t* pc_lbl = lv_label_create(card);
       lv_obj_set_style_text_font(pc_lbl, &kakao_kr_16, 0);
       lv_obj_set_style_text_color(pc_lbl, lv_color_hex(0x909090), 0);
-      lv_label_set_text(pc_lbl, page_count_buf);
+      lv_label_set_text(pc_lbl, g.group_title);
       lv_label_set_long_mode(pc_lbl, LV_LABEL_LONG_DOT);
       lv_obj_set_width(pc_lbl, lv_pct(100));
       lv_obj_align(pc_lbl, LV_ALIGN_TOP_LEFT, 0, 36);
       lv_obj_add_flag(pc_lbl, LV_OBJ_FLAG_EVENT_BUBBLE);
+    } else {
+      char page_count_buf[64] = {0};
+      const char* page = g.page_summary;
+      int count = g.total_count;
+      if (*page && count > 0) snprintf(page_count_buf, sizeof(page_count_buf), "p.%s · %d%s", page, count, u8"문항");
+      else if (*page) snprintf(page_count_buf, sizeof(page_count_buf), "p.%s", page);
+      else if (count > 0) snprintf(page_count_buf, sizeof(page_count_buf), "%d%s", count, u8"문항");
+      if (page_count_buf[0]) {
+        lv_obj_t* pc_lbl = lv_label_create(card);
+        lv_obj_set_style_text_font(pc_lbl, &kakao_kr_16, 0);
+        lv_obj_set_style_text_color(pc_lbl, lv_color_hex(0x909090), 0);
+        lv_label_set_text(pc_lbl, page_count_buf);
+        lv_label_set_long_mode(pc_lbl, LV_LABEL_LONG_DOT);
+        lv_obj_set_width(pc_lbl, lv_pct(100));
+        lv_obj_align(pc_lbl, LV_ALIGN_TOP_LEFT, 0, 36);
+        lv_obj_add_flag(pc_lbl, LV_OBJ_FLAG_EVENT_BUBBLE);
+      }
     }
   }
 
@@ -2531,6 +2784,8 @@ static void parse_groups_from_json(const JsonArray& groups) {
     }
     const char* content = grp["content"] | "";
     const char* hw_type = grp["type"] | "";
+    strncpy(g.item_type, hw_type, sizeof(g.item_type) - 1);
+    g.item_type[sizeof(g.item_type) - 1] = '\0';
     const char* book_id = grp["book_id"] | "";
     const char* grade_label = grp["grade_label"] | "";
     extract_book_name(content, gt, book_id, grade_label, hw_type, g.book_name, sizeof(g.book_name));
@@ -2596,7 +2851,11 @@ void ui_port_update_homeworks(const JsonArray& groups) {
       }
     }
   }
-  if (!need_full) { s_hw_updating = false; return; }
+  if (!need_full) {
+    ui_port_try_open_pending_homework_detail();
+    s_hw_updating = false;
+    return;
+  }
 
   s_hw_timer_epoch++;
   if (s_hw_global_timer) { lv_timer_del(s_hw_global_timer); s_hw_global_timer = nullptr; }
@@ -2685,6 +2944,7 @@ void ui_port_update_homeworks(const JsonArray& groups) {
       }
     }
   }
+  ui_port_try_open_pending_homework_detail();
   s_hw_updating = false;
   if (s_hw_refresh_pending) {
     s_hw_refresh_pending = false;
@@ -3206,6 +3466,37 @@ static void show_homework_detail_page(int group_idx) {
   s_detail_timer = lv_timer_create(detail_timer_cb, 1000, (void*)(uintptr_t)s_detail_timer_epoch);
   lv_timer_set_repeat_count(s_detail_timer, -1);
   detail_timer_cb(s_detail_timer);
+}
+
+static void ui_port_try_open_pending_homework_detail(void) {
+  if (!s_pending_detail_group_id[0]) return;
+  int idx = -1;
+  for (uint8_t i = 0; i < s_group_cnt; i++) {
+    if (strcmp(s_groups[i].group_id, s_pending_detail_group_id) == 0) {
+      idx = (int)i;
+      break;
+    }
+  }
+  if (idx < 0) return;
+  if (s_groups[idx].phase != 2) return;
+  s_pending_detail_group_id[0] = '\0';
+  close_hw_add_menu_page();
+  show_homework_detail_page(idx);
+}
+
+void ui_port_on_device_ack_json(const char* body) {
+  if (!body || !body[0]) return;
+  StaticJsonDocument<384> doc;
+  DeserializationError err = deserializeJson(doc, body);
+  if (err) return;
+  const char* action = doc["action"] | "";
+  if (strcmp(action, "create_descriptive_writing") != 0) return;
+  if (!doc["ok"].as<bool>()) return;
+  const char* gid = doc["group_id"] | "";
+  if (!gid || !gid[0]) return;
+  strncpy(s_pending_detail_group_id, gid, sizeof(s_pending_detail_group_id) - 1);
+  s_pending_detail_group_id[sizeof(s_pending_detail_group_id) - 1] = '\0';
+  ui_port_try_open_pending_homework_detail();
 }
 
 void ui_port_update_student_info(const JsonObject& info) {

@@ -17,6 +17,8 @@ import '../models/group_info.dart';
 import '../models/student_view_type.dart';
 import '../widgets/main_fab_alternative.dart';
 import '../app_overlays.dart';
+import '../services/tenant_service.dart';
+import '../services/m5_question_request_store.dart';
 import '../models/class_info.dart';
 import '../models/session_override.dart';
 import '../models/student_time_block.dart';
@@ -42,7 +44,6 @@ import '../widgets/homework_assign_dialog.dart';
 import '../widgets/left_side_sheet/favorite_templates_panel.dart';
 import '../widgets/textbook_flow_link_action.dart';
 import 'student/student_profile_page.dart';
-import '../app_overlays.dart';
 import '../models/behavior_card_drag_payload.dart';
 
 class MainScreen extends StatefulWidget {
@@ -1125,6 +1126,15 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     _attendedScrollCtrl = ScrollController();
     _waitingScrollCtrl = ScrollController();
     _initializeData();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_ensureM5QuestionSubscription());
+    });
+  }
+
+  Future<void> _ensureM5QuestionSubscription() async {
+    final id = await TenantService.instance.getActiveAcademyId();
+    if (!mounted || id == null) return;
+    await M5QuestionRequestStore.instance.start(id);
   }
 
   Future<void> _initializeData() async {
@@ -1238,6 +1248,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     _waitingScrollCtrl.dispose();
     _uiAnimController.dispose();
     _animLogTimer?.cancel();
+    unawaited(M5QuestionRequestStore.instance.stop());
     super.dispose();
   }
 
@@ -1944,7 +1955,13 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   Widget _buildContent() {
     switch (_selectedIndex) {
       case 0:
-        return const ClassContentScreen();
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Expanded(child: ClassContentScreen()),
+            _buildHomeQuestionChipsStrip(),
+          ],
+        );
       case 1:
         return StudentScreen(key: _studentScreenKey);
       case 2:
@@ -1958,6 +1975,51 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       default:
         return const SizedBox();
     }
+  }
+
+  /// 홈(수업 내용) 영역 하단에만 질문 칩 (FAB는 Scaffold floatingActionButton 유지).
+  Widget _buildHomeQuestionChipsStrip() {
+    return AnimatedBuilder(
+      animation: Listenable.merge([
+        gradingModeActive,
+        M5QuestionRequestStore.instance.pending,
+      ]),
+      builder: (context, _) {
+        if (gradingModeActive.value) return const SizedBox.shrink();
+        final entries = M5QuestionRequestStore.instance.pending.value;
+        if (entries.isEmpty) return const SizedBox.shrink();
+        return Material(
+          color: const Color(0xFF0B1112),
+          child: Padding(
+            // FAB `AnimatedPadding` bottom(16)과 맞춰 칩을 같은 선상으로 올림.
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 28),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    for (var i = 0; i < entries.length; i++) ...[
+                      _HomeM5QuestionChip(
+                        label: entries[i].studentDisplayName,
+                        onAck: () {
+                          unawaited(
+                            M5QuestionRequestStore.instance
+                                .acknowledge(entries[i].id),
+                          );
+                        },
+                      ),
+                      if (i < entries.length - 1) const SizedBox(width: 12),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
   }
 
   void _showClassRegistrationDialog() {
@@ -4536,6 +4598,58 @@ class _RecordNoteDialogState extends State<_RecordNoteDialog> {
 }
 
 // 회전 보더 페인터: 내부 child의 레이아웃을 바꾸지 않고, 외곽선만 회전시키며 그린다
+/// 홈 하단 줄용: 140×56 유지, 회색 아웃라인·이름 강조.
+class _HomeM5QuestionChip extends StatelessWidget {
+  final String label;
+  final VoidCallback onAck;
+
+  const _HomeM5QuestionChip({
+    required this.label,
+    required this.onAck,
+  });
+
+  static const Color _fill = Color(0xFF151C21);
+  static const Color _outline = Color(0xFF4A4A4A);
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 140,
+      height: 56,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onAck,
+          borderRadius: BorderRadius.circular(28),
+          child: Container(
+            width: 140,
+            height: 56,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: _fill,
+              borderRadius: BorderRadius.circular(28),
+              border: Border.all(color: _outline, width: 1.5),
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            child: Text(
+              label,
+              style: const TextStyle(
+                color: Color(0xFFEAF2F2),
+                fontSize: 20,
+                fontWeight: FontWeight.w600,
+                height: 1.1,
+              ),
+              textAlign: TextAlign.center,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _RotatingBorderPainter extends CustomPainter {
   final Color baseColor;
   final double tick; // 0..1

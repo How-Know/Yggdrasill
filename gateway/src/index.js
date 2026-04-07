@@ -422,6 +422,55 @@ client.on('message', async (topic, payload) => {
         publish(`academies/${academy_id}/devices/${device_id}/student_info`, JSON.stringify({ info: data && data[0] ? data[0] : null }), { qos: 1, retain: false });
         return;
       }
+      if (action === 'raise_question') {
+        const student_id = (msg.student_id || '').toString().trim() || null;
+        const { data: reqId, error } = await supa.rpc('m5_raise_student_question', {
+          p_academy_id: academy_id,
+          p_device_id: device_id,
+          p_student_id: student_id
+        });
+        if (error) console.error('[gateway] raise_question rpc error', error);
+        publish(
+          `academies/${academy_id}/devices/${device_id}/ack`,
+          JSON.stringify({
+            ok: !error,
+            action: 'raise_question',
+            error: error?.message,
+            request_id: reqId || null
+          }),
+          { qos: 1, retain: false }
+        );
+        return;
+      }
+      if (action === 'create_descriptive_writing') {
+        const student_id_opt = (msg.student_id || '').toString().trim() || null;
+        const { data: created, error } = await supa.rpc('m5_create_descriptive_writing_group', {
+          p_academy_id: academy_id,
+          p_device_id: device_id,
+          p_student_id: student_id_opt || null
+        });
+        if (error) console.error('[gateway] create_descriptive_writing rpc error', error);
+        const row = created && typeof created === 'object' ? created : null;
+        const sid = row && row.student_id ? String(row.student_id) : null;
+        const gid = row && row.group_id ? String(row.group_id) : null;
+        const iid = row && row.item_id ? String(row.item_id) : null;
+        publish(
+          `academies/${academy_id}/devices/${device_id}/ack`,
+          JSON.stringify({
+            ok: !error,
+            action: 'create_descriptive_writing',
+            error: error?.message,
+            group_id: gid,
+            item_id: iid,
+            student_id: sid
+          }),
+          { qos: 1, retain: false }
+        );
+        if (!error && sid) {
+          await publishHomeworksToBoundDevices(academy_id, sid, 'create_descriptive_writing');
+        }
+        return;
+      }
       return;
     }
   } catch (e) {

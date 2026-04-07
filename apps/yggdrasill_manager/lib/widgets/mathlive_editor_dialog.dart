@@ -335,6 +335,19 @@ class _MathLiveEditorDialogState extends State<MathLiveEditorDialog> {
         btn('분수', 'frac'),
         btn('루트', 'sqrt'),
         btn('괄호', 'paren'),
+        btn('+', 'op_plus'),
+        btn('−', 'op_minus'),
+        btn('×', 'op_times'),
+        btn('÷', 'op_div'),
+        btn('·', 'op_cdot'),
+        btn('=', 'op_eq'),
+        btn('<', 'op_lt'),
+        btn('>', 'op_gt'),
+        btn('≤', 'op_leq'),
+        btn('≥', 'op_geq'),
+        btn('≠', 'op_neq'),
+        btn('±', 'op_pm'),
+        btn('∓', 'op_mp'),
         btn('α', 'alpha'),
         btn('β', 'beta'),
         btn('γ', 'gamma'),
@@ -473,7 +486,7 @@ class _MathLiveEditorDialogState extends State<MathLiveEditorDialog> {
   <body>
     <div class="root">
       <math-field id="mf"></math-field>
-      <div class="hint">직접 입력하거나 상단 버튼(지수/분수/루트/행렬 등)을 사용하세요.</div>
+      <div class="hint">직접 입력하거나 상단 버튼(연산자·지수·분수·루트·행렬 등)을 사용하세요.</div>
     </div>
     <script>
       const initialLatex = $encodedInitial;
@@ -528,6 +541,19 @@ class _MathLiveEditorDialogState extends State<MathLiveEditorDialog> {
           case 'frac': insertLatex('\\\\frac{#?}{#?}'); break;
           case 'sqrt': insertLatex('\\\\sqrt{#?}'); break;
           case 'paren': insertLatex('\\\\left(#?\\\\right)'); break;
+          case 'op_plus': insertLatex('+'); break;
+          case 'op_minus': insertLatex('-'); break;
+          case 'op_times': insertLatex('\\\\times'); break;
+          case 'op_div': insertLatex('\\\\div'); break;
+          case 'op_cdot': insertLatex('\\\\cdot'); break;
+          case 'op_eq': insertLatex('='); break;
+          case 'op_lt': insertLatex('<'); break;
+          case 'op_gt': insertLatex('>'); break;
+          case 'op_leq': insertLatex('\\\\leq'); break;
+          case 'op_geq': insertLatex('\\\\geq'); break;
+          case 'op_neq': insertLatex('\\\\neq'); break;
+          case 'op_pm': insertLatex('\\\\pm'); break;
+          case 'op_mp': insertLatex('\\\\mp'); break;
           case 'alpha': insertLatex('\\\\alpha'); break;
           case 'beta': insertLatex('\\\\beta'); break;
           case 'gamma': insertLatex('\\\\gamma'); break;

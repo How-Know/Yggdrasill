@@ -8,7 +8,6 @@ import '../../../services/learning_problem_bank_service.dart';
 
 const List<String> kLearningProblemTemplateOptions = <String>[
   '\uB0B4\uC2E0\uD615',
-  '\uC218\uB2A5\uD615',
   '\uBAA8\uC758\uACE0\uC0AC\uD615',
 ];
 
@@ -58,7 +57,7 @@ const String kLearningQuestionModeOriginal = 'original';
 const String kLearningQuestionModeObjective = 'objective';
 const String kLearningQuestionModeSubjective = 'subjective';
 const String kLearningQuestionModeEssay = 'essay';
-const String kLearningRenderConfigVersion = 'pb_render_v32m_cover_text_inputs';
+const String kLearningRenderConfigVersion = 'pb_render_v32ze_rollback_firstline';
 
 class LearningProblemLayoutTuning {
   const LearningProblemLayoutTuning({
@@ -358,9 +357,8 @@ class LearningProblemLayoutSlot {
 String templateToProfile(String template) {
   switch (template.trim()) {
     case '\uC218\uB2A5\uD615':
-      return 'csat';
     case '\uBAA8\uC758\uACE0\uC0AC\uD615':
-      return 'mock';
+      return 'csat';
     case '\uB0B4\uC2E0\uD615':
     default:
       return 'naesin';

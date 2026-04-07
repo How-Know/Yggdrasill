@@ -6957,6 +6957,21 @@ void _showHomeworkChipSnackBar(BuildContext context, String message) {
   ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
 }
 
+/// 인쇄 파이프라인이 오류 없이 끝난 뒤, 실제로 인쇄 대상이 된 과제의 유형을 `프린트`로 맞춘다.
+void _applyHomeworkTypePrintAfterSuccessfulPrint({
+  required String studentId,
+  required Iterable<String> itemIds,
+}) {
+  const printType = '프린트';
+  for (final id in itemIds) {
+    final latest = HomeworkStore.instance.getById(studentId, id);
+    if (latest == null) continue;
+    if ((latest.type ?? '').trim() == printType) continue;
+    latest.type = printType;
+    HomeworkStore.instance.edit(studentId, latest);
+  }
+}
+
 String _mergeGroupPageText(List<HomeworkItem> items) {
   return mergeHomeworkPageRawStrings(items.map((e) => e.page));
 }
@@ -7633,8 +7648,8 @@ void _scheduleTempDelete(String path) {
   });
 }
 
-Future<void> _openPrintDialogForPath(String path) async {
-  await PrintRoutingService.instance.printFile(
+Future<bool> _openPrintDialogForPath(String path) {
+  return PrintRoutingService.instance.printFile(
     path: path,
     channel: PrintRoutingChannel.general,
     debugSource: 'class_content.waiting_chip',
@@ -8137,6 +8152,7 @@ Future<void> _handleWaitingChipLongPressPrint({
   final rangeDisplay = _normalizePageRangeForPrint(selectedRange);
   final rangeRaw = _shiftNormalizedPageRangeForPdf(rangeDisplay, pageOffset);
   String? printError;
+  var printJobSentToSpooler = false;
   try {
     await _runWithPrintProgressDialog(
       context,
@@ -8163,7 +8179,7 @@ Future<void> _handleWaitingChipLongPressPrint({
           return;
         }
         progressText.value = '프린터로 전송 중입니다...';
-        await _openPrintDialogForPath(pathToPrint);
+        printJobSentToSpooler = await _openPrintDialogForPath(pathToPrint);
       },
     );
   } catch (_) {
@@ -8174,6 +8190,13 @@ Future<void> _handleWaitingChipLongPressPrint({
   if (!context.mounted) return;
   if (printError != null) {
     _showHomeworkChipSnackBar(context, printError!);
+    return;
+  }
+  if (printJobSentToSpooler) {
+    _applyHomeworkTypePrintAfterSuccessfulPrint(
+      studentId: studentId,
+      itemIds: selectedHomeworks.map((e) => e.id),
+    );
   }
 }
 

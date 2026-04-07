@@ -324,7 +324,9 @@ class PrintRoutingService {
     await prefs.setString(key, normalized);
   }
 
-  Future<void> printFile({
+  /// Windows에서 Acrobat 직접 인쇄·PrintTo·Print 동사로 스풀러에 넘긴 경우 `true`.
+  /// 그 외(파일만 연 경우 등)는 `false`.
+  Future<bool> printFile({
     required String path,
     required PrintRoutingChannel channel,
     PrintDuplexMode duplexMode = PrintDuplexMode.systemDefault,
@@ -333,7 +335,7 @@ class PrintRoutingService {
     final target = path.trim();
     if (target.isEmpty) {
       _printLog(debugSource, 'printFile skipped: empty path');
-      return;
+      return false;
     }
 
     final configuredPrinter = await loadConfiguredPrinter(channel);
@@ -342,7 +344,7 @@ class PrintRoutingService {
       debugSource,
       'printFile request channel=$channel exists=$exists duplex=${_duplexModeLabel(duplexMode)} printer="${configuredPrinter ?? ''}" path="$target"',
     );
-    await _printWithRouting(
+    return _printWithRouting(
       target: target,
       printerName: configuredPrinter,
       channel: channel,
@@ -351,7 +353,7 @@ class PrintRoutingService {
     );
   }
 
-  Future<void> _printWithRouting({
+  Future<bool> _printWithRouting({
     required String target,
     required String? printerName,
     required PrintRoutingChannel channel,
@@ -396,7 +398,7 @@ class PrintRoutingService {
             );
             if (directAcrobatPrinted) {
               _printLog(debugSource, 'Printed via direct Acrobat /t route.');
-              return;
+              return true;
             }
 
             final qPrinter = _psSingleQuoted(normalizedPrinter);
@@ -415,7 +417,7 @@ class PrintRoutingService {
             );
             if (printTo.exitCode == 0) {
               _printLog(debugSource, 'Printed via PowerShell PrintTo route.');
-              return;
+              return true;
             }
           }
         } finally {
@@ -446,10 +448,10 @@ class PrintRoutingService {
         );
         if (printResult.exitCode == 0) {
           _printLog(debugSource, 'Printed via PowerShell Print fallback.');
-          return;
+          return true;
         }
         _printLog(debugSource, 'Print fallback failed. Will open file.');
-        return;
+        return false;
       }
     } catch (_) {
       _printLog(debugSource, 'Windows print route threw exception.');
@@ -457,5 +459,6 @@ class PrintRoutingService {
     }
     _printLog(debugSource, 'Fallback to OpenFilex.open');
     await OpenFilex.open(target);
+    return false;
   }
 }

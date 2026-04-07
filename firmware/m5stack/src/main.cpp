@@ -47,6 +47,7 @@ String homeworksTopic;
 String updateTopic;
 String studentInfoTopic;
 String unboundTopic;
+static String deviceAckTopic;
 static uint32_t nextMqttReconnectMs = 0;
 static const char* kMqttHosts[] = { CFG_MQTT_HOST, "test.mosquitto.org", "broker.hivemq.com" };
 static int mqttHostIndex = 0;
@@ -187,6 +188,8 @@ void onMqttConnect(bool sessionPresent) {
   mqtt.subscribe(unboundTopic.c_str(), 1);
   updateTopic = String("academies/") + academyId + "/devices/" + deviceId + "/update";
   mqtt.subscribe(updateTopic.c_str(), 1);
+  deviceAckTopic = String("academies/") + academyId + "/devices/" + deviceId + "/ack";
+  mqtt.subscribe(deviceAckTopic.c_str(), 1);
   Serial.printf("MQTT connected & subscribed (sessionPresent=%d)\n", sessionPresent ? 1 : 0);
 
   // Presence (retain)
@@ -250,6 +253,24 @@ void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties 
     String body; body.reserve(len + 1);
     for (size_t i = 0; i < len; ++i) body += (char)payload[i];
     Serial.print("ACK: "); Serial.println(body);
+  }
+  if (t == deviceAckTopic) {
+    static String da_acc;
+    static size_t da_expected = 0;
+    static size_t da_received = 0;
+    if (index == 0) {
+      da_acc.remove(0);
+      da_acc.reserve(total ? total : (len + 256));
+      da_expected = total ? total : len;
+      da_received = 0;
+    }
+    da_acc.concat(String(payload).substring(0, (int)len));
+    da_received += len;
+    if (total && da_received < total) { return; }
+    g_last_mqtt_rx_ack_ms = nowMs;
+    Serial.print("DEV_ACK: "); Serial.println(da_acc);
+    ui_port_on_device_ack_json(da_acc.c_str());
+    da_acc.remove(0);
   }
   if (t == todayListTopic) {
     static String acc; static size_t expected = 0; static size_t received = 0;
@@ -426,6 +447,30 @@ void fw_publish_pause_all() {
   doc["at"] = "";
   String payload; serializeJson(doc, payload);
   String topic = String("academies/") + academyId + "/students/" + studentId + "/homework/ALL/command";
+  mqtt.publish(topic.c_str(), 1, false, payload.c_str());
+}
+
+void fw_publish_raise_question() {
+  if (!studentId.length()) return;
+  DynamicJsonDocument doc(192);
+  doc["action"] = "raise_question";
+  doc["academy_id"] = academyId;
+  doc["student_id"] = studentId;
+  String payload;
+  serializeJson(doc, payload);
+  String topic = String("academies/") + academyId + "/devices/" + deviceId + "/command";
+  mqtt.publish(topic.c_str(), 1, false, payload.c_str());
+}
+
+void fw_publish_create_descriptive_writing() {
+  if (!studentId.length()) return;
+  DynamicJsonDocument doc(192);
+  doc["action"] = "create_descriptive_writing";
+  doc["academy_id"] = academyId;
+  doc["student_id"] = studentId;
+  String payload;
+  serializeJson(doc, payload);
+  String topic = String("academies/") + academyId + "/devices/" + deviceId + "/command";
   mqtt.publish(topic.c_str(), 1, false, payload.c_str());
 }
 

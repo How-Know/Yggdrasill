@@ -27,6 +27,7 @@ void ui_before_screen_change(void);
 void ui_before_screensaver(void);
 void ui_after_screensaver_wake(void);
 void ui_port_force_unbind(void);
+void ui_port_on_device_ack_json(const char* body);
 
 // 펌웨어 측 MQTT publish 콜백(메인에서 구현)
 void fw_publish_bind(const char* studentId);
@@ -36,6 +37,8 @@ void fw_publish_student_info(const char* studentId);
 void fw_publish_homework_action(const char* action, const char* itemId);
 void fw_publish_group_transition(const char* groupId, int from_phase = 0);
 void fw_publish_pause_all();
+void fw_publish_raise_question();
+void fw_publish_create_descriptive_writing(void);
 void fw_publish_check_update();
 void fw_publish_list_today();
 void fw_publish_list_homeworks(const char* studentIdArg);

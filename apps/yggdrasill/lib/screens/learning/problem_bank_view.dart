@@ -1391,7 +1391,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                     activeJob: _activeExportJob,
                     onTemplateChanged: (value) {
                       setState(() {
-                        if (value == '수능형') {
+                        if (value == '모의고사형' || value == '수능형') {
                           _exportSettings = _exportSettings.copyWith(
                             templateLabel: value,
                             paperLabel: 'B4',

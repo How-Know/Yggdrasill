@@ -186,11 +186,15 @@ class _ProblemBankExportServerPreviewDialogState
   late final TextEditingController _coverTopTitleController;
   late final TextEditingController _coverSubjectTitleController;
   late final TextEditingController _coverPhraseController;
-  late final TextEditingController _coverCommonLabelController;
-  late final TextEditingController _coverElectiveLabelController;
   late final TextEditingController _coverOrganizationController;
-  late final List<TextEditingController> _coverElectiveNameControllers;
-  late final List<TextEditingController> _coverElectivePageControllers;
+  final List<TextEditingController> _coverGroupLabelControllers =
+      <TextEditingController>[];
+  final List<TextEditingController> _coverGroupPageRangeControllers =
+      <TextEditingController>[];
+  final List<List<TextEditingController>> _coverGroupItemNameControllers =
+      <List<TextEditingController>>[];
+  final List<List<TextEditingController>> _coverGroupItemPageControllers =
+      <List<TextEditingController>>[];
 
   late String _currentPdfUrl;
   int _pageNumber = 1;
@@ -224,13 +228,7 @@ class _ProblemBankExportServerPreviewDialogState
     _coverTopTitleController = TextEditingController();
     _coverSubjectTitleController = TextEditingController();
     _coverPhraseController = TextEditingController();
-    _coverCommonLabelController = TextEditingController();
-    _coverElectiveLabelController = TextEditingController();
     _coverOrganizationController = TextEditingController();
-    _coverElectiveNameControllers =
-        List<TextEditingController>.generate(3, (_) => TextEditingController());
-    _coverElectivePageControllers =
-        List<TextEditingController>.generate(3, (_) => TextEditingController());
     _syncCoverPageTextControllers(
       _normalizeCoverPageTexts(widget.initialCoverPageTexts),
     );
@@ -264,15 +262,8 @@ class _ProblemBankExportServerPreviewDialogState
     _coverTopTitleController.dispose();
     _coverSubjectTitleController.dispose();
     _coverPhraseController.dispose();
-    _coverCommonLabelController.dispose();
-    _coverElectiveLabelController.dispose();
     _coverOrganizationController.dispose();
-    for (final controller in _coverElectiveNameControllers) {
-      controller.dispose();
-    }
-    for (final controller in _coverElectivePageControllers) {
-      controller.dispose();
-    }
+    _disposeCoverGroupControllers();
     super.dispose();
   }
 
@@ -319,6 +310,22 @@ class _ProblemBankExportServerPreviewDialogState
                 },
               )),
     );
+    if (_isTwoColumnLayout) {
+      _columnLabelAnchorMap = Map<String, Map<String, dynamic>>.fromEntries(
+        _columnLabelAnchorMap.entries.where((entry) {
+          final row = entry.value;
+          final page = int.tryParse('${row['page'] ?? 0}') ?? 0;
+          final col = int.tryParse('${row['columnIndex'] ?? -1}') ?? -1;
+          final rowIndex = int.tryParse('${row['rowIndex'] ?? 0}') ?? -1;
+          if (page < 1 || page > _computedPageColumnCounts.length) return false;
+          if (col < 0 || col > 1) return false;
+          if (rowIndex < 0) return false;
+          final pageCounts = _computedPageColumnCounts[page - 1];
+          final rowLimit = col < pageCounts.length ? pageCounts[col] : 0;
+          return rowIndex < rowLimit;
+        }),
+      );
+    }
     for (final pageNo in _titlePageIndexSet) {
       _ensureTitleHeaderForPage(pageNo);
     }
@@ -527,8 +534,8 @@ class _ProblemBankExportServerPreviewDialogState
     return _parsePageOverrides(widget.initialPageColumnQuestionCounts);
   }
 
-  String _anchorKey(int pageIndex, int columnIndex) =>
-      '${pageIndex + 1}:$columnIndex';
+  String _anchorKey(int pageIndex, int columnIndex, {int rowIndex = 0}) =>
+      '${pageIndex + 1}:$columnIndex:$rowIndex';
 
   int? _parseAnchorPageIndex(dynamic raw) {
     final text = '$raw'.trim().toLowerCase();
@@ -561,11 +568,16 @@ class _ProblemBankExportServerPreviewDialogState
       final columnIndex = int.tryParse(
         '${one['columnIndex'] ?? one['column'] ?? one['col'] ?? ''}',
       );
+      final rowIndex = int.tryParse(
+            '${one['rowIndex'] ?? one['row'] ?? one['slotRowIndex'] ?? ''}',
+          ) ??
+          0;
       final label = '${one['label'] ?? one['text'] ?? ''}'
           .replaceAll(RegExp(r'\s+'), ' ')
           .trim();
       if (pageIndex == null) continue;
       if (columnIndex == null || columnIndex < 0 || columnIndex > 1) continue;
+      if (rowIndex < 0) continue;
       if (label.isEmpty) continue;
       final defaultTop = _defaultAnchorTopForPage(pageIndex);
       final defaultPadding = _defaultAnchorPaddingForPage(pageIndex);
@@ -587,24 +599,15 @@ class _ProblemBankExportServerPreviewDialogState
         topPt = defaultTop;
         paddingTopPt = defaultPadding;
       }
-      out[_anchorKey(pageIndex, columnIndex)] = <String, dynamic>{
+      out[_anchorKey(pageIndex, columnIndex, rowIndex: rowIndex)] = <String, dynamic>{
         'page': pageIndex + 1,
         'columnIndex': columnIndex,
+        'rowIndex': rowIndex,
         'label': label,
         'topPt': topPt,
         'paddingTopPt': paddingTopPt,
       };
     }
-    final firstLeftKey = _anchorKey(0, 0);
-    out.putIfAbsent(
-        firstLeftKey,
-        () => <String, dynamic>{
-              'page': 1,
-              'columnIndex': 0,
-              'label': '5지선다형',
-              'topPt': _firstPageAnchorTopPt,
-              'paddingTopPt': _firstPageAnchorPaddingTopPt,
-            });
     return out;
   }
 
@@ -615,8 +618,9 @@ class _ProblemBankExportServerPreviewDialogState
   TextEditingController _controllerForAnchor({
     required int pageIndex,
     required int columnIndex,
+    required int rowIndex,
   }) {
-    final key = _anchorKey(pageIndex, columnIndex);
+    final key = _anchorKey(pageIndex, columnIndex, rowIndex: rowIndex);
     final existing = _labelControllers[key];
     if (existing != null) return existing;
     final initial = '${_columnLabelAnchorMap[key]?['label'] ?? ''}'.trim();
@@ -628,9 +632,10 @@ class _ProblemBankExportServerPreviewDialogState
   void _setAnchorLabel({
     required int pageIndex,
     required int columnIndex,
+    required int rowIndex,
     required String rawLabel,
   }) {
-    final key = _anchorKey(pageIndex, columnIndex);
+    final key = _anchorKey(pageIndex, columnIndex, rowIndex: rowIndex);
     final label = rawLabel.replaceAll(RegExp(r'\s+'), ' ').trim();
     if (label.isEmpty) {
       _columnLabelAnchorMap.remove(key);
@@ -640,6 +645,7 @@ class _ProblemBankExportServerPreviewDialogState
     _columnLabelAnchorMap[key] = <String, dynamic>{
       'page': pageIndex + 1,
       'columnIndex': columnIndex,
+      'rowIndex': rowIndex,
       'label': label,
       'topPt': prev?['topPt'] ?? _defaultAnchorTopForPage(pageIndex),
       'paddingTopPt':
@@ -650,13 +656,18 @@ class _ProblemBankExportServerPreviewDialogState
   void _addDefaultAnchor({
     required int pageIndex,
     required int columnIndex,
+    required int rowIndex,
   }) {
-    final controller =
-        _controllerForAnchor(pageIndex: pageIndex, columnIndex: columnIndex);
+    final controller = _controllerForAnchor(
+      pageIndex: pageIndex,
+      columnIndex: columnIndex,
+      rowIndex: rowIndex,
+    );
     controller.text = '5지선다형';
     _setAnchorLabel(
       pageIndex: pageIndex,
       columnIndex: columnIndex,
+      rowIndex: rowIndex,
       rawLabel: controller.text,
     );
     setState(() {});
@@ -671,10 +682,21 @@ class _ProblemBankExportServerPreviewDialogState
         .where((row) {
           final page = int.tryParse('${row['page'] ?? 0}') ?? 0;
           final col = int.tryParse('${row['columnIndex'] ?? -1}') ?? -1;
-          return page >= 1 && page <= maxPage && col >= 0 && col <= 1;
+          final rowIndex = int.tryParse('${row['rowIndex'] ?? 0}') ?? 0;
+          if (!(page >= 1 && page <= maxPage && col >= 0 && col <= 1)) {
+            return false;
+          }
+          if (rowIndex < 0) return false;
+          if (page - 1 < 0 || page - 1 >= _computedPageColumnCounts.length) {
+            return false;
+          }
+          final pageCounts = _computedPageColumnCounts[page - 1];
+          final rowLimit = col < pageCounts.length ? pageCounts[col] : 0;
+          return rowLimit > 0 && rowIndex < rowLimit;
         })
         .map((row) => <String, dynamic>{
               'columnIndex': row['columnIndex'],
+              'rowIndex': row['rowIndex'],
               'label': row['label'],
               'page': row['page'],
               'topPt': row['topPt'],
@@ -687,7 +709,10 @@ class _ProblemBankExportServerPreviewDialogState
         if (pageA != pageB) return pageA.compareTo(pageB);
         final colA = int.tryParse('${a['columnIndex'] ?? 0}') ?? 0;
         final colB = int.tryParse('${b['columnIndex'] ?? 0}') ?? 0;
-        return colA.compareTo(colB);
+        if (colA != colB) return colA.compareTo(colB);
+        final rowA = int.tryParse('${a['rowIndex'] ?? 0}') ?? 0;
+        final rowB = int.tryParse('${b['rowIndex'] ?? 0}') ?? 0;
+        return rowA.compareTo(rowB);
       });
   }
 
@@ -808,11 +833,30 @@ class _ProblemBankExportServerPreviewDialogState
       'subjectTitle': '수학 영역',
       'handwritingPhrase': '이 많은 별빛이 내린 언덕 위에',
       'commonLabel': '공통과목',
+      'commonPageRange': '1~12쪽',
+      'commonItems': const <Map<String, dynamic>>[],
       'electiveLabel': '선택과목',
+      'electivePageRange': '',
       'electiveItems': const <Map<String, dynamic>>[
         <String, dynamic>{'name': '확률과 통계', 'pages': '9~12쪽'},
         <String, dynamic>{'name': '미적분', 'pages': '13~16쪽'},
         <String, dynamic>{'name': '기하', 'pages': '17~20쪽'},
+      ],
+      'subjectGroups': const <Map<String, dynamic>>[
+        <String, dynamic>{
+          'label': '공통과목',
+          'pageRange': '1~12쪽',
+          'items': <Map<String, dynamic>>[],
+        },
+        <String, dynamic>{
+          'label': '선택과목',
+          'pageRange': '',
+          'items': <Map<String, dynamic>>[
+            <String, dynamic>{'name': '확률과 통계', 'pages': '9~12쪽'},
+            <String, dynamic>{'name': '미적분', 'pages': '13~16쪽'},
+            <String, dynamic>{'name': '기하', 'pages': '17~20쪽'},
+          ],
+        },
       ],
       'organization': '한국교육과정평가원',
     };
@@ -820,27 +864,176 @@ class _ProblemBankExportServerPreviewDialogState
 
   String _normalizeCoverTextValue(
     dynamic raw,
-    String fallback,
-  ) {
+    String fallback, {
+    bool allowEmpty = false,
+  }) {
     final text = '$raw'.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (allowEmpty) return text;
     if (text.isEmpty) return fallback;
     return text;
+  }
+
+  List<Map<String, dynamic>> _normalizeCoverItemRows(
+    dynamic rawItems, {
+    List<Map<String, dynamic>> fallback = const <Map<String, dynamic>>[],
+  }) {
+    final out = <Map<String, dynamic>>[];
+    if (rawItems is List) {
+      for (final one in rawItems) {
+        if (one is! Map) continue;
+        final name = _normalizeCoverTextValue(one['name'], '', allowEmpty: true);
+        final pages = _normalizeCoverTextValue(
+          one['pages'] ?? one['pageRange'],
+          '',
+          allowEmpty: true,
+        );
+        if (name.isEmpty && pages.isEmpty) continue;
+        out.add(<String, dynamic>{'name': name, 'pages': pages});
+      }
+    }
+    if (out.isNotEmpty) return out;
+    return fallback
+        .map((row) => <String, dynamic>{
+              'name': _normalizeCoverTextValue(
+                row['name'],
+                '',
+                allowEmpty: true,
+              ),
+              'pages': _normalizeCoverTextValue(
+                row['pages'],
+                '',
+                allowEmpty: true,
+              ),
+            })
+        .where((row) => ('${row['name']}${row['pages']}').trim().isNotEmpty)
+        .toList(growable: false);
+  }
+
+  List<Map<String, dynamic>> _normalizeCoverSubjectGroups({
+    required Map src,
+    required Map<String, dynamic> defaults,
+    required bool explicitGroupsPresent,
+  }) {
+    final fallbackGroups = (defaults['subjectGroups'] as List<dynamic>)
+        .whereType<Map>()
+        .map((row) => row.map((key, value) => MapEntry('$key', value)))
+        .toList(growable: false);
+
+    if (explicitGroupsPresent) {
+      final rawGroups = src['subjectGroups'];
+      if (rawGroups is! List) {
+        return const <Map<String, dynamic>>[];
+      }
+      final out = <Map<String, dynamic>>[];
+      for (var i = 0; i < rawGroups.length; i += 1) {
+        final one = rawGroups[i];
+        if (one is! Map) continue;
+        final fallbackLabel =
+            '${(i < fallbackGroups.length ? fallbackGroups[i]['label'] : null) ?? '대분류 ${i + 1}'}';
+        final label = _normalizeCoverTextValue(
+          one['label'],
+          fallbackLabel,
+          allowEmpty: true,
+        );
+        final pageRange = _normalizeCoverTextValue(
+          one['pageRange'] ?? one['pages'],
+          '',
+          allowEmpty: true,
+        );
+        final items = _normalizeCoverItemRows(
+          one['items'],
+          fallback: const <Map<String, dynamic>>[],
+        );
+        out.add(<String, dynamic>{
+          'label': label.isNotEmpty ? label : fallbackLabel,
+          'pageRange': pageRange,
+          'items': items,
+        });
+      }
+      return out;
+    }
+
+    final commonGroup = <String, dynamic>{
+      'label': _normalizeCoverTextValue(
+        src['commonLabel'],
+        '${defaults['commonLabel'] ?? '공통과목'}',
+      ),
+      'pageRange': _normalizeCoverTextValue(
+        src['commonPageRange'] ?? src['commonPages'],
+        '${defaults['commonPageRange'] ?? '1~12쪽'}',
+        allowEmpty: true,
+      ),
+      'items': _normalizeCoverItemRows(
+        src['commonItems'],
+        fallback: (defaults['commonItems'] as List<dynamic>)
+            .whereType<Map>()
+            .map((row) => row.map((key, value) => MapEntry('$key', value)))
+            .toList(growable: false),
+      ),
+    };
+    final electiveGroup = <String, dynamic>{
+      'label': _normalizeCoverTextValue(
+        src['electiveLabel'],
+        '${defaults['electiveLabel'] ?? '선택과목'}',
+      ),
+      'pageRange': _normalizeCoverTextValue(
+        src['electivePageRange'] ?? src['electivePages'],
+        '${defaults['electivePageRange'] ?? ''}',
+        allowEmpty: true,
+      ),
+      'items': _normalizeCoverItemRows(
+        src['electiveItems'],
+        fallback: (defaults['electiveItems'] as List<dynamic>)
+            .whereType<Map>()
+            .map((row) => row.map((key, value) => MapEntry('$key', value)))
+            .toList(growable: false),
+      ),
+    };
+    return <Map<String, dynamic>>[commonGroup, electiveGroup];
   }
 
   Map<String, dynamic> _normalizeCoverPageTexts(dynamic source) {
     final defaults = _defaultCoverPageTexts();
     final src = source is Map ? source : const <String, dynamic>{};
-    final rawItems = src['electiveItems'];
-    final normalizedItems = List<Map<String, dynamic>>.generate(3, (index) {
-      final fallback = (defaults['electiveItems'] as List<Map<String, dynamic>>)[index];
-      final row = rawItems is List && rawItems.length > index && rawItems[index] is Map
-          ? rawItems[index] as Map
-          : const <String, dynamic>{};
-      return <String, dynamic>{
-        'name': _normalizeCoverTextValue(row['name'], '${fallback['name'] ?? ''}'),
-        'pages': _normalizeCoverTextValue(row['pages'], '${fallback['pages'] ?? ''}'),
-      };
-    });
+    final explicitGroupsPresent = src['subjectGroups'] is List;
+    final subjectGroups = _normalizeCoverSubjectGroups(
+      src: src,
+      defaults: defaults,
+      explicitGroupsPresent: explicitGroupsPresent,
+    );
+    final fallbackGroups = (defaults['subjectGroups'] as List<dynamic>)
+        .whereType<Map>()
+        .map((row) => row.map((key, value) => MapEntry('$key', value)))
+        .toList(growable: false);
+    final commonGroup = subjectGroups.isNotEmpty
+        ? subjectGroups.first
+        : (fallbackGroups.isNotEmpty ? fallbackGroups.first : const <String, dynamic>{});
+    final electiveGroup = subjectGroups.length > 1
+        ? subjectGroups[1]
+        : (fallbackGroups.length > 1
+            ? fallbackGroups[1]
+            : const <String, dynamic>{});
+    final commonLabel = '${commonGroup['label'] ?? defaults['commonLabel'] ?? '공통과목'}';
+    final commonPageRange = _normalizeCoverTextValue(
+      commonGroup['pageRange'],
+      '${defaults['commonPageRange'] ?? '1~12쪽'}',
+      allowEmpty: true,
+    );
+    final commonItems = _normalizeCoverItemRows(
+      commonGroup['items'],
+      fallback: const <Map<String, dynamic>>[],
+    );
+    final electiveLabel =
+        '${electiveGroup['label'] ?? defaults['electiveLabel'] ?? '선택과목'}';
+    final electivePageRange = _normalizeCoverTextValue(
+      electiveGroup['pageRange'],
+      '${defaults['electivePageRange'] ?? ''}',
+      allowEmpty: true,
+    );
+    final electiveItems = _normalizeCoverItemRows(
+      electiveGroup['items'],
+      fallback: const <Map<String, dynamic>>[],
+    );
     return <String, dynamic>{
       'topTitle': _normalizeCoverTextValue(
         src['topTitle'],
@@ -854,15 +1047,15 @@ class _ProblemBankExportServerPreviewDialogState
         src['handwritingPhrase'],
         '${defaults['handwritingPhrase'] ?? ''}',
       ),
-      'commonLabel': _normalizeCoverTextValue(
-        src['commonLabel'],
-        '${defaults['commonLabel'] ?? ''}',
-      ),
-      'electiveLabel': _normalizeCoverTextValue(
-        src['electiveLabel'],
-        '${defaults['electiveLabel'] ?? ''}',
-      ),
-      'electiveItems': normalizedItems,
+      'commonLabel': commonLabel,
+      'commonPageRange': commonPageRange.isNotEmpty
+          ? commonPageRange
+          : '${defaults['commonPageRange'] ?? ''}',
+      'commonItems': commonItems,
+      'electiveLabel': electiveLabel,
+      'electivePageRange': electivePageRange,
+      'electiveItems': electiveItems,
+      'subjectGroups': subjectGroups,
       'organization': _normalizeCoverTextValue(
         src['organization'],
         '${defaults['organization'] ?? ''}',
@@ -870,39 +1063,238 @@ class _ProblemBankExportServerPreviewDialogState
     };
   }
 
+  void _disposeCoverGroupControllers() {
+    for (final controller in _coverGroupLabelControllers) {
+      controller.dispose();
+    }
+    for (final controller in _coverGroupPageRangeControllers) {
+      controller.dispose();
+    }
+    for (final list in _coverGroupItemNameControllers) {
+      for (final controller in list) {
+        controller.dispose();
+      }
+    }
+    for (final list in _coverGroupItemPageControllers) {
+      for (final controller in list) {
+        controller.dispose();
+      }
+    }
+    _coverGroupLabelControllers.clear();
+    _coverGroupPageRangeControllers.clear();
+    _coverGroupItemNameControllers.clear();
+    _coverGroupItemPageControllers.clear();
+  }
+
+  void _appendCoverSubjectGroupControllers({
+    required String label,
+    required String pageRange,
+    required List<Map<String, dynamic>> items,
+  }) {
+    _coverGroupLabelControllers.add(TextEditingController(text: label));
+    _coverGroupPageRangeControllers.add(TextEditingController(text: pageRange));
+    final itemNameControllers = <TextEditingController>[];
+    final itemPageControllers = <TextEditingController>[];
+    for (final row in items) {
+      itemNameControllers.add(
+        TextEditingController(text: '${row['name'] ?? ''}'),
+      );
+      itemPageControllers.add(
+        TextEditingController(text: '${row['pages'] ?? ''}'),
+      );
+    }
+    _coverGroupItemNameControllers.add(itemNameControllers);
+    _coverGroupItemPageControllers.add(itemPageControllers);
+  }
+
+  void _setCoverSubjectGroupsFromNormalized(List<Map<String, dynamic>> groups) {
+    _disposeCoverGroupControllers();
+    for (var i = 0; i < groups.length; i += 1) {
+      final group = groups[i];
+      _appendCoverSubjectGroupControllers(
+        label: _normalizeCoverTextValue(
+          group['label'],
+          '대분류 ${i + 1}',
+        ),
+        pageRange: _normalizeCoverTextValue(
+          group['pageRange'],
+          '',
+          allowEmpty: true,
+        ),
+        items: _normalizeCoverItemRows(
+          group['items'],
+          fallback: const <Map<String, dynamic>>[],
+        ),
+      );
+    }
+  }
+
+  void _addCoverSubjectGroup({
+    String label = '',
+    String pageRange = '',
+    List<Map<String, dynamic>> items = const <Map<String, dynamic>>[],
+  }) {
+    setState(() {
+      _appendCoverSubjectGroupControllers(
+        label: label.trim().isNotEmpty
+            ? label.trim()
+            : '대분류 ${_coverGroupLabelControllers.length + 1}',
+        pageRange: pageRange.trim(),
+        items: items,
+      );
+    });
+  }
+
+  void _removeCoverSubjectGroup(int groupIndex) {
+    setState(() {
+      if (groupIndex < 0 || groupIndex >= _coverGroupLabelControllers.length) {
+        return;
+      }
+      if (groupIndex >= _coverGroupPageRangeControllers.length ||
+          groupIndex >= _coverGroupItemNameControllers.length ||
+          groupIndex >= _coverGroupItemPageControllers.length) {
+        return;
+      }
+      _coverGroupLabelControllers.removeAt(groupIndex).dispose();
+      _coverGroupPageRangeControllers.removeAt(groupIndex).dispose();
+      final names = _coverGroupItemNameControllers.removeAt(groupIndex);
+      final pages = _coverGroupItemPageControllers.removeAt(groupIndex);
+      for (final controller in names) {
+        controller.dispose();
+      }
+      for (final controller in pages) {
+        controller.dispose();
+      }
+    });
+  }
+
+  void _addCoverSubjectItem({required int groupIndex}) {
+    setState(() {
+      if (groupIndex < 0 ||
+          groupIndex >= _coverGroupItemNameControllers.length ||
+          groupIndex >= _coverGroupItemPageControllers.length) {
+        return;
+      }
+      _coverGroupItemNameControllers[groupIndex].add(TextEditingController());
+      _coverGroupItemPageControllers[groupIndex].add(TextEditingController());
+    });
+  }
+
+  void _removeCoverSubjectItem({
+    required int groupIndex,
+    required int itemIndex,
+  }) {
+    setState(() {
+      if (groupIndex < 0 ||
+          groupIndex >= _coverGroupItemNameControllers.length ||
+          groupIndex >= _coverGroupItemPageControllers.length) {
+        return;
+      }
+      final nameControllers = _coverGroupItemNameControllers[groupIndex];
+      final pageControllers = _coverGroupItemPageControllers[groupIndex];
+      if (itemIndex < 0 ||
+          itemIndex >= nameControllers.length ||
+          itemIndex >= pageControllers.length) {
+        return;
+      }
+      nameControllers.removeAt(itemIndex).dispose();
+      pageControllers.removeAt(itemIndex).dispose();
+    });
+  }
+
   void _syncCoverPageTextControllers(Map<String, dynamic> config) {
     final normalized = _normalizeCoverPageTexts(config);
     _coverTopTitleController.text = '${normalized['topTitle'] ?? ''}';
     _coverSubjectTitleController.text = '${normalized['subjectTitle'] ?? ''}';
     _coverPhraseController.text = '${normalized['handwritingPhrase'] ?? ''}';
-    _coverCommonLabelController.text = '${normalized['commonLabel'] ?? ''}';
-    _coverElectiveLabelController.text = '${normalized['electiveLabel'] ?? ''}';
     _coverOrganizationController.text = '${normalized['organization'] ?? ''}';
-    final items = (normalized['electiveItems'] as List<dynamic>)
+    final groups = (normalized['subjectGroups'] as List<dynamic>)
         .whereType<Map>()
+        .map((row) => row.map((key, value) => MapEntry('$key', value)))
         .toList(growable: false);
-    for (var i = 0; i < 3; i += 1) {
-      final row = i < items.length ? items[i] : const <String, dynamic>{};
-      _coverElectiveNameControllers[i].text = '${row['name'] ?? ''}';
-      _coverElectivePageControllers[i].text = '${row['pages'] ?? ''}';
-    }
+    _setCoverSubjectGroupsFromNormalized(groups);
   }
 
   Map<String, dynamic> _coverPageTextsPayload() {
     final defaults = _defaultCoverPageTexts();
-    final defaultItems = defaults['electiveItems'] as List<Map<String, dynamic>>;
-    final items = List<Map<String, dynamic>>.generate(3, (index) {
-      return <String, dynamic>{
-        'name': _normalizeCoverTextValue(
-          _coverElectiveNameControllers[index].text,
-          '${defaultItems[index]['name'] ?? ''}',
-        ),
-        'pages': _normalizeCoverTextValue(
-          _coverElectivePageControllers[index].text,
-          '${defaultItems[index]['pages'] ?? ''}',
-        ),
-      };
-    });
+    List<Map<String, dynamic>> readRows(
+      List<TextEditingController> names,
+      List<TextEditingController> pages,
+    ) {
+      final out = <Map<String, dynamic>>[];
+      final maxLen = math.min(names.length, pages.length);
+      for (var i = 0; i < maxLen; i += 1) {
+        final name = _normalizeCoverTextValue(names[i].text, '', allowEmpty: true);
+        final page = _normalizeCoverTextValue(pages[i].text, '', allowEmpty: true);
+        if (name.isEmpty && page.isEmpty) continue;
+        out.add(<String, dynamic>{'name': name, 'pages': page});
+      }
+      return out;
+    }
+    final groupCount = [
+      _coverGroupLabelControllers.length,
+      _coverGroupPageRangeControllers.length,
+      _coverGroupItemNameControllers.length,
+      _coverGroupItemPageControllers.length,
+    ].reduce(math.min);
+    final subjectGroups = <Map<String, dynamic>>[];
+    for (var i = 0; i < groupCount; i += 1) {
+      final label = _normalizeCoverTextValue(
+        _coverGroupLabelControllers[i].text,
+        '대분류 ${i + 1}',
+      );
+      final pageRange = _normalizeCoverTextValue(
+        _coverGroupPageRangeControllers[i].text,
+        '',
+        allowEmpty: true,
+      );
+      final items = readRows(
+        _coverGroupItemNameControllers[i],
+        _coverGroupItemPageControllers[i],
+      );
+      subjectGroups.add(<String, dynamic>{
+        'label': label,
+        'pageRange': pageRange,
+        'items': items,
+      });
+    }
+    final defaultGroups = (defaults['subjectGroups'] as List<dynamic>)
+        .whereType<Map>()
+        .map((row) => row.map((key, value) => MapEntry('$key', value)))
+        .toList(growable: false);
+    final commonGroup = subjectGroups.isNotEmpty
+        ? subjectGroups.first
+        : (defaultGroups.isNotEmpty ? defaultGroups.first : const <String, dynamic>{});
+    final electiveGroup = subjectGroups.length > 1
+        ? subjectGroups[1]
+        : (defaultGroups.length > 1
+            ? defaultGroups[1]
+            : const <String, dynamic>{});
+    final commonLabel = '${commonGroup['label'] ?? defaults['commonLabel'] ?? '공통과목'}';
+    final commonPageRange = _normalizeCoverTextValue(
+      commonGroup['pageRange'],
+      '${defaults['commonPageRange'] ?? ''}',
+      allowEmpty: true,
+    );
+    final commonItems = (commonGroup['items'] is List)
+        ? (commonGroup['items'] as List<dynamic>)
+            .whereType<Map>()
+            .map((row) => row.map((key, value) => MapEntry('$key', value)))
+            .toList(growable: false)
+        : const <Map<String, dynamic>>[];
+    final electiveLabel =
+        '${electiveGroup['label'] ?? defaults['electiveLabel'] ?? '선택과목'}';
+    final electivePageRange = _normalizeCoverTextValue(
+      electiveGroup['pageRange'],
+      '${defaults['electivePageRange'] ?? ''}',
+      allowEmpty: true,
+    );
+    final electiveItems = (electiveGroup['items'] is List)
+        ? (electiveGroup['items'] as List<dynamic>)
+            .whereType<Map>()
+            .map((row) => row.map((key, value) => MapEntry('$key', value)))
+            .toList(growable: false)
+        : const <Map<String, dynamic>>[];
     return <String, dynamic>{
       'topTitle': _normalizeCoverTextValue(
         _coverTopTitleController.text,
@@ -916,15 +1308,15 @@ class _ProblemBankExportServerPreviewDialogState
         _coverPhraseController.text,
         '${defaults['handwritingPhrase'] ?? ''}',
       ),
-      'commonLabel': _normalizeCoverTextValue(
-        _coverCommonLabelController.text,
-        '${defaults['commonLabel'] ?? ''}',
-      ),
-      'electiveLabel': _normalizeCoverTextValue(
-        _coverElectiveLabelController.text,
-        '${defaults['electiveLabel'] ?? ''}',
-      ),
-      'electiveItems': items,
+      'commonLabel': commonLabel,
+      'commonPageRange': commonPageRange.isNotEmpty
+          ? commonPageRange
+          : '${defaults['commonPageRange'] ?? ''}',
+      'commonItems': commonItems,
+      'electiveLabel': electiveLabel,
+      'electivePageRange': electivePageRange,
+      'electiveItems': electiveItems,
+      'subjectGroups': subjectGroups,
       'organization': _normalizeCoverTextValue(
         _coverOrganizationController.text,
         '${defaults['organization'] ?? ''}',
@@ -1204,6 +1596,179 @@ class _ProblemBankExportServerPreviewDialogState
     );
   }
 
+  Widget _buildCoverInlineTextField({
+    required String label,
+    required TextEditingController controller,
+    String? hintText,
+  }) {
+    return TextField(
+      controller: controller,
+      style: const TextStyle(
+        color: _textPrimary,
+        fontSize: 12.3,
+        fontWeight: FontWeight.w700,
+      ),
+      decoration: InputDecoration(
+        labelText: label,
+        hintText: hintText,
+        isDense: true,
+        filled: true,
+        fillColor: const Color(0xFF0E161B),
+        labelStyle: const TextStyle(
+          color: _textMuted,
+          fontSize: 11.7,
+          fontWeight: FontWeight.w700,
+        ),
+        hintStyle: const TextStyle(
+          color: Color(0xFF708188),
+          fontSize: 11.3,
+          fontWeight: FontWeight.w600,
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: const BorderSide(color: Color(0xFF263740)),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: const BorderSide(color: Color(0xFF357D68), width: 1.1),
+        ),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+      ),
+    );
+  }
+
+  Widget _buildCoverSubjectGroupEditor({
+    required String title,
+    required int groupIndex,
+    required TextEditingController labelController,
+    required TextEditingController pageRangeController,
+    required List<TextEditingController> itemNameControllers,
+    required List<TextEditingController> itemPageControllers,
+  }) {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFF101920),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFF263740)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  title,
+                  style: const TextStyle(
+                    color: _textPrimary,
+                    fontSize: 12.2,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              TextButton.icon(
+                onPressed: () => _addCoverSubjectItem(groupIndex: groupIndex),
+                style: TextButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  foregroundColor: const Color(0xFFC7F2D8),
+                ),
+                icon: const Icon(Icons.add, size: 15),
+                label: const Text('하위과목 추가'),
+              ),
+              IconButton(
+                onPressed: () => _removeCoverSubjectGroup(groupIndex),
+                tooltip: '대분류 삭제',
+                icon: const Icon(
+                  Icons.delete_outline_rounded,
+                  size: 18,
+                  color: Color(0xFFB8C8CE),
+                ),
+                visualDensity: VisualDensity.compact,
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              Expanded(
+                flex: 3,
+                child: _buildCoverInlineTextField(
+                  label: '대분류명',
+                  controller: labelController,
+                  hintText: '대분류명',
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                flex: 2,
+                child: _buildCoverInlineTextField(
+                  label: '대분류 페이지(선택)',
+                  controller: pageRangeController,
+                  hintText: '1~12쪽',
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 7),
+          if (itemNameControllers.isEmpty)
+            const Padding(
+              padding: EdgeInsets.only(top: 2, bottom: 2),
+              child: Text(
+                '하위과목이 없습니다. `하위과목 추가`로 새 항목을 추가하세요.',
+                style: TextStyle(
+                  color: _textMuted,
+                  fontSize: 11.2,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          for (var i = 0;
+              i < math.min(itemNameControllers.length, itemPageControllers.length);
+              i += 1)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Row(
+                children: [
+                  Expanded(
+                    flex: 3,
+                    child: _buildCoverInlineTextField(
+                      label: '하위과목 ${i + 1}',
+                      controller: itemNameControllers[i],
+                      hintText: '과목명',
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    flex: 2,
+                    child: _buildCoverInlineTextField(
+                      label: '페이지',
+                      controller: itemPageControllers[i],
+                      hintText: '9~12쪽',
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  IconButton(
+                    onPressed: () =>
+                        _removeCoverSubjectItem(groupIndex: groupIndex, itemIndex: i),
+                    tooltip: '하위과목 삭제',
+                    icon: const Icon(
+                      Icons.remove_circle_outline_rounded,
+                      size: 18,
+                      color: Color(0xFFB8C8CE),
+                    ),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildCoverPageTextEditor() {
     return Container(
       width: double.infinity,
@@ -1251,60 +1816,60 @@ class _ProblemBankExportServerPreviewDialogState
             controller: _coverPhraseController,
             hintText: '이 많은 별빛이 내린 언덕 위에',
           ),
-          Row(
-            children: [
-              Expanded(
-                child: _buildCoverTextField(
-                  label: '공통과목 라벨',
-                  controller: _coverCommonLabelController,
-                  hintText: '공통과목',
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: _buildCoverTextField(
-                  label: '선택과목 라벨',
-                  controller: _coverElectiveLabelController,
-                  hintText: '선택과목',
-                ),
-              ),
-            ],
-          ),
           const SizedBox(height: 2),
           const Text(
-            '선택과목 하위 항목',
+            '과목 리스트 (대분류 → 하위과목)',
             style: TextStyle(
               color: _textMuted,
-              fontSize: 11.4,
+              fontSize: 11.5,
               fontWeight: FontWeight.w700,
             ),
           ),
           const SizedBox(height: 6),
-          for (var i = 0; i < 3; i += 1)
-            Row(
-              children: [
-                Expanded(
-                  flex: 3,
-                  child: _buildCoverTextField(
-                    label: '과목 ${i + 1}',
-                    controller: _coverElectiveNameControllers[i],
-                    hintText: i == 0
-                        ? '확률과 통계'
-                        : (i == 1 ? '미적분' : '기하'),
-                  ),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: () => _addCoverSubjectGroup(),
+              style: TextButton.styleFrom(
+                visualDensity: VisualDensity.compact,
+                foregroundColor: const Color(0xFFC7F2D8),
+              ),
+              icon: const Icon(Icons.add_box_outlined, size: 16),
+              label: const Text('대분류 추가'),
+            ),
+          ),
+          if (_coverGroupLabelControllers.isEmpty)
+            const Padding(
+              padding: EdgeInsets.only(top: 4, bottom: 8),
+              child: Text(
+                '대분류가 없습니다. `대분류 추가`로 새 과목 그룹을 만드세요.',
+                style: TextStyle(
+                  color: _textMuted,
+                  fontSize: 11.3,
+                  fontWeight: FontWeight.w600,
                 ),
-                const SizedBox(width: 8),
-                Expanded(
-                  flex: 2,
-                  child: _buildCoverTextField(
-                    label: '페이지',
-                    controller: _coverElectivePageControllers[i],
-                    hintText: i == 0
-                        ? '9~12쪽'
-                        : (i == 1 ? '13~16쪽' : '17~20쪽'),
-                  ),
-                ),
-              ],
+              ),
+            ),
+          for (var groupIndex = 0;
+              groupIndex <
+                  math.min(
+                    _coverGroupLabelControllers.length,
+                    math.min(
+                      _coverGroupPageRangeControllers.length,
+                      math.min(
+                        _coverGroupItemNameControllers.length,
+                        _coverGroupItemPageControllers.length,
+                      ),
+                    ),
+                  );
+              groupIndex += 1)
+            _buildCoverSubjectGroupEditor(
+              title: '대분류 ${groupIndex + 1}',
+              groupIndex: groupIndex,
+              labelController: _coverGroupLabelControllers[groupIndex],
+              pageRangeController: _coverGroupPageRangeControllers[groupIndex],
+              itemNameControllers: _coverGroupItemNameControllers[groupIndex],
+              itemPageControllers: _coverGroupItemPageControllers[groupIndex],
             ),
           _buildCoverTextField(
             label: '기관명',
@@ -1412,14 +1977,63 @@ class _ProblemBankExportServerPreviewDialogState
     );
   }
 
+  List<MapEntry<String, Map<String, dynamic>>> _anchorRowsForColumn({
+    required int pageIndex,
+    required int columnIndex,
+  }) {
+    final pageNo = pageIndex + 1;
+    final out = _columnLabelAnchorMap.entries.where((entry) {
+      final row = entry.value;
+      final page = int.tryParse('${row['page'] ?? 0}') ?? 0;
+      final col = int.tryParse('${row['columnIndex'] ?? -1}') ?? -1;
+      final rowIndex = int.tryParse('${row['rowIndex'] ?? 0}') ?? -1;
+      return page == pageNo &&
+          col == columnIndex &&
+          rowIndex >= 0;
+    }).toList(growable: true);
+    out.sort((a, b) {
+      final rowA = int.tryParse('${a.value['rowIndex'] ?? 0}') ?? 0;
+      final rowB = int.tryParse('${b.value['rowIndex'] ?? 0}') ?? 0;
+      return rowA.compareTo(rowB);
+    });
+    return out;
+  }
+
+  int? _nextAvailableAnchorRowIndex({
+    required int pageIndex,
+    required int columnIndex,
+  }) {
+    if (pageIndex < 0 || pageIndex >= _computedPageColumnCounts.length) {
+      return null;
+    }
+    final pageCounts = _computedPageColumnCounts[pageIndex];
+    if (columnIndex < 0 || columnIndex >= pageCounts.length) return null;
+    final rowLimit = pageCounts[columnIndex];
+    if (rowLimit <= 0) return null;
+    final used = _anchorRowsForColumn(pageIndex: pageIndex, columnIndex: columnIndex)
+        .map((entry) => int.tryParse('${entry.value['rowIndex'] ?? 0}') ?? -1)
+        .where((row) => row >= 0)
+        .toSet();
+    for (var row = 0; row < rowLimit; row += 1) {
+      if (!used.contains(row)) return row;
+    }
+    return null;
+  }
+
   Widget _buildAnchorEditor({
     required int pageIndex,
     required int columnIndex,
     required String title,
   }) {
-    final key = _anchorKey(pageIndex, columnIndex);
-    final hasAnchor = _columnLabelAnchorMap.containsKey(key);
-    if (!hasAnchor) {
+    final anchors = _anchorRowsForColumn(
+      pageIndex: pageIndex,
+      columnIndex: columnIndex,
+    );
+    final addableRowIndex = _nextAvailableAnchorRowIndex(
+      pageIndex: pageIndex,
+      columnIndex: columnIndex,
+    );
+    if (anchors.isEmpty) {
       return Container(
         width: double.infinity,
         padding: const EdgeInsets.fromLTRB(8, 7, 8, 7),
@@ -1441,13 +2055,16 @@ class _ProblemBankExportServerPreviewDialogState
               ),
             ),
             IconButton(
-              onPressed: () => _addDefaultAnchor(
-                pageIndex: pageIndex,
-                columnIndex: columnIndex,
-              ),
+              onPressed: addableRowIndex == null
+                  ? null
+                  : () => _addDefaultAnchor(
+                        pageIndex: pageIndex,
+                        columnIndex: columnIndex,
+                        rowIndex: addableRowIndex,
+                      ),
               visualDensity: VisualDensity.compact,
               iconSize: 18,
-              tooltip: '5지선다형 라벨 추가',
+              tooltip: '라벨 추가',
               color: _textPrimary,
               icon: const Icon(Icons.add_circle_outline_rounded),
             ),
@@ -1455,59 +2072,96 @@ class _ProblemBankExportServerPreviewDialogState
         ),
       );
     }
-    final controller = _controllerForAnchor(
-      pageIndex: pageIndex,
-      columnIndex: columnIndex,
-    );
-    return TextField(
-      controller: controller,
-      style: const TextStyle(
-        color: _textPrimary,
-        fontSize: 12.4,
-        fontWeight: FontWeight.w700,
-      ),
-      cursorColor: _textPrimary,
-      onChanged: (value) {
-        _setAnchorLabel(
-          pageIndex: pageIndex,
-          columnIndex: columnIndex,
-          rawLabel: value,
-        );
-      },
-      decoration: InputDecoration(
-        isDense: true,
-        filled: true,
-        fillColor: const Color(0xFF0C1418),
-        labelText: '$title 라벨',
-        labelStyle: const TextStyle(
-          color: _textMuted,
-          fontSize: 11.8,
-          fontWeight: FontWeight.w700,
-        ),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
-          borderSide: const BorderSide(color: Color(0xFF213037)),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
-          borderSide: const BorderSide(color: _accent, width: 1.1),
-        ),
-        suffixIcon: IconButton(
-          onPressed: () {
-            controller.clear();
-            _setAnchorLabel(
-              pageIndex: pageIndex,
-              columnIndex: columnIndex,
-              rawLabel: '',
-            );
-            setState(() {});
-          },
-          icon: const Icon(Icons.close_rounded, size: 16),
-          tooltip: '라벨 제거',
-          color: _textMuted,
-        ),
-      ),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        ...anchors.map((entry) {
+          final row = entry.value;
+          final rowIndex = int.tryParse('${row['rowIndex'] ?? 0}') ?? 0;
+          final controller = _controllerForAnchor(
+            pageIndex: pageIndex,
+            columnIndex: columnIndex,
+            rowIndex: rowIndex,
+          );
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: TextField(
+              controller: controller,
+              style: const TextStyle(
+                color: _textPrimary,
+                fontSize: 12.4,
+                fontWeight: FontWeight.w700,
+              ),
+              cursorColor: _textPrimary,
+              onChanged: (value) {
+                _setAnchorLabel(
+                  pageIndex: pageIndex,
+                  columnIndex: columnIndex,
+                  rowIndex: rowIndex,
+                  rawLabel: value,
+                );
+              },
+              decoration: InputDecoration(
+                isDense: true,
+                filled: true,
+                fillColor: const Color(0xFF0C1418),
+                labelText: '$title 라벨 (행 ${rowIndex + 1})',
+                labelStyle: const TextStyle(
+                  color: _textMuted,
+                  fontSize: 11.8,
+                  fontWeight: FontWeight.w700,
+                ),
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  borderSide: const BorderSide(color: Color(0xFF213037)),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  borderSide: const BorderSide(color: _accent, width: 1.1),
+                ),
+                suffixIcon: IconButton(
+                  onPressed: () {
+                    controller.clear();
+                    _setAnchorLabel(
+                      pageIndex: pageIndex,
+                      columnIndex: columnIndex,
+                      rowIndex: rowIndex,
+                      rawLabel: '',
+                    );
+                    setState(() {});
+                  },
+                  icon: const Icon(Icons.close_rounded, size: 16),
+                  tooltip: '라벨 제거',
+                  color: _textMuted,
+                ),
+              ),
+            ),
+          );
+        }),
+        if (addableRowIndex != null)
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton.icon(
+              onPressed: () => _addDefaultAnchor(
+                pageIndex: pageIndex,
+                columnIndex: columnIndex,
+                rowIndex: addableRowIndex,
+              ),
+              icon: const Icon(Icons.add_rounded, size: 16),
+              label: const Text('라벨 추가'),
+              style: TextButton.styleFrom(
+                foregroundColor: _textPrimary,
+                visualDensity: VisualDensity.compact,
+                textStyle: const TextStyle(
+                  fontSize: 11.8,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ),
+      ],
     );
   }
 

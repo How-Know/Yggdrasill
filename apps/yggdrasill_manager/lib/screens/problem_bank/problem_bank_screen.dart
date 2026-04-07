@@ -39,7 +39,6 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
 
   static const List<String> _templateOptions = <String>[
     '내신형',
-    '수능형',
     '모의고사형',
   ];
   static const List<String> _paperOptions = <String>['A4', 'B4', '8절'];
@@ -272,9 +271,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   String _templateToProfile(String template) {
     switch (template) {
       case '수능형':
-        return 'csat';
       case '모의고사형':
-        return 'mock';
+        return 'csat';
       case '내신형':
       default:
         return 'naesin';

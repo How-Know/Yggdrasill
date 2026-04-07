@@ -26,9 +26,6 @@ const double _kGradingCardMinWidth = 108.0;
 const double _kGradingCardMaxWidth = 396.0;
 const double _kGradingSectionGapTop = 22.0;
 const double _kGradingSectionGapBottom = 18.0;
-const double _kGradingSectionHeaderGap = 12.0;
-/// `숙제 과제` 헤더(Text 20) 한 줄 높이에 맞춘 근사값(레이아웃 분배용)
-const double _kGradingHomeworkSectionTitleHeight = 26.0;
 const EdgeInsets _kGradingPagePadding = EdgeInsets.fromLTRB(24, 0, 24, 24);
 
 typedef GradingGroupTapCallback = Future<void> Function(
@@ -90,11 +87,9 @@ class _GradingModePageState extends State<GradingModePage> {
                 }
                 return LayoutBuilder(
                   builder: (context, constraints) {
-                    final hasHomework = homeworkEntries.isNotEmpty;
                     final cardLayout = _resolveCardLayoutHorizontal(
                       constraints,
                       MediaQuery.of(context).size.height,
-                      hasHomeworkSection: hasHomework,
                     );
                     return Padding(
                       padding: _kGradingPagePadding,
@@ -120,30 +115,27 @@ class _GradingModePageState extends State<GradingModePage> {
                                     ),
                             ),
                           ),
-                          if (hasHomework) ...[
-                            const SizedBox(height: _kGradingSectionGapTop),
-                            const Divider(
-                                height: 1, color: Color(0xFF2A3A3A)),
-                            const SizedBox(height: _kGradingSectionGapBottom),
-                            _buildSectionHeader(
-                              title: '숙제 과제',
-                              count: homeworkEntries.length,
+                          const SizedBox(height: _kGradingSectionGapTop),
+                          const Divider(
+                              height: 1, color: Color(0xFF2A3A3A)),
+                          const SizedBox(height: _kGradingSectionGapBottom),
+                          Expanded(
+                            child: Align(
+                              alignment: Alignment.centerLeft,
+                              child: homeworkEntries.isNotEmpty
+                                  ? SizedBox(
+                                      height: cardLayout.height,
+                                      child: _buildHorizontalEntryStrip(
+                                        homeworkEntries,
+                                        cardLayout: cardLayout,
+                                        onCardTap: widget.onHomeworkCardTap,
+                                      ),
+                                    )
+                                  : _buildHomeworkEmptyPlaceholder(
+                                      cardLayout: cardLayout,
+                                    ),
                             ),
-                            const SizedBox(height: _kGradingSectionHeaderGap),
-                            Expanded(
-                              child: Align(
-                                alignment: Alignment.centerLeft,
-                                child: SizedBox(
-                                  height: cardLayout.height,
-                                  child: _buildHorizontalEntryStrip(
-                                    homeworkEntries,
-                                    cardLayout: cardLayout,
-                                    onCardTap: widget.onHomeworkCardTap,
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ],
+                          ),
                         ],
                       ),
                     );
@@ -157,12 +149,11 @@ class _GradingModePageState extends State<GradingModePage> {
     );
   }
 
-  /// 세로 스크롤 없이, 상·하(또는 상단 단독) 카드 줄 높이를 나눈다.
+  /// 세로 스크롤 없이, 제출 행·숙제 행에 동일한 카드 높이를 배분한다.
   _GradingCardLayout _resolveCardLayoutHorizontal(
     BoxConstraints constraints,
-    double fallbackViewportHeight, {
-    required bool hasHomeworkSection,
-  }) {
+    double fallbackViewportHeight,
+  ) {
     final viewportHeight =
         constraints.maxHeight.isFinite && constraints.maxHeight > 0
             ? constraints.maxHeight
@@ -171,19 +162,12 @@ class _GradingModePageState extends State<GradingModePage> {
         .clamp(_kGradingCardMinHeight, viewportHeight)
         .toDouble();
 
-    final double rowHeight;
-    if (!hasHomeworkSection) {
-      rowHeight = inner.clamp(_kGradingCardMinHeight, _kGradingCardMaxHeight);
-    } else {
-      final middleOverhead = _kGradingSectionGapTop +
-          1 +
-          _kGradingSectionGapBottom +
-          _kGradingHomeworkSectionTitleHeight +
-          _kGradingSectionHeaderGap;
-      rowHeight = ((inner - middleOverhead) / 2)
-          .clamp(_kGradingCardMinHeight, _kGradingCardMaxHeight)
-          .toDouble();
-    }
+    final middleOverhead = _kGradingSectionGapTop +
+        1 +
+        _kGradingSectionGapBottom;
+    final rowHeight = ((inner - middleOverhead) / 2)
+        .clamp(_kGradingCardMinHeight, _kGradingCardMaxHeight)
+        .toDouble();
 
     final baseByViewport = (viewportHeight * _kGradingCardHeightByViewport)
         .clamp(_kGradingCardMinHeight, _kGradingCardMaxHeight)
@@ -247,25 +231,6 @@ class _GradingModePageState extends State<GradingModePage> {
     return out;
   }
 
-  Widget _buildSectionHeader({
-    required String title,
-    required int count,
-  }) {
-    return Row(
-      children: [
-        Text(
-          '$title $count개',
-          style: const TextStyle(
-            color: kDlgText,
-            fontSize: 20,
-            fontWeight: FontWeight.w900,
-            letterSpacing: -0.2,
-          ),
-        ),
-      ],
-    );
-  }
-
   Widget _buildSubmittedEmptyPlaceholder({
     required _GradingCardLayout cardLayout,
   }) {
@@ -281,6 +246,32 @@ class _GradingModePageState extends State<GradingModePage> {
         child: const Center(
           child: Text(
             '활성 제출 과제가 없습니다.',
+            style: TextStyle(
+              color: Color(0xFF7F8C8C),
+              fontSize: 15,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHomeworkEmptyPlaceholder({
+    required _GradingCardLayout cardLayout,
+  }) {
+    return SizedBox(
+      width: double.infinity,
+      height: cardLayout.height,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: const Color(0xFF0F1718),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: const Color(0xFF2A3A3A)),
+        ),
+        child: const Center(
+          child: Text(
+            '표시할 숙제 과제가 없습니다.',
             style: TextStyle(
               color: Color(0xFF7F8C8C),
               fontSize: 15,

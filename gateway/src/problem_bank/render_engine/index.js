@@ -110,13 +110,34 @@ function normalizeTitlePageHeaders(raw, titlePageIndices, fallbackTitle = '수�
   return [...out.values()].sort((a, b) => a.page - b.page);
 }
 
+function normalizeCoverPageItems(rawItems, fallbackItems = []) {
+  const src = Array.isArray(rawItems) ? rawItems : [];
+  const out = [];
+  for (const one of src) {
+    if (!one || typeof one !== 'object') continue;
+    const name = normalizeWhitespace(one.name || one.label || '');
+    const pages = normalizeWhitespace(one.pages || one.pageRange || '');
+    if (!name && !pages) continue;
+    out.push({ name, pages });
+    if (out.length >= 24) break;
+  }
+  if (out.length > 0) return out;
+  return (Array.isArray(fallbackItems) ? fallbackItems : [])
+    .map((one) => ({
+      name: normalizeWhitespace(one?.name || one?.label || ''),
+      pages: normalizeWhitespace(one?.pages || one?.pageRange || ''),
+    }))
+    .filter((one) => one.name || one.pages)
+    .slice(0, 24);
+}
+
 function normalizeCoverPageTexts(raw, defaults = {}) {
   const src = raw && typeof raw === 'object' ? raw : {};
   const seed = defaults && typeof defaults === 'object' ? defaults : {};
-  const defaultItemsSrc = Array.isArray(seed.electiveItems) ? seed.electiveItems : [];
-  const fallbackItems = [0, 1, 2].map((index) => {
-    const item = defaultItemsSrc[index] && typeof defaultItemsSrc[index] === 'object'
-      ? defaultItemsSrc[index]
+  const defaultElectiveItemsSrc = Array.isArray(seed.electiveItems) ? seed.electiveItems : [];
+  const defaultElectiveItems = [0, 1, 2].map((index) => {
+    const item = defaultElectiveItemsSrc[index] && typeof defaultElectiveItemsSrc[index] === 'object'
+      ? defaultElectiveItemsSrc[index]
       : {};
     const fallbackName =
       index === 0 ? '확률과 통계' : (index === 1 ? '미적분' : '기하');
@@ -127,16 +148,9 @@ function normalizeCoverPageTexts(raw, defaults = {}) {
       pages: normalizeWhitespace(item.pages || fallbackPages) || fallbackPages,
     };
   });
-  const rawItems = Array.isArray(src.electiveItems) ? src.electiveItems : [];
-  const electiveItems = fallbackItems.map((fallback, index) => {
-    const item = rawItems[index] && typeof rawItems[index] === 'object'
-      ? rawItems[index]
-      : {};
-    return {
-      name: normalizeWhitespace(item.name || '') || fallback.name,
-      pages: normalizeWhitespace(item.pages || item.pageRange || '') || fallback.pages,
-    };
-  });
+  const defaultCommonItems = Array.isArray(seed.commonItems)
+    ? normalizeCoverPageItems(seed.commonItems, [])
+    : [];
   const topTitle = normalizeWhitespace(
     src.topTitle || seed.topTitle || '2026학년도 대학수학능력시험 문제지',
   ) || '2026학년도 대학수학능력시험 문제지';
@@ -146,12 +160,50 @@ function normalizeCoverPageTexts(raw, defaults = {}) {
   const handwritingPhrase = normalizeWhitespace(
     src.handwritingPhrase || seed.handwritingPhrase || '이 많은 별빛이 내린 언덕 위에',
   ) || '이 많은 별빛이 내린 언덕 위에';
-  const commonLabel = normalizeWhitespace(
-    src.commonLabel || seed.commonLabel || '공통과목',
-  ) || '공통과목';
-  const electiveLabel = normalizeWhitespace(
-    src.electiveLabel || seed.electiveLabel || '선택과목',
-  ) || '선택과목';
+  const fallbackGroups = [
+    {
+      label: normalizeWhitespace(src.commonLabel || seed.commonLabel || '공통과목') || '공통과목',
+      pageRange: normalizeWhitespace(
+        src.commonPageRange || src.commonPages || seed.commonPageRange || '1~12쪽',
+      ) || '1~12쪽',
+      items: normalizeCoverPageItems(src.commonItems, defaultCommonItems),
+    },
+    {
+      label: normalizeWhitespace(src.electiveLabel || seed.electiveLabel || '선택과목') || '선택과목',
+      pageRange: normalizeWhitespace(
+        src.electivePageRange || src.electivePages || seed.electivePageRange || '',
+      ),
+      items: normalizeCoverPageItems(src.electiveItems, defaultElectiveItems),
+    },
+  ];
+  const hasExplicitGroups = Array.isArray(src.subjectGroups);
+  let subjectGroups = [];
+  if (hasExplicitGroups) {
+    const rawGroups = Array.isArray(src.subjectGroups) ? src.subjectGroups : [];
+    subjectGroups = rawGroups
+      .filter((group) => group && typeof group === 'object')
+      .map((group, index) => {
+        const fallbackLabel = normalizeWhitespace(
+          fallbackGroups[index]?.label || `대분류 ${index + 1}`,
+        ) || `대분류 ${index + 1}`;
+        return {
+          label: normalizeWhitespace(group.label || '') || fallbackLabel,
+          pageRange: normalizeWhitespace(group.pageRange || group.pages || ''),
+          items: normalizeCoverPageItems(group.items, []),
+        };
+      })
+      .slice(0, 24);
+  } else {
+    subjectGroups = fallbackGroups;
+  }
+  const commonGroup = subjectGroups[0] || fallbackGroups[0];
+  const electiveGroup = subjectGroups[1] || fallbackGroups[1];
+  const commonLabel = commonGroup.label || '공통과목';
+  const commonPageRange = commonGroup.pageRange || '1~12쪽';
+  const commonItems = normalizeCoverPageItems(commonGroup.items, defaultCommonItems);
+  const electiveLabel = electiveGroup.label || '선택과목';
+  const electivePageRange = normalizeWhitespace(electiveGroup.pageRange || '');
+  const electiveItems = normalizeCoverPageItems(electiveGroup.items, defaultElectiveItems);
   const organization = normalizeWhitespace(
     src.organization || src.organizationName || seed.organization || '한국교육과정평가원',
   ) || '한국교육과정평가원';
@@ -160,8 +212,12 @@ function normalizeCoverPageTexts(raw, defaults = {}) {
     subjectTitle,
     handwritingPhrase,
     commonLabel,
+    commonPageRange,
+    commonItems,
     electiveLabel,
+    electivePageRange,
     electiveItems,
+    subjectGroups,
     organization,
   };
 }
@@ -183,12 +239,15 @@ function normalizeColumnLabelAnchors(raw, layoutColumns) {
     if (!one || typeof one !== 'object') continue;
     const columnIndex = toSafeInt(one.columnIndex, -1);
     if (columnIndex < 0 || columnIndex >= maxColumns) continue;
+    const parsedRowIndex = toSafeInt(one.rowIndex, 0);
+    const rowIndex = parsedRowIndex >= 0 ? parsedRowIndex : 0;
     const label = normalizeWhitespace(one.label || one.text || '');
     if (!label) continue;
     const topPt = Number(one.topPt);
     const paddingTopPt = Number(one.paddingTopPt);
     out.push({
       columnIndex,
+      rowIndex,
       label,
       page: normalizeAnchorPage(one.page),
       topPt: Number.isFinite(topPt) ? topPt : 8,
@@ -495,9 +554,11 @@ export async function renderPdfWithHtmlEngine({
       regenerationQueuedCount: 0,
       effectiveDpiByQuestionId: {},
     },
-    columnLabelAnchors: Array.isArray(layout?.columnLabelAnchors)
-      ? layout.columnLabelAnchors
-      : [],
+    columnLabelAnchors: Array.isArray(layoutMeta.columnLabelAnchors)
+      ? layoutMeta.columnLabelAnchors
+      : (Array.isArray(layout?.columnLabelAnchors)
+        ? layout.columnLabelAnchors
+        : []),
     titlePageIndices: Array.isArray(layoutMeta.titlePageIndices)
       ? layoutMeta.titlePageIndices
       : (Array.isArray(layout?.titlePageIndices)

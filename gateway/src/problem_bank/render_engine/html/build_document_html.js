@@ -10,7 +10,7 @@ const PAPER_MM = {
 };
 
 function profileTitle(profile) {
-  if (profile === 'csat') return '수능형 시험지';
+  if (profile === 'csat') return '모의고사형 시험지';
   if (profile === 'mock') return '모의고사형 시험지';
   return '내신형 시험지';
 }
@@ -35,6 +35,10 @@ function buildStyles({
   const grid4HeightMm = Math.max(100, paperMm.height - 2 * marginMm - headerApproxMm).toFixed(1);
   const mockFirstSubjectPt = ((stemSizePt + 20.5) * 1.1).toFixed(2);
   const mockSimpleSubjectPt = ((stemSizePt + 11.2) * 1.1).toFixed(2);
+  const coverTopPaddingPt = 33 * 0.8;
+  const isB4Paper = String(paper || '').trim().toUpperCase() === 'B4';
+  const coverTopRowMarginPt = isB4Paper ? 12 : 10;
+  const coverChipLeftTranslatePt = isB4Paper ? -18 : -20;
   const title = profileTitle(profile);
   return `
     @page {
@@ -391,30 +395,41 @@ function buildStyles({
     }
     .mock-cover-page,
     .mock-cover-blank {
+      height: ${(paperMm.height - 2 * marginMm).toFixed(1)}mm;
       min-height: ${(paperMm.height - 2 * marginMm).toFixed(1)}mm;
+      max-height: ${(paperMm.height - 2 * marginMm).toFixed(1)}mm;
+      width: 100%;
+      box-sizing: border-box;
       break-inside: avoid;
       overflow: hidden;
       background: #fff;
     }
     .mock-cover-page {
-      padding: 33pt 17pt 30pt;
+      padding: ${coverTopPaddingPt.toFixed(1)}pt 17pt 30pt;
       display: flex;
+      position: relative;
     }
     .mock-cover-blank {
       break-after: page;
     }
     .mock-cover-sheet {
       width: 100%;
-      min-height: 100%;
+      height: 100%;
+      min-height: 0;
+      max-height: 100%;
+      box-sizing: border-box;
       flex: 1 1 auto;
       display: flex;
       flex-direction: column;
       align-items: stretch;
+      padding-top: 6pt;
+      padding-bottom: 122pt;
+      overflow: hidden;
       color: #111;
       font-family: "YggMain", "HCR Batang", "Malgun Gothic", serif;
     }
     .mock-cover-top-row {
-      margin-top: 2pt;
+      margin-top: ${coverTopRowMarginPt}pt;
       display: grid;
       grid-template-columns: 1fr auto 1fr;
       align-items: end;
@@ -438,7 +453,7 @@ function buildStyles({
       color: #333;
       letter-spacing: 0.01em;
       white-space: nowrap;
-      transform: translateY(-10pt);
+      transform: translateY(${coverChipLeftTranslatePt}pt);
     }
     .mock-cover-top-title {
       justify-self: center;
@@ -482,7 +497,8 @@ function buildStyles({
         0.24pt 0 0 #111,
         -0.24pt 0 0 #111;
       white-space: nowrap;
-      transform: translate(10pt, -2pt);
+      margin-right: 4pt;
+      transform: translateY(-6pt);
     }
     .mock-cover-subject {
       display: flex;
@@ -600,10 +616,13 @@ function buildStyles({
       margin: 19.2pt auto 0;
       width: 92.5%;
       border: 0.8pt solid #a2a2a2;
-      padding: 9pt 20pt 9pt;
+      padding: 9pt 20pt 16pt;
       color: #333;
       font-size: calc((var(--stem-size-pt) + 0.35) * 1.3034 * 1pt);
       line-height: 1.791;
+      max-height: var(--mock-cover-subject-box-max-height, 232pt);
+      overflow: hidden;
+      box-sizing: border-box;
     }
     .mock-cover-subject-head {
       display: flex;
@@ -628,16 +647,58 @@ function buildStyles({
     .mock-cover-subject-indent {
       margin-left: 20pt;
     }
+    .mock-cover-subject-categories {
+      display: flex;
+      flex-direction: column;
+      gap: 5.6pt;
+      margin-top: 2pt;
+      min-width: 0;
+    }
+    .mock-cover-subject-categories.mock-cover-subject-categories-two-column {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      column-gap: 16pt;
+      row-gap: 5.6pt;
+      align-content: start;
+    }
+    .mock-cover-major-block {
+      min-width: 0;
+    }
+    .mock-cover-major-line {
+      font-weight: 800;
+      font-size: 1.05em;
+    }
+    .mock-cover-subject-items {
+      margin-top: 2.6pt;
+      margin-left: 20pt;
+      display: flex;
+      flex-direction: column;
+      gap: 2.6pt;
+      min-width: 0;
+    }
+    .mock-cover-subject-items.mock-cover-subject-items-two-column {
+      margin-left: 8pt;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      column-gap: 16pt;
+      row-gap: 2.6pt;
+      align-items: baseline;
+    }
+    .mock-cover-subject-line-sub {
+      min-width: 0;
+      font-size: 1.05em;
+    }
     .mock-cover-subject-item {
       flex: 0 0 auto;
     }
     .mock-cover-subject-item-major {
-      font-size: 1.11em;
+      font-size: 1.166em;
       font-weight: 800;
       -webkit-text-stroke: 0.1pt #222;
     }
     .mock-cover-subject-item-under {
-      margin-left: 1ch;
+      margin-left: 1.5ch;
+      font-size: 1.166em;
     }
     .mock-cover-dots {
       flex: 1 1 auto;
@@ -650,14 +711,20 @@ function buildStyles({
       min-width: 54pt;
       text-align: right;
       white-space: nowrap;
+      font-size: 1.05em;
     }
     .mock-cover-bottom-stack {
-      margin-top: 25pt;
-      width: 100%;
+      position: absolute;
+      left: 17pt;
+      right: 17pt;
+      bottom: 20pt;
+      width: auto;
+      z-index: 2;
     }
     .mock-cover-warning {
       margin: 0 auto;
       width: 92.5%;
+      box-sizing: border-box;
       min-height: 49.4pt;
       border: 0.8pt solid #a2a2a2;
       background: #ededed;
@@ -1253,17 +1320,22 @@ function buildQuestionChunks({
   if (rendered.length === 0) {
     return {
       chunks: [[]],
+      questionChunks: [[]],
       pageColumnCounts: safeColumns === 2 ? [[2, 2]] : [[safePerPage]],
     };
   }
   if (safeColumns !== 2 || safePerPage >= 99) {
     const chunks = [];
+    const questionChunks = [];
     for (let i = 0; i < rendered.length; i += safePerPage) {
       chunks.push(rendered.slice(i, i + safePerPage));
+      questionChunks.push(sourceQuestions.slice(i, i + safePerPage));
     }
     if (chunks.length === 0) chunks.push([]);
+    if (questionChunks.length === 0) questionChunks.push([]);
     return {
       chunks,
+      questionChunks,
       pageColumnCounts: chunks.map((chunk) => [chunk.length]),
     };
   }
@@ -1276,6 +1348,7 @@ function buildQuestionChunks({
   }
 
   const chunks = [];
+  const questionChunks = [];
   const pageColumnCounts = [];
   let cursor = 0;
   let pageIndex = 0;
@@ -1299,9 +1372,11 @@ function buildQuestionChunks({
     }
 
     const chunk = [];
+    const questionChunk = [];
     let leftCount = 0;
     for (let i = 0; i < leftCap && cursor < rendered.length; i += 1) {
       chunk.push(rendered[cursor]);
+      questionChunk.push(sourceQuestions[cursor]);
       cursor += 1;
       leftCount += 1;
     }
@@ -1315,23 +1390,27 @@ function buildQuestionChunks({
     let rightCount = 0;
     for (let i = 0; i < rightCap && cursor < rendered.length; i += 1) {
       chunk.push(rendered[cursor]);
+      questionChunk.push(sourceQuestions[cursor]);
       cursor += 1;
       rightCount += 1;
     }
 
     if (chunk.length === 0 && cursor < rendered.length) {
       chunk.push(rendered[cursor]);
+      questionChunk.push(sourceQuestions[cursor]);
       cursor += 1;
       leftCount = 1;
     }
 
     chunks.push(chunk);
+    questionChunks.push(questionChunk);
     pageColumnCounts.push([leftCount, rightCount]);
     pageIndex += 1;
   }
 
   return {
     chunks: chunks.length > 0 ? chunks : [[]],
+    questionChunks: questionChunks.length > 0 ? questionChunks : [[]],
     pageColumnCounts: pageColumnCounts.length > 0 ? pageColumnCounts : [[defaultLeft, defaultRight]],
   };
 }
@@ -1396,20 +1475,79 @@ function normalizeTitlePageHeaders(rawHeaders, titlePageIndices, fallbackTitle) 
 
 function normalizeCoverPageTexts(raw) {
   const src = raw && typeof raw === 'object' ? raw : {};
-  const fallbackItems = [
+  const fallbackElectiveItems = [
     { name: '확률과 통계', pages: '9~12쪽' },
     { name: '미적분', pages: '13~16쪽' },
     { name: '기하', pages: '17~20쪽' },
   ];
-  const rawItems = Array.isArray(src.electiveItems) ? src.electiveItems : [];
-  const electiveItems = fallbackItems.map((fallback, index) => {
-    const row = rawItems[index] && typeof rawItems[index] === 'object'
-      ? rawItems[index]
-      : {};
-    const name = String(row.name || '').replace(/\s+/g, ' ').trim() || fallback.name;
-    const pages = String(row.pages || row.pageRange || '').replace(/\s+/g, ' ').trim() || fallback.pages;
-    return { name, pages };
-  });
+  const normalizeItemRows = (rawRows, fallbackRows = []) => {
+    const out = [];
+    if (Array.isArray(rawRows)) {
+      for (const one of rawRows) {
+        if (!one || typeof one !== 'object') continue;
+        const name = String(one.name || one.label || '').replace(/\s+/g, ' ').trim();
+        const pages = String(one.pages || one.pageRange || '').replace(/\s+/g, ' ').trim();
+        if (!name && !pages) continue;
+        out.push({ name, pages });
+      }
+    }
+    if (out.length > 0) return out.slice(0, 24);
+    return fallbackRows
+      .map((one) => ({
+        name: String(one?.name || one?.label || '').replace(/\s+/g, ' ').trim(),
+        pages: String(one?.pages || one?.pageRange || '').replace(/\s+/g, ' ').trim(),
+      }))
+      .filter((one) => one.name || one.pages)
+      .slice(0, 24);
+  };
+  const fallbackGroups = [
+    {
+      label: String(src.commonLabel || '').replace(/\s+/g, ' ').trim() || '공통과목',
+      pageRange: String(src.commonPageRange || src.commonPages || '')
+        .replace(/\s+/g, ' ')
+        .trim() || '1~12쪽',
+      items: normalizeItemRows(src.commonItems, []),
+    },
+    {
+      label: String(src.electiveLabel || '').replace(/\s+/g, ' ').trim() || '선택과목',
+      pageRange: String(src.electivePageRange || src.electivePages || '')
+        .replace(/\s+/g, ' ')
+        .trim(),
+      items: normalizeItemRows(src.electiveItems, fallbackElectiveItems),
+    },
+  ];
+  const hasExplicitGroups = Array.isArray(src.subjectGroups);
+  let subjectGroups = [];
+  if (hasExplicitGroups) {
+    const rawGroups = Array.isArray(src.subjectGroups) ? src.subjectGroups : [];
+    subjectGroups = rawGroups
+      .filter((group) => group && typeof group === 'object')
+      .map((group, index) => {
+        const fallbackLabel = String(
+          fallbackGroups[index]?.label || `대분류 ${index + 1}`,
+        ).replace(/\s+/g, ' ').trim() || `대분류 ${index + 1}`;
+        return {
+          label:
+            String(group.label || '').replace(/\s+/g, ' ').trim() || fallbackLabel,
+          pageRange:
+            String(group.pageRange || group.pages || '').replace(/\s+/g, ' ').trim(),
+          items: normalizeItemRows(group.items, []),
+        };
+      })
+      .slice(0, 24);
+  } else {
+    subjectGroups = fallbackGroups;
+  }
+  const commonGroup = subjectGroups[0] || fallbackGroups[0];
+  const electiveGroup = subjectGroups[1] || fallbackGroups[1];
+  const commonLabel = String(commonGroup.label || '').replace(/\s+/g, ' ').trim() || '공통과목';
+  const commonPageRange =
+    String(commonGroup.pageRange || '').replace(/\s+/g, ' ').trim() || '1~12쪽';
+  const commonItems = normalizeItemRows(commonGroup.items, []);
+  const electiveLabel = String(electiveGroup.label || '').replace(/\s+/g, ' ').trim() || '선택과목';
+  const electivePageRange =
+    String(electiveGroup.pageRange || '').replace(/\s+/g, ' ').trim();
+  const electiveItems = normalizeItemRows(electiveGroup.items, fallbackElectiveItems);
   return {
     topTitle:
       String(src.topTitle || '').replace(/\s+/g, ' ').trim() || '2026학년도 대학수학능력시험 문제지',
@@ -1417,11 +1555,13 @@ function normalizeCoverPageTexts(raw) {
       String(src.subjectTitle || '').replace(/\s+/g, ' ').trim() || '수학 영역',
     handwritingPhrase:
       String(src.handwritingPhrase || '').replace(/\s+/g, ' ').trim() || '이 많은 별빛이 내린 언덕 위에',
-    commonLabel:
-      String(src.commonLabel || '').replace(/\s+/g, ' ').trim() || '공통과목',
-    electiveLabel:
-      String(src.electiveLabel || '').replace(/\s+/g, ' ').trim() || '선택과목',
+    commonLabel,
+    commonPageRange,
+    commonItems,
+    electiveLabel,
+    electivePageRange,
     electiveItems,
+    subjectGroups,
     organization:
       String(src.organization || src.organizationName || '').replace(/\s+/g, ' ').trim() || '한국교육과정평가원',
   };
@@ -1464,9 +1604,138 @@ export function buildDocumentHtml({
 
   const stemSizePt = Number(layout?.stemSizePt || 11.0);
   const allQ = (questions || []).map((q) => renderQuestionBlock(q, mathRenderer, { stemSizePt }));
+  let autoAnchorCarryMode = null;
+  const effectiveColumnLabelAnchorRows = [];
+  const effectiveAnchorSeen = new Set();
+  const inferQuestionMode = (question) => {
+    const rawType = String(
+      question?.question_type
+      || question?.questionType
+      || '',
+    )
+      .replace(/\s+/g, '');
+    const rawMode = String(
+      question?.export_mode
+      || question?.exportMode
+      || question?.question_mode
+      || question?.questionMode
+      || '',
+    )
+      .trim()
+      .toLowerCase();
+    if (rawMode === 'essay' || rawType.includes('서술')) return 'essay';
+    if (rawMode === 'objective' || rawType.includes('객관')) return 'objective';
+    if (rawMode === 'subjective' || rawType.includes('주관')) return 'subjective';
+    const choices = Array.isArray(question?.choices) ? question.choices : [];
+    if (choices.length >= 2) return 'objective';
+    return 'subjective';
+  };
+  const modeToSectionLabel = (mode) => {
+    if (mode === 'objective') return '5지선다형';
+    if (mode === 'essay') return '서술형';
+    return '단답형';
+  };
+  const normalizeAnchorPageValue = (rawPage) => {
+    const page = String(rawPage || '').trim().toLowerCase();
+    if (!page || page === 'first' || page === '1') return 'first';
+    if (page === 'all' || page === 'every') return 'all';
+    const parsed = Number.parseInt(page, 10);
+    if (Number.isFinite(parsed) && parsed >= 1) return parsed;
+    return 'first';
+  };
+  const anchorAppliesToPage = (anchorPage, pageIndex) => {
+    if (anchorPage === 'all') return true;
+    if (anchorPage === 'first') return pageIndex === 0;
+    if (Number.isFinite(anchorPage) && anchorPage >= 1) {
+      return pageIndex + 1 === anchorPage;
+    }
+    return pageIndex === 0;
+  };
+  const collectManualAnchorKeysForPage = (rawAnchors, pageIndex) => {
+    const keys = new Set();
+    if (!Array.isArray(rawAnchors)) return keys;
+    for (const one of rawAnchors) {
+      if (!one || typeof one !== 'object') continue;
+      const columnIndex = Number.parseInt(String(one.columnIndex ?? ''), 10);
+      if (!Number.isFinite(columnIndex) || columnIndex < 0) continue;
+      const rowIndexRaw = Number.parseInt(String(one.rowIndex ?? ''), 10);
+      const rowIndex = Number.isFinite(rowIndexRaw) && rowIndexRaw >= 0 ? rowIndexRaw : 0;
+      const page = normalizeAnchorPageValue(one.page);
+      if (!anchorAppliesToPage(page, pageIndex)) continue;
+      keys.add(`${rowIndex}:${columnIndex}`);
+    }
+    return keys;
+  };
+  const buildAutoTypeTransitionAnchors = ({
+    slotPlan,
+    questionChunk,
+    pageIndex,
+    isTitlePage,
+    manualAnchors,
+  }) => {
+    if (!isMockStyle) return [];
+    if (!slotPlan || !Array.isArray(slotPlan?.slots)) return [];
+    const rows = Array.isArray(questionChunk) ? questionChunk : [];
+    if (rows.length === 0) return [];
+    const manualKeys = collectManualAnchorKeysForPage(manualAnchors, pageIndex);
+    const firstPageAnchor = pageIndex === 0 && isTitlePage;
+    const topPt = firstPageAnchor ? 16 : 9.2;
+    const paddingTopPt = firstPageAnchor ? 27 : 35.8;
+    const autoAnchors = [];
+    let prevMode = autoAnchorCarryMode;
+    for (let order = 0; order < rows.length; order += 1) {
+      const mode = inferQuestionMode(rows[order]);
+      if (prevMode === mode) {
+        continue;
+      }
+      const slot = slotPlan.slots.find((one) => one.questionOrder === order);
+      if (!slot || !slot.expectsQuestion) {
+        prevMode = mode;
+        continue;
+      }
+      const key = `${slot.rowIndex}:${slot.columnIndex}`;
+      if (!manualKeys.has(key)) {
+        autoAnchors.push({
+          page: pageIndex + 1,
+          columnIndex: slot.columnIndex,
+          rowIndex: slot.rowIndex,
+          label: modeToSectionLabel(mode),
+          topPt,
+          paddingTopPt,
+        });
+      }
+      prevMode = mode;
+    }
+    autoAnchorCarryMode = prevMode;
+    return autoAnchors;
+  };
+  const collectEffectiveAnchorsForPage = (slotPlan, pageIndex, isTitlePageForPage) => {
+    if (!slotPlan || !Array.isArray(slotPlan.slots)) return;
+    const defaultTopPt = isTitlePageForPage ? 16 : 9.2;
+    const defaultPaddingTopPt = isTitlePageForPage ? 27 : 35.8;
+    for (const slot of slotPlan.slots) {
+      if (!slot || !slot.expectsQuestion || !slot.anchorLabel) continue;
+      const label = String(slot.anchorLabel || '').replace(/\s+/g, ' ').trim();
+      if (!label) continue;
+      const rowIndex = Number.isFinite(slot.rowIndex) ? Number(slot.rowIndex) : 0;
+      const columnIndex = Number.isFinite(slot.columnIndex) ? Number(slot.columnIndex) : 0;
+      const key = `${pageIndex + 1}:${columnIndex}:${rowIndex}`;
+      if (effectiveAnchorSeen.has(key)) continue;
+      effectiveAnchorSeen.add(key);
+      effectiveColumnLabelAnchorRows.push({
+        page: pageIndex + 1,
+        columnIndex,
+        rowIndex,
+        label,
+        topPt: defaultTopPt,
+        paddingTopPt: defaultPaddingTopPt,
+      });
+    }
+  };
   const renderStreamSection = (chunk, cls, options = {}) => {
     const pageIndex = Number.isFinite(options?.pageIndex) ? Number(options.pageIndex) : 0;
     const isTitlePage = options?.isTitlePage === true;
+    const questionChunk = Array.isArray(options?.questionChunk) ? options.questionChunk : [];
     const columnCountsOverride = Array.isArray(options?.columnQuestionCounts)
       ? options.columnQuestionCounts
       : null;
@@ -1477,7 +1746,7 @@ export function buildDocumentHtml({
         Number(options?.perPageOverride) || perPage,
       ),
     );
-    const slotPlan = buildSlotPlan({
+    const baseSlotPlan = buildSlotPlan({
       layoutMode: columnCountsOverride ? 'custom_columns' : (layout?.layoutMode || 'legacy'),
       layoutColumns: columns,
       perPage: perPageForSection,
@@ -1489,9 +1758,37 @@ export function buildDocumentHtml({
       pageIndex,
       isTitlePage,
     });
+    if (!baseSlotPlan) {
+      return `<section class="${cls}">${chunk.join('')}</section>`;
+    }
+    const autoAnchors = buildAutoTypeTransitionAnchors({
+      slotPlan: baseSlotPlan,
+      questionChunk,
+      pageIndex,
+      isTitlePage,
+      manualAnchors: layout?.columnLabelAnchors,
+    });
+    const slotPlan = autoAnchors.length > 0
+      ? buildSlotPlan({
+        layoutMode: columnCountsOverride ? 'custom_columns' : (layout?.layoutMode || 'legacy'),
+        layoutColumns: columns,
+        perPage: perPageForSection,
+        chunkLength: chunk.length,
+        columnQuestionCounts: columnCountsOverride ?? layout?.columnQuestionCounts,
+        columnLabelAnchors: [
+          ...(Array.isArray(layout?.columnLabelAnchors) ? layout.columnLabelAnchors : []),
+          ...autoAnchors,
+        ],
+        alignPolicy: layout?.alignPolicy,
+        profile,
+        pageIndex,
+        isTitlePage,
+      })
+      : baseSlotPlan;
     if (!slotPlan) {
       return `<section class="${cls}">${chunk.join('')}</section>`;
     }
+    collectEffectiveAnchorsForPage(slotPlan, pageIndex, isTitlePage);
     const sectionStyle = [
       `--slot-grid-cols:${slotPlan.columns}`,
       `--slot-grid-rows:${slotPlan.rowCount}`,
@@ -1527,8 +1824,11 @@ export function buildDocumentHtml({
         }
       }
       if (slot.anchorLabel) {
-        slotStyleParts.push(`--slot-label-top:${Number(slot.anchorTopPt || 9.2)}pt`);
-        slotStyleParts.push(`--slot-anchor-pad-top:${Number(slot.anchorPaddingTopPt || 35.8)}pt`);
+        // Use fixed per-page defaults so single/dual-label rows always align identically.
+        const defaultLabelTopPt = isTitlePage ? 16 : 9.2;
+        const defaultAnchorPadTopPt = isTitlePage ? 27 : 35.8;
+        slotStyleParts.push(`--slot-label-top:${defaultLabelTopPt}pt`);
+        slotStyleParts.push(`--slot-anchor-pad-top:${defaultAnchorPadTopPt}pt`);
       }
       const firstLine = slot.isHiddenPlaceholder
         ? ''
@@ -1546,6 +1846,7 @@ export function buildDocumentHtml({
           data-slot-hidden="${slot.isHiddenPlaceholder ? 1 : 0}"
           data-has-anchor="${slot.anchorLabel ? 1 : 0}"
           data-row-has-anchor="${slot.rowHasAnchor ? 1 : 0}"
+          data-row-anchor-count="${Number(slot.rowAnchorCount || 0)}"
         >${slotBody}</div>
       `;
     });
@@ -1567,6 +1868,9 @@ export function buildDocumentHtml({
     autoGuardLongQuestion: isMockStyle && columns === 2 && perPage <= 8,
   });
   const questionChunks = chunkPlan.chunks;
+  const questionChunksSource = Array.isArray(chunkPlan.questionChunks)
+    ? chunkPlan.questionChunks
+    : questionChunks.map(() => []);
   const pageColumnCounts = chunkPlan.pageColumnCounts;
   const titlePageIndices = normalizeTitlePageIndices(
     layout?.titlePageIndices,
@@ -1661,13 +1965,131 @@ export function buildDocumentHtml({
       );
       return `<span class="mock-cover-subject-main">${title}</span>`;
     };
-    const coverElectiveItemLines = (coverPageTexts.electiveItems || []).map((row) => `
-      <div class="mock-cover-subject-line mock-cover-subject-indent">
-        <span class="mock-cover-subject-item mock-cover-subject-item-major mock-cover-subject-item-under">${escapeHtml(String(row?.name || ''))}</span>
-        <span class="mock-cover-dots"></span>
-        <span class="mock-cover-page-range">${escapeHtml(String(row?.pages || ''))}</span>
-      </div>
-    `).join('');
+    const coverSubjectGroups = Array.isArray(coverPageTexts.subjectGroups)
+      ? coverPageTexts.subjectGroups
+      : [
+        {
+          label: coverPageTexts.commonLabel,
+          pageRange: coverPageTexts.commonPageRange,
+          items: coverPageTexts.commonItems || [],
+        },
+        {
+          label: coverPageTexts.electiveLabel,
+          pageRange: coverPageTexts.electivePageRange,
+          items: coverPageTexts.electiveItems || [],
+        },
+      ];
+    const COVER_SUBJECT_BOX_MAX_HEIGHT_PT = 420;
+    const COVER_SUBJECT_BOX_MIN_BOTTOM_RESERVE_PT = 12;
+    const COVER_SUBJECT_BOX_STATIC_OVERHEAD_PT = 48.6;
+    const COVER_SUBJECT_LINE_HEIGHT_PT = 22.8;
+    const COVER_SUBJECT_GROUP_GAP_PT = 5.6;
+    const COVER_SUBJECT_ITEMS_TOP_MARGIN_PT = 2.6;
+    const COVER_SUBJECT_ITEM_ROW_GAP_PT = 2.6;
+    const estimateGroupHeight = (group) => {
+      const items = Array.isArray(group?.items) ? group.items : [];
+      let groupHeight = COVER_SUBJECT_LINE_HEIGHT_PT;
+      if (items.length > 0) {
+        groupHeight += COVER_SUBJECT_ITEMS_TOP_MARGIN_PT;
+        groupHeight += items.length * COVER_SUBJECT_LINE_HEIGHT_PT;
+        groupHeight += Math.max(0, items.length - 1) * COVER_SUBJECT_ITEM_ROW_GAP_PT;
+      }
+      return groupHeight;
+    };
+    const groupHeights = coverSubjectGroups.map((group) => estimateGroupHeight(group));
+    const estimateCategoryHeight = ({ twoColumn }) => {
+      if (!twoColumn) {
+        return groupHeights.reduce((sum, height, index) => {
+          return sum + height + (index < groupHeights.length - 1 ? COVER_SUBJECT_GROUP_GAP_PT : 0);
+        }, 0);
+      }
+      let total = 0;
+      for (let i = 0; i < groupHeights.length; i += 2) {
+        total += Math.max(groupHeights[i] || 0, groupHeights[i + 1] || 0);
+        if (i + 2 < groupHeights.length) {
+          total += COVER_SUBJECT_GROUP_GAP_PT;
+        }
+      }
+      return total;
+    };
+    const estimatedOneColumnSubjectBoxHeight = COVER_SUBJECT_BOX_STATIC_OVERHEAD_PT + estimateCategoryHeight({
+      twoColumn: false,
+    });
+    const estimatedTwoColumnSubjectBoxHeight = COVER_SUBJECT_BOX_STATIC_OVERHEAD_PT + estimateCategoryHeight({
+      twoColumn: true,
+    });
+    const useTwoColumnForSubjectList =
+      estimatedOneColumnSubjectBoxHeight + COVER_SUBJECT_BOX_MIN_BOTTOM_RESERVE_PT
+      > COVER_SUBJECT_BOX_MAX_HEIGHT_PT
+      && estimatedTwoColumnSubjectBoxHeight < estimatedOneColumnSubjectBoxHeight;
+    const useTwoColumnForSubjectItems =
+      !useTwoColumnForSubjectList
+      && coverSubjectGroups.some((group) => Array.isArray(group?.items) && group.items.length >= 10);
+    const coverSubjectBoxStyle =
+      `--mock-cover-subject-box-max-height: ${COVER_SUBJECT_BOX_MAX_HEIGHT_PT.toFixed(1)}pt;`;
+    const coverSubjectCategoriesClass = [
+      'mock-cover-subject-categories',
+      useTwoColumnForSubjectList ? 'mock-cover-subject-categories-two-column' : '',
+    ].filter(Boolean).join(' ');
+    const renderCoverSubjectItemLine = (row) => {
+      const name = escapeHtml(String(row?.name || '').trim());
+      const pages = escapeHtml(String(row?.pages || '').trim());
+      if (!name && !pages) return '';
+      return `
+        <div class="mock-cover-subject-line mock-cover-subject-line-sub">
+          <span class="mock-cover-subject-item mock-cover-subject-item-under">${name || '&nbsp;'}</span>
+          <span class="mock-cover-dots"></span>
+          <span class="mock-cover-page-range">${pages || '&nbsp;'}</span>
+        </div>
+      `;
+    };
+    const renderCoverSubjectGroup = (group) => {
+      const label = escapeHtml(
+        String(group?.label || '').replace(/\s+/g, ' ').trim() || '과목',
+      );
+      const pageRange = escapeHtml(
+        String(group?.pageRange || '').replace(/\s+/g, ' ').trim(),
+      );
+      const items = Array.isArray(group?.items) ? group.items : [];
+      const itemLines = items.map((row) => renderCoverSubjectItemLine(row)).join('');
+      const itemClass = [
+        'mock-cover-subject-items',
+        useTwoColumnForSubjectItems ? 'mock-cover-subject-items-two-column' : '',
+      ].filter(Boolean).join(' ');
+      return `
+        <div class="mock-cover-major-block">
+          <div class="mock-cover-subject-line mock-cover-major-line">
+            <span class="mock-cover-subject-item mock-cover-subject-item-major">○ ${label}</span>
+            ${pageRange
+              ? `<span class="mock-cover-dots"></span><span class="mock-cover-page-range">${pageRange}</span>`
+              : ''}
+          </div>
+          ${itemLines ? `<div class="${itemClass}">${itemLines}</div>` : ''}
+        </div>
+      `;
+    };
+    const coverSubjectGroupsForRender = (() => {
+      if (!useTwoColumnForSubjectList || coverSubjectGroups.length <= 2) {
+        return coverSubjectGroups;
+      }
+      // Desired visual order for 2-column groups:
+      // 1 | 3
+      // 2 | 4
+      // ... (left column keeps original top-to-bottom priority)
+      const leftCount = Math.ceil(coverSubjectGroups.length / 2);
+      const leftGroups = coverSubjectGroups.slice(0, leftCount);
+      const rightGroups = coverSubjectGroups.slice(leftCount);
+      const interleaved = [];
+      const rowCount = Math.max(leftGroups.length, rightGroups.length);
+      for (let row = 0; row < rowCount; row += 1) {
+        if (leftGroups[row]) interleaved.push(leftGroups[row]);
+        if (rightGroups[row]) interleaved.push(rightGroups[row]);
+      }
+      return interleaved;
+    })();
+    const coverSubjectGroupLines = coverSubjectGroupsForRender
+      .map((group) => renderCoverSubjectGroup(group))
+      .join('');
     const renderCoverPages = () => `
       <div class="mock-cover-pages">
         <section class="mock-cover-page">
@@ -1730,25 +2152,19 @@ export function buildDocumentHtml({
                 <span class="mock-cover-info-text">계산은 문제지의 여백을 활용하시오.</span>
               </div>
             </div>
-            <div class="mock-cover-subject-box">
+            <div class="mock-cover-subject-box" style="${coverSubjectBoxStyle}">
               <div class="mock-cover-subject-head">
                 <span>※</span>
                 <span>공통과목 및 자신이 선택한 과목의 문제지를 확인하고, 답을 정확히 표시하시오.</span>
               </div>
-              <div class="mock-cover-subject-line">
-                <span class="mock-cover-subject-item mock-cover-subject-item-major">○ ${escapeHtml(coverPageTexts.commonLabel)}</span>
-                <span class="mock-cover-dots"></span>
-                <span class="mock-cover-page-range">1~12쪽</span>
+              <div class="${coverSubjectCategoriesClass}">
+                ${coverSubjectGroupLines}
               </div>
-              <div class="mock-cover-subject-line">
-                <span class="mock-cover-subject-item mock-cover-subject-item-major">○ ${escapeHtml(coverPageTexts.electiveLabel)}</span>
-              </div>
-              ${coverElectiveItemLines}
             </div>
-            <div class="mock-cover-bottom-stack">
-              <div class="mock-cover-warning">※ 시험이 시작되기 전까지 표지를 넘기지 마시오.</div>
-              <div class="mock-cover-org">${escapeHtml(coverPageTexts.organization)}</div>
-            </div>
+          </div>
+          <div class="mock-cover-bottom-stack">
+            <div class="mock-cover-warning">※ 시험이 시작되기 전까지 표지를 넘기지 마시오.</div>
+            <div class="mock-cover-org">${escapeHtml(coverPageTexts.organization)}</div>
           </div>
         </section>
         <section class="mock-cover-blank page-break"></section>
@@ -1809,6 +2225,7 @@ export function buildDocumentHtml({
         columnQuestionCounts: onePageCounts,
         perPageOverride: pagePerPage,
         isTitlePage,
+        questionChunk: Array.isArray(questionChunksSource[idx]) ? questionChunksSource[idx] : [],
       });
       const isLastPage = idx === totalPages - 1;
       const noticeMode = isLastPage
@@ -1859,6 +2276,7 @@ export function buildDocumentHtml({
       pageIndex: 0,
       columnQuestionCounts: onePageCounts,
       perPageOverride: onePagePerPage,
+      questionChunk: Array.isArray(questionChunksSource[0]) ? questionChunksSource[0] : [],
     });
   } else {
     questionHtml = questionChunks
@@ -1873,9 +2291,25 @@ export function buildDocumentHtml({
           perPageOverride: columns === 2 && Array.isArray(pageColumnCounts[idx])
             ? pageColumnCounts[idx].reduce((sum, one) => sum + (Number(one) || 0), 0)
             : perPage,
+          questionChunk: Array.isArray(questionChunksSource[idx]) ? questionChunksSource[idx] : [],
         },
       ))
       .join('');
+  }
+  if (layoutMeta && typeof layoutMeta === 'object') {
+    layoutMeta.columnLabelAnchors = effectiveColumnLabelAnchorRows.length > 0
+      ? [...effectiveColumnLabelAnchorRows].sort((a, b) => {
+        const pageA = Number(a?.page || 0);
+        const pageB = Number(b?.page || 0);
+        if (pageA !== pageB) return pageA - pageB;
+        const colA = Number(a?.columnIndex || 0);
+        const colB = Number(b?.columnIndex || 0);
+        if (colA !== colB) return colA - colB;
+        const rowA = Number(a?.rowIndex || 0);
+        const rowB = Number(b?.rowIndex || 0);
+        return rowA - rowB;
+      })
+      : (Array.isArray(layout?.columnLabelAnchors) ? layout.columnLabelAnchors : []);
   }
   const answerSheetHtml = includeAnswerSheet ? renderAnswerSheet(questions, mathRenderer) : '';
   const explanationHtml = includeExplanation ? renderExplanationSection(questions) : '';
