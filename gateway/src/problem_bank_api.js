@@ -124,6 +124,18 @@ function normalizeSourceTypeCode(raw, fallback = '') {
   return fallback;
 }
 
+function normalizeSemesterLabel(raw) {
+  const value = String(raw || '').trim();
+  if (value === '1학기' || value === '2학기') return value;
+  return '';
+}
+
+function normalizeExamTermLabel(raw) {
+  const value = String(raw || '').trim();
+  if (value === '중간' || value === '기말') return value;
+  return '';
+}
+
 function normalizePaper(raw) {
   const v = String(raw || '').trim().toUpperCase();
   if (v === 'A4' || v === 'B4' || v === '8\uC808') return v;
@@ -135,6 +147,41 @@ function normalizeNumeric(raw, fallback, min, max) {
   const n = Number.parseFloat(String(raw ?? ''));
   if (!Number.isFinite(n)) return fallback;
   return Math.min(max, Math.max(min, n));
+}
+
+function normalizeUuidListOrdered(raw) {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set();
+  const out = [];
+  for (const item of raw) {
+    const id = String(item || '').trim();
+    if (!isUuid(id) || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
+function normalizeJsonObject(raw, fallback = {}) {
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    return raw;
+  }
+  return fallback;
+}
+
+function normalizeJsonArray(raw, fallback = []) {
+  if (Array.isArray(raw)) return raw;
+  return fallback;
+}
+
+function chunkArray(input, chunkSize = 200) {
+  const safeChunk = Number.isFinite(chunkSize) && chunkSize > 0 ? chunkSize : 200;
+  if (!Array.isArray(input) || input.length === 0) return [];
+  const out = [];
+  for (let i = 0; i < input.length; i += safeChunk) {
+    out.push(input.slice(i, i + safeChunk));
+  }
+  return out;
 }
 
 function normalizeLayoutColumns(raw) {
@@ -399,10 +446,13 @@ function normalizeColumnLabelAnchors(raw, layoutColumns) {
     if (!label) continue;
     const topPt = Number.parseFloat(String(one.topPt ?? ''));
     const paddingTopPt = Number.parseFloat(String(one.paddingTopPt ?? ''));
+    const sourceRaw = String(one.source || '').trim().toLowerCase();
+    const source = sourceRaw === 'auto' ? 'auto' : 'manual';
     out.push({
       columnIndex,
       rowIndex,
       label,
+      source,
       page: normalizeAnchorPage(one.page),
       topPt: Number.isFinite(topPt) ? topPt : 8,
       paddingTopPt: Number.isFinite(paddingTopPt) ? paddingTopPt : 46,
@@ -522,7 +572,46 @@ function normalizeFigureQuality(rawFigureQuality, options = {}) {
   return { targetDpi, minDpi };
 }
 
-const EXPORT_RENDER_CONFIG_VERSION = 'pb_render_v32ze_rollback_firstline';
+const EXPORT_RENDER_CONFIG_VERSION = 'pb_render_v32zf_dual_anchor_row_stable';
+
+const QUESTION_COPY_SELECT_COLUMNS = [
+  'id',
+  'academy_id',
+  'document_id',
+  'source_page',
+  'source_order',
+  'question_number',
+  'question_type',
+  'stem',
+  'choices',
+  'figure_refs',
+  'equations',
+  'source_anchors',
+  'confidence',
+  'flags',
+  'is_checked',
+  'reviewed_by',
+  'reviewed_at',
+  'reviewer_notes',
+  'meta',
+  'curriculum_code',
+  'source_type_code',
+  'course_label',
+  'grade_label',
+  'exam_year',
+  'semester_label',
+  'exam_term_label',
+  'school_name',
+  'publisher_name',
+  'material_name',
+  'classification_detail',
+  'allow_objective',
+  'allow_subjective',
+  'objective_choices',
+  'objective_answer_key',
+  'subjective_answer',
+  'objective_generated',
+].join(',');
 
 function normalizeExportRenderConfig(options, selectedQuestionIds, defaults = {}) {
   const src = options && typeof options === 'object' ? options : {};
@@ -649,6 +738,16 @@ function isUuid(v) {
   );
 }
 
+function buildDerivedSourceFilename(sourceFilename) {
+  const raw = String(sourceFilename || '').trim();
+  if (!raw) return `saved_settings_${Date.now()}.hwpx`;
+  const dotIndex = raw.lastIndexOf('.');
+  const hasExt = dotIndex > 0 && dotIndex < raw.length - 1;
+  const base = hasExt ? raw.slice(0, dotIndex) : raw;
+  const ext = hasExt ? raw.slice(dotIndex) : '.hwpx';
+  return `${base}_세팅저장${ext}`;
+}
+
 async function ensureDocumentBelongs(academyId, documentId) {
   const { data, error } = await supa
     .from('pb_documents')
@@ -659,6 +758,10 @@ async function ensureDocumentBelongs(academyId, documentId) {
         'status',
         'exam_profile',
         'source_filename',
+        'source_storage_bucket',
+        'source_storage_path',
+        'source_sha256',
+        'source_size_bytes',
         'meta',
         'curriculum_code',
         'source_type_code',
@@ -686,10 +789,24 @@ async function createExtractJob(body, res) {
   const academyId = String(body.academyId || '').trim();
   const documentId = String(body.documentId || '').trim();
   const createdBy = String(body.createdBy || '').trim();
+  const rawTargetQuestionIds = Array.isArray(body.targetQuestionIds)
+    ? body.targetQuestionIds.map((v) => String(v || '').trim()).filter(Boolean)
+    : [];
+  const invalidTargetQuestionIds = rawTargetQuestionIds.filter((v) => !isUuid(v));
+  const safeTargetQuestionIds = Array.from(
+    new Set(rawTargetQuestionIds.filter((v) => isUuid(v))),
+  );
   if (!isUuid(academyId) || !isUuid(documentId)) {
     sendJson(res, 400, {
       ok: false,
       error: 'academyId/documentId must be uuid',
+    });
+    return;
+  }
+  if (invalidTargetQuestionIds.length > 0) {
+    sendJson(res, 400, {
+      ok: false,
+      error: 'targetQuestionIds must be uuid[]',
     });
     return;
   }
@@ -698,6 +815,35 @@ async function createExtractJob(body, res) {
     sendJson(res, 404, { ok: false, error: 'document_not_found' });
     return;
   }
+  let targetQuestionIds = [];
+  if (safeTargetQuestionIds.length > 0) {
+    const { data: targets, error: targetErr } = await supa
+      .from('pb_questions')
+      .select('id')
+      .eq('academy_id', academyId)
+      .eq('document_id', documentId)
+      .in('id', safeTargetQuestionIds);
+    if (targetErr) {
+      sendJson(res, 500, {
+        ok: false,
+        error: `target_question_lookup_failed:${targetErr.message}`,
+      });
+      return;
+    }
+    const matched = new Set((targets || []).map((row) => String(row.id || '').trim()));
+    targetQuestionIds = safeTargetQuestionIds.filter((id) => matched.has(id));
+    if (targetQuestionIds.length === 0) {
+      sendJson(res, 404, { ok: false, error: 'target_questions_not_found' });
+      return;
+    }
+  }
+  const initialSummary = targetQuestionIds.length > 0
+    ? {
+        partialReextract: true,
+        targetQuestionCount: targetQuestionIds.length,
+        targetQuestionIds,
+      }
+    : {};
 
   const { data: job, error: insertErr } = await supa
     .from('pb_extract_jobs')
@@ -709,8 +855,8 @@ async function createExtractJob(body, res) {
       retry_count: 0,
       max_retries: 3,
       worker_name: '',
-      source_version: 'api_v1',
-      result_summary: {},
+      source_version: targetQuestionIds.length > 0 ? 'api_v1_partial' : 'api_v1',
+      result_summary: initialSummary,
       error_code: '',
       error_message: '',
       started_at: null,
@@ -811,13 +957,33 @@ async function retryExtractJob(jobId, body, res) {
     sendJson(res, 409, { ok: false, error: 'extract_job_in_progress' });
     return;
   }
+  const oldSummary =
+    oldJob && typeof oldJob.result_summary === 'object' && oldJob.result_summary
+      ? oldJob.result_summary
+      : {};
+  const preservedTargetIds = Array.isArray(oldSummary.targetQuestionIds)
+    ? Array.from(
+        new Set(
+          oldSummary.targetQuestionIds
+            .map((v) => String(v || '').trim())
+            .filter((v) => isUuid(v)),
+        ),
+      )
+    : [];
+  const retrySummary = preservedTargetIds.length > 0
+    ? {
+        partialReextract: true,
+        targetQuestionCount: preservedTargetIds.length,
+        targetQuestionIds: preservedTargetIds,
+      }
+    : {};
   const { data: updated, error: updErr } = await supa
     .from('pb_extract_jobs')
     .update({
       status: 'queued',
       error_code: '',
       error_message: '',
-      result_summary: {},
+      result_summary: retrySummary,
       started_at: null,
       finished_at: null,
       updated_at: new Date().toISOString(),
@@ -1434,6 +1600,395 @@ async function cleanupExportArtifact(jobId, body, res) {
   sendJson(res, 200, { ok: true, job: updated });
 }
 
+async function saveSettingsAsDocument(body, res) {
+  const academyId = String(body.academyId || '').trim();
+  const sourceDocumentId = String(body.sourceDocumentId || '').trim();
+  const createdBy = String(body.createdBy || '').trim();
+  const rawRenderConfig = normalizeJsonObject(body.renderConfig, {});
+  const selectedQuestionIdsOrdered = normalizeUuidListOrdered(
+    body.selectedQuestionIdsOrdered || body.selectedQuestionIds,
+  );
+  if (!isUuid(academyId) || !isUuid(sourceDocumentId)) {
+    sendJson(res, 400, {
+      ok: false,
+      error: 'academyId/sourceDocumentId must be uuid',
+    });
+    return;
+  }
+  if (selectedQuestionIdsOrdered.length === 0) {
+    sendJson(res, 400, {
+      ok: false,
+      error: 'selectedQuestionIdsOrdered must be uuid[]',
+    });
+    return;
+  }
+
+  const sourceDoc = await ensureDocumentBelongs(academyId, sourceDocumentId);
+  if (!sourceDoc) {
+    sendJson(res, 404, { ok: false, error: 'source_document_not_found' });
+    return;
+  }
+
+  const sourceQuestionRowsById = new Map();
+  for (const idChunk of chunkArray(selectedQuestionIdsOrdered, 200)) {
+    const { data: rows, error: rowErr } = await supa
+      .from('pb_questions')
+      .select(QUESTION_COPY_SELECT_COLUMNS)
+      .eq('academy_id', academyId)
+      .in('id', idChunk);
+    if (rowErr) {
+      sendJson(res, 500, {
+        ok: false,
+        error: `save_settings_question_lookup_failed:${rowErr.message}`,
+      });
+      return;
+    }
+    for (const row of rows || []) {
+      const id = String(row?.id || '').trim();
+      if (!isUuid(id)) continue;
+      sourceQuestionRowsById.set(id, row);
+    }
+  }
+
+  const orderedSourceRows = [];
+  const missingIds = [];
+  for (const id of selectedQuestionIdsOrdered) {
+    const row = sourceQuestionRowsById.get(id);
+    if (!row) {
+      missingIds.push(id);
+      continue;
+    }
+    orderedSourceRows.push(row);
+  }
+  if (missingIds.length > 0) {
+    sendJson(res, 404, {
+      ok: false,
+      error: 'selected_questions_not_found',
+      missingQuestionIds: missingIds,
+    });
+    return;
+  }
+
+  const nowIso = new Date().toISOString();
+  const sourceDocMeta = normalizeJsonObject(sourceDoc.meta, {});
+  const sourceQuestionDocIds = Array.from(
+    new Set(
+      orderedSourceRows
+        .map((row) => String(row?.document_id || '').trim())
+        .filter((id) => isUuid(id)),
+    ),
+  );
+
+  const templateProfile = normalizeTemplateProfile(
+    body.templateProfile || rawRenderConfig.templateProfile || sourceDoc.exam_profile,
+  );
+  const paperSize = normalizePaper(
+    body.paperSize || rawRenderConfig.paperSize || 'A4',
+  );
+  const includeAnswerSheet = normalizeBool(
+    body.includeAnswerSheet ?? rawRenderConfig.includeAnswerSheet,
+    true,
+  );
+  const includeExplanation = normalizeBool(
+    body.includeExplanation ?? rawRenderConfig.includeExplanation,
+    false,
+  );
+  const fallbackQuestionMode = normalizeQuestionMode(
+    body.questionMode || rawRenderConfig.questionMode || 'original',
+  );
+  const sourceQuestionModeByQuestionId = normalizeQuestionModeMap(
+    body.questionModeByQuestionId,
+    selectedQuestionIdsOrdered,
+    fallbackQuestionMode,
+  );
+
+  const sourceStorageBucket = String(sourceDoc.source_storage_bucket || '').trim()
+    || 'problem-documents';
+  const sourceStoragePath = String(sourceDoc.source_storage_path || '').trim()
+    || `${academyId}/saved_settings/${Date.now()}_${sourceDocumentId}.hwpx`;
+  const sourceSha256 = String(sourceDoc.source_sha256 || '').trim();
+  const sourceSizeBytesRaw = Number.parseInt(
+    String(sourceDoc.source_size_bytes ?? '0'),
+    10,
+  );
+  const sourceSizeBytes = Number.isFinite(sourceSizeBytesRaw) && sourceSizeBytesRaw > 0
+    ? sourceSizeBytesRaw
+    : 0;
+  const examYearRaw = Number.parseInt(String(sourceDoc.exam_year ?? ''), 10);
+  const examYear = Number.isFinite(examYearRaw) && examYearRaw > 0 ? examYearRaw : null;
+  const sourceTypeCode = normalizeSourceTypeCode(
+    sourceDoc.source_type_code,
+    'school_past',
+  ) || 'school_past';
+  const curriculumCode = normalizeCurriculumCode(
+    sourceDoc.curriculum_code,
+    'rev_2022',
+  ) || 'rev_2022';
+
+  let createdDocumentId = '';
+  try {
+    const derivedMeta = {
+      ...sourceDocMeta,
+      saved_settings: {
+        sourceDocumentId,
+        sourceDocumentIds: sourceQuestionDocIds,
+        selectedQuestionCount: selectedQuestionIdsOrdered.length,
+        createdAt: nowIso,
+      },
+    };
+    const { data: createdDocument, error: createDocErr } = await supa
+      .from('pb_documents')
+      .insert({
+        academy_id: academyId,
+        created_by: isUuid(createdBy) ? createdBy : null,
+        source_filename: buildDerivedSourceFilename(sourceDoc.source_filename),
+        source_storage_bucket: sourceStorageBucket,
+        source_storage_path: sourceStoragePath,
+        source_sha256: sourceSha256,
+        source_size_bytes: sourceSizeBytes,
+        status: 'ready',
+        exam_profile: templateProfile,
+        meta: derivedMeta,
+        curriculum_code: curriculumCode,
+        source_type_code: sourceTypeCode,
+        course_label: String(sourceDoc.course_label || '').trim(),
+        grade_label: String(sourceDoc.grade_label || '').trim(),
+        exam_year: examYear,
+        semester_label: normalizeSemesterLabel(sourceDoc.semester_label),
+        exam_term_label: normalizeExamTermLabel(sourceDoc.exam_term_label),
+        school_name: String(sourceDoc.school_name || '').trim(),
+        publisher_name: String(sourceDoc.publisher_name || '').trim(),
+        material_name: String(sourceDoc.material_name || '').trim(),
+        classification_detail: normalizeJsonObject(sourceDoc.classification_detail, {}),
+      })
+      .select('*')
+      .maybeSingle();
+    if (createDocErr || !createdDocument) {
+      throw new Error(
+        `save_settings_document_insert_failed:${createDocErr?.message || 'unknown'}`,
+      );
+    }
+    createdDocumentId = String(createdDocument.id || '').trim();
+    if (!isUuid(createdDocumentId)) {
+      throw new Error('save_settings_document_id_invalid');
+    }
+
+    const questionInsertRows = orderedSourceRows.map((row, index) => {
+      const nextOrder = index + 1;
+      const confidenceRaw = Number.parseFloat(String(row?.confidence ?? '0'));
+      const confidence = Number.isFinite(confidenceRaw)
+        ? Math.max(0, Math.min(1, confidenceRaw))
+        : 0;
+      const rowMeta = normalizeJsonObject(row?.meta, {});
+      const rowSourceTypeCode = normalizeSourceTypeCode(
+        row?.source_type_code,
+        sourceTypeCode,
+      ) || sourceTypeCode;
+      const rowCurriculumCode = normalizeCurriculumCode(
+        row?.curriculum_code,
+        curriculumCode,
+      ) || curriculumCode;
+      const rowExamYearRaw = Number.parseInt(String(row?.exam_year ?? ''), 10);
+      const rowExamYear = Number.isFinite(rowExamYearRaw) && rowExamYearRaw > 0
+        ? rowExamYearRaw
+        : examYear;
+      return {
+        academy_id: academyId,
+        document_id: createdDocumentId,
+        extract_job_id: null,
+        source_page: 1,
+        source_order: nextOrder,
+        question_number: `${nextOrder}`,
+        question_type: String(row?.question_type || '미분류').trim() || '미분류',
+        stem: String(row?.stem || '').trim(),
+        choices: normalizeJsonArray(row?.choices, []),
+        figure_refs: normalizeJsonArray(row?.figure_refs, []),
+        equations: normalizeJsonArray(row?.equations, []),
+        source_anchors: normalizeJsonObject(row?.source_anchors, {}),
+        confidence,
+        flags: Array.isArray(row?.flags)
+          ? row.flags.map((one) => String(one || '')).filter(Boolean)
+          : [],
+        is_checked: row?.is_checked === true,
+        reviewed_by: isUuid(row?.reviewed_by) ? row.reviewed_by : null,
+        reviewed_at: row?.reviewed_at || null,
+        reviewer_notes: String(row?.reviewer_notes || '').trim(),
+        meta: {
+          ...rowMeta,
+          derived_source_question_id: String(row?.id || '').trim(),
+          derived_source_document_id: String(row?.document_id || '').trim(),
+          saved_settings_at: nowIso,
+        },
+        curriculum_code: rowCurriculumCode,
+        source_type_code: rowSourceTypeCode,
+        course_label: String(row?.course_label || sourceDoc.course_label || '').trim(),
+        grade_label: String(row?.grade_label || sourceDoc.grade_label || '').trim(),
+        exam_year: rowExamYear,
+        semester_label: normalizeSemesterLabel(
+          row?.semester_label || sourceDoc.semester_label,
+        ),
+        exam_term_label: normalizeExamTermLabel(
+          row?.exam_term_label || sourceDoc.exam_term_label,
+        ),
+        school_name: String(row?.school_name || sourceDoc.school_name || '').trim(),
+        publisher_name: String(
+          row?.publisher_name || sourceDoc.publisher_name || '',
+        ).trim(),
+        material_name: String(row?.material_name || sourceDoc.material_name || '').trim(),
+        classification_detail: normalizeJsonObject(row?.classification_detail, {}),
+        allow_objective: row?.allow_objective !== false,
+        allow_subjective: row?.allow_subjective !== false,
+        objective_choices: normalizeJsonArray(
+          row?.objective_choices,
+          normalizeJsonArray(row?.choices, []),
+        ),
+        objective_answer_key: String(row?.objective_answer_key || '').trim(),
+        subjective_answer: String(row?.subjective_answer || '').trim(),
+        objective_generated: row?.objective_generated === true,
+      };
+    });
+
+    const insertedQuestionRows = [];
+    for (const rowChunk of chunkArray(questionInsertRows, 120)) {
+      const { data: insertedRows, error: insertErr } = await supa
+        .from('pb_questions')
+        .insert(rowChunk)
+        .select('id,source_order,question_number');
+      if (insertErr) {
+        throw new Error(
+          `save_settings_question_insert_failed:${insertErr.message}`,
+        );
+      }
+      insertedQuestionRows.push(...(insertedRows || []));
+    }
+
+    const insertedIdBySourceOrder = new Map();
+    for (const inserted of insertedQuestionRows) {
+      const sourceOrder = Number.parseInt(String(inserted?.source_order ?? ''), 10);
+      const insertedId = String(inserted?.id || '').trim();
+      if (!Number.isFinite(sourceOrder) || sourceOrder <= 0 || !isUuid(insertedId)) {
+        continue;
+      }
+      insertedIdBySourceOrder.set(sourceOrder, insertedId);
+    }
+
+    const savedQuestionIdsOrdered = [];
+    const translatedQuestionModeByQuestionId = {};
+    for (let i = 0; i < selectedQuestionIdsOrdered.length; i += 1) {
+      const sourceQuestionId = selectedQuestionIdsOrdered[i];
+      const sourceOrder = i + 1;
+      const insertedId = insertedIdBySourceOrder.get(sourceOrder);
+      if (!isUuid(insertedId)) {
+        throw new Error('save_settings_inserted_question_id_missing');
+      }
+      savedQuestionIdsOrdered.push(insertedId);
+      translatedQuestionModeByQuestionId[insertedId] = normalizeQuestionMode(
+        sourceQuestionModeByQuestionId[sourceQuestionId] || fallbackQuestionMode,
+      );
+    }
+
+    const normalizedRenderConfig = normalizeExportRenderConfig(
+      {
+        ...rawRenderConfig,
+        questionMode: fallbackQuestionMode,
+        selectedQuestionIdsOrdered: savedQuestionIdsOrdered,
+        questionModeByQuestionId: translatedQuestionModeByQuestionId,
+      },
+      savedQuestionIdsOrdered,
+      {
+        questionMode: fallbackQuestionMode,
+        subjectTitleText:
+          String(rawRenderConfig.subjectTitleText || '').trim() || '수학 영역',
+        includeCoverPage: normalizeBool(rawRenderConfig.includeCoverPage, false),
+        coverPageTexts: normalizeJsonObject(rawRenderConfig.coverPageTexts, {}),
+      },
+    );
+
+    const renderConfig = {
+      ...normalizedRenderConfig,
+      templateProfile,
+      paperSize,
+      includeAnswerSheet,
+      includeExplanation,
+      selectedQuestionIdsOrdered: savedQuestionIdsOrdered,
+      questionModeByQuestionId: translatedQuestionModeByQuestionId,
+    };
+
+    const { data: preset, error: presetErr } = await supa
+      .from('pb_export_presets')
+      .upsert(
+        {
+          academy_id: academyId,
+          source_document_id: sourceDocumentId,
+          document_id: createdDocumentId,
+          render_config: renderConfig,
+          selected_question_ids: savedQuestionIdsOrdered,
+          question_mode_by_question_id: translatedQuestionModeByQuestionId,
+          created_by: isUuid(createdBy) ? createdBy : null,
+        },
+        { onConflict: 'academy_id,document_id' },
+      )
+      .select('*')
+      .maybeSingle();
+    if (presetErr || !preset) {
+      throw new Error(
+        `save_settings_preset_insert_failed:${presetErr?.message || 'unknown'}`,
+      );
+    }
+
+    sendJson(res, 201, {
+      ok: true,
+      document: createdDocument,
+      preset,
+      copiedQuestionCount: savedQuestionIdsOrdered.length,
+      selectedQuestionIds: savedQuestionIdsOrdered,
+      sourceDocumentIds: sourceQuestionDocIds,
+    });
+  } catch (err) {
+    if (createdDocumentId) {
+      try {
+        await supa
+          .from('pb_documents')
+          .delete()
+          .eq('academy_id', academyId)
+          .eq('id', createdDocumentId);
+      } catch (_) {
+        // ignore rollback failures
+      }
+    }
+    sendJson(res, 500, {
+      ok: false,
+      error: `save_settings_failed:${compact(err?.message || err, 400)}`,
+    });
+  }
+}
+
+async function getDocumentExportPreset(documentId, url, res) {
+  const academyId = String(url.searchParams.get('academyId') || '').trim();
+  if (!isUuid(documentId) || !isUuid(academyId)) {
+    sendJson(res, 400, { ok: false, error: 'documentId/academyId must be uuid' });
+    return;
+  }
+  const doc = await ensureDocumentBelongs(academyId, documentId);
+  if (!doc) {
+    sendJson(res, 404, { ok: false, error: 'document_not_found' });
+    return;
+  }
+  const { data, error } = await supa
+    .from('pb_export_presets')
+    .select('*')
+    .eq('academy_id', academyId)
+    .eq('document_id', documentId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) {
+    sendJson(res, 500, { ok: false, error: `export_preset_get_failed:${error.message}` });
+    return;
+  }
+  sendJson(res, 200, { ok: true, preset: data || null });
+}
+
 async function documentSummary(url, res) {
   const academyId = String(url.searchParams.get('academyId') || '').trim();
   const documentId = String(url.searchParams.get('documentId') || '').trim();
@@ -1767,6 +2322,17 @@ async function handler(req, res) {
     if (method === 'GET' && /^\/pb\/jobs\/export\/[^/]+$/.test(url.pathname)) {
       const jobId = url.pathname.split('/')[4];
       await getExportJob(jobId, url, res);
+      return;
+    }
+
+    if (method === 'POST' && url.pathname === '/pb/documents/save-settings') {
+      const body = await readJson(req);
+      await saveSettingsAsDocument(body, res);
+      return;
+    }
+    if (method === 'GET' && /^\/pb\/documents\/[^/]+\/export-preset$/.test(url.pathname)) {
+      const documentId = url.pathname.split('/')[3];
+      await getDocumentExportPreset(documentId, url, res);
       return;
     }
 

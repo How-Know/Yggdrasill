@@ -874,7 +874,20 @@ class ProblemBankService {
   Future<ProblemBankExtractJob> createExtractJob({
     required String academyId,
     required String documentId,
+    List<String> targetQuestionIds = const <String>[],
   }) async {
+    final safeTargetQuestionIds = targetQuestionIds
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    final initialSummary = safeTargetQuestionIds.isEmpty
+        ? const <String, dynamic>{}
+        : <String, dynamic>{
+            'partialReextract': true,
+            'targetQuestionCount': safeTargetQuestionIds.length,
+            'targetQuestionIds': safeTargetQuestionIds,
+          };
     if (hasGateway) {
       try {
         final json = await _gatewayPost(
@@ -883,6 +896,8 @@ class ProblemBankService {
             'academyId': academyId,
             'documentId': documentId,
             'createdBy': _client.auth.currentUser?.id,
+            if (safeTargetQuestionIds.isNotEmpty)
+              'targetQuestionIds': safeTargetQuestionIds,
           },
         );
         return ProblemBankExtractJob.fromMap(_mapFromDynamic(json['job']));
@@ -901,8 +916,10 @@ class ProblemBankService {
           'retry_count': 0,
           'max_retries': 3,
           'worker_name': '',
-          'source_version': 'manager_fallback',
-          'result_summary': <String, dynamic>{},
+          'source_version': safeTargetQuestionIds.isEmpty
+              ? 'manager_fallback'
+              : 'manager_partial_fallback',
+          'result_summary': initialSummary,
           'error_code': '',
           'error_message': '',
         })

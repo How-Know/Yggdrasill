@@ -334,6 +334,91 @@ class LearningProblemExportJob {
   }
 }
 
+class LearningProblemDocumentExportPreset {
+  const LearningProblemDocumentExportPreset({
+    required this.id,
+    required this.academyId,
+    required this.sourceDocumentId,
+    required this.documentId,
+    required this.renderConfig,
+    required this.selectedQuestionIds,
+    required this.questionModeByQuestionId,
+    this.createdAt,
+    this.updatedAt,
+  });
+
+  final String id;
+  final String academyId;
+  final String sourceDocumentId;
+  final String documentId;
+  final Map<String, dynamic> renderConfig;
+  final List<String> selectedQuestionIds;
+  final Map<String, String> questionModeByQuestionId;
+  final DateTime? createdAt;
+  final DateTime? updatedAt;
+
+  factory LearningProblemDocumentExportPreset.fromMap(
+    Map<String, dynamic> map,
+  ) {
+    final renderConfig = _mapOrEmpty(map['render_config']);
+    final modeMapRaw = _mapOrEmpty(map['question_mode_by_question_id']);
+    final modeMap = <String, String>{};
+    for (final entry in modeMapRaw.entries) {
+      final id = entry.key.trim();
+      if (id.isEmpty) continue;
+      final mode = '${entry.value ?? ''}'.trim();
+      if (mode.isEmpty) continue;
+      modeMap[id] = mode;
+    }
+    return LearningProblemDocumentExportPreset(
+      id: '${map['id'] ?? ''}'.trim(),
+      academyId: '${map['academy_id'] ?? ''}'.trim(),
+      sourceDocumentId: '${map['source_document_id'] ?? ''}'.trim(),
+      documentId: '${map['document_id'] ?? ''}'.trim(),
+      renderConfig: renderConfig,
+      selectedQuestionIds: _listOrEmpty(map['selected_question_ids'])
+          .map((e) => '$e'.trim())
+          .where((e) => e.isNotEmpty)
+          .toList(growable: false),
+      questionModeByQuestionId: modeMap,
+      createdAt: _dateTimeOrNull(map['created_at']),
+      updatedAt: _dateTimeOrNull(map['updated_at']),
+    );
+  }
+}
+
+class LearningProblemSavedSettingsDocumentResult {
+  const LearningProblemSavedSettingsDocumentResult({
+    required this.documentId,
+    required this.copiedQuestionCount,
+    required this.selectedQuestionIds,
+    this.preset,
+  });
+
+  final String documentId;
+  final int copiedQuestionCount;
+  final List<String> selectedQuestionIds;
+  final LearningProblemDocumentExportPreset? preset;
+
+  factory LearningProblemSavedSettingsDocumentResult.fromGatewayResponse(
+    Map<String, dynamic> payload,
+  ) {
+    final document = _mapOrEmpty(payload['document']);
+    final presetMap = _mapOrEmpty(payload['preset']);
+    return LearningProblemSavedSettingsDocumentResult(
+      documentId: '${document['id'] ?? ''}'.trim(),
+      copiedQuestionCount: _intOrZero(payload['copiedQuestionCount']),
+      selectedQuestionIds: _listOrEmpty(payload['selectedQuestionIds'])
+          .map((e) => '$e'.trim())
+          .where((e) => e.isNotEmpty)
+          .toList(growable: false),
+      preset: presetMap.isEmpty
+          ? null
+          : LearningProblemDocumentExportPreset.fromMap(presetMap),
+    );
+  }
+}
+
 class LearningProblemBankService {
   LearningProblemBankService({
     SupabaseClient? client,
@@ -672,6 +757,90 @@ class LearningProblemBankService {
     await _client
         .from('learning_problem_bank_question_orders')
         .upsert(rows, onConflict: 'academy_id,scope_key,question_id');
+  }
+
+  Future<LearningProblemSavedSettingsDocumentResult>
+      saveExportSettingsAsDocument({
+    required String academyId,
+    required String sourceDocumentId,
+    required List<String> selectedQuestionIdsOrdered,
+    required Map<String, String> questionModeByQuestionId,
+    required Map<String, dynamic> renderConfig,
+    required String templateProfile,
+    required String paperSize,
+    required bool includeAnswerSheet,
+    required bool includeExplanation,
+  }) async {
+    if (!hasGateway) {
+      throw Exception('세팅 저장은 게이트웨이 연결이 필요합니다.');
+    }
+    final selectedIds = selectedQuestionIdsOrdered
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toList(growable: false);
+    if (selectedIds.isEmpty) {
+      throw Exception('저장할 문항이 비어 있습니다.');
+    }
+    final modeMap = <String, String>{};
+    for (final id in selectedIds) {
+      final mode = (questionModeByQuestionId[id] ?? '').trim();
+      if (mode.isEmpty) continue;
+      modeMap[id] = mode;
+    }
+    final payload = await _gatewayPost(
+      '/pb/documents/save-settings',
+      body: <String, dynamic>{
+        'academyId': academyId,
+        'sourceDocumentId': sourceDocumentId,
+        'createdBy': _client.auth.currentUser?.id,
+        'selectedQuestionIdsOrdered': selectedIds,
+        'questionModeByQuestionId': modeMap,
+        'renderConfig': renderConfig,
+        'templateProfile': templateProfile.trim(),
+        'paperSize': paperSize.trim(),
+        'includeAnswerSheet': includeAnswerSheet,
+        'includeExplanation': includeExplanation,
+      },
+    );
+    return LearningProblemSavedSettingsDocumentResult.fromGatewayResponse(
+      payload,
+    );
+  }
+
+  Future<LearningProblemDocumentExportPreset?> getDocumentExportPreset({
+    required String academyId,
+    required String documentId,
+  }) async {
+    if (hasGateway) {
+      try {
+        final json = await _gatewayGet(
+          '/pb/documents/$documentId/export-preset',
+          query: <String, String>{'academyId': academyId},
+        );
+        final presetMap = _mapOrEmpty(json['preset']);
+        if (presetMap.isEmpty) return null;
+        return LearningProblemDocumentExportPreset.fromMap(presetMap);
+      } catch (_) {
+        // fallback
+      }
+    }
+    dynamic row;
+    try {
+      row = await _client
+          .from('pb_export_presets')
+          .select('*')
+          .eq('academy_id', academyId)
+          .eq('document_id', documentId)
+          .order('created_at', ascending: false)
+          .limit(1)
+          .maybeSingle();
+    } catch (_) {
+      return null;
+    }
+    if (row == null) return null;
+    return LearningProblemDocumentExportPreset.fromMap(
+      _mapOrEmpty(row),
+    );
   }
 
   Future<LearningProblemExportJob> createExportJob({

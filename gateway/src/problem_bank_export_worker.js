@@ -49,7 +49,7 @@ const FONT_PATH_QNUM =
   process.env.PB_PDF_FONT_QNUM_PATH || '';
 const FONT_PATH_SUBJECT =
   process.env.PB_PDF_FONT_SUBJECT_PATH || '';
-const RENDER_CONFIG_VERSION = 'pb_render_v32ze_rollback_firstline';
+const RENDER_CONFIG_VERSION = 'pb_render_v32zf_dual_anchor_row_stable';
 const FIGURE_REGEN_COOLDOWN_MIN = Math.max(
   2,
   Number.parseInt(process.env.PB_EXPORT_REGEN_COOLDOWN_MIN || '12', 10),
@@ -2101,10 +2101,13 @@ function normalizeColumnLabelAnchors(raw, layoutColumns) {
     if (!label) continue;
     const topPt = Number(one.topPt);
     const paddingTopPt = Number(one.paddingTopPt);
+    const sourceRaw = String(one.source || '').trim().toLowerCase();
+    const source = sourceRaw === 'auto' ? 'auto' : 'manual';
     out.push({
       columnIndex,
       rowIndex,
       label,
+      source,
       page: normalizeAnchorPage(one.page),
       topPt: Number.isFinite(topPt) ? topPt : 8,
       paddingTopPt: Number.isFinite(paddingTopPt) ? paddingTopPt : 46,

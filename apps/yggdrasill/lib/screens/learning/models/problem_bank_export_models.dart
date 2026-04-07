@@ -57,7 +57,8 @@ const String kLearningQuestionModeOriginal = 'original';
 const String kLearningQuestionModeObjective = 'objective';
 const String kLearningQuestionModeSubjective = 'subjective';
 const String kLearningQuestionModeEssay = 'essay';
-const String kLearningRenderConfigVersion = 'pb_render_v32ze_rollback_firstline';
+const String kLearningRenderConfigVersion =
+    'pb_render_v32zf_dual_anchor_row_stable';
 
 class LearningProblemLayoutTuning {
   const LearningProblemLayoutTuning({
@@ -191,6 +192,45 @@ class LearningProblemExportSettings {
       figureQuality: LearningProblemFigureQuality.defaults(),
       includeAnswerSheet: true,
       includeExplanation: false,
+    );
+  }
+
+  static LearningProblemExportSettings fromPresetRenderConfig({
+    required LearningProblemExportSettings base,
+    required Map<String, dynamic> renderConfig,
+  }) {
+    final profile = '${renderConfig['templateProfile'] ?? ''}'.trim();
+    final paper = '${renderConfig['paperSize'] ?? ''}'.trim();
+    final mode = '${renderConfig['questionMode'] ?? ''}'.trim();
+    final layoutColumns =
+        int.tryParse('${renderConfig['layoutColumns'] ?? ''}') ?? 1;
+    final maxPerPage =
+        int.tryParse('${renderConfig['maxQuestionsPerPage'] ?? ''}');
+    final layoutLabel = layoutColumns == 2 ? '2단' : '1단';
+    final options = maxQuestionsPerPageOptionsOf(layoutLabel);
+    final includeAnswerSheet = renderConfig['includeAnswerSheet'] is bool
+        ? renderConfig['includeAnswerSheet'] == true
+        : base.includeAnswerSheet;
+    final includeExplanation = renderConfig['includeExplanation'] is bool
+        ? renderConfig['includeExplanation'] == true
+        : base.includeExplanation;
+    final nextTemplate = profileToTemplate(profile);
+    final nextPaper =
+        kLearningProblemPaperOptions.contains(paper) ? paper : base.paperLabel;
+    final nextModeLabel = questionModeLabelOf(mode);
+    final nextMaxLabel = (maxPerPage != null && options.contains(maxPerPage))
+        ? '$maxPerPage'
+        : (options.contains(base.maxQuestionsPerPageCount)
+            ? '${base.maxQuestionsPerPageCount}'
+            : '${options.last}');
+    return base.copyWith(
+      templateLabel: nextTemplate,
+      paperLabel: nextPaper,
+      questionModeLabel: nextModeLabel,
+      layoutColumnLabel: layoutLabel,
+      maxQuestionsPerPageLabel: nextMaxLabel,
+      includeAnswerSheet: includeAnswerSheet,
+      includeExplanation: includeExplanation,
     );
   }
 
@@ -362,6 +402,17 @@ String templateToProfile(String template) {
     case '\uB0B4\uC2E0\uD615':
     default:
       return 'naesin';
+  }
+}
+
+String profileToTemplate(String profile) {
+  switch (profile.trim()) {
+    case 'mock':
+    case 'csat':
+      return '모의고사형';
+    case 'naesin':
+    default:
+      return '내신형';
   }
 }
 

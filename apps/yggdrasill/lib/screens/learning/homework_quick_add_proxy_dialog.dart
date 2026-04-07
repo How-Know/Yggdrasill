@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
@@ -77,8 +78,42 @@ class HomeworkQuickAddProxyDialogState
   final List<_DraftGroupItem> _draftGroupItems = <_DraftGroupItem>[];
   int _draftGroupItemSeq = 0;
   int _groupTitleAiRequestId = 0;
-  String? _expandedBigKey;
-  String? _expandedMidKey;
+  /// 오른쪽 페이지 패널에 표시할 중단원 (`big:i|mid:j`).
+  String? _activeMidKey;
+  /// 왼쪽 소단원 탭 후 오른쪽에서 해당 소단원 헤더로 스크롤.
+  String? _pendingScrollSmallExpandKey;
+
+  /// 펼쳐진 소단원 목록이 속한 중단원(`_midExpandKey`). 한 번에 하나만 펼침.
+  String? _expandedLeftMidSmallsKey;
+
+  static const Duration _kTreeSmallsExpandDuration =
+      Duration(milliseconds: 240);
+  static const Curve _kTreeSmallsExpandCurve = Curves.easeInOutCubic;
+
+  /// 페이지 리스트 한 줄 높이(디바이더 포함 영역과 동일).
+  static const double _kSmallPageListRowStride = 44;
+  /// 오른쪽 패널 소단원 구간 헤더 높이.
+  static const double _kMidRightSmallHeaderHeight = 40;
+
+  /// 대단원 하위 중단원 열의 왼쪽 들여쓰기; 소단원 목록에 한 단계 더 동일 적용.
+  static const double _kTreeMidIndentFromBig = 22;
+
+  final ScrollController _rangeRightScrollController = ScrollController();
+  final Map<String, GlobalKey> _smallHeaderKeys = <String, GlobalKey>{};
+
+  int? _pageListDragAnchorIndex;
+  bool? _pageListDragSelectMode;
+  /// 페이지 드래그 시작 시점의 소단원별 `selectedPages` (드래그 중 구간은 이 기준에 ∪ / −).
+  List<Set<int>>? _pageListDragBaselineBySmallIndex;
+
+  bool _rightPagePointerDown = false;
+  Offset? _rightPagePointerDownLocal;
+  bool _rightPageDragMoved = false;
+  /// `whole` = 소단원 헤더 줄 드래그, `page` = 페이지 줄 드래그.
+  String _rightPageSessionKind = '';
+  int? _rightPageWholeAnchorSmallIdx;
+  bool? _rightPageWholeSelectMode;
+  int? _rightPagePageSmallIdx;
 
   bool get _isChildAddMode => widget.childAddMode;
 
@@ -153,6 +188,7 @@ class HomeworkQuickAddProxyDialogState
     _count.dispose();
     _memo.dispose();
     _groupTitle.dispose();
+    _rangeRightScrollController.dispose();
     super.dispose();
   }
 
@@ -297,8 +333,9 @@ class HomeworkQuickAddProxyDialogState
         _linkedTextbooks = const <_LinkedTextbook>[];
         _selectedLinkedBookKey = null;
         _units = const <_BigUnitSelectionNode>[];
-        _expandedBigKey = null;
-        _expandedMidKey = null;
+        _activeMidKey = null;
+        _pendingScrollSmallExpandKey = null;
+        _expandedLeftMidSmallsKey = null;
         _manualPageMode = false;
       });
       _refreshRangeAutoDraft();
@@ -316,8 +353,9 @@ class HomeworkQuickAddProxyDialogState
         _selectedLinkedBookKey = preferredLinkedBookKey;
       }
       _units = const <_BigUnitSelectionNode>[];
-      _expandedBigKey = null;
-      _expandedMidKey = null;
+      _activeMidKey = null;
+      _pendingScrollSmallExpandKey = null;
+      _expandedLeftMidSmallsKey = null;
       _manualPageMode = false;
     });
     try {
@@ -348,8 +386,9 @@ class HomeworkQuickAddProxyDialogState
         if (mounted) {
           setState(() {
             _units = const <_BigUnitSelectionNode>[];
-            _expandedBigKey = null;
-            _expandedMidKey = null;
+            _activeMidKey = null;
+            _pendingScrollSmallExpandKey = null;
+            _expandedLeftMidSmallsKey = null;
           });
         }
         _refreshRangeAutoDraft();
@@ -360,8 +399,9 @@ class HomeworkQuickAddProxyDialogState
         _linkedTextbooks = const <_LinkedTextbook>[];
         _selectedLinkedBookKey = null;
         _units = const <_BigUnitSelectionNode>[];
-        _expandedBigKey = null;
-        _expandedMidKey = null;
+        _activeMidKey = null;
+        _pendingScrollSmallExpandKey = null;
+        _expandedLeftMidSmallsKey = null;
       });
       _refreshRangeAutoDraft();
     } finally {
@@ -377,8 +417,9 @@ class HomeworkQuickAddProxyDialogState
       if (!mounted) return;
       setState(() {
         _units = const <_BigUnitSelectionNode>[];
-        _expandedBigKey = null;
-        _expandedMidKey = null;
+        _activeMidKey = null;
+        _pendingScrollSmallExpandKey = null;
+        _expandedLeftMidSmallsKey = null;
       });
       _refreshRangeAutoDraft();
       return;
@@ -403,12 +444,18 @@ class HomeworkQuickAddProxyDialogState
         gradeLabel: linked.gradeLabel,
         units: parsed,
       );
+      final pageCompletionsBySmallKey = _issuedPageCompletionCountsByBook(
+        bookId: linked.bookId,
+        gradeLabel: linked.gradeLabel,
+        units: parsed,
+      );
       final acknowledgedSmallKeys =
           await _loadAcknowledgedSmallKeysForLinkedBook(linked);
       _applyIssuedLockedState(
         parsed,
         issuedSummaryBySmallKey,
         acknowledgedSmallKeys,
+        pageCompletionsBySmallKey,
       );
       _applyDraftBlockedStateToUnits(
         parsed,
@@ -416,16 +463,18 @@ class HomeworkQuickAddProxyDialogState
       );
       setState(() {
         _units = parsed;
-        _expandedBigKey = null;
-        _expandedMidKey = null;
+        _activeMidKey = _firstActiveMidKey(parsed);
+        _pendingScrollSmallExpandKey = null;
+        _expandedLeftMidSmallsKey = null;
       });
       _refreshRangeAutoDraft();
     } catch (_) {
       if (!mounted) return;
       setState(() {
         _units = const <_BigUnitSelectionNode>[];
-        _expandedBigKey = null;
-        _expandedMidKey = null;
+        _activeMidKey = null;
+        _pendingScrollSmallExpandKey = null;
+        _expandedLeftMidSmallsKey = null;
       });
       _refreshRangeAutoDraft();
     } finally {
@@ -550,6 +599,101 @@ class HomeworkQuickAddProxyDialogState
 
   String _smallKey(int bigOrder, int midOrder, int smallOrder) {
     return '$bigOrder|$midOrder|$smallOrder';
+  }
+
+  String _smallExpandKey(
+    _BigUnitSelectionNode big,
+    _MidUnitSelectionNode mid,
+    _SmallUnitSelectionNode small,
+  ) {
+    return '${big.orderIndex}|${mid.orderIndex}|${small.orderIndex}';
+  }
+
+  String _midExpandKey(_BigUnitSelectionNode big, _MidUnitSelectionNode mid) {
+    return 'big:${big.orderIndex}|mid:${mid.orderIndex}';
+  }
+
+  String? _firstActiveMidKey(List<_BigUnitSelectionNode> units) {
+    for (final big in units) {
+      for (final mid in big.middles) {
+        return _midExpandKey(big, mid);
+      }
+    }
+    return null;
+  }
+
+  MapEntry<_BigUnitSelectionNode, _MidUnitSelectionNode>? _resolveActiveMid() {
+    final key = _activeMidKey;
+    if (key == null) return null;
+    for (final big in _units) {
+      for (final mid in big.middles) {
+        if (_midExpandKey(big, mid) == key) {
+          return MapEntry(big, mid);
+        }
+      }
+    }
+    return null;
+  }
+
+  GlobalKey _headerKeyForSmallExpand(String expandKey) {
+    return _smallHeaderKeys.putIfAbsent(expandKey, GlobalKey.new);
+  }
+
+  void _scheduleScrollSmallHeaderToTop(String expandKey) {
+    _pendingScrollSmallExpandKey = expandKey;
+    final token = expandKey;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (_pendingScrollSmallExpandKey != token) return;
+      _pendingScrollSmallExpandKey = null;
+      final ctx = _smallHeaderKeys[expandKey]?.currentContext;
+      if (ctx != null) {
+        Scrollable.ensureVisible(
+          ctx,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
+          alignment: 0,
+        );
+      }
+    });
+  }
+
+  void _onLeftMidRowTapped(_BigUnitSelectionNode big, _MidUnitSelectionNode mid) {
+    final midKey = _midExpandKey(big, mid);
+    setState(() {
+      _activeMidKey = midKey;
+      if (mid.smalls.isNotEmpty) {
+        if (_expandedLeftMidSmallsKey == midKey) {
+          _expandedLeftMidSmallsKey = null;
+        } else {
+          _expandedLeftMidSmallsKey = midKey;
+        }
+      }
+    });
+  }
+
+  void _onLeftSmallRowTapped(
+    _BigUnitSelectionNode big,
+    _MidUnitSelectionNode mid,
+    _SmallUnitSelectionNode small,
+  ) {
+    final expand = _smallExpandKey(big, mid, small);
+    final midKey = _midExpandKey(big, mid);
+    setState(() {
+      _activeMidKey = midKey;
+      if (mid.smalls.isNotEmpty) {
+        _expandedLeftMidSmallsKey = midKey;
+      }
+    });
+    _scheduleScrollSmallHeaderToTop(expand);
+  }
+
+  String _smallTitlePrefix(
+    _BigUnitSelectionNode big,
+    _MidUnitSelectionNode mid,
+    _SmallUnitSelectionNode small,
+  ) {
+    return '${_n(big.orderIndex)}.${_n(mid.orderIndex)}.(${_n(small.orderIndex)})';
   }
 
   String _ackPrefsKeyForLinkedBook(_LinkedTextbook linked) {
@@ -702,6 +846,7 @@ class HomeworkQuickAddProxyDialogState
           if (small.draftBlocked) {
             small.selected = false;
             small.explicitSelected = false;
+            small.selectedPages.clear();
           }
         }
         mid.selected = _allSmallSelected(mid);
@@ -720,6 +865,7 @@ class HomeworkQuickAddProxyDialogState
             if (small.draftBlocked) continue;
             small.selected = false;
             small.explicitSelected = false;
+            small.selectedPages.clear();
           }
           mid.selected = _allSmallSelected(mid);
         }
@@ -976,14 +1122,9 @@ class HomeworkQuickAddProxyDialogState
     return hw.status == HomeworkStatus.completed || hw.phase == 4;
   }
 
-  Map<String, _IssuedSmallSummary> _issuedSmallSummaryByBook({
-    required String bookId,
-    required String gradeLabel,
-    required List<_BigUnitSelectionNode> units,
-  }) {
-    if (bookId.trim().isEmpty || gradeLabel.trim().isEmpty) {
-      return <String, _IssuedSmallSummary>{};
-    }
+  Map<String, Set<int>> _pagesBySmallKeyForIssuedScan(
+    List<_BigUnitSelectionNode> units,
+  ) {
     final pagesBySmallKey = <String, Set<int>>{};
     for (final big in units) {
       for (final mid in big.middles) {
@@ -996,6 +1137,18 @@ class HomeworkQuickAddProxyDialogState
         }
       }
     }
+    return pagesBySmallKey;
+  }
+
+  Map<String, _IssuedSmallSummary> _issuedSmallSummaryByBook({
+    required String bookId,
+    required String gradeLabel,
+    required List<_BigUnitSelectionNode> units,
+  }) {
+    if (bookId.trim().isEmpty || gradeLabel.trim().isEmpty) {
+      return <String, _IssuedSmallSummary>{};
+    }
+    final pagesBySmallKey = _pagesBySmallKeyForIssuedScan(units);
     if (pagesBySmallKey.isEmpty) return <String, _IssuedSmallSummary>{};
 
     final latestFinishedAtBySmallKey = <String, DateTime?>{};
@@ -1059,10 +1212,75 @@ class HomeworkQuickAddProxyDialogState
     return summary;
   }
 
+  /// 완료된 과제에 `page` 필드가 있을 때만, 소단원·쪽별 완료 횟수를 센다.
+  Map<String, Map<int, int>> _issuedPageCompletionCountsByBook({
+    required String bookId,
+    required String gradeLabel,
+    required List<_BigUnitSelectionNode> units,
+  }) {
+    if (bookId.trim().isEmpty || gradeLabel.trim().isEmpty) {
+      return <String, Map<int, int>>{};
+    }
+    final pagesBySmallKey = _pagesBySmallKeyForIssuedScan(units);
+    if (pagesBySmallKey.isEmpty) return <String, Map<int, int>>{};
+
+    final out = <String, Map<int, int>>{};
+    void bump(String smallKey, int page) {
+      final m = out.putIfAbsent(smallKey, () => <int, int>{});
+      m[page] = (m[page] ?? 0) + 1;
+    }
+
+    final items = HomeworkStore.instance.items(widget.studentId);
+    for (final hw in items) {
+      final hwBookId = (hw.bookId ?? '').trim();
+      final hwGrade = (hw.gradeLabel ?? '').trim();
+      if (hwBookId != bookId || hwGrade != gradeLabel) continue;
+      if (!_isCompletedForIssuedLock(hw)) continue;
+
+      final touched = <String>{};
+      final mappings = hw.unitMappings;
+      if (mappings != null && mappings.isNotEmpty) {
+        for (final raw in mappings) {
+          final m = Map<String, dynamic>.from(raw);
+          final bigOrder = _toInt(m['bigOrder'] ?? m['big_order']);
+          final midOrder = _toInt(m['midOrder'] ?? m['mid_order']);
+          final smallOrder = _toInt(m['smallOrder'] ?? m['small_order']);
+          if (bigOrder == null || midOrder == null || smallOrder == null) {
+            continue;
+          }
+          touched.add(_smallKey(bigOrder, midOrder, smallOrder));
+        }
+      }
+
+      final pagesHw = _pagesFromRawPageText(hw.page ?? '');
+      if (pagesHw.isNotEmpty) {
+        for (final entry in pagesBySmallKey.entries) {
+          if (_hasPageOverlap(pagesHw, entry.value)) {
+            touched.add(entry.key);
+          }
+        }
+      }
+
+      if (pagesHw.isEmpty) continue;
+
+      for (final key in touched) {
+        final smallPages = pagesBySmallKey[key];
+        if (smallPages == null) continue;
+        for (final p in pagesHw) {
+          if (smallPages.contains(p)) {
+            bump(key, p);
+          }
+        }
+      }
+    }
+    return out;
+  }
+
   void _applyIssuedLockedState(
     List<_BigUnitSelectionNode> units,
     Map<String, _IssuedSmallSummary> issuedSummaryBySmallKey,
     Set<String> acknowledgedSmallKeys,
+    Map<String, Map<int, int>> pageCompletionsBySmallKey,
   ) {
     for (final big in units) {
       big.explicitSelected = false;
@@ -1078,8 +1296,12 @@ class HomeworkQuickAddProxyDialogState
           small.finishedAt = summary?.latestFinishedAt;
           small.completedCount =
               (summary?.completedCount ?? 0) + (acknowledged ? 1 : 0);
+          small.pageCompletedCounts
+            ..clear()
+            ..addAll(pageCompletionsBySmallKey[key] ?? const {});
           small.selected = false;
           small.explicitSelected = false;
+          small.selectedPages.clear();
         }
         mid.selected = _allSmallSelected(mid);
       }
@@ -1113,6 +1335,7 @@ class HomeworkQuickAddProxyDialogState
           if (small.locked || small.draftBlocked) continue;
           small.selected = selected;
           small.explicitSelected = false;
+          small.selectedPages.clear();
         }
         mid.selected = _allSmallSelected(mid);
       }
@@ -1131,6 +1354,7 @@ class HomeworkQuickAddProxyDialogState
         if (small.locked || small.draftBlocked) continue;
         small.selected = selected;
         small.explicitSelected = false;
+        small.selectedPages.clear();
       }
       mid.selected = _allSmallSelected(mid);
       big.selected = _allMidSelected(big);
@@ -1138,7 +1362,8 @@ class HomeworkQuickAddProxyDialogState
     _refreshRangeAutoDraft();
   }
 
-  void _toggleSmall(
+  /// 소단원 **체크박스** — 단원 전체 선택(대/중단원과 동일). 페이지 단위 선택은 해제한다.
+  void _toggleSmallWhole(
     _BigUnitSelectionNode big,
     _MidUnitSelectionNode mid,
     _SmallUnitSelectionNode small,
@@ -1150,10 +1375,417 @@ class HomeworkQuickAddProxyDialogState
       mid.explicitSelected = false;
       small.selected = selected;
       small.explicitSelected = selected;
+      small.selectedPages.clear();
       mid.selected = _allSmallSelected(mid);
       big.selected = _allMidSelected(big);
     });
     _refreshRangeAutoDraft();
+  }
+
+  /// 잠금·차단이 아닌 페이지 줄만 이어 붙인 순서(중단원 내 드래그 범위).
+  List<MapEntry<int, int>> _rightMidUnlockedPageFlat(_MidUnitSelectionNode mid) {
+    final flat = <MapEntry<int, int>>[];
+    for (var si = 0; si < mid.smalls.length; si++) {
+      final s = mid.smalls[si];
+      if (s.locked || s.draftBlocked) continue;
+      final pgs = _smallPages(s).toList()..sort();
+      if (pgs.isEmpty) continue;
+      for (var pi = 0; pi < pgs.length; pi++) {
+        flat.add(MapEntry(si, pi));
+      }
+    }
+    return flat;
+  }
+
+  void _applyCrossSmallMidPageRange(
+    _BigUnitSelectionNode big,
+    _MidUnitSelectionNode mid,
+    int anchorSi,
+    int anchorPi,
+    int curSi,
+    int curPi,
+    bool select,
+  ) {
+    final baselines = _pageListDragBaselineBySmallIndex;
+    if (baselines == null || baselines.length != mid.smalls.length) return;
+
+    final flat = _rightMidUnlockedPageFlat(mid);
+    int findFlat(int si, int pi) {
+      for (var i = 0; i < flat.length; i++) {
+        if (flat[i].key == si && flat[i].value == pi) return i;
+      }
+      return -1;
+    }
+
+    final a = findFlat(anchorSi, anchorPi);
+    final b = findFlat(curSi, curPi);
+    if (a < 0 || b < 0) return;
+    final lo = a < b ? a : b;
+    final hi = a < b ? b : a;
+
+    final spanBySmall = <int, Set<int>>{};
+    for (var i = lo; i <= hi; i++) {
+      final si = flat[i].key;
+      final pi = flat[i].value;
+      final pgs = _smallPages(mid.smalls[si]).toList()..sort();
+      spanBySmall.putIfAbsent(si, () => <int>{}).add(pgs[pi]);
+    }
+
+    setState(() {
+      big.explicitSelected = false;
+      mid.explicitSelected = false;
+      for (var si = 0; si < mid.smalls.length; si++) {
+        final s = mid.smalls[si];
+        if (s.locked || s.draftBlocked) continue;
+        final span = spanBySmall[si] ?? <int>{};
+        final next = Set<int>.from(baselines[si]);
+        if (select) {
+          next.addAll(span);
+        } else {
+          next.removeAll(span);
+        }
+        s.selected = false;
+        s.explicitSelected = false;
+        s.selectedPages
+          ..clear()
+          ..addAll(next);
+      }
+      mid.selected = _allSmallSelected(mid);
+      big.selected = _allMidSelected(big);
+    });
+    _refreshRangeAutoDraft();
+  }
+
+  Widget _buildRightPageRowMeta({
+    required _SmallUnitSelectionNode small,
+    required int pageNum,
+    required bool blocked,
+  }) {
+    final q = small.pageCounts[pageNum] ?? 0;
+    final done = small.pageCompletedCounts[pageNum] ?? 0;
+    if (q <= 0 && done <= 0) {
+      return const SizedBox.shrink();
+    }
+    final subStyle = TextStyle(
+      color: blocked ? const Color(0xFF6D7777) : kDlgTextSub,
+      fontWeight: FontWeight.w600,
+      fontSize: 12.5,
+    );
+    final doneStyle = TextStyle(
+      color: blocked ? kDlgAccent.withOpacity(0.55) : kDlgAccent,
+      fontWeight: FontWeight.w800,
+      fontSize: 13,
+      height: 1.2,
+    );
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (q > 0) Text('$q문항', style: subStyle),
+        if (q > 0 && done > 0) const SizedBox(width: 8),
+        if (done > 0) Text('${done}회', style: doneStyle),
+      ],
+    );
+  }
+
+  /// 오른쪽 페이지 줄 체크 표시·드래그 기준용. 단원 전체 선택(`selected`)이면 모든 페이지가 선택된 것으로 본다.
+  bool _isRightPageChecked(_SmallUnitSelectionNode small, int pageNum) {
+    if (small.locked || small.draftBlocked) return false;
+    if (small.selected) return true;
+    return small.selectedPages.contains(pageNum);
+  }
+
+  List<_RightFlatEntry> _rightFlatEntries(_MidUnitSelectionNode mid) {
+    final out = <_RightFlatEntry>[];
+    for (var si = 0; si < mid.smalls.length; si++) {
+      out.add(_RightFlatEntry(smallIndex: si, isHeader: true));
+      final pages = _smallPages(mid.smalls[si]).toList()..sort();
+      for (var pi = 0; pi < pages.length; pi++) {
+        out.add(_RightFlatEntry(
+          smallIndex: si,
+          isHeader: false,
+          pageSortedIndex: pi,
+        ));
+      }
+    }
+    return out;
+  }
+
+  double _rightFlatEntryHeight(_RightFlatEntry e) {
+    return e.isHeader ? _kMidRightSmallHeaderHeight : _kSmallPageListRowStride;
+  }
+
+  double _rightFlatContentHeight(_MidUnitSelectionNode mid) {
+    var h = 0.0;
+    for (final e in _rightFlatEntries(mid)) {
+      h += _rightFlatEntryHeight(e);
+    }
+    return h;
+  }
+
+  _RightListHit? _rightFlatHitAtLocalY(_MidUnitSelectionNode mid, double localY) {
+    if (localY < 0) return null;
+    var y = 0.0;
+    for (final e in _rightFlatEntries(mid)) {
+      final eh = _rightFlatEntryHeight(e);
+      if (localY >= y && localY < y + eh) {
+        return _RightListHit(
+          smallIndex: e.smallIndex,
+          isHeader: e.isHeader,
+          pageSortedIndex: e.pageSortedIndex,
+        );
+      }
+      y += eh;
+    }
+    return null;
+  }
+
+  /// 헤더 위로 지나갈 때 등: 가장 가까운(잠금 아닌) 페이지 줄로 스냅.
+  _RightListHit? _rightFlatNearestUnblockedPageHit(
+    _MidUnitSelectionNode mid,
+    double localY,
+  ) {
+    var bestDist = double.infinity;
+    _RightListHit? best;
+    var y = 0.0;
+    for (final e in _rightFlatEntries(mid)) {
+      final eh = _rightFlatEntryHeight(e);
+      if (!e.isHeader && e.pageSortedIndex != null) {
+        final s = mid.smalls[e.smallIndex];
+        if (!s.locked && !s.draftBlocked) {
+          final centerY = y + eh / 2;
+          final d = (localY - centerY).abs();
+          if (d < bestDist) {
+            bestDist = d;
+            best = _RightListHit(
+              smallIndex: e.smallIndex,
+              isHeader: false,
+              pageSortedIndex: e.pageSortedIndex,
+            );
+          }
+        }
+      }
+      y += eh;
+    }
+    return best;
+  }
+
+  _RightListHit? _rightFlatPageHitForDrag(
+    _MidUnitSelectionNode mid,
+    double localY,
+  ) {
+    final hit = _rightFlatHitAtLocalY(mid, localY);
+    if (hit != null &&
+        !hit.isHeader &&
+        hit.pageSortedIndex != null) {
+      final s = mid.smalls[hit.smallIndex];
+      if (!s.locked && !s.draftBlocked) {
+        return hit;
+      }
+    }
+    return _rightFlatNearestUnblockedPageHit(mid, localY);
+  }
+
+  void _handleRightPageScrollSignal(PointerSignalEvent s) {
+    if (s is! PointerScrollEvent) return;
+    final c = _rangeRightScrollController;
+    if (!c.hasClients) return;
+    final next = (c.offset + s.scrollDelta.dy)
+        .clamp(0.0, c.position.maxScrollExtent)
+        .toDouble();
+    c.jumpTo(next);
+  }
+
+  void _beginSmallPageDragAt(
+    _BigUnitSelectionNode big,
+    _MidUnitSelectionNode mid,
+    _SmallUnitSelectionNode small,
+    List<int> pages,
+    int idx,
+  ) {
+    if (small.locked || small.draftBlocked || pages.isEmpty) return;
+    final safeIdx = idx.clamp(0, pages.length - 1);
+    final page = pages[safeIdx];
+    final selectMode = !_isRightPageChecked(small, page);
+    setState(() {
+      _pageListDragAnchorIndex = safeIdx;
+      _pageListDragSelectMode = selectMode;
+    });
+    _applyCrossSmallMidPageRange(
+      big,
+      mid,
+      _rightPagePageSmallIdx!,
+      safeIdx,
+      _rightPagePageSmallIdx!,
+      safeIdx,
+      selectMode,
+    );
+  }
+
+  void _applyWholeSmallRangeIndices(
+    _BigUnitSelectionNode big,
+    _MidUnitSelectionNode mid,
+    int loIdx,
+    int hiIdx,
+    bool select,
+  ) {
+    if (mid.smalls.isEmpty) return;
+    var lo = loIdx.clamp(0, mid.smalls.length - 1);
+    var hi = hiIdx.clamp(0, mid.smalls.length - 1);
+    if (lo > hi) {
+      final t = lo;
+      lo = hi;
+      hi = t;
+    }
+    setState(() {
+      big.explicitSelected = false;
+      mid.explicitSelected = false;
+      for (var i = lo; i <= hi; i++) {
+        final s = mid.smalls[i];
+        if (s.locked || s.draftBlocked) continue;
+        s.selected = select;
+        s.explicitSelected = select;
+        s.selectedPages.clear();
+      }
+      mid.selected = _allSmallSelected(mid);
+      big.selected = _allMidSelected(big);
+    });
+    _refreshRangeAutoDraft();
+  }
+
+  void _handleRightPagePointerDown(
+    PointerDownEvent e,
+    _BigUnitSelectionNode big,
+    _MidUnitSelectionNode mid,
+  ) {
+    final hit = _rightFlatHitAtLocalY(mid, e.localPosition.dy);
+    if (hit == null) return;
+    final small = mid.smalls[hit.smallIndex];
+    if (small.locked || small.draftBlocked) return;
+
+    setState(() {
+      _rightPagePointerDown = true;
+      _rightPagePointerDownLocal = e.localPosition;
+      _rightPageDragMoved = false;
+    });
+
+    if (!hit.isHeader && hit.pageSortedIndex != null) {
+      final pages = _smallPages(small).toList()..sort();
+      if (pages.isEmpty) return;
+      setState(() {
+        _rightPageSessionKind = 'page';
+        _rightPagePageSmallIdx = hit.smallIndex;
+        _pageListDragBaselineBySmallIndex = List<Set<int>>.generate(
+          mid.smalls.length,
+          (si) {
+            final s = mid.smalls[si];
+            final pgs = _smallPages(s).toList()..sort();
+            if (s.locked || s.draftBlocked) {
+              return Set<int>.from(s.selectedPages);
+            }
+            return s.selected ? pgs.toSet() : Set<int>.from(s.selectedPages);
+          },
+        );
+      });
+      _beginSmallPageDragAt(
+        big,
+        mid,
+        small,
+        pages,
+        hit.pageSortedIndex!,
+      );
+    } else if (hit.isHeader) {
+      setState(() {
+        _rightPageSessionKind = 'whole';
+        _rightPageWholeAnchorSmallIdx = hit.smallIndex;
+        _rightPageWholeSelectMode = !small.selected;
+      });
+    }
+  }
+
+  void _handleRightPagePointerMove(
+    PointerMoveEvent e,
+    _BigUnitSelectionNode big,
+    _MidUnitSelectionNode mid,
+  ) {
+    if (!_rightPagePointerDown || _rightPagePointerDownLocal == null) {
+      return;
+    }
+    final down = _rightPagePointerDownLocal!;
+
+    if (_rightPageSessionKind == 'page' && _rightPagePageSmallIdx != null) {
+      final anchor = _pageListDragAnchorIndex;
+      final mode = _pageListDragSelectMode;
+      if (anchor == null || mode == null) return;
+      final hit = _rightFlatPageHitForDrag(mid, e.localPosition.dy);
+      if (hit == null || hit.pageSortedIndex == null) return;
+      _applyCrossSmallMidPageRange(
+        big,
+        mid,
+        _rightPagePageSmallIdx!,
+        anchor,
+        hit.smallIndex,
+        hit.pageSortedIndex!,
+        mode,
+      );
+      return;
+    }
+
+    if (_rightPageSessionKind == 'whole' &&
+        _rightPageWholeAnchorSmallIdx != null &&
+        _rightPageWholeSelectMode != null) {
+      if ((e.localPosition - down).distance <= 4) return;
+      if (!_rightPageDragMoved) {
+        setState(() => _rightPageDragMoved = true);
+      }
+      final hit = _rightFlatHitAtLocalY(mid, e.localPosition.dy);
+      final curIdx = hit?.smallIndex ?? _rightPageWholeAnchorSmallIdx!;
+      final anchor = _rightPageWholeAnchorSmallIdx!;
+      final lo = curIdx < anchor ? curIdx : anchor;
+      final hi = curIdx > anchor ? curIdx : anchor;
+      _applyWholeSmallRangeIndices(
+        big,
+        mid,
+        lo,
+        hi,
+        _rightPageWholeSelectMode!,
+      );
+    }
+  }
+
+  void _handleRightPagePointerUp(
+    PointerUpEvent e,
+    _BigUnitSelectionNode big,
+    _MidUnitSelectionNode mid,
+  ) {
+    if (!_rightPagePointerDown) return;
+
+    setState(() {
+      _pageListDragAnchorIndex = null;
+      _pageListDragSelectMode = null;
+      _pageListDragBaselineBySmallIndex = null;
+      _rightPagePointerDown = false;
+      _rightPagePointerDownLocal = null;
+      _rightPageDragMoved = false;
+      _rightPageSessionKind = '';
+      _rightPageWholeAnchorSmallIdx = null;
+      _rightPageWholeSelectMode = null;
+      _rightPagePageSmallIdx = null;
+    });
+  }
+
+  void _handleRightPagePointerCancel() {
+    setState(() {
+      _pageListDragAnchorIndex = null;
+      _pageListDragSelectMode = null;
+      _pageListDragBaselineBySmallIndex = null;
+      _rightPagePointerDown = false;
+      _rightPagePointerDownLocal = null;
+      _rightPageDragMoved = false;
+      _rightPageSessionKind = '';
+      _rightPageWholeAnchorSmallIdx = null;
+      _rightPageWholeSelectMode = null;
+      _rightPagePageSmallIdx = null;
+    });
   }
 
   List<_SelectedSmallUnit> _selectedSmallUnits() {
@@ -1161,18 +1793,38 @@ class HomeworkQuickAddProxyDialogState
     for (final big in _units) {
       for (final mid in big.middles) {
         for (final small in mid.smalls) {
-          if (!small.selected || small.locked || small.draftBlocked) continue;
-          out.add(
-            _SelectedSmallUnit(
-              bigName: big.name,
-              midName: mid.name,
-              smallName: small.name,
-              bigOrder: big.orderIndex,
-              midOrder: mid.orderIndex,
-              smallOrder: small.orderIndex,
-              startPage: small.startPage,
-              endPage: small.endPage,
-              pageCounts: small.pageCounts,
+          if (small.locked || small.draftBlocked) continue;
+          if (small.selected) {
+            out.add(
+              _SelectedSmallUnit(
+                bigName: big.name,
+                midName: mid.name,
+                smallName: small.name,
+                bigOrder: big.orderIndex,
+                midOrder: mid.orderIndex,
+                smallOrder: small.orderIndex,
+                startPage: small.startPage,
+                endPage: small.endPage,
+                pageCounts: small.pageCounts,
+              ),
+            );
+            continue;
+          }
+          if (small.selectedPages.isEmpty) continue;
+          final pages = small.selectedPages
+              .where((p) => _smallPages(small).contains(p))
+              .toList()
+            ..sort();
+          out.addAll(
+            _coalesceConsecutivePagesForSmall(
+              big.name,
+              mid.name,
+              small.name,
+              big.orderIndex,
+              mid.orderIndex,
+              small.orderIndex,
+              pages,
+              small.pageCounts,
             ),
           );
         }
@@ -1181,20 +1833,90 @@ class HomeworkQuickAddProxyDialogState
     return out;
   }
 
-  String _mergedPageText(List<_SelectedSmallUnit> selected) {
-    final ranges = <String>[];
-    final seen = <String>{};
-    for (final s in selected) {
-      if (s.startPage == null || s.endPage == null) continue;
-      if (s.startPage == s.endPage) {
-        final value = '${s.startPage}';
-        if (seen.add(value)) ranges.add(value);
+  List<_SelectedSmallUnit> _coalesceConsecutivePagesForSmall(
+    String bigName,
+    String midName,
+    String smallName,
+    int bigOrder,
+    int midOrder,
+    int smallOrder,
+    List<int> sortedPages,
+    Map<int, int> pageCounts,
+  ) {
+    if (sortedPages.isEmpty) return const [];
+    final runs = <List<int>>[];
+    var run = <int>[sortedPages.first];
+    for (var i = 1; i < sortedPages.length; i++) {
+      final p = sortedPages[i];
+      if (p == run.last + 1) {
+        run.add(p);
       } else {
-        final value = '${s.startPage}-${s.endPage}';
-        if (seen.add(value)) ranges.add(value);
+        runs.add(run);
+        run = <int>[p];
       }
     }
-    if (ranges.isEmpty) return '';
+    runs.add(run);
+    return runs
+        .map((run) {
+          final lo = run.first;
+          final hi = run.last;
+          final counts = <int, int>{};
+          for (final p in run) {
+            if (pageCounts.containsKey(p)) counts[p] = pageCounts[p]!;
+          }
+          return _SelectedSmallUnit(
+            bigName: bigName,
+            midName: midName,
+            smallName: smallName,
+            bigOrder: bigOrder,
+            midOrder: midOrder,
+            smallOrder: smallOrder,
+            startPage: lo,
+            endPage: hi,
+            pageCounts: counts,
+          );
+        })
+        .toList();
+  }
+
+  /// 같은 소단원 안에서 인접·겹치는 페이지 구간을 합쳐 `1-5` 형태로 표기한다.
+  String _mergedPageText(List<_SelectedSmallUnit> selected) {
+    final sorted = _sortedSelectedSmallUnits(selected);
+    if (sorted.isEmpty) return '';
+    final ranges = <String>[];
+    String? gKey;
+    int? mergeLo;
+    int? mergeHi;
+
+    void flushGroup() {
+      if (gKey == null || mergeLo == null || mergeHi == null) return;
+      ranges.add(mergeLo == mergeHi ? '$mergeLo' : '$mergeLo-$mergeHi');
+    }
+
+    for (final s in sorted) {
+      if (s.startPage == null || s.endPage == null) continue;
+      final key = '${s.bigOrder}|${s.midOrder}|${s.smallOrder}';
+      final lo = s.startPage!;
+      final hi = s.endPage!;
+      if (key != gKey) {
+        flushGroup();
+        gKey = key;
+        mergeLo = lo;
+        mergeHi = hi;
+      } else {
+        final curHi = mergeHi!;
+        if (lo <= curHi + 1) {
+          if (hi > curHi) {
+            mergeHi = hi;
+          }
+        } else {
+          flushGroup();
+          mergeLo = lo;
+          mergeHi = hi;
+        }
+      }
+    }
+    flushGroup();
     return ranges.join(', ');
   }
 
@@ -1220,6 +1942,9 @@ class HomeworkQuickAddProxyDialogState
       if (a.midOrder != b.midOrder) return a.midOrder.compareTo(b.midOrder);
       if (a.smallOrder != b.smallOrder)
         return a.smallOrder.compareTo(b.smallOrder);
+      final ap = a.startPage ?? 0;
+      final bp = b.startPage ?? 0;
+      if (ap != bp) return ap.compareTo(bp);
       final byBig = a.bigName.compareTo(b.bigName);
       if (byBig != 0) return byBig;
       final byMid = a.midName.compareTo(b.midName);
@@ -1244,6 +1969,21 @@ class HomeworkQuickAddProxyDialogState
       sum += v;
     }
     return sum.toString();
+  }
+
+  String _smallRowStatusSuffix(_SmallUnitSelectionNode small) {
+    if (small.draftBlocked) return '추가됨';
+    if (small.completedCount > 0) return '완료 ${small.completedCount}회';
+    if (small.selectedPages.isNotEmpty) {
+      var sum = 0;
+      for (final p in small.selectedPages) {
+        sum += small.pageCounts[p] ?? 0;
+      }
+      if (sum > 0) return '${sum}문항';
+      return '${small.selectedPages.length}쪽';
+    }
+    final count = _countTextForSmall(small);
+    return count.isEmpty ? '-문항' : '${count}문항';
   }
 
   String _bookMetaText(_LinkedTextbook book) {
@@ -1390,7 +2130,8 @@ class HomeworkQuickAddProxyDialogState
     final out = <Map<String, dynamic>>[];
     final seen = <String>{};
     for (final s in selected) {
-      final key = '${s.bigOrder}|${s.midOrder}|${s.smallOrder}';
+      final key =
+          '${s.bigOrder}|${s.midOrder}|${s.smallOrder}|${s.startPage ?? 'n'}|${s.endPage ?? 'n'}';
       if (!seen.add(key)) continue;
       int? pageCount;
       if (s.pageCounts.isNotEmpty) {
@@ -1431,9 +2172,12 @@ class HomeworkQuickAddProxyDialogState
     final explicitAutoTitle = _resolveExplicitSelectionAutoTitle();
     final page = _mergedPageText(selected);
     final count = _mergedCountText(selected) ?? '';
+    final singleSmallTitle = first.smallName.trim().isEmpty
+        ? '교재 과제'
+        : first.smallName.trim();
     final title = explicitAutoTitle?.title ??
         (selected.length == 1
-            ? '$firstPrefix ${first.smallName}'
+            ? singleSmallTitle
             : '교재 과제 (${selected.length}개 소단원)');
     final pathSummary = explicitAutoTitle?.pathSummary ??
         (selected.length == 1
@@ -2109,6 +2853,7 @@ class HomeworkQuickAddProxyDialogState
                   _selectedLinkedBookKey = null;
                   _manualPageMode = false;
                   _units = const <_BigUnitSelectionNode>[];
+                  _expandedLeftMidSmallsKey = null;
                 });
                 await _handleFlowChanged(forceNoBookSelection: true);
               }
@@ -2505,6 +3250,445 @@ class HomeworkQuickAddProxyDialogState
     );
   }
 
+  Widget _buildRightMidPagePanel() {
+    final resolved = _resolveActiveMid();
+    if (resolved == null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Text(
+            '중단원을 선택하세요.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: kDlgTextSub,
+              fontWeight: FontWeight.w600,
+              fontSize: 13,
+            ),
+          ),
+        ),
+      );
+    }
+    final big = resolved.key;
+    final mid = resolved.value;
+    final totalH = _rightFlatContentHeight(mid);
+    if (totalH <= 0) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Text(
+            '이 중단원에 표시할 페이지가 없습니다.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: kDlgTextSub,
+              fontWeight: FontWeight.w600,
+              fontSize: 12.5,
+            ),
+          ),
+        ),
+      );
+    }
+
+    final rowWidgets = <Widget>[];
+    _RightFlatEntry? prev;
+    for (final e in _rightFlatEntries(mid)) {
+      if (e.isHeader) {
+        final small = mid.smalls[e.smallIndex];
+        final blocked = small.draftBlocked;
+        final expandKey = _smallExpandKey(big, mid, small);
+        final prefix = _smallTitlePrefix(big, mid, small);
+        rowWidgets.add(
+          SizedBox(
+            key: _headerKeyForSmallExpand(expandKey),
+            height: _kMidRightSmallHeaderHeight,
+            child: Container(
+              width: double.infinity,
+              color: const Color(0x1F0F1518),
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              alignment: Alignment.centerLeft,
+              child: LatexTextRenderer(
+                '$prefix ${small.name}',
+                style: TextStyle(
+                  color: blocked
+                      ? const Color(0xFF6D7777)
+                      : kDlgTextSub,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 12.4,
+                  height: 1.15,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ),
+        );
+      } else {
+        final small = mid.smalls[e.smallIndex];
+        final blocked = small.draftBlocked;
+        final pages = _smallPages(small).toList()..sort();
+        final pi = e.pageSortedIndex!;
+        if (pi >= pages.length) {
+          prev = e;
+          continue;
+        }
+        final pageNum = pages[pi];
+        final pageChecked = _isRightPageChecked(small, pageNum);
+        final afterHeader = prev?.isHeader == true;
+        rowWidgets.add(
+          SizedBox(
+            height: _kSmallPageListRowStride,
+            child: Container(
+              decoration: BoxDecoration(
+                border: Border(
+                  top: afterHeader
+                      ? BorderSide.none
+                      : const BorderSide(color: kDlgBorder, width: 1),
+                ),
+              ),
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              alignment: Alignment.centerLeft,
+              child: Row(
+                children: [
+                  Icon(
+                    pageChecked
+                        ? Icons.check_box_rounded
+                        : Icons.check_box_outline_blank_rounded,
+                    size: 22,
+                    color: blocked
+                        ? const Color(0xFF6D7777)
+                        : (pageChecked
+                            ? kDlgAccent
+                            : kDlgBorder),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      'P.$pageNum',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: kDlgText,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13.2,
+                      ),
+                    ),
+                  ),
+                  _buildRightPageRowMeta(
+                    small: small,
+                    pageNum: pageNum,
+                    blocked: blocked,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      }
+      prev = e;
+    }
+
+    return Scrollbar(
+      controller: _rangeRightScrollController,
+      thumbVisibility: true,
+      child: SingleChildScrollView(
+        controller: _rangeRightScrollController,
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Listener(
+              behavior: HitTestBehavior.opaque,
+              onPointerDown: (ev) =>
+                  _handleRightPagePointerDown(ev, big, mid),
+              onPointerMove: (ev) =>
+                  _handleRightPagePointerMove(ev, big, mid),
+              onPointerUp: (ev) => _handleRightPagePointerUp(ev, big, mid),
+              onPointerCancel: (_) => _handleRightPagePointerCancel(),
+              onPointerSignal: _handleRightPageScrollSignal,
+              child: SizedBox(
+                width: double.infinity,
+                height: totalH,
+              ),
+            ),
+            IgnorePointer(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: rowWidgets,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLeftUnitTreeColumn() {
+    return Theme(
+      data: Theme.of(context).copyWith(
+        dividerColor: Colors.transparent,
+        splashColor: Colors.transparent,
+        highlightColor: Colors.transparent,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (final big in _units)
+            ExpansionTile(
+              key: ValueKey('quickadd_big_${big.orderIndex}'),
+              initiallyExpanded: true,
+              expansionAnimationStyle: _fastTreeExpansionStyle,
+              tilePadding:
+                  const EdgeInsets.symmetric(horizontal: 2, vertical: 2),
+              childrenPadding: const EdgeInsets.fromLTRB(
+                _kTreeMidIndentFromBig,
+                0,
+                10,
+                8,
+              ),
+              maintainState: true,
+              iconColor: kDlgTextSub,
+              collapsedIconColor: kDlgTextSub,
+              title: Row(
+                children: [
+                  _buildTreeCheckbox(
+                    value: big.selected,
+                    onChanged: _hasEditableSmallInBig(big)
+                        ? (v) => _toggleBig(big, v ?? false)
+                        : null,
+                    disabled: !_hasEditableSmallInBig(big),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: LatexTextRenderer(
+                      big.name,
+                      style: const TextStyle(
+                        color: kDlgText,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 13.5,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              children: [
+                for (final mid in big.middles) _buildLeftMidBlock(big, mid),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLeftMidBlock(
+    _BigUnitSelectionNode big,
+    _MidUnitSelectionNode mid,
+  ) {
+    final midKey = _midExpandKey(big, mid);
+    final active = _activeMidKey == midKey;
+    final smallsExpanded = _expandedLeftMidSmallsKey == midKey;
+    final hasSmalls = mid.smalls.isNotEmpty;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(left: 4),
+                child: _buildTreeCheckbox(
+                  value: mid.selected,
+                  onChanged: _hasEditableSmallInMid(mid)
+                      ? (v) => _toggleMid(big, mid, v ?? false)
+                      : null,
+                  disabled: !_hasEditableSmallInMid(mid),
+                ),
+              ),
+              Expanded(
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: () => _onLeftMidRowTapped(big, mid),
+                    borderRadius: BorderRadius.circular(8),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 8,
+                      ),
+                      child: Row(
+                        children: [
+                          if (hasSmalls) ...[
+                            AnimatedRotation(
+                              turns: smallsExpanded ? 0.25 : 0,
+                              duration: _kTreeSmallsExpandDuration,
+                              curve: _kTreeSmallsExpandCurve,
+                              child: Icon(
+                                Icons.chevron_right,
+                                size: 22,
+                                color: kDlgTextSub,
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                          ],
+                          Expanded(
+                            child: LatexTextRenderer(
+                              mid.name,
+                              style: TextStyle(
+                                color: active ? kDlgAccent : kDlgText,
+                                fontWeight: active
+                                    ? FontWeight.w700
+                                    : FontWeight.w600,
+                                fontSize: 13,
+                              ),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          AnimatedSize(
+            duration: _kTreeSmallsExpandDuration,
+            curve: _kTreeSmallsExpandCurve,
+            alignment: Alignment.topLeft,
+            clipBehavior: Clip.hardEdge,
+            child: smallsExpanded && hasSmalls
+                ? Column(
+                    key: ValueKey<String>('left_smalls_$midKey'),
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const SizedBox(height: 4),
+                      Padding(
+                        padding: const EdgeInsets.only(
+                          left: _kTreeMidIndentFromBig,
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            for (final small in mid.smalls)
+                              _buildLeftSmallRow(big, mid, small),
+                          ],
+                        ),
+                      ),
+                    ],
+                  )
+                : const SizedBox(
+                    width: double.infinity,
+                    height: 0,
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLeftSmallRow(
+    _BigUnitSelectionNode big,
+    _MidUnitSelectionNode mid,
+    _SmallUnitSelectionNode small,
+  ) {
+    final page = _pageTextForSmall(small);
+    final titleText =
+        page.isEmpty ? small.name : '${small.name} (p.$page)';
+    final blocked = small.draftBlocked;
+    final highlight =
+        small.selected || small.selectedPages.isNotEmpty;
+    final doneText = _smallRowStatusSuffix(small);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 140),
+        decoration: BoxDecoration(
+          color: blocked
+              ? const Color(0x1F0F1518)
+              : (highlight
+                  ? const Color(0x1A33A373)
+                  : Colors.transparent),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: blocked
+                ? const Color(0xFF2E3C3F)
+                : (highlight
+                    ? kDlgAccent.withOpacity(0.9)
+                    : kDlgBorder.withOpacity(0.8)),
+          ),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(left: 4, top: 5),
+              child: _buildTreeCheckbox(
+                value: small.selected,
+                onChanged: blocked
+                    ? null
+                    : (v) =>
+                        _toggleSmallWhole(big, mid, small, v ?? false),
+                disabled: blocked,
+              ),
+            ),
+            Expanded(
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(8),
+                  onTap: blocked
+                      ? null
+                      : () => _onLeftSmallRowTapped(big, mid, small),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 4,
+                      vertical: 7,
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: LatexTextRenderer(
+                            titleText,
+                            style: TextStyle(
+                              color: blocked
+                                  ? const Color(0xFF6D7777)
+                                  : kDlgTextSub,
+                              fontWeight: FontWeight.w600,
+                              fontSize: 12.5,
+                              height: 1.2,
+                            ),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            softWrap: true,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          doneText,
+                          style: TextStyle(
+                            color: blocked
+                                ? const Color(0xFF6D7777)
+                                : kDlgTextSub,
+                            fontWeight: FontWeight.w700,
+                            fontSize: blocked ? 11.5 : 12,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildMetadataTree(_LinkedTextbook? selectedBook) {
     if (selectedBook == null) {
       return _buildNoticeCard('연결된 교재를 선택하세요.');
@@ -2534,224 +3718,31 @@ class HomeworkQuickAddProxyDialogState
       return _buildNoticeCard('선택한 교재의 메타데이터가 없습니다.');
     }
 
-    return Theme(
-      data: Theme.of(context).copyWith(
-        dividerColor: Colors.transparent,
-        splashColor: Colors.transparent,
-        highlightColor: Colors.transparent,
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          for (final big in _units)
-            ExpansionTile(
-              key: ValueKey(
-                'quickadd_big_${big.orderIndex}_${_expandedBigKey ?? ''}',
-              ),
-              initiallyExpanded: _expandedBigKey == 'big:${big.orderIndex}',
-              onExpansionChanged: (expanded) {
-                setState(() {
-                  final key = 'big:${big.orderIndex}';
-                  if (expanded) {
-                    _expandedBigKey = key;
-                  } else if (_expandedBigKey == key) {
-                    _expandedBigKey = null;
-                    _expandedMidKey = null;
-                  }
-                });
-              },
-              expansionAnimationStyle: _fastTreeExpansionStyle,
-              tilePadding: const EdgeInsets.symmetric(
-                horizontal: 2,
-                vertical: 2,
-              ),
-              childrenPadding: const EdgeInsets.fromLTRB(10, 0, 10, 8),
-              maintainState: false,
-              iconColor: kDlgTextSub,
-              collapsedIconColor: kDlgTextSub,
-              title: Row(
-                children: [
-                  _buildTreeCheckbox(
-                    value: big.selected,
-                    onChanged: _hasEditableSmallInBig(big)
-                        ? (v) => _toggleBig(big, v ?? false)
-                        : null,
-                    disabled: !_hasEditableSmallInBig(big),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: LatexTextRenderer(
-                      big.name,
-                      style: const TextStyle(
-                        color: kDlgText,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 13.5,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              children: [
-                for (final mid in big.middles)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 6),
-                    child: ExpansionTile(
-                      key: ValueKey(
-                        'quickadd_mid_${big.orderIndex}_${mid.orderIndex}_${_expandedMidKey ?? ''}',
-                      ),
-                      initiallyExpanded: _expandedMidKey ==
-                          'big:${big.orderIndex}|mid:${mid.orderIndex}',
-                      onExpansionChanged: (expanded) {
-                        setState(() {
-                          final bigKey = 'big:${big.orderIndex}';
-                          final midKey =
-                              'big:${big.orderIndex}|mid:${mid.orderIndex}';
-                          if (expanded) {
-                            _expandedBigKey = bigKey;
-                            _expandedMidKey = midKey;
-                          } else if (_expandedMidKey == midKey) {
-                            _expandedMidKey = null;
-                          }
-                        });
-                      },
-                      expansionAnimationStyle: _fastTreeExpansionStyle,
-                      tilePadding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 1,
-                      ),
-                      childrenPadding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
-                      maintainState: false,
-                      iconColor: kDlgTextSub,
-                      collapsedIconColor: kDlgTextSub,
-                      title: Row(
-                        children: [
-                          _buildTreeCheckbox(
-                            value: mid.selected,
-                            onChanged: _hasEditableSmallInMid(mid)
-                                ? (v) => _toggleMid(big, mid, v ?? false)
-                                : null,
-                            disabled: !_hasEditableSmallInMid(mid),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: LatexTextRenderer(
-                              mid.name,
-                              style: const TextStyle(
-                                color: kDlgText,
-                                fontWeight: FontWeight.w600,
-                                fontSize: 13,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                      children: [
-                        for (final small in mid.smalls)
-                          Builder(
-                            builder: (_) {
-                              final page = _pageTextForSmall(small);
-                              final count = _countTextForSmall(small);
-                              final titleText = page.isEmpty
-                                  ? small.name
-                                  : '${small.name} (p.$page)';
-                              final countText =
-                                  count.isEmpty ? '-문항' : '${count}문항';
-                              final blocked = small.draftBlocked;
-                              final doneText = small.draftBlocked
-                                  ? '추가됨'
-                                  : (small.completedCount > 0
-                                      ? '완료 ${small.completedCount}회'
-                                      : countText);
-                              return Padding(
-                                padding: const EdgeInsets.fromLTRB(4, 3, 4, 3),
-                                child: InkWell(
-                                  borderRadius: BorderRadius.circular(8),
-                                  mouseCursor: blocked
-                                      ? SystemMouseCursors.basic
-                                      : SystemMouseCursors.click,
-                                  onTap: blocked
-                                      ? null
-                                      : () => _toggleSmall(
-                                            big,
-                                            mid,
-                                            small,
-                                            !small.selected,
-                                          ),
-                                  child: AnimatedContainer(
-                                    duration: const Duration(milliseconds: 140),
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 8, vertical: 7),
-                                    decoration: BoxDecoration(
-                                      color: blocked
-                                          ? const Color(0x1F0F1518)
-                                          : (small.selected
-                                              ? const Color(0x1A33A373)
-                                              : Colors.transparent),
-                                      borderRadius: BorderRadius.circular(8),
-                                      border: Border.all(
-                                        color: blocked
-                                            ? const Color(0xFF2E3C3F)
-                                            : (small.selected
-                                                ? kDlgAccent.withOpacity(0.9)
-                                                : kDlgBorder.withOpacity(0.8)),
-                                      ),
-                                    ),
-                                    child: Row(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        _buildTreeCheckbox(
-                                          value: small.selected,
-                                          onChanged: blocked
-                                              ? null
-                                              : (v) => _toggleSmall(
-                                                    big,
-                                                    mid,
-                                                    small,
-                                                    v ?? false,
-                                                  ),
-                                          disabled: blocked,
-                                        ),
-                                        const SizedBox(width: 8),
-                                        Expanded(
-                                          child: LatexTextRenderer(
-                                            titleText,
-                                            style: TextStyle(
-                                              color: blocked
-                                                  ? const Color(0xFF6D7777)
-                                                  : kDlgTextSub,
-                                              fontWeight: FontWeight.w600,
-                                              fontSize: 12.5,
-                                              height: 1.2,
-                                            ),
-                                            softWrap: true,
-                                          ),
-                                        ),
-                                        const SizedBox(width: 8),
-                                        Text(
-                                          doneText,
-                                          style: TextStyle(
-                                            color: blocked
-                                                ? const Color(0xFF6D7777)
-                                                : kDlgTextSub,
-                                            fontWeight: FontWeight.w700,
-                                            fontSize: blocked ? 11.5 : 12,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              );
-                            },
-                          ),
-                      ],
-                    ),
-                  ),
-              ],
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Expanded(
+          flex: 44,
+          child: Scrollbar(
+            child: SingleChildScrollView(
+              child: _buildLeftUnitTreeColumn(),
             ),
-        ],
-      ),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          flex: 21,
+          child: Container(
+            decoration: BoxDecoration(
+              color: kDlgPanelBg,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: kDlgBorder),
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: _buildRightMidPagePanel(),
+          ),
+        ),
+      ],
     );
   }
 
@@ -2935,6 +3926,7 @@ class HomeworkQuickAddProxyDialogState
                     _selectedLinkedBookKey = null;
                     _manualPageMode = false;
                     _units = const <_BigUnitSelectionNode>[];
+                    _expandedLeftMidSmallsKey = null;
                   });
                   await _handleFlowChanged(forceNoBookSelection: true);
                   return;
@@ -3030,12 +4022,14 @@ class HomeworkQuickAddProxyDialogState
         ),
         const SizedBox(height: 10),
         Expanded(
-          child: Scrollbar(
-            thumbVisibility: !_manualPageMode,
-            child: SingleChildScrollView(
-              child: body,
-            ),
-          ),
+          child: !_manualPageMode && !_loadingMetadata && _units.isNotEmpty
+              ? body
+              : Scrollbar(
+                  thumbVisibility: !_manualPageMode,
+                  child: SingleChildScrollView(
+                    child: body,
+                  ),
+                ),
         ),
       ],
     );
@@ -3093,7 +4087,7 @@ class HomeworkQuickAddProxyDialogState
     final showThreeColumn = hasBookSelection;
     final waitingSelectedBook =
         _loadingFlowTextbooks && hasBookSelection && selectedBook == null;
-    final double targetDialogWidth = showThreeColumn ? 1420 : 1040;
+    final double targetDialogWidth = showThreeColumn ? 1640 : 1180;
     final int pickerChipCount = (_allLinkedTextbooks.length + 1).clamp(1, 200);
     final int estimatedPickerRows =
         ((pickerChipCount / (showThreeColumn ? 5 : 4)).ceil().clamp(1, 8))
@@ -3106,12 +4100,13 @@ class HomeworkQuickAddProxyDialogState
     if (targetDialogHeight < (showThreeColumn ? 720 : 680)) {
       targetDialogHeight = showThreeColumn ? 720 : 680;
     }
+    targetDialogHeight *= 1.1;
     final double maxDialogHeight = MediaQuery.of(context).size.height * 0.9;
     if (targetDialogHeight > maxDialogHeight) {
       targetDialogHeight = maxDialogHeight;
     }
     final Widget inputPanel = Expanded(
-      flex: showThreeColumn ? 11 : 12,
+      flex: showThreeColumn ? 2 : 12,
       child: Padding(
         padding: const EdgeInsets.all(12),
         child: Column(
@@ -3157,7 +4152,7 @@ class HomeworkQuickAddProxyDialogState
       ),
     );
     final Widget groupPanel = Expanded(
-      flex: 11,
+      flex: showThreeColumn ? 2 : 11,
       child: Container(
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
@@ -3169,7 +4164,7 @@ class HomeworkQuickAddProxyDialogState
       ),
     );
     final Widget rangePanel = Expanded(
-      flex: 10,
+      flex: 3,
       child: Container(
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
@@ -3367,6 +4362,30 @@ class _IssuedSmallSummary {
   });
 }
 
+class _RightFlatEntry {
+  final int smallIndex;
+  final bool isHeader;
+  final int? pageSortedIndex;
+
+  const _RightFlatEntry({
+    required this.smallIndex,
+    required this.isHeader,
+    this.pageSortedIndex,
+  });
+}
+
+class _RightListHit {
+  final int smallIndex;
+  final bool isHeader;
+  final int? pageSortedIndex;
+
+  const _RightListHit({
+    required this.smallIndex,
+    required this.isHeader,
+    this.pageSortedIndex,
+  });
+}
+
 class _BigUnitSelectionNode {
   final String name;
   final int orderIndex;
@@ -3393,6 +4412,10 @@ class _SmallUnitSelectionNode {
   final int? startPage;
   final int? endPage;
   final Map<int, int> pageCounts;
+  /// 표시 쪽 번호별 완료 과제 횟수(과제 `page` 텍스트로 판별 가능할 때만).
+  final Map<int, int> pageCompletedCounts = <int, int>{};
+  /// 체크박스 없이 펼친 페이지 칩에서 고른 쪽 번호(단원 전체가 아닐 때).
+  final Set<int> selectedPages = <int>{};
   bool locked;
   bool draftBlocked;
   DateTime? finishedAt;

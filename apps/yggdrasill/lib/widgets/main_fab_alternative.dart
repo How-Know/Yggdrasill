@@ -8,6 +8,58 @@ import 'payment_management_dialog.dart';
 import 'makeup_quick_dialog.dart';
 import '../app_overlays.dart';
 
+/// 홈 하단 **확인** FAB·M5 **질문 칩**이 같은 레이아웃 경로(`GestureDetector` → 고정 `SizedBox` → `Container`)를 쓰도록 통일.
+/// Scaffold FAB 슬롯과 본문 하단은 배치만 다를 뿐, 픽셀 치수는 동일해야 한다.
+class HomeBottomActionPill extends StatelessWidget {
+  static const double pillWidth = 140;
+  static const double pillHeight = 56;
+  static const double pillRadius = 28;
+
+  final Color backgroundColor;
+  final VoidCallback onTap;
+  final Widget child;
+  final EdgeInsetsGeometry padding;
+
+  const HomeBottomActionPill({
+    super.key,
+    required this.backgroundColor,
+    required this.onTap,
+    required this.child,
+    this.padding = EdgeInsets.zero,
+  });
+
+  static List<BoxShadow> pillBoxShadow() => [
+        BoxShadow(
+          color: Colors.black.withOpacity(0.2),
+          spreadRadius: 1,
+          blurRadius: 4,
+          offset: const Offset(0, 2),
+        ),
+      ];
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: SizedBox(
+        width: pillWidth,
+        height: pillHeight,
+        child: Container(
+          alignment: Alignment.center,
+          padding: padding,
+          decoration: BoxDecoration(
+            color: backgroundColor,
+            borderRadius: BorderRadius.circular(pillRadius),
+            boxShadow: pillBoxShadow(),
+          ),
+          child: child,
+        ),
+      ),
+    );
+  }
+}
+
 class MainFabAlternative extends StatefulWidget {
   final bool showHomeBatchConfirmFab;
 
@@ -283,49 +335,31 @@ class _MainFabAlternativeState extends State<MainFabAlternative>
                       opacity: canRunBatchConfirm ? 1.0 : 0.45,
                       child: IgnorePointer(
                         ignoring: !canRunBatchConfirm,
-                        child: GestureDetector(
+                        child: HomeBottomActionPill(
+                          backgroundColor: const Color(0xFF1B6B63),
                           onTap: () async {
                             final action = homeBatchConfirmAction;
                             if (action == null) return;
                             await action();
                           },
-                          child: SizedBox(
-                            width: 140,
-                            height: 56,
-                            child: Container(
-                              alignment: Alignment.center,
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF1B6B63),
-                                borderRadius: BorderRadius.circular(28),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withOpacity(0.2),
-                                    spreadRadius: 1,
-                                    blurRadius: 4,
-                                    offset: const Offset(0, 2),
-                                  ),
-                                ],
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.check_rounded,
+                                size: 21,
+                                color: Colors.white,
                               ),
-                              child: const Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(
-                                    Icons.check_rounded,
-                                    size: 21,
-                                    color: Colors.white,
-                                  ),
-                                  SizedBox(width: 8),
-                                  Text(
-                                    '확인',
-                                    style: TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 17,
-                                      fontWeight: FontWeight.w700,
-                                    ),
-                                  ),
-                                ],
+                              SizedBox(width: 8),
+                              Text(
+                                '확인',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 17,
+                                  fontWeight: FontWeight.w700,
+                                ),
                               ),
-                            ),
+                            ],
                           ),
                         ),
                       ),

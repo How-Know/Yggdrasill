@@ -1991,8 +1991,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         return Material(
           color: const Color(0xFF0B1112),
           child: Padding(
-            // FAB `AnimatedPadding` bottom(16)과 맞춰 칩을 같은 선상으로 올림.
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 28),
+            // 확인 FAB와 동일하게 Scaffold 하단 여백 16에 맞춤.
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
             child: Align(
               alignment: Alignment.centerLeft,
               child: SingleChildScrollView(
@@ -4598,7 +4598,7 @@ class _RecordNoteDialogState extends State<_RecordNoteDialog> {
 }
 
 // 회전 보더 페인터: 내부 child의 레이아웃을 바꾸지 않고, 외곽선만 회전시키며 그린다
-/// 홈 하단 줄용: 140×56 유지, 회색 아웃라인·이름 강조.
+/// 홈 하단 줄용: [HomeBottomActionPill]으로 확인 FAB와 동일 레이아웃·그림자·타이포.
 class _HomeM5QuestionChip extends StatelessWidget {
   final String label;
   final VoidCallback onAck;
@@ -4609,42 +4609,23 @@ class _HomeM5QuestionChip extends StatelessWidget {
   });
 
   static const Color _fill = Color(0xFF151C21);
-  static const Color _outline = Color(0xFF4A4A4A);
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      width: 140,
-      height: 56,
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: onAck,
-          borderRadius: BorderRadius.circular(28),
-          child: Container(
-            width: 140,
-            height: 56,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: _fill,
-              borderRadius: BorderRadius.circular(28),
-              border: Border.all(color: _outline, width: 1.5),
-            ),
-            padding: const EdgeInsets.symmetric(horizontal: 10),
-            child: Text(
-              label,
-              style: const TextStyle(
-                color: Color(0xFFEAF2F2),
-                fontSize: 20,
-                fontWeight: FontWeight.w600,
-                height: 1.1,
-              ),
-              textAlign: TextAlign.center,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
+    return HomeBottomActionPill(
+      backgroundColor: _fill,
+      onTap: onAck,
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+      child: Text(
+        label,
+        style: const TextStyle(
+          color: Color(0xFFEAF2F2),
+          fontSize: 17,
+          fontWeight: FontWeight.w700,
         ),
+        textAlign: TextAlign.center,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
       ),
     );
   }

@@ -69,10 +69,13 @@ function normalizeAnchors(rawAnchors, columns) {
     if (!label) continue;
     const topPt = Number(one.topPt);
     const paddingTopPt = Number(one.paddingTopPt);
+    const sourceRaw = String(one.source || '').trim().toLowerCase();
+    const source = sourceRaw === 'auto' ? 'auto' : 'manual';
     anchors.push({
       columnIndex,
       rowIndex,
       label,
+      source,
       page: normalizeAnchorPage(one.page),
       topPt: Number.isFinite(topPt) ? topPt : 9.2,
       paddingTopPt: Number.isFinite(paddingTopPt) ? paddingTopPt : 35.8,
@@ -89,6 +92,7 @@ function defaultTitlePageAnchors({ profile, isTitlePage, layoutColumns, perPage 
     {
       columnIndex: 0,
       label: '5지선다형',
+      source: 'manual',
       page: 'first',
       topPt: 16,
       paddingTopPt: 27,
@@ -204,6 +208,7 @@ export function buildSlotPlan({
         isHiddenPlaceholder: !expectsQuestion,
         questionOrder: Number.isFinite(slotQuestionOrder) ? slotQuestionOrder : null,
         anchorLabel: anchor?.label || '',
+        anchorSource: anchor?.source || 'manual',
         anchorTopPt: anchor?.topPt ?? 9.2,
         anchorPaddingTopPt: anchor?.paddingTopPt ?? 35.8,
       });

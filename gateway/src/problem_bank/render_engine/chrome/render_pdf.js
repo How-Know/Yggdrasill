@@ -216,6 +216,14 @@ async function renderOnce(html) {
           if (!row || !row.items || row.items.length < 2) return;
 
           if (row.hasAnchor) {
+            var ownAnchorCount = row.items.filter(function (item) {
+              return item.hasOwnAnchor;
+            }).length;
+            // When both columns have their own labels in the same row,
+            // keep CSS baseline spacing as-is to avoid extra top gap inflation.
+            if (ownAnchorCount >= 2) {
+              return;
+            }
             var refItems = row.items.filter(function (item) { return !item.hasOwnAnchor; });
             if (!refItems.length) refItems = row.items;
             var refTops = refItems.map(function (item) {

@@ -2552,6 +2552,72 @@ function toErrorCode(err) {
   return 'UNKNOWN';
 }
 
+function normalizeTargetQuestionIdsFromJob(job) {
+  const raw = job?.result_summary?.targetQuestionIds;
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  const seen = new Set();
+  for (const value of raw) {
+    const id = normalizeWhitespace(value);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
+function buildQuestionWritePayload({
+  question,
+  classification,
+  academyId,
+  documentId,
+  extractJobId,
+}) {
+  return {
+    academy_id: academyId,
+    document_id: documentId,
+    extract_job_id: extractJobId,
+    source_page: question.source_page,
+    source_order: question.source_order,
+    question_number: question.question_number,
+    question_type: question.question_type,
+    stem: question.stem,
+    choices: question.choices,
+    figure_refs: question.figure_refs,
+    equations: question.equations,
+    source_anchors: question.source_anchors,
+    confidence: question.confidence,
+    flags: question.flags,
+    is_checked: question.is_checked,
+    reviewed_by: question.reviewed_by,
+    reviewed_at: question.reviewed_at,
+    reviewer_notes: question.reviewer_notes,
+    allow_objective: question.allow_objective !== false,
+    allow_subjective: question.allow_subjective !== false,
+    objective_choices: Array.isArray(question.objective_choices)
+      ? question.objective_choices
+      : [],
+    objective_answer_key: String(question.objective_answer_key || ''),
+    subjective_answer: String(question.subjective_answer || ''),
+    objective_generated: question.objective_generated === true,
+    curriculum_code: classification.curriculum_code,
+    source_type_code: classification.source_type_code,
+    course_label: classification.course_label,
+    grade_label: classification.grade_label,
+    exam_year: classification.exam_year,
+    semester_label: classification.semester_label,
+    exam_term_label: classification.exam_term_label,
+    school_name: classification.school_name,
+    publisher_name: classification.publisher_name,
+    material_name: classification.material_name,
+    classification_detail: {
+      ...(classification.classification_detail || {}),
+      extracted_by_worker: true,
+    },
+    meta: question.meta,
+  };
+}
+
 async function lockQueuedJob(row) {
   const nextRetry = Number(row.retry_count || 0) + 1;
   const { data, error } = await supa
@@ -2573,7 +2639,12 @@ async function lockQueuedJob(row) {
   return data;
 }
 
-async function markJobFailed({ jobId, documentId, error }) {
+async function markJobFailed({
+  jobId,
+  documentId,
+  error,
+  skipDocumentStatusUpdate = false,
+}) {
   const errMsg = compact(error?.message || error);
   const errCode = toErrorCode(error);
   const nowIso = new Date().toISOString();
@@ -2587,7 +2658,7 @@ async function markJobFailed({ jobId, documentId, error }) {
       updated_at: nowIso,
     })
     .eq('id', jobId);
-  if (documentId) {
+  if (documentId && !skipDocumentStatusUpdate) {
     await supa
       .from('pb_documents')
       .update({
@@ -2791,116 +2862,154 @@ async function processOneJob(job) {
   const { questions, stats } = built;
   const dualModeStats = dualModeResult.stats || {};
   const nowIso = new Date().toISOString();
+  const targetQuestionIds = normalizeTargetQuestionIdsFromJob(job);
+  const partialReextract = targetQuestionIds.length > 0;
   let figureJobsQueued = 0;
   let figureJobSeedError = '';
+  let partialUpdatedCount = 0;
+  let partialLowConfidenceCount = 0;
+  let partialMissingTargets = [];
+  let partialUpdatedQuestionIds = [];
 
-  await supa.from('pb_questions').delete().eq('document_id', job.document_id);
+  if (partialReextract) {
+    const { data: existingRows, error: existingErr } = await supa
+      .from('pb_questions')
+      .select('id,question_number')
+      .eq('academy_id', job.academy_id)
+      .eq('document_id', job.document_id);
+    if (existingErr) {
+      throw new Error(`partial_current_fetch_failed:${existingErr.message}`);
+    }
+    const existingById = new Map(
+      (existingRows || []).map((row) => [String(row.id || '').trim(), row]),
+    );
+    const parsedByQuestionNumber = new Map();
+    for (const parsedQuestion of questions) {
+      const qNo = normalizeWhitespace(parsedQuestion?.question_number || '');
+      if (!qNo || parsedByQuestionNumber.has(qNo)) continue;
+      parsedByQuestionNumber.set(qNo, parsedQuestion);
+    }
+    const updateRows = [];
+    for (const targetId of targetQuestionIds) {
+      const current = existingById.get(targetId);
+      if (!current) {
+        partialMissingTargets.push({
+          questionId: targetId,
+          reason: 'question_not_found',
+        });
+        continue;
+      }
+      const targetQuestionNumber = normalizeWhitespace(current.question_number || '');
+      const parsed = parsedByQuestionNumber.get(targetQuestionNumber);
+      if (!parsed) {
+        partialMissingTargets.push({
+          questionId: targetId,
+          questionNumber: targetQuestionNumber,
+          reason: 'parsed_question_not_found',
+        });
+        continue;
+      }
+      if (Number(parsed?.confidence || 0) < REVIEW_CONFIDENCE_THRESHOLD) {
+        partialLowConfidenceCount += 1;
+      }
+      updateRows.push({
+        id: targetId,
+        ...buildQuestionWritePayload({
+          question: parsed,
+          classification,
+          academyId: job.academy_id,
+          documentId: job.document_id,
+          extractJobId: job.id,
+        }),
+        updated_at: nowIso,
+      });
+    }
+    if (updateRows.length === 0) {
+      throw new Error('partial_reextract_no_targets_updated');
+    }
+    const { error: upsertErr } = await supa.from('pb_questions').upsert(updateRows, {
+      onConflict: 'id',
+    });
+    if (upsertErr) {
+      throw new Error(`partial_question_upsert_failed:${upsertErr.message}`);
+    }
+    partialUpdatedCount = updateRows.length;
+    partialUpdatedQuestionIds = updateRows.map((row) => row.id);
+  } else {
+    await supa.from('pb_questions').delete().eq('document_id', job.document_id);
 
-  if (questions.length > 0) {
-    const chunkSize = 300;
-    for (let i = 0; i < questions.length; i += chunkSize) {
-      const chunk = questions.slice(i, i + chunkSize).map((q) => ({
-        academy_id: q.academy_id,
-        document_id: q.document_id,
-        extract_job_id: q.extract_job_id,
-        source_page: q.source_page,
-        source_order: q.source_order,
-        question_number: q.question_number,
-        question_type: q.question_type,
-        stem: q.stem,
-        choices: q.choices,
-        figure_refs: q.figure_refs,
-        equations: q.equations,
-        source_anchors: q.source_anchors,
-        confidence: q.confidence,
-        flags: q.flags,
-        is_checked: q.is_checked,
-        reviewed_by: q.reviewed_by,
-        reviewed_at: q.reviewed_at,
-        reviewer_notes: q.reviewer_notes,
-        allow_objective: q.allow_objective !== false,
-        allow_subjective: q.allow_subjective !== false,
-        objective_choices: Array.isArray(q.objective_choices)
-          ? q.objective_choices
-          : [],
-        objective_answer_key: String(q.objective_answer_key || ''),
-        subjective_answer: String(q.subjective_answer || ''),
-        objective_generated: q.objective_generated === true,
-        curriculum_code: classification.curriculum_code,
-        source_type_code: classification.source_type_code,
-        course_label: classification.course_label,
-        grade_label: classification.grade_label,
-        exam_year: classification.exam_year,
-        semester_label: classification.semester_label,
-        exam_term_label: classification.exam_term_label,
-        school_name: classification.school_name,
-        publisher_name: classification.publisher_name,
-        material_name: classification.material_name,
-        classification_detail: {
-          ...(classification.classification_detail || {}),
-          extracted_by_worker: true,
-        },
-        meta: q.meta,
-      }));
-      const { error: insertErr } = await supa.from('pb_questions').insert(chunk);
-      if (insertErr) {
-        throw new Error(`question_insert_failed:${insertErr.message}`);
+    if (questions.length > 0) {
+      const chunkSize = 300;
+      for (let i = 0; i < questions.length; i += chunkSize) {
+        const chunk = questions.slice(i, i + chunkSize).map((q) =>
+          buildQuestionWritePayload({
+            question: q,
+            classification,
+            academyId: job.academy_id,
+            documentId: job.document_id,
+            extractJobId: job.id,
+          }),
+        );
+        const { error: insertErr } = await supa.from('pb_questions').insert(chunk);
+        if (insertErr) {
+          throw new Error(`question_insert_failed:${insertErr.message}`);
+        }
       }
     }
-  }
 
-  if (AUTO_QUEUE_FIGURE_JOBS && questions.length > 0) {
-    try {
-      const { data: insertedQuestions, error: fetchInsertedErr } = await supa
-        .from('pb_questions')
-        .select('id,figure_refs')
-        .eq('academy_id', job.academy_id)
-        .eq('document_id', job.document_id)
-        .eq('extract_job_id', job.id);
-      if (fetchInsertedErr) {
-        throw new Error(`figure_seed_fetch_failed:${fetchInsertedErr.message}`);
-      }
-      const figureJobRows = (insertedQuestions || [])
-        .filter(
-          (row) => Array.isArray(row.figure_refs) && row.figure_refs.length > 0,
-        )
-        .map((row) => ({
-          academy_id: job.academy_id,
-          document_id: job.document_id,
-          question_id: row.id,
-          created_by: job.created_by || null,
-          status: 'queued',
-          provider: 'gemini',
-          model_name: '',
-          options: {},
-          prompt_text: '',
-          worker_name: '',
-          result_summary: {},
-          output_storage_bucket: 'problem-previews',
-          output_storage_path: '',
-          error_code: '',
-          error_message: '',
-          started_at: null,
-          finished_at: null,
-        }));
-      if (figureJobRows.length > 0) {
-        const { error: figureInsertErr } = await supa
-          .from('pb_figure_jobs')
-          .insert(figureJobRows);
-        if (figureInsertErr) {
-          throw new Error(`figure_job_seed_failed:${figureInsertErr.message}`);
+    if (AUTO_QUEUE_FIGURE_JOBS && questions.length > 0) {
+      try {
+        const { data: insertedQuestions, error: fetchInsertedErr } = await supa
+          .from('pb_questions')
+          .select('id,figure_refs')
+          .eq('academy_id', job.academy_id)
+          .eq('document_id', job.document_id)
+          .eq('extract_job_id', job.id);
+        if (fetchInsertedErr) {
+          throw new Error(`figure_seed_fetch_failed:${fetchInsertedErr.message}`);
         }
-        figureJobsQueued = figureJobRows.length;
+        const figureJobRows = (insertedQuestions || [])
+          .filter(
+            (row) => Array.isArray(row.figure_refs) && row.figure_refs.length > 0,
+          )
+          .map((row) => ({
+            academy_id: job.academy_id,
+            document_id: job.document_id,
+            question_id: row.id,
+            created_by: job.created_by || null,
+            status: 'queued',
+            provider: 'gemini',
+            model_name: '',
+            options: {},
+            prompt_text: '',
+            worker_name: '',
+            result_summary: {},
+            output_storage_bucket: 'problem-previews',
+            output_storage_path: '',
+            error_code: '',
+            error_message: '',
+            started_at: null,
+            finished_at: null,
+          }));
+        if (figureJobRows.length > 0) {
+          const { error: figureInsertErr } = await supa
+            .from('pb_figure_jobs')
+            .insert(figureJobRows);
+          if (figureInsertErr) {
+            throw new Error(`figure_job_seed_failed:${figureInsertErr.message}`);
+          }
+          figureJobsQueued = figureJobRows.length;
+        }
+      } catch (err) {
+        figureJobSeedError = compact(err?.message || err);
+        console.warn(
+          '[pb-extract-worker] figure_seed_skip',
+          JSON.stringify({
+            jobId: job.id,
+            message: figureJobSeedError,
+          }),
+        );
       }
-    } catch (err) {
-      figureJobSeedError = compact(err?.message || err);
-      console.warn(
-        '[pb-extract-worker] figure_seed_skip',
-        JSON.stringify({
-          jobId: job.id,
-          message: figureJobSeedError,
-        }),
-      );
     }
   }
 
@@ -2908,15 +3017,33 @@ async function processOneJob(job) {
   let previewScreenshotError = '';
   if (questions.length > 0) {
     try {
-      const { data: allInserted, error: fetchAllErr } = await supa
-        .from('pb_questions')
-        .select('*')
-        .eq('academy_id', job.academy_id)
-        .eq('document_id', job.document_id)
-        .eq('extract_job_id', job.id);
-      if (!fetchAllErr && allInserted && allInserted.length > 0) {
+      let previewTargets = [];
+      if (partialReextract) {
+        const { data: updatedRows, error: fetchUpdatedErr } = await supa
+          .from('pb_questions')
+          .select('*')
+          .eq('academy_id', job.academy_id)
+          .eq('document_id', job.document_id)
+          .in('id', partialUpdatedQuestionIds);
+        if (fetchUpdatedErr) {
+          throw new Error(`partial_preview_fetch_failed:${fetchUpdatedErr.message}`);
+        }
+        previewTargets = updatedRows || [];
+      } else {
+        const { data: allInserted, error: fetchAllErr } = await supa
+          .from('pb_questions')
+          .select('*')
+          .eq('academy_id', job.academy_id)
+          .eq('document_id', job.document_id)
+          .eq('extract_job_id', job.id);
+        if (fetchAllErr) {
+          throw new Error(`preview_fetch_failed:${fetchAllErr.message}`);
+        }
+        previewTargets = allInserted || [];
+      }
+      if (previewTargets.length > 0) {
         const results = await generateQuestionPreviews({
-          questions: allInserted,
+          questions: previewTargets,
           academyId: job.academy_id,
           layout: {},
           supabaseClient: supa,
@@ -2926,8 +3053,9 @@ async function processOneJob(job) {
           '[pb-extract-worker] preview_screenshots',
           JSON.stringify({
             jobId: job.id,
-            total: allInserted.length,
+            total: previewTargets.length,
             generated: previewScreenshotCount,
+            partialReextract,
           }),
         );
       }
@@ -2940,9 +3068,16 @@ async function processOneJob(job) {
     }
   }
 
-  const reviewRequired = stats.lowConfidenceCount > 0;
+  const reviewRequired = partialReextract
+    ? partialLowConfidenceCount > 0
+    : stats.lowConfidenceCount > 0;
   const jobStatus = reviewRequired ? 'review_required' : 'completed';
-  const docStatus = reviewRequired ? 'draft_review_required' : 'draft_ready';
+  const currentDocStatus = normalizeWhitespace(doc.status || '');
+  const docStatus = partialReextract
+    ? (reviewRequired
+      ? 'draft_review_required'
+      : (currentDocStatus || 'draft_ready'))
+    : (reviewRequired ? 'draft_review_required' : 'draft_ready');
 
   const resultSummary = {
     totalQuestions: questions.length,
@@ -2978,6 +3113,12 @@ async function processOneJob(job) {
     objectiveUnavailableCount: Number(dualModeStats.objectiveUnavailableCount || 0),
     examProfileDetected: stats.examProfile,
     reviewThreshold: REVIEW_CONFIDENCE_THRESHOLD,
+    partialReextract,
+    partialTargetCount: targetQuestionIds.length,
+    partialUpdatedCount,
+    partialLowConfidenceCount,
+    partialMissingTargetCount: partialMissingTargets.length,
+    partialMissingTargets,
   };
 
   const nextDocMeta = {
@@ -3033,8 +3174,10 @@ async function processOneJob(job) {
   return {
     jobStatus,
     docStatus,
-    questionCount: questions.length,
-    lowConfidenceCount: stats.lowConfidenceCount,
+    questionCount: partialReextract ? partialUpdatedCount : questions.length,
+    lowConfidenceCount: partialReextract
+      ? partialLowConfidenceCount
+      : stats.lowConfidenceCount,
     examProfile: stats.examProfile,
   };
 }
@@ -3069,10 +3212,12 @@ async function processBatch() {
       const retryCount = Number(locked.retry_count || 0);
       const maxRetries = Number(locked.max_retries ?? 3);
       if (retryCount > maxRetries) {
+        const partialReextract = normalizeTargetQuestionIdsFromJob(locked).length > 0;
         await markJobFailed({
           jobId: locked.id,
           documentId: locked.document_id,
           error: new Error('max_retries_exceeded'),
+          skipDocumentStatusUpdate: partialReextract,
         });
         summary.failed += 1;
         continue;
@@ -3092,6 +3237,7 @@ async function processBatch() {
       );
       summary.success += 1;
     } catch (err) {
+      const partialReextract = normalizeTargetQuestionIdsFromJob(locked).length > 0;
       console.error(
         '[pb-extract-worker] fail',
         JSON.stringify({
@@ -3099,12 +3245,14 @@ async function processBatch() {
           docId: locked?.document_id || row.document_id,
           errorCode: toErrorCode(err),
           message: compact(err?.message || err),
+          partialReextract,
         }),
       );
       await markJobFailed({
         jobId: locked?.id || row.id,
         documentId: locked?.document_id || row.document_id,
         error: err,
+        skipDocumentStatusUpdate: partialReextract,
       });
       summary.failed += 1;
     }

@@ -1656,6 +1656,8 @@ export function buildDocumentHtml({
     if (!Array.isArray(rawAnchors)) return keys;
     for (const one of rawAnchors) {
       if (!one || typeof one !== 'object') continue;
+      const source = String(one.source || '').trim().toLowerCase();
+      if (source === 'auto') continue;
       const columnIndex = Number.parseInt(String(one.columnIndex ?? ''), 10);
       if (!Number.isFinite(columnIndex) || columnIndex < 0) continue;
       const rowIndexRaw = Number.parseInt(String(one.rowIndex ?? ''), 10);
@@ -1700,6 +1702,7 @@ export function buildDocumentHtml({
           columnIndex: slot.columnIndex,
           rowIndex: slot.rowIndex,
           label: modeToSectionLabel(mode),
+          source: 'auto',
           topPt,
           paddingTopPt,
         });
@@ -1727,6 +1730,9 @@ export function buildDocumentHtml({
         columnIndex,
         rowIndex,
         label,
+        source: String(slot.anchorSource || 'manual').trim().toLowerCase() === 'auto'
+          ? 'auto'
+          : 'manual',
         topPt: defaultTopPt,
         paddingTopPt: defaultPaddingTopPt,
       });

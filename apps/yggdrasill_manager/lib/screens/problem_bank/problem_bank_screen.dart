@@ -139,6 +139,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   final TextEditingController _classificationSchoolFilterCtrl =
       TextEditingController();
   final Set<String> _dirtyQuestionIds = <String>{};
+  final Set<String> _reextractingQuestionIds = <String>{};
   bool _isSavingQuestionChanges = false;
   bool _isDeletingCurrentQuestions = false;
   bool _isDeletingClassificationDocument = false;
@@ -1548,6 +1549,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       _hasExtracted = false;
       _hasExported = false;
       _queuedLongWaitWarned = false;
+      _reextractingQuestionIds.clear();
       _statusText = '추출 작업을 큐에 등록 중...';
     });
     try {
@@ -1564,6 +1566,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       setState(() {
         _activeExtractJob = extractJob;
         _activeExportJob = null;
+        _reextractingQuestionIds.clear();
         _questions = <ProblemBankQuestion>[];
         _dirtyQuestionIds.clear();
         _dirtyDocumentMeta = false;
@@ -1589,6 +1592,121 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         _statusText = '추출 요청 실패';
       });
       _showSnack('추출 요청 실패: $e', error: true);
+    }
+  }
+
+  Future<void> _reextractQuestion(ProblemBankQuestion question) async {
+    await _startPartialReextract(
+      <ProblemBankQuestion>[question],
+      fromCheckedBulk: false,
+    );
+  }
+
+  Future<void> _reextractCheckedQuestions() async {
+    final targets = _questions.where((q) => q.isChecked).toList(growable: false);
+    if (targets.isEmpty) {
+      _showSnack('체크된 문항이 없습니다.', error: true);
+      return;
+    }
+    await _startPartialReextract(targets, fromCheckedBulk: true);
+  }
+
+  Future<void> _startPartialReextract(
+    List<ProblemBankQuestion> targets, {
+    required bool fromCheckedBulk,
+  }) async {
+    if (_isResetting ||
+        _isUploading ||
+        _isExtracting ||
+        _isExporting ||
+        _isSavingExportLocally ||
+        _isSavingQuestionChanges ||
+        _isDeletingCurrentQuestions) {
+      return;
+    }
+    if (_schemaMissing) {
+      _showSnack(
+        'DB 마이그레이션이 먼저 필요합니다: 20260324193000_problem_bank_pipeline.sql',
+        error: true,
+      );
+      return;
+    }
+    final academyId = _academyId;
+    if (academyId == null || academyId.isEmpty) {
+      _showSnack(
+        'academy_id를 찾을 수 없습니다. memberships 소속 정보를 확인해주세요.',
+        error: true,
+      );
+      return;
+    }
+    final doc = _activeDocument;
+    if (doc == null) {
+      _showSnack('먼저 HWPX를 업로드하고 문서를 선택해주세요.', error: true);
+      return;
+    }
+    final targetIds = targets
+        .map((q) => q.id.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    if (targetIds.isEmpty) {
+      _showSnack('재추출할 문항 ID를 찾지 못했습니다.', error: true);
+      return;
+    }
+    final extract = _activeExtractJob;
+    if (extract != null &&
+        extract.documentId == doc.id &&
+        (extract.status == 'queued' || extract.status == 'extracting')) {
+      _showSnack('이미 추출 작업이 진행 중입니다.');
+      return;
+    }
+
+    final targetLabel = fromCheckedBulk
+        ? '체크 문항 ${targetIds.length}건'
+        : '${targets.first.questionNumber}번 문항';
+    _appendPipelineLog('extract', '부분 재추출 요청: $targetLabel');
+    if (!mounted) return;
+    setState(() {
+      _isExtracting = true;
+      _queuedLongWaitWarned = false;
+      _reextractingQuestionIds
+        ..clear()
+        ..addAll(targetIds);
+      for (final id in targetIds) {
+        _dirtyQuestionIds.remove(id);
+        _questionPreviewUrls.remove(id);
+      }
+      _statusText = '$targetLabel 재추출 작업을 큐에 등록 중...';
+    });
+    try {
+      final extractJob = await _service.createExtractJob(
+        academyId: academyId,
+        documentId: doc.id,
+        targetQuestionIds: targetIds,
+      );
+      _appendPipelineLog(
+        'extract',
+        '부분 재추출 잡 생성: ${extractJob.id} (${extractJob.status})',
+      );
+      await _refreshDocuments();
+      if (!mounted) return;
+      setState(() {
+        _activeExtractJob = extractJob;
+        _lastExtractStatus = extractJob.status;
+        _isExtracting = true;
+        _statusText = '$targetLabel 재추출 작업을 큐에 등록했습니다.';
+      });
+      _ensurePolling();
+      _showSnack('$targetLabel 재추출 요청이 완료되었습니다.');
+    } catch (e) {
+      _appendPipelineLog('extract', '부분 재추출 요청 실패: $e', error: true);
+      if (!mounted) return;
+      setState(() {
+        _isExtracting = false;
+        _reextractingQuestionIds.clear();
+        _statusText = '부분 재추출 요청 실패';
+      });
+      _showSnack('$targetLabel 재추출 요청 실패: $e', error: true);
     }
   }
 
@@ -2373,6 +2491,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         final figureJobsQueuedHint =
             int.tryParse('${latest.resultSummary['figureJobsQueued'] ?? 0}') ??
                 0;
+        final partialReextract = latest.resultSummary['partialReextract'] == true;
         if (_lastExtractStatus != latest.status) {
           _appendPipelineLog(
             'extract',
@@ -2405,6 +2524,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           _activeExtractJob = latest;
           _isExtracting =
               latest.status == 'queued' || latest.status == 'extracting';
+          if (latest.isTerminal) {
+            _reextractingQuestionIds.clear();
+          }
           if (figureJobsQueuedHint > 0) {
             _isFigurePolling = true;
           }
@@ -2419,6 +2541,10 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           }
           if (figureJobsQueuedHint > 0) {
             nextStatusText = '추출 완료 · AI 그림 생성 대기 중';
+          } else if (partialReextract) {
+            nextStatusText = latest.status == 'review_required'
+                ? '선택 문항 재추출 완료 · 일부 저신뢰'
+                : '선택 문항 재추출 완료';
           } else {
             nextStatusText = latest.status == 'review_required'
                 ? '저신뢰 문항 추출 완료 · 검수/수정 후 업로드 대기'
@@ -2536,6 +2662,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       setState(() {
         _questions = questions;
         _dirtyQuestionIds.clear();
+        _reextractingQuestionIds.clear();
         _questionPreviewUrls.clear();
         final ids = questions.map((q) => q.id).toSet();
         _scoreDrafts.removeWhere((id, _) => !ids.contains(id));
@@ -7818,6 +7945,15 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     final scoreDraft = _scoreDraftFor(q);
     final previewChoices = _previewChoicesOf(q);
     final objectiveChoiceCount = previewChoices.length;
+    final isReextractingThisQuestion = _reextractingQuestionIds.contains(q.id);
+    final canReextractThisQuestion = !isReextractingThisQuestion &&
+        !_isResetting &&
+        !_isUploading &&
+        !_isExtracting &&
+        !_isExporting &&
+        !_isSavingExportLocally &&
+        !_isSavingQuestionChanges &&
+        !_isDeletingCurrentQuestions;
     return Container(
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
@@ -8164,8 +8300,28 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           ],
           const SizedBox(height: 8),
           Row(
-            mainAxisAlignment: MainAxisAlignment.end,
             children: [
+              IconButton(
+                tooltip: '이 문항 재추출',
+                iconSize: 18,
+                onPressed: canReextractThisQuestion
+                    ? () => unawaited(_reextractQuestion(q))
+                    : null,
+                icon: isReextractingThisQuestion
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 1.8,
+                          color: _textSub,
+                        ),
+                      )
+                    : const Icon(
+                        Icons.refresh,
+                        color: _textSub,
+                      ),
+              ),
+              const Spacer(),
               IconButton(
                 tooltip: '검수 편집',
                 iconSize: 18,
@@ -8610,6 +8766,34 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                       )
                     : const Icon(Icons.cloud_upload_outlined, size: 16),
                 label: const Text('업로드'),
+              ),
+              const SizedBox(width: 8),
+              OutlinedButton.icon(
+                onPressed: _activeDocument == null ||
+                        _checkedCount == 0 ||
+                        _isSavingQuestionChanges ||
+                        _isDeletingCurrentQuestions ||
+                        _isUploading ||
+                        _isExtracting ||
+                        _isExporting ||
+                        _isSavingExportLocally
+                    ? null
+                    : () => unawaited(_reextractCheckedQuestions()),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFF5EAFE8),
+                  side: const BorderSide(color: Color(0xFF5EAFE8)),
+                ),
+                icon: (_isExtracting && _reextractingQuestionIds.isNotEmpty)
+                    ? const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 1.8,
+                          color: Color(0xFF5EAFE8),
+                        ),
+                      )
+                    : const Icon(Icons.refresh, size: 16),
+                label: const Text('체크 재추출'),
               ),
               const SizedBox(width: 8),
               OutlinedButton.icon(

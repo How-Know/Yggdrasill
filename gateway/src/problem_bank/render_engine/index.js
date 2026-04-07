@@ -245,10 +245,13 @@ function normalizeColumnLabelAnchors(raw, layoutColumns) {
     if (!label) continue;
     const topPt = Number(one.topPt);
     const paddingTopPt = Number(one.paddingTopPt);
+    const sourceRaw = String(one.source || '').trim().toLowerCase();
+    const source = sourceRaw === 'auto' ? 'auto' : 'manual';
     out.push({
       columnIndex,
       rowIndex,
       label,
+      source,
       page: normalizeAnchorPage(one.page),
       topPt: Number.isFinite(topPt) ? topPt : 8,
       paddingTopPt: Number.isFinite(paddingTopPt) ? paddingTopPt : 46,

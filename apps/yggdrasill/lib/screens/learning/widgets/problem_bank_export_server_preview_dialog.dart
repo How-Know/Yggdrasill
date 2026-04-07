@@ -60,6 +60,10 @@ typedef ProblemBankPreviewGeneratePdfCallback = Future<void> Function(
   ProblemBankPreviewRefreshRequest request,
 );
 
+typedef ProblemBankPreviewSaveSettingsCallback = Future<void> Function(
+  ProblemBankPreviewRefreshRequest request,
+);
+
 class ProblemBankExportServerPreviewDialog extends StatefulWidget {
   const ProblemBankExportServerPreviewDialog({
     super.key,
@@ -79,6 +83,7 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
     this.initialIncludeExplanation = false,
     this.onRefreshRequested,
     this.onGeneratePdfRequested,
+    this.onSaveSettingsRequested,
   });
 
   final String pdfUrl;
@@ -97,6 +102,7 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
   final bool initialIncludeExplanation;
   final ProblemBankPreviewRefreshCallback? onRefreshRequested;
   final ProblemBankPreviewGeneratePdfCallback? onGeneratePdfRequested;
+  final ProblemBankPreviewSaveSettingsCallback? onSaveSettingsRequested;
 
   static Future<void> open(
     BuildContext context, {
@@ -119,6 +125,7 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
     bool initialIncludeExplanation = false,
     ProblemBankPreviewRefreshCallback? onRefreshRequested,
     ProblemBankPreviewGeneratePdfCallback? onGeneratePdfRequested,
+    ProblemBankPreviewSaveSettingsCallback? onSaveSettingsRequested,
   }) async {
     final size = MediaQuery.sizeOf(context);
     final maxWidth = (size.width - 24).clamp(1180.0, 2320.0).toDouble();
@@ -154,6 +161,7 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
               initialIncludeExplanation: initialIncludeExplanation,
               onRefreshRequested: onRefreshRequested,
               onGeneratePdfRequested: onGeneratePdfRequested,
+              onSaveSettingsRequested: onSaveSettingsRequested,
             ),
           ),
         );
@@ -203,6 +211,7 @@ class _ProblemBankExportServerPreviewDialogState
   int _viewerRevision = 0;
   bool _isRefreshing = false;
   bool _isGeneratingPdf = false;
+  bool _isSavingSettings = false;
   late bool _includeCoverPage;
   late bool _includeAnswerSheet;
   late bool _includeExplanation;
@@ -349,9 +358,10 @@ class _ProblemBankExportServerPreviewDialogState
       final title = '${one['title'] ?? one['subjectTitleText'] ?? ''}'
           .replaceAll(RegExp(r'\s+'), ' ')
           .trim();
-      final subtitle = '${one['subtitle'] ?? one['subTitle'] ?? one['sub'] ?? ''}'
-          .replaceAll(RegExp(r'\s+'), ' ')
-          .trim();
+      final subtitle =
+          '${one['subtitle'] ?? one['subTitle'] ?? one['sub'] ?? ''}'
+              .replaceAll(RegExp(r'\s+'), ' ')
+              .trim();
       if (title.isEmpty && subtitle.isEmpty) continue;
       out[pageRaw] = <String, String>{
         'title': title,
@@ -376,9 +386,10 @@ class _ProblemBankExportServerPreviewDialogState
   }
 
   void _ensureTitleHeaderForPage(int pageNo) {
-    final fallback = (_titlePageHeaderMap[1]?['title'] ?? _subjectController.text)
-        .replaceAll(RegExp(r'\s+'), ' ')
-        .trim();
+    final fallback =
+        (_titlePageHeaderMap[1]?['title'] ?? _subjectController.text)
+            .replaceAll(RegExp(r'\s+'), ' ')
+            .trim();
     final baseTitle = fallback.isNotEmpty ? fallback : '수학 영역';
     final existing = _titlePageHeaderMap[pageNo];
     if (existing == null) {
@@ -487,9 +498,8 @@ class _ProblemBankExportServerPreviewDialogState
   }) {
     _ensureTitleHeaderForPage(pageNo);
     final prev = _titlePageHeaderMap[pageNo] ?? const <String, String>{};
-    final normalizedTitle = (title ?? prev['title'] ?? '')
-        .replaceAll(RegExp(r'\s+'), ' ')
-        .trim();
+    final normalizedTitle =
+        (title ?? prev['title'] ?? '').replaceAll(RegExp(r'\s+'), ' ').trim();
     final normalizedSubtitle = (subtitle ?? prev['subtitle'] ?? '')
         .replaceAll(RegExp(r'\s+'), ' ')
         .trim();
@@ -575,10 +585,13 @@ class _ProblemBankExportServerPreviewDialogState
       final label = '${one['label'] ?? one['text'] ?? ''}'
           .replaceAll(RegExp(r'\s+'), ' ')
           .trim();
+      final sourceRaw = '${one['source'] ?? ''}'.trim().toLowerCase();
+      final source = sourceRaw == 'auto' ? 'auto' : 'manual';
       if (pageIndex == null) continue;
       if (columnIndex == null || columnIndex < 0 || columnIndex > 1) continue;
       if (rowIndex < 0) continue;
       if (label.isEmpty) continue;
+      if (source == 'auto') continue;
       final defaultTop = _defaultAnchorTopForPage(pageIndex);
       final defaultPadding = _defaultAnchorPaddingForPage(pageIndex);
       var topPt =
@@ -599,11 +612,13 @@ class _ProblemBankExportServerPreviewDialogState
         topPt = defaultTop;
         paddingTopPt = defaultPadding;
       }
-      out[_anchorKey(pageIndex, columnIndex, rowIndex: rowIndex)] = <String, dynamic>{
+      out[_anchorKey(pageIndex, columnIndex, rowIndex: rowIndex)] =
+          <String, dynamic>{
         'page': pageIndex + 1,
         'columnIndex': columnIndex,
         'rowIndex': rowIndex,
         'label': label,
+        'source': source,
         'topPt': topPt,
         'paddingTopPt': paddingTopPt,
       };
@@ -647,6 +662,7 @@ class _ProblemBankExportServerPreviewDialogState
       'columnIndex': columnIndex,
       'rowIndex': rowIndex,
       'label': label,
+      'source': 'manual',
       'topPt': prev?['topPt'] ?? _defaultAnchorTopForPage(pageIndex),
       'paddingTopPt':
           prev?['paddingTopPt'] ?? _defaultAnchorPaddingForPage(pageIndex),
@@ -698,6 +714,7 @@ class _ProblemBankExportServerPreviewDialogState
               'columnIndex': row['columnIndex'],
               'rowIndex': row['rowIndex'],
               'label': row['label'],
+              'source': row['source'] ?? 'manual',
               'page': row['page'],
               'topPt': row['topPt'],
               'paddingTopPt': row['paddingTopPt'],
@@ -811,9 +828,10 @@ class _ProblemBankExportServerPreviewDialogState
     for (final pageNo in pageNos) {
       _ensureTitleHeaderForPage(pageNo);
       final row = _titlePageHeaderMap[pageNo] ?? const <String, String>{};
-      final fallback = (_titlePageHeaderMap[1]?['title'] ?? _subjectController.text)
-          .replaceAll(RegExp(r'\s+'), ' ')
-          .trim();
+      final fallback =
+          (_titlePageHeaderMap[1]?['title'] ?? _subjectController.text)
+              .replaceAll(RegExp(r'\s+'), ' ')
+              .trim();
       final title = (row['title'] ?? '').trim().isNotEmpty
           ? (row['title'] ?? '').trim()
           : (fallback.isNotEmpty ? fallback : '수학 영역');
@@ -881,7 +899,8 @@ class _ProblemBankExportServerPreviewDialogState
     if (rawItems is List) {
       for (final one in rawItems) {
         if (one is! Map) continue;
-        final name = _normalizeCoverTextValue(one['name'], '', allowEmpty: true);
+        final name =
+            _normalizeCoverTextValue(one['name'], '', allowEmpty: true);
         final pages = _normalizeCoverTextValue(
           one['pages'] ?? one['pageRange'],
           '',
@@ -1007,13 +1026,16 @@ class _ProblemBankExportServerPreviewDialogState
         .toList(growable: false);
     final commonGroup = subjectGroups.isNotEmpty
         ? subjectGroups.first
-        : (fallbackGroups.isNotEmpty ? fallbackGroups.first : const <String, dynamic>{});
+        : (fallbackGroups.isNotEmpty
+            ? fallbackGroups.first
+            : const <String, dynamic>{});
     final electiveGroup = subjectGroups.length > 1
         ? subjectGroups[1]
         : (fallbackGroups.length > 1
             ? fallbackGroups[1]
             : const <String, dynamic>{});
-    final commonLabel = '${commonGroup['label'] ?? defaults['commonLabel'] ?? '공통과목'}';
+    final commonLabel =
+        '${commonGroup['label'] ?? defaults['commonLabel'] ?? '공통과목'}';
     final commonPageRange = _normalizeCoverTextValue(
       commonGroup['pageRange'],
       '${defaults['commonPageRange'] ?? '1~12쪽'}',
@@ -1224,13 +1246,16 @@ class _ProblemBankExportServerPreviewDialogState
       final out = <Map<String, dynamic>>[];
       final maxLen = math.min(names.length, pages.length);
       for (var i = 0; i < maxLen; i += 1) {
-        final name = _normalizeCoverTextValue(names[i].text, '', allowEmpty: true);
-        final page = _normalizeCoverTextValue(pages[i].text, '', allowEmpty: true);
+        final name =
+            _normalizeCoverTextValue(names[i].text, '', allowEmpty: true);
+        final page =
+            _normalizeCoverTextValue(pages[i].text, '', allowEmpty: true);
         if (name.isEmpty && page.isEmpty) continue;
         out.add(<String, dynamic>{'name': name, 'pages': page});
       }
       return out;
     }
+
     final groupCount = [
       _coverGroupLabelControllers.length,
       _coverGroupPageRangeControllers.length,
@@ -1264,13 +1289,16 @@ class _ProblemBankExportServerPreviewDialogState
         .toList(growable: false);
     final commonGroup = subjectGroups.isNotEmpty
         ? subjectGroups.first
-        : (defaultGroups.isNotEmpty ? defaultGroups.first : const <String, dynamic>{});
+        : (defaultGroups.isNotEmpty
+            ? defaultGroups.first
+            : const <String, dynamic>{});
     final electiveGroup = subjectGroups.length > 1
         ? subjectGroups[1]
         : (defaultGroups.length > 1
             ? defaultGroups[1]
             : const <String, dynamic>{});
-    final commonLabel = '${commonGroup['label'] ?? defaults['commonLabel'] ?? '공통과목'}';
+    final commonLabel =
+        '${commonGroup['label'] ?? defaults['commonLabel'] ?? '공통과목'}';
     final commonPageRange = _normalizeCoverTextValue(
       commonGroup['pageRange'],
       '${defaults['commonPageRange'] ?? ''}',
@@ -1469,6 +1497,23 @@ class _ProblemBankExportServerPreviewDialogState
     }
   }
 
+  Future<void> _saveSettings() async {
+    final callback = widget.onSaveSettingsRequested;
+    if (callback == null || _isSavingSettings || _isRefreshing) return;
+    setState(() {
+      _isSavingSettings = true;
+    });
+    try {
+      await callback(_buildRequestPayload());
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSavingSettings = false;
+        });
+      }
+    }
+  }
+
   Widget _buildSectionCard({
     required String title,
     required Widget child,
@@ -1590,7 +1635,8 @@ class _ProblemBankExportServerPreviewDialogState
             borderRadius: BorderRadius.circular(8),
             borderSide: const BorderSide(color: Color(0xFF357D68), width: 1.1),
           ),
-          contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
         ),
       ),
     );
@@ -1726,7 +1772,9 @@ class _ProblemBankExportServerPreviewDialogState
               ),
             ),
           for (var i = 0;
-              i < math.min(itemNameControllers.length, itemPageControllers.length);
+              i <
+                  math.min(
+                      itemNameControllers.length, itemPageControllers.length);
               i += 1)
             Padding(
               padding: const EdgeInsets.only(bottom: 6),
@@ -1751,8 +1799,8 @@ class _ProblemBankExportServerPreviewDialogState
                   ),
                   const SizedBox(width: 4),
                   IconButton(
-                    onPressed: () =>
-                        _removeCoverSubjectItem(groupIndex: groupIndex, itemIndex: i),
+                    onPressed: () => _removeCoverSubjectItem(
+                        groupIndex: groupIndex, itemIndex: i),
                     tooltip: '하위과목 삭제',
                     icon: const Icon(
                       Icons.remove_circle_outline_rounded,
@@ -1987,9 +2035,7 @@ class _ProblemBankExportServerPreviewDialogState
       final page = int.tryParse('${row['page'] ?? 0}') ?? 0;
       final col = int.tryParse('${row['columnIndex'] ?? -1}') ?? -1;
       final rowIndex = int.tryParse('${row['rowIndex'] ?? 0}') ?? -1;
-      return page == pageNo &&
-          col == columnIndex &&
-          rowIndex >= 0;
+      return page == pageNo && col == columnIndex && rowIndex >= 0;
     }).toList(growable: true);
     out.sort((a, b) {
       final rowA = int.tryParse('${a.value['rowIndex'] ?? 0}') ?? 0;
@@ -2010,7 +2056,8 @@ class _ProblemBankExportServerPreviewDialogState
     if (columnIndex < 0 || columnIndex >= pageCounts.length) return null;
     final rowLimit = pageCounts[columnIndex];
     if (rowLimit <= 0) return null;
-    final used = _anchorRowsForColumn(pageIndex: pageIndex, columnIndex: columnIndex)
+    final used = _anchorRowsForColumn(
+            pageIndex: pageIndex, columnIndex: columnIndex)
         .map((entry) => int.tryParse('${entry.value['rowIndex'] ?? 0}') ?? -1)
         .where((row) => row >= 0)
         .toSet();
@@ -2660,7 +2707,8 @@ class _ProblemBankExportServerPreviewDialogState
                                     });
                                   },
                                 ),
-                                if (_includeCoverPage) _buildCoverPageTextEditor(),
+                                if (_includeCoverPage)
+                                  _buildCoverPageTextEditor(),
                                 const SizedBox(height: 4),
                                 const Text(
                                   '중앙 타이틀 입력은 페이지 카드 하단의 `제목` 편집에서 페이지별로 설정합니다.\n1페이지는 기본 제목 페이지이며, 제목 페이지로 지정된 카드에서 타이틀/부제를 각각 입력할 수 있습니다.',
@@ -2700,9 +2748,44 @@ class _ProblemBankExportServerPreviewDialogState
                   SizedBox(
                     width: double.infinity,
                     child: FilledButton.icon(
-                      onPressed: (widget.onGeneratePdfRequested == null ||
+                      onPressed: (widget.onSaveSettingsRequested == null ||
+                              _isSavingSettings ||
                               _isGeneratingPdf ||
                               _isRefreshing)
+                          ? null
+                          : _saveSettings,
+                      style: FilledButton.styleFrom(
+                        backgroundColor: const Color(0xFF1F3842),
+                        foregroundColor: const Color(0xFFD9F0FF),
+                        disabledBackgroundColor: const Color(0xFF1A2A31),
+                        disabledForegroundColor: const Color(0xFF86A4B3),
+                        minimumSize: const Size.fromHeight(42),
+                        shape: const StadiumBorder(),
+                      ),
+                      icon: _isSavingSettings
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.save_outlined, size: 18),
+                      label: const Text(
+                        '세팅 저장',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w800,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed: (widget.onGeneratePdfRequested == null ||
+                              _isGeneratingPdf ||
+                              _isRefreshing ||
+                              _isSavingSettings)
                           ? null
                           : _generatePdf,
                       style: FilledButton.styleFrom(
