@@ -57,8 +57,9 @@ const String kLearningQuestionModeOriginal = 'original';
 const String kLearningQuestionModeObjective = 'objective';
 const String kLearningQuestionModeSubjective = 'subjective';
 const String kLearningQuestionModeEssay = 'essay';
+const String kLearningDefaultTitlePageTopText = '2026학년도 대학수학능력시험 문제지';
 const String kLearningRenderConfigVersion =
-    'pb_render_v32zf_dual_anchor_row_stable';
+    'pb_render_v32zq_title_page_top_text';
 
 class LearningProblemLayoutTuning {
   const LearningProblemLayoutTuning({
@@ -177,6 +178,9 @@ class LearningProblemExportSettings {
     required this.figureQuality,
     required this.includeAnswerSheet,
     required this.includeExplanation,
+    required this.titlePageTopText,
+    required this.includeQuestionScore,
+    required this.questionScoreByQuestionId,
   });
 
   factory LearningProblemExportSettings.initial() {
@@ -192,6 +196,9 @@ class LearningProblemExportSettings {
       figureQuality: LearningProblemFigureQuality.defaults(),
       includeAnswerSheet: true,
       includeExplanation: false,
+      titlePageTopText: kLearningDefaultTitlePageTopText,
+      includeQuestionScore: false,
+      questionScoreByQuestionId: const <String, double>{},
     );
   }
 
@@ -214,6 +221,16 @@ class LearningProblemExportSettings {
     final includeExplanation = renderConfig['includeExplanation'] is bool
         ? renderConfig['includeExplanation'] == true
         : base.includeExplanation;
+    final titlePageTopText = '${renderConfig['titlePageTopText'] ?? ''}'
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    final includeQuestionScore = renderConfig['includeQuestionScore'] is bool
+        ? renderConfig['includeQuestionScore'] == true
+        : base.includeQuestionScore;
+    final questionScoreByQuestionId = _parseQuestionScoreMap(
+      renderConfig['questionScoreByQuestionId'],
+      fallback: base.questionScoreByQuestionId,
+    );
     final nextTemplate = profileToTemplate(profile);
     final nextPaper =
         kLearningProblemPaperOptions.contains(paper) ? paper : base.paperLabel;
@@ -231,7 +248,29 @@ class LearningProblemExportSettings {
       maxQuestionsPerPageLabel: nextMaxLabel,
       includeAnswerSheet: includeAnswerSheet,
       includeExplanation: includeExplanation,
+      titlePageTopText:
+          titlePageTopText.isEmpty ? base.titlePageTopText : titlePageTopText,
+      includeQuestionScore: includeQuestionScore,
+      questionScoreByQuestionId: questionScoreByQuestionId,
     );
+  }
+
+  static Map<String, double> _parseQuestionScoreMap(
+    dynamic raw, {
+    Map<String, double> fallback = const <String, double>{},
+  }) {
+    final source = raw is Map ? raw : fallback;
+    final out = <String, double>{};
+    for (final entry in source.entries) {
+      final id = '${entry.key}'.trim();
+      if (id.isEmpty) continue;
+      final value = entry.value;
+      final parsed =
+          value is num ? value.toDouble() : double.tryParse('$value');
+      if (parsed == null || !parsed.isFinite || parsed < 0) continue;
+      out[id] = parsed;
+    }
+    return out;
   }
 
   final String templateLabel;
@@ -245,6 +284,9 @@ class LearningProblemExportSettings {
   final LearningProblemFigureQuality figureQuality;
   final bool includeAnswerSheet;
   final bool includeExplanation;
+  final String titlePageTopText;
+  final bool includeQuestionScore;
+  final Map<String, double> questionScoreByQuestionId;
 
   int get layoutColumnCount => layoutColumnsToCount(layoutColumnLabel);
 
@@ -291,6 +333,12 @@ class LearningProblemExportSettings {
       if (mode == null || mode.trim().isEmpty) continue;
       modeMap[id] = mode.trim();
     }
+    final scoreMap = <String, double>{};
+    for (final id in orderedIds) {
+      final score = questionScoreByQuestionId[id];
+      if (score == null || !score.isFinite || score < 0) continue;
+      scoreMap[id] = score;
+    }
     return <String, dynamic>{
       'renderConfigVersion': kLearningRenderConfigVersion,
       'templateProfile': templateProfile,
@@ -313,6 +361,9 @@ class LearningProblemExportSettings {
           'subtitle': '',
         },
       ],
+      'titlePageTopText': titlePageTopText.trim().isEmpty
+          ? kLearningDefaultTitlePageTopText
+          : titlePageTopText.trim(),
       'alignPolicy': const <String, dynamic>{
         'pairAlignment': 'row',
         'skipAnchorRows': true,
@@ -323,6 +374,8 @@ class LearningProblemExportSettings {
       'figureQuality': figureQuality.toJson(),
       'questionModeByQuestionId': modeMap,
       'selectedQuestionIdsOrdered': orderedIds,
+      'includeQuestionScore': includeQuestionScore,
+      'questionScoreByQuestionId': scoreMap,
     };
   }
 
@@ -338,6 +391,9 @@ class LearningProblemExportSettings {
     LearningProblemFigureQuality? figureQuality,
     bool? includeAnswerSheet,
     bool? includeExplanation,
+    String? titlePageTopText,
+    bool? includeQuestionScore,
+    Map<String, double>? questionScoreByQuestionId,
   }) {
     return LearningProblemExportSettings(
       templateLabel: templateLabel ?? this.templateLabel,
@@ -352,6 +408,10 @@ class LearningProblemExportSettings {
       figureQuality: figureQuality ?? this.figureQuality,
       includeAnswerSheet: includeAnswerSheet ?? this.includeAnswerSheet,
       includeExplanation: includeExplanation ?? this.includeExplanation,
+      titlePageTopText: titlePageTopText ?? this.titlePageTopText,
+      includeQuestionScore: includeQuestionScore ?? this.includeQuestionScore,
+      questionScoreByQuestionId:
+          questionScoreByQuestionId ?? this.questionScoreByQuestionId,
     );
   }
 }

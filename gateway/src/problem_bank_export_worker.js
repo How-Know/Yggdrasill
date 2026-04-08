@@ -49,7 +49,8 @@ const FONT_PATH_QNUM =
   process.env.PB_PDF_FONT_QNUM_PATH || '';
 const FONT_PATH_SUBJECT =
   process.env.PB_PDF_FONT_SUBJECT_PATH || '';
-const RENDER_CONFIG_VERSION = 'pb_render_v32zf_dual_anchor_row_stable';
+const RENDER_CONFIG_VERSION = 'pb_render_v32zq_title_page_top_text';
+const DEFAULT_TITLE_PAGE_TOP_TEXT = '2026학년도 대학수학능력시험 문제지';
 const FIGURE_REGEN_COOLDOWN_MIN = Math.max(
   2,
   Number.parseInt(process.env.PB_EXPORT_REGEN_COOLDOWN_MIN || '12', 10),
@@ -2226,6 +2227,17 @@ function normalizeQuestionModeMap(raw, selectedQuestionIdsOrdered, fallbackMode)
   return out;
 }
 
+function normalizeQuestionScoreMap(raw, selectedQuestionIdsOrdered) {
+  const src = raw && typeof raw === 'object' ? raw : {};
+  const out = {};
+  for (const id of selectedQuestionIdsOrdered) {
+    const parsed = Number.parseFloat(String(src[id] ?? ''));
+    if (!Number.isFinite(parsed) || parsed < 0) continue;
+    out[id] = Math.min(999, parsed);
+  }
+  return out;
+}
+
 function buildRenderConfigFromJob(job) {
   const options = job.options && typeof job.options === 'object' ? job.options : {};
   const layoutColumns = normalizeLayoutColumns(
@@ -2273,6 +2285,14 @@ function buildRenderConfigFromJob(job) {
     selectedQuestionIdsOrdered,
     questionMode,
   );
+  const includeQuestionScore = normalizeBool(
+    options.includeQuestionScore ?? options.includeScore,
+    false,
+  );
+  const questionScoreByQuestionId = normalizeQuestionScoreMap(
+    options.questionScoreByQuestionId,
+    selectedQuestionIdsOrdered,
+  );
   const font =
     options.font && typeof options.font === 'object'
       ? {
@@ -2285,6 +2305,9 @@ function buildRenderConfigFromJob(job) {
         };
   const subjectTitleText =
     normalizeWhitespace(options.subjectTitleText || '\uC218\uD559 \uC601\uC5ED') || '\uC218\uD559 \uC601\uC5ED';
+  const titlePageTopText =
+    normalizeWhitespace(options.titlePageTopText || DEFAULT_TITLE_PAGE_TOP_TEXT)
+      || DEFAULT_TITLE_PAGE_TOP_TEXT;
   const includeCoverPage = normalizeBool(
     options.includeCoverPage ?? options.coverPage,
     false,
@@ -2304,6 +2327,8 @@ function buildRenderConfigFromJob(job) {
     paperSize: normalizePaper(job.paper_size),
     includeAnswerSheet: job.include_answer_sheet === true,
     includeExplanation: job.include_explanation === true,
+    includeQuestionScore,
+    questionScoreByQuestionId,
     includeCoverPage,
     coverPageTexts,
     layoutColumns,
@@ -2322,6 +2347,7 @@ function buildRenderConfigFromJob(job) {
     questionModeByQuestionId,
     font,
     subjectTitleText,
+    titlePageTopText,
   };
 }
 
@@ -2346,6 +2372,8 @@ function computeRenderHash(renderConfig) {
     paperSize: renderConfig.paperSize,
     includeAnswerSheet: renderConfig.includeAnswerSheet,
     includeExplanation: renderConfig.includeExplanation,
+    includeQuestionScore: renderConfig.includeQuestionScore,
+    questionScoreByQuestionId: renderConfig.questionScoreByQuestionId,
     includeCoverPage: renderConfig.includeCoverPage,
     coverPageTexts: renderConfig.coverPageTexts,
     layoutColumns: renderConfig.layoutColumns,
@@ -2364,6 +2392,7 @@ function computeRenderHash(renderConfig) {
     questionModeByQuestionId: renderConfig.questionModeByQuestionId,
     font: renderConfig.font,
     subjectTitleText: renderConfig.subjectTitleText,
+    titlePageTopText: renderConfig.titlePageTopText,
   };
   const canonical = JSON.stringify(canonicalizeJson(payload));
   return createHash('sha256').update(canonical).digest('hex');
@@ -3941,10 +3970,16 @@ async function processOneJob(job) {
         columnLabelAnchors: rendered.columnLabelAnchors || [],
         titlePageIndices: rendered.titlePageIndices || [1],
         titlePageHeaders: rendered.titlePageHeaders || [],
+        titlePageTopText:
+          rendered.titlePageTopText
+          || renderConfig.titlePageTopText
+          || DEFAULT_TITLE_PAGE_TOP_TEXT,
         includeCoverPage: rendered.includeCoverPage === true,
         coverPageTexts: rendered.coverPageTexts || {},
         includeAnswerSheet: rendered.includeAnswerSheet === true,
         includeExplanation: rendered.includeExplanation === true,
+        includeQuestionScore: rendered.includeQuestionScore === true,
+        questionScoreByQuestionId: rendered.questionScoreByQuestionId || {},
         renderConfigVersion:
           rendered.renderConfigVersion || RENDER_CONFIG_VERSION,
         renderHash,
@@ -3991,10 +4026,16 @@ async function processOneJob(job) {
           columnLabelAnchors: rendered.columnLabelAnchors || [],
           titlePageIndices: rendered.titlePageIndices || [1],
           titlePageHeaders: rendered.titlePageHeaders || [],
+          titlePageTopText:
+            rendered.titlePageTopText
+            || renderConfig.titlePageTopText
+            || DEFAULT_TITLE_PAGE_TOP_TEXT,
           includeCoverPage: rendered.includeCoverPage === true,
           coverPageTexts: rendered.coverPageTexts || {},
           includeAnswerSheet: rendered.includeAnswerSheet === true,
           includeExplanation: rendered.includeExplanation === true,
+          includeQuestionScore: rendered.includeQuestionScore === true,
+          questionScoreByQuestionId: rendered.questionScoreByQuestionId || {},
           renderConfigVersion:
             rendered.renderConfigVersion || RENDER_CONFIG_VERSION,
           renderHash,

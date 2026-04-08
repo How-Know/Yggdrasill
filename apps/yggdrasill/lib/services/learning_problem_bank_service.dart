@@ -343,6 +343,9 @@ class LearningProblemDocumentExportPreset {
     required this.renderConfig,
     required this.selectedQuestionIds,
     required this.questionModeByQuestionId,
+    required this.titlePageTopText,
+    required this.includeQuestionScore,
+    required this.questionScoreByQuestionId,
     this.createdAt,
     this.updatedAt,
   });
@@ -354,6 +357,9 @@ class LearningProblemDocumentExportPreset {
   final Map<String, dynamic> renderConfig;
   final List<String> selectedQuestionIds;
   final Map<String, String> questionModeByQuestionId;
+  final String titlePageTopText;
+  final bool includeQuestionScore;
+  final Map<String, double> questionScoreByQuestionId;
   final DateTime? createdAt;
   final DateTime? updatedAt;
 
@@ -362,6 +368,12 @@ class LearningProblemDocumentExportPreset {
   ) {
     final renderConfig = _mapOrEmpty(map['render_config']);
     final modeMapRaw = _mapOrEmpty(map['question_mode_by_question_id']);
+    final titlePageTopText = '${renderConfig['titlePageTopText'] ?? ''}'
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    final includeQuestionScore = renderConfig['includeQuestionScore'] == true;
+    final questionScoreByQuestionId =
+        _scoreMapFromDynamic(renderConfig['questionScoreByQuestionId']);
     final modeMap = <String, String>{};
     for (final entry in modeMapRaw.entries) {
       final id = entry.key.trim();
@@ -381,6 +393,10 @@ class LearningProblemDocumentExportPreset {
           .where((e) => e.isNotEmpty)
           .toList(growable: false),
       questionModeByQuestionId: modeMap,
+      titlePageTopText:
+          titlePageTopText.isEmpty ? '2026학년도 대학수학능력시험 문제지' : titlePageTopText,
+      includeQuestionScore: includeQuestionScore,
+      questionScoreByQuestionId: questionScoreByQuestionId,
       createdAt: _dateTimeOrNull(map['created_at']),
       updatedAt: _dateTimeOrNull(map['updated_at']),
     );
@@ -1350,6 +1366,20 @@ Map<String, dynamic> _mapOrEmpty(dynamic value) {
 List<dynamic> _listOrEmpty(dynamic value) {
   if (value is List) return value;
   return const <dynamic>[];
+}
+
+Map<String, double> _scoreMapFromDynamic(dynamic value) {
+  if (value is! Map) return const <String, double>{};
+  final out = <String, double>{};
+  for (final entry in value.entries) {
+    final id = '${entry.key}'.trim();
+    if (id.isEmpty) continue;
+    final raw = entry.value;
+    final score = raw is num ? raw.toDouble() : double.tryParse('$raw');
+    if (score == null || !score.isFinite || score < 0) continue;
+    out[id] = score;
+  }
+  return out;
 }
 
 DateTime? _dateTimeOrNull(dynamic value) {

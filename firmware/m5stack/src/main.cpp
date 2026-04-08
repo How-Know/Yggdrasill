@@ -614,20 +614,20 @@ void loop() {
   lv_tick_inc(nowTick - lastTick);
   lastTick = nowTick;
 
-  if (g_hw_pending) {
+  // homeworks 토픽은 단일 슬롯에 덮어쓰기 → 처리 중·직후에 또 도착한 페이로드를 같은 루프에서 연속 소비
+  for (int hw_drain = 0; hw_drain < 12 && g_hw_pending; hw_drain++) {
     String json_copy;
     portENTER_CRITICAL(&g_hw_mux);
     json_copy = g_hw_pending_json;
     g_hw_pending_json.remove(0);
     g_hw_pending = false;
     portEXIT_CRITICAL(&g_hw_mux);
-    if (json_copy.length() > 0) {
-      DynamicJsonDocument doc(json_copy.length() + 4096);
-      DeserializationError err = deserializeJson(doc, json_copy.c_str(), json_copy.length());
-      if (!err) {
-        JsonArray arr = doc["groups"].as<JsonArray>();
-        ui_port_update_homeworks(arr);
-      }
+    if (json_copy.length() == 0) break;
+    DynamicJsonDocument doc(json_copy.length() + 4096);
+    DeserializationError err = deserializeJson(doc, json_copy.c_str(), json_copy.length());
+    if (!err) {
+      JsonArray arr = doc["groups"].as<JsonArray>();
+      ui_port_update_homeworks(arr);
     }
   }
 

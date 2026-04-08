@@ -151,6 +151,12 @@ function buildStyles({
     .q-stem {
       white-space: normal;
     }
+    .q-score {
+      display: inline;
+      font-weight: 700;
+      white-space: nowrap;
+      vertical-align: baseline;
+    }
     .lc-line {
       display: inline;
       line-height: var(--lc-line-normal);
@@ -1574,6 +1580,8 @@ export function buildDocumentHtml({
   questions,
   includeAnswerSheet,
   includeExplanation,
+  includeQuestionScore = false,
+  questionScoreByQuestionId = {},
   mathRenderer,
   fontFaceCss = '',
   maxQuestionsPerPage = 99,
@@ -1599,11 +1607,21 @@ export function buildDocumentHtml({
   const subjectTitleText = String(layout?.subjectTitleText || '수학 영역')
     .replace(/\s+/g, ' ')
     .trim() || '수학 영역';
+  const titlePageTopText = String(layout?.titlePageTopText || '2026학년도 대학수학능력시험 문제지')
+    .replace(/\s+/g, ' ')
+    .trim() || '2026학년도 대학수학능력시험 문제지';
   const includeCoverPage = isMockStyle && layout?.includeCoverPage === true;
   const coverPageTexts = normalizeCoverPageTexts(layout?.coverPageTexts);
+  const scoreMap = questionScoreByQuestionId && typeof questionScoreByQuestionId === 'object'
+    ? questionScoreByQuestionId
+    : {};
 
   const stemSizePt = Number(layout?.stemSizePt || 11.0);
-  const allQ = (questions || []).map((q) => renderQuestionBlock(q, mathRenderer, { stemSizePt }));
+  const allQ = (questions || []).map((q) => renderQuestionBlock(q, mathRenderer, {
+    stemSizePt,
+    includeQuestionScore,
+    questionScoreByQuestionId: scoreMap,
+  }));
   let autoAnchorCarryMode = null;
   const effectiveColumnLabelAnchorRows = [];
   const effectiveAnchorSeen = new Set();
@@ -1902,6 +1920,7 @@ export function buildDocumentHtml({
     layoutMeta.pageCount = questionChunks.length;
     layoutMeta.titlePageIndices = titlePageIndices;
     layoutMeta.titlePageHeaders = titlePageHeaders;
+    layoutMeta.titlePageTopText = titlePageTopText;
   }
   let coverHtml = '';
   let questionHtml;
@@ -2182,7 +2201,7 @@ export function buildDocumentHtml({
           <header class="mock-header-first">
             <div class="mock-header-first-top">
               <div></div>
-              <div class="mock-first-title">2026학년도 대학수학능력시험 문제지</div>
+              <div class="mock-first-title">${escapeHtml(titlePageTopText)}</div>
               <div class="mock-side-right"><span class="mock-page-no mock-page-no-first">${pageNo}</span></div>
             </div>
             <div class="mock-header-first-bottom">

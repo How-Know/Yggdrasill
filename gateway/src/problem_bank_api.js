@@ -488,6 +488,21 @@ function normalizeQuestionModeMap(raw, selectedIds, fallbackMode = 'original') {
   return out;
 }
 
+function normalizeQuestionScoreMap(raw, selectedIds, fallbackScores = {}) {
+  const out = {};
+  const src = raw && typeof raw === 'object' ? raw : {};
+  const fallback = fallbackScores && typeof fallbackScores === 'object'
+    ? fallbackScores
+    : {};
+  for (const id of selectedIds) {
+    const candidate = src[id] ?? fallback[id];
+    const parsed = Number.parseFloat(String(candidate ?? ''));
+    if (!Number.isFinite(parsed) || parsed < 0) continue;
+    out[id] = Math.min(999, parsed);
+  }
+  return out;
+}
+
 function normalizeSelectedQuestionIdsOrdered(raw, fallbackSelectedIds) {
   const fallback = Array.isArray(fallbackSelectedIds)
     ? fallbackSelectedIds.filter((v) => isUuid(v))
@@ -572,7 +587,8 @@ function normalizeFigureQuality(rawFigureQuality, options = {}) {
   return { targetDpi, minDpi };
 }
 
-const EXPORT_RENDER_CONFIG_VERSION = 'pb_render_v32zf_dual_anchor_row_stable';
+const EXPORT_RENDER_CONFIG_VERSION = 'pb_render_v32zq_title_page_top_text';
+const DEFAULT_TITLE_PAGE_TOP_TEXT = '2026학년도 대학수학능력시험 문제지';
 
 const QUESTION_COPY_SELECT_COLUMNS = [
   'id',
@@ -662,10 +678,24 @@ function normalizeExportRenderConfig(options, selectedQuestionIds, defaults = {}
     selectedQuestionIdsOrdered,
     questionMode,
   );
+  const includeQuestionScore = normalizeBool(
+    src.includeQuestionScore ?? src.includeScore,
+    normalizeBool(defaults.includeQuestionScore, false),
+  );
+  const questionScoreByQuestionId = normalizeQuestionScoreMap(
+    src.questionScoreByQuestionId,
+    selectedQuestionIdsOrdered,
+    defaults.questionScoreByQuestionId,
+  );
   const subjectTitleText =
     String(src.subjectTitleText || defaults.subjectTitleText || '\uC218\uD559 \uC601\uC5ED')
       .replace(/\s+/g, ' ')
       .trim() || '\uC218\uD559 \uC601\uC5ED';
+  const titlePageTopText = String(
+    src.titlePageTopText || defaults.titlePageTopText || DEFAULT_TITLE_PAGE_TOP_TEXT,
+  )
+    .replace(/\s+/g, ' ')
+    .trim() || DEFAULT_TITLE_PAGE_TOP_TEXT;
   const includeCoverPage = normalizeBool(
     src.includeCoverPage ?? src.coverPage,
     normalizeBool(defaults.includeCoverPage, false),
@@ -698,6 +728,9 @@ function normalizeExportRenderConfig(options, selectedQuestionIds, defaults = {}
     layoutTuning: normalizeLayoutTuning(src.layoutTuning, src),
     figureQuality: normalizeFigureQuality(src.figureQuality, src),
     subjectTitleText,
+    titlePageTopText,
+    includeQuestionScore,
+    questionScoreByQuestionId,
     font:
       src.font && typeof src.font === 'object'
         ? {
@@ -1295,6 +1328,8 @@ async function createExportJob(body, res) {
     paperSize,
     includeAnswerSheet,
     includeExplanation,
+    includeQuestionScore: renderConfig.includeQuestionScore === true,
+    questionScoreByQuestionId: renderConfig.questionScoreByQuestionId,
     includeCoverPage: renderConfig.includeCoverPage,
     coverPageTexts: renderConfig.coverPageTexts,
     layoutColumns: renderConfig.layoutColumns,
@@ -1307,6 +1342,7 @@ async function createExportJob(body, res) {
     titlePageHeaders: renderConfig.titlePageHeaders,
     alignPolicy: renderConfig.alignPolicy,
     subjectTitleText: renderConfig.subjectTitleText,
+    titlePageTopText: renderConfig.titlePageTopText,
     questionMode: renderConfig.questionMode,
     font: renderConfig.font,
     layoutTuning: renderConfig.layoutTuning,
@@ -1324,6 +1360,8 @@ async function createExportJob(body, res) {
     paperSize,
     includeAnswerSheet,
     includeExplanation,
+    includeQuestionScore: renderConfig.includeQuestionScore === true,
+    questionScoreByQuestionId: renderConfig.questionScoreByQuestionId,
     includeCoverPage: renderConfig.includeCoverPage,
     coverPageTexts: renderConfig.coverPageTexts,
     layoutColumns: renderConfig.layoutColumns,
@@ -1336,6 +1374,7 @@ async function createExportJob(body, res) {
     titlePageHeaders: renderConfig.titlePageHeaders,
     alignPolicy: renderConfig.alignPolicy,
     subjectTitleText: renderConfig.subjectTitleText,
+    titlePageTopText: renderConfig.titlePageTopText,
     questionMode: renderConfig.questionMode,
     layoutTuning: renderConfig.layoutTuning,
     figureQuality: renderConfig.figureQuality,
@@ -1693,6 +1732,10 @@ async function saveSettingsAsDocument(body, res) {
     body.includeExplanation ?? rawRenderConfig.includeExplanation,
     false,
   );
+  const includeQuestionScore = normalizeBool(
+    body.includeQuestionScore ?? rawRenderConfig.includeQuestionScore,
+    false,
+  );
   const fallbackQuestionMode = normalizeQuestionMode(
     body.questionMode || rawRenderConfig.questionMode || 'original',
   );
@@ -1700,6 +1743,10 @@ async function saveSettingsAsDocument(body, res) {
     body.questionModeByQuestionId,
     selectedQuestionIdsOrdered,
     fallbackQuestionMode,
+  );
+  const sourceQuestionScoreByQuestionId = normalizeQuestionScoreMap(
+    body.questionScoreByQuestionId || rawRenderConfig.questionScoreByQuestionId,
+    selectedQuestionIdsOrdered,
   );
 
   const sourceStorageBucket = String(sourceDoc.source_storage_bucket || '').trim()
@@ -1874,6 +1921,7 @@ async function saveSettingsAsDocument(body, res) {
 
     const savedQuestionIdsOrdered = [];
     const translatedQuestionModeByQuestionId = {};
+    const translatedQuestionScoreByQuestionId = {};
     for (let i = 0; i < selectedQuestionIdsOrdered.length; i += 1) {
       const sourceQuestionId = selectedQuestionIdsOrdered[i];
       const sourceOrder = i + 1;
@@ -1885,6 +1933,10 @@ async function saveSettingsAsDocument(body, res) {
       translatedQuestionModeByQuestionId[insertedId] = normalizeQuestionMode(
         sourceQuestionModeByQuestionId[sourceQuestionId] || fallbackQuestionMode,
       );
+      const sourceScore = sourceQuestionScoreByQuestionId[sourceQuestionId];
+      if (Number.isFinite(sourceScore) && sourceScore >= 0) {
+        translatedQuestionScoreByQuestionId[insertedId] = sourceScore;
+      }
     }
 
     const normalizedRenderConfig = normalizeExportRenderConfig(
@@ -1893,14 +1945,21 @@ async function saveSettingsAsDocument(body, res) {
         questionMode: fallbackQuestionMode,
         selectedQuestionIdsOrdered: savedQuestionIdsOrdered,
         questionModeByQuestionId: translatedQuestionModeByQuestionId,
+        includeQuestionScore,
+        questionScoreByQuestionId: translatedQuestionScoreByQuestionId,
       },
       savedQuestionIdsOrdered,
       {
         questionMode: fallbackQuestionMode,
         subjectTitleText:
           String(rawRenderConfig.subjectTitleText || '').trim() || '수학 영역',
+        titlePageTopText:
+          String(rawRenderConfig.titlePageTopText || '').replace(/\s+/g, ' ').trim()
+            || DEFAULT_TITLE_PAGE_TOP_TEXT,
         includeCoverPage: normalizeBool(rawRenderConfig.includeCoverPage, false),
         coverPageTexts: normalizeJsonObject(rawRenderConfig.coverPageTexts, {}),
+        includeQuestionScore,
+        questionScoreByQuestionId: translatedQuestionScoreByQuestionId,
       },
     );
 
@@ -1910,8 +1969,10 @@ async function saveSettingsAsDocument(body, res) {
       paperSize,
       includeAnswerSheet,
       includeExplanation,
+      includeQuestionScore,
       selectedQuestionIdsOrdered: savedQuestionIdsOrdered,
       questionModeByQuestionId: translatedQuestionModeByQuestionId,
+      questionScoreByQuestionId: translatedQuestionScoreByQuestionId,
     };
 
     const { data: preset, error: presetErr } = await supa

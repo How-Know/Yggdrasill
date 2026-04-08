@@ -103,9 +103,27 @@ static lv_coord_t s_drag_start_touch_y = 0;
 static lv_coord_t s_drag_start_sheet_y = 240;
 
 // 이전 과제 상태 캐시 (diff 기반 업데이트)
-struct HwCacheEntry { char id[64]; int phase; int acc; };
+// phase만 보면 누적시간·문항수·제목/요약 변경 시 카드가 갱신되지 않아 앱과 어긋날 수 있음 → 1단계: 수치·주요 문자열까지 비교
+struct HwCacheEntry {
+  char id[64];
+  int8_t phase;
+  int32_t accumulated;
+  int32_t cycle_elapsed;
+  int16_t check_count;
+  int16_t total_count;
+  char group_title[40];
+  char page_summary[32];
+  char book_name[64];
+  char item_type[24];
+  uint32_t children_fp;
+};
 static HwCacheEntry s_hw_cache[16];
 static uint8_t s_hw_cache_cnt = 0;
+
+static void hw_invalidate_cache(void) {
+  s_hw_cache_cnt = 0;
+  memset(s_hw_cache, 0, sizeof(s_hw_cache));
+}
 static volatile bool s_hw_updating = false;
 static bool s_hw_refresh_pending = false;
 
@@ -132,6 +150,22 @@ struct HwGroupData {
   HwChildEntry children[8];
   uint8_t child_cnt;
 };
+
+// 그룹 내 자식 항목 변화(페이즈·문항·누적 등)까지 need_full 에 반영
+static uint32_t hw_group_children_fp(const HwGroupData& g) {
+  uint32_t h = 5381u;
+  for (uint8_t i = 0; i < g.child_cnt; i++) {
+    const HwChildEntry& c = g.children[i];
+    for (const char* p = c.item_id; *p; ++p) h = ((h << 5) + h) + (uint8_t)*p;
+    h = ((h << 5) + h) + (uint8_t)c.phase;
+    h = ((h << 5) + h) + (uint16_t)c.count;
+    h = ((h << 5) + h) + (uint16_t)c.check_count;
+    h = ((h << 5) + h) + (uint32_t)c.accumulated;
+  }
+  h = ((h << 5) + h) + (uint8_t)g.child_cnt;
+  return h;
+}
+
 static HwGroupData s_groups[6];
 static uint8_t s_group_cnt = 0;
 struct ChildCheckCacheEntry {
@@ -1616,6 +1650,7 @@ static void build_homeworks_ui_internal() {
   s_sheet_drag_moved = false;
   lv_obj_clean(s_stage);
   s_homeworks_mode = true;
+  hw_invalidate_cache();
 
   s_pages = lv_obj_create(s_stage);
   lv_obj_set_size(s_pages, 320, 240);
@@ -1909,6 +1944,7 @@ void ui_before_screensaver(void) {
 
 void ui_port_force_unbind(void) {
   s_hw_refresh_pending = false;
+  hw_invalidate_cache();
   close_hw_add_menu_page();
   if (!s_homeworks_mode) return;
   s_hw_updating = false;
@@ -2837,17 +2873,40 @@ void ui_port_update_homeworks(const JsonArray& groups) {
   HwCacheEntry new_cache[16];
   uint8_t new_cnt = 0;
   for (uint8_t i = 0; i < s_group_cnt && new_cnt < 16; i++) {
-    strncpy(new_cache[new_cnt].id, s_groups[i].group_id, 63); new_cache[new_cnt].id[63] = '\0';
-    new_cache[new_cnt].phase = s_groups[i].phase;
-    new_cache[new_cnt].acc = (int)s_groups[i].accumulated;
+    HwCacheEntry& nc = new_cache[new_cnt];
+    strncpy(nc.id, s_groups[i].group_id, 63); nc.id[63] = '\0';
+    nc.phase = s_groups[i].phase;
+    nc.accumulated = s_groups[i].accumulated;
+    nc.cycle_elapsed = s_groups[i].cycle_elapsed;
+    nc.check_count = s_groups[i].check_count;
+    nc.total_count = s_groups[i].total_count;
+    strncpy(nc.group_title, s_groups[i].group_title, sizeof(nc.group_title) - 1);
+    nc.group_title[sizeof(nc.group_title) - 1] = '\0';
+    strncpy(nc.page_summary, s_groups[i].page_summary, sizeof(nc.page_summary) - 1);
+    nc.page_summary[sizeof(nc.page_summary) - 1] = '\0';
+    strncpy(nc.book_name, s_groups[i].book_name, sizeof(nc.book_name) - 1);
+    nc.book_name[sizeof(nc.book_name) - 1] = '\0';
+    strncpy(nc.item_type, s_groups[i].item_type, sizeof(nc.item_type) - 1);
+    nc.item_type[sizeof(nc.item_type) - 1] = '\0';
+    nc.children_fp = hw_group_children_fp(s_groups[i]);
     new_cnt++;
   }
 
   bool need_full = (new_cnt != s_hw_cache_cnt);
   if (!need_full) {
     for (uint8_t i = 0; i < new_cnt; i++) {
-      if (strcmp(new_cache[i].id, s_hw_cache[i].id) != 0 || new_cache[i].phase != s_hw_cache[i].phase) {
-        need_full = true; break;
+      const HwCacheEntry& a = new_cache[i];
+      const HwCacheEntry& b = s_hw_cache[i];
+      if (strcmp(a.id, b.id) != 0 || a.phase != b.phase ||
+          a.accumulated != b.accumulated || a.cycle_elapsed != b.cycle_elapsed ||
+          a.check_count != b.check_count || a.total_count != b.total_count ||
+          a.children_fp != b.children_fp ||
+          strcmp(a.group_title, b.group_title) != 0 ||
+          strcmp(a.page_summary, b.page_summary) != 0 ||
+          strcmp(a.book_name, b.book_name) != 0 ||
+          strcmp(a.item_type, b.item_type) != 0) {
+        need_full = true;
+        break;
       }
     }
   }

@@ -45,6 +45,7 @@ async function renderOnce(html) {
           if (el.classList) {
             if (el.classList.contains('math-inline')) return true;
             if (el.classList.contains('q-num')) return true;
+            if (el.classList.contains('q-score')) return true;
             if (el.classList.contains('choice-label')) return true;
             if (el.classList.contains('bogi-item-label')) return true;
           }
@@ -53,6 +54,55 @@ async function renderOnce(html) {
         }
         return false;
       }
+
+      // Normalize score placement in stem:
+      // 1) keep exactly one non-breaking space before [N점]
+      // 2) if stem ends with figure blocks, place score before those blocks
+      document.querySelectorAll('.q-stem').forEach(function (stem) {
+        function isFigureLike(el) {
+          if (!el) return false;
+          if (el.tagName === 'TABLE') return true;
+          if (!el.classList) return false;
+          return (
+            el.classList.contains('figure-inline-block')
+            || el.classList.contains('figure-group-horizontal')
+            || el.classList.contains('figure-container')
+            || el.classList.contains('table')
+            || el.classList.contains('question-table')
+          );
+        }
+        var scoreNodes = Array.from(stem.querySelectorAll('.q-score'));
+        if (!scoreNodes.length) return;
+        scoreNodes.forEach(function (scoreNode) {
+          // Case A: score is currently after trailing figure block(s)
+          // -> move score before that trailing figure run.
+          var prevFigureStart = null;
+          var prevCursor = scoreNode.previousElementSibling;
+          while (prevCursor && isFigureLike(prevCursor)) {
+            prevFigureStart = prevCursor;
+            prevCursor = prevCursor.previousElementSibling;
+          }
+          if (prevFigureStart) stem.insertBefore(scoreNode, prevFigureStart);
+
+          // Case B: score is before trailing figures (already good) - keep.
+          // If some figure element appears right after score, do nothing.
+
+          // Keep score label text clean; spacing is handled by the previous text node.
+          var rawText = String(scoreNode.textContent || '');
+          rawText = rawText.replace(/^[\s\u00A0]+/, '');
+          scoreNode.textContent = rawText;
+
+          // Keep exactly one NBSP before score.
+          var prev = scoreNode.previousSibling;
+          if (prev && prev.nodeType === 3) {
+            prev.textContent = String(prev.textContent || '')
+              .replace(/[ \t\r\n\u00A0]+$/g, '')
+              + '\u00A0';
+          } else {
+            stem.insertBefore(document.createTextNode('\u00A0'), scoreNode);
+          }
+        });
+      });
 
       document.querySelectorAll('.q-stem, .choice-text, .bogi-item-text').forEach(function (block) {
         block.querySelectorAll('.debug-first').forEach(function (node) {

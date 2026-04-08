@@ -235,8 +235,10 @@ logEvent('log', '[gateway] mqtt runtime config', {
   recoveryCooldownMs: cfg.recoveryCooldownMs
 });
 
-async function publishHomeworksToBoundDevices(academy_id, student_id, source = 'unknown') {
-  if (!academy_id || !student_id) return;
+/** 학생 단위로 RPC+푸시를 직렬화해 빠른 연속 DB 이벤트 시 스냅샷 역전·중간 상태 유실 완화 */
+const homeworkPublishChains = new Map();
+
+async function publishHomeworksToBoundDevicesImpl(academy_id, student_id, source = 'unknown') {
   const { data: binds, error: bErr } = await supa
     .from('m5_device_bindings')
     .select('device_id')
@@ -267,6 +269,20 @@ async function publishHomeworksToBoundDevices(academy_id, student_id, source = '
       { qos: 1, retain: false }
     );
   }
+}
+
+async function publishHomeworksToBoundDevices(academy_id, student_id, source = 'unknown') {
+  if (!academy_id || !student_id) return;
+  const key = `${academy_id}::${student_id}`;
+  const prev = homeworkPublishChains.get(key) ?? Promise.resolve();
+  const job = prev
+    .catch(() => {})
+    .then(() => publishHomeworksToBoundDevicesImpl(academy_id, student_id, source))
+    .catch((e) => {
+      console.error('[gateway] publishHomeworksToBoundDevices chain', { source, key, error: e?.message ?? e });
+    });
+  homeworkPublishChains.set(key, job);
+  return job;
 }
 
 client.on('message', async (topic, payload) => {

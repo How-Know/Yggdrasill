@@ -348,7 +348,125 @@ function numIndentEm(numStr) {
   return '1.10';
 }
 
-export function renderQuestionBlock(question, mathRenderer, { stemSizePt = 11 } = {}) {
+function resolveQuestionScore(question, scoreMapByQuestionId) {
+  const questionId = String(question?.id || '').trim();
+  const mapScore = Number.parseFloat(
+    String(scoreMapByQuestionId?.[questionId] ?? ''),
+  );
+  if (Number.isFinite(mapScore) && mapScore >= 0) {
+    return Math.min(999, mapScore);
+  }
+  const meta = question?.meta && typeof question.meta === 'object' ? question.meta : {};
+  const metaScore = Number.parseFloat(
+    String(meta.score_point ?? meta.scorePoint ?? ''),
+  );
+  if (Number.isFinite(metaScore) && metaScore >= 0) {
+    return Math.min(999, metaScore);
+  }
+  return 3;
+}
+
+function formatQuestionScore(scoreValue) {
+  if (!Number.isFinite(scoreValue)) return '3';
+  if (Math.abs(scoreValue - Math.round(scoreValue)) < 0.0001) {
+    return String(Math.round(scoreValue));
+  }
+  return scoreValue.toFixed(1).replace(/\.0$/, '');
+}
+
+function appendScoreToStemHtml(
+  stemHtml,
+  scoreHtml,
+  { preferBeforeTrailingFigure = false } = {},
+) {
+  function findMatchingDivEnd(source, openIdx) {
+    const tagRe = /<\/?div\b[^>]*>/gi;
+    tagRe.lastIndex = openIdx;
+    let depth = 0;
+    let sawOpen = false;
+    let match = tagRe.exec(source);
+    while (match) {
+      const token = String(match[0] || '');
+      const isClose = /^<\//.test(token);
+      if (isClose) {
+        if (sawOpen) depth -= 1;
+      } else {
+        depth += 1;
+        sawOpen = true;
+      }
+      if (sawOpen && depth === 0) return tagRe.lastIndex;
+      match = tagRe.exec(source);
+    }
+    return -1;
+  }
+
+  function findTrailingDivContainerStart(source, marker) {
+    const start = source.lastIndexOf(marker);
+    if (start < 0) return -1;
+    const end = findMatchingDivEnd(source, start);
+    if (end < 0) return -1;
+    if (source.slice(end).trim().length > 0) return -1;
+    return start;
+  }
+
+  function findTrailingTableStart(source) {
+    const start = source.lastIndexOf('<table');
+    if (start < 0) return -1;
+    const closeIdx = source.indexOf('</table>', start);
+    if (closeIdx < 0) return -1;
+    const end = closeIdx + '</table>'.length;
+    if (source.slice(end).trim().length > 0) return -1;
+    return start;
+  }
+
+  const base = String(stemHtml || '');
+  const score = String(scoreHtml || '');
+  if (!base.trim()) return score;
+  if (preferBeforeTrailingFigure) {
+    // 보기/박스가 포함된 문제는 점수를 박스 내부가 아니라 박스 앞에 붙인다.
+    const lastBogiBoxStart = base.lastIndexOf('<div class="bogi-box');
+    if (lastBogiBoxStart >= 0) {
+      return `${base.slice(0, lastBogiBoxStart)}&nbsp;${score}${base.slice(lastBogiBoxStart)}`;
+    }
+
+    // Case 1) Stem ends with block-like containers such as 보기 박스/그림/표.
+    // Score should be attached to statement text, so place it before these blocks.
+    const trailingMarkers = [
+      '<div class="figure-container',
+      '<div class="figure-inline-block',
+      '<div class="figure-group-horizontal',
+    ];
+    for (const marker of trailingMarkers) {
+      const start = findTrailingDivContainerStart(base, marker);
+      if (start >= 0) {
+        return `${base.slice(0, start)}&nbsp;${score}${base.slice(start)}`;
+      }
+    }
+    const tableStart = findTrailingTableStart(base);
+    if (tableStart >= 0) {
+      return `${base.slice(0, tableStart)}&nbsp;${score}${base.slice(tableStart)}`;
+    }
+
+    // Case 2) Inline line ends with figure block(s) inside `.lc-line`.
+    // Insert score before the trailing figure block, not after it.
+    const trailingInlineLineFigureRe =
+      /(<span class="lc-line[^"]*"[^>]*>[\s\S]*?)(<div class="figure-inline-block[\s\S]*<\/div>)(\s*<\/span>\s*)$/;
+    if (trailingInlineLineFigureRe.test(base)) {
+      return base.replace(trailingInlineLineFigureRe, `$1&nbsp;${score}$2$3`);
+    }
+  }
+  return `${base}&nbsp;${score}`;
+}
+
+export function renderQuestionBlock(
+  question,
+  mathRenderer,
+  {
+    stemSizePt = 11,
+    includeQuestionScore = false,
+    questionScoreByQuestionId = {},
+  } = {},
+) {
   const number = String(question?.question_number || '?');
   const equations = Array.isArray(question?.equations) ? question.equations : [];
   const dataUrls = Array.isArray(question?.figure_data_urls) ? question.figure_data_urls : [];
@@ -376,10 +494,27 @@ export function renderQuestionBlock(question, mathRenderer, { stemSizePt = 11 } 
   const hasFraction = stem.hasFraction || choiceHtml.includes('has-fraction');
   const questionClass = hasFraction ? 'question has-fraction' : 'question';
   const indent = numIndentEm(number);
+  const scoreSuffix = includeQuestionScore
+    ? `<span class="q-score">[${escapeHtml(formatQuestionScore(
+      resolveQuestionScore(question, questionScoreByQuestionId),
+    ))}점]</span>`
+    : '';
+  const stemRawHtml = String(stem.stemHtml || '');
+  const hasTrailingContainerLikeContent =
+    /<div class="(?:bogi-box|figure-inline-block|figure-group-horizontal|figure-container)[^"]*"|<table[\s>]/.test(stemRawHtml);
+  const hasFigureLikeContent =
+    hasTrailingContainerLikeContent
+    || inlineCount > 0
+    || String(figureHtml || '').trim().length > 0;
+  const stemHtml = scoreSuffix
+    ? appendScoreToStemHtml(stemRawHtml, scoreSuffix, {
+      preferBeforeTrailingFigure: hasFigureLikeContent,
+    })
+    : stemRawHtml;
 
   return `
     <article class="${questionClass}" style="padding-left:${indent}em;text-indent:-${indent}em;">
-      <div class="q-stem"><span class="q-num">${escapeHtml(number)}.</span> ${stem.stemHtml}</div>
+      <div class="q-stem"><span class="q-num">${escapeHtml(number)}.</span> ${stemHtml}</div>
       ${figureHtml}
       ${choiceHtml}
     </article>

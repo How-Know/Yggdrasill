@@ -3,9 +3,22 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:pdfrx/pdfrx.dart';
 
+class ProblemBankPreviewQuestionScoreEntry {
+  const ProblemBankPreviewQuestionScoreEntry({
+    required this.questionId,
+    required this.questionNumber,
+    this.defaultScore = 3,
+  });
+
+  final String questionId;
+  final String questionNumber;
+  final double defaultScore;
+}
+
 class ProblemBankPreviewRefreshRequest {
   const ProblemBankPreviewRefreshRequest({
     required this.subjectTitleText,
+    required this.titlePageTopText,
     required this.pageColumnQuestionCounts,
     required this.columnLabelAnchors,
     required this.titlePageIndices,
@@ -14,9 +27,12 @@ class ProblemBankPreviewRefreshRequest {
     required this.includeCoverPage,
     required this.includeAnswerSheet,
     required this.includeExplanation,
+    required this.includeQuestionScore,
+    required this.questionScoreByQuestionId,
   });
 
   final String subjectTitleText;
+  final String titlePageTopText;
   final List<Map<String, dynamic>> pageColumnQuestionCounts;
   final List<Map<String, dynamic>> columnLabelAnchors;
   final List<int> titlePageIndices;
@@ -25,11 +41,14 @@ class ProblemBankPreviewRefreshRequest {
   final bool includeCoverPage;
   final bool includeAnswerSheet;
   final bool includeExplanation;
+  final bool includeQuestionScore;
+  final Map<String, double> questionScoreByQuestionId;
 }
 
 class ProblemBankPreviewRefreshResult {
   const ProblemBankPreviewRefreshResult({
     required this.pdfUrl,
+    this.titlePageTopText = '2026학년도 대학수학능력시험 문제지',
     this.pageColumnQuestionCounts = const <Map<String, dynamic>>[],
     this.columnLabelAnchors = const <Map<String, dynamic>>[],
     this.titlePageIndices = const <int>[],
@@ -38,9 +57,12 @@ class ProblemBankPreviewRefreshResult {
     this.includeCoverPage = false,
     this.includeAnswerSheet = true,
     this.includeExplanation = false,
+    this.includeQuestionScore = false,
+    this.questionScoreByQuestionId = const <String, double>{},
   });
 
   final String pdfUrl;
+  final String titlePageTopText;
   final List<Map<String, dynamic>> pageColumnQuestionCounts;
   final List<Map<String, dynamic>> columnLabelAnchors;
   final List<int> titlePageIndices;
@@ -49,6 +71,8 @@ class ProblemBankPreviewRefreshResult {
   final bool includeCoverPage;
   final bool includeAnswerSheet;
   final bool includeExplanation;
+  final bool includeQuestionScore;
+  final Map<String, double> questionScoreByQuestionId;
 }
 
 typedef ProblemBankPreviewRefreshCallback
@@ -70,6 +94,7 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
     required this.pdfUrl,
     required this.titleText,
     this.initialSubjectTitle = '수학 영역',
+    this.initialTitlePageTopText = '2026학년도 대학수학능력시험 문제지',
     this.layoutColumns = 1,
     this.maxQuestionsPerPage = 4,
     this.totalQuestionCount = 0,
@@ -81,6 +106,9 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
     this.initialIncludeCoverPage = false,
     this.initialIncludeAnswerSheet = true,
     this.initialIncludeExplanation = false,
+    this.initialIncludeQuestionScore = false,
+    this.initialQuestionScoreByQuestionId = const <String, double>{},
+    this.questionScoreEntries = const <ProblemBankPreviewQuestionScoreEntry>[],
     this.onRefreshRequested,
     this.onGeneratePdfRequested,
     this.onSaveSettingsRequested,
@@ -89,6 +117,7 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
   final String pdfUrl;
   final String titleText;
   final String initialSubjectTitle;
+  final String initialTitlePageTopText;
   final int layoutColumns;
   final int maxQuestionsPerPage;
   final int totalQuestionCount;
@@ -100,6 +129,9 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
   final bool initialIncludeCoverPage;
   final bool initialIncludeAnswerSheet;
   final bool initialIncludeExplanation;
+  final bool initialIncludeQuestionScore;
+  final Map<String, double> initialQuestionScoreByQuestionId;
+  final List<ProblemBankPreviewQuestionScoreEntry> questionScoreEntries;
   final ProblemBankPreviewRefreshCallback? onRefreshRequested;
   final ProblemBankPreviewGeneratePdfCallback? onGeneratePdfRequested;
   final ProblemBankPreviewSaveSettingsCallback? onSaveSettingsRequested;
@@ -109,6 +141,7 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
     required String pdfUrl,
     String titleText = '서버 PDF 미리보기',
     String initialSubjectTitle = '수학 영역',
+    String initialTitlePageTopText = '2026학년도 대학수학능력시험 문제지',
     int layoutColumns = 1,
     int maxQuestionsPerPage = 4,
     int totalQuestionCount = 0,
@@ -123,6 +156,11 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
     bool initialIncludeCoverPage = false,
     bool initialIncludeAnswerSheet = true,
     bool initialIncludeExplanation = false,
+    bool initialIncludeQuestionScore = false,
+    Map<String, double> initialQuestionScoreByQuestionId =
+        const <String, double>{},
+    List<ProblemBankPreviewQuestionScoreEntry> questionScoreEntries =
+        const <ProblemBankPreviewQuestionScoreEntry>[],
     ProblemBankPreviewRefreshCallback? onRefreshRequested,
     ProblemBankPreviewGeneratePdfCallback? onGeneratePdfRequested,
     ProblemBankPreviewSaveSettingsCallback? onSaveSettingsRequested,
@@ -148,6 +186,7 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
               pdfUrl: pdfUrl,
               titleText: titleText,
               initialSubjectTitle: initialSubjectTitle,
+              initialTitlePageTopText: initialTitlePageTopText,
               layoutColumns: layoutColumns,
               maxQuestionsPerPage: maxQuestionsPerPage,
               totalQuestionCount: totalQuestionCount,
@@ -159,6 +198,10 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
               initialIncludeCoverPage: initialIncludeCoverPage,
               initialIncludeAnswerSheet: initialIncludeAnswerSheet,
               initialIncludeExplanation: initialIncludeExplanation,
+              initialIncludeQuestionScore: initialIncludeQuestionScore,
+              initialQuestionScoreByQuestionId:
+                  initialQuestionScoreByQuestionId,
+              questionScoreEntries: questionScoreEntries,
               onRefreshRequested: onRefreshRequested,
               onGeneratePdfRequested: onGeneratePdfRequested,
               onSaveSettingsRequested: onSaveSettingsRequested,
@@ -176,6 +219,7 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
 
 class _ProblemBankExportServerPreviewDialogState
     extends State<ProblemBankExportServerPreviewDialog> {
+  static const String _defaultTitlePageTopText = '2026학년도 대학수학능력시험 문제지';
   static const double _minScale = 0.2;
   static const double _maxScale = 8;
   static const Color _panelBg = Color(0xFF151C21);
@@ -191,6 +235,7 @@ class _ProblemBankExportServerPreviewDialogState
 
   final PdfViewerController _viewerController = PdfViewerController();
   late final TextEditingController _subjectController;
+  late final TextEditingController _titlePageTopTextController;
   late final TextEditingController _coverTopTitleController;
   late final TextEditingController _coverSubjectTitleController;
   late final TextEditingController _coverPhraseController;
@@ -215,6 +260,9 @@ class _ProblemBankExportServerPreviewDialogState
   late bool _includeCoverPage;
   late bool _includeAnswerSheet;
   late bool _includeExplanation;
+  late bool _includeQuestionScore;
+  late List<ProblemBankPreviewQuestionScoreEntry> _questionScoreEntries;
+  late Map<String, double> _questionScoreByQuestionId;
   late Map<int, List<int>> _pageOverrides;
   late List<List<int>> _computedPageColumnCounts;
   late Map<String, Map<String, dynamic>> _columnLabelAnchorMap;
@@ -234,6 +282,11 @@ class _ProblemBankExportServerPreviewDialogState
     _currentPdfUrl = widget.pdfUrl;
     _subjectController =
         TextEditingController(text: widget.initialSubjectTitle);
+    _titlePageTopTextController = TextEditingController(
+      text: widget.initialTitlePageTopText.trim().isNotEmpty
+          ? widget.initialTitlePageTopText.trim()
+          : _defaultTitlePageTopText,
+    );
     _coverTopTitleController = TextEditingController();
     _coverSubjectTitleController = TextEditingController();
     _coverPhraseController = TextEditingController();
@@ -244,6 +297,13 @@ class _ProblemBankExportServerPreviewDialogState
     _includeCoverPage = widget.initialIncludeCoverPage;
     _includeAnswerSheet = widget.initialIncludeAnswerSheet;
     _includeExplanation = widget.initialIncludeExplanation;
+    _includeQuestionScore = widget.initialIncludeQuestionScore;
+    _questionScoreEntries = _normalizeQuestionScoreEntries(
+      widget.questionScoreEntries,
+    );
+    _questionScoreByQuestionId = _normalizeQuestionScoreMap(
+      widget.initialQuestionScoreByQuestionId,
+    );
     _pageOverrides = _readInitialPageOverrides();
     _computedPageColumnCounts = _recomputePageColumnCounts();
     _columnLabelAnchorMap = _readInitialColumnLabelAnchors();
@@ -268,6 +328,7 @@ class _ProblemBankExportServerPreviewDialogState
       controller.dispose();
     }
     _subjectController.dispose();
+    _titlePageTopTextController.dispose();
     _coverTopTitleController.dispose();
     _coverSubjectTitleController.dispose();
     _coverPhraseController.dispose();
@@ -297,6 +358,255 @@ class _ProblemBankExportServerPreviewDialogState
       }
     }
     return out;
+  }
+
+  double _sanitizeQuestionScore(num value) {
+    final normalized = value.toDouble();
+    if (!normalized.isFinite) return 3;
+    if (normalized < 0) return 0;
+    if (normalized > 999) return 999;
+    return normalized;
+  }
+
+  List<ProblemBankPreviewQuestionScoreEntry> _normalizeQuestionScoreEntries(
+    List<ProblemBankPreviewQuestionScoreEntry> source,
+  ) {
+    if (source.isEmpty) return const <ProblemBankPreviewQuestionScoreEntry>[];
+    final out = <ProblemBankPreviewQuestionScoreEntry>[];
+    final seen = <String>{};
+    for (final entry in source) {
+      final questionId = entry.questionId.trim();
+      if (questionId.isEmpty || seen.contains(questionId)) continue;
+      seen.add(questionId);
+      final questionNumber = entry.questionNumber.trim().isNotEmpty
+          ? entry.questionNumber.trim()
+          : '${out.length + 1}';
+      out.add(
+        ProblemBankPreviewQuestionScoreEntry(
+          questionId: questionId,
+          questionNumber: questionNumber,
+          defaultScore: _sanitizeQuestionScore(entry.defaultScore),
+        ),
+      );
+    }
+    return out;
+  }
+
+  Map<String, double> _normalizeQuestionScoreMap(Map<String, double> source) {
+    final out = <String, double>{};
+    for (final entry in _questionScoreEntries) {
+      final score = source[entry.questionId];
+      out[entry.questionId] =
+          _sanitizeQuestionScore(score ?? entry.defaultScore);
+    }
+    return out;
+  }
+
+  Map<String, double> _questionScorePayload() {
+    if (_questionScoreEntries.isEmpty) return const <String, double>{};
+    final out = <String, double>{};
+    for (final entry in _questionScoreEntries) {
+      final score = _questionScoreByQuestionId[entry.questionId];
+      out[entry.questionId] =
+          _sanitizeQuestionScore(score ?? entry.defaultScore);
+    }
+    return out;
+  }
+
+  String _formatScoreValue(num value) {
+    final safe = value.toDouble();
+    if (!safe.isFinite) return '0';
+    if ((safe - safe.round()).abs() < 0.0001) return '${safe.round()}';
+    return safe.toStringAsFixed(1).replaceFirst(RegExp(r'\.0$'), '');
+  }
+
+  double? _parseScoreInput(String raw) {
+    final text = raw.trim();
+    if (text.isEmpty) return null;
+    final parsed = double.tryParse(text);
+    if (parsed == null || !parsed.isFinite) return null;
+    return _sanitizeQuestionScore(parsed);
+  }
+
+  double _questionScoreTotal(Map<String, double> source) {
+    var total = 0.0;
+    for (final entry in _questionScoreEntries) {
+      total += _sanitizeQuestionScore(
+        source[entry.questionId] ?? entry.defaultScore,
+      );
+    }
+    return total;
+  }
+
+  Future<void> _openQuestionScoreSettingsDialog() async {
+    if (_questionScoreEntries.isEmpty) return;
+    final draft = _questionScorePayload();
+    final controllers = <String, TextEditingController>{};
+    for (final entry in _questionScoreEntries) {
+      controllers[entry.questionId] = TextEditingController(
+        text: _formatScoreValue(
+          draft[entry.questionId] ?? entry.defaultScore,
+        ),
+      );
+    }
+    try {
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) {
+          return StatefulBuilder(
+            builder: (context, setDialogState) {
+              final total = _questionScoreTotal(draft);
+              return AlertDialog(
+                backgroundColor: _panelBg,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  side: const BorderSide(color: _panelBorder),
+                ),
+                titlePadding: const EdgeInsets.fromLTRB(18, 16, 18, 8),
+                contentPadding: const EdgeInsets.fromLTRB(18, 8, 18, 8),
+                actionsPadding: const EdgeInsets.fromLTRB(10, 4, 10, 10),
+                title: const Text(
+                  '문항별 점수 설정',
+                  style: TextStyle(
+                    color: _textPrimary,
+                    fontSize: 14.4,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                content: SizedBox(
+                  width: 420,
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxHeight: 520),
+                    child: SingleChildScrollView(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          for (final entry in _questionScoreEntries)
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 8),
+                              child: Row(
+                                children: [
+                                  SizedBox(
+                                    width: 70,
+                                    child: Text(
+                                      '${entry.questionNumber}번',
+                                      style: const TextStyle(
+                                        color: _textPrimary,
+                                        fontSize: 12.6,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ),
+                                  Expanded(
+                                    child: TextField(
+                                      controller: controllers[entry.questionId],
+                                      keyboardType:
+                                          const TextInputType.numberWithOptions(
+                                        decimal: true,
+                                        signed: false,
+                                      ),
+                                      style: const TextStyle(
+                                        color: _textPrimary,
+                                        fontSize: 12.8,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                      decoration: const InputDecoration(
+                                        isDense: true,
+                                        filled: true,
+                                        fillColor: Color(0xFF0E161B),
+                                        enabledBorder: OutlineInputBorder(
+                                          borderSide:
+                                              BorderSide(color: _panelBorder),
+                                        ),
+                                        focusedBorder: OutlineInputBorder(
+                                          borderSide:
+                                              BorderSide(color: _accent),
+                                        ),
+                                        contentPadding: EdgeInsets.symmetric(
+                                          horizontal: 10,
+                                          vertical: 9,
+                                        ),
+                                        suffixText: '점',
+                                        suffixStyle: TextStyle(
+                                          color: _textMuted,
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                      onChanged: (value) {
+                                        final parsed = _parseScoreInput(value);
+                                        if (parsed == null) return;
+                                        setDialogState(() {
+                                          draft[entry.questionId] = parsed;
+                                        });
+                                      },
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          const SizedBox(height: 6),
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.fromLTRB(12, 9, 12, 9),
+                            decoration: BoxDecoration(
+                              color: _panelSectionBg,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: _panelBorder),
+                            ),
+                            child: Text(
+                              '총점: ${_formatScoreValue(total)}점',
+                              style: const TextStyle(
+                                color: _textPrimary,
+                                fontSize: 12.8,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () {
+                      for (final entry in _questionScoreEntries) {
+                        final restored = _sanitizeQuestionScore(
+                          entry.defaultScore,
+                        );
+                        draft[entry.questionId] = restored;
+                        controllers[entry.questionId]?.text =
+                            _formatScoreValue(restored);
+                      }
+                      setDialogState(() {});
+                    },
+                    child: const Text('기본값 복원'),
+                  ),
+                  TextButton(
+                    onPressed: () => Navigator.of(dialogContext).pop(),
+                    child: const Text('취소'),
+                  ),
+                  FilledButton(
+                    onPressed: () {
+                      setState(() {
+                        _questionScoreByQuestionId =
+                            _normalizeQuestionScoreMap(draft);
+                      });
+                      Navigator.of(dialogContext).pop();
+                    },
+                    child: const Text('적용'),
+                  ),
+                ],
+              );
+            },
+          );
+        },
+      );
+    } finally {
+      for (final controller in controllers.values) {
+        controller.dispose();
+      }
+    }
   }
 
   void _syncPageScopedUiState() {
@@ -1355,6 +1665,7 @@ class _ProblemBankExportServerPreviewDialogState
   ProblemBankPreviewRefreshRequest _buildRequestPayload() {
     return ProblemBankPreviewRefreshRequest(
       subjectTitleText: _subjectController.text.trim(),
+      titlePageTopText: _titlePageTopTextController.text.trim(),
       pageColumnQuestionCounts: _pageColumnPayload(),
       columnLabelAnchors: _columnLabelAnchorsPayload(),
       titlePageIndices: _titlePageIndicesPayload(),
@@ -1363,6 +1674,8 @@ class _ProblemBankExportServerPreviewDialogState
       includeCoverPage: _includeCoverPage,
       includeAnswerSheet: _includeAnswerSheet,
       includeExplanation: _includeExplanation,
+      includeQuestionScore: _includeQuestionScore,
+      questionScoreByQuestionId: _questionScorePayload(),
     );
   }
 
@@ -1450,6 +1763,17 @@ class _ProblemBankExportServerPreviewDialogState
         _includeCoverPage = refreshed.includeCoverPage;
         _includeAnswerSheet = refreshed.includeAnswerSheet;
         _includeExplanation = refreshed.includeExplanation;
+        _includeQuestionScore = refreshed.includeQuestionScore;
+        final refreshedTopText = refreshed.titlePageTopText.trim();
+        final nextTopText = refreshedTopText.isNotEmpty
+            ? refreshedTopText
+            : _defaultTitlePageTopText;
+        if (_titlePageTopTextController.text != nextTopText) {
+          _titlePageTopTextController.text = nextTopText;
+        }
+        _questionScoreByQuestionId = _normalizeQuestionScoreMap(
+          refreshed.questionScoreByQuestionId,
+        );
         _syncCoverPageTextControllers(refreshed.coverPageTexts);
         if (_isTwoColumnLayout) {
           _pageOverrides =
@@ -1545,6 +1869,7 @@ class _ProblemBankExportServerPreviewDialogState
     required String description,
     required bool value,
     required ValueChanged<bool> onChanged,
+    Widget? trailingAction,
   }) {
     return Container(
       width: double.infinity,
@@ -1582,6 +1907,10 @@ class _ProblemBankExportServerPreviewDialogState
               ],
             ),
           ),
+          if (trailingAction != null) ...[
+            const SizedBox(width: 6),
+            trailingAction,
+          ],
           const SizedBox(width: 8),
           Switch(
             value: value,
@@ -2676,6 +3005,11 @@ class _ProblemBankExportServerPreviewDialogState
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
+                                _buildCoverTextField(
+                                  label: '제목 페이지 상단 문구 (모든 제목 페이지 공통)',
+                                  controller: _titlePageTopTextController,
+                                  hintText: _defaultTitlePageTopText,
+                                ),
                                 _buildTitleSwitchTile(
                                   label: '표지',
                                   description:
@@ -2684,6 +3018,36 @@ class _ProblemBankExportServerPreviewDialogState
                                   onChanged: (value) {
                                     setState(() {
                                       _includeCoverPage = value;
+                                    });
+                                  },
+                                ),
+                                _buildTitleSwitchTile(
+                                  label: '점수',
+                                  description: '문항 끝에 [N점] 형식으로 배점을 표시합니다.',
+                                  value: _includeQuestionScore,
+                                  trailingAction: IconButton(
+                                    onPressed: _questionScoreEntries.isEmpty
+                                        ? null
+                                        : _openQuestionScoreSettingsDialog,
+                                    tooltip: '문항별 점수 설정',
+                                    icon: const Icon(Icons.tune_rounded),
+                                    iconSize: 18,
+                                    color: _textPrimary,
+                                    disabledColor: _textMuted,
+                                    visualDensity: VisualDensity.compact,
+                                    style: IconButton.styleFrom(
+                                      backgroundColor: const Color(0xFF1B252B),
+                                      foregroundColor: _textPrimary,
+                                      disabledBackgroundColor:
+                                          const Color(0xFF162026),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                    ),
+                                  ),
+                                  onChanged: (value) {
+                                    setState(() {
+                                      _includeQuestionScore = value;
                                     });
                                   },
                                 ),
@@ -2726,7 +3090,7 @@ class _ProblemBankExportServerPreviewDialogState
                           _buildSectionCard(
                             title: '문제와 답안',
                             child: Text(
-                              '현재 설정: 빠른정답 ${_includeAnswerSheet ? 'ON' : 'OFF'} · 해설 ${_includeExplanation ? 'ON' : 'OFF'}',
+                              '현재 설정: 점수 ${_includeQuestionScore ? 'ON' : 'OFF'} · 빠른정답 ${_includeAnswerSheet ? 'ON' : 'OFF'} · 해설 ${_includeExplanation ? 'ON' : 'OFF'}',
                               style: const TextStyle(
                                 color: Color(0xFF9FB3B3),
                                 fontSize: 12.2,

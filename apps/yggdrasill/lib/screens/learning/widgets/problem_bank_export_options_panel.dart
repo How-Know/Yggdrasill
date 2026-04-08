@@ -476,6 +476,7 @@ class ProblemBankExportOptionsPanel extends StatelessWidget {
             dropdownColor: const Color(0xFF151C21),
             iconEnabledColor: _textMuted,
             isDense: true,
+            isExpanded: true,
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
             borderRadius: BorderRadius.circular(10),
             items: values

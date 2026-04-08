@@ -377,6 +377,19 @@ function normalizeQuestionForHtml(question) {
   };
 }
 
+function normalizeQuestionScoreByQuestionId(raw) {
+  if (!raw || typeof raw !== 'object') return {};
+  const out = {};
+  for (const [key, value] of Object.entries(raw)) {
+    const id = String(key || '').trim();
+    if (!id) continue;
+    const parsed = Number.parseFloat(String(value ?? ''));
+    if (!Number.isFinite(parsed) || parsed < 0) continue;
+    out[id] = Math.min(999, parsed);
+  }
+  return out;
+}
+
 function buildHtmlLayout(renderConfig, baseLayout) {
   const tuning = renderConfig?.layoutTuning || {};
   const marginPt = Number(tuning.pageMargin || baseLayout.margin || 46);
@@ -392,6 +405,9 @@ function buildHtmlLayout(renderConfig, baseLayout) {
     ? parsedMaxQuestionsPerPage
     : 0;
   const subjectTitleText = normalizeWhitespace(renderConfig?.subjectTitleText || '수학 영역') || '수학 영역';
+  const titlePageTopText =
+    normalizeWhitespace(renderConfig?.titlePageTopText || '2026학년도 대학수학능력시험 문제지')
+    || '2026학년도 대학수학능력시험 문제지';
   const titlePageIndices = normalizeTitlePageIndices(
     renderConfig?.titlePageIndices || renderConfig?.titlePages,
   );
@@ -401,6 +417,10 @@ function buildHtmlLayout(renderConfig, baseLayout) {
     subjectTitleText,
   );
   const includeCoverPage = renderConfig?.includeCoverPage === true;
+  const includeQuestionScore = renderConfig?.includeQuestionScore === true;
+  const questionScoreByQuestionId = normalizeQuestionScoreByQuestionId(
+    renderConfig?.questionScoreByQuestionId,
+  );
   const coverPageTexts = normalizeCoverPageTexts(
     renderConfig?.coverPageTexts || renderConfig?.coverTexts || renderConfig?.coverPageTextConfig,
   );
@@ -431,9 +451,12 @@ function buildHtmlLayout(renderConfig, baseLayout) {
     titlePageIndices,
     titlePageHeaders,
     includeCoverPage,
+    includeQuestionScore,
+    questionScoreByQuestionId,
     coverPageTexts,
     alignPolicy: normalizeAlignPolicy(renderConfig?.alignPolicy),
     subjectTitleText,
+    titlePageTopText,
   };
 }
 
@@ -516,6 +539,8 @@ export async function renderPdfWithHtmlEngine({
     questions: htmlQuestions,
     includeAnswerSheet: renderConfig?.includeAnswerSheet === true,
     includeExplanation: renderConfig?.includeExplanation === true,
+    includeQuestionScore: layout?.includeQuestionScore === true,
+    questionScoreByQuestionId: layout?.questionScoreByQuestionId || {},
     mathRenderer,
     fontFaceCss: buildFontFaceCss({
       regularPath: fontRegularPath,
@@ -538,6 +563,8 @@ export async function renderPdfWithHtmlEngine({
     maxQuestionsPerPage,
     includeAnswerSheet: renderConfig?.includeAnswerSheet === true,
     includeExplanation: renderConfig?.includeExplanation === true,
+    includeQuestionScore: layout?.includeQuestionScore === true,
+    questionScoreByQuestionId: layout?.questionScoreByQuestionId || {},
     includeCoverPage: layout?.includeCoverPage === true,
     coverPageTexts: layout?.coverPageTexts || normalizeCoverPageTexts(null),
     renderConfigVersion,
@@ -572,6 +599,9 @@ export async function renderPdfWithHtmlEngine({
       : (Array.isArray(layout?.titlePageHeaders)
         ? layout.titlePageHeaders
         : []),
+    titlePageTopText: String(
+      layoutMeta.titlePageTopText || layout?.titlePageTopText || '',
+    ).trim() || '2026학년도 대학수학능력시험 문제지',
     pageColumnQuestionCounts: Array.isArray(layoutMeta.pageColumnQuestionCounts)
       ? layoutMeta.pageColumnQuestionCounts
       : [],
@@ -628,6 +658,8 @@ export async function buildDocumentPreviewHtml({
     questions: htmlQuestions,
     includeAnswerSheet: renderConfig?.includeAnswerSheet === true,
     includeExplanation: renderConfig?.includeExplanation === true,
+    includeQuestionScore: layout?.includeQuestionScore === true,
+    questionScoreByQuestionId: layout?.questionScoreByQuestionId || {},
     mathRenderer,
     fontFaceCss: buildFontFaceCss({
       regularPath: fontRegularPath,

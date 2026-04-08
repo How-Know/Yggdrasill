@@ -812,6 +812,22 @@ class _ProblemBankViewState extends State<ProblemBankView> {
             .toList(growable: false);
       }
 
+      Map<String, double> readScoreMap(dynamic primary, dynamic fallback) {
+        final src = primary is Map
+            ? primary
+            : (fallback is Map ? fallback : const <String, dynamic>{});
+        final out = <String, double>{};
+        for (final entry in src.entries) {
+          final id = '${entry.key}'.trim();
+          if (id.isEmpty) continue;
+          final raw = entry.value;
+          final score = raw is num ? raw.toDouble() : double.tryParse('$raw');
+          if (score == null || !score.isFinite || score < 0) continue;
+          out[id] = score;
+        }
+        return out;
+      }
+
       List<int> readPositiveIntList(
         dynamic primary,
         dynamic fallback, {
@@ -827,15 +843,52 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         return out.isEmpty ? defaults : out;
       }
 
+      double parseDefaultQuestionScore(LearningProblemQuestion question) {
+        final rawScore =
+            question.meta['score_point'] ?? question.meta['scorePoint'];
+        final parsed = rawScore is num
+            ? rawScore.toDouble()
+            : double.tryParse('$rawScore');
+        if (parsed == null || !parsed.isFinite || parsed < 0) return 3;
+        return parsed;
+      }
+
+      List<ProblemBankPreviewQuestionScoreEntry> buildScoreEntries(
+        List<LearningProblemQuestion> questions,
+      ) {
+        final out = <ProblemBankPreviewQuestionScoreEntry>[];
+        final seen = <String>{};
+        for (final question in questions) {
+          final id = question.id.trim();
+          if (id.isEmpty || seen.contains(id)) continue;
+          seen.add(id);
+          out.add(
+            ProblemBankPreviewQuestionScoreEntry(
+              questionId: id,
+              questionNumber: question.displayQuestionNumber.trim().isEmpty
+                  ? '${out.length + 1}'
+                  : question.displayQuestionNumber.trim(),
+              defaultScore: parseDefaultQuestionScore(question),
+            ),
+          );
+        }
+        return out;
+      }
+
       Map<String, dynamic> buildRenderPatch(
         ProblemBankPreviewRefreshRequest request,
       ) {
+        final topText = request.titlePageTopText.trim();
         final patch = <String, dynamic>{
           'subjectTitleText': request.subjectTitleText.trim().isEmpty
               ? '수학 영역'
               : request.subjectTitleText.trim(),
+          'titlePageTopText':
+              topText.isEmpty ? kLearningDefaultTitlePageTopText : topText,
           'includeCoverPage': request.includeCoverPage,
           'coverPageTexts': request.coverPageTexts,
+          'includeQuestionScore': request.includeQuestionScore,
+          'questionScoreByQuestionId': request.questionScoreByQuestionId,
         };
         if (_exportSettings.layoutColumnCount == 2) {
           patch['layoutMode'] = 'custom_columns';
@@ -887,12 +940,26 @@ class _ProblemBankViewState extends State<ProblemBankView> {
             }
             final subjectTitle =
                 '${preset.renderConfig['subjectTitleText'] ?? ''}'.trim();
+            final titlePageTopText =
+                '${preset.renderConfig['titlePageTopText'] ?? ''}'.trim();
             initialRenderPatch = <String, dynamic>{
               'subjectTitleText': subjectTitle.isEmpty ? '수학 영역' : subjectTitle,
+              'titlePageTopText': titlePageTopText.isEmpty
+                  ? kLearningDefaultTitlePageTopText
+                  : titlePageTopText,
               'includeCoverPage': readBoolFlag(
                 preset.renderConfig['includeCoverPage'],
                 null,
                 false,
+              ),
+              'includeQuestionScore': readBoolFlag(
+                preset.renderConfig['includeQuestionScore'],
+                null,
+                false,
+              ),
+              'questionScoreByQuestionId': readScoreMap(
+                preset.renderConfig['questionScoreByQuestionId'],
+                const <String, dynamic>{},
               ),
               'coverPageTexts': readCoverPageTexts(
                 preset.renderConfig['coverPageTexts'],
@@ -946,12 +1013,19 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       final initialSubjectTitle =
           '${completed.resultSummary['subjectTitleText'] ?? completed.options['subjectTitleText'] ?? '수학 영역'}'
               .trim();
+      final initialTitlePageTopText =
+          '${completed.resultSummary['titlePageTopText'] ?? completed.options['titlePageTopText'] ?? kLearningDefaultTitlePageTopText}'
+              .trim();
+      final scoreEntries = buildScoreEntries(selected);
       await ProblemBankExportServerPreviewDialog.open(
         context,
         pdfUrl: completed.outputUrl,
         titleText: '서버 PDF 미리보기 (${selected.length}문항)',
         initialSubjectTitle:
             initialSubjectTitle.isEmpty ? '수학 영역' : initialSubjectTitle,
+        initialTitlePageTopText: initialTitlePageTopText.isEmpty
+            ? kLearningDefaultTitlePageTopText
+            : initialTitlePageTopText,
         layoutColumns: _exportSettings.layoutColumnCount,
         maxQuestionsPerPage: _exportSettings.maxQuestionsPerPageCount,
         totalQuestionCount: selected.length,
@@ -986,22 +1060,32 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           completed.options['includeExplanation'],
           _exportSettings.includeExplanation,
         ),
+        initialIncludeQuestionScore: readBoolFlag(
+          completed.resultSummary['includeQuestionScore'],
+          completed.options['includeQuestionScore'],
+          _exportSettings.includeQuestionScore,
+        ),
+        initialQuestionScoreByQuestionId: readScoreMap(
+          completed.resultSummary['questionScoreByQuestionId'],
+          completed.options['questionScoreByQuestionId'],
+        ),
+        questionScoreEntries: scoreEntries,
         initialCoverPageTexts: readCoverPageTexts(
           completed.resultSummary['coverPageTexts'],
           completed.options['coverPageTexts'],
         ),
         onRefreshRequested: (request) async {
-          if (_exportSettings.includeAnswerSheet !=
-                  request.includeAnswerSheet ||
-              _exportSettings.includeExplanation !=
-                  request.includeExplanation) {
-            setState(() {
-              _exportSettings = _exportSettings.copyWith(
-                includeAnswerSheet: request.includeAnswerSheet,
-                includeExplanation: request.includeExplanation,
-              );
-            });
-          }
+          setState(() {
+            _exportSettings = _exportSettings.copyWith(
+              titlePageTopText: request.titlePageTopText.trim().isEmpty
+                  ? kLearningDefaultTitlePageTopText
+                  : request.titlePageTopText.trim(),
+              includeAnswerSheet: request.includeAnswerSheet,
+              includeExplanation: request.includeExplanation,
+              includeQuestionScore: request.includeQuestionScore,
+              questionScoreByQuestionId: request.questionScoreByQuestionId,
+            );
+          });
           final renderPatch = buildRenderPatch(request);
           final refreshed = await _ensureCompletedExportForSelection(
             selectedQuestions: selected,
@@ -1034,12 +1118,27 @@ class _ProblemBankViewState extends State<ProblemBankView> {
             refreshed.options['includeExplanation'],
             request.includeExplanation,
           );
+          final includeQuestionScore = readBoolFlag(
+            refreshed.resultSummary['includeQuestionScore'],
+            refreshed.options['includeQuestionScore'],
+            request.includeQuestionScore,
+          );
+          final titlePageTopText =
+              '${refreshed.resultSummary['titlePageTopText'] ?? refreshed.options['titlePageTopText'] ?? request.titlePageTopText}'
+                  .trim();
           final coverPageTexts = readCoverPageTexts(
             refreshed.resultSummary['coverPageTexts'],
             refreshed.options['coverPageTexts'],
           );
+          final questionScoreByQuestionId = readScoreMap(
+            refreshed.resultSummary['questionScoreByQuestionId'],
+            refreshed.options['questionScoreByQuestionId'],
+          );
           return ProblemBankPreviewRefreshResult(
             pdfUrl: refreshed.outputUrl,
+            titlePageTopText: titlePageTopText.isEmpty
+                ? kLearningDefaultTitlePageTopText
+                : titlePageTopText,
             pageColumnQuestionCounts: readMapRows(
               refreshed.resultSummary['pageColumnQuestionCounts'],
               refreshed.options['pageColumnQuestionCounts'],
@@ -1060,20 +1159,22 @@ class _ProblemBankViewState extends State<ProblemBankView> {
             includeCoverPage: includeCoverPage,
             includeAnswerSheet: includeAnswerSheet,
             includeExplanation: includeExplanation,
+            includeQuestionScore: includeQuestionScore,
+            questionScoreByQuestionId: questionScoreByQuestionId,
           );
         },
         onGeneratePdfRequested: (request) async {
-          if (_exportSettings.includeAnswerSheet !=
-                  request.includeAnswerSheet ||
-              _exportSettings.includeExplanation !=
-                  request.includeExplanation) {
-            setState(() {
-              _exportSettings = _exportSettings.copyWith(
-                includeAnswerSheet: request.includeAnswerSheet,
-                includeExplanation: request.includeExplanation,
-              );
-            });
-          }
+          setState(() {
+            _exportSettings = _exportSettings.copyWith(
+              titlePageTopText: request.titlePageTopText.trim().isEmpty
+                  ? kLearningDefaultTitlePageTopText
+                  : request.titlePageTopText.trim(),
+              includeAnswerSheet: request.includeAnswerSheet,
+              includeExplanation: request.includeExplanation,
+              includeQuestionScore: request.includeQuestionScore,
+              questionScoreByQuestionId: request.questionScoreByQuestionId,
+            );
+          });
           final renderPatch = buildRenderPatch(request);
           final completedPdf = await _ensureCompletedExportForSelection(
             selectedQuestions: selected,
@@ -1097,17 +1198,17 @@ class _ProblemBankViewState extends State<ProblemBankView> {
             _showSnack('학원 정보가 없어 세팅 저장을 진행할 수 없습니다.');
             return;
           }
-          if (_exportSettings.includeAnswerSheet !=
-                  request.includeAnswerSheet ||
-              _exportSettings.includeExplanation !=
-                  request.includeExplanation) {
-            setState(() {
-              _exportSettings = _exportSettings.copyWith(
-                includeAnswerSheet: request.includeAnswerSheet,
-                includeExplanation: request.includeExplanation,
-              );
-            });
-          }
+          setState(() {
+            _exportSettings = _exportSettings.copyWith(
+              titlePageTopText: request.titlePageTopText.trim().isEmpty
+                  ? kLearningDefaultTitlePageTopText
+                  : request.titlePageTopText.trim(),
+              includeAnswerSheet: request.includeAnswerSheet,
+              includeExplanation: request.includeExplanation,
+              includeQuestionScore: request.includeQuestionScore,
+              questionScoreByQuestionId: request.questionScoreByQuestionId,
+            );
+          });
           final orderedQuestionIds =
               _selectedQuestionIdsInCurrentOrder(selected);
           if (orderedQuestionIds.isEmpty) {
