@@ -49,7 +49,7 @@ const FONT_PATH_QNUM =
   process.env.PB_PDF_FONT_QNUM_PATH || '';
 const FONT_PATH_SUBJECT =
   process.env.PB_PDF_FONT_SUBJECT_PATH || '';
-const RENDER_CONFIG_VERSION = 'pb_render_v32zq_title_page_top_text';
+const RENDER_CONFIG_VERSION = 'pb_render_v32zw_logo_overlay_left2pt';
 const DEFAULT_TITLE_PAGE_TOP_TEXT = '2026학년도 대학수학능력시험 문제지';
 const FIGURE_REGEN_COOLDOWN_MIN = Math.max(
   2,
@@ -1348,6 +1348,80 @@ async function toBufferFromStorageData(data) {
   throw new Error('Unsupported storage payload type');
 }
 
+function detectImageMimeFromBytes(bytes) {
+  if (!Buffer.isBuffer(bytes) || bytes.length < 4) return 'image/png';
+  if (bytes.length >= 8
+      && bytes[0] === 0x89
+      && bytes[1] === 0x50
+      && bytes[2] === 0x4e
+      && bytes[3] === 0x47
+      && bytes[4] === 0x0d
+      && bytes[5] === 0x0a
+      && bytes[6] === 0x1a
+      && bytes[7] === 0x0a) {
+    return 'image/png';
+  }
+  if (bytes[0] === 0xff && bytes[1] === 0xd8) return 'image/jpeg';
+  if (bytes.length >= 12
+      && bytes[0] === 0x52
+      && bytes[1] === 0x49
+      && bytes[2] === 0x46
+      && bytes[3] === 0x46
+      && bytes[8] === 0x57
+      && bytes[9] === 0x45
+      && bytes[10] === 0x42
+      && bytes[11] === 0x50) {
+    return 'image/webp';
+  }
+  if (bytes.length >= 6) {
+    const sig = bytes.slice(0, 6).toString('ascii');
+    if (sig === 'GIF87a' || sig === 'GIF89a') return 'image/gif';
+  }
+  return 'image/png';
+}
+
+async function fetchAcademyLogoDataUrl(academyId) {
+  const id = String(academyId || '').trim();
+  if (!id) return '';
+  try {
+    const { data, error } = await supa
+      .from('academy_settings')
+      .select('logo_bucket,logo_path,logo')
+      .eq('academy_id', id)
+      .maybeSingle();
+    if (error || !data) return '';
+    let bytes = Buffer.alloc(0);
+    const bucket = normalizeWhitespace(data.logo_bucket || '');
+    const path = normalizeWhitespace(data.logo_path || '');
+    if (bucket && path) {
+      const { data: storageData, error: storageErr } = await supa.storage
+        .from(bucket)
+        .download(path);
+      if (!storageErr && storageData) {
+        bytes = await toBufferFromStorageData(storageData);
+      }
+    }
+    if ((!Buffer.isBuffer(bytes) || bytes.length === 0) && data.logo) {
+      const legacy = data.logo;
+      if (Buffer.isBuffer(legacy)) {
+        bytes = legacy;
+      } else if (legacy instanceof Uint8Array) {
+        bytes = Buffer.from(legacy);
+      } else if (Array.isArray(legacy)) {
+        bytes = Buffer.from(legacy);
+      } else if (legacy && typeof legacy === 'object' && Array.isArray(legacy.data)) {
+        bytes = Buffer.from(legacy.data);
+      }
+    }
+    if (!Buffer.isBuffer(bytes) || bytes.length === 0) return '';
+    const mime = detectImageMimeFromBytes(bytes);
+    return `data:${mime};base64,${bytes.toString('base64')}`;
+  } catch (err) {
+    console.warn('[pb-export-worker] academy logo load failed:', err?.message || err);
+    return '';
+  }
+}
+
 function parseAssetPixelSize(asset) {
   const rawWidth =
     asset?.width_px ??
@@ -2289,6 +2363,10 @@ function buildRenderConfigFromJob(job) {
     options.includeQuestionScore ?? options.includeScore,
     false,
   );
+  const includeAcademyLogo = normalizeBool(
+    options.includeAcademyLogo ?? options.showAcademyLogo,
+    false,
+  );
   const questionScoreByQuestionId = normalizeQuestionScoreMap(
     options.questionScoreByQuestionId,
     selectedQuestionIdsOrdered,
@@ -2308,6 +2386,8 @@ function buildRenderConfigFromJob(job) {
   const titlePageTopText =
     normalizeWhitespace(options.titlePageTopText || DEFAULT_TITLE_PAGE_TOP_TEXT)
       || DEFAULT_TITLE_PAGE_TOP_TEXT;
+  const timeLimitText =
+    normalizeWhitespace(options.timeLimitText || options.examTimeLimitText || '');
   const includeCoverPage = normalizeBool(
     options.includeCoverPage ?? options.coverPage,
     false,
@@ -2328,6 +2408,7 @@ function buildRenderConfigFromJob(job) {
     includeAnswerSheet: job.include_answer_sheet === true,
     includeExplanation: job.include_explanation === true,
     includeQuestionScore,
+    includeAcademyLogo,
     questionScoreByQuestionId,
     includeCoverPage,
     coverPageTexts,
@@ -2348,6 +2429,7 @@ function buildRenderConfigFromJob(job) {
     font,
     subjectTitleText,
     titlePageTopText,
+    timeLimitText,
   };
 }
 
@@ -2393,6 +2475,8 @@ function computeRenderHash(renderConfig) {
     font: renderConfig.font,
     subjectTitleText: renderConfig.subjectTitleText,
     titlePageTopText: renderConfig.titlePageTopText,
+    timeLimitText: renderConfig.timeLimitText,
+    includeAcademyLogo: renderConfig.includeAcademyLogo === true,
   };
   const canonical = JSON.stringify(canonicalizeJson(payload));
   return createHash('sha256').update(canonical).digest('hex');
@@ -3706,9 +3790,21 @@ async function renderPdf(job, questions, renderConfig) {
   const repoQnumFont = repoAssetPath(
     'apps', 'yggdrasill', 'assets', 'fonts', 'chosun', 'ChosunNm.ttf',
   );
+  const shouldUseAcademyLogo =
+    (profile === 'mock' || profile === 'csat')
+    && renderConfig?.includeAcademyLogo === true;
+  const academyLogoDataUrl = shouldUseAcademyLogo
+    ? await fetchAcademyLogoDataUrl(job?.academy_id)
+    : '';
+  const htmlRenderConfig = shouldUseAcademyLogo
+    ? {
+        ...renderConfig,
+        academyLogoDataUrl,
+      }
+    : renderConfig;
   return renderPdfWithHtmlEngine({
     questions: modeApplied.questions,
-    renderConfig,
+    renderConfig: htmlRenderConfig,
     profile,
     paper,
     modeByQuestionId: modeApplied.modeByQuestionId,
@@ -3974,6 +4070,8 @@ async function processOneJob(job) {
           rendered.titlePageTopText
           || renderConfig.titlePageTopText
           || DEFAULT_TITLE_PAGE_TOP_TEXT,
+        timeLimitText: String(renderConfig.timeLimitText || '').trim(),
+        includeAcademyLogo: rendered.includeAcademyLogo === true,
         includeCoverPage: rendered.includeCoverPage === true,
         coverPageTexts: rendered.coverPageTexts || {},
         includeAnswerSheet: rendered.includeAnswerSheet === true,
@@ -4030,6 +4128,8 @@ async function processOneJob(job) {
             rendered.titlePageTopText
             || renderConfig.titlePageTopText
             || DEFAULT_TITLE_PAGE_TOP_TEXT,
+          timeLimitText: String(renderConfig.timeLimitText || '').trim(),
+          includeAcademyLogo: rendered.includeAcademyLogo === true,
           includeCoverPage: rendered.includeCoverPage === true,
           coverPageTexts: rendered.coverPageTexts || {},
           includeAnswerSheet: rendered.includeAnswerSheet === true,

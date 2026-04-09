@@ -1027,11 +1027,18 @@ class DataManager {
             DateTime? parseTsOpt(dynamic v) =>
                 (v == null) ? null : DateTime.tryParse(v as String)?.toLocal();
             try {
+              String? parseChangeReason(dynamic v) {
+                if (v == null) return null;
+                final s = v.toString().trim();
+                return s.isEmpty ? null : s;
+              }
+
               final ov = SessionOverride(
                 id: m['id'] as String,
                 studentId: m['student_id'] as String,
                 sessionTypeId: m['session_type_id'] as String?,
                 setId: m['set_id'] as String?,
+                occurrenceId: m['occurrence_id']?.toString(),
                 overrideType:
                     SessionOverride.parseType(m['override_type'] as String),
                 originalClassDateTime: parseTsOpt(m['original_class_datetime']),
@@ -1039,6 +1046,7 @@ class DataManager {
                     parseTsOpt(m['replacement_class_datetime']),
                 durationMinutes: (m['duration_minutes'] as num?)?.toInt(),
                 reason: SessionOverride.parseReason(m['reason'] as String?),
+                changeReason: parseChangeReason(m['change_reason']),
                 status: SessionOverride.parseStatus(m['status'] as String),
                 originalAttendanceId: m['original_attendance_id'] as String?,
                 replacementAttendanceId:
@@ -1070,10 +1078,17 @@ class DataManager {
             if (idx == -1) return;
             DateTime? parseTsOpt(dynamic v) =>
                 (v == null) ? null : DateTime.tryParse(v as String)?.toLocal();
+            String? parseChangeReason(dynamic v) {
+              if (v == null) return null;
+              final s = v.toString().trim();
+              return s.isEmpty ? null : s;
+            }
+
             try {
               _sessionOverrides[idx] = _sessionOverrides[idx].copyWith(
                 sessionTypeId: m['session_type_id'] as String?,
                 setId: m['set_id'] as String?,
+                occurrenceId: m['occurrence_id']?.toString(),
                 overrideType:
                     SessionOverride.parseType(m['override_type'] as String),
                 originalClassDateTime: parseTsOpt(m['original_class_datetime']),
@@ -1081,6 +1096,7 @@ class DataManager {
                     parseTsOpt(m['replacement_class_datetime']),
                 durationMinutes: (m['duration_minutes'] as num?)?.toInt(),
                 reason: SessionOverride.parseReason(m['reason'] as String?),
+                changeReason: parseChangeReason(m['change_reason']),
                 status: SessionOverride.parseStatus(m['status'] as String),
                 originalAttendanceId: m['original_attendance_id'] as String?,
                 replacementAttendanceId:
@@ -1123,6 +1139,10 @@ class DataManager {
   Future<void> addMemo(Memo memo) => MemoService.instance.addMemo(memo);
   Future<void> updateMemo(Memo memo) => MemoService.instance.updateMemo(memo);
   Future<void> deleteMemo(String id) => MemoService.instance.deleteMemo(id);
+  Future<void> reorderInquiryMemos(List<String> idsInOrder) =>
+      MemoService.instance.reorderInquiryMemos(idsInOrder);
+  int nextInquirySortIndexForAppend() =>
+      MemoService.instance.nextInquirySortIndexForAppend();
 
   void _initializeDefaults() {
     _groups = [];
@@ -1734,7 +1754,7 @@ class DataManager {
       final rows = await supa
           .from('session_overrides')
           .select(
-              'id,student_id,session_type_id,set_id,occurrence_id,override_type,original_attendance_id,replacement_attendance_id,original_class_datetime,replacement_class_datetime,duration_minutes,reason,status,created_at,updated_at,version')
+              'id,student_id,session_type_id,set_id,occurrence_id,override_type,original_attendance_id,replacement_attendance_id,original_class_datetime,replacement_class_datetime,duration_minutes,reason,change_reason,status,created_at,updated_at,version')
           .eq('academy_id', academyId)
           .order('updated_at', ascending: false);
       final list = rows as List<dynamic>;
@@ -1743,6 +1763,13 @@ class DataManager {
           final v = m[k] as String?;
           if (v == null || v.isEmpty) return null;
           return DateTime.parse(v).toLocal();
+        }
+
+        String? parseChangeReasonCol() {
+          final v = m['change_reason'];
+          if (v == null) return null;
+          final s = v.toString().trim();
+          return s.isEmpty ? null : s;
         }
 
         return SessionOverride(
@@ -1756,6 +1783,7 @@ class DataManager {
           replacementClassDateTime: parseTsOpt('replacement_class_datetime'),
           durationMinutes: (m['duration_minutes'] as num?)?.toInt(),
           reason: SessionOverride.parseReason(m['reason'] as String?),
+          changeReason: parseChangeReasonCol(),
           status: SessionOverride.parseStatus(m['status'] as String),
           originalAttendanceId: m['original_attendance_id'] as String?,
           replacementAttendanceId: m['replacement_attendance_id'] as String?,
@@ -1797,6 +1825,10 @@ class DataManager {
             overrideData.replacementClassDateTime?.toUtc().toIso8601String(),
         'duration_minutes': overrideData.durationMinutes,
         'reason': SessionOverride.reasonToString(overrideData.reason),
+        'change_reason': (overrideData.changeReason == null ||
+                overrideData.changeReason!.trim().isEmpty)
+            ? null
+            : overrideData.changeReason!.trim(),
         'status': SessionOverride.statusToString(overrideData.status),
         'original_attendance_id': overrideData.originalAttendanceId,
         'replacement_attendance_id': overrideData.replacementAttendanceId,
@@ -1843,6 +1875,10 @@ class DataManager {
             newData.replacementClassDateTime?.toUtc().toIso8601String(),
         'duration_minutes': newData.durationMinutes,
         'reason': SessionOverride.reasonToString(newData.reason),
+        'change_reason': (newData.changeReason == null ||
+                newData.changeReason!.trim().isEmpty)
+            ? null
+            : newData.changeReason!.trim(),
         'status': SessionOverride.statusToString(newData.status),
         'original_attendance_id': newData.originalAttendanceId,
         'replacement_attendance_id': newData.replacementAttendanceId,

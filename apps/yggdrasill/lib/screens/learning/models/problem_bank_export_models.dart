@@ -59,7 +59,7 @@ const String kLearningQuestionModeSubjective = 'subjective';
 const String kLearningQuestionModeEssay = 'essay';
 const String kLearningDefaultTitlePageTopText = '2026학년도 대학수학능력시험 문제지';
 const String kLearningRenderConfigVersion =
-    'pb_render_v32zq_title_page_top_text';
+    'pb_render_v32zw_logo_overlay_left2pt';
 
 class LearningProblemLayoutTuning {
   const LearningProblemLayoutTuning({
@@ -178,6 +178,8 @@ class LearningProblemExportSettings {
     required this.figureQuality,
     required this.includeAnswerSheet,
     required this.includeExplanation,
+    required this.includeAcademyLogo,
+    required this.timeLimitText,
     required this.titlePageTopText,
     required this.includeQuestionScore,
     required this.questionScoreByQuestionId,
@@ -196,6 +198,8 @@ class LearningProblemExportSettings {
       figureQuality: LearningProblemFigureQuality.defaults(),
       includeAnswerSheet: true,
       includeExplanation: false,
+      includeAcademyLogo: false,
+      timeLimitText: '',
       titlePageTopText: kLearningDefaultTitlePageTopText,
       includeQuestionScore: false,
       questionScoreByQuestionId: const <String, double>{},
@@ -221,12 +225,108 @@ class LearningProblemExportSettings {
     final includeExplanation = renderConfig['includeExplanation'] is bool
         ? renderConfig['includeExplanation'] == true
         : base.includeExplanation;
+    final includeAcademyLogo = renderConfig['includeAcademyLogo'] is bool
+        ? renderConfig['includeAcademyLogo'] == true
+        : base.includeAcademyLogo;
+    final timeLimitText = '${renderConfig['timeLimitText'] ?? ''}'
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
     final titlePageTopText = '${renderConfig['titlePageTopText'] ?? ''}'
         .replaceAll(RegExp(r'\s+'), ' ')
         .trim();
     final includeQuestionScore = renderConfig['includeQuestionScore'] is bool
         ? renderConfig['includeQuestionScore'] == true
         : base.includeQuestionScore;
+    final fontMap = renderConfig['font'] is Map
+        ? (renderConfig['font'] as Map).map(
+            (key, value) => MapEntry('$key', value),
+          )
+        : const <String, dynamic>{};
+    final fontFamilyRaw = '${fontMap['family'] ?? ''}'.trim();
+    final nextFontFamily = fontFamilyRaw.isNotEmpty &&
+            kLearningProblemFontFamilyOptions.contains(fontFamilyRaw)
+        ? fontFamilyRaw
+        : base.fontFamilyLabel;
+    final nextFontSizeLabel = _fontSizeLabelFromRender(
+      fontMap['size'],
+      fallback: base.fontSizeLabel,
+    );
+    final layoutTuningMap = renderConfig['layoutTuning'] is Map
+        ? (renderConfig['layoutTuning'] as Map).map(
+            (key, value) => MapEntry('$key', value),
+          )
+        : const <String, dynamic>{};
+    final nextLayoutTuning = base.layoutTuning.copyWith(
+      pageMargin: _doubleFromDynamic(
+        layoutTuningMap['pageMargin'],
+        fallback: base.layoutTuning.pageMargin,
+        min: 20,
+        max: 96,
+      ),
+      columnGap: _doubleFromDynamic(
+        layoutTuningMap['columnGap'],
+        fallback: base.layoutTuning.columnGap,
+        min: 0,
+        max: 72,
+      ),
+      questionGap: _doubleFromDynamic(
+        layoutTuningMap['questionGap'],
+        fallback: base.layoutTuning.questionGap,
+        min: 0,
+        max: 64,
+      ),
+      numberLaneWidth: _doubleFromDynamic(
+        layoutTuningMap['numberLaneWidth'],
+        fallback: base.layoutTuning.numberLaneWidth,
+        min: 10,
+        max: 80,
+      ),
+      numberGap: _doubleFromDynamic(
+        layoutTuningMap['numberGap'],
+        fallback: base.layoutTuning.numberGap,
+        min: 0,
+        max: 30,
+      ),
+      hangingIndent: _doubleFromDynamic(
+        layoutTuningMap['hangingIndent'],
+        fallback: base.layoutTuning.hangingIndent,
+        min: 0,
+        max: 96,
+      ),
+      lineHeight: _doubleFromDynamic(
+        layoutTuningMap['lineHeight'],
+        fallback: base.layoutTuning.lineHeight,
+        min: 10,
+        max: 32,
+      ),
+      choiceSpacing: _doubleFromDynamic(
+        layoutTuningMap['choiceSpacing'],
+        fallback: base.layoutTuning.choiceSpacing,
+        min: 0,
+        max: 24,
+      ),
+    );
+    final figureQualityMap = renderConfig['figureQuality'] is Map
+        ? (renderConfig['figureQuality'] as Map).map(
+            (key, value) => MapEntry('$key', value),
+          )
+        : const <String, dynamic>{};
+    final nextTargetDpi = _intFromDynamic(
+      figureQualityMap['targetDpi'],
+      fallback: base.figureQuality.targetDpi,
+      min: 300,
+      max: 1200,
+    );
+    final nextMinDpi = _intFromDynamic(
+      figureQualityMap['minDpi'],
+      fallback: math.min(base.figureQuality.minDpi, nextTargetDpi).toInt(),
+      min: 72,
+      max: 1200,
+    ).clamp(72, nextTargetDpi).toInt();
+    final nextFigureQuality = base.figureQuality.copyWith(
+      targetDpi: nextTargetDpi,
+      minDpi: nextMinDpi,
+    );
     final questionScoreByQuestionId = _parseQuestionScoreMap(
       renderConfig['questionScoreByQuestionId'],
       fallback: base.questionScoreByQuestionId,
@@ -246,8 +346,14 @@ class LearningProblemExportSettings {
       questionModeLabel: nextModeLabel,
       layoutColumnLabel: layoutLabel,
       maxQuestionsPerPageLabel: nextMaxLabel,
+      fontFamilyLabel: nextFontFamily,
+      fontSizeLabel: nextFontSizeLabel,
+      layoutTuning: nextLayoutTuning,
+      figureQuality: nextFigureQuality,
       includeAnswerSheet: includeAnswerSheet,
       includeExplanation: includeExplanation,
+      includeAcademyLogo: includeAcademyLogo,
+      timeLimitText: timeLimitText,
       titlePageTopText:
           titlePageTopText.isEmpty ? base.titlePageTopText : titlePageTopText,
       includeQuestionScore: includeQuestionScore,
@@ -273,6 +379,41 @@ class LearningProblemExportSettings {
     return out;
   }
 
+  static String _fontSizeLabelFromRender(
+    dynamic raw, {
+    required String fallback,
+  }) {
+    final parsed = raw is num ? raw.toDouble() : double.tryParse('$raw');
+    if (parsed == null || !parsed.isFinite || parsed <= 0) return fallback;
+    if ((parsed - 11.0).abs() < 0.001) return '기본';
+    final asLabel =
+        parsed % 1 == 0 ? parsed.toStringAsFixed(0) : parsed.toStringAsFixed(1);
+    if (kLearningProblemFontSizeOptions.contains(asLabel)) return asLabel;
+    return fallback;
+  }
+
+  static double _doubleFromDynamic(
+    dynamic raw, {
+    required double fallback,
+    required double min,
+    required double max,
+  }) {
+    final parsed = raw is num ? raw.toDouble() : double.tryParse('$raw');
+    if (parsed == null || !parsed.isFinite) return fallback;
+    return parsed.clamp(min, max).toDouble();
+  }
+
+  static int _intFromDynamic(
+    dynamic raw, {
+    required int fallback,
+    required int min,
+    required int max,
+  }) {
+    final parsed = raw is num ? raw.toInt() : int.tryParse('$raw');
+    if (parsed == null) return fallback;
+    return parsed.clamp(min, max).toInt();
+  }
+
   final String templateLabel;
   final String paperLabel;
   final String questionModeLabel;
@@ -284,6 +425,8 @@ class LearningProblemExportSettings {
   final LearningProblemFigureQuality figureQuality;
   final bool includeAnswerSheet;
   final bool includeExplanation;
+  final bool includeAcademyLogo;
+  final String timeLimitText;
   final String titlePageTopText;
   final bool includeQuestionScore;
   final Map<String, double> questionScoreByQuestionId;
@@ -364,6 +507,8 @@ class LearningProblemExportSettings {
       'titlePageTopText': titlePageTopText.trim().isEmpty
           ? kLearningDefaultTitlePageTopText
           : titlePageTopText.trim(),
+      'includeAcademyLogo': includeAcademyLogo,
+      'timeLimitText': timeLimitText.trim(),
       'alignPolicy': const <String, dynamic>{
         'pairAlignment': 'row',
         'skipAnchorRows': true,
@@ -391,6 +536,8 @@ class LearningProblemExportSettings {
     LearningProblemFigureQuality? figureQuality,
     bool? includeAnswerSheet,
     bool? includeExplanation,
+    bool? includeAcademyLogo,
+    String? timeLimitText,
     String? titlePageTopText,
     bool? includeQuestionScore,
     Map<String, double>? questionScoreByQuestionId,
@@ -408,6 +555,8 @@ class LearningProblemExportSettings {
       figureQuality: figureQuality ?? this.figureQuality,
       includeAnswerSheet: includeAnswerSheet ?? this.includeAnswerSheet,
       includeExplanation: includeExplanation ?? this.includeExplanation,
+      includeAcademyLogo: includeAcademyLogo ?? this.includeAcademyLogo,
+      timeLimitText: timeLimitText ?? this.timeLimitText,
       titlePageTopText: titlePageTopText ?? this.titlePageTopText,
       includeQuestionScore: includeQuestionScore ?? this.includeQuestionScore,
       questionScoreByQuestionId:

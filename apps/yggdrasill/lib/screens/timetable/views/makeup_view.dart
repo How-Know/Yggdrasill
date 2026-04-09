@@ -2,6 +2,55 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../../services/data_manager.dart';
 import '../../../models/session_override.dart';
+import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
+
+/// [makeup_quick_dialog] 보강 확인 다이얼로그와 톤 통일
+const Color _mkDialogBg = Color(0xFF0B1112);
+const Color _mkFieldBg = Color(0xFF15171C);
+const Color _mkBorder = Color(0xFF223131);
+const Color _mkText = Color(0xFFEAF2F2);
+const Color _mkTextSub = Color(0xFF9FB3B3);
+const Color _mkAccent = Color(0xFF33A373);
+
+/// 시간 행과 동일한 `fontSize`, 라벨·본문 베이스라인 정렬 (`Text.rich`)
+Widget _makeupReasonRichLine(
+  String? changeReason, {
+  double fontSize = 18,
+  bool compact = false,
+}) {
+  final has = changeReason?.trim().isNotEmpty == true;
+  final body = has ? changeReason!.trim() : '없음';
+  final bodyColor =
+      has ? (compact ? Colors.white70 : _mkText) : Colors.white38;
+  return Text.rich(
+    TextSpan(
+      style: TextStyle(
+        fontSize: fontSize,
+        height: 1.2,
+      ),
+      children: [
+        TextSpan(
+          text: '사유: ',
+          style: TextStyle(
+            color: _mkTextSub,
+            fontWeight: FontWeight.w700,
+            fontSize: fontSize,
+            height: 1.2,
+          ),
+        ),
+        TextSpan(
+          text: body,
+          style: TextStyle(
+            color: bodyColor,
+            fontWeight: FontWeight.w600,
+            fontSize: fontSize,
+            height: 1.2,
+          ),
+        ),
+      ],
+    ),
+  );
+}
 
 class MakeupView extends StatefulWidget {
   const MakeupView({super.key});
@@ -549,9 +598,28 @@ class _PlannedTile extends StatelessWidget {
                         builder: (_) => _MakeupEditDialog(item: item),
                       );
                       if (updated != null) {
-                        await DataManager.instance.updateSessionOverride(
-                          updated,
-                        );
+                        try {
+                          await DataManager.instance.updateSessionOverride(
+                            updated,
+                          );
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('보강이 수정되었습니다.'),
+                                backgroundColor: _mkAccent,
+                              ),
+                            );
+                          }
+                        } catch (e) {
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('수정 실패: $e'),
+                                backgroundColor: const Color(0xFFE53E3E),
+                              ),
+                            );
+                          }
+                        }
                       }
                     },
                   ),
@@ -624,6 +692,8 @@ class _PlannedTile extends StatelessWidget {
               ),
             ],
           ),
+          const SizedBox(height: 8),
+          _makeupReasonRichLine(item.changeReason, fontSize: 18),
         ],
       ),
     );
@@ -743,7 +813,14 @@ class _OverrideTile extends StatelessWidget {
                                 );
                               }
                             } catch (e) {
-                              // error handling
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text('수정 실패: $e'),
+                                    backgroundColor: const Color(0xFFE53E3E),
+                                  ),
+                                );
+                              }
                             }
                           }
                         },
@@ -807,6 +884,9 @@ class _OverrideTile extends StatelessWidget {
                 style: const TextStyle(color: Colors.white38, fontSize: 12),
               ),
             ],
+            const SizedBox(height: 6),
+            _makeupReasonRichLine(item.changeReason,
+                fontSize: 14, compact: true),
           ],
         ),
       );
@@ -889,6 +969,8 @@ class _OverrideTile extends StatelessWidget {
                 ),
             ],
           ),
+          const SizedBox(height: 8),
+          _makeupReasonRichLine(item.changeReason, fontSize: 18),
         ],
       ),
     );
@@ -1338,13 +1420,19 @@ class _MakeupEditDialogState extends State<_MakeupEditDialog> {
   TimeOfDay? _timeOriginal;
   DateTime? _dateReplacement;
   TimeOfDay? _timeReplacement;
-  int _duration = 50;
+  late int _duration;
+  late final TextEditingController _durationCtrl;
+  late final ImeAwareTextEditingController _reasonCtrl;
 
   @override
   void initState() {
     super.initState();
     _duration = widget.item.durationMinutes ??
         DataManager.instance.academySettings.lessonDuration;
+    _durationCtrl = TextEditingController(text: _duration.toString());
+    _reasonCtrl = ImeAwareTextEditingController(
+      text: widget.item.changeReason ?? '',
+    );
     if (widget.item.originalClassDateTime != null) {
       final dt = widget.item.originalClassDateTime!;
       _dateOriginal = DateTime(dt.year, dt.month, dt.day);
@@ -1358,171 +1446,260 @@ class _MakeupEditDialogState extends State<_MakeupEditDialog> {
   }
 
   @override
+  void dispose() {
+    _durationCtrl.dispose();
+    _reasonCtrl.dispose();
+    super.dispose();
+  }
+
+  Widget _sectionLabel(String text) {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Text(
+        text,
+        style: const TextStyle(
+          color: _mkTextSub,
+          fontSize: 12,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+    );
+  }
+
+  Widget _pickChip({
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+  }) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+          decoration: BoxDecoration(
+            color: _mkFieldBg,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: _mkBorder.withOpacity(0.9)),
+          ),
+          child: Row(
+            children: [
+              Icon(icon, color: _mkAccent, size: 20),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  label,
+                  style: const TextStyle(
+                    color: _mkText,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      backgroundColor: const Color(0xFF1F1F1F),
-      title: const Text('보강 편집', style: TextStyle(color: Colors.white)),
+      backgroundColor: _mkDialogBg,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: const BorderSide(color: _mkBorder),
+      ),
+      titlePadding: const EdgeInsets.fromLTRB(24, 22, 24, 10),
+      contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
+      actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+      title: Row(
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: _mkAccent.withOpacity(0.12),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: _mkAccent.withOpacity(0.28)),
+            ),
+            child: const Icon(Icons.edit_calendar_rounded,
+                color: _mkAccent, size: 22),
+          ),
+          const SizedBox(width: 12),
+          const Expanded(
+            child: Text(
+              '보강 수정',
+              style: TextStyle(
+                color: _mkText,
+                fontSize: 18,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ),
+        ],
+      ),
       content: SizedBox(
         width: 420,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // original
-            if (widget.item.overrideType != OverrideType.add)
-              Column(
-                children: [
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text(
-                      '원본 일정',
-                      style: TextStyle(color: Colors.white70),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: ListTile(
-                          leading: const Icon(
-                            Icons.calendar_today,
-                            color: Colors.white70,
-                          ),
-                          title: Text(
-                            _dateOriginal == null
-                                ? '날짜 선택'
-                                : _fmtDate(_dateOriginal!),
-                            style: const TextStyle(color: Colors.white),
-                          ),
-                          onTap: () => _pickDate(isReplacement: false),
-                          tileColor: const Color(0xFF2A2A2A),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: ListTile(
-                          leading: const Icon(
-                            Icons.access_time,
-                            color: Colors.white70,
-                          ),
-                          title: Text(
-                            _timeOriginal == null
-                                ? '시간 선택'
-                                : _fmtTime(_timeOriginal!),
-                            style: const TextStyle(color: Colors.white),
-                          ),
-                          onTap: () => _pickTime(isReplacement: false),
-                          tileColor: const Color(0xFF2A2A2A),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                ],
-              ),
-            // replacement
-            Column(
-              children: [
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    widget.item.overrideType == OverrideType.add
-                        ? '날짜'
-                        : '보강 일정',
-                    style: TextStyle(color: Colors.white70),
-                  ),
-                ),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (widget.item.overrideType != OverrideType.add) ...[
+                _sectionLabel('원본 일정'),
                 const SizedBox(height: 8),
                 Row(
                   children: [
                     Expanded(
-                      child: ListTile(
-                        leading: const Icon(
-                          Icons.calendar_today,
-                          color: Colors.white70,
-                        ),
-                        title: Text(
-                          _dateReplacement == null
-                              ? '날짜 선택'
-                              : _fmtDate(_dateReplacement!),
-                          style: const TextStyle(color: Colors.white),
-                        ),
-                        onTap: () => _pickDate(isReplacement: true),
-                        tileColor: const Color(0xFF2A2A2A),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8),
-                        ),
+                      child: _pickChip(
+                        icon: Icons.calendar_today_outlined,
+                        label: _dateOriginal == null
+                            ? '날짜 선택'
+                            : _fmtDate(_dateOriginal!),
+                        onTap: () => _pickDate(isReplacement: false),
                       ),
                     ),
-                    const SizedBox(width: 8),
+                    const SizedBox(width: 10),
                     Expanded(
-                      child: ListTile(
-                        leading: const Icon(
-                          Icons.access_time,
-                          color: Colors.white70,
-                        ),
-                        title: Text(
-                          _timeReplacement == null
-                              ? '시간 선택'
-                              : _fmtTime(_timeReplacement!),
-                          style: const TextStyle(color: Colors.white),
-                        ),
-                        onTap: () => _pickTime(isReplacement: true),
-                        tileColor: const Color(0xFF2A2A2A),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8),
-                        ),
+                      child: _pickChip(
+                        icon: Icons.schedule_rounded,
+                        label: _timeOriginal == null
+                            ? '시간 선택'
+                            : _fmtTime(_timeOriginal!),
+                        onTap: () => _pickTime(isReplacement: false),
                       ),
                     ),
                   ],
                 ),
+                const SizedBox(height: 16),
               ],
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                const Text('기간(분)', style: TextStyle(color: Colors.white70)),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF2A2A2A),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                    child: TextFormField(
-                      initialValue: _duration.toString(),
-                      keyboardType: TextInputType.number,
-                      style: const TextStyle(color: Colors.white),
-                      decoration: const InputDecoration(
-                        border: InputBorder.none,
-                      ),
-                      onChanged: (v) {
-                        final n = int.tryParse(v);
-                        if (n != null && n > 0 && n <= 360) _duration = n;
-                      },
+              _sectionLabel(
+                widget.item.overrideType == OverrideType.add
+                    ? '추가 수업 일정'
+                    : '보강 일정',
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: _pickChip(
+                      icon: Icons.calendar_today_outlined,
+                      label: _dateReplacement == null
+                          ? '날짜 선택'
+                          : _fmtDate(_dateReplacement!),
+                      onTap: () => _pickDate(isReplacement: true),
                     ),
                   ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: _pickChip(
+                      icon: Icons.schedule_rounded,
+                      label: _timeReplacement == null
+                          ? '시간 선택'
+                          : _fmtTime(_timeReplacement!),
+                      onTap: () => _pickTime(isReplacement: true),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              _sectionLabel('기간(분)'),
+              const SizedBox(height: 8),
+              TextField(
+                controller: _durationCtrl,
+                keyboardType: TextInputType.number,
+                style: const TextStyle(color: _mkText, fontSize: 15),
+                decoration: InputDecoration(
+                  isDense: true,
+                  filled: true,
+                  fillColor: _mkFieldBg,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: _mkBorder.withOpacity(0.9)),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: _mkBorder.withOpacity(0.9)),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide:
+                        const BorderSide(color: _mkAccent, width: 1.2),
+                  ),
                 ),
-              ],
-            ),
-          ],
+              ),
+              const SizedBox(height: 14),
+              _sectionLabel('변경 사유 (선택)'),
+              const SizedBox(height: 8),
+              TextField(
+                controller: _reasonCtrl,
+                maxLength: 300,
+                maxLines: 3,
+                style: const TextStyle(color: _mkText, fontSize: 14),
+                decoration: InputDecoration(
+                  isDense: true,
+                  counterStyle:
+                      const TextStyle(color: _mkTextSub, fontSize: 11),
+                  hintText: '예: 학부모 요청, 일정 조정 등',
+                  hintStyle: TextStyle(color: _mkTextSub.withOpacity(0.65)),
+                  filled: true,
+                  fillColor: _mkFieldBg,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: _mkBorder.withOpacity(0.9)),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: _mkBorder.withOpacity(0.9)),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide:
+                        const BorderSide(color: _mkAccent, width: 1.2),
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
       actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('취소', style: TextStyle(color: Colors.white70)),
-        ),
-        TextButton(
-          onPressed: _save,
-          child: const Text('저장', style: TextStyle(color: Colors.white)),
-          style: TextButton.styleFrom(backgroundColor: const Color(0xFF1976D2)),
+        Row(
+          children: [
+            Expanded(
+              child: TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                style: TextButton.styleFrom(
+                  foregroundColor: _mkTextSub,
+                  padding:
+                      const EdgeInsets.symmetric(vertical: 14, horizontal: 8),
+                ),
+                child: const Text('취소',
+                    style: TextStyle(fontWeight: FontWeight.w800)),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              flex: 2,
+              child: ElevatedButton(
+                onPressed: _save,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _mkAccent,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                child: const Text('저장',
+                    style: TextStyle(fontWeight: FontWeight.w900)),
+              ),
+            ),
+          ],
         ),
       ],
     );
@@ -1543,8 +1720,8 @@ class _MakeupEditDialogState extends State<_MakeupEditDialog> {
       lastDate: DateTime(now.year + 1),
       builder: (context, child) => Theme(
         data: Theme.of(context).copyWith(
-          colorScheme: const ColorScheme.dark(primary: Color(0xFF1976D2)),
-          dialogBackgroundColor: const Color(0xFF1F1F1F),
+          colorScheme: const ColorScheme.dark(primary: _mkAccent),
+          dialogBackgroundColor: _mkDialogBg,
         ),
         child: child!,
       ),
@@ -1567,18 +1744,18 @@ class _MakeupEditDialogState extends State<_MakeupEditDialog> {
       initialTime: initial ?? const TimeOfDay(hour: 14, minute: 0),
       builder: (context, child) => Theme(
         data: Theme.of(context).copyWith(
-          timePickerTheme: const TimePickerThemeData(
-            backgroundColor: Color(0xFF1F1F1F),
-            dialHandColor: Color(0xFF1976D2),
-            dialBackgroundColor: Color(0xFF2A2A2A),
+          timePickerTheme: TimePickerThemeData(
+            backgroundColor: _mkDialogBg,
+            dialHandColor: _mkAccent,
+            dialBackgroundColor: _mkFieldBg,
             hourMinuteTextColor: Colors.white,
             dayPeriodTextColor: Colors.white,
-            helpTextStyle: TextStyle(color: Colors.white),
-            entryModeIconColor: Color(0xFF1976D2),
+            helpTextStyle: const TextStyle(color: Colors.white),
+            entryModeIconColor: _mkAccent,
           ),
           colorScheme: const ColorScheme.dark(
-            primary: Color(0xFF1976D2),
-            surface: Color(0xFF1F1F1F),
+            primary: _mkAccent,
+            surface: _mkDialogBg,
           ),
         ),
         child: child!,
@@ -1601,6 +1778,18 @@ class _MakeupEditDialogState extends State<_MakeupEditDialog> {
     }
     if (_dateReplacement == null || _timeReplacement == null) return;
 
+    final parsedDur = int.tryParse(_durationCtrl.text.trim());
+    if (parsedDur == null || parsedDur <= 0 || parsedDur > 360) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('기간(분)은 1~360 사이 숫자로 입력해 주세요.'),
+          backgroundColor: Color(0xFFE53E3E),
+        ),
+      );
+      return;
+    }
+    _duration = parsedDur;
+
     DateTime? origDt;
     if (widget.item.overrideType != OverrideType.add) {
       origDt = DateTime(
@@ -1620,10 +1809,12 @@ class _MakeupEditDialogState extends State<_MakeupEditDialog> {
       _timeReplacement!.minute,
     );
 
+    final cr = _reasonCtrl.text.trim();
     final updated = widget.item.copyWith(
       originalClassDateTime: origDt,
       replacementClassDateTime: replDt,
       durationMinutes: _duration,
+      changeReason: cr.isEmpty ? null : cr,
     );
     Navigator.of(context).pop(updated);
   }

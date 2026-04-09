@@ -88,6 +88,14 @@ function normalizeWhitespace(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
 }
 
+function normalizePresetDisplayName(raw, fallback = '') {
+  const normalized = normalizeWhitespace(raw);
+  const safeFallback = normalizeWhitespace(fallback);
+  const value = normalized || safeFallback;
+  if (!value) return '';
+  return value.slice(0, 120);
+}
+
 function normalizeTemplateProfile(raw) {
   const s = String(raw || '').trim().toLowerCase();
   if (s === 'csat' || s === 'mock' || s === 'naesin') return s;
@@ -587,7 +595,7 @@ function normalizeFigureQuality(rawFigureQuality, options = {}) {
   return { targetDpi, minDpi };
 }
 
-const EXPORT_RENDER_CONFIG_VERSION = 'pb_render_v32zq_title_page_top_text';
+const EXPORT_RENDER_CONFIG_VERSION = 'pb_render_v32zw_logo_overlay_left2pt';
 const DEFAULT_TITLE_PAGE_TOP_TEXT = '2026학년도 대학수학능력시험 문제지';
 
 const QUESTION_COPY_SELECT_COLUMNS = [
@@ -696,6 +704,15 @@ function normalizeExportRenderConfig(options, selectedQuestionIds, defaults = {}
   )
     .replace(/\s+/g, ' ')
     .trim() || DEFAULT_TITLE_PAGE_TOP_TEXT;
+  const timeLimitText = String(
+    src.timeLimitText || src.examTimeLimitText || defaults.timeLimitText || '',
+  )
+    .replace(/\s+/g, ' ')
+    .trim();
+  const includeAcademyLogo = normalizeBool(
+    src.includeAcademyLogo ?? src.showAcademyLogo,
+    normalizeBool(defaults.includeAcademyLogo, false),
+  );
   const includeCoverPage = normalizeBool(
     src.includeCoverPage ?? src.coverPage,
     normalizeBool(defaults.includeCoverPage, false),
@@ -729,6 +746,8 @@ function normalizeExportRenderConfig(options, selectedQuestionIds, defaults = {}
     figureQuality: normalizeFigureQuality(src.figureQuality, src),
     subjectTitleText,
     titlePageTopText,
+    timeLimitText,
+    includeAcademyLogo,
     includeQuestionScore,
     questionScoreByQuestionId,
     font:
@@ -1343,6 +1362,8 @@ async function createExportJob(body, res) {
     alignPolicy: renderConfig.alignPolicy,
     subjectTitleText: renderConfig.subjectTitleText,
     titlePageTopText: renderConfig.titlePageTopText,
+    timeLimitText: renderConfig.timeLimitText,
+    includeAcademyLogo: renderConfig.includeAcademyLogo === true,
     questionMode: renderConfig.questionMode,
     font: renderConfig.font,
     layoutTuning: renderConfig.layoutTuning,
@@ -1375,6 +1396,8 @@ async function createExportJob(body, res) {
     alignPolicy: renderConfig.alignPolicy,
     subjectTitleText: renderConfig.subjectTitleText,
     titlePageTopText: renderConfig.titlePageTopText,
+    timeLimitText: renderConfig.timeLimitText,
+    includeAcademyLogo: renderConfig.includeAcademyLogo === true,
     questionMode: renderConfig.questionMode,
     layoutTuning: renderConfig.layoutTuning,
     figureQuality: renderConfig.figureQuality,
@@ -1643,6 +1666,7 @@ async function saveSettingsAsDocument(body, res) {
   const academyId = String(body.academyId || '').trim();
   const sourceDocumentId = String(body.sourceDocumentId || '').trim();
   const createdBy = String(body.createdBy || '').trim();
+  const rawDisplayName = body.displayName;
   const rawRenderConfig = normalizeJsonObject(body.renderConfig, {});
   const selectedQuestionIdsOrdered = normalizeUuidListOrdered(
     body.selectedQuestionIdsOrdered || body.selectedQuestionIds,
@@ -1956,6 +1980,11 @@ async function saveSettingsAsDocument(body, res) {
         titlePageTopText:
           String(rawRenderConfig.titlePageTopText || '').replace(/\s+/g, ' ').trim()
             || DEFAULT_TITLE_PAGE_TOP_TEXT,
+        timeLimitText:
+          String(rawRenderConfig.timeLimitText || rawRenderConfig.examTimeLimitText || '')
+            .replace(/\s+/g, ' ')
+            .trim(),
+        includeAcademyLogo: normalizeBool(rawRenderConfig.includeAcademyLogo, false),
         includeCoverPage: normalizeBool(rawRenderConfig.includeCoverPage, false),
         coverPageTexts: normalizeJsonObject(rawRenderConfig.coverPageTexts, {}),
         includeQuestionScore,
@@ -1974,6 +2003,11 @@ async function saveSettingsAsDocument(body, res) {
       questionModeByQuestionId: translatedQuestionModeByQuestionId,
       questionScoreByQuestionId: translatedQuestionScoreByQuestionId,
     };
+    const presetDisplayName = normalizePresetDisplayName(
+      rawDisplayName,
+      String(createdDocument.source_filename || '').trim()
+        || buildDerivedSourceFilename(sourceDoc.source_filename),
+    );
 
     const { data: preset, error: presetErr } = await supa
       .from('pb_export_presets')
@@ -1985,6 +2019,7 @@ async function saveSettingsAsDocument(body, res) {
           render_config: renderConfig,
           selected_question_ids: savedQuestionIdsOrdered,
           question_mode_by_question_id: translatedQuestionModeByQuestionId,
+          display_name: presetDisplayName,
           created_by: isUuid(createdBy) ? createdBy : null,
         },
         { onConflict: 'academy_id,document_id' },
@@ -2048,6 +2083,179 @@ async function getDocumentExportPreset(documentId, url, res) {
     return;
   }
   sendJson(res, 200, { ok: true, preset: data || null });
+}
+
+async function listExportPresets(url, res) {
+  const academyId = String(url.searchParams.get('academyId') || '').trim();
+  if (!isUuid(academyId)) {
+    sendJson(res, 400, { ok: false, error: 'academyId must be uuid' });
+    return;
+  }
+  const limit = normalizeLimit(url.searchParams.get('limit'), 100, 500);
+  const offsetRaw = Number.parseInt(
+    String(url.searchParams.get('offset') || '0'),
+    10,
+  );
+  const offset = Number.isFinite(offsetRaw) && offsetRaw > 0 ? offsetRaw : 0;
+
+  const { data: rows, error } = await supa
+    .from('pb_export_presets')
+    .select(
+      [
+        'id',
+        'academy_id',
+        'source_document_id',
+        'document_id',
+        'display_name',
+        'render_config',
+        'selected_question_ids',
+        'question_mode_by_question_id',
+        'created_at',
+        'updated_at',
+      ].join(','),
+    )
+    .eq('academy_id', academyId)
+    .order('created_at', { ascending: false })
+    .range(offset, offset + limit - 1);
+  if (error) {
+    sendJson(res, 500, { ok: false, error: `export_presets_list_failed:${error.message}` });
+    return;
+  }
+
+  const documentIds = Array.from(
+    new Set(
+      (rows || [])
+        .flatMap((row) => [
+          String(row?.source_document_id || '').trim(),
+          String(row?.document_id || '').trim(),
+        ])
+        .filter((id) => isUuid(id)),
+    ),
+  );
+  const documentNameMap = new Map();
+  for (const chunk of chunkArray(documentIds, 250)) {
+    const { data: docs, error: docErr } = await supa
+      .from('pb_documents')
+      .select('id,source_filename')
+      .eq('academy_id', academyId)
+      .in('id', chunk);
+    if (docErr) {
+      sendJson(res, 500, {
+        ok: false,
+        error: `export_presets_document_lookup_failed:${docErr.message}`,
+      });
+      return;
+    }
+    for (const doc of docs || []) {
+      const id = String(doc?.id || '').trim();
+      if (!isUuid(id)) continue;
+      documentNameMap.set(id, String(doc?.source_filename || '').trim());
+    }
+  }
+
+  const presets = (rows || []).map((row) => {
+    const sourceDocumentId = String(row?.source_document_id || '').trim();
+    const documentId = String(row?.document_id || '').trim();
+    const renderConfig = normalizeJsonObject(row?.render_config, {});
+    const selectedQuestionIds = Array.isArray(row?.selected_question_ids)
+      ? row.selected_question_ids
+      : [];
+    const fallbackName = documentNameMap.get(documentId)
+      || `세팅저장 ${String(row?.created_at || '').slice(0, 10)}`;
+    return {
+      id: String(row?.id || '').trim(),
+      academyId: String(row?.academy_id || '').trim(),
+      sourceDocumentId,
+      documentId,
+      displayName: normalizePresetDisplayName(row?.display_name, fallbackName),
+      sourceDocumentName: documentNameMap.get(sourceDocumentId) || '',
+      documentName: documentNameMap.get(documentId) || '',
+      selectedQuestionCount: selectedQuestionIds.length,
+      renderConfig,
+      questionModeByQuestionId: normalizeJsonObject(
+        row?.question_mode_by_question_id,
+        {},
+      ),
+      templateProfile: String(renderConfig.templateProfile || '').trim(),
+      paperSize: String(renderConfig.paperSize || '').trim(),
+      includeAnswerSheet: renderConfig.includeAnswerSheet === true,
+      includeExplanation: renderConfig.includeExplanation === true,
+      includeQuestionScore: renderConfig.includeQuestionScore === true,
+      includeAcademyLogo: renderConfig.includeAcademyLogo === true,
+      createdAt: row?.created_at || null,
+      updatedAt: row?.updated_at || null,
+    };
+  });
+
+  sendJson(res, 200, {
+    ok: true,
+    presets,
+    paging: { offset, limit },
+  });
+}
+
+async function renameExportPreset(presetId, body, res) {
+  const academyId = String(body?.academyId || '').trim();
+  const displayName = normalizePresetDisplayName(body?.displayName);
+  if (!isUuid(academyId) || !isUuid(presetId)) {
+    sendJson(res, 400, { ok: false, error: 'academyId/presetId must be uuid' });
+    return;
+  }
+  if (!displayName) {
+    sendJson(res, 400, { ok: false, error: 'displayName required' });
+    return;
+  }
+
+  const { data: preset, error: presetErr } = await supa
+    .from('pb_export_presets')
+    .update({
+      display_name: displayName,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', presetId)
+    .eq('academy_id', academyId)
+    .select('*')
+    .maybeSingle();
+  if (presetErr) {
+    sendJson(res, 500, {
+      ok: false,
+      error: `export_preset_rename_failed:${presetErr.message}`,
+    });
+    return;
+  }
+  if (!preset) {
+    sendJson(res, 404, { ok: false, error: 'export_preset_not_found' });
+    return;
+  }
+
+  sendJson(res, 200, { ok: true, preset });
+}
+
+async function deleteExportPreset(presetId, body, res) {
+  const academyId = String(body?.academyId || '').trim();
+  if (!isUuid(academyId) || !isUuid(presetId)) {
+    sendJson(res, 400, { ok: false, error: 'academyId/presetId must be uuid' });
+    return;
+  }
+  const { data, error } = await supa
+    .from('pb_export_presets')
+    .delete()
+    .eq('academy_id', academyId)
+    .eq('id', presetId)
+    .select('id')
+    .limit(1);
+  if (error) {
+    sendJson(res, 500, {
+      ok: false,
+      error: `export_preset_delete_failed:${error.message}`,
+    });
+    return;
+  }
+  if (!Array.isArray(data) || data.length === 0) {
+    sendJson(res, 404, { ok: false, error: 'export_preset_not_found' });
+    return;
+  }
+  sendJson(res, 200, { ok: true, deletedPresetId: presetId });
 }
 
 async function documentSummary(url, res) {
@@ -2394,6 +2602,22 @@ async function handler(req, res) {
     if (method === 'GET' && /^\/pb\/documents\/[^/]+\/export-preset$/.test(url.pathname)) {
       const documentId = url.pathname.split('/')[3];
       await getDocumentExportPreset(documentId, url, res);
+      return;
+    }
+    if (method === 'GET' && url.pathname === '/pb/export-presets') {
+      await listExportPresets(url, res);
+      return;
+    }
+    if (method === 'POST' && /^\/pb\/export-presets\/[^/]+\/rename$/.test(url.pathname)) {
+      const presetId = url.pathname.split('/')[3];
+      const body = await readJson(req);
+      await renameExportPreset(presetId, body, res);
+      return;
+    }
+    if (method === 'POST' && /^\/pb\/export-presets\/[^/]+\/delete$/.test(url.pathname)) {
+      const presetId = url.pathname.split('/')[3];
+      const body = await readJson(req);
+      await deleteExportPreset(presetId, body, res);
       return;
     }
 

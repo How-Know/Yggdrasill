@@ -699,21 +699,40 @@ class BackfillRunner {
             ? null
             : DateTime.tryParse(s)?.toIso8601String();
         final rows = rowsLocal
-            .map((r) => {
-                  'id': _toUuid((r['id'] ?? '').toString(), 'memos'),
-                  'academy_id': academyId,
-                  'original': r['original'],
-                  'summary': r['summary'],
-                  'scheduled_at': dt(r['scheduled_at'] as String?),
-                  'dismissed': (r['dismissed'] is int)
-                      ? ((r['dismissed'] as int) != 0)
-                      : r['dismissed'],
-                  'recurrence_type': r['recurrence_type'],
-                  'weekdays': r['weekdays'],
-                  'recurrence_end':
-                      (r['recurrence_end'] as String?)?.substring(0, 10),
-                  'recurrence_count': r['recurrence_count'],
-                })
+            .map((r) {
+              final m = <String, dynamic>{
+                'id': _toUuid((r['id'] ?? '').toString(), 'memos'),
+                'academy_id': academyId,
+                'original': r['original'],
+                'summary': r['summary'],
+                'scheduled_at': dt(r['scheduled_at'] as String?),
+                'dismissed': (r['dismissed'] is int)
+                    ? ((r['dismissed'] as int) != 0)
+                    : r['dismissed'],
+                'recurrence_type': r['recurrence_type'],
+                'weekdays': r['weekdays'],
+                'recurrence_end':
+                    (r['recurrence_end'] as String?)?.substring(0, 10),
+                'recurrence_count': r['recurrence_count'],
+              };
+              if (r.containsKey('category')) m['category'] = r['category'];
+              if (r.containsKey('inquiry_phone')) {
+                m['inquiry_phone'] = r['inquiry_phone'];
+              }
+              if (r.containsKey('inquiry_school_grade')) {
+                m['inquiry_school_grade'] = r['inquiry_school_grade'];
+              }
+              if (r.containsKey('inquiry_availability')) {
+                m['inquiry_availability'] = r['inquiry_availability'];
+              }
+              if (r.containsKey('inquiry_note')) {
+                m['inquiry_note'] = r['inquiry_note'];
+              }
+              if (r.containsKey('inquiry_sort_index')) {
+                m['inquiry_sort_index'] = r['inquiry_sort_index'];
+              }
+              return m;
+            })
             .toList();
         await supa.from('memos').upsert(rows, onConflict: 'id');
         debugPrint('[BACKFILL][memos] upserted=${rows.length}');

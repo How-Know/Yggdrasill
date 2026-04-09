@@ -348,6 +348,24 @@ class _MathLiveEditorDialogState extends State<MathLiveEditorDialog> {
         btn('≠', 'op_neq'),
         btn('±', 'op_pm'),
         btn('∓', 'op_mp'),
+        btn('⇒', 'log_implies'),
+        btn('→', 'log_to'),
+        btn('←', 'log_impliedby'),
+        btn('↔', 'log_iff'),
+        btn('∧', 'log_and'),
+        btn('∨', 'log_or'),
+        btn('¬', 'log_not'),
+        btn('∀', 'log_forall'),
+        btn('∃', 'log_exists'),
+        btn('∴', 'log_therefore'),
+        btn('∵', 'log_because'),
+        btn('∈', 'log_in'),
+        btn('∉', 'log_nin'),
+        btn('⊂', 'log_subset'),
+        btn('⊆', 'log_subseteq'),
+        btn('∪', 'log_cup'),
+        btn('∩', 'log_cap'),
+        btn('∅', 'log_empty'),
         btn('α', 'alpha'),
         btn('β', 'beta'),
         btn('γ', 'gamma'),
@@ -486,7 +504,7 @@ class _MathLiveEditorDialogState extends State<MathLiveEditorDialog> {
   <body>
     <div class="root">
       <math-field id="mf"></math-field>
-      <div class="hint">직접 입력하거나 상단 버튼(연산자·지수·분수·루트·행렬 등)을 사용하세요.</div>
+      <div class="hint">직접 입력하거나 상단 버튼(연산자·논리·집합·지수·분수·루트·행렬 등)을 사용하세요.</div>
     </div>
     <script>
       const initialLatex = $encodedInitial;
@@ -554,6 +572,24 @@ class _MathLiveEditorDialogState extends State<MathLiveEditorDialog> {
           case 'op_neq': insertLatex('\\\\neq'); break;
           case 'op_pm': insertLatex('\\\\pm'); break;
           case 'op_mp': insertLatex('\\\\mp'); break;
+          case 'log_implies': insertLatex('\\\\Rightarrow'); break;
+          case 'log_to': insertLatex('\\\\to'); break;
+          case 'log_impliedby': insertLatex('\\\\Leftarrow'); break;
+          case 'log_iff': insertLatex('\\\\Leftrightarrow'); break;
+          case 'log_and': insertLatex('\\\\land'); break;
+          case 'log_or': insertLatex('\\\\lor'); break;
+          case 'log_not': insertLatex('\\\\neg'); break;
+          case 'log_forall': insertLatex('\\\\forall'); break;
+          case 'log_exists': insertLatex('\\\\exists'); break;
+          case 'log_therefore': insertLatex('\\\\therefore'); break;
+          case 'log_because': insertLatex('\\\\because'); break;
+          case 'log_in': insertLatex('\\\\in'); break;
+          case 'log_nin': insertLatex('\\\\notin'); break;
+          case 'log_subset': insertLatex('\\\\subset'); break;
+          case 'log_subseteq': insertLatex('\\\\subseteq'); break;
+          case 'log_cup': insertLatex('\\\\cup'); break;
+          case 'log_cap': insertLatex('\\\\cap'); break;
+          case 'log_empty': insertLatex('\\\\emptyset'); break;
           case 'alpha': insertLatex('\\\\alpha'); break;
           case 'beta': insertLatex('\\\\beta'); break;
           case 'gamma': insertLatex('\\\\gamma'); break;

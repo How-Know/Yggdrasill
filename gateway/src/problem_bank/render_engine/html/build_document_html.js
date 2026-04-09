@@ -763,6 +763,9 @@ function buildStyles({
       break-inside: avoid;
       overflow: hidden;
     }
+    .mock-page.mock-page-title {
+      overflow: visible;
+    }
     .mock-page.mock-page-title .mock-header-first {
       margin-bottom: 20pt;
     }
@@ -860,6 +863,22 @@ function buildStyles({
       font-weight: 900;
       -webkit-text-stroke: 0.14pt #111;
       line-height: 1;
+    }
+    .mock-chip-session-wrap {
+      position: relative;
+      display: inline-flex;
+      overflow: visible;
+    }
+    .mock-academy-logo-overlay {
+      position: absolute;
+      left: -2pt;
+      width: 100%;
+      height: auto;
+      bottom: calc(100% + 6.2pt);
+      display: block;
+      transform-origin: center bottom;
+      transform: scaleY(0.94);
+      pointer-events: none;
     }
     .mock-chip-condensed {
       display: inline-block;
@@ -1610,6 +1629,13 @@ export function buildDocumentHtml({
   const titlePageTopText = String(layout?.titlePageTopText || '2026학년도 대학수학능력시험 문제지')
     .replace(/\s+/g, ' ')
     .trim() || '2026학년도 대학수학능력시험 문제지';
+  const includeAcademyLogo = isMockStyle && layout?.includeAcademyLogo === true;
+  const academyLogoDataUrl = includeAcademyLogo
+    ? String(layout?.academyLogoDataUrl || '').trim()
+    : '';
+  const hasAcademyLogo = includeAcademyLogo
+    && academyLogoDataUrl.length > 0
+    && /^data:image\//i.test(academyLogoDataUrl);
   const includeCoverPage = isMockStyle && layout?.includeCoverPage === true;
   const coverPageTexts = normalizeCoverPageTexts(layout?.coverPageTexts);
   const scoreMap = questionScoreByQuestionId && typeof questionScoreByQuestionId === 'object'
@@ -2197,6 +2223,9 @@ export function buildDocumentHtml({
     `;
     const renderMockHeader = (pageNo, isTitlePage) => {
       if (isTitlePage) {
+        const sessionChipHtml = hasAcademyLogo
+          ? `<span class="mock-chip-session-wrap"><img class="mock-academy-logo-overlay" src="${escapeHtml(academyLogoDataUrl)}" alt="" /><span class="mock-chip mock-chip-session"><span class="mock-chip-condensed">제 2 교시</span></span></span>`
+          : '<span class="mock-chip mock-chip-session"><span class="mock-chip-condensed">제 2 교시</span></span>';
         return `
           <header class="mock-header-first">
             <div class="mock-header-first-top">
@@ -2206,7 +2235,7 @@ export function buildDocumentHtml({
             </div>
             <div class="mock-header-first-bottom">
               <div class="mock-side-left">
-                <span class="mock-chip mock-chip-session"><span class="mock-chip-condensed">제 2 교시</span></span>
+                ${sessionChipHtml}
               </div>
               <div class="mock-first-subject">${renderTitleLine(pageNo)}</div>
               <div class="mock-side-right">

@@ -34,7 +34,7 @@ class AcademyDbService {
         mem ? inMemoryDatabasePath : await _resolveLocalDbPath();
     return await openDatabaseWithLog(
       path,
-      version: 53,
+      version: 55,
       onConfigure: (db) async {
         // 잠금 최소화를 위한 설정은 유지
         await db.execute('PRAGMA journal_mode=WAL');
@@ -323,6 +323,7 @@ class AcademyDbService {
             replacement_class_datetime TEXT,
             duration_minutes INTEGER,
             reason TEXT,
+            change_reason TEXT,
             original_attendance_id TEXT,
             replacement_attendance_id TEXT,
             status TEXT NOT NULL,
@@ -1804,6 +1805,43 @@ class AcademyDbService {
             print('[DB][마이그레이션] v53 academy_settings.address 추가 실패: $e');
           }
         }
+        if (oldVersion < 54) {
+          try {
+            Future<void> addColIfMissing(String name, String ddl) async {
+              final cols = await db.rawQuery('PRAGMA table_info(memos)');
+              if (cols.any((c) => c['name'] == name)) return;
+              await db.execute(ddl);
+            }
+
+            await addColIfMissing('category', 'ALTER TABLE memos ADD COLUMN category TEXT');
+            await addColIfMissing(
+                'inquiry_phone', 'ALTER TABLE memos ADD COLUMN inquiry_phone TEXT');
+            await addColIfMissing('inquiry_school_grade',
+                'ALTER TABLE memos ADD COLUMN inquiry_school_grade TEXT');
+            await addColIfMissing('inquiry_availability',
+                'ALTER TABLE memos ADD COLUMN inquiry_availability TEXT');
+            await addColIfMissing(
+                'inquiry_note', 'ALTER TABLE memos ADD COLUMN inquiry_note TEXT');
+            await addColIfMissing('inquiry_sort_index',
+                'ALTER TABLE memos ADD COLUMN inquiry_sort_index INTEGER');
+          } catch (e) {
+            print('[DB][마이그레이션] v54 memos 문의 컬럼 추가 실패: $e');
+          }
+        }
+        if (oldVersion < 55) {
+          try {
+            final ovCols =
+                await db.rawQuery('PRAGMA table_info(session_overrides)');
+            final has = ovCols.any((c) => c['name'] == 'change_reason');
+            if (!has) {
+              await db.execute(
+                  'ALTER TABLE session_overrides ADD COLUMN change_reason TEXT');
+            }
+          } catch (e) {
+            print(
+                '[DB][마이그레이션] v55 session_overrides.change_reason 추가 실패: $e');
+          }
+        }
       },
     );
   }
@@ -2114,6 +2152,27 @@ class AcademyDbService {
           updated_at TEXT
         )
       ''');
+    }
+    try {
+      Future<void> addColIfMissing(String name, String ddl) async {
+        final cols = await dbClient.rawQuery('PRAGMA table_info(memos)');
+        if (cols.any((c) => c['name'] == name)) return;
+        await dbClient.execute(ddl);
+      }
+
+      await addColIfMissing('category', 'ALTER TABLE memos ADD COLUMN category TEXT');
+      await addColIfMissing(
+          'inquiry_phone', 'ALTER TABLE memos ADD COLUMN inquiry_phone TEXT');
+      await addColIfMissing('inquiry_school_grade',
+          'ALTER TABLE memos ADD COLUMN inquiry_school_grade TEXT');
+      await addColIfMissing('inquiry_availability',
+          'ALTER TABLE memos ADD COLUMN inquiry_availability TEXT');
+      await addColIfMissing(
+          'inquiry_note', 'ALTER TABLE memos ADD COLUMN inquiry_note TEXT');
+      await addColIfMissing('inquiry_sort_index',
+          'ALTER TABLE memos ADD COLUMN inquiry_sort_index INTEGER');
+    } catch (e) {
+      print('[DB][ensureMemosTable] 컬럼 보강 실패: $e');
     }
   }
 

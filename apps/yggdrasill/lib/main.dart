@@ -1,4 +1,3 @@
-import 'package:uuid/uuid.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -1282,34 +1281,25 @@ class _GlobalMemoOverlayState extends State<_GlobalMemoOverlay> {
               builder: (_) => const MemoInputDialog(),
             );
             if (result == null) return;
-            final text = result.text.trim();
-            if (text.isEmpty) return;
-            final now = DateTime.now();
-            final trimmed = text.trim();
-            final scheduledAt = await AiSummaryService.extractDateTime(trimmed);
-            final memo = Memo(
-              id: const Uuid().v4(),
-              original: trimmed,
-              summary: '요약 중...',
-              categoryKey: MemoCategory.normalize(result.categoryKey),
-              scheduledAt: scheduledAt,
-              dismissed: false,
-              createdAt: now,
-              updatedAt: now,
-            );
-            await DataManager.instance.addMemo(memo);
-            try {
-              final summary = await AiSummaryService.summarize(memo.original);
-              await DataManager.instance.updateMemo(
-                memo.copyWith(
-                  summary: summary,
-                  updatedAt: DateTime.now(),
-                ),
-              );
-            } catch (_) {}
+            await addMemoFromCreateResult(result);
           },
           onEditMemo: (ctx, item) async {
             final dlgCtx = rootNavigatorKey.currentContext ?? context;
+            if (item.categoryKey == MemoCategory.inquiry) {
+              final edited = await showDialog<MemoInquiryEditResult>(
+                context: dlgCtx,
+                builder: (_) => MemoInquiryEditDialog(
+                  initialPhone: item.inquiryPhone ?? '',
+                  initialSchoolGrade: item.inquirySchoolGrade ?? '',
+                  initialAvailability: item.inquiryAvailability ?? '',
+                  initialNote: item.inquiryNote ?? '',
+                  fallbackOriginal: item.original,
+                ),
+              );
+              if (edited == null) return;
+              await applyMemoInquiryEdit(item: item, edited: edited);
+              return;
+            }
             final edited = await showDialog<MemoEditResult>(
               context: dlgCtx,
               builder: (_) => MemoEditDialog(
@@ -1322,7 +1312,6 @@ class _GlobalMemoOverlayState extends State<_GlobalMemoOverlay> {
             }
             final newOriginal = edited.text.trim();
             if (newOriginal.isEmpty) return;
-            // 기존 메모 유지 후 필요한 필드만 업데이트 (요약은 비동기)
             var updated = item.copyWith(
               original: newOriginal,
               summary: '요약 중...',
@@ -1673,10 +1662,14 @@ class _GlobalMemoFloatingBannersState
           child: ValueListenableBuilder<List<Memo>>(
             valueListenable: DataManager.instance.memosNotifier,
             builder: (context, memos, _) {
+              // 문의 탭 전용 메모는 우측 시트에서만 보이게 — 전역 플로팅 배너 제외
+              final forBanners = memos
+                  .where((m) => !memoIsFormInquiryForList(m))
+                  .toList();
               // 가까운 미래 포함, 해제되지 않은 배너만 (규칙에 맞게 미래도 표시)
               // 디버그 로그 제거
               final withSchedule =
-                  memos.where((m) => m.scheduledAt != null).toList();
+                  forBanners.where((m) => m.scheduledAt != null).toList();
               final notDismissedFlag =
                   withSchedule.where((m) => !m.dismissed).toList();
               final notSessionDismissed = notDismissedFlag
@@ -1687,7 +1680,7 @@ class _GlobalMemoFloatingBannersState
                 ..sort((a, b) => a.scheduledAt!.compareTo(b.scheduledAt!));
               // 일정 없는 메모: 삭제 전까지 항상 표시 (dismissed/세션 해제 무시)
               final unscheduledCandidates =
-                  memos.where((m) => m.scheduledAt == null).toList();
+                  forBanners.where((m) => m.scheduledAt == null).toList();
               // 결합 후 정렬: (scheduledAt ?? createdAt) 오름차순 → 최신이 아래쪽
               DateTime sortKey(m) => (m.scheduledAt ?? m.createdAt);
               final combined = [

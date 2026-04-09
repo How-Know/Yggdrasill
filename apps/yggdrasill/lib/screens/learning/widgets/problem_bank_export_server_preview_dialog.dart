@@ -19,41 +19,87 @@ class ProblemBankPreviewRefreshRequest {
   const ProblemBankPreviewRefreshRequest({
     required this.subjectTitleText,
     required this.titlePageTopText,
+    required this.timeLimitText,
     required this.pageColumnQuestionCounts,
     required this.columnLabelAnchors,
     required this.titlePageIndices,
     required this.titlePageHeaders,
     required this.coverPageTexts,
+    required this.includeAcademyLogo,
     required this.includeCoverPage,
     required this.includeAnswerSheet,
     required this.includeExplanation,
     required this.includeQuestionScore,
     required this.questionScoreByQuestionId,
+    this.presetDisplayName = '',
   });
 
   final String subjectTitleText;
   final String titlePageTopText;
+  final String timeLimitText;
   final List<Map<String, dynamic>> pageColumnQuestionCounts;
   final List<Map<String, dynamic>> columnLabelAnchors;
   final List<int> titlePageIndices;
   final List<Map<String, dynamic>> titlePageHeaders;
   final Map<String, dynamic> coverPageTexts;
+  final bool includeAcademyLogo;
   final bool includeCoverPage;
   final bool includeAnswerSheet;
   final bool includeExplanation;
   final bool includeQuestionScore;
   final Map<String, double> questionScoreByQuestionId;
+  final String presetDisplayName;
+
+  ProblemBankPreviewRefreshRequest copyWith({
+    String? subjectTitleText,
+    String? titlePageTopText,
+    String? timeLimitText,
+    List<Map<String, dynamic>>? pageColumnQuestionCounts,
+    List<Map<String, dynamic>>? columnLabelAnchors,
+    List<int>? titlePageIndices,
+    List<Map<String, dynamic>>? titlePageHeaders,
+    Map<String, dynamic>? coverPageTexts,
+    bool? includeAcademyLogo,
+    bool? includeCoverPage,
+    bool? includeAnswerSheet,
+    bool? includeExplanation,
+    bool? includeQuestionScore,
+    Map<String, double>? questionScoreByQuestionId,
+    String? presetDisplayName,
+  }) {
+    return ProblemBankPreviewRefreshRequest(
+      subjectTitleText: subjectTitleText ?? this.subjectTitleText,
+      titlePageTopText: titlePageTopText ?? this.titlePageTopText,
+      timeLimitText: timeLimitText ?? this.timeLimitText,
+      pageColumnQuestionCounts:
+          pageColumnQuestionCounts ?? this.pageColumnQuestionCounts,
+      columnLabelAnchors: columnLabelAnchors ?? this.columnLabelAnchors,
+      titlePageIndices: titlePageIndices ?? this.titlePageIndices,
+      titlePageHeaders: titlePageHeaders ?? this.titlePageHeaders,
+      coverPageTexts: coverPageTexts ?? this.coverPageTexts,
+      includeAcademyLogo: includeAcademyLogo ?? this.includeAcademyLogo,
+      includeCoverPage: includeCoverPage ?? this.includeCoverPage,
+      includeAnswerSheet: includeAnswerSheet ?? this.includeAnswerSheet,
+      includeExplanation: includeExplanation ?? this.includeExplanation,
+      includeQuestionScore: includeQuestionScore ?? this.includeQuestionScore,
+      questionScoreByQuestionId:
+          questionScoreByQuestionId ?? this.questionScoreByQuestionId,
+      presetDisplayName: presetDisplayName ?? this.presetDisplayName,
+    );
+  }
 }
 
 class ProblemBankPreviewRefreshResult {
   const ProblemBankPreviewRefreshResult({
     required this.pdfUrl,
     this.titlePageTopText = '2026학년도 대학수학능력시험 문제지',
+    this.timeLimitText = '',
     this.pageColumnQuestionCounts = const <Map<String, dynamic>>[],
     this.columnLabelAnchors = const <Map<String, dynamic>>[],
     this.titlePageIndices = const <int>[],
     this.titlePageHeaders = const <Map<String, dynamic>>[],
     this.coverPageTexts = const <String, dynamic>{},
+    this.includeAcademyLogo = false,
     this.includeCoverPage = false,
     this.includeAnswerSheet = true,
     this.includeExplanation = false,
@@ -63,11 +109,13 @@ class ProblemBankPreviewRefreshResult {
 
   final String pdfUrl;
   final String titlePageTopText;
+  final String timeLimitText;
   final List<Map<String, dynamic>> pageColumnQuestionCounts;
   final List<Map<String, dynamic>> columnLabelAnchors;
   final List<int> titlePageIndices;
   final List<Map<String, dynamic>> titlePageHeaders;
   final Map<String, dynamic> coverPageTexts;
+  final bool includeAcademyLogo;
   final bool includeCoverPage;
   final bool includeAnswerSheet;
   final bool includeExplanation;
@@ -95,6 +143,7 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
     required this.titleText,
     this.initialSubjectTitle = '수학 영역',
     this.initialTitlePageTopText = '2026학년도 대학수학능력시험 문제지',
+    this.initialTimeLimitText = '',
     this.layoutColumns = 1,
     this.maxQuestionsPerPage = 4,
     this.totalQuestionCount = 0,
@@ -103,6 +152,7 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
     this.initialTitlePageIndices = const <int>[],
     this.initialTitlePageHeaders = const <Map<String, dynamic>>[],
     this.initialCoverPageTexts = const <String, dynamic>{},
+    this.initialIncludeAcademyLogo = false,
     this.initialIncludeCoverPage = false,
     this.initialIncludeAnswerSheet = true,
     this.initialIncludeExplanation = false,
@@ -118,6 +168,7 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
   final String titleText;
   final String initialSubjectTitle;
   final String initialTitlePageTopText;
+  final String initialTimeLimitText;
   final int layoutColumns;
   final int maxQuestionsPerPage;
   final int totalQuestionCount;
@@ -126,6 +177,7 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
   final List<int> initialTitlePageIndices;
   final List<Map<String, dynamic>> initialTitlePageHeaders;
   final Map<String, dynamic> initialCoverPageTexts;
+  final bool initialIncludeAcademyLogo;
   final bool initialIncludeCoverPage;
   final bool initialIncludeAnswerSheet;
   final bool initialIncludeExplanation;
@@ -142,6 +194,7 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
     String titleText = '서버 PDF 미리보기',
     String initialSubjectTitle = '수학 영역',
     String initialTitlePageTopText = '2026학년도 대학수학능력시험 문제지',
+    String initialTimeLimitText = '',
     int layoutColumns = 1,
     int maxQuestionsPerPage = 4,
     int totalQuestionCount = 0,
@@ -153,6 +206,7 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
     List<Map<String, dynamic>> initialTitlePageHeaders =
         const <Map<String, dynamic>>[],
     Map<String, dynamic> initialCoverPageTexts = const <String, dynamic>{},
+    bool initialIncludeAcademyLogo = false,
     bool initialIncludeCoverPage = false,
     bool initialIncludeAnswerSheet = true,
     bool initialIncludeExplanation = false,
@@ -187,6 +241,7 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
               titleText: titleText,
               initialSubjectTitle: initialSubjectTitle,
               initialTitlePageTopText: initialTitlePageTopText,
+              initialTimeLimitText: initialTimeLimitText,
               layoutColumns: layoutColumns,
               maxQuestionsPerPage: maxQuestionsPerPage,
               totalQuestionCount: totalQuestionCount,
@@ -195,6 +250,7 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
               initialTitlePageIndices: initialTitlePageIndices,
               initialTitlePageHeaders: initialTitlePageHeaders,
               initialCoverPageTexts: initialCoverPageTexts,
+              initialIncludeAcademyLogo: initialIncludeAcademyLogo,
               initialIncludeCoverPage: initialIncludeCoverPage,
               initialIncludeAnswerSheet: initialIncludeAnswerSheet,
               initialIncludeExplanation: initialIncludeExplanation,
@@ -236,6 +292,7 @@ class _ProblemBankExportServerPreviewDialogState
   final PdfViewerController _viewerController = PdfViewerController();
   late final TextEditingController _subjectController;
   late final TextEditingController _titlePageTopTextController;
+  late final TextEditingController _timeLimitController;
   late final TextEditingController _coverTopTitleController;
   late final TextEditingController _coverSubjectTitleController;
   late final TextEditingController _coverPhraseController;
@@ -257,6 +314,8 @@ class _ProblemBankExportServerPreviewDialogState
   bool _isRefreshing = false;
   bool _isGeneratingPdf = false;
   bool _isSavingSettings = false;
+  String _lastPresetDisplayName = '';
+  late bool _includeAcademyLogo;
   late bool _includeCoverPage;
   late bool _includeAnswerSheet;
   late bool _includeExplanation;
@@ -287,6 +346,8 @@ class _ProblemBankExportServerPreviewDialogState
           ? widget.initialTitlePageTopText.trim()
           : _defaultTitlePageTopText,
     );
+    _timeLimitController =
+        TextEditingController(text: widget.initialTimeLimitText.trim());
     _coverTopTitleController = TextEditingController();
     _coverSubjectTitleController = TextEditingController();
     _coverPhraseController = TextEditingController();
@@ -294,6 +355,7 @@ class _ProblemBankExportServerPreviewDialogState
     _syncCoverPageTextControllers(
       _normalizeCoverPageTexts(widget.initialCoverPageTexts),
     );
+    _includeAcademyLogo = widget.initialIncludeAcademyLogo;
     _includeCoverPage = widget.initialIncludeCoverPage;
     _includeAnswerSheet = widget.initialIncludeAnswerSheet;
     _includeExplanation = widget.initialIncludeExplanation;
@@ -329,6 +391,7 @@ class _ProblemBankExportServerPreviewDialogState
     }
     _subjectController.dispose();
     _titlePageTopTextController.dispose();
+    _timeLimitController.dispose();
     _coverTopTitleController.dispose();
     _coverSubjectTitleController.dispose();
     _coverPhraseController.dispose();
@@ -1666,16 +1729,19 @@ class _ProblemBankExportServerPreviewDialogState
     return ProblemBankPreviewRefreshRequest(
       subjectTitleText: _subjectController.text.trim(),
       titlePageTopText: _titlePageTopTextController.text.trim(),
+      timeLimitText: _timeLimitController.text.trim(),
       pageColumnQuestionCounts: _pageColumnPayload(),
       columnLabelAnchors: _columnLabelAnchorsPayload(),
       titlePageIndices: _titlePageIndicesPayload(),
       titlePageHeaders: _titlePageHeadersPayload(),
       coverPageTexts: _coverPageTextsPayload(),
+      includeAcademyLogo: _includeAcademyLogo,
       includeCoverPage: _includeCoverPage,
       includeAnswerSheet: _includeAnswerSheet,
       includeExplanation: _includeExplanation,
       includeQuestionScore: _includeQuestionScore,
       questionScoreByQuestionId: _questionScorePayload(),
+      presetDisplayName: '',
     );
   }
 
@@ -1760,6 +1826,7 @@ class _ProblemBankExportServerPreviewDialogState
         _pageNumber = 1;
         _pageCount = 0;
         _viewerRevision += 1;
+        _includeAcademyLogo = refreshed.includeAcademyLogo;
         _includeCoverPage = refreshed.includeCoverPage;
         _includeAnswerSheet = refreshed.includeAnswerSheet;
         _includeExplanation = refreshed.includeExplanation;
@@ -1770,6 +1837,10 @@ class _ProblemBankExportServerPreviewDialogState
             : _defaultTitlePageTopText;
         if (_titlePageTopTextController.text != nextTopText) {
           _titlePageTopTextController.text = nextTopText;
+        }
+        final refreshedTimeLimitText = refreshed.timeLimitText.trim();
+        if (_timeLimitController.text != refreshedTimeLimitText) {
+          _timeLimitController.text = refreshedTimeLimitText;
         }
         _questionScoreByQuestionId = _normalizeQuestionScoreMap(
           refreshed.questionScoreByQuestionId,
@@ -1821,14 +1892,75 @@ class _ProblemBankExportServerPreviewDialogState
     }
   }
 
+  String _defaultPresetDisplayName() {
+    final last = _lastPresetDisplayName.trim();
+    if (last.isNotEmpty) return last;
+    final title =
+        _titlePageTopTextController.text.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (title.isNotEmpty) {
+      return '$title 세팅';
+    }
+    final now = DateTime.now();
+    String two(int v) => v.toString().padLeft(2, '0');
+    return '문제은행 프리셋 ${now.year}${two(now.month)}${two(now.day)}_${two(now.hour)}${two(now.minute)}';
+  }
+
+  Future<String?> _askPresetDisplayName() async {
+    final controller = TextEditingController(text: _defaultPresetDisplayName());
+    final value = await showDialog<String>(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF10171A),
+          title: const Text(
+            '프리셋 이름',
+            style: TextStyle(color: _textPrimary),
+          ),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            style: const TextStyle(
+              color: _textPrimary,
+              fontWeight: FontWeight.w700,
+            ),
+            decoration: const InputDecoration(
+              hintText: '예: 3월 모의고사 출력세팅',
+            ),
+            onSubmitted: (_) => Navigator.of(ctx).pop(controller.text.trim()),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('취소'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(controller.text.trim()),
+              child: const Text('저장'),
+            ),
+          ],
+        );
+      },
+    );
+    controller.dispose();
+    final normalized = (value ?? '').replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (normalized.isEmpty) return null;
+    return normalized;
+  }
+
   Future<void> _saveSettings() async {
     final callback = widget.onSaveSettingsRequested;
     if (callback == null || _isSavingSettings || _isRefreshing) return;
+    final presetDisplayName = await _askPresetDisplayName();
+    if (presetDisplayName == null) return;
     setState(() {
       _isSavingSettings = true;
+      _lastPresetDisplayName = presetDisplayName;
     });
     try {
-      await callback(_buildRequestPayload());
+      final payload = _buildRequestPayload().copyWith(
+        presetDisplayName: presetDisplayName,
+      );
+      await callback(payload);
     } finally {
       if (mounted) {
         setState(() {
@@ -3011,6 +3143,16 @@ class _ProblemBankExportServerPreviewDialogState
                                   hintText: _defaultTitlePageTopText,
                                 ),
                                 _buildTitleSwitchTile(
+                                  label: '학원 로고',
+                                  description: '모의고사형 제목 페이지에 학원 로고를 표시합니다.',
+                                  value: _includeAcademyLogo,
+                                  onChanged: (value) {
+                                    setState(() {
+                                      _includeAcademyLogo = value;
+                                    });
+                                  },
+                                ),
+                                _buildTitleSwitchTile(
                                   label: '표지',
                                   description:
                                       'ON 시 맨 앞에 표지 1페이지 + 빈 페이지 1페이지를 추가합니다.',
@@ -3089,14 +3231,24 @@ class _ProblemBankExportServerPreviewDialogState
                           const SizedBox(height: 16),
                           _buildSectionCard(
                             title: '문제와 답안',
-                            child: Text(
-                              '현재 설정: 점수 ${_includeQuestionScore ? 'ON' : 'OFF'} · 빠른정답 ${_includeAnswerSheet ? 'ON' : 'OFF'} · 해설 ${_includeExplanation ? 'ON' : 'OFF'}',
-                              style: const TextStyle(
-                                color: Color(0xFF9FB3B3),
-                                fontSize: 12.2,
-                                fontWeight: FontWeight.w600,
-                                height: 1.35,
-                              ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                _buildCoverTextField(
+                                  label: '제한시간 (저장/복원용, PDF 미표시)',
+                                  controller: _timeLimitController,
+                                  hintText: '예: 100분',
+                                ),
+                                Text(
+                                  '현재 설정: 로고 ${_includeAcademyLogo ? 'ON' : 'OFF'} · 점수 ${_includeQuestionScore ? 'ON' : 'OFF'} · 빠른정답 ${_includeAnswerSheet ? 'ON' : 'OFF'} · 해설 ${_includeExplanation ? 'ON' : 'OFF'}',
+                                  style: const TextStyle(
+                                    color: Color(0xFF9FB3B3),
+                                    fontSize: 12.2,
+                                    fontWeight: FontWeight.w600,
+                                    height: 1.35,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
                           const SizedBox(height: 16),

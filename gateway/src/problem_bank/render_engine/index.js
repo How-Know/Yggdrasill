@@ -417,6 +417,10 @@ function buildHtmlLayout(renderConfig, baseLayout) {
     subjectTitleText,
   );
   const includeCoverPage = renderConfig?.includeCoverPage === true;
+  const includeAcademyLogo = renderConfig?.includeAcademyLogo === true;
+  const academyLogoDataUrl = includeAcademyLogo
+    ? String(renderConfig?.academyLogoDataUrl || '').trim()
+    : '';
   const includeQuestionScore = renderConfig?.includeQuestionScore === true;
   const questionScoreByQuestionId = normalizeQuestionScoreByQuestionId(
     renderConfig?.questionScoreByQuestionId,
@@ -451,6 +455,8 @@ function buildHtmlLayout(renderConfig, baseLayout) {
     titlePageIndices,
     titlePageHeaders,
     includeCoverPage,
+    includeAcademyLogo,
+    academyLogoDataUrl,
     includeQuestionScore,
     questionScoreByQuestionId,
     coverPageTexts,
@@ -566,6 +572,7 @@ export async function renderPdfWithHtmlEngine({
     includeQuestionScore: layout?.includeQuestionScore === true,
     questionScoreByQuestionId: layout?.questionScoreByQuestionId || {},
     includeCoverPage: layout?.includeCoverPage === true,
+    includeAcademyLogo: layout?.includeAcademyLogo === true,
     coverPageTexts: layout?.coverPageTexts || normalizeCoverPageTexts(null),
     renderConfigVersion,
     fontFamily: fontFamilyResolved || fontFamilyRequested || '',

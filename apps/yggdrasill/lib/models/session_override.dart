@@ -5,6 +5,9 @@ enum OverrideStatus { planned, completed, canceled }
 enum OverrideReason { makeup, holiday, teacher, other }
 
 class SessionOverride {
+  /// [copyWith]에서 `changeReason`을 `null`로 두고 싶을 때만 전달하기 위한 센티넬
+  static const Object _kUnsetChangeReason = Object();
+
   final String id;
   final String studentId;
   final String? sessionTypeId; // 수업 종류(이름/ID)
@@ -15,6 +18,8 @@ class SessionOverride {
   final DateTime? replacementClassDateTime; // replace/add 대체/추가 회차
   final int? durationMinutes; // 분 단위
   final OverrideReason? reason;
+  /// 직원 입력 변경·보강 사유 (알림톡 등). `reason` 컬럼(분류)과 별개.
+  final String? changeReason;
   final OverrideStatus status;
   final String? originalAttendanceId; // 결석 레코드 ID (보강 상쇄 링크)
   final String? replacementAttendanceId; // 보강 출석 레코드 ID
@@ -33,6 +38,7 @@ class SessionOverride {
     this.replacementClassDateTime,
     this.durationMinutes,
     this.reason,
+    this.changeReason,
     required this.status,
     this.originalAttendanceId,
     this.replacementAttendanceId,
@@ -54,6 +60,7 @@ class SessionOverride {
     DateTime? replacementClassDateTime,
     int? durationMinutes,
     OverrideReason? reason,
+    Object? changeReason = _kUnsetChangeReason,
     OverrideStatus? status,
     String? originalAttendanceId,
     String? replacementAttendanceId,
@@ -61,6 +68,9 @@ class SessionOverride {
     DateTime? updatedAt,
     int? version,
   }) {
+    final String? nextChangeReason = identical(changeReason, _kUnsetChangeReason)
+        ? this.changeReason
+        : changeReason as String?;
     return SessionOverride(
       id: id ?? this.id,
       studentId: studentId ?? this.studentId,
@@ -72,6 +82,7 @@ class SessionOverride {
       replacementClassDateTime: replacementClassDateTime ?? this.replacementClassDateTime,
       durationMinutes: durationMinutes ?? this.durationMinutes,
       reason: reason ?? this.reason,
+      changeReason: nextChangeReason,
       status: status ?? this.status,
       originalAttendanceId: originalAttendanceId ?? this.originalAttendanceId,
       replacementAttendanceId: replacementAttendanceId ?? this.replacementAttendanceId,
@@ -183,6 +194,12 @@ class SessionOverride {
           : null,
       durationMinutes: map['duration_minutes'] as int?,
       reason: _reasonFromString(map['reason'] as String?),
+      changeReason: () {
+        final v = map['change_reason'];
+        if (v == null) return null;
+        final s = v.toString().trim();
+        return s.isEmpty ? null : s;
+      }(),
       status: _statusFromString(map['status'] as String),
       originalAttendanceId: map['original_attendance_id'] as String?,
       replacementAttendanceId: map['replacement_attendance_id'] as String?,
@@ -204,6 +221,7 @@ class SessionOverride {
       'replacement_class_datetime': replacementClassDateTime?.toIso8601String(),
       'duration_minutes': durationMinutes,
       'reason': _reasonToString(reason),
+      'change_reason': changeReason,
       'status': _statusToString(status),
       'original_attendance_id': originalAttendanceId,
       'replacement_attendance_id': replacementAttendanceId,

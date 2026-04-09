@@ -29,6 +29,7 @@ class ProblemBankExportOptionsPanel extends StatelessWidget {
     required this.onLineHeightChanged,
     required this.onChoiceSpacingChanged,
     required this.onTargetDpiChanged,
+    required this.onPresetPressed,
   });
 
   final LearningProblemExportSettings settings;
@@ -55,6 +56,7 @@ class ProblemBankExportOptionsPanel extends StatelessWidget {
   final ValueChanged<double> onLineHeightChanged;
   final ValueChanged<double> onChoiceSpacingChanged;
   final ValueChanged<int> onTargetDpiChanged;
+  final VoidCallback onPresetPressed;
 
   static const _panelBg = Color(0xFF151C21);
   static const _border = Color(0xFF223131);
@@ -81,13 +83,38 @@ class ProblemBankExportOptionsPanel extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            '양식 적용 및 출력',
-            style: TextStyle(
-              color: _textPrimary,
-              fontSize: 15,
-              fontWeight: FontWeight.w800,
-            ),
+          Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  '양식 적용 및 출력',
+                  style: TextStyle(
+                    color: _textPrimary,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              OutlinedButton.icon(
+                onPressed: disabled ? null : onPresetPressed,
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: _textPrimary,
+                  side: const BorderSide(color: Color(0xFF2D4D4B)),
+                  minimumSize: const Size(0, 34),
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  visualDensity: VisualDensity.compact,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+                icon: const Icon(Icons.bookmark_outline, size: 16),
+                label: const Text(
+                  '프리셋',
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
+              ),
+            ],
           ),
           const SizedBox(height: 10),
           SingleChildScrollView(

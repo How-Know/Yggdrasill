@@ -340,10 +340,16 @@ class LearningProblemDocumentExportPreset {
     required this.academyId,
     required this.sourceDocumentId,
     required this.documentId,
+    required this.displayName,
+    required this.sourceDocumentName,
+    required this.documentName,
     required this.renderConfig,
     required this.selectedQuestionIds,
+    required this.selectedQuestionCount,
     required this.questionModeByQuestionId,
     required this.titlePageTopText,
+    required this.includeAcademyLogo,
+    required this.timeLimitText,
     required this.includeQuestionScore,
     required this.questionScoreByQuestionId,
     this.createdAt,
@@ -354,21 +360,65 @@ class LearningProblemDocumentExportPreset {
   final String academyId;
   final String sourceDocumentId;
   final String documentId;
+  final String displayName;
+  final String sourceDocumentName;
+  final String documentName;
   final Map<String, dynamic> renderConfig;
   final List<String> selectedQuestionIds;
+  final int selectedQuestionCount;
   final Map<String, String> questionModeByQuestionId;
   final String titlePageTopText;
+  final bool includeAcademyLogo;
+  final String timeLimitText;
   final bool includeQuestionScore;
   final Map<String, double> questionScoreByQuestionId;
   final DateTime? createdAt;
   final DateTime? updatedAt;
 
+  String get templateProfile =>
+      '${renderConfig['templateProfile'] ?? ''}'.trim();
+  String get paperSize => '${renderConfig['paperSize'] ?? ''}'.trim();
+
   factory LearningProblemDocumentExportPreset.fromMap(
     Map<String, dynamic> map,
   ) {
-    final renderConfig = _mapOrEmpty(map['render_config']);
-    final modeMapRaw = _mapOrEmpty(map['question_mode_by_question_id']);
+    final renderConfig = _mapOrEmpty(
+      map['render_config'] is Map ? map['render_config'] : map['renderConfig'],
+    );
+    final modeMapRaw = _mapOrEmpty(
+      map['question_mode_by_question_id'] is Map
+          ? map['question_mode_by_question_id']
+          : map['questionModeByQuestionId'],
+    );
+    final selectedQuestionIds = _listOrEmpty(
+      map['selected_question_ids'] is List
+          ? map['selected_question_ids']
+          : map['selectedQuestionIds'],
+    )
+        .map((e) => '$e'.trim())
+        .where((e) => e.isNotEmpty)
+        .toList(growable: false);
+    final sourceDocumentName =
+        '${map['source_document_name'] ?? map['sourceDocumentName'] ?? ''}'
+            .trim();
+    final documentName =
+        '${map['document_name'] ?? map['documentName'] ?? ''}'.trim();
+    final displayName =
+        '${map['display_name'] ?? map['displayName'] ?? ''}'.trim();
+    final selectedQuestionCount = _intOrNull(
+          map['selected_question_count'] ?? map['selectedQuestionCount'],
+        ) ??
+        selectedQuestionIds.length;
+    final fallbackDisplayName = displayName.isNotEmpty
+        ? displayName
+        : (documentName.isNotEmpty
+            ? documentName
+            : (sourceDocumentName.isNotEmpty ? sourceDocumentName : '세팅저장'));
     final titlePageTopText = '${renderConfig['titlePageTopText'] ?? ''}'
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    final includeAcademyLogo = renderConfig['includeAcademyLogo'] == true;
+    final timeLimitText = '${renderConfig['timeLimitText'] ?? ''}'
         .replaceAll(RegExp(r'\s+'), ' ')
         .trim();
     final includeQuestionScore = renderConfig['includeQuestionScore'] == true;
@@ -384,17 +434,22 @@ class LearningProblemDocumentExportPreset {
     }
     return LearningProblemDocumentExportPreset(
       id: '${map['id'] ?? ''}'.trim(),
-      academyId: '${map['academy_id'] ?? ''}'.trim(),
-      sourceDocumentId: '${map['source_document_id'] ?? ''}'.trim(),
-      documentId: '${map['document_id'] ?? ''}'.trim(),
+      academyId: '${map['academy_id'] ?? map['academyId'] ?? ''}'.trim(),
+      sourceDocumentId:
+          '${map['source_document_id'] ?? map['sourceDocumentId'] ?? ''}'
+              .trim(),
+      documentId: '${map['document_id'] ?? map['documentId'] ?? ''}'.trim(),
+      displayName: fallbackDisplayName,
+      sourceDocumentName: sourceDocumentName,
+      documentName: documentName,
       renderConfig: renderConfig,
-      selectedQuestionIds: _listOrEmpty(map['selected_question_ids'])
-          .map((e) => '$e'.trim())
-          .where((e) => e.isNotEmpty)
-          .toList(growable: false),
+      selectedQuestionIds: selectedQuestionIds,
+      selectedQuestionCount: selectedQuestionCount,
       questionModeByQuestionId: modeMap,
       titlePageTopText:
           titlePageTopText.isEmpty ? '2026학년도 대학수학능력시험 문제지' : titlePageTopText,
+      includeAcademyLogo: includeAcademyLogo,
+      timeLimitText: timeLimitText,
       includeQuestionScore: includeQuestionScore,
       questionScoreByQuestionId: questionScoreByQuestionId,
       createdAt: _dateTimeOrNull(map['created_at']),
@@ -786,6 +841,7 @@ class LearningProblemBankService {
     required String paperSize,
     required bool includeAnswerSheet,
     required bool includeExplanation,
+    String displayName = '',
   }) async {
     if (!hasGateway) {
       throw Exception('세팅 저장은 게이트웨이 연결이 필요합니다.');
@@ -816,11 +872,145 @@ class LearningProblemBankService {
         'paperSize': paperSize.trim(),
         'includeAnswerSheet': includeAnswerSheet,
         'includeExplanation': includeExplanation,
+        'displayName': displayName.trim(),
       },
     );
     return LearningProblemSavedSettingsDocumentResult.fromGatewayResponse(
       payload,
     );
+  }
+
+  Future<List<LearningProblemDocumentExportPreset>> listExportPresets({
+    required String academyId,
+    int limit = 120,
+    int offset = 0,
+  }) async {
+    final safeLimit = limit.clamp(1, 500).toInt();
+    final safeOffset = offset < 0 ? 0 : offset;
+    if (hasGateway) {
+      final json = await _gatewayGet(
+        '/pb/export-presets',
+        query: <String, String>{
+          'academyId': academyId,
+          'limit': '$safeLimit',
+          'offset': '$safeOffset',
+        },
+      );
+      return _listOrEmpty(json['presets'])
+          .map((e) =>
+              LearningProblemDocumentExportPreset.fromMap(_mapOrEmpty(e)))
+          .where((e) => e.id.isNotEmpty)
+          .toList(growable: false);
+    }
+
+    final rows = await _client
+        .from('pb_export_presets')
+        .select('*')
+        .eq('academy_id', academyId)
+        .order('created_at', ascending: false)
+        .range(safeOffset, safeOffset + safeLimit - 1);
+    final rawMaps = (rows as List<dynamic>)
+        .map(_mapOrEmpty)
+        .where((row) => row.isNotEmpty)
+        .toList(growable: false);
+    if (rawMaps.isEmpty) return const <LearningProblemDocumentExportPreset>[];
+
+    final docIds = <String>{};
+    for (final row in rawMaps) {
+      final sourceId = '${row['source_document_id'] ?? ''}'.trim();
+      final documentId = '${row['document_id'] ?? ''}'.trim();
+      if (sourceId.isNotEmpty) docIds.add(sourceId);
+      if (documentId.isNotEmpty) docIds.add(documentId);
+    }
+    final docNameById = <String, String>{};
+    for (final chunk in _chunkStrings(docIds.toList(growable: false), 250)) {
+      final docRows = await _client
+          .from('pb_documents')
+          .select('id,source_filename')
+          .eq('academy_id', academyId)
+          .inFilter('id', chunk);
+      for (final item in (docRows as List<dynamic>)) {
+        final row = _mapOrEmpty(item);
+        final id = '${row['id'] ?? ''}'.trim();
+        if (id.isEmpty) continue;
+        docNameById[id] = '${row['source_filename'] ?? ''}'.trim();
+      }
+    }
+
+    final enriched = rawMaps.map((row) {
+      final sourceId = '${row['source_document_id'] ?? ''}'.trim();
+      final documentId = '${row['document_id'] ?? ''}'.trim();
+      final selectedIds = _listOrEmpty(row['selected_question_ids']);
+      final fallbackDisplay = '${row['display_name'] ?? ''}'.trim().isNotEmpty
+          ? '${row['display_name'] ?? ''}'.trim()
+          : (docNameById[documentId] ?? '');
+      return <String, dynamic>{
+        ...row,
+        'display_name': fallbackDisplay,
+        'source_document_name': docNameById[sourceId] ?? '',
+        'document_name': docNameById[documentId] ?? '',
+        'selected_question_count': selectedIds.length,
+      };
+    }).toList(growable: false);
+
+    return enriched
+        .map(LearningProblemDocumentExportPreset.fromMap)
+        .where((e) => e.id.isNotEmpty)
+        .toList(growable: false);
+  }
+
+  Future<LearningProblemDocumentExportPreset?> renameExportPreset({
+    required String academyId,
+    required String presetId,
+    required String displayName,
+  }) async {
+    final safeDisplayName = displayName.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (safeDisplayName.isEmpty) {
+      throw Exception('프리셋 이름을 입력해 주세요.');
+    }
+    if (hasGateway) {
+      final json = await _gatewayPost(
+        '/pb/export-presets/$presetId/rename',
+        body: <String, dynamic>{
+          'academyId': academyId,
+          'displayName': safeDisplayName,
+        },
+      );
+      final presetMap = _mapOrEmpty(json['preset']);
+      if (presetMap.isEmpty) return null;
+      return LearningProblemDocumentExportPreset.fromMap(presetMap);
+    }
+
+    final updated = await _client
+        .from('pb_export_presets')
+        .update(<String, dynamic>{
+          'display_name': safeDisplayName,
+          'updated_at': DateTime.now().toIso8601String(),
+        })
+        .eq('academy_id', academyId)
+        .eq('id', presetId)
+        .select('*')
+        .maybeSingle();
+    if (updated == null) return null;
+    return LearningProblemDocumentExportPreset.fromMap(_mapOrEmpty(updated));
+  }
+
+  Future<void> deleteExportPreset({
+    required String academyId,
+    required String presetId,
+  }) async {
+    if (hasGateway) {
+      await _gatewayPost(
+        '/pb/export-presets/$presetId/delete',
+        body: <String, dynamic>{'academyId': academyId},
+      );
+      return;
+    }
+    await _client
+        .from('pb_export_presets')
+        .delete()
+        .eq('academy_id', academyId)
+        .eq('id', presetId);
   }
 
   Future<LearningProblemDocumentExportPreset?> getDocumentExportPreset({

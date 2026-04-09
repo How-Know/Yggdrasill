@@ -879,12 +879,15 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         ProblemBankPreviewRefreshRequest request,
       ) {
         final topText = request.titlePageTopText.trim();
+        final timeLimitText = request.timeLimitText.trim();
         final patch = <String, dynamic>{
           'subjectTitleText': request.subjectTitleText.trim().isEmpty
               ? '수학 영역'
               : request.subjectTitleText.trim(),
           'titlePageTopText':
               topText.isEmpty ? kLearningDefaultTitlePageTopText : topText,
+          'timeLimitText': timeLimitText,
+          'includeAcademyLogo': request.includeAcademyLogo,
           'includeCoverPage': request.includeCoverPage,
           'coverPageTexts': request.coverPageTexts,
           'includeQuestionScore': request.includeQuestionScore,
@@ -942,11 +945,19 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                 '${preset.renderConfig['subjectTitleText'] ?? ''}'.trim();
             final titlePageTopText =
                 '${preset.renderConfig['titlePageTopText'] ?? ''}'.trim();
+            final timeLimitText =
+                '${preset.renderConfig['timeLimitText'] ?? ''}'.trim();
             initialRenderPatch = <String, dynamic>{
               'subjectTitleText': subjectTitle.isEmpty ? '수학 영역' : subjectTitle,
               'titlePageTopText': titlePageTopText.isEmpty
                   ? kLearningDefaultTitlePageTopText
                   : titlePageTopText,
+              'timeLimitText': timeLimitText,
+              'includeAcademyLogo': readBoolFlag(
+                preset.renderConfig['includeAcademyLogo'],
+                null,
+                false,
+              ),
               'includeCoverPage': readBoolFlag(
                 preset.renderConfig['includeCoverPage'],
                 null,
@@ -1016,6 +1027,9 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       final initialTitlePageTopText =
           '${completed.resultSummary['titlePageTopText'] ?? completed.options['titlePageTopText'] ?? kLearningDefaultTitlePageTopText}'
               .trim();
+      final initialTimeLimitText =
+          '${completed.resultSummary['timeLimitText'] ?? completed.options['timeLimitText'] ?? _exportSettings.timeLimitText}'
+              .trim();
       final scoreEntries = buildScoreEntries(selected);
       await ProblemBankExportServerPreviewDialog.open(
         context,
@@ -1026,6 +1040,12 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         initialTitlePageTopText: initialTitlePageTopText.isEmpty
             ? kLearningDefaultTitlePageTopText
             : initialTitlePageTopText,
+        initialTimeLimitText: initialTimeLimitText,
+        initialIncludeAcademyLogo: readBoolFlag(
+          completed.resultSummary['includeAcademyLogo'],
+          completed.options['includeAcademyLogo'],
+          _exportSettings.includeAcademyLogo,
+        ),
         layoutColumns: _exportSettings.layoutColumnCount,
         maxQuestionsPerPage: _exportSettings.maxQuestionsPerPageCount,
         totalQuestionCount: selected.length,
@@ -1077,6 +1097,8 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         onRefreshRequested: (request) async {
           setState(() {
             _exportSettings = _exportSettings.copyWith(
+              includeAcademyLogo: request.includeAcademyLogo,
+              timeLimitText: request.timeLimitText.trim(),
               titlePageTopText: request.titlePageTopText.trim().isEmpty
                   ? kLearningDefaultTitlePageTopText
                   : request.titlePageTopText.trim(),
@@ -1123,6 +1145,14 @@ class _ProblemBankViewState extends State<ProblemBankView> {
             refreshed.options['includeQuestionScore'],
             request.includeQuestionScore,
           );
+          final includeAcademyLogo = readBoolFlag(
+            refreshed.resultSummary['includeAcademyLogo'],
+            refreshed.options['includeAcademyLogo'],
+            request.includeAcademyLogo,
+          );
+          final timeLimitText =
+              '${refreshed.resultSummary['timeLimitText'] ?? refreshed.options['timeLimitText'] ?? request.timeLimitText}'
+                  .trim();
           final titlePageTopText =
               '${refreshed.resultSummary['titlePageTopText'] ?? refreshed.options['titlePageTopText'] ?? request.titlePageTopText}'
                   .trim();
@@ -1139,6 +1169,8 @@ class _ProblemBankViewState extends State<ProblemBankView> {
             titlePageTopText: titlePageTopText.isEmpty
                 ? kLearningDefaultTitlePageTopText
                 : titlePageTopText,
+            timeLimitText: timeLimitText,
+            includeAcademyLogo: includeAcademyLogo,
             pageColumnQuestionCounts: readMapRows(
               refreshed.resultSummary['pageColumnQuestionCounts'],
               refreshed.options['pageColumnQuestionCounts'],
@@ -1166,6 +1198,8 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         onGeneratePdfRequested: (request) async {
           setState(() {
             _exportSettings = _exportSettings.copyWith(
+              includeAcademyLogo: request.includeAcademyLogo,
+              timeLimitText: request.timeLimitText.trim(),
               titlePageTopText: request.titlePageTopText.trim().isEmpty
                   ? kLearningDefaultTitlePageTopText
                   : request.titlePageTopText.trim(),
@@ -1200,6 +1234,8 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           }
           setState(() {
             _exportSettings = _exportSettings.copyWith(
+              includeAcademyLogo: request.includeAcademyLogo,
+              timeLimitText: request.timeLimitText.trim(),
               titlePageTopText: request.titlePageTopText.trim().isEmpty
                   ? kLearningDefaultTitlePageTopText
                   : request.titlePageTopText.trim(),
@@ -1236,6 +1272,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
               paperSize: _exportSettings.paperLabel,
               includeAnswerSheet: request.includeAnswerSheet,
               includeExplanation: request.includeExplanation,
+              displayName: request.presetDisplayName.trim(),
             );
             final count = saveResult.copiedQuestionCount;
             _showSnack(
@@ -1527,6 +1564,351 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     _showSnack('만들기 기능은 다음 단계에서 구현 예정입니다.');
   }
 
+  String _formatDateTimeShort(DateTime? value) {
+    if (value == null) return '날짜 없음';
+    String two(int v) => v.toString().padLeft(2, '0');
+    return '${value.year}-${two(value.month)}-${two(value.day)} ${two(value.hour)}:${two(value.minute)}';
+  }
+
+  Future<void> _openExportPresetManagerDialog() async {
+    final academyId = _academyId;
+    if (academyId == null || academyId.isEmpty) {
+      _showSnack('학원 정보가 없어 프리셋을 불러올 수 없습니다.');
+      return;
+    }
+    List<LearningProblemDocumentExportPreset> initialPresets;
+    try {
+      initialPresets = await _service.listExportPresets(
+        academyId: academyId,
+        limit: 300,
+      );
+    } catch (e) {
+      _showSnack('프리셋 목록 조회 실패: $e');
+      return;
+    }
+    if (!mounted) return;
+
+    final size = MediaQuery.sizeOf(context);
+    List<LearningProblemDocumentExportPreset> presets = initialPresets;
+    bool isWorking = false;
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        Future<void> reloadPresets(StateSetter setModalState) async {
+          setModalState(() {
+            isWorking = true;
+          });
+          try {
+            final refreshed = await _service.listExportPresets(
+              academyId: academyId,
+              limit: 300,
+            );
+            setModalState(() {
+              presets = refreshed;
+            });
+          } catch (e) {
+            _showSnack('프리셋 새로고침 실패: $e');
+          } finally {
+            setModalState(() {
+              isWorking = false;
+            });
+          }
+        }
+
+        Future<void> applyPreset(
+          LearningProblemDocumentExportPreset preset,
+        ) async {
+          final presetSettings =
+              LearningProblemExportSettings.fromPresetRenderConfig(
+            base: _exportSettings,
+            renderConfig: preset.renderConfig,
+          );
+          final modeMap = <String, String>{};
+          for (final question in _questions) {
+            final rawMode = preset.questionModeByQuestionId[question.id];
+            if (rawMode == null || rawMode.trim().isEmpty) continue;
+            modeMap[question.id] = normalizeQuestionModeSelection(
+              question,
+              rawMode,
+              fallbackMode: kLearningQuestionModeOriginal,
+            );
+          }
+          if (!mounted) return;
+          setState(() {
+            _exportSettings = presetSettings;
+            _selectedQuestionModes.addAll(modeMap);
+          });
+          if (Navigator.of(dialogContext).canPop()) {
+            Navigator.of(dialogContext).pop();
+          }
+          _showSnack('프리셋 적용: ${preset.displayName}');
+        }
+
+        Future<void> renamePreset(
+          LearningProblemDocumentExportPreset preset,
+          StateSetter setModalState,
+        ) async {
+          final controller = TextEditingController(text: preset.displayName);
+          final nextName = await showDialog<String>(
+            context: dialogContext,
+            builder: (ctx) {
+              return AlertDialog(
+                backgroundColor: const Color(0xFF0F171B),
+                title: const Text(
+                  '프리셋 이름 수정',
+                  style: TextStyle(color: _rsTextPrimary),
+                ),
+                content: TextField(
+                  controller: controller,
+                  autofocus: true,
+                  style: const TextStyle(color: _rsTextPrimary),
+                  decoration: const InputDecoration(
+                    hintText: '프리셋 이름을 입력하세요',
+                  ),
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.of(ctx).pop(),
+                    child: const Text('취소'),
+                  ),
+                  FilledButton(
+                    onPressed: () =>
+                        Navigator.of(ctx).pop(controller.text.trim()),
+                    child: const Text('저장'),
+                  ),
+                ],
+              );
+            },
+          );
+          controller.dispose();
+          final normalized =
+              (nextName ?? '').replaceAll(RegExp(r'\s+'), ' ').trim();
+          if (normalized.isEmpty) return;
+          setModalState(() {
+            isWorking = true;
+          });
+          try {
+            final renamed = await _service.renameExportPreset(
+              academyId: academyId,
+              presetId: preset.id,
+              displayName: normalized,
+            );
+            if (renamed != null) {
+              final next = presets
+                  .map((item) => item.id == preset.id ? renamed : item)
+                  .toList(growable: false);
+              setModalState(() {
+                presets = next;
+              });
+            } else {
+              await reloadPresets(setModalState);
+            }
+          } catch (e) {
+            _showSnack('프리셋 이름 수정 실패: $e');
+          } finally {
+            setModalState(() {
+              isWorking = false;
+            });
+          }
+        }
+
+        Future<void> deletePreset(
+          LearningProblemDocumentExportPreset preset,
+          StateSetter setModalState,
+        ) async {
+          final confirmed = await showDialog<bool>(
+            context: dialogContext,
+            builder: (ctx) {
+              return AlertDialog(
+                backgroundColor: const Color(0xFF0F171B),
+                title: const Text(
+                  '프리셋 삭제',
+                  style: TextStyle(color: _rsTextPrimary),
+                ),
+                content: Text(
+                  '`${preset.displayName}` 프리셋을 삭제할까요?\n(원본/저장 문서는 유지됩니다.)',
+                  style: const TextStyle(color: _rsTextMuted, height: 1.35),
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.of(ctx).pop(false),
+                    child: const Text('취소'),
+                  ),
+                  FilledButton(
+                    onPressed: () => Navigator.of(ctx).pop(true),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFF6C2B2B),
+                    ),
+                    child: const Text('삭제'),
+                  ),
+                ],
+              );
+            },
+          );
+          if (confirmed != true) return;
+          setModalState(() {
+            isWorking = true;
+          });
+          try {
+            await _service.deleteExportPreset(
+              academyId: academyId,
+              presetId: preset.id,
+            );
+            setModalState(() {
+              presets = presets
+                  .where((item) => item.id != preset.id)
+                  .toList(growable: false);
+            });
+            _showSnack('프리셋 삭제 완료');
+          } catch (e) {
+            _showSnack('프리셋 삭제 실패: $e');
+          } finally {
+            setModalState(() {
+              isWorking = false;
+            });
+          }
+        }
+
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return AlertDialog(
+              backgroundColor: const Color(0xFF0B1112),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
+              ),
+              title: Row(
+                children: [
+                  const Expanded(
+                    child: Text(
+                      '저장된 프리셋',
+                      style: TextStyle(
+                        color: _rsTextPrimary,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: '새로고침',
+                    onPressed:
+                        isWorking ? null : () => reloadPresets(setModalState),
+                    icon: const Icon(Icons.refresh, color: _rsTextMuted),
+                  ),
+                ],
+              ),
+              content: SizedBox(
+                width: math.min(size.width * 0.75, 860.0),
+                height: math.min(size.height * 0.7, 560.0),
+                child: presets.isEmpty
+                    ? const Center(
+                        child: Text(
+                          '저장된 프리셋이 없습니다.',
+                          style: TextStyle(
+                            color: _rsTextMuted,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      )
+                    : ListView.separated(
+                        itemCount: presets.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 8),
+                        itemBuilder: (context, index) {
+                          final preset = presets[index];
+                          final profile = preset.templateProfile.toUpperCase();
+                          final paper = preset.paperSize.trim();
+                          final metaLine = [
+                            if (profile.isNotEmpty) profile,
+                            if (paper.isNotEmpty) paper,
+                            '${preset.selectedQuestionCount}문항',
+                            _formatDateTimeShort(preset.createdAt),
+                          ].join(' · ');
+                          return Container(
+                            padding: const EdgeInsets.fromLTRB(10, 10, 10, 8),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF0F171B),
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(color: _rsBorder),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  preset.displayName,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    color: _rsTextPrimary,
+                                    fontSize: 13.2,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  metaLine,
+                                  style: const TextStyle(
+                                    color: _rsTextMuted,
+                                    fontSize: 11.8,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                const SizedBox(height: 6),
+                                Row(
+                                  children: [
+                                    TextButton.icon(
+                                      onPressed: isWorking
+                                          ? null
+                                          : () => applyPreset(preset),
+                                      icon: const Icon(Icons.playlist_add_check,
+                                          size: 16),
+                                      label: const Text('적용'),
+                                    ),
+                                    const SizedBox(width: 4),
+                                    IconButton(
+                                      tooltip: '이름 수정',
+                                      onPressed: isWorking
+                                          ? null
+                                          : () => renamePreset(
+                                              preset, setModalState),
+                                      icon: const Icon(Icons.edit_outlined,
+                                          size: 18),
+                                      color: _rsTextMuted,
+                                    ),
+                                    IconButton(
+                                      tooltip: '삭제',
+                                      onPressed: isWorking
+                                          ? null
+                                          : () => deletePreset(
+                                              preset, setModalState),
+                                      icon: const Icon(Icons.delete_outline,
+                                          size: 18),
+                                      color: const Color(0xFFD38E8E),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                      ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: isWorking
+                      ? null
+                      : () => Navigator.of(dialogContext).pop(),
+                  child: const Text(
+                    '닫기',
+                    style: TextStyle(color: _rsTextMuted),
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
   void _showSnack(String message) {
     if (!mounted) return;
     final messenger = ScaffoldMessenger.of(context);
@@ -1574,6 +1956,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                     isBusy: _isExporting,
                     isSavingLocally: _isSavingExportLocally,
                     activeJob: _activeExportJob,
+                    onPresetPressed: _openExportPresetManagerDialog,
                     onTemplateChanged: (value) {
                       setState(() {
                         if (value == '모의고사형' || value == '수능형') {

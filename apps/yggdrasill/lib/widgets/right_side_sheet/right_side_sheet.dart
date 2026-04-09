@@ -7,7 +7,6 @@ import 'package:flutter/gestures.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
-import 'package:mneme_flutter/widgets/dark_panel_route.dart';
 import 'package:mneme_flutter/widgets/pdf/pdf_editor_dialog.dart';
 import 'package:mneme_flutter/widgets/pdf/homework_answer_viewer_dialog.dart';
 import 'package:open_filex/open_filex.dart';
@@ -16,13 +15,7 @@ import 'package:uuid/uuid.dart';
 import 'file_shortcut_tab.dart';
 import '../latex_text_renderer.dart';
 import '../pill_tab_selector.dart';
-import '../../models/consult_note.dart';
 import '../../models/memo.dart';
-import '../../screens/consult/consult_notes_screen.dart';
-import '../../services/consult_note_controller.dart';
-import '../../services/consult_note_service.dart';
-import '../../services/consult_inquiry_demand_service.dart';
-import '../../services/consult_trial_lesson_service.dart';
 import '../../services/ai_summary.dart';
 import '../../services/data_manager.dart';
 import '../../services/runtime_flags.dart';
@@ -1326,8 +1319,6 @@ class _RightSideSheetState extends State<RightSideSheet> {
           onEditMemo: (m) => unawaited(_onEditMemoPressed(m)),
           selectedFilterKey: _memoFilterKey,
           onFilterChanged: (k) => setState(() => _memoFilterKey = k),
-          onOpenConsult: () => unawaited(_openConsultPage()),
-          onCloseSheet: widget.onClose,
         );
       case RightSideSheetMode.fileShortcut:
         return FileShortcutTab(dialogContext: widget.dialogContext);
@@ -1641,7 +1632,8 @@ class _RightSideSheetState extends State<RightSideSheet> {
   Future<void> _onAddMemoPressed() async {
     final dlgCtx = widget.dialogContext ?? context;
     final initialCat = (_memoFilterKey == MemoCategory.schedule ||
-            _memoFilterKey == MemoCategory.consult)
+            _memoFilterKey == MemoCategory.consult ||
+            _memoFilterKey == MemoCategory.inquiry)
         ? _memoFilterKey
         : MemoCategory.schedule;
     final result = await showDialog<MemoCreateResult>(
@@ -1650,37 +1642,27 @@ class _RightSideSheetState extends State<RightSideSheet> {
       builder: (_) => MemoInputDialog(initialCategoryKey: initialCat),
     );
     if (result == null) return;
-    final text = result.text.trim();
-    if (text.isEmpty) return;
-
-    final now = DateTime.now();
-    final trimmed = text;
-    final String pickedCategoryKey = result.categoryKey;
-    final memo = Memo(
-      id: const Uuid().v4(),
-      original: trimmed,
-      summary: '요약 중...',
-      scheduledAt: await AiSummaryService.extractDateTime(trimmed),
-      categoryKey: MemoCategory.normalize(pickedCategoryKey),
-      dismissed: false,
-      createdAt: now,
-      updatedAt: now,
-    );
-    await DataManager.instance.addMemo(memo);
-
-    try {
-      final summary = await AiSummaryService.summarize(memo.original);
-      await DataManager.instance.updateMemo(
-        memo.copyWith(
-          summary: summary,
-          updatedAt: DateTime.now(),
-        ),
-      );
-    } catch (_) {}
+    await addMemoFromCreateResult(result);
   }
 
   Future<void> _onEditMemoPressed(Memo item) async {
     final dlgCtx = widget.dialogContext ?? context;
+    if (item.categoryKey == MemoCategory.inquiry) {
+      final edited = await showDialog<MemoInquiryEditResult>(
+        context: dlgCtx,
+        useRootNavigator: true,
+        builder: (_) => MemoInquiryEditDialog(
+          initialPhone: item.inquiryPhone ?? '',
+          initialSchoolGrade: item.inquirySchoolGrade ?? '',
+          initialAvailability: item.inquiryAvailability ?? '',
+          initialNote: item.inquiryNote ?? '',
+          fallbackOriginal: item.original,
+        ),
+      );
+      if (edited == null) return;
+      await applyMemoInquiryEdit(item: item, edited: edited);
+      return;
+    }
     final edited = await showDialog<MemoEditResult>(
       context: dlgCtx,
       useRootNavigator: true,
@@ -1709,26 +1691,6 @@ class _RightSideSheetState extends State<RightSideSheet> {
       updated = updated.copyWith(summary: summary, updatedAt: DateTime.now());
       await DataManager.instance.updateMemo(updated);
     } catch (_) {}
-  }
-
-  Future<void> _openConsultPage() async {
-    final ctx = widget.dialogContext ?? context;
-    try {
-      // 문의 노트로 진입할 때는 우측 사이드 시트를 닫는다.
-      // (닫힌 상태에서 별도 패널로 문의 노트를 사용하는 UX)
-      final nav = Navigator.of(ctx, rootNavigator: true);
-      try {
-        widget.onClose();
-      } catch (_) {}
-      await nav.push(
-        DarkPanelRoute<void>(child: const ConsultNotesScreen()),
-      );
-    } catch (_) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('문의 노트 페이지를 열 수 없습니다.')));
-      }
-    }
   }
 }
 
@@ -1829,309 +1791,26 @@ class _BottomAddBar extends StatelessWidget {
 
 // -------------------- 메모 --------------------
 
-class _MemoExplorer extends StatelessWidget {
-  final ValueListenable<List<Memo>> memosListenable;
-  final VoidCallback onAddMemo;
-  final void Function(Memo memo) onEditMemo;
-  final String selectedFilterKey; // 'all' | MemoCategory.*
-  final ValueChanged<String> onFilterChanged;
-  final VoidCallback onOpenConsult;
-  final VoidCallback onCloseSheet;
-
-  const _MemoExplorer({
-    required this.memosListenable,
-    required this.onAddMemo,
-    required this.onEditMemo,
-    required this.selectedFilterKey,
-    required this.onFilterChanged,
-    required this.onOpenConsult,
-    required this.onCloseSheet,
-  });
-
-  String _displayText(Memo m) {
-    final summary = m.summary.trim();
-    if (summary.isNotEmpty && summary != '요약 중...') return summary;
-    return m.original.trim().isEmpty ? '(내용 없음)' : m.original.trim();
-  }
-
-  String _scheduleLabel(DateTime? s) {
-    if (s == null) return '';
-    final hh = s.hour.toString().padLeft(2, '0');
-    final mm = s.minute.toString().padLeft(2, '0');
-    return '${s.month}/${s.day} $hh:$mm';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final filters = <MapEntry<String, String>>[
-      const MapEntry(_RightSideSheetState._memoFilterAll, '전체'),
-      MapEntry(MemoCategory.schedule, '일정'),
-      MapEntry(MemoCategory.consult, '상담'),
-      MapEntry(MemoCategory.inquiry, '문의'),
-    ];
-
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(10, 12, 10, 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          const Text(
-            '메모',
-            style: TextStyle(
-                color: _rsText, fontSize: 16, fontWeight: FontWeight.w900),
-          ),
-          const SizedBox(height: 12),
-          _ExplorerHeader(
-            leading: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
-                  tooltip: '메모 추가',
-                  onPressed: onAddMemo,
-                  icon: const Icon(Icons.add, color: Colors.white70, size: 20),
-                  padding: EdgeInsets.zero,
-                  constraints:
-                      const BoxConstraints(minWidth: 44, minHeight: 44),
-                ),
-                const SizedBox(width: 8),
-                IconButton(
-                  tooltip: '문의 노트 열기',
-                  onPressed: onOpenConsult,
-                  icon: const Icon(Icons.support_agent_outlined,
-                      color: Colors.white70, size: 20),
-                  padding: EdgeInsets.zero,
-                  constraints:
-                      const BoxConstraints(minWidth: 44, minHeight: 44),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              for (int i = 0; i < filters.length; i++) ...[
-                Expanded(
-                  child: _MemoFilterPill(
-                    label: filters[i].value,
-                    selected: selectedFilterKey == filters[i].key,
-                    onTap: () => onFilterChanged(filters[i].key),
-                  ),
-                ),
-                if (i != filters.length - 1) const SizedBox(width: 8),
-              ],
-            ],
-          ),
-          const SizedBox(height: 14),
-          Expanded(
-            child: ValueListenableBuilder<List<Memo>>(
-              valueListenable: memosListenable,
-              builder: (context, memos, _) {
-                var list = [...memos]
-                  ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
-                if (selectedFilterKey != _RightSideSheetState._memoFilterAll) {
-                  list = list
-                      .where((m) => m.categoryKey == selectedFilterKey)
-                      .toList();
-                }
-
-                // 문의 탭에서는: 등록 문의(필기 노트) 목록만 제공 (문의 메모 리스트는 제거)
-                if (selectedFilterKey == MemoCategory.inquiry) {
-                  return FutureBuilder<List<ConsultNoteMeta>>(
-                    future: ConsultNoteService.instance.listMetas(),
-                    builder: (context, snap) {
-                      final notes = snap.data ?? const <ConsultNoteMeta>[];
-                      if (notes.isEmpty) {
-                        return const Center(
-                          child: Text('등록 문의 없음',
-                              style: TextStyle(
-                                  color: _rsTextSub,
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w700)),
-                        );
-                      }
-
-                      final items = <Widget>[];
-                      if (notes.isNotEmpty) {
-                        items.add(const Padding(
-                          padding: EdgeInsets.fromLTRB(2, 6, 2, 8),
-                          child: Text('등록 문의',
-                              style: TextStyle(
-                                  color: _rsTextSub,
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w900)),
-                        ));
-                        items.add(ValueListenableBuilder<
-                            List<ConsultTrialLessonSlot>>(
-                          valueListenable:
-                              ConsultTrialLessonService.instance.slotsNotifier,
-                          builder: (context, trialSlots, _) {
-                            final trialNoteIds = trialSlots
-                                .map((s) => s.sourceNoteId)
-                                .where((id) => id.isNotEmpty)
-                                .toSet();
-                            final arrivedNoteIds = trialSlots
-                                .where((s) => s.arrivalTime != null)
-                                .map((s) => s.sourceNoteId)
-                                .where((id) => id.isNotEmpty)
-                                .toSet();
-
-                            final children = <Widget>[];
-                            for (final n in notes) {
-                              final dt = n.updatedAt.toLocal();
-                              final hh = dt.hour.toString().padLeft(2, '0');
-                              final mm = dt.minute.toString().padLeft(2, '0');
-                              final subtitle =
-                                  '${dt.month}/${dt.day} $hh:$mm · 선 ${n.strokeCount}개';
-
-                              final bool hasDesired =
-                                  n.desiredWeekday != null &&
-                                      n.desiredHour != null &&
-                                      n.desiredMinute != null;
-                              final bool hasTrial = trialNoteIds.contains(n.id);
-                              final bool hasArrived =
-                                  arrivedNoteIds.contains(n.id);
-                              final int stage = (hasArrived && hasDesired)
-                                  ? 3
-                                  : (hasTrial ? 2 : 1);
-
-                              children.add(_InquiryNoteCard(
-                                key: ValueKey('note:${n.id}'),
-                                title: n.title,
-                                subtitle: subtitle,
-                                stage: stage,
-                                onTap: () {
-                                  ConsultNoteController.instance
-                                      .requestOpen(n.id);
-                                  // 문의 노트 화면이 열려있지 않으면 먼저 열어준다(중복 push 방지)
-                                  if (!ConsultNoteController
-                                      .instance.isScreenOpen) {
-                                    onOpenConsult();
-                                  } else {
-                                    onCloseSheet();
-                                  }
-                                },
-                                onDelete: () {
-                                  unawaited(() async {
-                                    await ConsultNoteService.instance
-                                        .delete(n.id);
-                                    await ConsultInquiryDemandService.instance
-                                        .removeForNote(n.id);
-                                    await ConsultTrialLessonService.instance
-                                        .removeForNote(n.id);
-                                    // 동일 탭으로 setState 유도(노트 목록 갱신)
-                                    onFilterChanged(selectedFilterKey);
-                                  }());
-                                },
-                              ));
-                              children.add(const SizedBox(height: 10));
-                            }
-                            return Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: children,
-                            );
-                          },
-                        ));
-                      }
-
-                      return ListView(
-                        padding: const EdgeInsets.symmetric(vertical: 4),
-                        children: items,
-                      );
-                    },
-                  );
-                }
-
-                if (list.isEmpty) {
-                  return const Center(
-                    child: Text('메모 없음',
-                        style: TextStyle(
-                            color: _rsTextSub,
-                            fontSize: 13,
-                            fontWeight: FontWeight.w700)),
-                  );
-                }
-
-                return ListView.separated(
-                  padding: const EdgeInsets.symmetric(vertical: 4),
-                  itemCount: list.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 10),
-                  itemBuilder: (context, index) {
-                    final m = list[index];
-                    final when = _scheduleLabel(m.scheduledAt);
-                    return _MemoCard(
-                      key: ValueKey(m.id),
-                      dateLabel: '${m.createdAt.month}/${m.createdAt.day}',
-                      scheduleLabel: when,
-                      categoryLabel: MemoCategory.labelOf(m.categoryKey),
-                      text: _displayText(m),
-                      onTap: () => onEditMemo(m),
-                      onDelete: () =>
-                          unawaited(DataManager.instance.deleteMemo(m.id)),
-                    );
-                  },
-                );
-              },
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _MemoCard extends StatefulWidget {
-  final String dateLabel;
-  final String scheduleLabel;
-  final String categoryLabel;
-  final String text;
+class _InquiryMemoCard extends StatefulWidget {
+  final Memo memo;
   final VoidCallback onTap;
   final VoidCallback onDelete;
 
-  const _MemoCard({
+  const _InquiryMemoCard({
     super.key,
-    required this.dateLabel,
-    required this.scheduleLabel,
-    required this.categoryLabel,
-    required this.text,
+    required this.memo,
     required this.onTap,
     required this.onDelete,
   });
 
   @override
-  State<_MemoCard> createState() => _MemoCardState();
+  State<_InquiryMemoCard> createState() => _InquiryMemoCardState();
 }
 
-class _InquiryNoteCard extends StatefulWidget {
-  final String title;
-  final String subtitle;
-
-  /// 문의 노트 진행 단계:
-  /// 1 = 상담/문의 생성
-  /// 2 = 시범수업 완료
-  /// 3 = 시범수업 + 희망수업 기록(등록 직전)
-  final int stage;
-  final VoidCallback onTap;
-  final VoidCallback onDelete;
-
-  const _InquiryNoteCard({
-    super.key,
-    required this.title,
-    required this.subtitle,
-    this.stage = 1,
-    required this.onTap,
-    required this.onDelete,
-  });
-
-  @override
-  State<_InquiryNoteCard> createState() => _InquiryNoteCardState();
-}
-
-class _InquiryNoteCardState extends State<_InquiryNoteCard>
+class _InquiryMemoCardState extends State<_InquiryMemoCard>
     with SingleTickerProviderStateMixin {
-  // 메모 카드와 동일한 슬라이드 삭제 UX
-  // 단일 삭제 액션은 2버튼(140) 기준 "1버튼 분량"만 차지하도록 축소
   static const double _actionPaneWidth = 74;
-  static const double _minCardHeight = 84;
+  static const double _minCardHeight = 96;
   static const Duration _snapDuration = Duration(milliseconds: 160);
 
   late final AnimationController _ctrl =
@@ -2183,31 +1862,48 @@ class _InquiryNoteCardState extends State<_InquiryNoteCard>
     super.dispose();
   }
 
+  static String _disp(String? s) {
+    final t = (s ?? '').trim();
+    return t.isEmpty ? '—' : t;
+  }
+
+  Widget _fieldRow(String label, String value) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: Text(
+            label,
+            textAlign: TextAlign.left,
+            style: const TextStyle(
+                color: _rsTextSub,
+                fontSize: 12,
+                fontWeight: FontWeight.w900),
+          ),
+        ),
+        Expanded(
+          child: Text(
+            value,
+            textAlign: TextAlign.right,
+            maxLines: 4,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+                color: _rsText,
+                fontSize: 14,
+                fontWeight: FontWeight.w800,
+                height: 1.3),
+          ),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final radius = BorderRadius.circular(14);
-
-    Color stageColor(int stage) {
-      switch (stage) {
-        case 3:
-          return _rsAccent;
-        case 2:
-          return const Color(0xFFF2B45B); // 예정(노랑)
-        default:
-          return _rsTextSub;
-      }
-    }
-
-    String stageLabel(int stage) {
-      switch (stage) {
-        case 3:
-          return '3대기';
-        case 2:
-          return '2예정';
-        default:
-          return '1문의';
-      }
-    }
+    final m = widget.memo;
+    final dateLabel = '${m.createdAt.month}/${m.createdAt.day}';
+    final lines = memoInquiryCardLines(m);
 
     Widget frontCard() {
       return ConstrainedBox(
@@ -2222,54 +1918,22 @@ class _InquiryNoteCardState extends State<_InquiryNoteCard>
             hoverColor: Colors.white.withOpacity(0.03),
             child: Padding(
               padding: const EdgeInsets.all(12),
-              child: Row(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          widget.title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                              color: _rsText,
-                              fontSize: 14,
-                              fontWeight: FontWeight.w900),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          widget.subtitle,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                              color: _rsTextSub,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w700),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: stageColor(widget.stage).withOpacity(0.14),
-                      borderRadius: BorderRadius.circular(999),
-                      border: Border.all(
-                          color: stageColor(widget.stage).withOpacity(0.28)),
-                    ),
-                    child: Text(
-                      stageLabel(widget.stage),
-                      style: TextStyle(
-                        color: stageColor(widget.stage),
+                  Text(
+                    dateLabel,
+                    style: const TextStyle(
+                        color: _rsTextSub,
                         fontSize: 12,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
+                        fontWeight: FontWeight.w900),
                   ),
+                  const SizedBox(height: 6),
+                  _fieldRow('연락처', _disp(lines.contact)),
+                  const SizedBox(height: 4),
+                  _fieldRow('학교·학년', _disp(lines.schoolGrade)),
+                  const SizedBox(height: 4),
+                  _fieldRow('가능 요일·시간', _disp(lines.availability)),
                 ],
               ),
             ),
@@ -2337,6 +2001,276 @@ class _InquiryNoteCardState extends State<_InquiryNoteCard>
       ),
     );
   }
+}
+
+class _InquiryMemosReorderList extends StatefulWidget {
+  final ValueListenable<List<Memo>> memosListenable;
+  final void Function(Memo) onEditMemo;
+
+  const _InquiryMemosReorderList({
+    super.key,
+    required this.memosListenable,
+    required this.onEditMemo,
+  });
+
+  @override
+  State<_InquiryMemosReorderList> createState() =>
+      _InquiryMemosReorderListState();
+}
+
+class _InquiryMemosReorderListState extends State<_InquiryMemosReorderList> {
+  final ScrollController _scrollCtrl = ScrollController();
+
+  @override
+  void dispose() {
+    _scrollCtrl.dispose();
+    super.dispose();
+  }
+
+  List<Memo> _sorted(List<Memo> all) {
+    final list = all.where(memoIsFormInquiryForList).toList();
+    list.sort(compareInquiryMemos);
+    return list;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<List<Memo>>(
+      valueListenable: widget.memosListenable,
+      builder: (context, memos, _) {
+        final list = _sorted(memos);
+        if (list.isEmpty) {
+          return const Center(
+            child: Text(
+              '문의 메모 없음',
+              style: TextStyle(
+                  color: _rsTextSub,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700),
+            ),
+          );
+        }
+        return Scrollbar(
+          controller: _scrollCtrl,
+          thumbVisibility: true,
+          child: ReorderableListView.builder(
+            scrollController: _scrollCtrl,
+            buildDefaultDragHandles: false,
+            itemCount: list.length,
+            onReorder: (oldIndex, newIndex) {
+              if (newIndex > oldIndex) newIndex -= 1;
+              final next = List<Memo>.from(list);
+              final item = next.removeAt(oldIndex);
+              next.insert(newIndex, item);
+              unawaited(DataManager.instance
+                  .reorderInquiryMemos(next.map((m) => m.id).toList()));
+            },
+            proxyDecorator: (child, index, animation) {
+              final curved = CurvedAnimation(
+                  parent: animation, curve: Curves.easeOutCubic);
+              return AnimatedBuilder(
+                animation: curved,
+                builder: (context, _) {
+                  final v = curved.value;
+                  return Transform.translate(
+                    offset: Offset(0, -4 * v),
+                    child: Transform.scale(
+                      scale: 1.0 + 0.02 * v,
+                      child: Material(
+                        color: _rsBg,
+                        surfaceTintColor: Colors.transparent,
+                        shadowColor: Colors.black.withOpacity(0.35),
+                        elevation: 12 * v,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        child: child,
+                      ),
+                    ),
+                  );
+                },
+              );
+            },
+            itemBuilder: (context, index) {
+              final m = list[index];
+              return ReorderableDelayedDragStartListener(
+                key: ValueKey('inq:${m.id}'),
+                index: index,
+                child: Padding(
+                  padding: EdgeInsets.only(
+                      bottom: index == list.length - 1 ? 0 : 8),
+                  child: _InquiryMemoCard(
+                    memo: m,
+                    onTap: () => widget.onEditMemo(m),
+                    onDelete: () =>
+                        unawaited(DataManager.instance.deleteMemo(m.id)),
+                  ),
+                ),
+              );
+            },
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _MemoExplorer extends StatelessWidget {
+  final ValueListenable<List<Memo>> memosListenable;
+  final VoidCallback onAddMemo;
+  final void Function(Memo memo) onEditMemo;
+  final String selectedFilterKey; // 'all' | MemoCategory.*
+  final ValueChanged<String> onFilterChanged;
+
+  const _MemoExplorer({
+    required this.memosListenable,
+    required this.onAddMemo,
+    required this.onEditMemo,
+    required this.selectedFilterKey,
+    required this.onFilterChanged,
+  });
+
+  String _displayText(Memo m) {
+    final summary = m.summary.trim();
+    if (summary.isNotEmpty && summary != '요약 중...') return summary;
+    return m.original.trim().isEmpty ? '(내용 없음)' : m.original.trim();
+  }
+
+  String _scheduleLabel(DateTime? s) {
+    if (s == null) return '';
+    final hh = s.hour.toString().padLeft(2, '0');
+    final mm = s.minute.toString().padLeft(2, '0');
+    return '${s.month}/${s.day} $hh:$mm';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final filters = <MapEntry<String, String>>[
+      const MapEntry(_RightSideSheetState._memoFilterAll, '전체'),
+      MapEntry(MemoCategory.schedule, '일정'),
+      MapEntry(MemoCategory.consult, '상담'),
+      MapEntry(MemoCategory.inquiry, '문의'),
+    ];
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(10, 12, 10, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            '메모',
+            style: TextStyle(
+                color: _rsText, fontSize: 16, fontWeight: FontWeight.w900),
+          ),
+          const SizedBox(height: 12),
+          _ExplorerHeader(
+            leading: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  tooltip: '메모 추가',
+                  onPressed: onAddMemo,
+                  icon: const Icon(Icons.add, color: Colors.white70, size: 20),
+                  padding: EdgeInsets.zero,
+                  constraints:
+                      const BoxConstraints(minWidth: 44, minHeight: 44),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              for (int i = 0; i < filters.length; i++) ...[
+                Expanded(
+                  child: _MemoFilterPill(
+                    label: filters[i].value,
+                    selected: selectedFilterKey == filters[i].key,
+                    onTap: () => onFilterChanged(filters[i].key),
+                  ),
+                ),
+                if (i != filters.length - 1) const SizedBox(width: 8),
+              ],
+            ],
+          ),
+          const SizedBox(height: 14),
+          Expanded(
+            child: ValueListenableBuilder<List<Memo>>(
+              valueListenable: memosListenable,
+              builder: (context, memos, _) {
+                var list = [...memos]
+                  ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+                if (selectedFilterKey != _RightSideSheetState._memoFilterAll) {
+                  list = list
+                      .where((m) => m.categoryKey == selectedFilterKey)
+                      .toList();
+                }
+
+                if (selectedFilterKey == MemoCategory.inquiry) {
+                  return _InquiryMemosReorderList(
+                    memosListenable: memosListenable,
+                    onEditMemo: onEditMemo,
+                  );
+                }
+
+                if (list.isEmpty) {
+                  return const Center(
+                    child: Text('메모 없음',
+                        style: TextStyle(
+                            color: _rsTextSub,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700)),
+                  );
+                }
+
+                return ListView.separated(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  itemCount: list.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 10),
+                  itemBuilder: (context, index) {
+                    final m = list[index];
+                    final when = _scheduleLabel(m.scheduledAt);
+                    return _MemoCard(
+                      key: ValueKey(m.id),
+                      dateLabel: '${m.createdAt.month}/${m.createdAt.day}',
+                      scheduleLabel: when,
+                      categoryLabel: MemoCategory.labelOf(m.categoryKey),
+                      text: _displayText(m),
+                      onTap: () => onEditMemo(m),
+                      onDelete: () =>
+                          unawaited(DataManager.instance.deleteMemo(m.id)),
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MemoCard extends StatefulWidget {
+  final String dateLabel;
+  final String scheduleLabel;
+  final String categoryLabel;
+  final String text;
+  final VoidCallback onTap;
+  final VoidCallback onDelete;
+
+  const _MemoCard({
+    super.key,
+    required this.dateLabel,
+    required this.scheduleLabel,
+    required this.categoryLabel,
+    required this.text,
+    required this.onTap,
+    required this.onDelete,
+  });
+
+  @override
+  State<_MemoCard> createState() => _MemoCardState();
 }
 
 class _MemoCardState extends State<_MemoCard>

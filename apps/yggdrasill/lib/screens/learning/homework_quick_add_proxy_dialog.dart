@@ -99,7 +99,19 @@ class HomeworkQuickAddProxyDialogState
   static const double _kTreeMidIndentFromBig = 22;
 
   final ScrollController _rangeRightScrollController = ScrollController();
+  final ScrollController _leftTreeScrollController = ScrollController();
   final Map<String, GlobalKey> _smallHeaderKeys = <String, GlobalKey>{};
+  final Map<String, GlobalKey> _leftSmallRowKeys = <String, GlobalKey>{};
+
+  static const double _kLeftSmallDragSlopPx = 6;
+  static const double _kLeftSmallCheckboxHitWidth = 44;
+
+  bool _leftSmallDragPointerDown = false;
+  bool _leftSmallDragMovedPastSlop = false;
+  Offset? _leftSmallDragDownGlobal;
+  String? _leftSmallDragAnchorExpandKey;
+  bool? _leftSmallDragSelectMode;
+  Map<String, _SmallDragSnap>? _leftSmallDragBaseline;
 
   int? _pageListDragAnchorIndex;
   bool? _pageListDragSelectMode;
@@ -189,6 +201,7 @@ class HomeworkQuickAddProxyDialogState
     _memo.dispose();
     _groupTitle.dispose();
     _rangeRightScrollController.dispose();
+    _leftTreeScrollController.dispose();
     super.dispose();
   }
 
@@ -1380,6 +1393,242 @@ class HomeworkQuickAddProxyDialogState
       big.selected = _allMidSelected(big);
     });
     _refreshRangeAutoDraft();
+  }
+
+  // --- 왼쪽 트리: 펼친 소단원 줄 세로 드래그(전체 단위 일괄 선택). 오른쪽 페이지 Listener와 분리. ---
+
+  Map<String, _SmallDragSnap> _captureAllSmallDragSnapshots() {
+    final m = <String, _SmallDragSnap>{};
+    for (final big in _units) {
+      for (final mid in big.middles) {
+        for (final small in mid.smalls) {
+          m[_smallExpandKey(big, mid, small)] = _SmallDragSnap.fromNode(small);
+        }
+      }
+    }
+    return m;
+  }
+
+  List<String> _leftDraggableVisibleSmallExpandKeysOrdered() {
+    final out = <String>[];
+    for (final big in _units) {
+      for (final mid in big.middles) {
+        if (_expandedLeftMidSmallsKey != _midExpandKey(big, mid)) continue;
+        for (final small in mid.smalls) {
+          if (small.locked || small.draftBlocked) continue;
+          out.add(_smallExpandKey(big, mid, small));
+        }
+      }
+    }
+    return out;
+  }
+
+  RenderBox? _leftSmallRowRenderBox(String expandKey) {
+    final ctx = _leftSmallRowKeys[expandKey]?.currentContext;
+    if (ctx == null) return null;
+    final box = ctx.findRenderObject();
+    if (box is! RenderBox || !box.attached) return null;
+    return box;
+  }
+
+  bool _leftSmallRowHitTestGlobal(String expandKey, Offset global) {
+    final box = _leftSmallRowRenderBox(expandKey);
+    if (box == null) return false;
+    final topLeft = box.localToGlobal(Offset.zero);
+    return Rect.fromLTWH(topLeft.dx, topLeft.dy, box.size.width, box.size.height)
+        .contains(global);
+  }
+
+  bool _isGlobalOnLeftSmallCheckboxStrip(Offset global, String expandKey) {
+    final box = _leftSmallRowRenderBox(expandKey);
+    if (box == null) return false;
+    final local = box.globalToLocal(global);
+    return local.dx >= 0 && local.dx < _kLeftSmallCheckboxHitWidth;
+  }
+
+  String? _leftSmallExpandKeyUnderGlobal(Offset global) {
+    for (final big in _units) {
+      for (final mid in big.middles) {
+        if (_expandedLeftMidSmallsKey != _midExpandKey(big, mid)) continue;
+        for (final small in mid.smalls) {
+          final k = _smallExpandKey(big, mid, small);
+          if (_leftSmallRowHitTestGlobal(k, global)) return k;
+        }
+      }
+    }
+    return null;
+  }
+
+  String? _leftSmallExpandKeyNearestDraggable(Offset global) {
+    String? best;
+    var bestScore = double.infinity;
+    for (final k in _leftDraggableVisibleSmallExpandKeysOrdered()) {
+      final box = _leftSmallRowRenderBox(k);
+      if (box == null) continue;
+      final topLeft = box.localToGlobal(Offset.zero);
+      final rect = Rect.fromLTWH(
+        topLeft.dx,
+        topLeft.dy,
+        box.size.width,
+        box.size.height,
+      );
+      final nx = global.dx.clamp(rect.left, rect.right).toDouble();
+      final ny = global.dy.clamp(rect.top, rect.bottom).toDouble();
+      final horiz = (global.dx - nx).abs();
+      final vert = (global.dy - ny).abs();
+      final score = vert + horiz * 0.35;
+      if (score < bestScore) {
+        bestScore = score;
+        best = k;
+      }
+    }
+    return best;
+  }
+
+  ({
+    _BigUnitSelectionNode big,
+    _MidUnitSelectionNode mid,
+    _SmallUnitSelectionNode small,
+  })? _lookupTripleForSmallExpandKey(String expandKey) {
+    for (final big in _units) {
+      for (final mid in big.middles) {
+        for (final small in mid.smalls) {
+          if (_smallExpandKey(big, mid, small) == expandKey) {
+            return (big: big, mid: mid, small: small);
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  bool _leftWholeSelectModeForAnchorSmall(_SmallUnitSelectionNode s) {
+    if (s.locked || s.draftBlocked) return true;
+    if (s.selected && s.selectedPages.isEmpty) return false;
+    return true;
+  }
+
+  void _applyLeftSmallWholeVisibleRange(
+    String anchorExpandKey,
+    String curExpandKey,
+    bool select,
+  ) {
+    final baselines = _leftSmallDragBaseline;
+    if (baselines == null) return;
+    final keys = _leftDraggableVisibleSmallExpandKeysOrdered();
+    final ia = keys.indexOf(anchorExpandKey);
+    final ib = keys.indexOf(curExpandKey);
+    if (ia < 0 || ib < 0) return;
+    final lo = ia < ib ? ia : ib;
+    final hi = ia < ib ? ib : ia;
+    final range = keys.sublist(lo, hi + 1).toSet();
+
+    setState(() {
+      for (final big in _units) {
+        big.explicitSelected = false;
+        for (final mid in big.middles) {
+          mid.explicitSelected = false;
+          for (final small in mid.smalls) {
+            final k = _smallExpandKey(big, mid, small);
+            final snap = baselines[k];
+            if (snap == null) continue;
+            if (!range.contains(k)) {
+              small.selected = snap.selected;
+              small.explicitSelected = snap.explicitSelected;
+              small.selectedPages
+                ..clear()
+                ..addAll(snap.pages);
+            } else {
+              if (select) {
+                small.selected = true;
+                small.explicitSelected = true;
+                small.selectedPages.clear();
+              } else {
+                small.selected = false;
+                small.explicitSelected = false;
+                small.selectedPages.clear();
+              }
+            }
+          }
+          mid.selected = _allSmallSelected(mid);
+        }
+        big.selected = _allMidSelected(big);
+      }
+    });
+    _refreshRangeAutoDraft();
+  }
+
+  void _handleLeftTreePointerDown(PointerDownEvent e) {
+    if (_rightPagePointerDown) return;
+    final g = e.position;
+    final key = _leftSmallExpandKeyUnderGlobal(g);
+    if (key == null) return;
+    if (_isGlobalOnLeftSmallCheckboxStrip(g, key)) return;
+    final triplet = _lookupTripleForSmallExpandKey(key);
+    if (triplet == null) return;
+    if (triplet.small.locked || triplet.small.draftBlocked) return;
+
+    setState(() {
+      _leftSmallDragPointerDown = true;
+      _leftSmallDragMovedPastSlop = false;
+      _leftSmallDragDownGlobal = g;
+      _leftSmallDragAnchorExpandKey = key;
+    });
+  }
+
+  void _handleLeftTreePointerMove(PointerMoveEvent e) {
+    if (!_leftSmallDragPointerDown || _leftSmallDragAnchorExpandKey == null) {
+      return;
+    }
+    final anchor = _leftSmallDragAnchorExpandKey!;
+    final g = e.position;
+
+    if (!_leftSmallDragMovedPastSlop) {
+      final down = _leftSmallDragDownGlobal;
+      if (down == null) return;
+      if ((g - down).distance < _kLeftSmallDragSlopPx) return;
+      setState(() {
+        _leftSmallDragMovedPastSlop = true;
+        _leftSmallDragBaseline = _captureAllSmallDragSnapshots();
+        final t = _lookupTripleForSmallExpandKey(anchor);
+        _leftSmallDragSelectMode = t == null
+            ? true
+            : _leftWholeSelectModeForAnchorSmall(t.small);
+      });
+    }
+
+    final curKey = _leftSmallExpandKeyUnderGlobal(g) ??
+        _leftSmallExpandKeyNearestDraggable(g);
+    if (curKey == null || _leftSmallDragSelectMode == null) return;
+    _applyLeftSmallWholeVisibleRange(
+      anchor,
+      curKey,
+      _leftSmallDragSelectMode!,
+    );
+  }
+
+  void _handleLeftTreePointerUp(PointerUpEvent e) {
+    if (!_leftSmallDragPointerDown) return;
+    setState(() {
+      _leftSmallDragPointerDown = false;
+      _leftSmallDragMovedPastSlop = false;
+      _leftSmallDragDownGlobal = null;
+      _leftSmallDragAnchorExpandKey = null;
+      _leftSmallDragSelectMode = null;
+      _leftSmallDragBaseline = null;
+    });
+  }
+
+  void _handleLeftTreePointerCancel(PointerCancelEvent e) {
+    if (!_leftSmallDragPointerDown) return;
+    setState(() {
+      _leftSmallDragPointerDown = false;
+      _leftSmallDragMovedPastSlop = false;
+      _leftSmallDragDownGlobal = null;
+      _leftSmallDragAnchorExpandKey = null;
+      _leftSmallDragSelectMode = null;
+      _leftSmallDragBaseline = null;
+    });
   }
 
   /// 잠금·차단이 아닌 페이지 줄만 이어 붙인 순서(중단원 내 드래그 범위).
@@ -3428,12 +3677,18 @@ class HomeworkQuickAddProxyDialogState
         splashColor: Colors.transparent,
         highlightColor: Colors.transparent,
       ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          for (final big in _units)
-            ExpansionTile(
+      child: Listener(
+        behavior: HitTestBehavior.translucent,
+        onPointerDown: _handleLeftTreePointerDown,
+        onPointerMove: _handleLeftTreePointerMove,
+        onPointerUp: _handleLeftTreePointerUp,
+        onPointerCancel: _handleLeftTreePointerCancel,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            for (final big in _units)
+              ExpansionTile(
               key: ValueKey('quickadd_big_${big.orderIndex}'),
               initiallyExpanded: true,
               expansionAnimationStyle: _fastTreeExpansionStyle,
@@ -3474,7 +3729,8 @@ class HomeworkQuickAddProxyDialogState
                 for (final mid in big.middles) _buildLeftMidBlock(big, mid),
               ],
             ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -3594,6 +3850,7 @@ class HomeworkQuickAddProxyDialogState
     _MidUnitSelectionNode mid,
     _SmallUnitSelectionNode small,
   ) {
+    final expandKey = _smallExpandKey(big, mid, small);
     final page = _pageTextForSmall(small);
     final titleText =
         page.isEmpty ? small.name : '${small.name} (p.$page)';
@@ -3602,6 +3859,7 @@ class HomeworkQuickAddProxyDialogState
         small.selected || small.selectedPages.isNotEmpty;
     final doneText = _smallRowStatusSuffix(small);
     return Padding(
+      key: _leftSmallRowKeys.putIfAbsent(expandKey, GlobalKey.new),
       padding: const EdgeInsets.only(bottom: 4),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 140),
@@ -3724,7 +3982,12 @@ class HomeworkQuickAddProxyDialogState
         Expanded(
           flex: 44,
           child: Scrollbar(
+            controller: _leftTreeScrollController,
             child: SingleChildScrollView(
+              controller: _leftTreeScrollController,
+              physics: _leftSmallDragPointerDown && _leftSmallDragMovedPastSlop
+                  ? const NeverScrollableScrollPhysics()
+                  : null,
               child: _buildLeftUnitTreeColumn(),
             ),
           ),
@@ -4360,6 +4623,26 @@ class _IssuedSmallSummary {
     required this.latestFinishedAt,
     required this.completedCount,
   });
+}
+
+class _SmallDragSnap {
+  final bool selected;
+  final bool explicitSelected;
+  final Set<int> pages;
+
+  _SmallDragSnap({
+    required this.selected,
+    required this.explicitSelected,
+    required Set<int> pageSnapshot,
+  }) : pages = Set<int>.from(pageSnapshot);
+
+  factory _SmallDragSnap.fromNode(_SmallUnitSelectionNode s) {
+    return _SmallDragSnap(
+      selected: s.selected,
+      explicitSelected: s.explicitSelected,
+      pageSnapshot: s.selectedPages,
+    );
+  }
 }
 
 class _RightFlatEntry {
