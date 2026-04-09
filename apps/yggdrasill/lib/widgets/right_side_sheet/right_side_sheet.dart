@@ -1793,12 +1793,15 @@ class _BottomAddBar extends StatelessWidget {
 
 class _InquiryMemoCard extends StatefulWidget {
   final Memo memo;
+  /// 목록 위에서부터 1-based 순번
+  final int ordinalFromTop;
   final VoidCallback onTap;
   final VoidCallback onDelete;
 
   const _InquiryMemoCard({
     super.key,
     required this.memo,
+    required this.ordinalFromTop,
     required this.onTap,
     required this.onDelete,
   });
@@ -1921,14 +1924,34 @@ class _InquiryMemoCardState extends State<_InquiryMemoCard>
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    dateLabel,
-                    style: const TextStyle(
-                        color: _rsTextSub,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w900),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: Text(
+                          '${widget.ordinalFromTop}',
+                          textAlign: TextAlign.left,
+                          style: const TextStyle(
+                            color: _rsText,
+                            fontSize: 15,
+                            fontWeight: FontWeight.w900,
+                            height: 1.0,
+                          ),
+                        ),
+                      ),
+                      Expanded(
+                        child: Text(
+                          dateLabel,
+                          textAlign: TextAlign.right,
+                          style: const TextStyle(
+                              color: _rsTextSub,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w900),
+                        ),
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 6),
+                  const SizedBox(height: 9),
                   _fieldRow('연락처', _disp(lines.contact)),
                   const SizedBox(height: 4),
                   _fieldRow('학교·학년', _disp(lines.schoolGrade)),
@@ -2022,6 +2045,13 @@ class _InquiryMemosReorderListState extends State<_InquiryMemosReorderList> {
   final ScrollController _scrollCtrl = ScrollController();
 
   @override
+  void initState() {
+    super.initState();
+    // 문의 탭으로 전환될 때마다 위젯이 새로 붙으므로 서버/로컬 목록 갱신
+    unawaited(DataManager.instance.loadMemos());
+  }
+
+  @override
   void dispose() {
     _scrollCtrl.dispose();
     super.dispose();
@@ -2039,76 +2069,108 @@ class _InquiryMemosReorderListState extends State<_InquiryMemosReorderList> {
       valueListenable: widget.memosListenable,
       builder: (context, memos, _) {
         final list = _sorted(memos);
+        final countLabel = Text(
+          '총 ${list.length}개',
+          textAlign: TextAlign.center,
+          style: const TextStyle(
+            color: _rsTextSub,
+            fontSize: 12,
+            fontWeight: FontWeight.w800,
+          ),
+        );
         if (list.isEmpty) {
-          return const Center(
-            child: Text(
-              '문의 메모 없음',
-              style: TextStyle(
-                  color: _rsTextSub,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700),
-            ),
-          );
-        }
-        return Scrollbar(
-          controller: _scrollCtrl,
-          thumbVisibility: true,
-          child: ReorderableListView.builder(
-            scrollController: _scrollCtrl,
-            buildDefaultDragHandles: false,
-            itemCount: list.length,
-            onReorder: (oldIndex, newIndex) {
-              if (newIndex > oldIndex) newIndex -= 1;
-              final next = List<Memo>.from(list);
-              final item = next.removeAt(oldIndex);
-              next.insert(newIndex, item);
-              unawaited(DataManager.instance
-                  .reorderInquiryMemos(next.map((m) => m.id).toList()));
-            },
-            proxyDecorator: (child, index, animation) {
-              final curved = CurvedAnimation(
-                  parent: animation, curve: Curves.easeOutCubic);
-              return AnimatedBuilder(
-                animation: curved,
-                builder: (context, _) {
-                  final v = curved.value;
-                  return Transform.translate(
-                    offset: Offset(0, -4 * v),
-                    child: Transform.scale(
-                      scale: 1.0 + 0.02 * v,
-                      child: Material(
-                        color: _rsBg,
-                        surfaceTintColor: Colors.transparent,
-                        shadowColor: Colors.black.withOpacity(0.35),
-                        elevation: 12 * v,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(14),
-                        ),
-                        child: child,
-                      ),
-                    ),
-                  );
-                },
-              );
-            },
-            itemBuilder: (context, index) {
-              final m = list[index];
-              return ReorderableDelayedDragStartListener(
-                key: ValueKey('inq:${m.id}'),
-                index: index,
-                child: Padding(
-                  padding: EdgeInsets.only(
-                      bottom: index == list.length - 1 ? 0 : 8),
-                  child: _InquiryMemoCard(
-                    memo: m,
-                    onTap: () => widget.onEditMemo(m),
-                    onDelete: () =>
-                        unawaited(DataManager.instance.deleteMemo(m.id)),
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: countLabel,
+              ),
+              const Expanded(
+                child: Center(
+                  child: Text(
+                    '문의 메모 없음',
+                    style: TextStyle(
+                        color: _rsTextSub,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700),
                   ),
                 ),
-              );
-            },
-          ),
+              ),
+            ],
+          );
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: countLabel,
+            ),
+            Expanded(
+              child: Scrollbar(
+                controller: _scrollCtrl,
+                thumbVisibility: true,
+                child: ReorderableListView.builder(
+                  scrollController: _scrollCtrl,
+                  buildDefaultDragHandles: false,
+                  itemCount: list.length,
+                  onReorder: (oldIndex, newIndex) {
+                    if (newIndex > oldIndex) newIndex -= 1;
+                    final next = List<Memo>.from(list);
+                    final item = next.removeAt(oldIndex);
+                    next.insert(newIndex, item);
+                    unawaited(DataManager.instance
+                        .reorderInquiryMemos(next.map((m) => m.id).toList()));
+                  },
+                  proxyDecorator: (child, index, animation) {
+                    final curved = CurvedAnimation(
+                        parent: animation, curve: Curves.easeOutCubic);
+                    return AnimatedBuilder(
+                      animation: curved,
+                      builder: (context, _) {
+                        final v = curved.value;
+                        return Transform.translate(
+                          offset: Offset(0, -4 * v),
+                          child: Transform.scale(
+                            scale: 1.0 + 0.02 * v,
+                            child: Material(
+                              color: _rsBg,
+                              surfaceTintColor: Colors.transparent,
+                              shadowColor: Colors.black.withOpacity(0.35),
+                              elevation: 12 * v,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                              child: child,
+                            ),
+                          ),
+                        );
+                      },
+                    );
+                  },
+                  itemBuilder: (context, index) {
+                    final m = list[index];
+                    return ReorderableDelayedDragStartListener(
+                      key: ValueKey('inq:${m.id}'),
+                      index: index,
+                      child: Padding(
+                        padding: EdgeInsets.only(
+                            bottom: index == list.length - 1 ? 0 : 8),
+                        child: _InquiryMemoCard(
+                          memo: m,
+                          ordinalFromTop: index + 1,
+                          onTap: () => widget.onEditMemo(m),
+                          onDelete: () =>
+                              unawaited(DataManager.instance.deleteMemo(m.id)),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ),
+          ],
         );
       },
     );

@@ -49,6 +49,19 @@ class _ProblemBankViewState extends State<ProblemBankView> {
   };
 
   static const List<String> _levelOptions = <String>['초', '중', '고'];
+  static const String _kNaesinLinkConfigKey = 'naesinLinkKey';
+  static const List<String> _kNaesinLinkExamTerms = <String>['중간고사', '기말고사'];
+  static const List<int> _kNaesinLinkYears = <int>[2021, 2022, 2023, 2024, 2025];
+  static const List<String> _kNaesinLinkSchools = <String>[
+    '경신중',
+    '능인중',
+    '대륜중',
+    '동도중',
+    '소선여중',
+    '오성중',
+    '정화중',
+    '황금중',
+  ];
 
   final LearningProblemBankService _service = LearningProblemBankService();
 
@@ -614,7 +627,9 @@ class _ProblemBankViewState extends State<ProblemBankView> {
   ) {
     final out = <String, String>{};
     for (final question in questions) {
-      out[question.id] = _selectedModeOfQuestion(question);
+      final key = question.stableQuestionKey;
+      if (key.isEmpty) continue;
+      out[key] = _selectedModeOfQuestion(question);
     }
     return out;
   }
@@ -656,12 +671,12 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     });
   }
 
-  List<String> _selectedQuestionIdsInCurrentOrder(
+  List<String> _selectedQuestionUidsInCurrentOrder(
     List<LearningProblemQuestion> selectedQuestions,
   ) {
     return selectedQuestions
-        .map((q) => q.id.trim())
-        .where((id) => id.isNotEmpty)
+        .map((q) => q.stableQuestionKey)
+        .where((uid) => uid.trim().isNotEmpty)
         .toList(growable: false);
   }
 
@@ -669,10 +684,10 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     List<LearningProblemQuestion> selectedQuestions,
   ) {
     final selectedModes = _selectedModeMapForQuestions(selectedQuestions);
-    final orderedIds = _selectedQuestionIdsInCurrentOrder(selectedQuestions);
+    final orderedUids = _selectedQuestionUidsInCurrentOrder(selectedQuestions);
     return _exportSettings.toRenderConfig(
-      selectedQuestionIdsOrdered: orderedIds,
-      questionModeByQuestionId: selectedModes,
+      selectedQuestionUidsOrdered: orderedUids,
+      questionModeByQuestionUid: selectedModes,
     );
   }
 
@@ -680,11 +695,11 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     List<LearningProblemQuestion> selectedQuestions,
   ) {
     final selectedModes = _selectedModeMapForQuestions(selectedQuestions);
-    final orderedIds = _selectedQuestionIdsInCurrentOrder(selectedQuestions);
+    final orderedUids = _selectedQuestionUidsInCurrentOrder(selectedQuestions);
     return buildLearningRenderHash(
       settings: _exportSettings,
-      selectedQuestionIdsOrdered: orderedIds,
-      questionModeByQuestionId: selectedModes,
+      selectedQuestionUidsOrdered: orderedUids,
+      questionModeByQuestionUid: selectedModes,
     );
   }
 
@@ -743,7 +758,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       return reusable;
     }
 
-    final orderedIds = _selectedQuestionIdsInCurrentOrder(selectedQuestions);
+    final orderedUids = _selectedQuestionUidsInCurrentOrder(selectedQuestions);
     final options = <String, dynamic>{
       ...renderConfig,
       'renderHash': renderHash,
@@ -756,7 +771,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       paperSize: _exportSettings.paperLabel,
       includeAnswerSheet: _exportSettings.includeAnswerSheet,
       includeExplanation: _exportSettings.includeExplanation,
-      selectedQuestionIds: orderedIds,
+      selectedQuestionUids: orderedUids,
       renderHash: renderHash,
       previewOnly: previewOnly,
       options: options,
@@ -859,7 +874,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         final out = <ProblemBankPreviewQuestionScoreEntry>[];
         final seen = <String>{};
         for (final question in questions) {
-          final id = question.id.trim();
+          final id = question.stableQuestionKey.trim();
           if (id.isEmpty || seen.contains(id)) continue;
           seen.add(id);
           out.add(
@@ -891,6 +906,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           'includeCoverPage': request.includeCoverPage,
           'coverPageTexts': request.coverPageTexts,
           'includeQuestionScore': request.includeQuestionScore,
+          'questionScoreByQuestionUid': request.questionScoreByQuestionId,
           'questionScoreByQuestionId': request.questionScoreByQuestionId,
         };
         if (_exportSettings.layoutColumnCount == 2) {
@@ -927,7 +943,9 @@ class _ProblemBankViewState extends State<ProblemBankView> {
             );
             final presetModeMap = <String, String>{};
             for (final question in selected) {
-              final rawMode = preset.questionModeByQuestionId[question.id];
+              final rawMode = preset.questionModeByQuestionUid[
+                      question.stableQuestionKey] ??
+                  preset.questionModeByQuestionUid[question.id];
               if (rawMode == null || rawMode.trim().isEmpty) continue;
               presetModeMap[question.id] = normalizeQuestionModeSelection(
                 question,
@@ -938,7 +956,9 @@ class _ProblemBankViewState extends State<ProblemBankView> {
             if (mounted) {
               setState(() {
                 _exportSettings = presetSettings;
-                _selectedQuestionModes.addAll(presetModeMap);
+                _selectedQuestionModes
+                  ..clear()
+                  ..addAll(presetModeMap);
               });
             }
             final subjectTitle =
@@ -969,7 +989,11 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                 false,
               ),
               'questionScoreByQuestionId': readScoreMap(
+                preset.renderConfig['questionScoreByQuestionUid'],
                 preset.renderConfig['questionScoreByQuestionId'],
+              ),
+              'questionScoreByQuestionUid': readScoreMap(
+                preset.renderConfig['questionScoreByQuestionUid'],
                 const <String, dynamic>{},
               ),
               'coverPageTexts': readCoverPageTexts(
@@ -1086,8 +1110,10 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           _exportSettings.includeQuestionScore,
         ),
         initialQuestionScoreByQuestionId: readScoreMap(
-          completed.resultSummary['questionScoreByQuestionId'],
-          completed.options['questionScoreByQuestionId'],
+          completed.resultSummary['questionScoreByQuestionUid'],
+          completed.options['questionScoreByQuestionUid'] ??
+              completed.resultSummary['questionScoreByQuestionId'] ??
+              completed.options['questionScoreByQuestionId'],
         ),
         questionScoreEntries: scoreEntries,
         initialCoverPageTexts: readCoverPageTexts(
@@ -1161,9 +1187,17 @@ class _ProblemBankViewState extends State<ProblemBankView> {
             refreshed.options['coverPageTexts'],
           );
           final questionScoreByQuestionId = readScoreMap(
-            refreshed.resultSummary['questionScoreByQuestionId'],
-            refreshed.options['questionScoreByQuestionId'],
+            refreshed.resultSummary['questionScoreByQuestionUid'],
+            refreshed.resultSummary['questionScoreByQuestionId'] ??
+                refreshed.options['questionScoreByQuestionId'],
           );
+          final questionScoreByQuestionUid = readScoreMap(
+            refreshed.resultSummary['questionScoreByQuestionUid'],
+            refreshed.options['questionScoreByQuestionUid'],
+          );
+          final mergedQuestionScoreMap = questionScoreByQuestionUid.isNotEmpty
+              ? questionScoreByQuestionUid
+              : questionScoreByQuestionId;
           return ProblemBankPreviewRefreshResult(
             pdfUrl: refreshed.outputUrl,
             titlePageTopText: titlePageTopText.isEmpty
@@ -1192,7 +1226,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
             includeAnswerSheet: includeAnswerSheet,
             includeExplanation: includeExplanation,
             includeQuestionScore: includeQuestionScore,
-            questionScoreByQuestionId: questionScoreByQuestionId,
+            questionScoreByQuestionId: mergedQuestionScoreMap,
           );
         },
         onGeneratePdfRequested: (request) async {
@@ -1245,9 +1279,9 @@ class _ProblemBankViewState extends State<ProblemBankView> {
               questionScoreByQuestionId: request.questionScoreByQuestionId,
             );
           });
-          final orderedQuestionIds =
-              _selectedQuestionIdsInCurrentOrder(selected);
-          if (orderedQuestionIds.isEmpty) {
+          final orderedQuestionUids =
+              _selectedQuestionUidsInCurrentOrder(selected);
+          if (orderedQuestionUids.isEmpty) {
             _showSnack('저장할 문항이 없습니다.');
             return;
           }
@@ -1265,8 +1299,8 @@ class _ProblemBankViewState extends State<ProblemBankView> {
             final saveResult = await _service.saveExportSettingsAsDocument(
               academyId: academyId,
               sourceDocumentId: sourceDocumentId,
-              selectedQuestionIdsOrdered: orderedQuestionIds,
-              questionModeByQuestionId: _selectedModeMapForQuestions(selected),
+              selectedQuestionUidsOrdered: orderedQuestionUids,
+              questionModeByQuestionUid: _selectedModeMapForQuestions(selected),
               renderConfig: renderConfig,
               templateProfile: _exportSettings.templateProfile,
               paperSize: _exportSettings.paperLabel,
@@ -1276,7 +1310,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
             );
             final count = saveResult.copiedQuestionCount;
             _showSnack(
-              '세팅 저장 완료: 새 문서 생성 (${count > 0 ? count : orderedQuestionIds.length}문항)',
+              '프리셋 저장 완료 (${count > 0 ? count : orderedQuestionUids.length}문항)',
             );
           } catch (e) {
             _showSnack('세팅 저장 실패: $e');
@@ -1570,6 +1604,160 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     return '${value.year}-${two(value.month)}-${two(value.day)} ${two(value.hour)}:${two(value.minute)}';
   }
 
+  String _defaultNaesinExamTermByDate(DateTime now) {
+    final month = now.month;
+    final day = now.day;
+    if (month >= 1 && month <= 4) return '중간고사';
+    if (month == 5) return day <= 15 ? '중간고사' : '기말고사';
+    if (month >= 6 && month <= 7) return '기말고사';
+    if (month >= 8 && month <= 9) return '중간고사';
+    if (month == 10) return day <= 15 ? '중간고사' : '기말고사';
+    return '기말고사';
+  }
+
+  int _defaultNaesinYearByDate(DateTime now) {
+    final year = now.year;
+    if (_kNaesinLinkYears.contains(year)) return year;
+    if (year < _kNaesinLinkYears.first) return _kNaesinLinkYears.first;
+    return _kNaesinLinkYears.last;
+  }
+
+  String _buildNaesinLinkKey({
+    required String gradeKey,
+    required String courseKey,
+    required String examTerm,
+    required String school,
+    required int year,
+  }) {
+    return '$gradeKey|$courseKey|$examTerm|$school|$year';
+  }
+
+  _NaesinLinkSelection? _parseNaesinLinkKey(String raw) {
+    final normalized = raw.trim();
+    if (normalized.isEmpty) return null;
+    final parts = normalized.split('|');
+    if (parts.length != 5) return null;
+    final gradeKey = parts[0].trim();
+    final courseKey = parts[1].trim();
+    final examTerm = parts[2].trim();
+    final school = parts[3].trim();
+    final year = int.tryParse(parts[4].trim());
+    if (gradeKey.isEmpty ||
+        courseKey.isEmpty ||
+        examTerm.isEmpty ||
+        school.isEmpty ||
+        year == null) {
+      return null;
+    }
+    return _NaesinLinkSelection(
+      gradeKey: gradeKey,
+      courseKey: courseKey,
+      examTerm: examTerm,
+      school: school,
+      year: year,
+    );
+  }
+
+  String _naesinLinkSummaryLabel(String rawKey) {
+    final parsed = _parseNaesinLinkKey(rawKey);
+    if (parsed == null) return '';
+    return '${parsed.school} · ${parsed.year} · ${parsed.courseKey} · ${parsed.examTerm}';
+  }
+
+  List<_NaesinGradeOption> _naesinGradeOptionsForLevel(String level) {
+    if (level.trim() == '고') {
+      return const <_NaesinGradeOption>[
+        _NaesinGradeOption(key: 'H1', label: '고1'),
+        _NaesinGradeOption(key: 'H2', label: '고2'),
+        _NaesinGradeOption(key: 'H3', label: '고3'),
+      ];
+    }
+    return const <_NaesinGradeOption>[
+      _NaesinGradeOption(key: 'M1', label: '중1'),
+      _NaesinGradeOption(key: 'M2', label: '중2'),
+      _NaesinGradeOption(key: 'M3', label: '중3'),
+    ];
+  }
+
+  List<_NaesinCourseOption> _naesinCourseOptionsForGrade(String gradeKey) {
+    switch (gradeKey) {
+      case 'M1':
+        return const <_NaesinCourseOption>[
+          _NaesinCourseOption(key: 'M1-1', label: '1-1'),
+          _NaesinCourseOption(key: 'M1-2', label: '1-2'),
+        ];
+      case 'M2':
+        return const <_NaesinCourseOption>[
+          _NaesinCourseOption(key: 'M2-1', label: '2-1'),
+          _NaesinCourseOption(key: 'M2-2', label: '2-2'),
+        ];
+      case 'M3':
+        return const <_NaesinCourseOption>[
+          _NaesinCourseOption(key: 'M3-1', label: '3-1'),
+          _NaesinCourseOption(key: 'M3-2', label: '3-2'),
+        ];
+      case 'H1':
+        return const <_NaesinCourseOption>[
+          _NaesinCourseOption(key: 'H1-c1', label: '공통수학1'),
+          _NaesinCourseOption(key: 'H1-c2', label: '공통수학2'),
+        ];
+      case 'H2':
+      case 'H3':
+        return const <_NaesinCourseOption>[
+          _NaesinCourseOption(key: 'H-algebra', label: '대수'),
+        ];
+      default:
+        return const <_NaesinCourseOption>[
+          _NaesinCourseOption(key: 'M1-1', label: '1-1'),
+          _NaesinCourseOption(key: 'M1-2', label: '1-2'),
+        ];
+    }
+  }
+
+  ({String gradeKey, String courseKey}) _deriveNaesinDefaultGradeCourse() {
+    final now = DateTime.now();
+    final isHigh = _selectedSchoolLevel.trim() == '고';
+    final normalizedCourse = _selectedDetailedCourse
+        .replaceAll(' ', '')
+        .replaceAll('학기', '')
+        .trim();
+    if (isHigh) {
+      if (normalizedCourse.contains('공통수학1')) {
+        return (gradeKey: 'H1', courseKey: 'H1-c1');
+      }
+      if (normalizedCourse.contains('공통수학2')) {
+        return (gradeKey: 'H1', courseKey: 'H1-c2');
+      }
+      if (normalizedCourse.contains('고2')) {
+        return (gradeKey: 'H2', courseKey: 'H-algebra');
+      }
+      if (normalizedCourse.contains('고3')) {
+        return (gradeKey: 'H3', courseKey: 'H-algebra');
+      }
+      final firstSemester = now.month <= 7;
+      return (
+        gradeKey: 'H1',
+        courseKey: firstSemester ? 'H1-c1' : 'H1-c2',
+      );
+    }
+    final matched = RegExp(r'([1-3])\s*-\s*([1-2])').firstMatch(normalizedCourse);
+    if (matched != null) {
+      final grade = matched.group(1)!;
+      final semester = matched.group(2)!;
+      return (gradeKey: 'M$grade', courseKey: 'M$grade-$semester');
+    }
+    if (normalizedCourse.contains('중2')) {
+      final semester = now.month <= 7 ? '1' : '2';
+      return (gradeKey: 'M2', courseKey: 'M2-$semester');
+    }
+    if (normalizedCourse.contains('중3')) {
+      final semester = now.month <= 7 ? '1' : '2';
+      return (gradeKey: 'M3', courseKey: 'M3-$semester');
+    }
+    final semester = now.month <= 7 ? '1' : '2';
+    return (gradeKey: 'M1', courseKey: 'M1-$semester');
+  }
+
   Future<void> _openExportPresetManagerDialog() async {
     final academyId = _academyId;
     if (academyId == null || academyId.isEmpty) {
@@ -1616,6 +1804,107 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           }
         }
 
+        int readInt(dynamic value) {
+          if (value is int) return value;
+          if (value is num) return value.toInt();
+          return int.tryParse('${value ?? ''}') ?? 0;
+        }
+
+        Future<void> runLegacyCloneCleanup(StateSetter setModalState) async {
+          setModalState(() {
+            isWorking = true;
+          });
+          Map<String, dynamic> dryRunResult;
+          try {
+            dryRunResult = await _service.cleanupLegacySavedSettingsClones(
+              academyId: academyId,
+              dryRun: true,
+              limit: 2000,
+            );
+          } catch (e) {
+            _showSnack('레거시 정리(미리보기) 실패: $e');
+            setModalState(() {
+              isWorking = false;
+            });
+            return;
+          }
+
+          final legacyCount = readInt(dryRunResult['legacyDocumentCount']);
+          if (legacyCount <= 0) {
+            _showSnack('정리할 레거시 저장 문서가 없습니다.');
+            setModalState(() {
+              isWorking = false;
+            });
+            return;
+          }
+          if (!mounted) return;
+          if (!dialogContext.mounted) return;
+
+          final confirmed = await showDialog<bool>(
+            context: dialogContext,
+            builder: (ctx) {
+              return AlertDialog(
+                backgroundColor: const Color(0xFF0F171B),
+                title: const Text(
+                  '레거시 저장문서 정리',
+                  style: TextStyle(color: _rsTextPrimary),
+                ),
+                content: Text(
+                  '레거시 복제 문서 $legacyCount개가 감지되었습니다.\n'
+                  '참조형 전환 이후에는 불필요하므로 삭제할까요?',
+                  style: const TextStyle(color: _rsTextMuted, height: 1.35),
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.of(ctx).pop(false),
+                    child: const Text('취소'),
+                  ),
+                  FilledButton(
+                    onPressed: () => Navigator.of(ctx).pop(true),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFF6C2B2B),
+                    ),
+                    child: const Text('삭제 실행'),
+                  ),
+                ],
+              );
+            },
+          );
+          if (confirmed != true) {
+            setModalState(() {
+              isWorking = false;
+            });
+            return;
+          }
+
+          try {
+            final result = await _service.cleanupLegacySavedSettingsClones(
+              academyId: academyId,
+              dryRun: false,
+              limit: 2000,
+            );
+            final deletedDocs = readInt(result['deletedDocumentCount']);
+            final deletedPresets = readInt(result['deletedPresetCount']);
+            _showSnack(
+              '레거시 정리 완료: 문서 $deletedDocs개 · 프리셋 $deletedPresets개',
+            );
+            final refreshed = await _service.listExportPresets(
+              academyId: academyId,
+              limit: 300,
+            );
+            if (!mounted) return;
+            setModalState(() {
+              presets = refreshed;
+            });
+          } catch (e) {
+            _showSnack('레거시 정리 실패: $e');
+          } finally {
+            setModalState(() {
+              isWorking = false;
+            });
+          }
+        }
+
         Future<void> applyPreset(
           LearningProblemDocumentExportPreset preset,
         ) async {
@@ -1625,8 +1914,15 @@ class _ProblemBankViewState extends State<ProblemBankView> {
             renderConfig: preset.renderConfig,
           );
           final modeMap = <String, String>{};
+          final presetUidSet = preset.selectedQuestionUids
+              .map((uid) => uid.trim())
+              .where((uid) => uid.isNotEmpty)
+              .toSet();
+          final matchedSelectedIds = <String>{};
           for (final question in _questions) {
-            final rawMode = preset.questionModeByQuestionId[question.id];
+            final rawMode = preset.questionModeByQuestionUid[
+                    question.stableQuestionKey] ??
+                preset.questionModeByQuestionUid[question.id];
             if (rawMode == null || rawMode.trim().isEmpty) continue;
             modeMap[question.id] = normalizeQuestionModeSelection(
               question,
@@ -1634,15 +1930,37 @@ class _ProblemBankViewState extends State<ProblemBankView> {
               fallbackMode: kLearningQuestionModeOriginal,
             );
           }
+          if (presetUidSet.isNotEmpty) {
+            for (final question in _questions) {
+              final key = question.stableQuestionKey.trim();
+              if (key.isEmpty) continue;
+              if (presetUidSet.contains(key)) {
+                matchedSelectedIds.add(question.id);
+              }
+            }
+          }
           if (!mounted) return;
           setState(() {
             _exportSettings = presetSettings;
-            _selectedQuestionModes.addAll(modeMap);
+            _selectedQuestionModes
+              ..clear()
+              ..addAll(modeMap);
+            if (presetUidSet.isNotEmpty) {
+              _selectedQuestionIds
+                ..clear()
+                ..addAll(matchedSelectedIds);
+            }
           });
           if (Navigator.of(dialogContext).canPop()) {
             Navigator.of(dialogContext).pop();
           }
-          _showSnack('프리셋 적용: ${preset.displayName}');
+          if (presetUidSet.isNotEmpty) {
+            _showSnack(
+              '프리셋 적용: ${preset.displayName} (선택 ${matchedSelectedIds.length}/${presetUidSet.length}문항)',
+            );
+          } else {
+            _showSnack('프리셋 적용: ${preset.displayName}');
+          }
         }
 
         Future<void> renamePreset(
@@ -1770,6 +2088,322 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           }
         }
 
+        Future<void> linkPresetToNaesinCell(
+          LearningProblemDocumentExportPreset preset,
+          StateSetter setModalState,
+        ) async {
+          final now = DateTime.now();
+          final currentLinkKey =
+              '${preset.renderConfig[_kNaesinLinkConfigKey] ?? preset.naesinLinkKey}'
+                  .trim();
+          final existing = _parseNaesinLinkKey(currentLinkKey);
+          final gradeCourse = _deriveNaesinDefaultGradeCourse();
+          final levelKey = _selectedSchoolLevel.trim() == '고' ? '고' : '중';
+          final gradeOptions = _naesinGradeOptionsForLevel(levelKey);
+          if (gradeOptions.isEmpty) {
+            _showSnack('내신 연결을 위한 학년 옵션을 불러오지 못했습니다.');
+            return;
+          }
+          var selectedGradeKey = existing?.gradeKey ?? gradeCourse.gradeKey;
+          if (!gradeOptions.any((e) => e.key == selectedGradeKey)) {
+            selectedGradeKey = gradeOptions.first.key;
+          }
+          var selectedCourseKey = existing?.courseKey ?? gradeCourse.courseKey;
+          var selectedExamTerm = existing?.examTerm ?? _defaultNaesinExamTermByDate(now);
+          if (!_kNaesinLinkExamTerms.contains(selectedExamTerm)) {
+            selectedExamTerm = _kNaesinLinkExamTerms.first;
+          }
+          final fallbackSchool = (_selectedSchoolName ?? '').trim();
+          var selectedSchool = existing?.school ?? fallbackSchool;
+          if (!_kNaesinLinkSchools.contains(selectedSchool)) {
+            selectedSchool = _kNaesinLinkSchools.first;
+          }
+          var selectedYear = existing?.year ?? _defaultNaesinYearByDate(now);
+          if (!_kNaesinLinkYears.contains(selectedYear)) {
+            selectedYear = _kNaesinLinkYears.last;
+          }
+
+          final nextLinkKey = await showDialog<String>(
+            context: dialogContext,
+            builder: (ctx) {
+              return StatefulBuilder(
+                builder: (context, setLinkState) {
+                  const fieldTextStyle = TextStyle(
+                    color: _rsTextPrimary,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                  );
+                  InputDecoration fieldDecoration(String label) {
+                    return InputDecoration(
+                      labelText: label,
+                      labelStyle: const TextStyle(
+                        color: _rsTextMuted,
+                        fontSize: 12.4,
+                        fontWeight: FontWeight.w700,
+                      ),
+                      filled: true,
+                      fillColor: const Color(0xFF141D22),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: const BorderSide(color: _rsBorder),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: const BorderSide(
+                          color: Color(0xFF3E8A7A),
+                          width: 1.2,
+                        ),
+                      ),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 11,
+                        vertical: 10,
+                      ),
+                    );
+                  }
+                  final courseOptions =
+                      _naesinCourseOptionsForGrade(selectedGradeKey);
+                  if (!courseOptions.any((e) => e.key == selectedCourseKey)) {
+                    selectedCourseKey = courseOptions.first.key;
+                  }
+                  return AlertDialog(
+                    backgroundColor: _rsBg,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      side: const BorderSide(color: _rsBorder),
+                    ),
+                    title: const Text(
+                      '내신 셀 연결',
+                      style: TextStyle(
+                        color: _rsTextPrimary,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 17,
+                      ),
+                    ),
+                    content: SizedBox(
+                      width: 430,
+                      child: SingleChildScrollView(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            const Text(
+                              '프리셋과 연결할 내신 셀을 선택하세요.',
+                              style: TextStyle(
+                                color: _rsTextMuted,
+                                fontSize: 12.2,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: DropdownButtonFormField<String>(
+                                    value: selectedGradeKey,
+                                    decoration: fieldDecoration('학년'),
+                                    dropdownColor: const Color(0xFF141D22),
+                                    style: fieldTextStyle,
+                                    iconEnabledColor: _rsTextMuted,
+                                    items: [
+                                      for (final option in gradeOptions)
+                                        DropdownMenuItem<String>(
+                                          value: option.key,
+                                          child: Text(
+                                            option.label,
+                                            style: fieldTextStyle,
+                                          ),
+                                        ),
+                                    ],
+                                    onChanged: (value) {
+                                      if (value == null || value.isEmpty) return;
+                                      setLinkState(() {
+                                        selectedGradeKey = value;
+                                      });
+                                    },
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: DropdownButtonFormField<String>(
+                                    value: selectedCourseKey,
+                                    decoration: fieldDecoration('과정'),
+                                    dropdownColor: const Color(0xFF141D22),
+                                    style: fieldTextStyle,
+                                    iconEnabledColor: _rsTextMuted,
+                                    items: [
+                                      for (final option in courseOptions)
+                                        DropdownMenuItem<String>(
+                                          value: option.key,
+                                          child: Text(
+                                            option.label,
+                                            style: fieldTextStyle,
+                                          ),
+                                        ),
+                                    ],
+                                    onChanged: (value) {
+                                      if (value == null || value.isEmpty) return;
+                                      setLinkState(() {
+                                        selectedCourseKey = value;
+                                      });
+                                    },
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: DropdownButtonFormField<String>(
+                                    value: selectedExamTerm,
+                                    decoration: fieldDecoration('시험 구분'),
+                                    dropdownColor: const Color(0xFF141D22),
+                                    style: fieldTextStyle,
+                                    iconEnabledColor: _rsTextMuted,
+                                    items: [
+                                      for (final option in _kNaesinLinkExamTerms)
+                                        DropdownMenuItem<String>(
+                                          value: option,
+                                          child: Text(
+                                            option,
+                                            style: fieldTextStyle,
+                                          ),
+                                        ),
+                                    ],
+                                    onChanged: (value) {
+                                      if (value == null || value.isEmpty) return;
+                                      setLinkState(() {
+                                        selectedExamTerm = value;
+                                      });
+                                    },
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: DropdownButtonFormField<int>(
+                                    value: selectedYear,
+                                    decoration: fieldDecoration('연도'),
+                                    dropdownColor: const Color(0xFF141D22),
+                                    style: fieldTextStyle,
+                                    iconEnabledColor: _rsTextMuted,
+                                    items: [
+                                      for (final option in _kNaesinLinkYears)
+                                        DropdownMenuItem<int>(
+                                          value: option,
+                                          child: Text(
+                                            '$option',
+                                            style: fieldTextStyle,
+                                          ),
+                                        ),
+                                    ],
+                                    onChanged: (value) {
+                                      if (value == null) return;
+                                      setLinkState(() {
+                                        selectedYear = value;
+                                      });
+                                    },
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            DropdownButtonFormField<String>(
+                              value: selectedSchool,
+                              decoration: fieldDecoration('학교'),
+                              dropdownColor: const Color(0xFF141D22),
+                              style: fieldTextStyle,
+                              iconEnabledColor: _rsTextMuted,
+                              items: [
+                                for (final option in _kNaesinLinkSchools)
+                                  DropdownMenuItem<String>(
+                                    value: option,
+                                    child: Text(
+                                      option,
+                                      style: fieldTextStyle,
+                                    ),
+                                  ),
+                              ],
+                              onChanged: (value) {
+                                if (value == null || value.isEmpty) return;
+                                setLinkState(() {
+                                  selectedSchool = value;
+                                });
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    actions: [
+                      if (currentLinkKey.isNotEmpty)
+                        TextButton(
+                          onPressed: () => Navigator.of(ctx).pop(''),
+                          style: TextButton.styleFrom(
+                            foregroundColor: const Color(0xFFD38E8E),
+                          ),
+                          child: const Text('연결 해제'),
+                        ),
+                      TextButton(
+                        onPressed: () => Navigator.of(ctx).pop(),
+                        style: TextButton.styleFrom(
+                          foregroundColor: _rsTextMuted,
+                        ),
+                        child: const Text('취소'),
+                      ),
+                      FilledButton(
+                        onPressed: () {
+                          Navigator.of(ctx).pop(
+                            _buildNaesinLinkKey(
+                              gradeKey: selectedGradeKey,
+                              courseKey: selectedCourseKey,
+                              examTerm: selectedExamTerm,
+                              school: selectedSchool,
+                              year: selectedYear,
+                            ),
+                          );
+                        },
+                        style: FilledButton.styleFrom(
+                          backgroundColor: const Color(0xFF2E7366),
+                          foregroundColor: _rsTextPrimary,
+                        ),
+                        child: const Text('저장'),
+                      ),
+                    ],
+                  );
+                },
+              );
+            },
+          );
+          if (nextLinkKey == null) return;
+          setModalState(() {
+            isWorking = true;
+          });
+          try {
+            final updated = await _service.updateExportPresetNaesinLink(
+              academyId: academyId,
+              presetId: preset.id,
+              naesinLinkKey: nextLinkKey.isEmpty ? null : nextLinkKey,
+            );
+            if (updated != null) {
+              final next = presets
+                  .map((item) => item.id == preset.id ? updated : item)
+                  .toList(growable: false);
+              setModalState(() {
+                presets = next;
+              });
+            } else {
+              await reloadPresets(setModalState);
+            }
+            _showSnack(nextLinkKey.isEmpty ? '내신 연결 해제 완료' : '내신 연결 저장 완료');
+          } catch (e) {
+            _showSnack('내신 연결 저장 실패: $e');
+          } finally {
+            setModalState(() {
+              isWorking = false;
+            });
+          }
+        }
+
         return StatefulBuilder(
           builder: (context, setModalState) {
             return AlertDialog(
@@ -1786,6 +2420,16 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                         color: _rsTextPrimary,
                         fontWeight: FontWeight.w800,
                       ),
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: '레거시 정리',
+                    onPressed: isWorking
+                        ? null
+                        : () => runLegacyCloneCleanup(setModalState),
+                    icon: const Icon(
+                      Icons.cleaning_services_outlined,
+                      color: _rsTextMuted,
                     ),
                   ),
                   IconButton(
@@ -1816,6 +2460,11 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                           final preset = presets[index];
                           final profile = preset.templateProfile.toUpperCase();
                           final paper = preset.paperSize.trim();
+                          final rawNaesinLinkKey =
+                              '${preset.renderConfig[_kNaesinLinkConfigKey] ?? preset.naesinLinkKey}'
+                                  .trim();
+                          final naesinLinkLabel =
+                              _naesinLinkSummaryLabel(rawNaesinLinkKey);
                           final metaLine = [
                             if (profile.isNotEmpty) profile,
                             if (paper.isNotEmpty) paper,
@@ -1851,6 +2500,17 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                                     fontWeight: FontWeight.w600,
                                   ),
                                 ),
+                                if (naesinLinkLabel.isNotEmpty) ...[
+                                  const SizedBox(height: 3),
+                                  Text(
+                                    '내신 연결: $naesinLinkLabel',
+                                    style: const TextStyle(
+                                      color: Color(0xFFAFC2D6),
+                                      fontSize: 11.4,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ],
                                 const SizedBox(height: 6),
                                 Row(
                                   children: [
@@ -1861,6 +2521,18 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                                       icon: const Icon(Icons.playlist_add_check,
                                           size: 16),
                                       label: const Text('적용'),
+                                    ),
+                                    const SizedBox(width: 4),
+                                    TextButton.icon(
+                                      onPressed: isWorking
+                                          ? null
+                                          : () => linkPresetToNaesinCell(
+                                              preset, setModalState),
+                                      icon: const Icon(
+                                        Icons.link_outlined,
+                                        size: 16,
+                                      ),
+                                      label: const Text('내신 연결'),
                                     ),
                                     const SizedBox(width: 4),
                                     IconButton(
@@ -2220,8 +2892,9 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     return LayoutBuilder(
       builder: (context, constraints) {
         const spacing = 10.0;
-        const maxCardWidth = 672.0;
-        const cardHeight = 468.0;
+        // 그리드 미리보기 카드 크기(보내기 워커와 무관, UI 전용)
+        const maxCardWidth = 571.2; // 672 * 0.85
+        const cardHeight = 397.8; // 468 * 0.85
         final availableWidth =
             constraints.maxWidth.isFinite ? constraints.maxWidth : maxCardWidth;
         final cols = math.max(
@@ -2301,6 +2974,36 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       },
     );
   }
+}
+
+class _NaesinLinkSelection {
+  const _NaesinLinkSelection({
+    required this.gradeKey,
+    required this.courseKey,
+    required this.examTerm,
+    required this.school,
+    required this.year,
+  });
+
+  final String gradeKey;
+  final String courseKey;
+  final String examTerm;
+  final String school;
+  final int year;
+}
+
+class _NaesinGradeOption {
+  const _NaesinGradeOption({required this.key, required this.label});
+
+  final String key;
+  final String label;
+}
+
+class _NaesinCourseOption {
+  const _NaesinCourseOption({required this.key, required this.label});
+
+  final String key;
+  final String label;
 }
 
 class _QuestionOrderSaveRequest {

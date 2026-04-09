@@ -36,8 +36,8 @@ class ProblemBankFilterBar extends StatelessWidget {
 
   final bool isBusy;
 
-  static const _panelBg = Color(0xFF151C21);
-  static const _border = Color(0xFF223131);
+  static const _panelBg = Color(0xFF222222);
+  static const _border = Color(0xFF333333);
   static const double _controlHeight = 40;
 
   @override

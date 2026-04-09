@@ -116,8 +116,7 @@ class _GradingModePageState extends State<GradingModePage> {
                             ),
                           ),
                           const SizedBox(height: _kGradingSectionGapTop),
-                          const Divider(
-                              height: 1, color: Color(0xFF2A3A3A)),
+                          const Divider(height: 1, color: Color(0xFF2A3A3A)),
                           const SizedBox(height: _kGradingSectionGapBottom),
                           Expanded(
                             child: Align(
@@ -162,9 +161,8 @@ class _GradingModePageState extends State<GradingModePage> {
         .clamp(_kGradingCardMinHeight, viewportHeight)
         .toDouble();
 
-    final middleOverhead = _kGradingSectionGapTop +
-        1 +
-        _kGradingSectionGapBottom;
+    final middleOverhead =
+        _kGradingSectionGapTop + 1 + _kGradingSectionGapBottom;
     final rowHeight = ((inner - middleOverhead) / 2)
         .clamp(_kGradingCardMinHeight, _kGradingCardMaxHeight)
         .toDouble();
@@ -719,6 +717,7 @@ class _GradingModePageState extends State<GradingModePage> {
       type: summaryType,
       page: pageSummary.isEmpty ? null : pageSummary,
       count: totalCount > 0 ? totalCount : first.count,
+      timeLimitMinutes: displaySeed.timeLimitMinutes ?? first.timeLimitMinutes,
       memo: displaySeed.memo,
       content: displaySeed.content,
       bookId: displaySeed.bookId,
@@ -1078,9 +1077,8 @@ class _SubmittedHomeworkCard extends StatelessWidget {
             (!hasImage && fallbackCoverColor.computeLuminance() > 0.6);
         final overlayNameSize = (41.0 * scale).clamp(22.0, 41.0).toDouble();
         final overlayHorizontalPad = (14.0 * scale).clamp(8.0, 14.0).toDouble();
-        final overlayNameColor = useDarkOverlayText
-            ? Colors.black.withOpacity(0.82)
-            : Colors.white;
+        final overlayNameColor =
+            useDarkOverlayText ? Colors.black.withOpacity(0.82) : Colors.white;
         final overlayTimeGap = (6.0 * scale).clamp(3.0, 6.0).toDouble();
         final overlayTimeSize = (overlayNameSize * 0.7).clamp(10.0, 29.0);
         final overlayTextShadows = useDarkOverlayText
@@ -1100,8 +1098,7 @@ class _SubmittedHomeworkCard extends StatelessWidget {
                       ? Colors.black87
                       : Colors.black.withOpacity(0.26),
                   blurRadius: (8.0 * scale).clamp(4.0, 8.0).toDouble(),
-                  offset:
-                      Offset(0, (2.0 * scale).clamp(1.0, 2.0).toDouble()),
+                  offset: Offset(0, (2.0 * scale).clamp(1.0, 2.0).toDouble()),
                 ),
               ];
         return Stack(
@@ -1191,8 +1188,7 @@ class _SubmittedHomeworkCard extends StatelessWidget {
                           ),
                           if (i != pageLines.length - 1)
                             SizedBox(
-                              height:
-                                  (overlayTimeGap * 0.58).clamp(2.0, 4.0),
+                              height: (overlayTimeGap * 0.58).clamp(2.0, 4.0),
                             ),
                         ],
                       ],

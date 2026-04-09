@@ -58,8 +58,8 @@ class ProblemBankExportOptionsPanel extends StatelessWidget {
   final ValueChanged<int> onTargetDpiChanged;
   final VoidCallback onPresetPressed;
 
-  static const _panelBg = Color(0xFF151C21);
-  static const _border = Color(0xFF223131);
+  static const _panelBg = Color(0xFF222222);
+  static const _border = Color(0xFF333333);
   static const _textPrimary = Color(0xFFEAF2F2);
   static const _textMuted = Color(0xFF9FB3B3);
   static const _accent = Color(0xFF33A373);

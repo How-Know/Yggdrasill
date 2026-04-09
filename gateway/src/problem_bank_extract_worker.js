@@ -2572,11 +2572,14 @@ function buildQuestionWritePayload({
   academyId,
   documentId,
   extractJobId,
+  questionUid = '',
 }) {
+  const safeQuestionUid = normalizeWhitespace(questionUid);
   return {
     academy_id: academyId,
     document_id: documentId,
     extract_job_id: extractJobId,
+    ...(safeQuestionUid ? { question_uid: safeQuestionUid } : {}),
     source_page: question.source_page,
     source_order: question.source_order,
     question_number: question.question_number,
@@ -2871,18 +2874,42 @@ async function processOneJob(job) {
   let partialMissingTargets = [];
   let partialUpdatedQuestionIds = [];
 
-  if (partialReextract) {
-    const { data: existingRows, error: existingErr } = await supa
-      .from('pb_questions')
-      .select('id,question_number')
-      .eq('academy_id', job.academy_id)
-      .eq('document_id', job.document_id);
-    if (existingErr) {
-      throw new Error(`partial_current_fetch_failed:${existingErr.message}`);
+  const { data: existingRows, error: existingErr } = await supa
+    .from('pb_questions')
+    .select('id,question_number,question_uid,source_order')
+    .eq('academy_id', job.academy_id)
+    .eq('document_id', job.document_id)
+    .order('source_order', { ascending: true });
+  if (existingErr) {
+    throw new Error(`current_questions_fetch_failed:${existingErr.message}`);
+  }
+  const existingById = new Map(
+    (existingRows || []).map((row) => [String(row.id || '').trim(), row]),
+  );
+  const existingQuestionUidQueueByNumber = new Map();
+  for (const row of existingRows || []) {
+    const questionNumber = normalizeWhitespace(row?.question_number || '');
+    const questionUid = normalizeWhitespace(row?.question_uid || '');
+    if (!questionNumber || !questionUid) continue;
+    const queue = existingQuestionUidQueueByNumber.get(questionNumber) || [];
+    queue.push(questionUid);
+    existingQuestionUidQueueByNumber.set(questionNumber, queue);
+  }
+  const consumeQuestionUidByQuestionNumber = (rawQuestionNumber) => {
+    const key = normalizeWhitespace(rawQuestionNumber || '');
+    if (!key) return '';
+    const queue = existingQuestionUidQueueByNumber.get(key);
+    if (!Array.isArray(queue) || queue.length === 0) return '';
+    const uid = normalizeWhitespace(queue.shift() || '');
+    if (queue.length === 0) {
+      existingQuestionUidQueueByNumber.delete(key);
+    } else {
+      existingQuestionUidQueueByNumber.set(key, queue);
     }
-    const existingById = new Map(
-      (existingRows || []).map((row) => [String(row.id || '').trim(), row]),
-    );
+    return uid;
+  };
+
+  if (partialReextract) {
     const parsedByQuestionNumber = new Map();
     for (const parsedQuestion of questions) {
       const qNo = normalizeWhitespace(parsedQuestion?.question_number || '');
@@ -2920,6 +2947,7 @@ async function processOneJob(job) {
           academyId: job.academy_id,
           documentId: job.document_id,
           extractJobId: job.id,
+          questionUid: normalizeWhitespace(current.question_uid || ''),
         }),
         updated_at: nowIso,
       });
@@ -2948,6 +2976,7 @@ async function processOneJob(job) {
             academyId: job.academy_id,
             documentId: job.document_id,
             extractJobId: job.id,
+            questionUid: consumeQuestionUidByQuestionNumber(q.question_number),
           }),
         );
         const { error: insertErr } = await supa.from('pb_questions').insert(chunk);

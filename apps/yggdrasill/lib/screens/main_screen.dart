@@ -449,6 +449,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       _homeworkChipAssignRevisionByStudent[id] = rev;
       _activeAssignmentsFutureByStudent[id] = store.loadActiveAssignments(id);
     }
+
     for (final t in waiting) {
       schedule(t);
     }
@@ -2286,7 +2287,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                                                               _SideSheetBottomView
                                                                   .allStudents
                                                           ? Icons.groups
-                                                          : Icons.groups_outlined,
+                                                          : Icons
+                                                              .groups_outlined,
                                                       color: _sideSheetBottomView ==
                                                               _SideSheetBottomView
                                                                   .allStudents
@@ -3224,14 +3226,12 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                 assignStore.peekCachedActiveAssignments(studentId);
             final loadedOnce =
                 assignStore.hasCompletedActiveAssignmentLoad(studentId);
-            final waiting =
-                snapshot.connectionState == ConnectionState.waiting;
+            final waiting = snapshot.connectionState == ConnectionState.waiting;
             // 첫 로드: 배정 응답이 오기 전에는 과제 칩을 그리지 않음(예약 과제가 한 프레임 현행으로 비침 방지).
             if (!loadedOnce && waiting && cachePeek == null) {
               return const SizedBox(height: 32);
             }
-            final assignments = snapshot.connectionState ==
-                    ConnectionState.done
+            final assignments = snapshot.connectionState == ConnectionState.done
                 ? (snapshot.data ?? const <HomeworkAssignmentDetail>[])
                 : (cachePeek ?? const <HomeworkAssignmentDetail>[]);
             final hiddenAssignedItemIds = <String>{
@@ -3712,6 +3712,7 @@ extension on _MainScreenState {
       count: (countStr == null || countStr.isEmpty)
           ? null
           : int.tryParse(countStr),
+      timeLimitMinutes: item.timeLimitMinutes,
       content: (edited['content'] as String?)?.trim(),
       bookId: item.bookId,
       gradeLabel: item.gradeLabel,

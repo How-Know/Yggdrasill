@@ -595,7 +595,7 @@ function normalizeFigureQuality(rawFigureQuality, options = {}) {
   return { targetDpi, minDpi };
 }
 
-const EXPORT_RENDER_CONFIG_VERSION = 'pb_render_v32zw_logo_overlay_left2pt';
+const EXPORT_RENDER_CONFIG_VERSION = 'pb_render_v33_ref_uid_live_release';
 const DEFAULT_TITLE_PAGE_TOP_TEXT = '2026학년도 대학수학능력시험 문제지';
 
 const QUESTION_COPY_SELECT_COLUMNS = [
@@ -637,7 +637,7 @@ const QUESTION_COPY_SELECT_COLUMNS = [
   'objective_generated',
 ].join(',');
 
-function normalizeExportRenderConfig(options, selectedQuestionIds, defaults = {}) {
+function normalizeExportRenderConfig(options, selectedQuestionUids, defaults = {}) {
   const src = options && typeof options === 'object' ? options : {};
   const layoutColumns = normalizeLayoutColumns(
     src.layoutColumns ||
@@ -677,23 +677,23 @@ function normalizeExportRenderConfig(options, selectedQuestionIds, defaults = {}
   const questionMode = normalizeQuestionMode(
     src.questionMode || src.question_mode || src.mode || defaults.questionMode,
   );
-  const selectedQuestionIdsOrdered = normalizeSelectedQuestionIdsOrdered(
-    src.selectedQuestionIdsOrdered,
-    selectedQuestionIds,
+  const selectedQuestionUidsOrdered = normalizeSelectedQuestionIdsOrdered(
+    src.selectedQuestionUidsOrdered || src.selectedQuestionIdsOrdered,
+    selectedQuestionUids,
   );
-  const questionModeByQuestionId = normalizeQuestionModeMap(
-    src.questionModeByQuestionId,
-    selectedQuestionIdsOrdered,
+  const questionModeByQuestionUid = normalizeQuestionModeMap(
+    src.questionModeByQuestionUid || src.questionModeByQuestionId,
+    selectedQuestionUidsOrdered,
     questionMode,
   );
   const includeQuestionScore = normalizeBool(
     src.includeQuestionScore ?? src.includeScore,
     normalizeBool(defaults.includeQuestionScore, false),
   );
-  const questionScoreByQuestionId = normalizeQuestionScoreMap(
-    src.questionScoreByQuestionId,
-    selectedQuestionIdsOrdered,
-    defaults.questionScoreByQuestionId,
+  const questionScoreByQuestionUid = normalizeQuestionScoreMap(
+    src.questionScoreByQuestionUid || src.questionScoreByQuestionId,
+    selectedQuestionUidsOrdered,
+    defaults.questionScoreByQuestionUid || defaults.questionScoreByQuestionId,
   );
   const subjectTitleText =
     String(src.subjectTitleText || defaults.subjectTitleText || '\uC218\uD559 \uC601\uC5ED')
@@ -749,7 +749,7 @@ function normalizeExportRenderConfig(options, selectedQuestionIds, defaults = {}
     timeLimitText,
     includeAcademyLogo,
     includeQuestionScore,
-    questionScoreByQuestionId,
+    questionScoreByQuestionUid,
     font:
       src.font && typeof src.font === 'object'
         ? {
@@ -760,8 +760,12 @@ function normalizeExportRenderConfig(options, selectedQuestionIds, defaults = {}
             family: '',
             size: 11.3,
           },
-    selectedQuestionIdsOrdered,
-    questionModeByQuestionId,
+    selectedQuestionUidsOrdered,
+    questionModeByQuestionUid,
+    // Legacy aliases kept during rollout.
+    selectedQuestionIdsOrdered: selectedQuestionUidsOrdered,
+    questionModeByQuestionId: questionModeByQuestionUid,
+    questionScoreByQuestionId: questionScoreByQuestionUid,
   };
 }
 
@@ -1274,38 +1278,42 @@ async function createExportJob(body, res) {
     return;
   }
 
-  const selectedQuestionIdsRaw = Array.isArray(body.selectedQuestionIds)
-    ? body.selectedQuestionIds.filter((v) => isUuid(v))
-    : [];
-  let selectedQuestionIds = selectedQuestionIdsRaw;
+  const selectedQuestionUidsRaw = normalizeUuidListOrdered(
+    body.selectedQuestionUids || body.selectedQuestionIds,
+  );
+  let selectedQuestionUids = selectedQuestionUidsRaw;
+  let selectedQuestionIds = [];
   let sourceDocumentIds = [];
-  if (selectedQuestionIdsRaw.length > 0) {
+  if (selectedQuestionUidsRaw.length > 0) {
     const { data: selectedRows, error: selectedErr } = await supa
       .from('pb_questions')
-      .select('id,document_id')
+      .select('id,document_id,question_uid')
       .eq('academy_id', academyId)
-      .in('id', selectedQuestionIdsRaw);
+      .in('question_uid', selectedQuestionUidsRaw);
     if (selectedErr) {
       sendJson(res, 500, {
         ok: false,
-        error: `export_selected_questions_lookup_failed:${selectedErr.message}`,
+        error: `export_selected_question_uids_lookup_failed:${selectedErr.message}`,
       });
       return;
     }
-    const rowById = new Map(
-      (selectedRows || []).map((row) => [String(row.id || ''), row]),
+    const rowByUid = new Map(
+      (selectedRows || []).map((row) => [String(row.question_uid || ''), row]),
     );
-    selectedQuestionIds = selectedQuestionIdsRaw.filter((id) => rowById.has(id));
-    if (selectedQuestionIds.length === 0) {
+    selectedQuestionUids = selectedQuestionUidsRaw.filter((uid) => rowByUid.has(uid));
+    selectedQuestionIds = selectedQuestionUids
+      .map((uid) => String(rowByUid.get(uid)?.id || '').trim())
+      .filter((id) => isUuid(id));
+    if (selectedQuestionUids.length === 0 || selectedQuestionIds.length === 0) {
       sendJson(res, 400, {
         ok: false,
-        error: 'selected_question_ids_invalid',
+        error: 'selected_question_uids_invalid',
       });
       return;
     }
     const seenDocIds = new Set();
-    for (const id of selectedQuestionIds) {
-      const row = rowById.get(id);
+    for (const uid of selectedQuestionUids) {
+      const row = rowByUid.get(uid);
       const docId = String(row?.document_id || '').trim();
       if (!isUuid(docId) || seenDocIds.has(docId)) continue;
       seenDocIds.add(docId);
@@ -1327,7 +1335,7 @@ async function createExportJob(body, res) {
     body.previewOnly,
     normalizeBool(rawOptions.previewOnly, false),
   );
-  const renderConfig = normalizeExportRenderConfig(rawOptions, selectedQuestionIds, {
+  const renderConfig = normalizeExportRenderConfig(rawOptions, selectedQuestionUids, {
     questionMode: rawOptions.questionMode || rawOptions.question_mode || rawOptions.mode,
     layoutColumns:
       rawOptions.layoutColumns ||
@@ -1348,7 +1356,8 @@ async function createExportJob(body, res) {
     includeAnswerSheet,
     includeExplanation,
     includeQuestionScore: renderConfig.includeQuestionScore === true,
-    questionScoreByQuestionId: renderConfig.questionScoreByQuestionId,
+    questionScoreByQuestionUid: renderConfig.questionScoreByQuestionUid,
+    questionScoreByQuestionId: renderConfig.questionScoreByQuestionUid,
     includeCoverPage: renderConfig.includeCoverPage,
     coverPageTexts: renderConfig.coverPageTexts,
     layoutColumns: renderConfig.layoutColumns,
@@ -1368,8 +1377,10 @@ async function createExportJob(body, res) {
     font: renderConfig.font,
     layoutTuning: renderConfig.layoutTuning,
     figureQuality: renderConfig.figureQuality,
-    selectedQuestionIdsOrdered: renderConfig.selectedQuestionIdsOrdered,
-    questionModeByQuestionId: renderConfig.questionModeByQuestionId,
+    selectedQuestionUidsOrdered: renderConfig.selectedQuestionUidsOrdered,
+    selectedQuestionIdsOrdered: renderConfig.selectedQuestionUidsOrdered,
+    questionModeByQuestionUid: renderConfig.questionModeByQuestionUid,
+    questionModeByQuestionId: renderConfig.questionModeByQuestionUid,
   };
   const renderHash = computeRenderHash(renderHashPayload);
 
@@ -1382,7 +1393,8 @@ async function createExportJob(body, res) {
     includeAnswerSheet,
     includeExplanation,
     includeQuestionScore: renderConfig.includeQuestionScore === true,
-    questionScoreByQuestionId: renderConfig.questionScoreByQuestionId,
+    questionScoreByQuestionUid: renderConfig.questionScoreByQuestionUid,
+    questionScoreByQuestionId: renderConfig.questionScoreByQuestionUid,
     includeCoverPage: renderConfig.includeCoverPage,
     coverPageTexts: renderConfig.coverPageTexts,
     layoutColumns: renderConfig.layoutColumns,
@@ -1402,8 +1414,10 @@ async function createExportJob(body, res) {
     layoutTuning: renderConfig.layoutTuning,
     figureQuality: renderConfig.figureQuality,
     font: renderConfig.font,
-    selectedQuestionIdsOrdered: renderConfig.selectedQuestionIdsOrdered,
-    questionModeByQuestionId: renderConfig.questionModeByQuestionId,
+    selectedQuestionUidsOrdered: renderConfig.selectedQuestionUidsOrdered,
+    selectedQuestionIdsOrdered: renderConfig.selectedQuestionUidsOrdered,
+    questionModeByQuestionUid: renderConfig.questionModeByQuestionUid,
+    questionModeByQuestionId: renderConfig.questionModeByQuestionUid,
     renderHash,
     previewOnly,
   };
@@ -1662,13 +1676,201 @@ async function cleanupExportArtifact(jobId, body, res) {
   sendJson(res, 200, { ok: true, job: updated });
 }
 
+function normalizeSignedUrlTtlSeconds(raw, fallbackSeconds = 60 * 15) {
+  const parsed = Number.parseInt(String(raw ?? ''), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallbackSeconds;
+  return Math.max(60, Math.min(60 * 60 * 24 * 7, parsed));
+}
+
+async function regenerateExportSignedUrl(exportJobId, url, res) {
+  const academyId = String(url.searchParams.get('academyId') || '').trim();
+  if (!isUuid(academyId) || !isUuid(exportJobId)) {
+    sendJson(res, 400, { ok: false, error: 'academyId/exportJobId must be uuid' });
+    return;
+  }
+  const ttlSeconds = normalizeSignedUrlTtlSeconds(url.searchParams.get('ttlSeconds'));
+  const { data: job, error: jobErr } = await supa
+    .from('pb_exports')
+    .select('*')
+    .eq('id', exportJobId)
+    .eq('academy_id', academyId)
+    .maybeSingle();
+  if (jobErr) {
+    sendJson(res, 500, { ok: false, error: `export_job_lookup_failed:${jobErr.message}` });
+    return;
+  }
+  if (!job) {
+    sendJson(res, 404, { ok: false, error: 'export_job_not_found' });
+    return;
+  }
+  if (String(job.status || '').trim() !== 'completed') {
+    sendJson(res, 409, { ok: false, error: 'export_job_not_completed' });
+    return;
+  }
+  const bucket = String(job.output_storage_bucket || 'problem-exports').trim() || 'problem-exports';
+  const path = String(job.output_storage_path || '').trim();
+  if (!path) {
+    sendJson(res, 409, { ok: false, error: 'export_output_path_empty' });
+    return;
+  }
+  const { data: signed, error: signErr } = await supa.storage
+    .from(bucket)
+    .createSignedUrl(path, ttlSeconds);
+  if (signErr) {
+    sendJson(res, 500, { ok: false, error: `export_signed_url_failed:${signErr.message}` });
+    return;
+  }
+  const signedUrl = String(signed?.signedUrl || '').trim();
+  if (!signedUrl) {
+    sendJson(res, 500, { ok: false, error: 'export_signed_url_empty' });
+    return;
+  }
+
+  const nowIso = new Date().toISOString();
+  const summary = normalizeJsonObject(job.result_summary, {});
+  const issuedCountRaw = Number.parseInt(
+    String(summary.signed_url_issued_count ?? summary.signedUrlIssuedCount ?? '0'),
+    10,
+  );
+  const issuedCount = Number.isFinite(issuedCountRaw) && issuedCountRaw > 0
+    ? issuedCountRaw + 1
+    : 1;
+  try {
+    await supa
+      .from('pb_exports')
+      .update({
+        updated_at: nowIso,
+        result_summary: {
+          ...summary,
+          signed_url_issued_count: issuedCount,
+          signed_url_last_issued_at: nowIso,
+        },
+      })
+      .eq('id', exportJobId)
+      .eq('academy_id', academyId);
+  } catch (_) {
+    // audit update best-effort
+  }
+
+  sendJson(res, 200, {
+    ok: true,
+    exportJobId,
+    signedUrl,
+    expiresInSeconds: ttlSeconds,
+    outputStorageBucket: bucket,
+    outputStoragePath: path,
+  });
+}
+
+function isSavedSettingsDocumentMeta(rawMeta) {
+  const meta = normalizeJsonObject(rawMeta, {});
+  const saved = meta.saved_settings || meta.savedSettings;
+  return saved && typeof saved === 'object';
+}
+
+async function cleanupLegacySavedSettings(body, res) {
+  const academyId = String(body?.academyId || '').trim();
+  if (!isUuid(academyId)) {
+    sendJson(res, 400, { ok: false, error: 'academyId must be uuid' });
+    return;
+  }
+  const dryRun = normalizeBool(body?.dryRun, true);
+  const limit = normalizeLimit(body?.limit, 300, 5000);
+  const { data: rows, error: listErr } = await supa
+    .from('pb_documents')
+    .select('id,source_filename,created_at,meta')
+    .eq('academy_id', academyId)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (listErr) {
+    sendJson(res, 500, { ok: false, error: `legacy_documents_list_failed:${listErr.message}` });
+    return;
+  }
+  const legacyDocs = (rows || [])
+    .filter((row) => isSavedSettingsDocumentMeta(row?.meta))
+    .map((row) => ({
+      id: String(row?.id || '').trim(),
+      sourceFilename: String(row?.source_filename || '').trim(),
+      createdAt: row?.created_at || null,
+    }))
+    .filter((row) => isUuid(row.id));
+
+  if (legacyDocs.length === 0) {
+    sendJson(res, 200, {
+      ok: true,
+      dryRun,
+      scanned: Number(rows?.length || 0),
+      legacyDocumentCount: 0,
+      deletedDocumentCount: 0,
+      deletedPresetCount: 0,
+      documents: [],
+    });
+    return;
+  }
+
+  if (dryRun) {
+    sendJson(res, 200, {
+      ok: true,
+      dryRun: true,
+      scanned: Number(rows?.length || 0),
+      legacyDocumentCount: legacyDocs.length,
+      deletedDocumentCount: 0,
+      deletedPresetCount: 0,
+      documents: legacyDocs,
+    });
+    return;
+  }
+
+  const legacyIds = legacyDocs.map((row) => row.id);
+  let deletedPresetCount = 0;
+  for (const idChunk of chunkArray(legacyIds, 200)) {
+    const { data: deletedPresets } = await supa
+      .from('pb_export_presets')
+      .delete()
+      .eq('academy_id', academyId)
+      .in('document_id', idChunk)
+      .select('id');
+    deletedPresetCount += Number(Array.isArray(deletedPresets) ? deletedPresets.length : 0);
+  }
+  let deletedDocumentCount = 0;
+  for (const idChunk of chunkArray(legacyIds, 150)) {
+    const { data: deletedDocs, error: delErr } = await supa
+      .from('pb_documents')
+      .delete()
+      .eq('academy_id', academyId)
+      .in('id', idChunk)
+      .select('id');
+    if (delErr) {
+      sendJson(res, 500, {
+        ok: false,
+        error: `legacy_documents_delete_failed:${delErr.message}`,
+      });
+      return;
+    }
+    deletedDocumentCount += Number(Array.isArray(deletedDocs) ? deletedDocs.length : 0);
+  }
+
+  sendJson(res, 200, {
+    ok: true,
+    dryRun: false,
+    scanned: Number(rows?.length || 0),
+    legacyDocumentCount: legacyDocs.length,
+    deletedDocumentCount,
+    deletedPresetCount,
+    documents: legacyDocs,
+  });
+}
+
 async function saveSettingsAsDocument(body, res) {
   const academyId = String(body.academyId || '').trim();
   const sourceDocumentId = String(body.sourceDocumentId || '').trim();
   const createdBy = String(body.createdBy || '').trim();
   const rawDisplayName = body.displayName;
   const rawRenderConfig = normalizeJsonObject(body.renderConfig, {});
-  const selectedQuestionIdsOrdered = normalizeUuidListOrdered(
+  const selectedQuestionUidsOrderedInput = normalizeUuidListOrdered(
+    body.selectedQuestionUidsOrdered || body.selectedQuestionUids,
+  );
+  const selectedQuestionIdsOrderedInput = normalizeUuidListOrdered(
     body.selectedQuestionIdsOrdered || body.selectedQuestionIds,
   );
   if (!isUuid(academyId) || !isUuid(sourceDocumentId)) {
@@ -1678,10 +1880,13 @@ async function saveSettingsAsDocument(body, res) {
     });
     return;
   }
-  if (selectedQuestionIdsOrdered.length === 0) {
+  if (
+    selectedQuestionUidsOrderedInput.length === 0
+    && selectedQuestionIdsOrderedInput.length === 0
+  ) {
     sendJson(res, 400, {
       ok: false,
-      error: 'selectedQuestionIdsOrdered must be uuid[]',
+      error: 'selectedQuestionUidsOrdered or selectedQuestionIdsOrdered must be uuid[]',
     });
     return;
   }
@@ -1692,287 +1897,158 @@ async function saveSettingsAsDocument(body, res) {
     return;
   }
 
-  const sourceQuestionRowsById = new Map();
-  for (const idChunk of chunkArray(selectedQuestionIdsOrdered, 200)) {
-    const { data: rows, error: rowErr } = await supa
-      .from('pb_questions')
-      .select(QUESTION_COPY_SELECT_COLUMNS)
-      .eq('academy_id', academyId)
-      .in('id', idChunk);
-    if (rowErr) {
-      sendJson(res, 500, {
+  try {
+    const sourceQuestionRowsByUid = new Map();
+    const sourceQuestionRowsById = new Map();
+    if (selectedQuestionUidsOrderedInput.length > 0) {
+      for (const uidChunk of chunkArray(selectedQuestionUidsOrderedInput, 200)) {
+        const { data: rows, error: rowErr } = await supa
+          .from('pb_questions')
+          .select('id,question_uid,document_id')
+          .eq('academy_id', academyId)
+          .in('question_uid', uidChunk);
+        if (rowErr) {
+          sendJson(res, 500, {
+            ok: false,
+            error: `save_settings_question_uid_lookup_failed:${rowErr.message}`,
+          });
+          return;
+        }
+        for (const row of rows || []) {
+          const uid = String(row?.question_uid || '').trim();
+          if (!isUuid(uid)) continue;
+          sourceQuestionRowsByUid.set(uid, row);
+        }
+      }
+    } else {
+      for (const idChunk of chunkArray(selectedQuestionIdsOrderedInput, 200)) {
+        const { data: rows, error: rowErr } = await supa
+          .from('pb_questions')
+          .select('id,question_uid,document_id')
+          .eq('academy_id', academyId)
+          .in('id', idChunk);
+        if (rowErr) {
+          sendJson(res, 500, {
+            ok: false,
+            error: `save_settings_question_id_lookup_failed:${rowErr.message}`,
+          });
+          return;
+        }
+        for (const row of rows || []) {
+          const id = String(row?.id || '').trim();
+          if (!isUuid(id)) continue;
+          sourceQuestionRowsById.set(id, row);
+        }
+      }
+    }
+
+    const orderedSourceRows = [];
+    const missingQuestionUids = [];
+    const missingQuestionIds = [];
+    if (selectedQuestionUidsOrderedInput.length > 0) {
+      for (const uid of selectedQuestionUidsOrderedInput) {
+        const row = sourceQuestionRowsByUid.get(uid);
+        if (!row) {
+          missingQuestionUids.push(uid);
+          continue;
+        }
+        orderedSourceRows.push(row);
+      }
+    } else {
+      for (const id of selectedQuestionIdsOrderedInput) {
+        const row = sourceQuestionRowsById.get(id);
+        if (!row) {
+          missingQuestionIds.push(id);
+          continue;
+        }
+        orderedSourceRows.push(row);
+      }
+    }
+    if (missingQuestionUids.length > 0) {
+      sendJson(res, 404, {
         ok: false,
-        error: `save_settings_question_lookup_failed:${rowErr.message}`,
+        error: 'selected_question_uids_not_found',
+        missingQuestionUids: missingQuestionUids,
       });
       return;
     }
-    for (const row of rows || []) {
-      const id = String(row?.id || '').trim();
-      if (!isUuid(id)) continue;
-      sourceQuestionRowsById.set(id, row);
+    if (missingQuestionIds.length > 0) {
+      sendJson(res, 404, {
+        ok: false,
+        error: 'selected_question_ids_not_found',
+        missingQuestionIds: missingQuestionIds,
+      });
+      return;
     }
-  }
-
-  const orderedSourceRows = [];
-  const missingIds = [];
-  for (const id of selectedQuestionIdsOrdered) {
-    const row = sourceQuestionRowsById.get(id);
-    if (!row) {
-      missingIds.push(id);
-      continue;
+    if (orderedSourceRows.length === 0) {
+      sendJson(res, 400, {
+        ok: false,
+        error: 'selected_questions_empty_after_validation',
+      });
+      return;
     }
-    orderedSourceRows.push(row);
-  }
-  if (missingIds.length > 0) {
-    sendJson(res, 404, {
-      ok: false,
-      error: 'selected_questions_not_found',
-      missingQuestionIds: missingIds,
-    });
-    return;
-  }
 
-  const nowIso = new Date().toISOString();
-  const sourceDocMeta = normalizeJsonObject(sourceDoc.meta, {});
-  const sourceQuestionDocIds = Array.from(
-    new Set(
-      orderedSourceRows
-        .map((row) => String(row?.document_id || '').trim())
-        .filter((id) => isUuid(id)),
-    ),
-  );
-
-  const templateProfile = normalizeTemplateProfile(
-    body.templateProfile || rawRenderConfig.templateProfile || sourceDoc.exam_profile,
-  );
-  const paperSize = normalizePaper(
-    body.paperSize || rawRenderConfig.paperSize || 'A4',
-  );
-  const includeAnswerSheet = normalizeBool(
-    body.includeAnswerSheet ?? rawRenderConfig.includeAnswerSheet,
-    true,
-  );
-  const includeExplanation = normalizeBool(
-    body.includeExplanation ?? rawRenderConfig.includeExplanation,
-    false,
-  );
-  const includeQuestionScore = normalizeBool(
-    body.includeQuestionScore ?? rawRenderConfig.includeQuestionScore,
-    false,
-  );
-  const fallbackQuestionMode = normalizeQuestionMode(
-    body.questionMode || rawRenderConfig.questionMode || 'original',
-  );
-  const sourceQuestionModeByQuestionId = normalizeQuestionModeMap(
-    body.questionModeByQuestionId,
-    selectedQuestionIdsOrdered,
-    fallbackQuestionMode,
-  );
-  const sourceQuestionScoreByQuestionId = normalizeQuestionScoreMap(
-    body.questionScoreByQuestionId || rawRenderConfig.questionScoreByQuestionId,
-    selectedQuestionIdsOrdered,
-  );
-
-  const sourceStorageBucket = String(sourceDoc.source_storage_bucket || '').trim()
-    || 'problem-documents';
-  const sourceStoragePath = String(sourceDoc.source_storage_path || '').trim()
-    || `${academyId}/saved_settings/${Date.now()}_${sourceDocumentId}.hwpx`;
-  const sourceSha256 = String(sourceDoc.source_sha256 || '').trim();
-  const sourceSizeBytesRaw = Number.parseInt(
-    String(sourceDoc.source_size_bytes ?? '0'),
-    10,
-  );
-  const sourceSizeBytes = Number.isFinite(sourceSizeBytesRaw) && sourceSizeBytesRaw > 0
-    ? sourceSizeBytesRaw
-    : 0;
-  const examYearRaw = Number.parseInt(String(sourceDoc.exam_year ?? ''), 10);
-  const examYear = Number.isFinite(examYearRaw) && examYearRaw > 0 ? examYearRaw : null;
-  const sourceTypeCode = normalizeSourceTypeCode(
-    sourceDoc.source_type_code,
-    'school_past',
-  ) || 'school_past';
-  const curriculumCode = normalizeCurriculumCode(
-    sourceDoc.curriculum_code,
-    'rev_2022',
-  ) || 'rev_2022';
-
-  let createdDocumentId = '';
-  try {
-    const derivedMeta = {
-      ...sourceDocMeta,
-      saved_settings: {
-        sourceDocumentId,
-        sourceDocumentIds: sourceQuestionDocIds,
-        selectedQuestionCount: selectedQuestionIdsOrdered.length,
-        createdAt: nowIso,
-      },
-    };
-    const { data: createdDocument, error: createDocErr } = await supa
-      .from('pb_documents')
-      .insert({
-        academy_id: academyId,
-        created_by: isUuid(createdBy) ? createdBy : null,
-        source_filename: buildDerivedSourceFilename(sourceDoc.source_filename),
-        source_storage_bucket: sourceStorageBucket,
-        source_storage_path: sourceStoragePath,
-        source_sha256: sourceSha256,
-        source_size_bytes: sourceSizeBytes,
-        status: 'ready',
-        exam_profile: templateProfile,
-        meta: derivedMeta,
-        curriculum_code: curriculumCode,
-        source_type_code: sourceTypeCode,
-        course_label: String(sourceDoc.course_label || '').trim(),
-        grade_label: String(sourceDoc.grade_label || '').trim(),
-        exam_year: examYear,
-        semester_label: normalizeSemesterLabel(sourceDoc.semester_label),
-        exam_term_label: normalizeExamTermLabel(sourceDoc.exam_term_label),
-        school_name: String(sourceDoc.school_name || '').trim(),
-        publisher_name: String(sourceDoc.publisher_name || '').trim(),
-        material_name: String(sourceDoc.material_name || '').trim(),
-        classification_detail: normalizeJsonObject(sourceDoc.classification_detail, {}),
+    const selectedQuestionIdsOrdered = orderedSourceRows
+      .map((row) => String(row?.id || '').trim())
+      .filter((id) => isUuid(id));
+    const selectedQuestionUidsOrdered = orderedSourceRows
+      .map((row) => {
+        const uid = String(row?.question_uid || '').trim();
+        if (isUuid(uid)) return uid;
+        return String(row?.id || '').trim();
       })
-      .select('*')
-      .maybeSingle();
-    if (createDocErr || !createdDocument) {
-      throw new Error(
-        `save_settings_document_insert_failed:${createDocErr?.message || 'unknown'}`,
-      );
-    }
-    createdDocumentId = String(createdDocument.id || '').trim();
-    if (!isUuid(createdDocumentId)) {
-      throw new Error('save_settings_document_id_invalid');
-    }
-
-    const questionInsertRows = orderedSourceRows.map((row, index) => {
-      const nextOrder = index + 1;
-      const confidenceRaw = Number.parseFloat(String(row?.confidence ?? '0'));
-      const confidence = Number.isFinite(confidenceRaw)
-        ? Math.max(0, Math.min(1, confidenceRaw))
-        : 0;
-      const rowMeta = normalizeJsonObject(row?.meta, {});
-      const rowSourceTypeCode = normalizeSourceTypeCode(
-        row?.source_type_code,
-        sourceTypeCode,
-      ) || sourceTypeCode;
-      const rowCurriculumCode = normalizeCurriculumCode(
-        row?.curriculum_code,
-        curriculumCode,
-      ) || curriculumCode;
-      const rowExamYearRaw = Number.parseInt(String(row?.exam_year ?? ''), 10);
-      const rowExamYear = Number.isFinite(rowExamYearRaw) && rowExamYearRaw > 0
-        ? rowExamYearRaw
-        : examYear;
-      return {
-        academy_id: academyId,
-        document_id: createdDocumentId,
-        extract_job_id: null,
-        source_page: 1,
-        source_order: nextOrder,
-        question_number: `${nextOrder}`,
-        question_type: String(row?.question_type || '미분류').trim() || '미분류',
-        stem: String(row?.stem || '').trim(),
-        choices: normalizeJsonArray(row?.choices, []),
-        figure_refs: normalizeJsonArray(row?.figure_refs, []),
-        equations: normalizeJsonArray(row?.equations, []),
-        source_anchors: normalizeJsonObject(row?.source_anchors, {}),
-        confidence,
-        flags: Array.isArray(row?.flags)
-          ? row.flags.map((one) => String(one || '')).filter(Boolean)
-          : [],
-        is_checked: row?.is_checked === true,
-        reviewed_by: isUuid(row?.reviewed_by) ? row.reviewed_by : null,
-        reviewed_at: row?.reviewed_at || null,
-        reviewer_notes: String(row?.reviewer_notes || '').trim(),
-        meta: {
-          ...rowMeta,
-          derived_source_question_id: String(row?.id || '').trim(),
-          derived_source_document_id: String(row?.document_id || '').trim(),
-          saved_settings_at: nowIso,
-        },
-        curriculum_code: rowCurriculumCode,
-        source_type_code: rowSourceTypeCode,
-        course_label: String(row?.course_label || sourceDoc.course_label || '').trim(),
-        grade_label: String(row?.grade_label || sourceDoc.grade_label || '').trim(),
-        exam_year: rowExamYear,
-        semester_label: normalizeSemesterLabel(
-          row?.semester_label || sourceDoc.semester_label,
-        ),
-        exam_term_label: normalizeExamTermLabel(
-          row?.exam_term_label || sourceDoc.exam_term_label,
-        ),
-        school_name: String(row?.school_name || sourceDoc.school_name || '').trim(),
-        publisher_name: String(
-          row?.publisher_name || sourceDoc.publisher_name || '',
-        ).trim(),
-        material_name: String(row?.material_name || sourceDoc.material_name || '').trim(),
-        classification_detail: normalizeJsonObject(row?.classification_detail, {}),
-        allow_objective: row?.allow_objective !== false,
-        allow_subjective: row?.allow_subjective !== false,
-        objective_choices: normalizeJsonArray(
-          row?.objective_choices,
-          normalizeJsonArray(row?.choices, []),
-        ),
-        objective_answer_key: String(row?.objective_answer_key || '').trim(),
-        subjective_answer: String(row?.subjective_answer || '').trim(),
-        objective_generated: row?.objective_generated === true,
-      };
-    });
-
-    const insertedQuestionRows = [];
-    for (const rowChunk of chunkArray(questionInsertRows, 120)) {
-      const { data: insertedRows, error: insertErr } = await supa
-        .from('pb_questions')
-        .insert(rowChunk)
-        .select('id,source_order,question_number');
-      if (insertErr) {
-        throw new Error(
-          `save_settings_question_insert_failed:${insertErr.message}`,
-        );
-      }
-      insertedQuestionRows.push(...(insertedRows || []));
-    }
-
-    const insertedIdBySourceOrder = new Map();
-    for (const inserted of insertedQuestionRows) {
-      const sourceOrder = Number.parseInt(String(inserted?.source_order ?? ''), 10);
-      const insertedId = String(inserted?.id || '').trim();
-      if (!Number.isFinite(sourceOrder) || sourceOrder <= 0 || !isUuid(insertedId)) {
-        continue;
-      }
-      insertedIdBySourceOrder.set(sourceOrder, insertedId);
-    }
-
-    const savedQuestionIdsOrdered = [];
-    const translatedQuestionModeByQuestionId = {};
-    const translatedQuestionScoreByQuestionId = {};
-    for (let i = 0; i < selectedQuestionIdsOrdered.length; i += 1) {
-      const sourceQuestionId = selectedQuestionIdsOrdered[i];
-      const sourceOrder = i + 1;
-      const insertedId = insertedIdBySourceOrder.get(sourceOrder);
-      if (!isUuid(insertedId)) {
-        throw new Error('save_settings_inserted_question_id_missing');
-      }
-      savedQuestionIdsOrdered.push(insertedId);
-      translatedQuestionModeByQuestionId[insertedId] = normalizeQuestionMode(
-        sourceQuestionModeByQuestionId[sourceQuestionId] || fallbackQuestionMode,
-      );
-      const sourceScore = sourceQuestionScoreByQuestionId[sourceQuestionId];
-      if (Number.isFinite(sourceScore) && sourceScore >= 0) {
-        translatedQuestionScoreByQuestionId[insertedId] = sourceScore;
-      }
-    }
+      .filter((uid) => isUuid(uid));
+    const sourceQuestionDocIds = Array.from(
+      new Set(
+        orderedSourceRows
+          .map((row) => String(row?.document_id || '').trim())
+          .filter((id) => isUuid(id)),
+      ),
+    );
+    const templateProfile = normalizeTemplateProfile(
+      body.templateProfile || rawRenderConfig.templateProfile || sourceDoc.exam_profile,
+    );
+    const paperSize = normalizePaper(
+      body.paperSize || rawRenderConfig.paperSize || 'A4',
+    );
+    const includeAnswerSheet = normalizeBool(
+      body.includeAnswerSheet ?? rawRenderConfig.includeAnswerSheet,
+      true,
+    );
+    const includeExplanation = normalizeBool(
+      body.includeExplanation ?? rawRenderConfig.includeExplanation,
+      false,
+    );
+    const includeQuestionScore = normalizeBool(
+      body.includeQuestionScore ?? rawRenderConfig.includeQuestionScore,
+      false,
+    );
+    const fallbackQuestionMode = normalizeQuestionMode(
+      body.questionMode || rawRenderConfig.questionMode || 'original',
+    );
+    const sourceQuestionModeByQuestionUid = normalizeQuestionModeMap(
+      body.questionModeByQuestionUid || body.questionModeByQuestionId,
+      selectedQuestionUidsOrdered,
+      fallbackQuestionMode,
+    );
+    const sourceQuestionScoreByQuestionUid = normalizeQuestionScoreMap(
+      body.questionScoreByQuestionUid
+        || body.questionScoreByQuestionId
+        || rawRenderConfig.questionScoreByQuestionUid
+        || rawRenderConfig.questionScoreByQuestionId,
+      selectedQuestionUidsOrdered,
+    );
 
     const normalizedRenderConfig = normalizeExportRenderConfig(
       {
         ...rawRenderConfig,
         questionMode: fallbackQuestionMode,
-        selectedQuestionIdsOrdered: savedQuestionIdsOrdered,
-        questionModeByQuestionId: translatedQuestionModeByQuestionId,
+        selectedQuestionUidsOrdered,
+        questionModeByQuestionUid: sourceQuestionModeByQuestionUid,
         includeQuestionScore,
-        questionScoreByQuestionId: translatedQuestionScoreByQuestionId,
+        questionScoreByQuestionUid: sourceQuestionScoreByQuestionUid,
       },
-      savedQuestionIdsOrdered,
+      selectedQuestionUidsOrdered,
       {
         questionMode: fallbackQuestionMode,
         subjectTitleText:
@@ -1988,7 +2064,7 @@ async function saveSettingsAsDocument(body, res) {
         includeCoverPage: normalizeBool(rawRenderConfig.includeCoverPage, false),
         coverPageTexts: normalizeJsonObject(rawRenderConfig.coverPageTexts, {}),
         includeQuestionScore,
-        questionScoreByQuestionId: translatedQuestionScoreByQuestionId,
+        questionScoreByQuestionUid: sourceQuestionScoreByQuestionUid,
       },
     );
 
@@ -1999,59 +2075,53 @@ async function saveSettingsAsDocument(body, res) {
       includeAnswerSheet,
       includeExplanation,
       includeQuestionScore,
-      selectedQuestionIdsOrdered: savedQuestionIdsOrdered,
-      questionModeByQuestionId: translatedQuestionModeByQuestionId,
-      questionScoreByQuestionId: translatedQuestionScoreByQuestionId,
+      selectedQuestionUidsOrdered,
+      questionModeByQuestionUid: sourceQuestionModeByQuestionUid,
+      questionScoreByQuestionUid: sourceQuestionScoreByQuestionUid,
+      // Legacy aliases kept during rollout.
+      selectedQuestionIdsOrdered: selectedQuestionUidsOrdered,
+      questionModeByQuestionId: sourceQuestionModeByQuestionUid,
+      questionScoreByQuestionId: sourceQuestionScoreByQuestionUid,
     };
     const presetDisplayName = normalizePresetDisplayName(
       rawDisplayName,
-      String(createdDocument.source_filename || '').trim()
-        || buildDerivedSourceFilename(sourceDoc.source_filename),
+      String(sourceDoc.source_filename || '').trim() || '문제은행 프리셋',
     );
 
     const { data: preset, error: presetErr } = await supa
       .from('pb_export_presets')
-      .upsert(
-        {
-          academy_id: academyId,
-          source_document_id: sourceDocumentId,
-          document_id: createdDocumentId,
-          render_config: renderConfig,
-          selected_question_ids: savedQuestionIdsOrdered,
-          question_mode_by_question_id: translatedQuestionModeByQuestionId,
-          display_name: presetDisplayName,
-          created_by: isUuid(createdBy) ? createdBy : null,
-        },
-        { onConflict: 'academy_id,document_id' },
-      )
+      .insert({
+        academy_id: academyId,
+        source_document_id: sourceDocumentId,
+        document_id: null,
+        source_document_ids: sourceQuestionDocIds,
+        render_config: renderConfig,
+        selected_question_uids: selectedQuestionUidsOrdered,
+        selected_question_ids: selectedQuestionIdsOrdered,
+        question_mode_by_question_uid: sourceQuestionModeByQuestionUid,
+        question_mode_by_question_id: sourceQuestionModeByQuestionUid,
+        display_name: presetDisplayName,
+        created_by: isUuid(createdBy) ? createdBy : null,
+      })
       .select('*')
       .maybeSingle();
     if (presetErr || !preset) {
       throw new Error(
-        `save_settings_preset_insert_failed:${presetErr?.message || 'unknown'}`,
+        `save_settings_preset_save_failed:${presetErr?.message || 'unknown'}`,
       );
     }
 
     sendJson(res, 201, {
       ok: true,
-      document: createdDocument,
       preset,
-      copiedQuestionCount: savedQuestionIdsOrdered.length,
-      selectedQuestionIds: savedQuestionIdsOrdered,
+      copiedQuestionCount: 0,
+      selectedQuestionIds: selectedQuestionIdsOrdered,
+      selectedQuestionUids: selectedQuestionUidsOrdered,
       sourceDocumentIds: sourceQuestionDocIds,
+      sourceDocumentId,
+      mode: 'reference_preset',
     });
   } catch (err) {
-    if (createdDocumentId) {
-      try {
-        await supa
-          .from('pb_documents')
-          .delete()
-          .eq('academy_id', academyId)
-          .eq('id', createdDocumentId);
-      } catch (_) {
-        // ignore rollback failures
-      }
-    }
     sendJson(res, 500, {
       ok: false,
       error: `save_settings_failed:${compact(err?.message || err, 400)}`,
@@ -2074,7 +2144,12 @@ async function getDocumentExportPreset(documentId, url, res) {
     .from('pb_export_presets')
     .select('*')
     .eq('academy_id', academyId)
-    .eq('document_id', documentId)
+    .or(
+      [
+        `source_document_id.eq.${documentId}`,
+        `source_document_ids.cs.{${documentId}}`,
+      ].join(','),
+    )
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -2105,10 +2180,13 @@ async function listExportPresets(url, res) {
         'id',
         'academy_id',
         'source_document_id',
+        'source_document_ids',
         'document_id',
         'display_name',
         'render_config',
+        'selected_question_uids',
         'selected_question_ids',
+        'question_mode_by_question_uid',
         'question_mode_by_question_id',
         'created_at',
         'updated_at',
@@ -2127,6 +2205,9 @@ async function listExportPresets(url, res) {
       (rows || [])
         .flatMap((row) => [
           String(row?.source_document_id || '').trim(),
+          ...(Array.isArray(row?.source_document_ids)
+            ? row.source_document_ids.map((one) => String(one || '').trim())
+            : []),
           String(row?.document_id || '').trim(),
         ])
         .filter((id) => isUuid(id)),
@@ -2155,27 +2236,45 @@ async function listExportPresets(url, res) {
 
   const presets = (rows || []).map((row) => {
     const sourceDocumentId = String(row?.source_document_id || '').trim();
+    const sourceDocumentIds = Array.isArray(row?.source_document_ids)
+      ? row.source_document_ids
+        .map((one) => String(one || '').trim())
+        .filter((id) => isUuid(id))
+      : [];
     const documentId = String(row?.document_id || '').trim();
     const renderConfig = normalizeJsonObject(row?.render_config, {});
+    const selectedQuestionUids = Array.isArray(row?.selected_question_uids)
+      ? row.selected_question_uids
+      : [];
     const selectedQuestionIds = Array.isArray(row?.selected_question_ids)
       ? row.selected_question_ids
       : [];
-    const fallbackName = documentNameMap.get(documentId)
+    const fallbackName = documentNameMap.get(sourceDocumentId)
+      || documentNameMap.get(sourceDocumentIds[0])
+      || documentNameMap.get(documentId)
       || `세팅저장 ${String(row?.created_at || '').slice(0, 10)}`;
+    const questionModeByQuestionUid = normalizeJsonObject(
+      row?.question_mode_by_question_uid || row?.question_mode_by_question_id,
+      {},
+    );
     return {
       id: String(row?.id || '').trim(),
       academyId: String(row?.academy_id || '').trim(),
       sourceDocumentId,
+      sourceDocumentIds,
       documentId,
       displayName: normalizePresetDisplayName(row?.display_name, fallbackName),
-      sourceDocumentName: documentNameMap.get(sourceDocumentId) || '',
+      sourceDocumentName:
+        documentNameMap.get(sourceDocumentId)
+        || documentNameMap.get(sourceDocumentIds[0])
+        || '',
       documentName: documentNameMap.get(documentId) || '',
-      selectedQuestionCount: selectedQuestionIds.length,
+      selectedQuestionUids,
+      selectedQuestionIds: selectedQuestionUids,
+      selectedQuestionCount: selectedQuestionUids.length || selectedQuestionIds.length,
       renderConfig,
-      questionModeByQuestionId: normalizeJsonObject(
-        row?.question_mode_by_question_id,
-        {},
-      ),
+      questionModeByQuestionUid,
+      questionModeByQuestionId: questionModeByQuestionUid,
       templateProfile: String(renderConfig.templateProfile || '').trim(),
       paperSize: String(renderConfig.paperSize || '').trim(),
       includeAnswerSheet: renderConfig.includeAnswerSheet === true,
@@ -2593,6 +2692,11 @@ async function handler(req, res) {
       await getExportJob(jobId, url, res);
       return;
     }
+    if (method === 'GET' && /^\/pb\/jobs\/export\/[^/]+\/signed-url$/.test(url.pathname)) {
+      const jobId = url.pathname.split('/')[4];
+      await regenerateExportSignedUrl(jobId, url, res);
+      return;
+    }
 
     if (method === 'POST' && url.pathname === '/pb/documents/save-settings') {
       const body = await readJson(req);
@@ -2618,6 +2722,11 @@ async function handler(req, res) {
       const presetId = url.pathname.split('/')[3];
       const body = await readJson(req);
       await deleteExportPreset(presetId, body, res);
+      return;
+    }
+    if (method === 'POST' && url.pathname === '/pb/admin/cleanup-legacy-saved-settings') {
+      const body = await readJson(req);
+      await cleanupLegacySavedSettings(body, res);
       return;
     }
 

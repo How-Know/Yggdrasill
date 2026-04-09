@@ -10,14 +10,14 @@ class ProblemBankExportLayoutPage extends StatelessWidget {
     required this.page,
     required this.settings,
     required this.figureUrlsByQuestionId,
-    required this.questionModeByQuestionId,
+    required this.questionModeByQuestionUid,
   });
 
   final int pageIndex;
   final LearningProblemLayoutPreviewPage page;
   final LearningProblemExportSettings settings;
   final Map<String, Map<String, String>> figureUrlsByQuestionId;
-  final Map<String, String> questionModeByQuestionId;
+  final Map<String, String> questionModeByQuestionUid;
 
   static const _field = Color(0xFF10171A);
   static const _border = Color(0xFF223131);
@@ -59,7 +59,7 @@ class ProblemBankExportLayoutPage extends StatelessWidget {
                   page: page,
                   settings: settings,
                   figureUrlsByQuestionId: figureUrlsByQuestionId,
-                  questionModeByQuestionId: questionModeByQuestionId,
+                  questionModeByQuestionUid: questionModeByQuestionUid,
                 ),
               ),
             ),

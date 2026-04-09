@@ -40,7 +40,8 @@ class ProblemBankQuestionCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: color.cardBg,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: color.border, width: selected ? 1.4 : 1),
+        // 선택 시에도 테두리 두께를 동일하게 유지해 안쪽 레이아웃이 밀리지 않게 함
+        border: Border.all(color: color.border, width: 2),
         boxShadow: color.boxShadow,
       ),
       child: Column(
@@ -320,7 +321,7 @@ _CardPalette _palette({
     );
   }
   return _CardPalette(
-    cardBg: selected ? const Color(0xFF1B272A) : const Color(0xFF10171A),
+    cardBg: const Color(0xFF15171C),
     border: selected ? const Color(0xFF2F786B) : const Color(0xFF223131),
     divider: const Color(0xFF223131),
     textPrimary: const Color(0xFFEAF2F2),

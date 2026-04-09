@@ -10,13 +10,13 @@ class ProblemBankExportPdfQuestionPage extends StatelessWidget {
     required this.page,
     required this.settings,
     required this.figureUrlsByQuestionId,
-    required this.questionModeByQuestionId,
+    required this.questionModeByQuestionUid,
   });
 
   final LearningProblemLayoutPreviewPage page;
   final LearningProblemExportSettings settings;
   final Map<String, Map<String, String>> figureUrlsByQuestionId;
-  final Map<String, String> questionModeByQuestionId;
+  final Map<String, String> questionModeByQuestionUid;
 
   @override
   Widget build(BuildContext context) {
@@ -124,7 +124,7 @@ class ProblemBankExportPdfQuestionPage extends StatelessWidget {
     }
     final mode = effectiveQuestionModeOf(
       question,
-      questionModeByQuestionId: questionModeByQuestionId,
+      questionModeByQuestionUid: questionModeByQuestionUid,
       fallbackMode: settings.questionModeValue,
     );
     final previewQuestion = questionForLayoutPreviewMode(

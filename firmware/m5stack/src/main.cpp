@@ -63,6 +63,8 @@ static uint32_t g_last_mqtt_rx_homeworks_ms = 0;
 static uint32_t g_last_mqtt_rx_student_info_ms = 0;
 static uint32_t g_last_watchdog_soft_ms = 0;
 static uint32_t g_last_watchdog_hard_ms = 0;
+// LittleFS 복원 등으로 studentId만 있고 bind MQTT를 아직 안 보낸 상태 — 첫 연결에서 등원(m5_record_arrival) 처리되도록 함
+static bool g_mqtt_bind_announced = false;
 static const uint32_t MQTT_STALE_SOFT_MS = 45000;
 static const uint32_t MQTT_STALE_HARD_MS = 180000;
 static const uint32_t MQTT_STALE_SOFT_COOLDOWN_MS = 15000;
@@ -169,6 +171,7 @@ void fw_clear_local_binding_state(void) {
     LittleFS.end();
   }
   studentId = "";
+  g_mqtt_bind_announced = false;
 }
 
 void onMqttConnect(bool sessionPresent) {
@@ -205,9 +208,15 @@ void onMqttConnect(bool sessionPresent) {
   // Request initial data: 바인딩된 학생이 있으면 student_info 요청, 없으면 list_today 요청
   String cmdTopic = String("academies/") + academyId + "/devices/" + deviceId + "/command";
   if (studentId.length() > 0) {
-    Serial.printf("[MQTT] Requesting student_info + list_homeworks for: %s\n", studentId.c_str());
+    // bind가 서버에 도달해야 m5_bind_device + m5_record_arrival(등원)이 실행됨. LittleFS 복원만 한 경우 첫 연결에서 bind 필요.
+    if (!g_mqtt_bind_announced) {
+      Serial.printf("[MQTT] Re-announcing bind (등원/바인딩 동기화) for: %s\n", studentId.c_str());
+      fw_publish_bind(studentId.c_str());
+    } else {
+      Serial.printf("[MQTT] Requesting student_info + list_homeworks for: %s\n", studentId.c_str());
+      fw_publish_list_homeworks(studentId.c_str());
+    }
     fw_publish_student_info(studentId.c_str());
-    fw_publish_list_homeworks(studentId.c_str());
   } else {
     // 바인딩 없으면 학생 리스트 요청
     DynamicJsonDocument cmd(64);
@@ -369,6 +378,7 @@ void fw_publish_bind(const char* studentIdArg) {
   String payload; serializeJson(doc, payload);
   String topic = String("academies/") + academyId + "/devices/" + deviceId + "/command";
   mqtt.publish(topic.c_str(), 1, false, payload.c_str());
+  g_mqtt_bind_announced = true;
 }
 
 void fw_publish_unbind() {

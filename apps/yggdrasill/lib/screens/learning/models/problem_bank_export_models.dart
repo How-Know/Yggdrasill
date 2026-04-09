@@ -59,7 +59,7 @@ const String kLearningQuestionModeSubjective = 'subjective';
 const String kLearningQuestionModeEssay = 'essay';
 const String kLearningDefaultTitlePageTopText = '2026학년도 대학수학능력시험 문제지';
 const String kLearningRenderConfigVersion =
-    'pb_render_v32zw_logo_overlay_left2pt';
+    'pb_render_v33_ref_uid_live_release';
 
 class LearningProblemLayoutTuning {
   const LearningProblemLayoutTuning({
@@ -328,7 +328,8 @@ class LearningProblemExportSettings {
       minDpi: nextMinDpi,
     );
     final questionScoreByQuestionId = _parseQuestionScoreMap(
-      renderConfig['questionScoreByQuestionId'],
+      renderConfig['questionScoreByQuestionUid'] ??
+          renderConfig['questionScoreByQuestionId'],
       fallback: base.questionScoreByQuestionId,
     );
     final nextTemplate = profileToTemplate(profile);
@@ -463,24 +464,24 @@ class LearningProblemExportSettings {
   }
 
   Map<String, dynamic> toRenderConfig({
-    required List<String> selectedQuestionIdsOrdered,
-    required Map<String, String> questionModeByQuestionId,
+    required List<String> selectedQuestionUidsOrdered,
+    required Map<String, String> questionModeByQuestionUid,
   }) {
-    final orderedIds = selectedQuestionIdsOrdered
+    final orderedUids = selectedQuestionUidsOrdered
         .map((e) => e.trim())
         .where((e) => e.isNotEmpty)
         .toList(growable: false);
     final modeMap = <String, String>{};
-    for (final id in orderedIds) {
-      final mode = questionModeByQuestionId[id];
+    for (final uid in orderedUids) {
+      final mode = questionModeByQuestionUid[uid];
       if (mode == null || mode.trim().isEmpty) continue;
-      modeMap[id] = mode.trim();
+      modeMap[uid] = mode.trim();
     }
     final scoreMap = <String, double>{};
-    for (final id in orderedIds) {
-      final score = questionScoreByQuestionId[id];
+    for (final uid in orderedUids) {
+      final score = questionScoreByQuestionId[uid];
       if (score == null || !score.isFinite || score < 0) continue;
-      scoreMap[id] = score;
+      scoreMap[uid] = score;
     }
     return <String, dynamic>{
       'renderConfigVersion': kLearningRenderConfigVersion,
@@ -517,9 +518,13 @@ class LearningProblemExportSettings {
       'questionMode': questionModeValue,
       'layoutTuning': layoutTuning.toJson(),
       'figureQuality': figureQuality.toJson(),
-      'questionModeByQuestionId': modeMap,
-      'selectedQuestionIdsOrdered': orderedIds,
+      'questionModeByQuestionUid': modeMap,
+      'selectedQuestionUidsOrdered': orderedUids,
       'includeQuestionScore': includeQuestionScore,
+      'questionScoreByQuestionUid': scoreMap,
+      // Legacy aliases kept during rollout.
+      'questionModeByQuestionId': modeMap,
+      'selectedQuestionIdsOrdered': orderedUids,
       'questionScoreByQuestionId': scoreMap,
     };
   }
@@ -714,12 +719,14 @@ String normalizeQuestionModeSelection(
 
 String effectiveQuestionModeOf(
   LearningProblemQuestion question, {
-  required Map<String, String> questionModeByQuestionId,
+  required Map<String, String> questionModeByQuestionUid,
   required String fallbackMode,
 }) {
+  final stableKey = question.stableQuestionKey;
   return normalizeQuestionModeSelection(
     question,
-    questionModeByQuestionId[question.id],
+    questionModeByQuestionUid[stableKey] ??
+        questionModeByQuestionUid[question.id],
     fallbackMode: fallbackMode,
   );
 }
@@ -763,7 +770,7 @@ double questionSlotHeightForLayoutPreview({
 List<LearningProblemLayoutPreviewPage> buildQuestionLayoutPreviewPages(
   List<LearningProblemQuestion> selectedQuestions, {
   required LearningProblemExportSettings settings,
-  Map<String, String> questionModeByQuestionId = const <String, String>{},
+  Map<String, String> questionModeByQuestionUid = const <String, String>{},
 }) {
   final pages = <LearningProblemLayoutPreviewPage>[];
   if (selectedQuestions.isEmpty) return pages;
@@ -795,7 +802,7 @@ List<LearningProblemLayoutPreviewPage> buildQuestionLayoutPreviewPages(
       final original = selectedQuestions[cursor];
       final mode = effectiveQuestionModeOf(
         original,
-        questionModeByQuestionId: questionModeByQuestionId,
+        questionModeByQuestionUid: questionModeByQuestionUid,
         fallbackMode: settings.questionModeValue,
       );
       final previewQuestion = questionForLayoutPreviewMode(
@@ -1074,12 +1081,12 @@ String _normalizePreviewLine(String raw) {
 
 String buildLearningRenderHash({
   required LearningProblemExportSettings settings,
-  required List<String> selectedQuestionIdsOrdered,
-  required Map<String, String> questionModeByQuestionId,
+  required List<String> selectedQuestionUidsOrdered,
+  required Map<String, String> questionModeByQuestionUid,
 }) {
   final renderConfig = settings.toRenderConfig(
-    selectedQuestionIdsOrdered: selectedQuestionIdsOrdered,
-    questionModeByQuestionId: questionModeByQuestionId,
+    selectedQuestionUidsOrdered: selectedQuestionUidsOrdered,
+    questionModeByQuestionUid: questionModeByQuestionUid,
   );
   final canonicalJson = _canonicalJsonEncode(renderConfig);
   return sha256.convert(utf8.encode(canonicalJson)).toString();

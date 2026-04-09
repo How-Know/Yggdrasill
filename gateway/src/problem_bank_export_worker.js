@@ -49,7 +49,7 @@ const FONT_PATH_QNUM =
   process.env.PB_PDF_FONT_QNUM_PATH || '';
 const FONT_PATH_SUBJECT =
   process.env.PB_PDF_FONT_SUBJECT_PATH || '';
-const RENDER_CONFIG_VERSION = 'pb_render_v32zw_logo_overlay_left2pt';
+const RENDER_CONFIG_VERSION = 'pb_render_v33_ref_uid_live_release';
 const DEFAULT_TITLE_PAGE_TOP_TEXT = '2026학년도 대학수학능력시험 문제지';
 const FIGURE_REGEN_COOLDOWN_MIN = Math.max(
   2,
@@ -2350,13 +2350,15 @@ function buildRenderConfigFromJob(job) {
   const questionMode = normalizeQuestionMode(
     options.questionMode || options.question_mode || options.mode || 'original',
   );
-  const selectedQuestionIdsOrdered = normalizeSelectedQuestionIdsOrdered(
-    options.selectedQuestionIdsOrdered,
-    Array.isArray(job.selected_question_ids) ? job.selected_question_ids : [],
+  const selectedQuestionUidsOrdered = normalizeSelectedQuestionIdsOrdered(
+    options.selectedQuestionUidsOrdered || options.selectedQuestionIdsOrdered,
+    Array.isArray(options.selectedQuestionUids)
+      ? options.selectedQuestionUids
+      : (Array.isArray(job.selected_question_ids) ? job.selected_question_ids : []),
   );
-  const questionModeByQuestionId = normalizeQuestionModeMap(
-    options.questionModeByQuestionId,
-    selectedQuestionIdsOrdered,
+  const questionModeByQuestionUid = normalizeQuestionModeMap(
+    options.questionModeByQuestionUid || options.questionModeByQuestionId,
+    selectedQuestionUidsOrdered,
     questionMode,
   );
   const includeQuestionScore = normalizeBool(
@@ -2367,9 +2369,9 @@ function buildRenderConfigFromJob(job) {
     options.includeAcademyLogo ?? options.showAcademyLogo,
     false,
   );
-  const questionScoreByQuestionId = normalizeQuestionScoreMap(
-    options.questionScoreByQuestionId,
-    selectedQuestionIdsOrdered,
+  const questionScoreByQuestionUid = normalizeQuestionScoreMap(
+    options.questionScoreByQuestionUid || options.questionScoreByQuestionId,
+    selectedQuestionUidsOrdered,
   );
   const font =
     options.font && typeof options.font === 'object'
@@ -2409,7 +2411,7 @@ function buildRenderConfigFromJob(job) {
     includeExplanation: job.include_explanation === true,
     includeQuestionScore,
     includeAcademyLogo,
-    questionScoreByQuestionId,
+    questionScoreByQuestionUid,
     includeCoverPage,
     coverPageTexts,
     layoutColumns,
@@ -2424,8 +2426,12 @@ function buildRenderConfigFromJob(job) {
     questionMode,
     layoutTuning: normalizeLayoutTuning(options.layoutTuning, options),
     figureQuality: normalizeFigureQuality(options.figureQuality, options),
-    selectedQuestionIdsOrdered,
-    questionModeByQuestionId,
+    selectedQuestionUidsOrdered,
+    questionModeByQuestionUid,
+    // Legacy aliases kept during rollout.
+    selectedQuestionIdsOrdered: selectedQuestionUidsOrdered,
+    questionModeByQuestionId: questionModeByQuestionUid,
+    questionScoreByQuestionId: questionScoreByQuestionUid,
     font,
     subjectTitleText,
     titlePageTopText,
@@ -2455,7 +2461,7 @@ function computeRenderHash(renderConfig) {
     includeAnswerSheet: renderConfig.includeAnswerSheet,
     includeExplanation: renderConfig.includeExplanation,
     includeQuestionScore: renderConfig.includeQuestionScore,
-    questionScoreByQuestionId: renderConfig.questionScoreByQuestionId,
+    questionScoreByQuestionUid: renderConfig.questionScoreByQuestionUid,
     includeCoverPage: renderConfig.includeCoverPage,
     coverPageTexts: renderConfig.coverPageTexts,
     layoutColumns: renderConfig.layoutColumns,
@@ -2470,8 +2476,8 @@ function computeRenderHash(renderConfig) {
     questionMode: renderConfig.questionMode,
     layoutTuning: renderConfig.layoutTuning,
     figureQuality: renderConfig.figureQuality,
-    selectedQuestionIdsOrdered: renderConfig.selectedQuestionIdsOrdered,
-    questionModeByQuestionId: renderConfig.questionModeByQuestionId,
+    selectedQuestionUidsOrdered: renderConfig.selectedQuestionUidsOrdered,
+    questionModeByQuestionUid: renderConfig.questionModeByQuestionUid,
     font: renderConfig.font,
     subjectTitleText: renderConfig.subjectTitleText,
     titlePageTopText: renderConfig.titlePageTopText,
@@ -2675,16 +2681,19 @@ function applyQuestionModeForQuestion(question, selectedMode, fallbackMode = 'or
   };
 }
 
-function applyQuestionModesForExport(questions, questionModeByQuestionId, fallbackMode) {
+function applyQuestionModesForExport(questions, questionModeByQuestionUid, fallbackMode) {
   const modeMap = {};
   const normalized = [];
   for (const q of questions || []) {
-    const selectedMode = questionModeByQuestionId?.[q.id];
+    const mapKey = String(q.question_uid || q.id || '').trim();
+    const legacyIdKey = String(q.id || '').trim();
+    const selectedMode = questionModeByQuestionUid?.[mapKey]
+      || questionModeByQuestionUid?.[legacyIdKey];
     const applied = applyQuestionModeForQuestion(q, selectedMode, fallbackMode);
-    modeMap[q.id] = applied.mode;
+    if (mapKey) modeMap[mapKey] = applied.mode;
     normalized.push(applied.question);
   }
-  return { questions: normalized, modeByQuestionId: modeMap };
+  return { questions: normalized, modeByQuestionUid: modeMap };
 }
 
 function toErrorCode(err) {
@@ -3674,11 +3683,16 @@ function drawExplanationPage({ pdfDoc, fonts, layout, questions, paperLabel }) {
 async function fetchQuestionsForJob(job, renderConfig) {
   const academyId = String(job.academy_id || '').trim();
   const documentId = String(job.document_id || '').trim();
-  const selectedIds = Array.isArray(renderConfig?.selectedQuestionIdsOrdered)
-    ? renderConfig.selectedQuestionIdsOrdered
-    : (Array.isArray(job.selected_question_ids)
-      ? job.selected_question_ids.map((e) => String(e).trim()).filter((e) => e.length > 0)
-      : []);
+  const selectedUids = Array.isArray(renderConfig?.selectedQuestionUidsOrdered)
+    ? renderConfig.selectedQuestionUidsOrdered
+    : (Array.isArray(renderConfig?.selectedQuestionIdsOrdered)
+      ? renderConfig.selectedQuestionIdsOrdered
+      : (Array.isArray(job?.options?.selectedQuestionUidsOrdered)
+        ? job.options.selectedQuestionUidsOrdered
+        : (Array.isArray(job.selected_question_ids)
+          ? job.selected_question_ids.map((e) => String(e).trim()).filter((e) => e.length > 0)
+          : [])));
+  const selectedUidSet = new Set(selectedUids);
   const options = job.options && typeof job.options === 'object' ? job.options : {};
   const sourceDocumentIds = Array.isArray(options.sourceDocumentIds)
     ? options.sourceDocumentIds.map((e) => String(e).trim()).filter((e) => e.length > 0)
@@ -3687,13 +3701,12 @@ async function fetchQuestionsForJob(job, renderConfig) {
   let query = supa
     .from('pb_questions')
     .select(
-      'id,document_id,question_number,question_type,stem,choices,allow_objective,allow_subjective,objective_choices,objective_answer_key,subjective_answer,objective_generated,figure_refs,equations,confidence,flags,reviewer_notes,source_page,source_order,meta',
+      'id,question_uid,document_id,question_number,question_type,stem,choices,allow_objective,allow_subjective,objective_choices,objective_answer_key,subjective_answer,objective_generated,figure_refs,equations,confidence,flags,reviewer_notes,source_page,source_order,meta',
     )
     .eq('academy_id', academyId);
 
-  const selectedIdsSet = new Set(selectedIds);
-  if (selectedIdsSet.size > 0) {
-    query = query.in('id', selectedIds);
+  if (selectedUidSet.size > 0) {
+    query = query.in('question_uid', Array.from(selectedUidSet));
   } else {
     query = query.eq('document_id', documentId).eq('is_checked', true);
   }
@@ -3706,6 +3719,7 @@ async function fetchQuestionsForJob(job, renderConfig) {
   }
   const rows = (data || []).map((row) => ({
     id: String(row.id || ''),
+    question_uid: String(row.question_uid || row.id || ''),
     document_id: String(row.document_id || ''),
     question_number: String(row.question_number || ''),
     question_type: String(row.question_type || ''),
@@ -3727,12 +3741,25 @@ async function fetchQuestionsForJob(job, renderConfig) {
     meta: row.meta && typeof row.meta === 'object' ? row.meta : {},
   }));
 
-  if (selectedIdsSet.size > 0) {
-    const selectedOrder = new Map(selectedIds.map((id, idx) => [id, idx]));
+  const missingQuestionUids = [];
+  if (selectedUidSet.size > 0) {
+    const fetchedUidSet = new Set(
+      rows.map((row) => String(row.question_uid || '').trim()).filter((uid) => uid.length > 0),
+    );
+    for (const uid of selectedUids) {
+      if (!fetchedUidSet.has(uid)) {
+        missingQuestionUids.push(uid);
+      }
+    }
+    const selectedOrder = new Map(selectedUids.map((uid, idx) => [uid, idx]));
     const docOrder = new Map(sourceDocumentIds.map((id, idx) => [id, idx]));
     rows.sort((a, b) => {
-      const ai = selectedOrder.has(a.id) ? selectedOrder.get(a.id) : Number.MAX_SAFE_INTEGER;
-      const bi = selectedOrder.has(b.id) ? selectedOrder.get(b.id) : Number.MAX_SAFE_INTEGER;
+      const ai = selectedOrder.has(a.question_uid)
+        ? selectedOrder.get(a.question_uid)
+        : Number.MAX_SAFE_INTEGER;
+      const bi = selectedOrder.has(b.question_uid)
+        ? selectedOrder.get(b.question_uid)
+        : Number.MAX_SAFE_INTEGER;
       if (ai !== bi) return ai - bi;
       const ad = docOrder.has(a.document_id) ? docOrder.get(a.document_id) : Number.MAX_SAFE_INTEGER;
       const bd = docOrder.has(b.document_id) ? docOrder.get(b.document_id) : Number.MAX_SAFE_INTEGER;
@@ -3742,7 +3769,7 @@ async function fetchQuestionsForJob(job, renderConfig) {
     });
   }
 
-  return rows;
+  return { rows, missingQuestionUids };
 }
 
 async function renderPdf(job, questions, renderConfig) {
@@ -3774,7 +3801,7 @@ async function renderPdf(job, questions, renderConfig) {
   const fallbackQuestionMode = normalizeQuestionMode(renderConfig?.questionMode);
   const modeApplied = applyQuestionModesForExport(
     questions,
-    renderConfig?.questionModeByQuestionId || {},
+    renderConfig?.questionModeByQuestionUid || renderConfig?.questionModeByQuestionId || {},
     fallbackQuestionMode,
   );
   const exportQuestions = modeApplied.questions;
@@ -3807,7 +3834,7 @@ async function renderPdf(job, questions, renderConfig) {
     renderConfig: htmlRenderConfig,
     profile,
     paper,
-    modeByQuestionId: modeApplied.modeByQuestionId,
+    modeByQuestionId: modeApplied.modeByQuestionUid,
     questionMode: fallbackQuestionMode,
     layoutColumns,
     maxQuestionsPerPage,
@@ -3975,7 +4002,8 @@ async function renderPdf(job, questions, renderConfig) {
     profile,
     paper,
     questionMode,
-    modeByQuestionId: modeApplied.modeByQuestionId,
+    modeByQuestionId: modeApplied.modeByQuestionUid,
+    modeByQuestionUid: modeApplied.modeByQuestionUid,
     layoutColumns,
     maxQuestionsPerPage,
     renderConfigVersion:
@@ -3997,7 +4025,11 @@ async function renderPdf(job, questions, renderConfig) {
 async function processOneJob(job) {
   const renderConfig = buildRenderConfigFromJob(job);
   const renderHash = computeRenderHash(renderConfig);
-  const questions = await fetchQuestionsForJob(job, renderConfig);
+  const fetched = await fetchQuestionsForJob(job, renderConfig);
+  const questions = Array.isArray(fetched?.rows) ? fetched.rows : [];
+  const missingQuestionUids = Array.isArray(fetched?.missingQuestionUids)
+    ? fetched.missingQuestionUids
+    : [];
   if (!questions.length) {
     throw new Error('selected_questions_empty');
   }
@@ -4059,7 +4091,7 @@ async function processOneJob(job) {
         profile: rendered.profile,
         paper: rendered.paper,
         questionMode: rendered.questionMode || 'original',
-        modeByQuestionId: rendered.modeByQuestionId || {},
+        modeByQuestionId: rendered.modeByQuestionId || rendered.modeByQuestionUid || {},
         layoutColumns: rendered.layoutColumns || 1,
         maxQuestionsPerPage: rendered.maxQuestionsPerPage || 0,
         pageColumnQuestionCounts: rendered.pageColumnQuestionCounts || [],
@@ -4077,7 +4109,11 @@ async function processOneJob(job) {
         includeAnswerSheet: rendered.includeAnswerSheet === true,
         includeExplanation: rendered.includeExplanation === true,
         includeQuestionScore: rendered.includeQuestionScore === true,
-        questionScoreByQuestionId: rendered.questionScoreByQuestionId || {},
+        questionScoreByQuestionUid:
+          rendered.questionScoreByQuestionUid
+          || rendered.questionScoreByQuestionId
+          || {},
+        missingQuestionUids,
         renderConfigVersion:
           rendered.renderConfigVersion || RENDER_CONFIG_VERSION,
         renderHash,
@@ -4117,7 +4153,7 @@ async function processOneJob(job) {
           profile: rendered.profile,
           paper: rendered.paper,
           questionMode: rendered.questionMode || 'original',
-          modeByQuestionId: rendered.modeByQuestionId || {},
+          modeByQuestionId: rendered.modeByQuestionId || rendered.modeByQuestionUid || {},
           layoutColumns: rendered.layoutColumns || 1,
           maxQuestionsPerPage: rendered.maxQuestionsPerPage || 0,
           pageColumnQuestionCounts: rendered.pageColumnQuestionCounts || [],
@@ -4135,7 +4171,11 @@ async function processOneJob(job) {
           includeAnswerSheet: rendered.includeAnswerSheet === true,
           includeExplanation: rendered.includeExplanation === true,
           includeQuestionScore: rendered.includeQuestionScore === true,
-          questionScoreByQuestionId: rendered.questionScoreByQuestionId || {},
+          questionScoreByQuestionUid:
+            rendered.questionScoreByQuestionUid
+            || rendered.questionScoreByQuestionId
+            || {},
+          missingQuestionUids,
           renderConfigVersion:
             rendered.renderConfigVersion || RENDER_CONFIG_VERSION,
           renderHash,

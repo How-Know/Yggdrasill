@@ -16,8 +16,8 @@ class ProblemBankSchoolSheet extends StatelessWidget {
   final ValueChanged<String> onSchoolSelected;
   final bool isLoading;
 
-  static const _panelBg = Color(0xFF151C21);
-  static const _border = Color(0xFF223131);
+  static const _panelBg = Color(0xFF222222);
+  static const _border = Color(0xFF333333);
   static const _selectedBg = Color(0xFF173C36);
   static const _text = Color(0xFFEAF2F2);
 

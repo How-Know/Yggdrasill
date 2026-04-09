@@ -10,13 +10,13 @@ class ProblemBankExportLayoutPreviewDialog extends StatelessWidget {
     required this.selectedQuestions,
     required this.settings,
     required this.figureUrlsByQuestionId,
-    required this.questionModeByQuestionId,
+    required this.questionModeByQuestionUid,
   });
 
   final List<LearningProblemQuestion> selectedQuestions;
   final LearningProblemExportSettings settings;
   final Map<String, Map<String, String>> figureUrlsByQuestionId;
-  final Map<String, String> questionModeByQuestionId;
+  final Map<String, String> questionModeByQuestionUid;
 
   static const _panel = Color(0xFF10171A);
   static const _field = Color(0xFF151C21);
@@ -29,7 +29,7 @@ class ProblemBankExportLayoutPreviewDialog extends StatelessWidget {
     required List<LearningProblemQuestion> selectedQuestions,
     required LearningProblemExportSettings settings,
     required Map<String, Map<String, String>> figureUrlsByQuestionId,
-    required Map<String, String> questionModeByQuestionId,
+    required Map<String, String> questionModeByQuestionUid,
   }) async {
     final size = MediaQuery.sizeOf(context);
     final maxWidth = (size.width - 48).clamp(980.0, 1480.0).toDouble();
@@ -52,7 +52,7 @@ class ProblemBankExportLayoutPreviewDialog extends StatelessWidget {
               selectedQuestions: selectedQuestions,
               settings: settings,
               figureUrlsByQuestionId: figureUrlsByQuestionId,
-              questionModeByQuestionId: questionModeByQuestionId,
+              questionModeByQuestionUid: questionModeByQuestionUid,
             ),
           ),
         );
@@ -65,7 +65,7 @@ class ProblemBankExportLayoutPreviewDialog extends StatelessWidget {
     final pages = buildQuestionLayoutPreviewPages(
       selectedQuestions,
       settings: settings,
-      questionModeByQuestionId: questionModeByQuestionId,
+      questionModeByQuestionUid: questionModeByQuestionUid,
     );
 
     return Padding(
@@ -107,7 +107,7 @@ class ProblemBankExportLayoutPreviewDialog extends StatelessWidget {
                     page: pages[i],
                     settings: settings,
                     figureUrlsByQuestionId: figureUrlsByQuestionId,
-                    questionModeByQuestionId: questionModeByQuestionId,
+                    questionModeByQuestionUid: questionModeByQuestionUid,
                   ),
                   const SizedBox(height: 12),
                 ],
@@ -169,7 +169,7 @@ class ProblemBankExportLayoutPreviewDialog extends StatelessWidget {
               children: questions.map((q) {
                 final mode = effectiveQuestionModeOf(
                   q,
-                  questionModeByQuestionId: questionModeByQuestionId,
+                  questionModeByQuestionUid: questionModeByQuestionUid,
                   fallbackMode: settings.questionModeValue,
                 );
                 final ans = previewAnswerForMode(q, mode);

@@ -16,6 +16,7 @@ class HomeworkItem {
   String? type;
   String? page;
   int? count;
+  int? timeLimitMinutes;
   String? memo;
   String? content;
   String? bookId;
@@ -53,6 +54,7 @@ class HomeworkItem {
     this.type,
     this.page,
     this.count,
+    this.timeLimitMinutes,
     this.memo,
     this.content,
     this.bookId,
@@ -163,6 +165,7 @@ class HomeworkRecentTemplatePart {
   final String? type;
   final String? page;
   final int? count;
+  final int? timeLimitMinutes;
   final String? memo;
   final String? content;
   final String? bookId;
@@ -182,6 +185,7 @@ class HomeworkRecentTemplatePart {
     this.type,
     this.page,
     this.count,
+    this.timeLimitMinutes,
     this.memo,
     this.content,
     this.bookId,
@@ -294,6 +298,12 @@ class HomeworkStore {
         (message.contains('does not exist') || message.contains('42703'));
   }
 
+  bool _isMissingTimeLimitColumnError(Object error) {
+    final message = error.toString().toLowerCase();
+    return message.contains('time_limit_minutes') &&
+        (message.contains('does not exist') || message.contains('42703'));
+  }
+
   bool _isMissingGroupCycleStartedColumnError(Object error) {
     final message = error.toString().toLowerCase();
     return message.contains('cycle_started_at') &&
@@ -346,46 +356,88 @@ class HomeworkStore {
       }
     }
 
+    Future<List<Map<String, dynamic>>> attachTimeLimitMinutes(
+      List<Map<String, dynamic>> baseRows,
+    ) async {
+      if (baseRows.isEmpty) return baseRows;
+      try {
+        dynamic query = supa
+            .from('homework_items')
+            .select('id,time_limit_minutes')
+            .eq('academy_id', academyId);
+        if (studentId != null && studentId.trim().isNotEmpty) {
+          query = query.eq('student_id', studentId.trim());
+        }
+        final raw = await query;
+        final rows = (raw as List<dynamic>).cast<Map<String, dynamic>>();
+        final byId = <String, int?>{};
+        for (final row in rows) {
+          final id = (row['id'] as String?)?.trim();
+          if (id == null || id.isEmpty) continue;
+          byId[id] =
+              _normalizePositiveInt(_parseIntOpt(row['time_limit_minutes']));
+        }
+        for (final row in baseRows) {
+          final id = (row['id'] as String?)?.trim();
+          if (id == null || id.isEmpty) continue;
+          if (byId.containsKey(id)) {
+            row['time_limit_minutes'] = byId[id];
+          }
+        }
+      } catch (e) {
+        if (!_isMissingTimeLimitColumnError(e)) {
+          rethrow;
+        }
+      }
+      return baseRows;
+    }
+
+    List<Map<String, dynamic>> rows;
     try {
-      return await runSelectWithCycleFallback(
+      rows = await runSelectWithCycleFallback(
         withCycleBase: _homeworkItemSelectWithSplit,
         withoutCycleBase: _homeworkItemSelectWithSplitNoCycleBase,
       );
     } catch (e) {
       if (_isMissingDefaultSplitPartsError(e)) {
         try {
-          return await runSelectWithCycleFallback(
+          rows = await runSelectWithCycleFallback(
             withCycleBase: _homeworkItemSelectLegacy,
             withoutCycleBase: _homeworkItemSelectLegacyNoCycleBase,
           );
+          return attachTimeLimitMinutes(rows);
         } catch (legacyError) {
           if (_isMissingMemoColumnError(legacyError)) {
-            return await runSelectWithCycleFallback(
+            rows = await runSelectWithCycleFallback(
               withCycleBase: _homeworkItemSelectLegacyNoMemo,
               withoutCycleBase: _homeworkItemSelectLegacyNoMemoNoCycleBase,
             );
+            return attachTimeLimitMinutes(rows);
           }
           rethrow;
         }
       }
       if (_isMissingMemoColumnError(e)) {
         try {
-          return await runSelectWithCycleFallback(
+          rows = await runSelectWithCycleFallback(
             withCycleBase: _homeworkItemSelectWithSplitNoMemo,
             withoutCycleBase: _homeworkItemSelectWithSplitNoMemoNoCycleBase,
           );
+          return attachTimeLimitMinutes(rows);
         } catch (memoFallbackError) {
           if (_isMissingDefaultSplitPartsError(memoFallbackError)) {
-            return await runSelectWithCycleFallback(
+            rows = await runSelectWithCycleFallback(
               withCycleBase: _homeworkItemSelectLegacyNoMemo,
               withoutCycleBase: _homeworkItemSelectLegacyNoMemoNoCycleBase,
             );
+            return attachTimeLimitMinutes(rows);
           }
           rethrow;
         }
       }
       rethrow;
     }
+    return attachTimeLimitMinutes(rows);
   }
 
   DateTime? _parseTsOpt(dynamic v) {
@@ -407,6 +459,11 @@ class HomeworkStore {
     return _parseIntOpt(v) ?? fallback;
   }
 
+  int? _normalizePositiveInt(int? value) {
+    if (value == null || value <= 0) return null;
+    return value;
+  }
+
   HomeworkItem _parseHomeworkItemRow(Map<String, dynamic> r) {
     return HomeworkItem(
       id: (r['id'] as String?) ?? const Uuid().v4(),
@@ -417,6 +474,8 @@ class HomeworkStore {
       type: (r['type'] as String?)?.trim(),
       page: (r['page'] as String?)?.trim(),
       count: _parseIntOpt(r['count']),
+      timeLimitMinutes:
+          _normalizePositiveInt(_parseIntOpt(r['time_limit_minutes'])),
       memo: (r['memo'] as String?)?.trim(),
       content: (r['content'] as String?)?.trim(),
       bookId: (r['book_id'] as String?)?.trim(),
@@ -608,8 +667,8 @@ class HomeworkStore {
       }
     }
 
-    final links =
-        _groupItemsByGroupId.putIfAbsent(cleanedGroupId, () => <HomeworkGroupItem>[]);
+    final links = _groupItemsByGroupId.putIfAbsent(
+        cleanedGroupId, () => <HomeworkGroupItem>[]);
     final existingIdx =
         links.indexWhere((e) => e.homeworkItemId == cleanedItemId);
     final resolvedOrder = itemOrderIndex ??
@@ -902,6 +961,7 @@ class HomeworkStore {
       type: item.type,
       page: item.page,
       count: item.count,
+      timeLimitMinutes: _normalizePositiveInt(item.timeLimitMinutes),
       memo: item.memo,
       content: item.content,
       bookId: item.bookId,
@@ -1341,6 +1401,7 @@ class HomeworkStore {
         'type': it.type,
         'page': it.page,
         'count': it.count,
+        'time_limit_minutes': _normalizePositiveInt(it.timeLimitMinutes),
         if (it.memo != null) 'memo': it.memo,
         'content': it.content,
         'book_id': it.bookId,
@@ -1732,6 +1793,7 @@ class HomeworkStore {
     String? type,
     String? page,
     int? count,
+    int? timeLimitMinutes,
     String? memo,
     String? content,
     String? bookId,
@@ -1754,6 +1816,7 @@ class HomeworkStore {
       type: type,
       page: page,
       count: count,
+      timeLimitMinutes: _normalizePositiveInt(timeLimitMinutes),
       memo: memo,
       content: content,
       bookId: bookId,
@@ -1804,6 +1867,7 @@ class HomeworkStore {
       'type': item.type ?? '',
       'page': item.page ?? '',
       'count': item.count,
+      'time_limit_minutes': _normalizePositiveInt(item.timeLimitMinutes),
       if (item.memo != null) 'memo': item.memo,
       'content': item.content ?? '',
       'book_id': item.bookId ?? '',
@@ -1842,7 +1906,9 @@ class HomeworkStore {
       final payloadItems = <Map<String, dynamic>>[];
       for (var i = 0; i < items.length; i++) {
         final it = items[i];
-        final sp = (splitPartsByItem[it.id] ?? it.defaultSplitParts).clamp(1, 4).toInt();
+        final sp = (splitPartsByItem[it.id] ?? it.defaultSplitParts)
+            .clamp(1, 4)
+            .toInt();
         payloadItems.add(
           _homeworkItemToReservedRpcPayload(
             it,
@@ -2360,7 +2426,8 @@ class HomeworkStore {
     }
   }
 
-  Future<void> reloadStudentHomework(String studentId) => _reloadStudent(studentId);
+  Future<void> reloadStudentHomework(String studentId) =>
+      _reloadStudent(studentId);
 
   /// 채점 취소: 롤백·리로드 후 호출. 완료 과제는 `homework_reopen_completed_to_waiting`,
   /// 그 외는 `homework_wait`로 대기(phase 1) 복귀. 마지막에 한 번 리로드한다.
@@ -2852,8 +2919,7 @@ class HomeworkStore {
     String studentId,
     List<String> itemIds, {
     bool includeCompleted = false,
-  }
-  ) {
+  }) {
     if (itemIds.isEmpty) return;
     final list = _byStudentId[studentId];
     if (list == null) {
@@ -3281,6 +3347,7 @@ class HomeworkStore {
     String? body,
     String? page,
     int? count,
+    int? timeLimitMinutes,
     String? type,
     String? memo,
     String? content,
@@ -3340,6 +3407,8 @@ class HomeworkStore {
     final templateUnitMappings = template?.unitMappings;
     final resolvedFlowId = (flowId ?? '').trim();
     final int? resolvedCount = (count != null && count > 0) ? count : null;
+    final int? resolvedTimeLimit = _normalizePositiveInt(timeLimitMinutes) ??
+        _normalizePositiveInt(template?.timeLimitMinutes);
     final resolvedColor = color ?? template?.color ?? const Color(0xFF1976D2);
     final resolvedSplitParts =
         (defaultSplitParts ?? template?.defaultSplitParts ?? 1)
@@ -3357,6 +3426,7 @@ class HomeworkStore {
       type: resolvedType.isEmpty ? template?.type : resolvedType,
       page: resolvedPage.isEmpty ? template?.page : resolvedPage,
       count: resolvedCount,
+      timeLimitMinutes: resolvedTimeLimit,
       memo: resolvedMemo.isEmpty ? template?.memo : resolvedMemo,
       content: resolvedContent.isEmpty ? template?.content : resolvedContent,
       bookId: resolvedBookId.isEmpty ? template?.bookId : resolvedBookId,
@@ -3424,6 +3494,7 @@ class HomeworkStore {
         'type': item.type,
         'page': item.page,
         'count': item.count,
+        'time_limit_minutes': _normalizePositiveInt(item.timeLimitMinutes),
         if (item.memo != null) 'memo': item.memo,
         'content': item.content,
         'book_id': item.bookId,
@@ -3501,6 +3572,7 @@ class HomeworkStore {
       // 즐겨찾기 드롭 경로에서는 count 등이 int/num으로 들어올 수 있다.
       return '$value'.trim();
     }
+
     String? asNullableText(dynamic value) {
       final v = asText(value);
       return v.isEmpty ? null : v;
@@ -3550,6 +3622,7 @@ class HomeworkStore {
       final titleRaw = asText(entry['title']);
       final page = asText(entry['page']);
       final countText = asText(entry['count']);
+      final timeLimitMinutes = asPositiveInt(entry['timeLimitMinutes']);
       final content = asText(entry['content']);
       final title = titleRaw.isEmpty ? '과제' : titleRaw;
       var body = asText(entry['body']);
@@ -3557,6 +3630,7 @@ class HomeworkStore {
         final parts = <String>[];
         if (page.isNotEmpty) parts.add('p.$page');
         if (countText.isNotEmpty) parts.add('${countText}문항');
+        if (timeLimitMinutes != null) parts.add('제한시간 ${timeLimitMinutes}분');
         if (parts.isEmpty) {
           body = content.isEmpty ? title : content;
         } else {
@@ -3569,6 +3643,7 @@ class HomeworkStore {
         ...entry,
         'title': title,
         'body': body,
+        if (timeLimitMinutes != null) 'timeLimitMinutes': timeLimitMinutes,
       });
     }
     if (normalized.isEmpty) return const <HomeworkItem>[];
@@ -3626,6 +3701,7 @@ class HomeworkStore {
             body: asText(entry['body']),
             page: asText(entry['page']),
             count: asPositiveInt(entry['count']),
+            timeLimitMinutes: asPositiveInt(entry['timeLimitMinutes']),
             type: asText(entry['type']),
             memo: asText(entry['memo']),
             content: asText(entry['content']),
@@ -3689,7 +3765,8 @@ class HomeworkStore {
             _groupIdByItemId.remove(id);
           }
           HomeworkAssignmentStore.instance
-              .revertOptimisticReservedAssignmentsForItems(studentId, createdIds);
+              .revertOptimisticReservedAssignmentsForItems(
+                  studentId, createdIds);
           await _reloadStudent(studentId);
           return const <HomeworkItem>[];
         }

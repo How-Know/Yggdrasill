@@ -43,6 +43,8 @@ LV_IMG_DECLARE(stop_100dp_999999_FILL0_wght400_GRAD0_opsz48);
 LV_IMG_DECLARE(lists_100dp_999999_FILL0_wght400_GRAD0_opsz48);
 LV_IMG_DECLARE(check_100dp_999999_FILL0_wght400_GRAD0_opsz48);
 
+struct ConfirmToWaitCtx;
+
 // 간단 포팅: 시뮬레이터 레이아웃을 축약 반영
 static lv_obj_t* s_stage = nullptr;
 static lv_obj_t* s_pages = nullptr;
@@ -58,7 +60,9 @@ static lv_obj_t* s_empty_label = nullptr;
 static lv_obj_t* s_empty_overlay = nullptr;
 static lv_obj_t* s_volume_popup = nullptr;
 static lv_obj_t* s_bind_confirm_popup = nullptr;
-static lv_obj_t* s_question_sent_popup = nullptr;
+static lv_obj_t* s_raise_question_confirm_popup = nullptr;
+static lv_obj_t* s_confirm_to_wait_popup = nullptr;
+static ConfirmToWaitCtx* s_confirm_to_wait_ctx = nullptr;
 static lv_obj_t* s_entry_hub = nullptr;
 static lv_obj_t* s_entry_name_label = nullptr;
 static lv_obj_t* s_hub_clock_label = nullptr;
@@ -138,6 +142,10 @@ struct HwChildEntry {
   int8_t phase;
   int32_t accumulated;
 };
+struct ConfirmToWaitCtx {
+  char group_id[40];
+};
+
 struct HwGroupData {
   char group_id[40];
   char group_title[40];
@@ -266,6 +274,9 @@ static char s_pending_detail_group_id[40] = "";
 static bool s_screensaver_hid_hw_add_menu = false;
 static const uint32_t SCROLL_TAP_SUPPRESS_MS = 180;
 static const lv_coord_t TAP_MOVE_SLOP_PX = 8;
+static lv_coord_t s_question_btn_press_x = 0;
+static lv_coord_t s_question_btn_press_y = 0;
+static bool s_question_btn_dragged = false;
 
 static inline void suppress_tap_temporarily(uint32_t ms = SCROLL_TAP_SUPPRESS_MS) {
   uint32_t until = millis() + ms;
@@ -288,8 +299,10 @@ static void close_volume_popup(void);
 static void show_brightness_popup(void);
 static void close_brightness_popup(void);
 static void close_bind_confirm_popup(void);
-static void close_question_sent_popup(void);
-static void show_question_sent_popup(void);
+static void close_raise_question_confirm_popup(void);
+static void close_confirm_to_wait_popup(void);
+static void show_raise_question_confirm_popup(void);
+static void show_confirm_phase_to_waiting_popup(const char* group_id, int group_idx);
 static void show_entry_hub_overlay(void);
 static void close_student_info_screen(bool show_entry_hub);
 static void show_student_info_screen(void);
@@ -643,6 +656,7 @@ static void bottom_sheet_drag_cb(lv_event_t* e) {
   if ((code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) && s_sheet_dragging) {
     s_sheet_dragging = false;
     if (s_sheet_drag_moved) {
+      suppress_tap_temporarily();
       handle_drag_end(e);
     }
   }
@@ -853,63 +867,181 @@ static void close_bind_confirm_popup(void) {
   s_pending_bind_student_name = "";
 }
 
-static void close_question_sent_popup(void) {
-  if (s_question_sent_popup && lv_obj_is_valid(s_question_sent_popup)) {
-    lv_obj_del(s_question_sent_popup);
+static void close_raise_question_confirm_popup(void) {
+  if (s_raise_question_confirm_popup && lv_obj_is_valid(s_raise_question_confirm_popup)) {
+    lv_obj_del(s_raise_question_confirm_popup);
   }
-  s_question_sent_popup = nullptr;
+  s_raise_question_confirm_popup = nullptr;
 }
 
-static void show_question_sent_popup(void) {
-  if (s_question_sent_popup && lv_obj_is_valid(s_question_sent_popup)) return;
-  s_question_sent_popup = lv_obj_create(lv_scr_act());
-  lv_obj_set_size(s_question_sent_popup, 276, 132);
-  lv_obj_center(s_question_sent_popup);
-  lv_obj_set_style_bg_color(s_question_sent_popup, lv_color_hex(0x202020), 0);
-  lv_obj_set_style_bg_opa(s_question_sent_popup, LV_OPA_COVER, 0);
-  lv_obj_set_style_border_width(s_question_sent_popup, 1, 0);
-  lv_obj_set_style_border_color(s_question_sent_popup, lv_color_hex(0x3A3A3A), 0);
-  lv_obj_set_style_radius(s_question_sent_popup, 14, 0);
-  lv_obj_set_style_pad_all(s_question_sent_popup, 12, 0);
-  lv_obj_set_style_pad_row(s_question_sent_popup, 10, 0);
-  lv_obj_clear_flag(s_question_sent_popup, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_set_flex_flow(s_question_sent_popup, LV_FLEX_FLOW_COLUMN);
-  lv_obj_set_flex_align(s_question_sent_popup, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+static void close_confirm_to_wait_popup(void) {
+  if (s_confirm_to_wait_popup && lv_obj_is_valid(s_confirm_to_wait_popup)) {
+    lv_obj_del(s_confirm_to_wait_popup);
+  }
+  s_confirm_to_wait_popup = nullptr;
+  if (s_confirm_to_wait_ctx) {
+    free(s_confirm_to_wait_ctx);
+    s_confirm_to_wait_ctx = nullptr;
+  }
+}
 
-  lv_obj_t* msg = lv_label_create(s_question_sent_popup);
+static void show_raise_question_confirm_popup(void) {
+  if (s_raise_question_confirm_popup && lv_obj_is_valid(s_raise_question_confirm_popup)) return;
+
+  s_raise_question_confirm_popup = lv_obj_create(lv_scr_act());
+  lv_obj_set_size(s_raise_question_confirm_popup, 276, 148);
+  lv_obj_center(s_raise_question_confirm_popup);
+  lv_obj_set_style_bg_color(s_raise_question_confirm_popup, lv_color_hex(0x202020), 0);
+  lv_obj_set_style_bg_opa(s_raise_question_confirm_popup, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(s_raise_question_confirm_popup, 1, 0);
+  lv_obj_set_style_border_color(s_raise_question_confirm_popup, lv_color_hex(0x3A3A3A), 0);
+  lv_obj_set_style_radius(s_raise_question_confirm_popup, 14, 0);
+  lv_obj_set_style_pad_all(s_raise_question_confirm_popup, 12, 0);
+  lv_obj_set_style_pad_row(s_raise_question_confirm_popup, 10, 0);
+  lv_obj_clear_flag(s_raise_question_confirm_popup, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_flex_flow(s_raise_question_confirm_popup, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_flex_align(s_raise_question_confirm_popup, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+  lv_obj_t* msg = lv_label_create(s_raise_question_confirm_popup);
   lv_obj_set_width(msg, 248);
   lv_obj_set_style_text_align(msg, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_set_style_text_font(msg, &kakao_kr_16, 0);
   lv_obj_set_style_text_color(msg, lv_color_hex(0xD0D0D0), 0);
   lv_label_set_long_mode(msg, LV_LABEL_LONG_WRAP);
-  lv_label_set_text(msg, u8"질문 신청했습니다");
+  lv_label_set_text(msg, u8"질문 하고 싶어요.");
 
-  lv_obj_t* row = lv_obj_create(s_question_sent_popup);
+  lv_obj_t* row = lv_obj_create(s_raise_question_confirm_popup);
   lv_obj_set_width(row, lv_pct(100));
   lv_obj_set_height(row, 50);
   lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
   lv_obj_set_style_border_width(row, 0, 0);
   lv_obj_set_style_pad_all(row, 0, 0);
+  lv_obj_set_style_pad_column(row, 12, 0);
   lv_obj_set_scrollbar_mode(row, LV_SCROLLBAR_MODE_OFF);
   lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
-  lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
-  lv_obj_t* ok_btn = lv_btn_create(row);
-  lv_obj_set_size(ok_btn, 248, 40);
-  lv_obj_set_style_radius(ok_btn, 10, 0);
-  lv_obj_set_style_bg_color(ok_btn, lv_color_hex(0x1FA95B), 0);
-  lv_obj_set_style_border_width(ok_btn, 0, 0);
-  lv_obj_t* ok_lbl = lv_label_create(ok_btn);
-  lv_obj_set_style_text_font(ok_lbl, &kakao_kr_16, 0);
-  lv_label_set_text(ok_lbl, u8"확인");
-  lv_obj_center(ok_lbl);
-  lv_obj_add_event_cb(ok_btn, [](lv_event_t* e) {
+  lv_obj_t* cancel_btn = lv_btn_create(row);
+  lv_obj_set_size(cancel_btn, 118, 40);
+  lv_obj_set_style_radius(cancel_btn, 10, 0);
+  lv_obj_set_style_bg_color(cancel_btn, lv_color_hex(0x323232), 0);
+  lv_obj_set_style_border_width(cancel_btn, 0, 0);
+  lv_obj_t* cancel_lbl = lv_label_create(cancel_btn);
+  lv_obj_set_style_text_font(cancel_lbl, &kakao_kr_16, 0);
+  lv_label_set_text(cancel_lbl, u8"취소");
+  lv_obj_center(cancel_lbl);
+  lv_obj_add_event_cb(cancel_btn, [](lv_event_t* e) {
     (void)e;
-    close_question_sent_popup();
+    close_raise_question_confirm_popup();
   }, LV_EVENT_CLICKED, NULL);
 
-  screensaver_attach_activity(s_question_sent_popup);
+  lv_obj_t* confirm_btn = lv_btn_create(row);
+  lv_obj_set_size(confirm_btn, 118, 40);
+  lv_obj_set_style_radius(confirm_btn, 10, 0);
+  lv_obj_set_style_bg_color(confirm_btn, lv_color_hex(0x1FA95B), 0);
+  lv_obj_set_style_border_width(confirm_btn, 0, 0);
+  lv_obj_t* confirm_lbl = lv_label_create(confirm_btn);
+  lv_obj_set_style_text_font(confirm_lbl, &kakao_kr_16, 0);
+  lv_label_set_text(confirm_lbl, u8"확인");
+  lv_obj_center(confirm_lbl);
+  lv_obj_add_event_cb(confirm_btn, [](lv_event_t* e) {
+    (void)e;
+    close_raise_question_confirm_popup();
+    fw_publish_raise_question();
+  }, LV_EVENT_CLICKED, NULL);
+
+  screensaver_attach_activity(s_raise_question_confirm_popup);
+}
+
+static void show_confirm_phase_to_waiting_popup(const char* group_id, int group_idx) {
+  if (!group_id || !group_id[0]) return;
+  if (s_confirm_to_wait_popup && lv_obj_is_valid(s_confirm_to_wait_popup)) return;
+
+  ConfirmToWaitCtx* ctx = (ConfirmToWaitCtx*)malloc(sizeof(ConfirmToWaitCtx));
+  if (!ctx) return;
+  strncpy(ctx->group_id, group_id, sizeof(ctx->group_id) - 1);
+  ctx->group_id[sizeof(ctx->group_id) - 1] = '\0';
+  s_confirm_to_wait_ctx = ctx;
+
+  const char* line1 = u8"과제";
+  if (group_idx >= 0 && (unsigned)group_idx < s_group_cnt) {
+    const HwGroupData& g = s_groups[group_idx];
+    if (g.group_title[0]) line1 = g.group_title;
+    else if (g.book_name[0]) line1 = g.book_name;
+  }
+
+  s_confirm_to_wait_popup = lv_obj_create(lv_scr_act());
+  lv_obj_set_size(s_confirm_to_wait_popup, 276, 168);
+  lv_obj_center(s_confirm_to_wait_popup);
+  lv_obj_set_style_bg_color(s_confirm_to_wait_popup, lv_color_hex(0x202020), 0);
+  lv_obj_set_style_bg_opa(s_confirm_to_wait_popup, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(s_confirm_to_wait_popup, 1, 0);
+  lv_obj_set_style_border_color(s_confirm_to_wait_popup, lv_color_hex(0x3A3A3A), 0);
+  lv_obj_set_style_radius(s_confirm_to_wait_popup, 14, 0);
+  lv_obj_set_style_pad_all(s_confirm_to_wait_popup, 12, 0);
+  lv_obj_set_style_pad_row(s_confirm_to_wait_popup, 10, 0);
+  lv_obj_clear_flag(s_confirm_to_wait_popup, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_flex_flow(s_confirm_to_wait_popup, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_flex_align(s_confirm_to_wait_popup, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+  lv_obj_t* msg = lv_label_create(s_confirm_to_wait_popup);
+  lv_obj_set_width(msg, 248);
+  lv_obj_set_style_text_align(msg, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_set_style_text_font(msg, &kakao_kr_16, 0);
+  lv_obj_set_style_text_color(msg, lv_color_hex(0xD0D0D0), 0);
+  lv_label_set_long_mode(msg, LV_LABEL_LONG_WRAP);
+  char msgbuf[160];
+  snprintf(msgbuf, sizeof(msgbuf), u8"%.*s\n과제를 찾아왔나요?", 32, line1);
+  lv_label_set_text(msg, msgbuf);
+
+  lv_obj_t* row = lv_obj_create(s_confirm_to_wait_popup);
+  lv_obj_set_width(row, lv_pct(100));
+  lv_obj_set_height(row, 50);
+  lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(row, 0, 0);
+  lv_obj_set_style_pad_all(row, 0, 0);
+  lv_obj_set_style_pad_column(row, 12, 0);
+  lv_obj_set_scrollbar_mode(row, LV_SCROLLBAR_MODE_OFF);
+  lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+  lv_obj_t* cancel_btn = lv_btn_create(row);
+  lv_obj_set_size(cancel_btn, 118, 40);
+  lv_obj_set_style_radius(cancel_btn, 10, 0);
+  lv_obj_set_style_bg_color(cancel_btn, lv_color_hex(0x323232), 0);
+  lv_obj_set_style_border_width(cancel_btn, 0, 0);
+  lv_obj_t* cancel_lbl = lv_label_create(cancel_btn);
+  lv_obj_set_style_text_font(cancel_lbl, &kakao_kr_16, 0);
+  lv_label_set_text(cancel_lbl, u8"취소");
+  lv_obj_center(cancel_lbl);
+  lv_obj_add_event_cb(cancel_btn, [](lv_event_t* e) {
+    (void)e;
+    close_confirm_to_wait_popup();
+  }, LV_EVENT_CLICKED, NULL);
+
+  lv_obj_t* confirm_btn = lv_btn_create(row);
+  lv_obj_set_size(confirm_btn, 118, 40);
+  lv_obj_set_style_radius(confirm_btn, 10, 0);
+  lv_obj_set_style_bg_color(confirm_btn, lv_color_hex(0x1FA95B), 0);
+  lv_obj_set_style_border_width(confirm_btn, 0, 0);
+  lv_obj_t* confirm_lbl = lv_label_create(confirm_btn);
+  lv_obj_set_style_text_font(confirm_lbl, &kakao_kr_16, 0);
+  lv_label_set_text(confirm_lbl, u8"확인");
+  lv_obj_center(confirm_lbl);
+  lv_obj_add_event_cb(confirm_btn, [](lv_event_t* e) {
+    (void)e;
+    char gid[40] = {};
+    if (s_confirm_to_wait_ctx) {
+      strncpy(gid, s_confirm_to_wait_ctx->group_id, sizeof(gid) - 1);
+      gid[sizeof(gid) - 1] = '\0';
+    }
+    close_confirm_to_wait_popup();
+    if (gid[0]) fw_publish_group_transition(gid, 4);
+  }, LV_EVENT_CLICKED, NULL);
+
+  screensaver_attach_activity(s_confirm_to_wait_popup);
 }
 
 static void close_student_info_screen(bool show_entry_hub) {
@@ -1581,7 +1713,8 @@ static void show_bind_confirm_popup(const char* student_id, const char* student_
 static void build_student_list_ui() {
   create_base_container();
   close_bind_confirm_popup();
-  close_question_sent_popup();
+  close_raise_question_confirm_popup();
+  close_confirm_to_wait_popup();
   if (s_hub_clock_timer) { lv_timer_del(s_hub_clock_timer); s_hub_clock_timer = nullptr; }
   if (s_entry_hub && lv_obj_is_valid(s_entry_hub)) { lv_obj_del(s_entry_hub); s_entry_hub = nullptr; s_entry_name_label = nullptr; s_hub_clock_label = nullptr; s_hub_battery_widget = nullptr; s_hub_battery_label = nullptr; }
   if (s_student_info_screen && lv_obj_is_valid(s_student_info_screen)) { lv_obj_del(s_student_info_screen); s_student_info_screen = nullptr; }
@@ -1638,7 +1771,8 @@ static void build_student_list_ui() {
 static void build_homeworks_ui_internal() {
   create_base_container();
   close_bind_confirm_popup();
-  close_question_sent_popup();
+  close_raise_question_confirm_popup();
+  close_confirm_to_wait_popup();
   if (s_hub_clock_timer) { lv_timer_del(s_hub_clock_timer); s_hub_clock_timer = nullptr; }
   if (s_entry_hub && lv_obj_is_valid(s_entry_hub)) { lv_obj_del(s_entry_hub); s_entry_hub = nullptr; s_entry_name_label = nullptr; s_hub_clock_label = nullptr; s_hub_battery_widget = nullptr; s_hub_battery_label = nullptr; }
   if (s_student_info_screen && lv_obj_is_valid(s_student_info_screen)) { lv_obj_del(s_student_info_screen); s_student_info_screen = nullptr; }
@@ -1750,10 +1884,30 @@ static void build_homeworks_ui_internal() {
   lv_img_set_zoom(question_img, 200);
   lv_obj_center(question_img);
   lv_obj_add_event_cb(question_btn, [](lv_event_t* e) {
+    lv_indev_t* indev = lv_event_get_indev(e);
+    if (!indev) return;
+    lv_point_t p;
+    lv_indev_get_point(indev, &p);
+    s_question_btn_press_x = p.x;
+    s_question_btn_press_y = p.y;
+    s_question_btn_dragged = false;
+  }, LV_EVENT_PRESSED, NULL);
+  lv_obj_add_event_cb(question_btn, [](lv_event_t* e) {
+    lv_indev_t* indev = lv_event_get_indev(e);
+    if (!indev) return;
+    lv_point_t p;
+    lv_indev_get_point(indev, &p);
+    lv_coord_t dx = p.x - s_question_btn_press_x;
+    lv_coord_t dy = p.y - s_question_btn_press_y;
+    if (dx < 0) dx = -dx;
+    if (dy < 0) dy = -dy;
+    if (dx > TAP_MOVE_SLOP_PX || dy > TAP_MOVE_SLOP_PX) s_question_btn_dragged = true;
+  }, LV_EVENT_PRESSING, NULL);
+  lv_obj_add_event_cb(question_btn, [](lv_event_t* e) {
     (void)e;
+    if (s_question_btn_dragged || is_tap_suppressed()) return;
     animate_bottom_sheet_to(false);
-    fw_publish_raise_question();
-    show_question_sent_popup();
+    show_raise_question_confirm_popup();
   }, LV_EVENT_CLICKED, NULL);
 
   // home button
@@ -1908,7 +2062,8 @@ void ui_before_screen_change(void) {
     toggle_bottom_sheet();
   }
   close_bind_confirm_popup();
-  close_question_sent_popup();
+  close_raise_question_confirm_popup();
+  close_confirm_to_wait_popup();
   close_student_info_screen(false);
   close_stopwatch_screen(false);
   close_hw_add_menu_page();
@@ -1921,7 +2076,8 @@ void ui_before_screen_change(void) {
 void ui_before_screensaver(void) {
   if (g_bottom_sheet_open) toggle_bottom_sheet();
   close_bind_confirm_popup();
-  close_question_sent_popup();
+  close_raise_question_confirm_popup();
+  close_confirm_to_wait_popup();
   close_volume_popup();
   close_brightness_popup();
   if (s_hub_clock_timer) { lv_timer_del(s_hub_clock_timer); s_hub_clock_timer = nullptr; }
@@ -2775,7 +2931,7 @@ static lv_obj_t* create_hw_card(lv_obj_t* parent, int group_idx) {
         s_detail_manual_override_until_ms = millis() + 5000;
         update_detail_play_button_visual();
       } else if (dd->phase == 4) {
-        fw_publish_group_transition(dd->group_id, 4);
+        show_confirm_phase_to_waiting_popup(dd->group_id, dd->group_idx);
       }
     }, LV_EVENT_CLICKED, d);
     lv_obj_add_event_cb(card, [](lv_event_t* e){

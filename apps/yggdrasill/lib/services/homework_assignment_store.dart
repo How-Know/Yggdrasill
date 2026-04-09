@@ -5,6 +5,7 @@ import 'package:uuid/uuid.dart';
 
 import 'tenant_service.dart';
 import 'homework_store.dart';
+import 'learning_problem_bank_service.dart';
 
 class HomeworkAssignmentDetail {
   final String id;
@@ -28,6 +29,10 @@ class HomeworkAssignmentDetail {
   final int repeatIndex;
   final int splitParts;
   final int splitRound;
+  final String? liveReleaseId;
+  final String? releaseExportJobId;
+  final DateTime? liveReleaseLockedAt;
+  final String? liveReleaseSignedUrl;
 
   const HomeworkAssignmentDetail({
     required this.id,
@@ -51,6 +56,10 @@ class HomeworkAssignmentDetail {
     required this.repeatIndex,
     required this.splitParts,
     required this.splitRound,
+    this.liveReleaseId,
+    this.releaseExportJobId,
+    this.liveReleaseLockedAt,
+    this.liveReleaseSignedUrl,
   });
 }
 
@@ -126,6 +135,8 @@ class HomeworkAssignmentStore {
   HomeworkAssignmentStore._internal();
   static final HomeworkAssignmentStore instance =
       HomeworkAssignmentStore._internal();
+  final LearningProblemBankService _problemBankService =
+      LearningProblemBankService();
   static const String reservationNote = '__reserved_homework__';
   /// Synthetic assignment ids merged into [loadActiveAssignments] until the server row exists.
   static const String optimisticReservedAssignmentIdPrefix = '__opt_resv__:';
@@ -482,6 +493,67 @@ class HomeworkAssignmentStore {
         msg.contains('homework_assignments.group_title_snapshot') ||
         msg.contains('group_id') ||
         msg.contains('group_title_snapshot');
+  }
+
+  bool _isMissingLiveReleaseColumnsError(Object error) {
+    final msg = error.toString().toLowerCase();
+    if (!msg.contains('column')) return false;
+    return msg.contains('homework_assignments.live_release_id') ||
+        msg.contains('homework_assignments.release_export_job_id') ||
+        msg.contains('homework_assignments.live_release_locked_at') ||
+        msg.contains('live_release_id') ||
+        msg.contains('release_export_job_id') ||
+        msg.contains('live_release_locked_at');
+  }
+
+  Map<String, dynamic>? _extractJoinedMap(dynamic raw) {
+    if (raw is Map) return Map<String, dynamic>.from(raw);
+    if (raw is List && raw.isNotEmpty && raw.first is Map) {
+      return Map<String, dynamic>.from(raw.first as Map);
+    }
+    return null;
+  }
+
+  String _resolveLiveReleaseExportJobId(Map<String, dynamic> assignmentRow) {
+    final status = _asTrimmed(assignmentRow['status']).toLowerCase();
+    final liveReleaseId = _asTrimmed(assignmentRow['live_release_id']);
+    if (liveReleaseId.isEmpty) return '';
+    final releaseExportJobId = _asTrimmed(assignmentRow['release_export_job_id']);
+    final releaseRow = _extractJoinedMap(assignmentRow['pb_live_releases']);
+    final activeExportJobId = _asTrimmed(releaseRow?['active_export_job_id']);
+    final frozenExportJobId = _asTrimmed(releaseRow?['frozen_export_job_id']);
+    if (status == 'completed') {
+      if (releaseExportJobId.isNotEmpty) return releaseExportJobId;
+      return frozenExportJobId;
+    }
+    if (status == 'assigned' || status == 'in_progress') {
+      return activeExportJobId;
+    }
+    return '';
+  }
+
+  Future<Map<String, String>> _loadLiveReleaseSignedUrlByExportJobId({
+    required String academyId,
+    required Set<String> exportJobIds,
+  }) async {
+    final out = <String, String>{};
+    if (academyId.trim().isEmpty || exportJobIds.isEmpty) return out;
+    for (final exportJobId in exportJobIds) {
+      final safeId = exportJobId.trim();
+      if (safeId.isEmpty) continue;
+      try {
+        final signedUrl = await _problemBankService.regenerateExportSignedUrl(
+          academyId: academyId,
+          exportJobId: safeId,
+        );
+        if (signedUrl.trim().isNotEmpty) {
+          out[safeId] = signedUrl.trim();
+        }
+      } catch (_) {
+        // keep best-effort behavior
+      }
+    }
+    return out;
   }
 
   Future<Map<String, HomeworkAssignmentGroupMeta>> _loadGroupMetaByItemIds({
@@ -999,17 +1071,31 @@ class HomeworkAssignmentStore {
         return rows as List<dynamic>;
       }
 
-      const selectWithGroup =
+      const selectWithGroupAndLiveRelease =
+          'id,homework_item_id,group_id,group_title_snapshot,assigned_at,due_date,order_index,status,note,progress,issue_type,issue_note,repeat_index,split_parts,split_round,live_release_id,release_export_job_id,live_release_locked_at,pb_live_releases(active_export_job_id,frozen_export_job_id),homework_items(id,title,type,page,count,content,flow_id)';
+      const selectWithGroupLegacyLiveRelease =
           'id,homework_item_id,group_id,group_title_snapshot,assigned_at,due_date,order_index,status,note,progress,issue_type,issue_note,repeat_index,split_parts,split_round,homework_items(id,title,type,page,count,content,flow_id)';
+      const selectLegacyWithLiveRelease =
+          'id,homework_item_id,assigned_at,due_date,order_index,status,note,progress,issue_type,issue_note,repeat_index,split_parts,split_round,live_release_id,release_export_job_id,live_release_locked_at,pb_live_releases(active_export_job_id,frozen_export_job_id),homework_items(id,title,type,page,count,content,flow_id)';
       const selectLegacy =
           'id,homework_item_id,assigned_at,due_date,order_index,status,note,progress,issue_type,issue_note,repeat_index,split_parts,split_round,homework_items(id,title,type,page,count,content,flow_id)';
 
       late final List<dynamic> rows;
       try {
-        rows = await runSelect(selectWithGroup);
+        rows = await runSelect(selectWithGroupAndLiveRelease);
       } catch (e) {
         if (_isMissingAssignmentGroupColumnsError(e)) {
-          rows = await runSelect(selectLegacy);
+          try {
+            rows = await runSelect(selectLegacyWithLiveRelease);
+          } catch (legacyErr) {
+            if (_isMissingLiveReleaseColumnsError(legacyErr)) {
+              rows = await runSelect(selectLegacy);
+            } else {
+              rethrow;
+            }
+          }
+        } else if (_isMissingLiveReleaseColumnsError(e)) {
+          rows = await runSelect(selectWithGroupLegacyLiveRelease);
         } else {
           rethrow;
         }
@@ -1030,11 +1116,28 @@ class HomeworkAssignmentStore {
         return 0;
       }
 
-      for (final r in rows.cast<Map<String, dynamic>>()) {
+      final typedRows = rows.cast<Map<String, dynamic>>();
+      final liveReleaseExportJobIds = <String>{};
+      for (final row in typedRows) {
+        final exportJobId = _resolveLiveReleaseExportJobId(row);
+        if (exportJobId.isNotEmpty) {
+          liveReleaseExportJobIds.add(exportJobId);
+        }
+      }
+      final signedUrlByExportJobId = await _loadLiveReleaseSignedUrlByExportJobId(
+        academyId: academyId,
+        exportJobIds: liveReleaseExportJobIds,
+      );
+
+      for (final r in typedRows) {
         final hw = r['homework_items'] as Map<String, dynamic>?;
         final groupId = _asTrimmed(r['group_id']);
         final groupTitleSnapshot = _asTrimmed(r['group_title_snapshot']);
         final splitParts = _normalizeSplitParts(r['split_parts']);
+        final liveReleaseId = _asTrimmed(r['live_release_id']);
+        final releaseExportJobId = _asTrimmed(r['release_export_job_id']);
+        final resolvedExportJobId = _resolveLiveReleaseExportJobId(r);
+        final signedUrl = signedUrlByExportJobId[resolvedExportJobId];
         list.add(
           HomeworkAssignmentDetail(
             id: (r['id'] as String?) ?? '',
@@ -1061,6 +1164,14 @@ class HomeworkAssignmentStore {
             repeatIndex: _normalizeRepeatIndex(r['repeat_index']),
             splitParts: splitParts,
             splitRound: _normalizeSplitRound(r['split_round'], splitParts),
+            liveReleaseId: liveReleaseId.isEmpty ? null : liveReleaseId,
+            releaseExportJobId:
+                releaseExportJobId.isEmpty ? null : releaseExportJobId,
+            liveReleaseLockedAt: parseTs(r['live_release_locked_at']),
+            liveReleaseSignedUrl:
+                signedUrl == null || signedUrl.trim().isEmpty
+                    ? null
+                    : signedUrl.trim(),
           ),
         );
       }
@@ -1462,6 +1573,7 @@ class HomeworkAssignmentStore {
     int splitParts = 1,
     Map<String, int>? splitPartsByItem,
     Map<String, HomeworkAssignmentGroupMeta>? groupMetaByItemId,
+    String? liveReleaseId,
   }) async {
     if (items.isEmpty) return;
     try {
@@ -1470,6 +1582,7 @@ class HomeworkAssignmentStore {
       _ensureRealtimeForAcademy(academyId);
       final supa = Supabase.instance.client;
       final dueDateIso = _dueDateIso(dueDate);
+      final safeLiveReleaseId = (liveReleaseId ?? '').trim();
       final resolvedGroupMetaByItem = <String, HomeworkAssignmentGroupMeta>{};
       if (groupMetaByItemId != null && groupMetaByItemId.isNotEmpty) {
         for (final entry in groupMetaByItemId.entries) {
@@ -1622,6 +1735,10 @@ class HomeworkAssignmentStore {
           'order_index': nextOrder++,
           'status': 'assigned',
           'note': note,
+          'live_release_id':
+              safeLiveReleaseId.isEmpty ? null : safeLiveReleaseId,
+          'release_export_job_id': null,
+          'live_release_locked_at': null,
           'repeat_index': repeatIndex,
           'split_parts': nextSplitParts,
           'split_round': nextSplitRound,
@@ -1639,11 +1756,20 @@ class HomeworkAssignmentStore {
       try {
         await supa.from('homework_assignments').insert(rows);
       } catch (e) {
-        if (!_isMissingAssignmentGroupColumnsError(e)) rethrow;
+        final missingGroupColumns = _isMissingAssignmentGroupColumnsError(e);
+        final missingLiveReleaseColumns = _isMissingLiveReleaseColumnsError(e);
+        if (!missingGroupColumns && !missingLiveReleaseColumns) rethrow;
         final fallbackRows = rows.map((row) {
           final copy = Map<String, dynamic>.from(row);
-          copy.remove('group_id');
-          copy.remove('group_title_snapshot');
+          if (missingGroupColumns) {
+            copy.remove('group_id');
+            copy.remove('group_title_snapshot');
+          }
+          if (missingLiveReleaseColumns) {
+            copy.remove('live_release_id');
+            copy.remove('release_export_job_id');
+            copy.remove('live_release_locked_at');
+          }
           return copy;
         }).toList(growable: false);
         await supa.from('homework_assignments').insert(fallbackRows);
@@ -1779,6 +1905,76 @@ class HomeworkAssignmentStore {
       _bump();
     } catch (e, st) {
       debugPrint('[HW_ASSIGN][clear_active][ERROR] $e\n$st');
+    }
+  }
+
+  Future<void> attachLiveReleaseToAssignments({
+    required String studentId,
+    required List<String> assignmentIds,
+    required String liveReleaseId,
+    bool onlyUncompleted = true,
+  }) async {
+    final safeAssignmentIds = assignmentIds
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    final safeLiveReleaseId = liveReleaseId.trim();
+    if (safeAssignmentIds.isEmpty || safeLiveReleaseId.isEmpty) return;
+    try {
+      final academyId = await TenantService.instance.getActiveAcademyId() ??
+          await TenantService.instance.ensureActiveAcademy();
+      _ensureRealtimeForAcademy(academyId);
+      dynamic query = Supabase.instance.client
+          .from('homework_assignments')
+          .update(<String, dynamic>{
+        'live_release_id': safeLiveReleaseId,
+        'release_export_job_id': null,
+        'live_release_locked_at': null,
+      })
+          .eq('academy_id', academyId)
+          .eq('student_id', studentId)
+          .inFilter('id', safeAssignmentIds);
+      if (onlyUncompleted) {
+        query = query.inFilter('status', const <String>['assigned', 'in_progress']);
+      }
+      await query;
+      _bump();
+    } catch (e, st) {
+      debugPrint('[HW_ASSIGN][attach_live_release][ERROR] $e\n$st');
+    }
+  }
+
+  Future<void> detachLiveReleaseFromAssignments({
+    required String studentId,
+    required List<String> assignmentIds,
+    bool onlyUncompleted = true,
+  }) async {
+    final safeAssignmentIds = assignmentIds
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    if (safeAssignmentIds.isEmpty) return;
+    try {
+      final academyId = await TenantService.instance.getActiveAcademyId() ??
+          await TenantService.instance.ensureActiveAcademy();
+      _ensureRealtimeForAcademy(academyId);
+      dynamic query = Supabase.instance.client
+          .from('homework_assignments')
+          .update(<String, dynamic>{
+        'live_release_id': null,
+      })
+          .eq('academy_id', academyId)
+          .eq('student_id', studentId)
+          .inFilter('id', safeAssignmentIds);
+      if (onlyUncompleted) {
+        query = query.inFilter('status', const <String>['assigned', 'in_progress']);
+      }
+      await query;
+      _bump();
+    } catch (e, st) {
+      debugPrint('[HW_ASSIGN][detach_live_release][ERROR] $e\n$st');
     }
   }
 }

@@ -349,6 +349,13 @@ function numIndentEm(numStr) {
 }
 
 function resolveQuestionScore(question, scoreMapByQuestionId) {
+  const questionUid = String(question?.question_uid || '').trim();
+  const mapScoreByUid = Number.parseFloat(
+    String(scoreMapByQuestionId?.[questionUid] ?? ''),
+  );
+  if (Number.isFinite(mapScoreByUid) && mapScoreByUid >= 0) {
+    return Math.min(999, mapScoreByUid);
+  }
   const questionId = String(question?.id || '').trim();
   const mapScore = Number.parseFloat(
     String(scoreMapByQuestionId?.[questionId] ?? ''),
