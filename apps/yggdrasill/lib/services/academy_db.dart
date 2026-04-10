@@ -1,4 +1,5 @@
 import 'package:sqflite/sqflite.dart';
+import 'package:uuid/uuid.dart';
 import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
 import '../models/academy_settings.dart';
@@ -1917,6 +1918,50 @@ class AcademyDbService {
         PRIMARY KEY (school, level, grade, date)
       )
     ''');
+    await dbClient.execute('''
+      CREATE TABLE IF NOT EXISTS exam_season_snapshots (
+        id TEXT PRIMARY KEY,
+        created_at TEXT NOT NULL,
+        payload_json TEXT NOT NULL
+      )
+    ''');
+  }
+
+  static final _uuid = Uuid();
+
+  Future<String> insertExamSeasonSnapshot(String payloadJson) async {
+    final dbClient = await db;
+    await ensureExamTables();
+    final id = _uuid.v4();
+    final createdAt = DateTime.now().toUtc().toIso8601String();
+    await dbClient.insert('exam_season_snapshots', {
+      'id': id,
+      'created_at': createdAt,
+      'payload_json': payloadJson,
+    });
+    return id;
+  }
+
+  Future<List<Map<String, dynamic>>> listExamSeasonSnapshots() async {
+    final dbClient = await db;
+    await ensureExamTables();
+    return dbClient.query(
+      'exam_season_snapshots',
+      orderBy: 'created_at DESC',
+    );
+  }
+
+  Future<Map<String, dynamic>?> getExamSeasonSnapshotById(String id) async {
+    final dbClient = await db;
+    await ensureExamTables();
+    final rows = await dbClient.query(
+      'exam_season_snapshots',
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    return rows.first;
   }
 
   Future<void> saveExamDataForSchoolGrade({
@@ -1970,19 +2015,18 @@ class AcademyDbService {
   }) async {
     final dbClient = await db;
     await ensureExamTables();
-    final schedules = await dbClient.query('exam_schedules',
-        where: 'school = ? AND level = ? AND grade = ?',
-        whereArgs: [school, level, grade]);
-    final ranges = await dbClient.query('exam_ranges',
-        where: 'school = ? AND level = ? AND grade = ?',
-        whereArgs: [school, level, grade]);
-    final days = await dbClient.query('exam_days',
-        where: 'school = ? AND level = ? AND grade = ?',
-        whereArgs: [school, level, grade]);
+    const where = 'school = ? AND level = ? AND grade = ?';
+    final args = [school, level, grade];
+    final rows = await Future.wait([
+      dbClient.query('exam_schedules',
+          where: where, whereArgs: args),
+      dbClient.query('exam_ranges', where: where, whereArgs: args),
+      dbClient.query('exam_days', where: where, whereArgs: args),
+    ]);
     return {
-      'schedules': schedules,
-      'ranges': ranges,
-      'days': days,
+      'schedules': rows[0],
+      'ranges': rows[1],
+      'days': rows[2],
     };
   }
 

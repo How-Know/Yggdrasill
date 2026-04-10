@@ -108,6 +108,9 @@ class HomeworkQuickAddProxyDialogState
 
   final ScrollController _rangeRightScrollController = ScrollController();
   final ScrollController _leftTreeScrollController = ScrollController();
+  final ScrollController _naesinGridScrollController = ScrollController();
+  final ScrollController _rangeFallbackScrollController = ScrollController();
+  final ScrollController _inputPanelScrollController = ScrollController();
   final Map<String, GlobalKey> _smallHeaderKeys = <String, GlobalKey>{};
   final Map<String, GlobalKey> _leftSmallRowKeys = <String, GlobalKey>{};
 
@@ -166,6 +169,8 @@ class HomeworkQuickAddProxyDialogState
   final LearningProblemBankService _problemBankService =
       LearningProblemBankService();
   final Set<String> _naesinLinkedCellKeys = <String>{};
+  final Map<String, _NaesinPresetAutoValues> _naesinAutoValuesByCellKey =
+      <String, _NaesinPresetAutoValues>{};
   bool _loadingNaesinLinkedCellKeys = false;
 
   bool get _isChildAddMode => widget.childAddMode;
@@ -247,6 +252,9 @@ class HomeworkQuickAddProxyDialogState
     _groupTitle.dispose();
     _rangeRightScrollController.dispose();
     _leftTreeScrollController.dispose();
+    _naesinGridScrollController.dispose();
+    _rangeFallbackScrollController.dispose();
+    _inputPanelScrollController.dispose();
     super.dispose();
   }
 
@@ -319,6 +327,12 @@ class HomeworkQuickAddProxyDialogState
     return parsed;
   }
 
+  String _formatPageRangeFromCount(int pageCount) {
+    if (pageCount <= 0) return '';
+    if (pageCount == 1) return '1';
+    return '1-$pageCount';
+  }
+
   String _activeHomeworkType({required bool hasBookSelection}) {
     return hasBookSelection ? _linkedHomeworkType : _type;
   }
@@ -381,6 +395,61 @@ class HomeworkQuickAddProxyDialogState
       if (item.key == courseKey) return item.label;
     }
     return courseKey.trim();
+  }
+
+  int _safeIntFromDynamic(dynamic raw) {
+    if (raw is int) return raw;
+    if (raw is num) return raw.toInt();
+    return int.tryParse('$raw') ?? 0;
+  }
+
+  int? _parseTimeLimitMinutesFromPresetRenderConfig(
+    Map<String, dynamic> renderConfig,
+  ) {
+    final raw = '${renderConfig['timeLimitText'] ?? ''}'.trim();
+    if (raw.isEmpty) return null;
+    final matched = RegExp(r'(\d{1,4})').firstMatch(raw);
+    final parsed = int.tryParse(matched?.group(1) ?? '');
+    if (parsed == null || parsed <= 0) return null;
+    return parsed;
+  }
+
+  int? _estimateQuestionPageCountFromPreset({
+    required Map<String, dynamic> renderConfig,
+    required int questionCount,
+  }) {
+    final rawPageRows = renderConfig['pageColumnQuestionCounts'];
+    if (rawPageRows is List) {
+      var maxPageIndex = 0;
+      for (final row in rawPageRows) {
+        if (row is! Map) continue;
+        final map = Map<String, dynamic>.from(row);
+        final pageIndex = _safeIntFromDynamic(
+          map['pageIndex'] ?? map['page'] ?? map['pageNo'],
+        );
+        final left = _safeIntFromDynamic(
+          map['left'] ?? map['leftCount'] ?? map['col1'],
+        );
+        final right = _safeIntFromDynamic(
+          map['right'] ?? map['rightCount'] ?? map['col2'],
+        );
+        if (pageIndex <= 0 || left + right <= 0) continue;
+        if (pageIndex > maxPageIndex) {
+          maxPageIndex = pageIndex;
+        }
+      }
+      if (maxPageIndex > 0) return maxPageIndex;
+    }
+    if (questionCount <= 0) return null;
+    final layoutColumns = _safeIntFromDynamic(renderConfig['layoutColumns']);
+    final defaultPerPage = layoutColumns == 2 ? 8 : 4;
+    final maxQuestionsPerPage = _safeIntFromDynamic(
+      renderConfig['maxQuestionsPerPage'],
+    );
+    final perPage =
+        maxQuestionsPerPage > 0 ? maxQuestionsPerPage : defaultPerPage;
+    if (perPage <= 0) return null;
+    return ((questionCount + perPage - 1) / perPage).floor();
   }
 
   String _naesinDraftLinkKeyForCell({
@@ -571,6 +640,7 @@ class HomeworkQuickAddProxyDialogState
         if (!mounted) return;
         setState(() {
           _naesinLinkedCellKeys.clear();
+          _naesinAutoValuesByCellKey.clear();
         });
         return;
       }
@@ -579,12 +649,31 @@ class HomeworkQuickAddProxyDialogState
         limit: 500,
       );
       final linkedKeys = <String>{};
+      final autoValuesByKey = <String, _NaesinPresetAutoValues>{};
       for (final preset in presets) {
         final key =
             '${preset.renderConfig[_kNaesinLinkConfigKey] ?? preset.naesinLinkKey}'
                 .trim();
         if (key.isNotEmpty) {
           linkedKeys.add(key);
+          final questionCount = preset.selectedQuestionCount > 0
+              ? preset.selectedQuestionCount
+              : preset.selectedQuestionUids.length;
+          final questionPageCount = _estimateQuestionPageCountFromPreset(
+            renderConfig: preset.renderConfig,
+            questionCount: questionCount,
+          );
+          final timeLimitMinutes = _parseTimeLimitMinutesFromPresetRenderConfig(
+            preset.renderConfig,
+          );
+          autoValuesByKey.putIfAbsent(
+            key,
+            () => _NaesinPresetAutoValues(
+              questionCount: questionCount,
+              questionPageCount: questionPageCount,
+              timeLimitMinutes: timeLimitMinutes,
+            ),
+          );
         }
       }
       if (!mounted) return;
@@ -592,161 +681,21 @@ class HomeworkQuickAddProxyDialogState
         _naesinLinkedCellKeys
           ..clear()
           ..addAll(linkedKeys);
+        _naesinAutoValuesByCellKey
+          ..clear()
+          ..addAll(autoValuesByKey);
       });
     } catch (_) {
       if (!mounted) return;
       setState(() {
         _naesinLinkedCellKeys.clear();
+        _naesinAutoValuesByCellKey.clear();
       });
     } finally {
       if (mounted) {
         setState(() => _loadingNaesinLinkedCellKeys = false);
       }
     }
-  }
-
-  Future<_NaesinCellCreateInput?> _showNaesinCellCreateDialog({
-    required String school,
-    required int year,
-  }) async {
-    final pageController = ImeAwareTextEditingController();
-    final countController = ImeAwareTextEditingController();
-    final limitController = ImeAwareTextEditingController();
-    String? validationMessage;
-    final result = await showDialog<_NaesinCellCreateInput>(
-      context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (dialogContext, setDialogState) {
-          return AlertDialog(
-            backgroundColor: kDlgBg,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(14),
-            ),
-            title: const Text(
-              '내신 과제 추가',
-              style: TextStyle(color: kDlgText, fontWeight: FontWeight.w900),
-            ),
-            content: SizedBox(
-              width: 420,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    '$year $school · ${_naesinGradeYearLabel(_naesinGradeKey)} · ${_naesinCourseLabel(_naesinCourseKey)} · $_naesinExamTerm',
-                    style: const TextStyle(
-                      color: kDlgTextSub,
-                      fontSize: 12.4,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          controller: pageController,
-                          keyboardType: TextInputType.text,
-                          inputFormatters: [
-                            FilteringTextInputFormatter.allow(
-                              RegExp(r'[0-9\-~,/ ]'),
-                            ),
-                          ],
-                          style: const TextStyle(
-                            color: kDlgText,
-                            fontWeight: FontWeight.w600,
-                          ),
-                          decoration: _inputDecoration('페이지', hint: '예: 12-19'),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: TextField(
-                          controller: countController,
-                          keyboardType: TextInputType.number,
-                          inputFormatters: [
-                            FilteringTextInputFormatter.digitsOnly
-                          ],
-                          style: const TextStyle(
-                            color: kDlgText,
-                            fontWeight: FontWeight.w600,
-                          ),
-                          decoration: _inputDecoration('문항수', hint: '예: 20'),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  TextField(
-                    controller: limitController,
-                    keyboardType: TextInputType.number,
-                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                    style: const TextStyle(
-                      color: kDlgText,
-                      fontWeight: FontWeight.w600,
-                    ),
-                    decoration: _inputDecoration(
-                      '제한시간(분)',
-                      hint: '예: 50 (선택)',
-                    ),
-                  ),
-                  if (validationMessage != null) ...[
-                    const SizedBox(height: 10),
-                    Text(
-                      validationMessage!,
-                      style: const TextStyle(
-                        color: Color(0xFFE57373),
-                        fontSize: 12.2,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(dialogContext).pop(),
-                style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
-                child: const Text('취소'),
-              ),
-              FilledButton(
-                onPressed: () {
-                  final page = pageController.text.trim();
-                  final count = _parsePositiveIntText(countController.text);
-                  final timeLimit = _parsePositiveIntText(limitController.text);
-                  if (page.isEmpty) {
-                    setDialogState(() {
-                      validationMessage = '페이지를 입력하세요.';
-                    });
-                    return;
-                  }
-                  if (count == null) {
-                    setDialogState(() {
-                      validationMessage = '문항수는 1 이상의 숫자로 입력하세요.';
-                    });
-                    return;
-                  }
-                  Navigator.of(dialogContext).pop(
-                    _NaesinCellCreateInput(
-                      page: page,
-                      count: count,
-                      timeLimitMinutes: timeLimit,
-                    ),
-                  );
-                },
-                style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
-                child: const Text('추가'),
-              ),
-            ],
-          );
-        },
-      ),
-    );
-    pageController.dispose();
-    countController.dispose();
-    limitController.dispose();
-    return result;
   }
 
   Future<void> _onNaesinStatusCellTapped({
@@ -772,14 +721,27 @@ class HomeworkQuickAddProxyDialogState
         return;
       }
     }
-    final input = await _showNaesinCellCreateDialog(school: school, year: year);
-    if (input == null) return;
-    const resolvedType = '테스트';
-    final title = _naesinChildHomeworkTitle();
-    final groupTitle = _naesinGroupTitleForCell(school: school, year: year);
     final linkKey = _buildNaesinLinkKeyForCell(school: school, year: year);
-    final countText = '${input.count}';
-    final content = <String>[
+    final autoValues = _naesinAutoValuesByCellKey[linkKey];
+    final pageInput = _page.text.trim();
+    final countInput = _parsePositiveIntText(_count.text);
+    final autoPageCount = autoValues?.questionPageCount ?? 0;
+    final resolvedPage = pageInput.isNotEmpty
+        ? pageInput
+        : _formatPageRangeFromCount(autoPageCount);
+    final resolvedCount = countInput ?? autoValues?.questionCount;
+    if (resolvedPage.isEmpty || resolvedCount == null || resolvedCount <= 0) {
+      _showDialogSnackBar('연결된 프리셋에서 페이지/문항수를 자동 추출하지 못했습니다.');
+      return;
+    }
+    final autoResolvedTimeLimit =
+        _parsePositiveIntText(_timeLimitMinutes.text) ??
+            autoValues?.timeLimitMinutes;
+    const resolvedType = '테스트';
+    final autoTitle = _naesinChildHomeworkTitle();
+    final groupTitle = _naesinGroupTitleForCell(school: school, year: year);
+    final countText = '$resolvedCount';
+    final autoContent = <String>[
       '내신 기출',
       '학교: $school',
       '연도: $year',
@@ -787,11 +749,44 @@ class HomeworkQuickAddProxyDialogState
       '과정: ${_naesinCourseLabel(_naesinCourseKey)}',
       '시험: $_naesinExamTerm',
     ].join('\n');
+
+    // 자동 추출값은 가운데 입력필드에도 반영해 사용자가 즉시 수정할 수 있게 한다.
+    if (_title.text.trim().isEmpty) {
+      _setControllerText(_title, autoTitle);
+    }
+    if (_page.text.trim().isEmpty) {
+      _setControllerText(_page, resolvedPage);
+    }
+    if (_count.text.trim().isEmpty) {
+      _setControllerText(_count, countText);
+    }
+    if (_timeLimitMinutes.text.trim().isEmpty &&
+        autoResolvedTimeLimit != null) {
+      _setControllerText(_timeLimitMinutes, '$autoResolvedTimeLimit');
+    }
+    if (_content.text.trim().isEmpty) {
+      _setControllerText(_content, autoContent);
+    }
+
+    final titleInput = _title.text.trim();
+    final title = titleInput.isEmpty ? autoTitle : titleInput;
+    final page = _page.text.trim();
+    final count = _parsePositiveIntText(_count.text) ?? resolvedCount;
+    if (page.isEmpty || count <= 0) {
+      _showDialogSnackBar('페이지/문항수를 확인해주세요.');
+      return;
+    }
+    final countInputText = '$count';
+    final timeLimitMinutes =
+        _parsePositiveIntText(_timeLimitMinutes.text) ?? autoResolvedTimeLimit;
+    final memo = _memo.text.trim();
+    final contentInput = _content.text.trim();
+    final content = contentInput.isEmpty ? autoContent : contentInput;
     final body = _composeBodyValues(
-      page: input.page,
-      count: countText,
+      page: page,
+      count: countInputText,
       content: content,
-      timeLimitMinutes: input.timeLimitMinutes,
+      timeLimitMinutes: timeLimitMinutes,
     );
     final draftItem = _DraftGroupItem(
       key: 'draft_${_draftGroupItemSeq++}',
@@ -803,14 +798,14 @@ class HomeworkQuickAddProxyDialogState
       sourceUnitPath: linkKey,
       unitMappings: const <Map<String, dynamic>>[],
       title: title,
-      page: input.page,
-      count: countText,
-      memo: '',
+      page: page,
+      count: countInputText,
+      memo: memo,
       content: content,
       body: body,
       color: _colorForType(resolvedType),
       splitParts: _selectedSplitParts.clamp(1, 4).toInt(),
-      timeLimitMinutes: input.timeLimitMinutes,
+      timeLimitMinutes: timeLimitMinutes,
       naesinLinkKey: linkKey,
       naesinGroupTitle: groupTitle,
     );
@@ -5018,8 +5013,10 @@ class HomeworkQuickAddProxyDialogState
           ),
         Expanded(
           child: Scrollbar(
+            controller: _naesinGridScrollController,
             thumbVisibility: true,
             child: SingleChildScrollView(
+              controller: _naesinGridScrollController,
               padding: const EdgeInsets.only(top: 8),
               child: Column(
                 children: [
@@ -5312,8 +5309,10 @@ class HomeworkQuickAddProxyDialogState
           child: !_manualPageMode && !_loadingMetadata && _units.isNotEmpty
               ? body
               : Scrollbar(
+                  controller: _rangeFallbackScrollController,
                   thumbVisibility: !_manualPageMode,
                   child: SingleChildScrollView(
+                    controller: _rangeFallbackScrollController,
                     child: body,
                   ),
                 ),
@@ -5417,24 +5416,30 @@ class HomeworkQuickAddProxyDialogState
             const Divider(height: 1, thickness: 1, color: kDlgBorder),
             const SizedBox(height: 24),
             Expanded(
-              child: SingleChildScrollView(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _buildRightDetailPanel(
-                      waitingSelectedBook: waitingSelectedBook,
-                      selectedBook: selectedBook,
-                    ),
-                    const SizedBox(height: 10),
-                    const Divider(height: 1, thickness: 1, color: kDlgBorder),
-                    const SizedBox(height: 8),
-                    const YggDialogSectionHeader(
-                      icon: Icons.tune_rounded,
-                      title: '출제 기본 옵션',
-                    ),
-                    const SizedBox(height: 6),
-                    _buildAssignmentOptions(),
-                  ],
+              child: Scrollbar(
+                controller: _inputPanelScrollController,
+                thumbVisibility: true,
+                child: SingleChildScrollView(
+                  controller: _inputPanelScrollController,
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _buildRightDetailPanel(
+                        waitingSelectedBook: waitingSelectedBook,
+                        selectedBook: selectedBook,
+                      ),
+                      const SizedBox(height: 10),
+                      const Divider(height: 1, thickness: 1, color: kDlgBorder),
+                      const SizedBox(height: 8),
+                      const YggDialogSectionHeader(
+                        icon: Icons.tune_rounded,
+                        title: '출제 기본 옵션',
+                      ),
+                      const SizedBox(height: 6),
+                      _buildAssignmentOptions(),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -5525,15 +5530,15 @@ class HomeworkQuickAddProxyDialogState
   }
 }
 
-class _NaesinCellCreateInput {
-  const _NaesinCellCreateInput({
-    required this.page,
-    required this.count,
+class _NaesinPresetAutoValues {
+  const _NaesinPresetAutoValues({
+    required this.questionCount,
+    this.questionPageCount,
     this.timeLimitMinutes,
   });
 
-  final String page;
-  final int count;
+  final int questionCount;
+  final int? questionPageCount;
   final int? timeLimitMinutes;
 }
 

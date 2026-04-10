@@ -97,3 +97,28 @@ where status = 'error'
   and last_error like 'token_issue_failed:%';
 ```
 
+## 9) 보강 예약 알림톡 워커 (선택, 별도 프로세스)
+
+보강 예약은 `makeup_notification_queue`를 사용합니다. 출결 워커와 **프로세스를 분리**합니다.
+
+1. 마이그레이션(보강 큐·설정 컬럼·트리거) 적용 후, 테스트 학원에 `makeup_template_code`, `makeup_message_template`, `makeup_alimtalk_enabled = true` 설정.
+2. `.env`에 아래 추가:
+
+```bash
+MAKEUP_ALIMTALK_ENABLED=1
+# 선택: 당일 큐만 (기본과 동일하려면 생략 가능)
+MAKEUP_ALIMTALK_ONLY_TODAY_QUEUE=1
+```
+
+3. PM2로 **두 번째** 프로세스 기동:
+
+```bash
+cd ~/Yggdrasill/gateway
+pm2 start src/makeup_alimtalk_worker.js --name ygg-makeup-alimtalk-worker
+pm2 save
+```
+
+`MAKEUP_ALIMTALK_ENABLED`가 없으면 보강 워커는 즉시 종료하므로, 배포만 해도 출결 경로에 영향이 없습니다.
+
+자세한 롤아웃·검증 SQL·템플릿 변수는 [makeup_alimtalk_setup.md](./makeup_alimtalk_setup.md)를 참고하세요.
+

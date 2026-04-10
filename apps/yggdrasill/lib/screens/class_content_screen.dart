@@ -2428,10 +2428,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     for (final student in attendingStudents) {
       waitingCandidates.addAll(
         HomeworkStore.instance.items(student.id).where(
-              (hw) =>
-                  hw.status != HomeworkStatus.completed &&
-                  hw.phase == 1 &&
-                  _hasDirectHomeworkTextbookLink(hw),
+              (hw) => hw.status != HomeworkStatus.completed && hw.phase == 1,
             ),
       );
     }
@@ -2446,10 +2443,12 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     for (final hw in waitingCandidates) {
       try {
         final resolved =
-            await _resolveHomeworkPdfLinks(hw, allowFlowFallback: false);
+            await _resolveHomeworkPdfLinks(hw, allowFlowFallback: true);
         final bodyRaw = resolved.bodyPathRaw.trim();
         if (bodyRaw.isEmpty) continue;
         if (_isWebUrl(bodyRaw)) continue;
+        final localPath = _toLocalFilePath(bodyRaw);
+        if (localPath.isEmpty || !await File(localPath).exists()) continue;
         hasPrintableBodyLink = true;
         break;
       } catch (_) {}
@@ -2460,6 +2459,22 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       return;
     }
     setState(() => _printPickMode = true);
+  }
+
+  Future<bool> _canPrintHomeworkByResolvedTextbook(HomeworkItem hw) async {
+    try {
+      final resolved = await _resolveHomeworkPdfLinks(
+        hw,
+        allowFlowFallback: true,
+      );
+      final bodyRaw = resolved.bodyPathRaw.trim();
+      if (bodyRaw.isEmpty || _isWebUrl(bodyRaw)) return false;
+      final bodyPath = _toLocalFilePath(bodyRaw);
+      if (bodyPath.isEmpty) return false;
+      return await File(bodyPath).exists();
+    } catch (_) {
+      return false;
+    }
   }
 
   Future<void> _handleHomeworkPrintPick({
@@ -2507,10 +2522,12 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       setState(() => _printPickMode = false);
     }
 
-    final printableById = <String, bool>{
-      for (final child in waitingChildren)
-        child.id: _hasDirectHomeworkTextbookLink(child),
-    };
+    final printableById = <String, bool>{};
+    for (final child in waitingChildren) {
+      printableById[child.id] =
+          await _canPrintHomeworkByResolvedTextbook(child);
+    }
+    if (!mounted) return;
     final initialSelectedById = <String, bool>{
       for (final child in waitingChildren)
         child.id: printableById[child.id] ?? false,
@@ -2519,7 +2536,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         .where((e) => printableById[e.id] ?? false)
         .toList(growable: false);
     if (defaultPrintableChildren.isEmpty) {
-      _showHomeworkChipSnackBar(context, '인쇄할 하위 과제를 선택하세요.');
+      _showHomeworkChipSnackBar(context, '인쇄 가능한 하위 과제가 없습니다.');
       return;
     }
 
@@ -7754,6 +7771,7 @@ Future<_HomeworkPrintConfirmResult?> _showHomeworkPrintConfirmDialog({
   Map<String, bool> initialChildSelectionById = const <String, bool>{},
 }) async {
   final controller = ImeAwareTextEditingController(text: initialRange);
+  final contentScrollController = ScrollController();
   bool printWhole = initialRange.isEmpty || !isPdf;
   final resolvedTitle = (dialogTitle ?? hw.title).trim();
   final hasChildChecklist = selectableChildren.isNotEmpty;
@@ -7794,183 +7812,194 @@ Future<_HomeworkPrintConfirmResult?> _showHomeworkPrintConfirmDialog({
             ),
             content: SizedBox(
               width: hasChildChecklist ? 540 : 440,
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (hasChildChecklist) ...[
-                      const YggDialogSectionHeader(
-                        icon: Icons.checklist_rounded,
-                        title: '하위 과제 선택',
-                      ),
-                      const Text(
-                        '체크한 하위 과제 페이지만 인쇄 범위에 반영됩니다.',
-                        style: TextStyle(color: kDlgTextSub, fontSize: 12.5),
-                      ),
-                      const SizedBox(height: 10),
-                      ConstrainedBox(
-                        constraints: const BoxConstraints(maxHeight: 260),
-                        child: ListView.separated(
-                          shrinkWrap: true,
-                          itemCount: selectableChildren.length,
-                          separatorBuilder: (_, __) =>
-                              const SizedBox(height: 8),
-                          itemBuilder: (ctx, idx) {
-                            final child = selectableChildren[idx];
-                            final canPrint =
-                                childPrintableById[child.id] ?? true;
-                            final pageText = (child.page ?? '').trim();
-                            final countText =
-                                (child.count != null && child.count! > 0)
-                                    ? '${child.count}문항'
-                                    : '-';
-                            final subtitle = [
-                              if (pageText.isNotEmpty) 'p.$pageText',
-                              countText,
-                              if (!canPrint) '교재 링크 없음',
-                            ].join(' · ');
-                            return Container(
-                              decoration: BoxDecoration(
-                                color: kDlgPanelBg,
-                                borderRadius: BorderRadius.circular(10),
-                                border: Border.all(color: kDlgBorder),
-                              ),
-                              child: CheckboxListTile(
-                                value: selectedChildById[child.id] ?? false,
-                                onChanged: canPrint
-                                    ? (v) => setLocalState(() {
-                                          selectedChildById[child.id] =
-                                              v ?? false;
-                                          if (isPdf && !printWhole) {
-                                            final merged =
-                                                mergedRangeFromSelection();
-                                            if (merged.isNotEmpty ||
-                                                controller.text
-                                                    .trim()
-                                                    .isEmpty) {
-                                              controller.text = merged;
-                                            }
-                                          }
-                                        })
-                                    : null,
-                                contentPadding: const EdgeInsets.symmetric(
-                                  horizontal: 10,
-                                  vertical: 2,
-                                ),
-                                activeColor: kDlgAccent,
-                                checkColor: Colors.white,
-                                controlAffinity:
-                                    ListTileControlAffinity.leading,
-                                title: LatexTextRenderer(
-                                  child.title.trim().isEmpty
-                                      ? '(제목 없음)'
-                                      : child.title.trim(),
-                                  style: TextStyle(
-                                    color: canPrint ? kDlgText : kDlgTextSub,
-                                    fontWeight: FontWeight.w700,
-                                    fontSize: 13.5,
-                                  ),
-                                  maxLines: 1,
-                                  softWrap: false,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                                subtitle: Text(
-                                  subtitle,
-                                  style: TextStyle(
-                                    color: canPrint
-                                        ? kDlgTextSub
-                                        : const Color(0xFF6E7E7E),
-                                    fontSize: 12,
-                                  ),
-                                ),
-                              ),
-                            );
-                          },
+              child: Scrollbar(
+                controller: contentScrollController,
+                thumbVisibility: true,
+                child: SingleChildScrollView(
+                  controller: contentScrollController,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (hasChildChecklist) ...[
+                        const YggDialogSectionHeader(
+                          icon: Icons.checklist_rounded,
+                          title: '하위 과제 선택',
                         ),
+                        const Text(
+                          '체크한 하위 과제 페이지만 인쇄 범위에 반영됩니다.',
+                          style: TextStyle(color: kDlgTextSub, fontSize: 12.5),
+                        ),
+                        const SizedBox(height: 10),
+                        ConstrainedBox(
+                          constraints: const BoxConstraints(maxHeight: 260),
+                          child: Column(
+                            children: [
+                              for (var idx = 0;
+                                  idx < selectableChildren.length;
+                                  idx++) ...[
+                                if (idx > 0) const SizedBox(height: 8),
+                                (() {
+                                  final child = selectableChildren[idx];
+                                  final canPrint =
+                                      childPrintableById[child.id] ?? true;
+                                  final pageText = (child.page ?? '').trim();
+                                  final countText =
+                                      (child.count != null && child.count! > 0)
+                                          ? '${child.count}문항'
+                                          : '-';
+                                  final subtitle = [
+                                    if (pageText.isNotEmpty) 'p.$pageText',
+                                    countText,
+                                    if (!canPrint) '교재 링크 없음',
+                                  ].join(' · ');
+                                  return Container(
+                                    decoration: BoxDecoration(
+                                      color: kDlgPanelBg,
+                                      borderRadius: BorderRadius.circular(10),
+                                      border: Border.all(color: kDlgBorder),
+                                    ),
+                                    child: CheckboxListTile(
+                                      value:
+                                          selectedChildById[child.id] ?? false,
+                                      onChanged: canPrint
+                                          ? (v) => setLocalState(() {
+                                                selectedChildById[child.id] =
+                                                    v ?? false;
+                                                if (isPdf && !printWhole) {
+                                                  final merged =
+                                                      mergedRangeFromSelection();
+                                                  if (merged.isNotEmpty ||
+                                                      controller.text
+                                                          .trim()
+                                                          .isEmpty) {
+                                                    controller.text = merged;
+                                                  }
+                                                }
+                                              })
+                                          : null,
+                                      contentPadding:
+                                          const EdgeInsets.symmetric(
+                                        horizontal: 10,
+                                        vertical: 2,
+                                      ),
+                                      activeColor: kDlgAccent,
+                                      checkColor: Colors.white,
+                                      controlAffinity:
+                                          ListTileControlAffinity.leading,
+                                      title: LatexTextRenderer(
+                                        child.title.trim().isEmpty
+                                            ? '(제목 없음)'
+                                            : child.title.trim(),
+                                        style: TextStyle(
+                                          color:
+                                              canPrint ? kDlgText : kDlgTextSub,
+                                          fontWeight: FontWeight.w700,
+                                          fontSize: 13.5,
+                                        ),
+                                        maxLines: 1,
+                                        softWrap: false,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                      subtitle: Text(
+                                        subtitle,
+                                        style: TextStyle(
+                                          color: canPrint
+                                              ? kDlgTextSub
+                                              : const Color(0xFF6E7E7E),
+                                          fontSize: 12,
+                                        ),
+                                      ),
+                                    ),
+                                  );
+                                })(),
+                              ],
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 14),
+                      ],
+                      const YggDialogSectionHeader(
+                        icon: Icons.print_rounded,
+                        title: '출력 정보',
+                      ),
+                      LatexTextRenderer(
+                        resolvedTitle.isEmpty ? '(제목 없음)' : resolvedTitle,
+                        style: const TextStyle(
+                          color: kDlgText,
+                          fontWeight: FontWeight.w800,
+                        ),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        p.basename(filePath),
+                        style:
+                            const TextStyle(color: kDlgTextSub, fontSize: 12.5),
                       ),
                       const SizedBox(height: 14),
-                    ],
-                    const YggDialogSectionHeader(
-                      icon: Icons.print_rounded,
-                      title: '출력 정보',
-                    ),
-                    LatexTextRenderer(
-                      resolvedTitle.isEmpty ? '(제목 없음)' : resolvedTitle,
-                      style: const TextStyle(
-                        color: kDlgText,
-                        fontWeight: FontWeight.w800,
-                      ),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      p.basename(filePath),
-                      style:
-                          const TextStyle(color: kDlgTextSub, fontSize: 12.5),
-                    ),
-                    const SizedBox(height: 14),
-                    if (!isPdf)
-                      const Text(
-                        'PDF가 아니어서 전체 인쇄로 진행됩니다.',
-                        style: TextStyle(color: kDlgTextSub),
-                      )
-                    else ...[
-                      CheckboxListTile(
-                        value: printWhole,
-                        onChanged: (v) {
-                          setLocalState(() {
-                            printWhole = v ?? false;
-                            if (!printWhole && hasChildChecklist) {
-                              final merged = mergedRangeFromSelection();
-                              if (merged.isNotEmpty) {
-                                controller.text = merged;
+                      if (!isPdf)
+                        const Text(
+                          'PDF가 아니어서 전체 인쇄로 진행됩니다.',
+                          style: TextStyle(color: kDlgTextSub),
+                        )
+                      else ...[
+                        CheckboxListTile(
+                          value: printWhole,
+                          onChanged: (v) {
+                            setLocalState(() {
+                              printWhole = v ?? false;
+                              if (!printWhole && hasChildChecklist) {
+                                final merged = mergedRangeFromSelection();
+                                if (merged.isNotEmpty) {
+                                  controller.text = merged;
+                                }
                               }
-                            }
-                          });
-                        },
-                        contentPadding: EdgeInsets.zero,
-                        controlAffinity: ListTileControlAffinity.leading,
-                        activeColor: kDlgAccent,
-                        title: const Text(
-                          '전체 인쇄',
-                          style: TextStyle(
-                              color: kDlgText, fontWeight: FontWeight.w700),
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      TextField(
-                        controller: controller,
-                        enabled: !printWhole,
-                        style: const TextStyle(color: kDlgText),
-                        cursorColor: kDlgAccent,
-                        decoration: InputDecoration(
-                          hintText: '페이지 범위 (예: 10-15, 20)',
-                          hintStyle: const TextStyle(color: kDlgTextSub),
-                          filled: true,
-                          fillColor: kDlgFieldBg,
-                          enabledBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(10),
-                            borderSide: const BorderSide(color: kDlgBorder),
-                          ),
-                          focusedBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(10),
-                            borderSide:
-                                const BorderSide(color: kDlgAccent, width: 1.4),
-                          ),
-                          disabledBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(10),
-                            borderSide: const BorderSide(color: kDlgBorder),
-                          ),
-                          contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 12,
+                            });
+                          },
+                          contentPadding: EdgeInsets.zero,
+                          controlAffinity: ListTileControlAffinity.leading,
+                          activeColor: kDlgAccent,
+                          title: const Text(
+                            '전체 인쇄',
+                            style: TextStyle(
+                                color: kDlgText, fontWeight: FontWeight.w700),
                           ),
                         ),
-                      ),
+                        const SizedBox(height: 8),
+                        TextField(
+                          controller: controller,
+                          enabled: !printWhole,
+                          style: const TextStyle(color: kDlgText),
+                          cursorColor: kDlgAccent,
+                          decoration: InputDecoration(
+                            hintText: '페이지 범위 (예: 10-15, 20)',
+                            hintStyle: const TextStyle(color: kDlgTextSub),
+                            filled: true,
+                            fillColor: kDlgFieldBg,
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(10),
+                              borderSide: const BorderSide(color: kDlgBorder),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(10),
+                              borderSide: const BorderSide(
+                                  color: kDlgAccent, width: 1.4),
+                            ),
+                            disabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(10),
+                              borderSide: const BorderSide(color: kDlgBorder),
+                            ),
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 12,
+                            ),
+                          ),
+                        ),
+                      ],
                     ],
-                  ],
+                  ),
                 ),
               ),
             ),
@@ -8001,6 +8030,7 @@ Future<_HomeworkPrintConfirmResult?> _showHomeworkPrintConfirmDialog({
     },
   );
   controller.dispose();
+  contentScrollController.dispose();
   return result;
 }
 
@@ -8097,11 +8127,7 @@ Future<void> _handleWaitingChipLongPressPrint({
   Map<String, bool> groupInitialSelectionById = const <String, bool>{},
 }) async {
   if (hw.phase != 1) return;
-  if (!_hasDirectHomeworkTextbookLink(hw)) {
-    _showHomeworkChipSnackBar(context, '해당 과제에는 연결된 교재가 없어 인쇄할 수 없습니다.');
-    return;
-  }
-  final resolved = await _resolveHomeworkPdfLinks(hw, allowFlowFallback: false);
+  final resolved = await _resolveHomeworkPdfLinks(hw, allowFlowFallback: true);
   if (!context.mounted) return;
 
   final bodyRaw = resolved.bodyPathRaw;
@@ -8150,7 +8176,7 @@ Future<void> _handleWaitingChipLongPressPrint({
   if (!context.mounted || confirmResult == null) return;
   if (selectableGroupChildren.isNotEmpty &&
       confirmResult.selectedChildIds.isEmpty) {
-    _showHomeworkChipSnackBar(context, '인쇄할 하위 과제를 선택하세요.');
+    _showHomeworkChipSnackBar(context, '인쇄 가능한 하위 과제를 선택하세요.');
     return;
   }
   final selectedIds = confirmResult.selectedChildIds.toSet();

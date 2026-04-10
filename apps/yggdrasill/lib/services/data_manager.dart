@@ -7350,30 +7350,28 @@ class DataManager {
         final academyId = await TenantService.instance.getActiveAcademyId() ??
             await TenantService.instance.ensureActiveAcademy();
         final supa = Supabase.instance.client;
-        final schedules = await supa
-            .from('exam_schedules')
-            .select('date,names_json')
-            .match({
+        final match = {
           'academy_id': academyId,
           'school': school,
           'level': level.index,
           'grade': grade
-        }).order('date');
-        final ranges = await supa
-            .from('exam_ranges')
-            .select('date,range_text')
-            .match({
-          'academy_id': academyId,
-          'school': school,
-          'level': level.index,
-          'grade': grade
-        }).order('date');
-        final days = await supa.from('exam_days').select('date').match({
-          'academy_id': academyId,
-          'school': school,
-          'level': level.index,
-          'grade': grade
-        }).order('date');
+        };
+        final fetched = await Future.wait([
+          supa
+              .from('exam_schedules')
+              .select('date,names_json')
+              .match(match)
+              .order('date'),
+          supa
+              .from('exam_ranges')
+              .select('date,range_text')
+              .match(match)
+              .order('date'),
+          supa.from('exam_days').select('date').match(match).order('date'),
+        ]);
+        final schedules = fetched[0];
+        final ranges = fetched[1];
+        final days = fetched[2];
         final res = {
           'schedules': (schedules as List)
               .map((r) => {
@@ -7523,6 +7521,251 @@ class DataManager {
     _examTitlesBySg.remove(key);
     _examRangesBySg.remove(key);
     _examDaysBySg.remove(key);
+  }
+
+  /// 단일 학교·학년의 활성 시험 데이터를 스냅샷 엔트리 형태로 직렬화. 비어 있으면 null.
+  Future<Map<String, dynamic>?> buildExamSeasonSnapshotEntry(
+      String school, EducationLevel level, int grade) async {
+    final res = await loadExamFor(school, level, grade);
+    final schedules = (res['schedules'] as List?)?.cast<Map<String, dynamic>>() ??
+        const <Map<String, dynamic>>[];
+    final ranges = (res['ranges'] as List?)?.cast<Map<String, dynamic>>() ??
+        const <Map<String, dynamic>>[];
+    final days = (res['days'] as List?)?.cast<Map<String, dynamic>>() ??
+        const <Map<String, dynamic>>[];
+    final hasAny =
+        schedules.isNotEmpty || ranges.isNotEmpty || days.isNotEmpty;
+    if (!hasAny) return null;
+    return {
+      'school': school,
+      'level': level.index,
+      'grade': grade,
+      'schedules': [
+        for (final r in schedules)
+          {
+            'date': (r['date'] as String?) ?? '',
+            'names_json': (r['names_json'] as String?) ?? '[]',
+          }
+      ],
+      'ranges': [
+        for (final r in ranges)
+          {
+            'date': (r['date'] as String?) ?? '',
+            'range_text': (r['range_text'] as String?) ?? '',
+          }
+      ],
+      'days': [
+        for (final r in days) {'date': (r['date'] as String?) ?? ''}
+      ],
+    };
+  }
+
+  Future<String?> insertExamSeasonSnapshotPayload(
+      Map<String, dynamic> payload) async {
+    if (TagPresetService.preferSupabaseRead) {
+      try {
+        final academyId = await TenantService.instance.getActiveAcademyId() ??
+            await TenantService.instance.ensureActiveAcademy();
+        final supa = Supabase.instance.client;
+        final row = await supa
+            .from('exam_season_snapshots')
+            .insert({
+              'academy_id': academyId,
+              'payload': payload,
+            })
+            .select('id')
+            .maybeSingle();
+        final id = row?['id'] as String?;
+        return id;
+      } catch (e, st) {
+        // ignore: avoid_print
+        print('[exam_season_snapshots][insert] $e\n$st');
+        return null;
+      }
+    }
+    try {
+      final jsonStr = jsonEncode(payload);
+      return await AcademyDbService.instance.insertExamSeasonSnapshot(jsonStr);
+    } catch (e, st) {
+      // ignore: avoid_print
+      print('[exam_season_snapshots][insert local] $e\n$st');
+      return null;
+    }
+  }
+
+  /// `id`, `created_at`(ISO), `entry_count`
+  Future<List<Map<String, dynamic>>> listExamSeasonSnapshots() async {
+    if (TagPresetService.preferSupabaseRead) {
+      try {
+        final academyId = await TenantService.instance.getActiveAcademyId() ??
+            await TenantService.instance.ensureActiveAcademy();
+        final supa = Supabase.instance.client;
+        final rows = await supa
+            .from('exam_season_snapshots')
+            .select('id, created_at, payload')
+            .eq('academy_id', academyId)
+            .order('created_at', ascending: false);
+        final list = (rows as List).cast<Map<String, dynamic>>();
+        return [
+          for (final r in list)
+            {
+              'id': r['id'] as String,
+              'created_at': r['created_at'] as String,
+              'entry_count': _examSeasonPayloadEntryCount(r['payload']),
+            }
+        ];
+      } catch (e, st) {
+        // ignore: avoid_print
+        print('[exam_season_snapshots][list] $e\n$st');
+        return [];
+      }
+    }
+    final raw = await AcademyDbService.instance.listExamSeasonSnapshots();
+    return [
+      for (final r in raw)
+        {
+          'id': r['id'] as String,
+          'created_at': r['created_at'] as String,
+          'entry_count': _examSeasonEntryCountFromJsonString(
+              r['payload_json'] as String? ?? '{}'),
+        }
+    ];
+  }
+
+  int _examSeasonEntryCountFromJsonString(String s) {
+    try {
+      return _examSeasonPayloadEntryCount(jsonDecode(s));
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  int _examSeasonPayloadEntryCount(dynamic payload) {
+    if (payload is! Map) return 0;
+    final entries = payload['entries'];
+    if (entries is! List) return 0;
+    return entries.length;
+  }
+
+  Future<void> restoreExamSeasonSnapshot(String snapshotId) async {
+    Map<String, dynamic>? payloadMap;
+    if (TagPresetService.preferSupabaseRead) {
+      try {
+        final academyId = await TenantService.instance.getActiveAcademyId() ??
+            await TenantService.instance.ensureActiveAcademy();
+        final supa = Supabase.instance.client;
+        final row = await supa
+            .from('exam_season_snapshots')
+            .select('payload')
+            .eq('academy_id', academyId)
+            .eq('id', snapshotId)
+            .maybeSingle();
+        final p = row?['payload'];
+        if (p is Map<String, dynamic>) {
+          payloadMap = p;
+        } else if (p is Map) {
+          payloadMap = Map<String, dynamic>.from(p);
+        }
+      } catch (e, st) {
+        // ignore: avoid_print
+        print('[exam_season_snapshots][restore fetch] $e\n$st');
+      }
+    } else {
+      final row = await AcademyDbService.instance
+          .getExamSeasonSnapshotById(snapshotId);
+      if (row != null) {
+        try {
+          payloadMap = jsonDecode(row['payload_json'] as String)
+              as Map<String, dynamic>;
+        } catch (_) {}
+      }
+    }
+    if (payloadMap == null) return;
+    final entries = payloadMap['entries'];
+    if (entries is! List) return;
+    for (final raw in entries) {
+      if (raw is! Map) continue;
+      final m = Map<String, dynamic>.from(raw);
+      final school = (m['school'] as String?) ?? '';
+      final levelIdx = (m['level'] as num?)?.toInt() ?? 0;
+      final grade = (m['grade'] as num?)?.toInt() ?? 0;
+      if (school.isEmpty) continue;
+      if (levelIdx < 0 || levelIdx >= EducationLevel.values.length) continue;
+      final level = EducationLevel.values[levelIdx];
+
+      final titles = <DateTime, List<String>>{};
+      final sched = m['schedules'];
+      if (sched is List) {
+        for (final r in sched) {
+          if (r is! Map) continue;
+          final dateIso = (r['date'] as String?) ?? '';
+          if (dateIso.isEmpty) continue;
+          final d = DateTime.tryParse(dateIso);
+          if (d == null) continue;
+          final key = DateTime(d.year, d.month, d.day);
+          List<dynamic> list;
+          try {
+            list = jsonDecode((r['names_json'] as String?) ?? '[]');
+          } catch (_) {
+            list = [];
+          }
+          titles[key] = list.map((e) => e.toString()).toList();
+        }
+      }
+
+      final rangesMap = <DateTime, String>{};
+      final rng = m['ranges'];
+      if (rng is List) {
+        for (final r in rng) {
+          if (r is! Map) continue;
+          final dateIso = (r['date'] as String?) ?? '';
+          if (dateIso.isEmpty) continue;
+          final d = DateTime.tryParse(dateIso);
+          if (d == null) continue;
+          final key = DateTime(d.year, d.month, d.day);
+          rangesMap[key] = (r['range_text'] as String?) ?? '';
+        }
+      }
+
+      await saveExamFor(school, level, grade, titles, rangesMap);
+
+      final daySet = <DateTime>{};
+      final days = m['days'];
+      if (days is List) {
+        for (final r in days) {
+          if (r is! Map) continue;
+          final dateIso = (r['date'] as String?) ?? '';
+          if (dateIso.isEmpty) continue;
+          final d = DateTime.tryParse(dateIso);
+          if (d == null) continue;
+          daySet.add(DateTime(d.year, d.month, d.day));
+        }
+      }
+      await saveExamDays(school, level, grade, daySet);
+    }
+  }
+
+  /// 스냅샷에 넣을 데이터가 있을 때만 DB에 기록한 뒤, 대상 학교·학년 활성 데이터를 모두 삭제.
+  Future<void> archiveAndClearExamsForNewSeason(
+      List<({String school, EducationLevel level, int grade})> targets) async {
+    final entries = <Map<String, dynamic>>[];
+    for (final t in targets) {
+      final e = await buildExamSeasonSnapshotEntry(t.school, t.level, t.grade);
+      if (e != null) entries.add(e);
+    }
+    if (entries.isNotEmpty) {
+      final id = await insertExamSeasonSnapshotPayload({
+        'version': 1,
+        'entries': entries,
+      });
+      if (id == null) {
+        throw Exception(
+            '시험 기록 스냅샷을 저장하지 못했습니다. 네트워크와 로그인 상태를 확인한 뒤 다시 시도하세요.');
+      }
+    }
+    for (final t in targets) {
+      await deleteExamData(t.school, t.level, t.grade);
+    }
   }
 
   Future<void> saveExamDays(String school, EducationLevel level, int grade,

@@ -51,7 +51,13 @@ class _ProblemBankViewState extends State<ProblemBankView> {
   static const List<String> _levelOptions = <String>['초', '중', '고'];
   static const String _kNaesinLinkConfigKey = 'naesinLinkKey';
   static const List<String> _kNaesinLinkExamTerms = <String>['중간고사', '기말고사'];
-  static const List<int> _kNaesinLinkYears = <int>[2021, 2022, 2023, 2024, 2025];
+  static const List<int> _kNaesinLinkYears = <int>[
+    2021,
+    2022,
+    2023,
+    2024,
+    2025
+  ];
   static const List<String> _kNaesinLinkSchools = <String>[
     '경신중',
     '능인중',
@@ -681,23 +687,27 @@ class _ProblemBankViewState extends State<ProblemBankView> {
   }
 
   Map<String, dynamic> _buildRenderConfigForSelection(
-    List<LearningProblemQuestion> selectedQuestions,
-  ) {
+    List<LearningProblemQuestion> selectedQuestions, {
+    LearningProblemExportSettings? settingsOverride,
+  }) {
     final selectedModes = _selectedModeMapForQuestions(selectedQuestions);
     final orderedUids = _selectedQuestionUidsInCurrentOrder(selectedQuestions);
-    return _exportSettings.toRenderConfig(
+    final settings = settingsOverride ?? _exportSettings;
+    return settings.toRenderConfig(
       selectedQuestionUidsOrdered: orderedUids,
       questionModeByQuestionUid: selectedModes,
     );
   }
 
   String _buildRenderHashForSelection(
-    List<LearningProblemQuestion> selectedQuestions,
-  ) {
+    List<LearningProblemQuestion> selectedQuestions, {
+    LearningProblemExportSettings? settingsOverride,
+  }) {
     final selectedModes = _selectedModeMapForQuestions(selectedQuestions);
     final orderedUids = _selectedQuestionUidsInCurrentOrder(selectedQuestions);
+    final settings = settingsOverride ?? _exportSettings;
     return buildLearningRenderHash(
-      settings: _exportSettings,
+      settings: settings,
       selectedQuestionUidsOrdered: orderedUids,
       questionModeByQuestionUid: selectedModes,
     );
@@ -737,13 +747,21 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     required List<LearningProblemQuestion> selectedQuestions,
     required bool previewOnly,
     Map<String, dynamic> renderConfigPatch = const <String, dynamic>{},
+    LearningProblemExportSettings? settingsOverride,
   }) async {
     final academyId = _academyId;
     if (academyId == null || academyId.isEmpty) return null;
     if (selectedQuestions.isEmpty) return null;
-    final renderHash = _buildRenderHashForSelection(selectedQuestions);
+    final settings = settingsOverride ?? _exportSettings;
+    final renderHash = _buildRenderHashForSelection(
+      selectedQuestions,
+      settingsOverride: settings,
+    );
     final renderConfig = <String, dynamic>{
-      ..._buildRenderConfigForSelection(selectedQuestions),
+      ..._buildRenderConfigForSelection(
+        selectedQuestions,
+        settingsOverride: settings,
+      ),
       ...renderConfigPatch,
     };
     // Always generate a fresh server render so preview/PDF never picks
@@ -767,10 +785,10 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     final job = await _service.createExportJob(
       academyId: academyId,
       documentId: selectedQuestions.first.documentId,
-      templateProfile: _exportSettings.templateProfile,
-      paperSize: _exportSettings.paperLabel,
-      includeAnswerSheet: _exportSettings.includeAnswerSheet,
-      includeExplanation: _exportSettings.includeExplanation,
+      templateProfile: settings.templateProfile,
+      paperSize: settings.paperLabel,
+      includeAnswerSheet: settings.includeAnswerSheet,
+      includeExplanation: settings.includeExplanation,
       selectedQuestionUids: orderedUids,
       renderHash: renderHash,
       previewOnly: previewOnly,
@@ -943,8 +961,8 @@ class _ProblemBankViewState extends State<ProblemBankView> {
             );
             final presetModeMap = <String, String>{};
             for (final question in selected) {
-              final rawMode = preset.questionModeByQuestionUid[
-                      question.stableQuestionKey] ??
+              final rawMode = preset
+                      .questionModeByQuestionUid[question.stableQuestionKey] ??
                   preset.questionModeByQuestionUid[question.id];
               if (rawMode == null || rawMode.trim().isEmpty) continue;
               presetModeMap[question.id] = normalizeQuestionModeSelection(
@@ -1121,24 +1139,26 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           completed.options['coverPageTexts'],
         ),
         onRefreshRequested: (request) async {
+          final nextSettings = _exportSettings.copyWith(
+            includeAcademyLogo: request.includeAcademyLogo,
+            timeLimitText: request.timeLimitText.trim(),
+            titlePageTopText: request.titlePageTopText.trim().isEmpty
+                ? kLearningDefaultTitlePageTopText
+                : request.titlePageTopText.trim(),
+            includeAnswerSheet: request.includeAnswerSheet,
+            includeExplanation: request.includeExplanation,
+            includeQuestionScore: request.includeQuestionScore,
+            questionScoreByQuestionId: request.questionScoreByQuestionId,
+          );
           setState(() {
-            _exportSettings = _exportSettings.copyWith(
-              includeAcademyLogo: request.includeAcademyLogo,
-              timeLimitText: request.timeLimitText.trim(),
-              titlePageTopText: request.titlePageTopText.trim().isEmpty
-                  ? kLearningDefaultTitlePageTopText
-                  : request.titlePageTopText.trim(),
-              includeAnswerSheet: request.includeAnswerSheet,
-              includeExplanation: request.includeExplanation,
-              includeQuestionScore: request.includeQuestionScore,
-              questionScoreByQuestionId: request.questionScoreByQuestionId,
-            );
+            _exportSettings = nextSettings;
           });
           final renderPatch = buildRenderPatch(request);
           final refreshed = await _ensureCompletedExportForSelection(
             selectedQuestions: selected,
             previewOnly: true,
             renderConfigPatch: renderPatch,
+            settingsOverride: nextSettings,
           );
           if (!mounted || refreshed == null) return null;
           if (refreshed.status != 'completed' ||
@@ -1230,24 +1250,26 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           );
         },
         onGeneratePdfRequested: (request) async {
+          final nextSettings = _exportSettings.copyWith(
+            includeAcademyLogo: request.includeAcademyLogo,
+            timeLimitText: request.timeLimitText.trim(),
+            titlePageTopText: request.titlePageTopText.trim().isEmpty
+                ? kLearningDefaultTitlePageTopText
+                : request.titlePageTopText.trim(),
+            includeAnswerSheet: request.includeAnswerSheet,
+            includeExplanation: request.includeExplanation,
+            includeQuestionScore: request.includeQuestionScore,
+            questionScoreByQuestionId: request.questionScoreByQuestionId,
+          );
           setState(() {
-            _exportSettings = _exportSettings.copyWith(
-              includeAcademyLogo: request.includeAcademyLogo,
-              timeLimitText: request.timeLimitText.trim(),
-              titlePageTopText: request.titlePageTopText.trim().isEmpty
-                  ? kLearningDefaultTitlePageTopText
-                  : request.titlePageTopText.trim(),
-              includeAnswerSheet: request.includeAnswerSheet,
-              includeExplanation: request.includeExplanation,
-              includeQuestionScore: request.includeQuestionScore,
-              questionScoreByQuestionId: request.questionScoreByQuestionId,
-            );
+            _exportSettings = nextSettings;
           });
           final renderPatch = buildRenderPatch(request);
           final completedPdf = await _ensureCompletedExportForSelection(
             selectedQuestions: selected,
             previewOnly: false,
             renderConfigPatch: renderPatch,
+            settingsOverride: nextSettings,
           );
           if (!mounted || completedPdf == null) return;
           if (completedPdf.status != 'completed' ||
@@ -1717,10 +1739,8 @@ class _ProblemBankViewState extends State<ProblemBankView> {
   ({String gradeKey, String courseKey}) _deriveNaesinDefaultGradeCourse() {
     final now = DateTime.now();
     final isHigh = _selectedSchoolLevel.trim() == '고';
-    final normalizedCourse = _selectedDetailedCourse
-        .replaceAll(' ', '')
-        .replaceAll('학기', '')
-        .trim();
+    final normalizedCourse =
+        _selectedDetailedCourse.replaceAll(' ', '').replaceAll('학기', '').trim();
     if (isHigh) {
       if (normalizedCourse.contains('공통수학1')) {
         return (gradeKey: 'H1', courseKey: 'H1-c1');
@@ -1740,7 +1760,8 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         courseKey: firstSemester ? 'H1-c1' : 'H1-c2',
       );
     }
-    final matched = RegExp(r'([1-3])\s*-\s*([1-2])').firstMatch(normalizedCourse);
+    final matched =
+        RegExp(r'([1-3])\s*-\s*([1-2])').firstMatch(normalizedCourse);
     if (matched != null) {
       final grade = matched.group(1)!;
       final semester = matched.group(2)!;
@@ -1920,9 +1941,9 @@ class _ProblemBankViewState extends State<ProblemBankView> {
               .toSet();
           final matchedSelectedIds = <String>{};
           for (final question in _questions) {
-            final rawMode = preset.questionModeByQuestionUid[
-                    question.stableQuestionKey] ??
-                preset.questionModeByQuestionUid[question.id];
+            final rawMode =
+                preset.questionModeByQuestionUid[question.stableQuestionKey] ??
+                    preset.questionModeByQuestionUid[question.id];
             if (rawMode == null || rawMode.trim().isEmpty) continue;
             modeMap[question.id] = normalizeQuestionModeSelection(
               question,
@@ -2109,7 +2130,8 @@ class _ProblemBankViewState extends State<ProblemBankView> {
             selectedGradeKey = gradeOptions.first.key;
           }
           var selectedCourseKey = existing?.courseKey ?? gradeCourse.courseKey;
-          var selectedExamTerm = existing?.examTerm ?? _defaultNaesinExamTermByDate(now);
+          var selectedExamTerm =
+              existing?.examTerm ?? _defaultNaesinExamTermByDate(now);
           if (!_kNaesinLinkExamTerms.contains(selectedExamTerm)) {
             selectedExamTerm = _kNaesinLinkExamTerms.first;
           }
@@ -2160,6 +2182,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                       ),
                     );
                   }
+
                   final courseOptions =
                       _naesinCourseOptionsForGrade(selectedGradeKey);
                   if (!courseOptions.any((e) => e.key == selectedCourseKey)) {
@@ -2215,7 +2238,8 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                                         ),
                                     ],
                                     onChanged: (value) {
-                                      if (value == null || value.isEmpty) return;
+                                      if (value == null || value.isEmpty)
+                                        return;
                                       setLinkState(() {
                                         selectedGradeKey = value;
                                       });
@@ -2241,7 +2265,8 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                                         ),
                                     ],
                                     onChanged: (value) {
-                                      if (value == null || value.isEmpty) return;
+                                      if (value == null || value.isEmpty)
+                                        return;
                                       setLinkState(() {
                                         selectedCourseKey = value;
                                       });
@@ -2261,7 +2286,8 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                                     style: fieldTextStyle,
                                     iconEnabledColor: _rsTextMuted,
                                     items: [
-                                      for (final option in _kNaesinLinkExamTerms)
+                                      for (final option
+                                          in _kNaesinLinkExamTerms)
                                         DropdownMenuItem<String>(
                                           value: option,
                                           child: Text(
@@ -2271,7 +2297,8 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                                         ),
                                     ],
                                     onChanged: (value) {
-                                      if (value == null || value.isEmpty) return;
+                                      if (value == null || value.isEmpty)
+                                        return;
                                       setLinkState(() {
                                         selectedExamTerm = value;
                                       });

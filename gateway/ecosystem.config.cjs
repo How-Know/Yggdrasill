@@ -28,6 +28,28 @@ module.exports = {
         GW_STALE_ACTIVITY_WINDOW_MS: '600000',
         GW_RECOVERY_COOLDOWN_MS: '60000'
       }
+    },
+    {
+      name: 'ygg-makeup-alimtalk-worker',
+      cwd: __dirname,
+      script: 'src/makeup_alimtalk_worker.js',
+      exec_mode: 'fork',
+      instances: 1,
+      watch: false,
+      autorestart: true,
+      max_restarts: 20,
+      min_uptime: '10s',
+      restart_delay: 5000,
+      kill_timeout: 10000,
+      max_memory_restart: '200M',
+      merge_logs: true,
+      time: true,
+      log_date_format: 'YYYY-MM-DD HH:mm:ss.SSS Z',
+      // 서버 .env에 MAKEUP_ALIMTALK_ENABLED=1 없으면 워커는 시작 직후 종료(무해).
+      env: {
+        NODE_ENV: 'production',
+        MAKEUP_ALIMTALK_ENABLED: process.env.MAKEUP_ALIMTALK_ENABLED || '0'
+      }
     }
   ]
 };

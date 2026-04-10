@@ -31,6 +31,7 @@ import 'services/tag_store.dart';
 import 'tools/backfill_runner.dart';
 import 'package:path_provider/path_provider.dart';
 import 'services/runtime_flags.dart';
+import 'widgets/dialog_tokens.dart';
 import 'services/app_config.dart';
 import 'services/update_service.dart';
 import 'package:package_info_plus/package_info_plus.dart' as pkg;
@@ -168,50 +169,53 @@ int _sgGrade(String sg) {
   return int.tryParse(gradeText.replaceAll('학년', '')) ?? 0;
 }
 
+Future<void> _preloadOneSg(String sg, EducationLevel level) async {
+  final school = _sgSchool(sg);
+  final gradeNum = _sgGrade(sg);
+  final res = await DataManager.instance.loadExamFor(school, level, gradeNum);
+  // schedules
+  final Map<DateTime, List<String>> saved = <DateTime, List<String>>{};
+  final schedules =
+      (res['schedules'] as List?)?.cast<Map<String, dynamic>>() ??
+          const <Map<String, dynamic>>[];
+  for (final row in schedules) {
+    final dateIso = (row['date'] as String?) ?? '';
+    if (dateIso.isEmpty) continue;
+    final d = DateTime.parse(dateIso);
+    final key = DateTime(d.year, d.month, d.day);
+    final namesJson = (row['names_json'] as String?) ?? '[]';
+    List<dynamic> list;
+    try {
+      list = jsonDecode(namesJson);
+    } catch (_) {
+      list = [];
+    }
+    saved[key] = list.map((e) => e.toString()).toList();
+  }
+  if (saved.isNotEmpty) {
+    _preloadedSavedBySg[sg] = saved;
+  }
+  // ranges
+  final Map<DateTime, String> ranges = <DateTime, String>{};
+  final rangesRows = (res['ranges'] as List?)?.cast<Map<String, dynamic>>() ??
+      const <Map<String, dynamic>>[];
+  for (final row in rangesRows) {
+    final dateIso = (row['date'] as String?) ?? '';
+    if (dateIso.isEmpty) continue;
+    final d = DateTime.parse(dateIso);
+    final key = DateTime(d.year, d.month, d.day);
+    final text = (row['range_text'] as String?) ?? '';
+    ranges[key] = text;
+  }
+  if (ranges.isNotEmpty) {
+    _preloadedRangesBySg[sg] = ranges;
+  }
+}
+
 Future<void> _preloadExamDataFor(
     List<String> sgLabels, EducationLevel level) async {
-  for (final sg in sgLabels) {
-    final school = _sgSchool(sg);
-    final gradeNum = _sgGrade(sg);
-    final res = await DataManager.instance.loadExamFor(school, level, gradeNum);
-    // schedules
-    final Map<DateTime, List<String>> saved = <DateTime, List<String>>{};
-    final schedules =
-        (res['schedules'] as List?)?.cast<Map<String, dynamic>>() ??
-            const <Map<String, dynamic>>[];
-    for (final row in schedules) {
-      final dateIso = (row['date'] as String?) ?? '';
-      if (dateIso.isEmpty) continue;
-      final d = DateTime.parse(dateIso);
-      final key = DateTime(d.year, d.month, d.day);
-      final namesJson = (row['names_json'] as String?) ?? '[]';
-      List<dynamic> list;
-      try {
-        list = jsonDecode(namesJson);
-      } catch (_) {
-        list = [];
-      }
-      saved[key] = list.map((e) => e.toString()).toList();
-    }
-    if (saved.isNotEmpty) {
-      _preloadedSavedBySg[sg] = saved;
-    }
-    // ranges
-    final Map<DateTime, String> ranges = <DateTime, String>{};
-    final rangesRows = (res['ranges'] as List?)?.cast<Map<String, dynamic>>() ??
-        const <Map<String, dynamic>>[];
-    for (final row in rangesRows) {
-      final dateIso = (row['date'] as String?) ?? '';
-      if (dateIso.isEmpty) continue;
-      final d = DateTime.parse(dateIso);
-      final key = DateTime(d.year, d.month, d.day);
-      final text = (row['range_text'] as String?) ?? '';
-      ranges[key] = text;
-    }
-    if (ranges.isNotEmpty) {
-      _preloadedRangesBySg[sg] = ranges;
-    }
-  }
+  if (sgLabels.isEmpty) return;
+  await Future.wait(sgLabels.map((sg) => _preloadOneSg(sg, level)));
 }
 
 Future<void> _preloadExamDialogData() async {
@@ -260,6 +264,47 @@ Future<void> _preloadExamDialogData() async {
     _preloadExamDataFor(middle, EducationLevel.middle),
     _preloadExamDataFor(high, EducationLevel.high),
   ]);
+}
+
+void _clearPreloadedForVisibleSchoolGrades(
+    List<String> middle, List<String> high) {
+  for (final sg in middle) {
+    _preloadedSavedBySg.remove(sg);
+    _preloadedRangesBySg.remove(sg);
+  }
+  for (final sg in high) {
+    _preloadedSavedBySg.remove(sg);
+    _preloadedRangesBySg.remove(sg);
+  }
+}
+
+Future<void> _rehydratePreloadForSchoolGrades(
+    List<String> middle, List<String> high) async {
+  await Future.wait([
+    ...middle.map((sg) => _preloadOneSg(sg, EducationLevel.middle)),
+    ...high.map((sg) => _preloadOneSg(sg, EducationLevel.high)),
+  ]);
+}
+
+List<({String school, EducationLevel level, int grade})>
+    _examTargetsFromSchoolGradeLabels(
+        List<String> middle, List<String> high) {
+  final out = <({String school, EducationLevel level, int grade})>[];
+  for (final sg in middle) {
+    final idx = sg.lastIndexOf(' ');
+    final school = idx > 0 ? sg.substring(0, idx) : sg;
+    final gtext = idx > 0 ? sg.substring(idx + 1) : '';
+    final gnum = int.tryParse(gtext.replaceAll('학년', '')) ?? 0;
+    out.add((school: school, level: EducationLevel.middle, grade: gnum));
+  }
+  for (final sg in high) {
+    final idx = sg.lastIndexOf(' ');
+    final school = idx > 0 ? sg.substring(0, idx) : sg;
+    final gtext = idx > 0 ? sg.substring(idx + 1) : '';
+    final gnum = int.tryParse(gtext.replaceAll('학년', '')) ?? 0;
+    out.add((school: school, level: EducationLevel.high, grade: gnum));
+  }
+  return out;
 }
 
 // ===== 과목/배정 영속화 =====
@@ -1850,11 +1895,6 @@ class _ExamFabCluster extends StatelessWidget {
                 icon: Icons.event_note,
                 label: '일정',
                 onPressed: () async {
-                  // 다이얼로그 표시 전에 데이터 프리로드하여 초기 깜빡임 제거
-                  try {
-                    await _preloadExamDialogData();
-                  } catch (_) {}
-                  // Route 애니메이션 비용 최소화를 위해 useRootNavigator + barrierDismissible true 유지
                   await showDialog(
                     context: rootNavigatorKey.currentContext!,
                     builder: (ctx) => const _ExamScheduleDialog(),
@@ -1991,29 +2031,42 @@ class _ExamActionButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return SizedBox(
       height: 49, // 10% 감소
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
+      child: Container(
+        decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(24),
-          onTap: onPressed,
-          child: Ink(
-            decoration: const ShapeDecoration(
-              color: Color(0xFF1976D2),
-              shape: StadiumBorder(
-                  side: BorderSide(color: Colors.transparent, width: 0)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.2),
+              spreadRadius: 1,
+              blurRadius: 4,
+              offset: const Offset(0, 2),
             ),
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(icon, color: Colors.white, size: 22),
-                const SizedBox(width: 9),
-                Text(label,
-                    style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700)),
-              ],
+          ],
+        ),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(24),
+            onTap: onPressed,
+            child: Ink(
+              decoration: const ShapeDecoration(
+                color: Color(0xFF1B6B63),
+                shape: StadiumBorder(
+                    side: BorderSide(color: Colors.transparent, width: 0)),
+              ),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(icon, color: Colors.white, size: 22),
+                  const SizedBox(width: 9),
+                  Text(label,
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700)),
+                ],
+              ),
             ),
           ),
         ),
@@ -2031,19 +2084,32 @@ class _ExamIconOnlyButton extends StatelessWidget {
     return SizedBox(
       height: 49, // 10% 감소
       width: 49,
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
+      child: Container(
+        decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(24),
-          onTap: onPressed,
-          child: Ink(
-            decoration: const ShapeDecoration(
-              color: Color(0xFF1976D2),
-              shape: StadiumBorder(
-                  side: BorderSide(color: Colors.transparent, width: 0)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.2),
+              spreadRadius: 1,
+              blurRadius: 4,
+              offset: const Offset(0, 2),
             ),
-            child: const Center(
-                child: Icon(Icons.settings, color: Colors.white, size: 22)),
+          ],
+        ),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(24),
+            onTap: onPressed,
+            child: Ink(
+              decoration: const ShapeDecoration(
+                color: Color(0xFF1B6B63),
+                shape: StadiumBorder(
+                    side: BorderSide(color: Colors.transparent, width: 0)),
+              ),
+              child: const Center(
+                  child: Icon(Icons.settings, color: Colors.white, size: 22)),
+            ),
           ),
         ),
       ),
@@ -2503,6 +2569,178 @@ class _LinearGlowPainter extends CustomPainter {
   }
 }
 
+// ----- 시험 일정 다이얼로그 계열: 앱 공통 다이얼로그 톤 (dialog_tokens) -----
+
+RoundedRectangleBorder _examDlgShape() => RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(16),
+      side: const BorderSide(color: kDlgBorder),
+    );
+
+/// 시간표 필터 다이얼로그와 유사한 상단 액션 칩
+Widget _examScheduleHeaderChip({
+  required IconData icon,
+  required String label,
+  required VoidCallback? onPressed,
+  String? tooltip,
+}) {
+  final enabled = onPressed != null;
+  final content = Material(
+    color: Colors.transparent,
+    child: InkWell(
+      borderRadius: BorderRadius.circular(10),
+      onTap: onPressed,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: kDlgFieldBg,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: kDlgBorder),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              icon,
+              size: 18,
+              color: enabled ? kDlgTextSub : kDlgTextSub.withOpacity(0.45),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              label,
+              style: TextStyle(
+                color: enabled ? kDlgText : kDlgTextSub.withOpacity(0.45),
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+  if (tooltip != null && tooltip.isNotEmpty) {
+    return Tooltip(message: tooltip, child: content);
+  }
+  return content;
+}
+
+class _ExamSeasonHistoryDialog extends StatefulWidget {
+  const _ExamSeasonHistoryDialog();
+  @override
+  State<_ExamSeasonHistoryDialog> createState() =>
+      _ExamSeasonHistoryDialogState();
+}
+
+class _ExamSeasonHistoryDialogState extends State<_ExamSeasonHistoryDialog> {
+  List<Map<String, dynamic>> _rows = [];
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    DataManager.instance.listExamSeasonSnapshots().then((list) {
+      if (mounted) {
+        setState(() {
+          _rows = list;
+          _loading = false;
+        });
+      }
+    });
+  }
+
+  String _fmtCreatedAt(String? iso) {
+    if (iso == null || iso.isEmpty) return '';
+    final d = DateTime.tryParse(iso);
+    if (d == null) return iso;
+    final l = d.toLocal();
+    return '${l.year}.${l.month.toString().padLeft(2, '0')}.${l.day.toString().padLeft(2, '0')} '
+        '${l.hour.toString().padLeft(2, '0')}:${l.minute.toString().padLeft(2, '0')}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: kDlgBg,
+      shape: _examDlgShape(),
+      titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 8),
+      contentPadding: const EdgeInsets.fromLTRB(24, 8, 24, 8),
+      actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+      title: const Text(
+        '시험 시즌 기록',
+        style: TextStyle(
+            color: kDlgText, fontSize: 20, fontWeight: FontWeight.w900),
+      ),
+      content: SizedBox(
+        width: 420,
+        height: 360,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Divider(color: kDlgBorder, height: 1),
+            const SizedBox(height: 12),
+            Expanded(
+              child: _loading
+                  ? const Center(
+                      child: CircularProgressIndicator(color: kDlgAccent),
+                    )
+                  : _rows.isEmpty
+                      ? const Center(
+                          child: Text(
+                            '저장된 기록이 없습니다.',
+                            style: TextStyle(
+                                color: kDlgTextSub,
+                                fontWeight: FontWeight.w600),
+                          ),
+                        )
+                      : ListView.separated(
+                          itemCount: _rows.length,
+                          separatorBuilder: (_, __) =>
+                              const Divider(height: 1, color: kDlgBorder),
+                          itemBuilder: (ctx, i) {
+                            final r = _rows[i];
+                            final id = r['id'] as String;
+                            final cnt =
+                                (r['entry_count'] as num?)?.toInt() ?? 0;
+                            return Material(
+                              color: Colors.transparent,
+                              child: ListTile(
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                tileColor: kDlgPanelBg,
+                                title: Text(
+                                  _fmtCreatedAt(r['created_at'] as String?),
+                                  style: const TextStyle(
+                                      color: kDlgText,
+                                      fontWeight: FontWeight.w800),
+                                ),
+                                subtitle: Text(
+                                  '$cnt개 학교·학년',
+                                  style: const TextStyle(color: kDlgTextSub),
+                                ),
+                                onTap: () => Navigator.of(context).pop(id),
+                              ),
+                            );
+                          },
+                        ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          style: TextButton.styleFrom(
+            foregroundColor: kDlgTextSub,
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+          ),
+          child: const Text('닫기'),
+        ),
+      ],
+    );
+  }
+}
+
 class _ExamScheduleDialog extends StatefulWidget {
   const _ExamScheduleDialog();
   @override
@@ -2512,6 +2750,8 @@ class _ExamScheduleDialog extends StatefulWidget {
 class _ExamScheduleDialogState extends State<_ExamScheduleDialog> {
   // 다이얼로그 성능: reassemble 방지를 위해 Key 유지, RepaintBoundary 적용
   final Key _contentKey = const ValueKey('exam-dialog-content');
+  /// false면 프리로드 중(즉시 다이얼로그 오픈 후 내부에서 로드)
+  bool _preloadReady = false;
   // 과정별 학년 필터: 'M1','M2','M3','H1','H2','H3'
   final Set<String> _gradeFilter = <String>{};
   final GlobalKey<_ExamScheduleWizardState> _middleKey =
@@ -2519,6 +2759,169 @@ class _ExamScheduleDialogState extends State<_ExamScheduleDialog> {
   final GlobalKey<_ExamScheduleWizardState> _highKey =
       GlobalKey<_ExamScheduleWizardState>();
   static const String _kGradeFilterKey = 'exam_dialog_grade_filter';
+  bool _seasonActionBusy = false;
+
+  Future<void> _onTapRefreshSeason(BuildContext context,
+      List<String> schoolGradeMiddle, List<String> schoolGradeHigh) async {
+    if (_seasonActionBusy) return;
+    final targets = _examTargetsFromSchoolGradeLabels(
+        schoolGradeMiddle, schoolGradeHigh);
+    if (targets.isEmpty) {
+      rootScaffoldMessengerKey.currentState?.showSnackBar(
+        const SnackBar(content: Text('표시된 학교·학년이 없습니다. 학년을 선택하세요.')),
+      );
+      return;
+    }
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: kDlgBg,
+        shape: _examDlgShape(),
+        titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 8),
+        contentPadding: const EdgeInsets.fromLTRB(24, 8, 24, 8),
+        actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+        title: const Text(
+          '다음 시험 시즌으로',
+          style: TextStyle(
+              color: kDlgText, fontSize: 20, fontWeight: FontWeight.w900),
+        ),
+        content: const Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Divider(color: kDlgBorder, height: 1),
+            SizedBox(height: 16),
+            Text(
+              '현재 시험 일정을 기록에 저장한 뒤 화면을 비웁니다. '
+              '학년·과목 설정은 그대로입니다. 계속할까요?',
+              style: TextStyle(
+                  color: kDlgTextSub, fontWeight: FontWeight.w600, height: 1.35),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            style: TextButton.styleFrom(
+              foregroundColor: kDlgTextSub,
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+            ),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(
+              backgroundColor: kDlgAccent,
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10)),
+            ),
+            child: const Text('새로고침',
+                style: TextStyle(
+                    color: Colors.white, fontWeight: FontWeight.w900)),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    setState(() => _seasonActionBusy = true);
+    try {
+      await DataManager.instance.archiveAndClearExamsForNewSeason(targets);
+      _clearPreloadedForVisibleSchoolGrades(
+          schoolGradeMiddle, schoolGradeHigh);
+      _middleKey.currentState?.resetForNewSeason();
+      _highKey.currentState?.resetForNewSeason();
+      rootScaffoldMessengerKey.currentState?.showSnackBar(
+        const SnackBar(content: Text('다음 시험 시즌을 위해 초기화했습니다.')),
+      );
+    } catch (e) {
+      rootScaffoldMessengerKey.currentState?.showSnackBar(
+        SnackBar(content: Text('$e')),
+      );
+    } finally {
+      if (mounted) setState(() => _seasonActionBusy = false);
+    }
+  }
+
+  Future<void> _onTapExamHistory(BuildContext context,
+      List<String> schoolGradeMiddle, List<String> schoolGradeHigh) async {
+    if (_seasonActionBusy) return;
+    final snapshotId = await showDialog<String>(
+      context: context,
+      builder: (ctx) => const _ExamSeasonHistoryDialog(),
+    );
+    if (snapshotId == null || !mounted) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: kDlgBg,
+        shape: _examDlgShape(),
+        titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 8),
+        contentPadding: const EdgeInsets.fromLTRB(24, 8, 24, 8),
+        actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+        title: const Text(
+          '기록 복원',
+          style: TextStyle(
+              color: kDlgText, fontSize: 20, fontWeight: FontWeight.w900),
+        ),
+        content: const Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Divider(color: kDlgBorder, height: 1),
+            SizedBox(height: 16),
+            Text(
+              '선택한 시즌의 일정으로 활성 데이터를 덮어씁니다. 계속할까요?',
+              style: TextStyle(
+                  color: kDlgTextSub, fontWeight: FontWeight.w600, height: 1.35),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            style: TextButton.styleFrom(
+              foregroundColor: kDlgTextSub,
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+            ),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(
+              backgroundColor: kDlgAccent,
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10)),
+            ),
+            child: const Text('복원',
+                style: TextStyle(
+                    color: Colors.white, fontWeight: FontWeight.w900)),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    setState(() => _seasonActionBusy = true);
+    try {
+      await DataManager.instance.restoreExamSeasonSnapshot(snapshotId);
+      _clearPreloadedForVisibleSchoolGrades(
+          schoolGradeMiddle, schoolGradeHigh);
+      await _rehydratePreloadForSchoolGrades(
+          schoolGradeMiddle, schoolGradeHigh);
+      _middleKey.currentState?.reloadFromPreloadMaps();
+      _highKey.currentState?.reloadFromPreloadMaps();
+      rootScaffoldMessengerKey.currentState?.showSnackBar(
+        const SnackBar(content: Text('기록에서 복원했습니다.')),
+      );
+    } catch (e) {
+      rootScaffoldMessengerKey.currentState?.showSnackBar(
+        SnackBar(content: Text('복원 실패: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _seasonActionBusy = false);
+    }
+  }
 
   Future<void> _openGradeFilterDialog(BuildContext context) async {
     await showDialog(
@@ -2526,66 +2929,67 @@ class _ExamScheduleDialogState extends State<_ExamScheduleDialog> {
       builder: (ctx) {
         return StatefulBuilder(builder: (ctxSB, setSB) {
           return AlertDialog(
-            backgroundColor: const Color(0xFF1F1F1F),
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            title: const Text('학년 선택', style: TextStyle(color: Colors.white)),
+            backgroundColor: kDlgBg,
+            shape: _examDlgShape(),
+            titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 8),
+            contentPadding: const EdgeInsets.fromLTRB(24, 8, 24, 8),
+            actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+            title: const Text(
+              '학년 선택',
+              style: TextStyle(
+                  color: kDlgText, fontSize: 20, fontWeight: FontWeight.w900),
+            ),
             content: SizedBox(
               width: 420,
-              child: Wrap(
-                spacing: 10,
-                runSpacing: 8,
-                children: const [
-                  ['중1', 'M1'],
-                  ['중2', 'M2'],
-                  ['중3', 'M3'],
-                  ['고1', 'H1'],
-                  ['고2', 'H2'],
-                  ['고3', 'H3'],
-                ]
-                    .map((pair) {
-                      // pair[0]: label, pair[1]: key
-                      return pair;
-                    })
-                    .toList()
-                    .map((pair) {
-                      final String label = pair[0] as String;
-                      final String key = pair[1] as String;
-                      final bool selected = _gradeFilter.contains(key);
-                      return FilterChip(
-                        label: Text(label),
-                        selected: selected,
-                        onSelected: (val) {
-                          setSB(() {
-                            setState(() {
-                              if (val) {
-                                _gradeFilter.add(key);
-                              } else {
-                                _gradeFilter.remove(key);
-                              }
-                            });
-                          });
-                        },
-                        backgroundColor: const Color(0xFF232326),
-                        selectedColor: const Color(0xFF2A2A2A),
-                        labelStyle: TextStyle(
-                            color: selected ? Colors.white : Colors.white70),
-                        side: BorderSide(
-                            color: selected
-                                ? const Color(0xFF1976D2)
-                                : Colors.white24,
-                            width: selected ? 1.6 : 1.0),
-                        showCheckmark: true,
-                        checkmarkColor: const Color(0xFF1976D2),
-                      );
-                    })
-                    .toList(),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Divider(color: kDlgBorder, height: 1),
+                  const SizedBox(height: 16),
+                  const YggDialogSectionHeader(
+                      icon: Icons.school_outlined, title: '중·고 학년'),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      for (final pair in const [
+                        ['중1', 'M1'],
+                        ['중2', 'M2'],
+                        ['중3', 'M3'],
+                        ['고1', 'H1'],
+                        ['고2', 'H2'],
+                        ['고3', 'H3'],
+                      ])
+                        Builder(builder: (_) {
+                          final label = pair[0] as String;
+                          final key = pair[1] as String;
+                          final selected = _gradeFilter.contains(key);
+                          return YggDialogFilterChip(
+                            label: label,
+                            selected: selected,
+                            onSelected: (val) {
+                              setSB(() {
+                                setState(() {
+                                  if (val) {
+                                    _gradeFilter.add(key);
+                                  } else {
+                                    _gradeFilter.remove(key);
+                                  }
+                                });
+                              });
+                            },
+                          );
+                        }),
+                    ],
+                  ),
+                ],
               ),
             ),
             actions: [
-              TextButton(
+              FilledButton(
                 onPressed: () async {
-                  // persist selection
                   final prefs = await SharedPreferences.getInstance();
                   await prefs.setStringList(
                       _kGradeFilterKey, _gradeFilter.toList());
@@ -2593,8 +2997,16 @@ class _ExamScheduleDialogState extends State<_ExamScheduleDialog> {
                   if (mounted) setState(() {});
                   Navigator.of(ctxSB).pop();
                 },
-                child:
-                    const Text('닫기', style: TextStyle(color: Colors.white70)),
+                style: FilledButton.styleFrom(
+                  backgroundColor: kDlgAccent,
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 28, vertical: 14),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10)),
+                ),
+                child: const Text('적용',
+                    style: TextStyle(
+                        color: Colors.white, fontWeight: FontWeight.w900)),
               ),
             ],
           );
@@ -2606,8 +3018,12 @@ class _ExamScheduleDialogState extends State<_ExamScheduleDialog> {
   @override
   void initState() {
     super.initState();
-    // restore grade filter
-    SharedPreferences.getInstance().then((prefs) {
+    _runInitialLoad();
+  }
+
+  Future<void> _runInitialLoad() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
       final list = prefs.getStringList(_kGradeFilterKey) ?? const <String>[];
       if (list.isNotEmpty && mounted) {
         setState(() {
@@ -2617,11 +3033,57 @@ class _ExamScheduleDialogState extends State<_ExamScheduleDialog> {
         });
         _dlog('[GRADE_FILTER][load] $list');
       }
-    });
+    } catch (_) {}
+    try {
+      await _preloadExamDialogData();
+    } catch (_) {}
+    if (mounted) {
+      setState(() => _preloadReady = true);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    if (!_preloadReady) {
+      return AlertDialog(
+        backgroundColor: kDlgBg,
+        shape: _examDlgShape(),
+        titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 8),
+        contentPadding: const EdgeInsets.fromLTRB(24, 8, 24, 8),
+        actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+        title: const Text(
+          '시험 일정',
+          style: TextStyle(
+              color: kDlgText, fontSize: 20, fontWeight: FontWeight.w900),
+        ),
+        content: const Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Divider(color: kDlgBorder, height: 1),
+            SizedBox(height: 20),
+            SizedBox(
+              width: 280,
+              height: 100,
+              child: Center(
+                child: CircularProgressIndicator(color: kDlgAccent),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            style: TextButton.styleFrom(
+              foregroundColor: kDlgTextSub,
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+            ),
+            child: const Text('닫기'),
+          ),
+        ],
+      );
+    }
+
     final students = DataManager.instance.students;
     // 중학교 → 고등학교 순, 같은 과정 내에서는 학교명 가나다순, 학년은 저학년→고학년
     int levelRank(EducationLevel l) {
@@ -2685,33 +3147,70 @@ class _ExamScheduleDialogState extends State<_ExamScheduleDialog> {
     }).toList();
 
     return AlertDialog(
-      backgroundColor: const Color(0xFF1F1F1F),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      title: Row(
+      backgroundColor: kDlgBg,
+      shape: _examDlgShape(),
+      titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 8),
+      contentPadding: const EdgeInsets.fromLTRB(24, 12, 24, 24),
+      actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+      title: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          const Text('시험 일정', style: TextStyle(color: Colors.white)),
-          const Spacer(),
-          TextButton.icon(
-            onPressed: () => _openGradeFilterDialog(context),
-            icon: const Icon(Icons.grade, size: 18),
-            label: const Text('학년'),
-            style: TextButton.styleFrom(
-              foregroundColor: Colors.white70,
-              backgroundColor: Colors.white12,
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            ),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Expanded(
+                child: Text(
+                  '시험 일정',
+                  style: TextStyle(
+                      color: kDlgText,
+                      fontSize: 20,
+                      fontWeight: FontWeight.w900),
+                ),
+              ),
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _examScheduleHeaderChip(
+                      icon: Icons.refresh_rounded,
+                      label: '새로고침',
+                      tooltip: '다음 시험 시즌으로 (기록 보관 후 초기화)',
+                      onPressed: _seasonActionBusy
+                          ? null
+                          : () => _onTapRefreshSeason(
+                              context, schoolGradeMiddle, schoolGradeHigh),
+                    ),
+                    const SizedBox(width: 8),
+                    _examScheduleHeaderChip(
+                      icon: Icons.history_rounded,
+                      label: '이전',
+                      tooltip: '저장된 시즌 기록에서 복원',
+                      onPressed: _seasonActionBusy
+                          ? null
+                          : () => _onTapExamHistory(
+                              context, schoolGradeMiddle, schoolGradeHigh),
+                    ),
+                    const SizedBox(width: 8),
+                    _examScheduleHeaderChip(
+                      icon: Icons.grade_rounded,
+                      label: '학년',
+                      onPressed: () => _openGradeFilterDialog(context),
+                    ),
+                    const SizedBox(width: 8),
+                    _examScheduleHeaderChip(
+                      icon: Icons.menu_book_rounded,
+                      label: '과목',
+                      onPressed: () => _openSubjectListDialog(context),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
-          const SizedBox(width: 8),
-          TextButton.icon(
-            onPressed: () => _openSubjectListDialog(context),
-            icon: const Icon(Icons.menu_book, size: 18),
-            label: const Text('과목'),
-            style: TextButton.styleFrom(
-              foregroundColor: Colors.white70,
-              backgroundColor: Colors.white12,
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            ),
-          ),
+          const SizedBox(height: 12),
+          const Divider(color: kDlgBorder, height: 1),
         ],
       ),
       content: RepaintBoundary(
@@ -2721,40 +3220,6 @@ class _ExamScheduleDialogState extends State<_ExamScheduleDialog> {
           width: 1360,
           child: Stack(
             children: [
-              // 프리로드 결과를 위저드에 주입 (첫 프레임 직후 1회)
-              Builder(builder: (_) {
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  final mid = _middleKey.currentState;
-                  if (mid != null) {
-                    _preloadedSavedBySg.forEach((k, v) {
-                      if (schoolGradeMiddle.contains(k))
-                        mid._savedBySchoolGrade[k] =
-                            Map<DateTime, List<String>>.from(v);
-                    });
-                    _preloadedRangesBySg.forEach((k, v) {
-                      if (schoolGradeMiddle.contains(k))
-                        mid._rangesBySchoolGrade[k] =
-                            Map<DateTime, String>.from(v);
-                    });
-                    mid.setState(() {});
-                  }
-                  final hi = _highKey.currentState;
-                  if (hi != null) {
-                    _preloadedSavedBySg.forEach((k, v) {
-                      if (schoolGradeHigh.contains(k))
-                        hi._savedBySchoolGrade[k] =
-                            Map<DateTime, List<String>>.from(v);
-                    });
-                    _preloadedRangesBySg.forEach((k, v) {
-                      if (schoolGradeHigh.contains(k))
-                        hi._rangesBySchoolGrade[k] =
-                            Map<DateTime, String>.from(v);
-                    });
-                    hi.setState(() {});
-                  }
-                });
-                return const SizedBox.shrink();
-              }),
               Row(
                 children: [
                   Expanded(
@@ -2790,12 +3255,12 @@ class _ExamScheduleDialogState extends State<_ExamScheduleDialog> {
                     padding:
                         const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                     decoration: BoxDecoration(
-                        color: const Color(0xFF232326),
-                        borderRadius: BorderRadius.circular(6),
-                        border: Border.all(color: Colors.white24)),
+                        color: kDlgPanelBg,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: kDlgBorder)),
                     child: Text(label,
                         style: const TextStyle(
-                            color: Colors.white60, fontSize: 13)),
+                            color: kDlgTextSub, fontSize: 13)),
                   );
                 }),
               ),
@@ -2904,7 +3369,11 @@ class _ExamScheduleDialogState extends State<_ExamScheduleDialog> {
               } catch (_) {}
             }));
           },
-          child: const Text('닫기', style: TextStyle(color: Colors.white70)),
+          style: TextButton.styleFrom(
+            foregroundColor: kDlgTextSub,
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+          ),
+          child: const Text('닫기'),
         )
       ],
     );
@@ -2918,35 +3387,47 @@ Future<void> _openSubjectListDialog(BuildContext context) async {
     builder: (ctx) {
       return StatefulBuilder(builder: (ctxSB, setSB) {
         return AlertDialog(
-          backgroundColor: const Color(0xFF1F1F1F),
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          title: Row(
+          backgroundColor: kDlgBg,
+          shape: _examDlgShape(),
+          titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 8),
+          contentPadding: const EdgeInsets.fromLTRB(24, 8, 24, 8),
+          actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+          title: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
             children: [
-              const Text('시험명', style: TextStyle(color: Colors.white)),
-              const Spacer(),
-              TextButton.icon(
-                onPressed: () async {
-                  final name = await _openExamNameAddDialog(ctxSB);
-                  if (name != null && name.trim().isNotEmpty) {
-                    final trimmed = name.trim();
-                    final list = [..._examNames.value];
-                    if (!list.contains(trimmed)) {
-                      list.add(trimmed);
-                      _examNames.value = list;
-                      await _saveExamMetaPrefs();
-                    }
-                  }
-                },
-                icon: const Icon(Icons.add, size: 18),
-                label: const Text('추가'),
-                style: TextButton.styleFrom(
-                  foregroundColor: Colors.white70,
-                  backgroundColor: Colors.white12,
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                ),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Expanded(
+                    child: Text(
+                      '시험명',
+                      style: TextStyle(
+                          color: kDlgText,
+                          fontSize: 20,
+                          fontWeight: FontWeight.w900),
+                    ),
+                  ),
+                  _examScheduleHeaderChip(
+                    icon: Icons.add_rounded,
+                    label: '추가',
+                    onPressed: () async {
+                      final name = await _openExamNameAddDialog(ctxSB);
+                      if (name != null && name.trim().isNotEmpty) {
+                        final trimmed = name.trim();
+                        final list = [..._examNames.value];
+                        if (!list.contains(trimmed)) {
+                          list.add(trimmed);
+                          _examNames.value = list;
+                          await _saveExamMetaPrefs();
+                        }
+                      }
+                    },
+                  ),
+                ],
               ),
+              const SizedBox(height: 12),
+              const Divider(color: kDlgBorder, height: 1),
             ],
           ),
           content: SizedBox(
@@ -2957,14 +3438,17 @@ Future<void> _openSubjectListDialog(BuildContext context) async {
               builder: (context, items, _) {
                 if (items.isEmpty) {
                   return const Center(
-                      child: Text('등록된 시험명이 없습니다. 우측 상단에서 추가하세요.',
-                          style: TextStyle(color: Colors.white54)));
+                      child: Text(
+                    '등록된 시험명이 없습니다. 우측 상단에서 추가하세요.',
+                    style: TextStyle(
+                        color: kDlgTextSub, fontWeight: FontWeight.w600),
+                  ));
                 }
                 final sorted = [...items]..sort();
                 return ListView.separated(
                   itemCount: sorted.length,
                   separatorBuilder: (_, __) =>
-                      const Divider(height: 1, color: Colors.white12),
+                      const Divider(height: 1, color: kDlgBorder),
                   itemBuilder: (c, i) {
                     final name = sorted[i];
                     final assigned =
@@ -2977,50 +3461,59 @@ Future<void> _openSubjectListDialog(BuildContext context) async {
                       ..sort();
                     final rightText =
                         schools.isEmpty ? '' : schools.join(' · ');
-                    return ListTile(
-                      title: Text(name,
-                          style: const TextStyle(
-                              color: Colors.white, fontSize: 20)),
-                      subtitle: null,
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          SizedBox(
-                            width: 260,
-                            child: Align(
-                              alignment: Alignment.centerRight,
-                              child: Text(
-                                rightText,
-                                textAlign: TextAlign.right,
-                                overflow: TextOverflow.ellipsis,
-                                maxLines: 2,
-                                style: const TextStyle(
-                                    color: Colors.white54, fontSize: 14),
+                    return Material(
+                      color: Colors.transparent,
+                      child: ListTile(
+                        tileColor: kDlgPanelBg,
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10)),
+                        title: Text(name,
+                            style: const TextStyle(
+                                color: kDlgText,
+                                fontSize: 18,
+                                fontWeight: FontWeight.w800)),
+                        subtitle: null,
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            SizedBox(
+                              width: 260,
+                              child: Align(
+                                alignment: Alignment.centerRight,
+                                child: Text(
+                                  rightText,
+                                  textAlign: TextAlign.right,
+                                  overflow: TextOverflow.ellipsis,
+                                  maxLines: 2,
+                                  style: const TextStyle(
+                                      color: kDlgTextSub, fontSize: 13),
+                                ),
                               ),
                             ),
-                          ),
-                          const SizedBox(width: 8),
-                          IconButton(
-                            tooltip: '삭제',
-                            onPressed: () {
-                              setSB(() {
-                                final list = [..._examNames.value]
-                                  ..remove(name);
-                                _examNames.value = list;
-                                _examAssignmentByName.remove(name);
-                                _saveExamMetaPrefs();
-                              });
-                            },
-                            icon: const Icon(Icons.delete_outline,
-                                color: Colors.redAccent),
-                          ),
-                        ],
+                            const SizedBox(width: 8),
+                            IconButton(
+                              tooltip: '삭제',
+                              onPressed: () {
+                                setSB(() {
+                                  final list = [..._examNames.value]
+                                    ..remove(name);
+                                  _examNames.value = list;
+                                  _examAssignmentByName.remove(name);
+                                  _saveExamMetaPrefs();
+                                });
+                              },
+                              icon: const Icon(Icons.delete_outline,
+                                  color: Colors.redAccent),
+                            ),
+                          ],
+                        ),
+                        onTap: () async {
+                          await _openSchoolGradeMultiSelectDialog(
+                              context, name);
+                          await _saveExamMetaPrefs();
+                          setSB(() {}); // 선택 결과 반영
+                        },
                       ),
-                      onTap: () async {
-                        await _openSchoolGradeMultiSelectDialog(context, name);
-                        await _saveExamMetaPrefs();
-                        setSB(() {}); // 선택 결과 반영
-                      },
                     );
                   },
                 );
@@ -3030,7 +3523,12 @@ Future<void> _openSubjectListDialog(BuildContext context) async {
           actions: [
             TextButton(
               onPressed: () => Navigator.of(ctxSB).pop(),
-              child: const Text('닫기', style: TextStyle(color: Colors.white70)),
+              style: TextButton.styleFrom(
+                foregroundColor: kDlgTextSub,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+              ),
+              child: const Text('닫기'),
             ),
           ],
         );
@@ -3045,33 +3543,65 @@ Future<String?> _openExamNameAddDialog(BuildContext context) async {
     builder: (ctx) {
       final ctrl = ImeAwareTextEditingController();
       return AlertDialog(
-        backgroundColor: const Color(0xFF1F1F1F),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        title: const Text('시험명 추가', style: TextStyle(color: Colors.white)),
+        backgroundColor: kDlgBg,
+        shape: _examDlgShape(),
+        titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 8),
+        contentPadding: const EdgeInsets.fromLTRB(24, 8, 24, 8),
+        actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+        title: const Text(
+          '시험명 추가',
+          style: TextStyle(
+              color: kDlgText, fontSize: 20, fontWeight: FontWeight.w900),
+        ),
         content: SizedBox(
           width: 420,
-          child: TextField(
-            controller: ctrl,
-            style: const TextStyle(color: Colors.white),
-            decoration: const InputDecoration(
-              hintText: '예: 중간고사 수학',
-              hintStyle: TextStyle(color: Colors.white38),
-              enabledBorder: OutlineInputBorder(
-                  borderSide: BorderSide(color: Colors.white24)),
-              focusedBorder: OutlineInputBorder(
-                  borderSide: BorderSide(color: Color(0xFF1976D2))),
-            ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Divider(color: kDlgBorder, height: 1),
+              const SizedBox(height: 16),
+              TextField(
+                controller: ctrl,
+                style: const TextStyle(color: kDlgText),
+                decoration: const InputDecoration(
+                  filled: true,
+                  fillColor: kDlgFieldBg,
+                  hintText: '예: 중간고사 수학',
+                  hintStyle: TextStyle(color: kDlgTextSub),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.all(Radius.circular(10)),
+                    borderSide: BorderSide(color: kDlgBorder),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.all(Radius.circular(10)),
+                    borderSide: BorderSide(color: kDlgAccent, width: 1.5),
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
         actions: [
           TextButton(
               onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('취소', style: TextStyle(color: Colors.white70))),
+              style: TextButton.styleFrom(
+                foregroundColor: kDlgTextSub,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+              ),
+              child: const Text('취소')),
           FilledButton(
             onPressed: () => Navigator.of(ctx).pop(ctrl.text.trim()),
             style: FilledButton.styleFrom(
-                backgroundColor: const Color(0xFF1976D2)),
-            child: const Text('추가'),
+              backgroundColor: kDlgAccent,
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10)),
+            ),
+            child: const Text('추가',
+                style: TextStyle(
+                    color: Colors.white, fontWeight: FontWeight.w900)),
           ),
         ],
       );
@@ -3129,18 +3659,41 @@ Future<void> _openSchoolGradeMultiSelectDialog(
     builder: (ctx) {
       return StatefulBuilder(builder: (ctxSB, setSB) {
         return AlertDialog(
-          backgroundColor: const Color(0xFF1F1F1F),
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          title: Text('학교·학년 선택 - $examName',
-              style: const TextStyle(color: Colors.white)),
+          backgroundColor: kDlgBg,
+          shape: _examDlgShape(),
+          titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 8),
+          contentPadding: const EdgeInsets.fromLTRB(24, 8, 24, 8),
+          actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+          title: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                '학교·학년 선택',
+                style: TextStyle(
+                    color: kDlgText, fontSize: 20, fontWeight: FontWeight.w900),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                examName,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                    color: kDlgTextSub,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 12),
+              const Divider(color: kDlgBorder, height: 1),
+            ],
+          ),
           content: SizedBox(
             width: 460,
             height: MediaQuery.of(ctxSB).size.height * 0.60,
             child: ListView.separated(
               itemCount: keys.length,
               separatorBuilder: (_, __) =>
-                  const Divider(height: 1, color: Colors.white12),
+                  const Divider(height: 1, color: kDlgBorder),
               itemBuilder: (c, i) {
                 final key = keys[i];
                 final meta = metaBySchool[key]!;
@@ -3161,15 +3714,18 @@ Future<void> _openSchoolGradeMultiSelectDialog(
                         child: Text(
                             '$school${levelLabel.isNotEmpty ? ' ($levelLabel)' : ''}',
                             style: const TextStyle(
-                                color: Colors.white, fontSize: 16)),
+                                color: kDlgText,
+                                fontSize: 15,
+                                fontWeight: FontWeight.w700)),
                       ),
                       Wrap(
-                        spacing: 10,
+                        spacing: 8,
                         runSpacing: 6,
+                        alignment: WrapAlignment.end,
                         children: grades.map((g) {
                           final checked = selected.contains(g);
-                          return FilterChip(
-                            label: Text('${g}학년'),
+                          return YggDialogFilterChip(
+                            label: '${g}학년',
                             selected: checked,
                             onSelected: (val) {
                               setSB(() {
@@ -3183,17 +3739,6 @@ Future<void> _openSchoolGradeMultiSelectDialog(
                                 }
                               });
                             },
-                            backgroundColor: const Color(0xFF232326),
-                            selectedColor: const Color(0xFF2A2A2A),
-                            labelStyle: TextStyle(
-                                color: checked ? Colors.white : Colors.white70),
-                            side: BorderSide(
-                                color: checked
-                                    ? const Color(0xFF1976D2)
-                                    : Colors.white24,
-                                width: checked ? 1.6 : 1.0),
-                            showCheckmark: true,
-                            checkmarkColor: const Color(0xFF1976D2),
                           );
                         }).toList(),
                       ),
@@ -3206,8 +3751,12 @@ Future<void> _openSchoolGradeMultiSelectDialog(
           actions: [
             TextButton(
                 onPressed: () => Navigator.of(ctx).pop(),
-                child:
-                    const Text('취소', style: TextStyle(color: Colors.white70))),
+                style: TextButton.styleFrom(
+                  foregroundColor: kDlgTextSub,
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 20, vertical: 14),
+                ),
+                child: const Text('취소')),
             FilledButton(
               onPressed: () {
                 // 저장 반영
@@ -3217,8 +3766,15 @@ Future<void> _openSchoolGradeMultiSelectDialog(
                 Navigator.of(ctx).pop();
               },
               style: FilledButton.styleFrom(
-                  backgroundColor: const Color(0xFF1976D2)),
-              child: const Text('저장'),
+                backgroundColor: kDlgAccent,
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 28, vertical: 14),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10)),
+              ),
+              child: const Text('저장',
+                  style: TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.w900)),
             ),
           ],
         );
@@ -3256,6 +3812,58 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
   String _hoverTooltipText = '';
 
   @override
+  void initState() {
+    super.initState();
+    // 프리로드 맵은 다이얼로그 오픈 전에 채워지므로 첫 프레임부터 데이터 반영(깜빡임 없음)
+    for (final sg in widget.schoolGrade) {
+      final sav = _preloadedSavedBySg[sg];
+      if (sav != null) {
+        _savedBySchoolGrade[sg] = Map<DateTime, List<String>>.from(sav);
+      }
+      final rng = _preloadedRangesBySg[sg];
+      if (rng != null) {
+        _rangesBySchoolGrade[sg] = Map<DateTime, String>.from(rng);
+      }
+    }
+  }
+
+  /// 다음 시험 시즌: 활성 DB는 비워진 뒤 호출. 프리로드 맵에서 해당 학교·학년 키는 다이얼로그에서 먼저 제거할 것.
+  void resetForNewSeason() {
+    _hideHoverTooltip();
+    if (!mounted) return;
+    setState(() {
+      _step = 0;
+      _selectedSchoolGrade = null;
+      _selectedDays.clear();
+      _titlesByDate.clear();
+      _savedBySchoolGrade.clear();
+      _selectedDaysBySchoolGrade.clear();
+      _rangesBySchoolGrade.clear();
+      _rangeBadgesBySchoolGrade.clear();
+      _hoveredSchoolGrade = null;
+    });
+    _titleCtrl.clear();
+  }
+
+  void reloadFromPreloadMaps() {
+    if (!mounted) return;
+    setState(() {
+      _savedBySchoolGrade.clear();
+      _rangesBySchoolGrade.clear();
+      for (final sg in widget.schoolGrade) {
+        final sav = _preloadedSavedBySg[sg];
+        if (sav != null) {
+          _savedBySchoolGrade[sg] = Map<DateTime, List<String>>.from(sav);
+        }
+        final rng = _preloadedRangesBySg[sg];
+        if (rng != null) {
+          _rangesBySchoolGrade[sg] = Map<DateTime, String>.from(rng);
+        }
+      }
+    });
+  }
+
+  @override
   void dispose() {
     _hideHoverTooltip();
     _titleCtrl.dispose();
@@ -3283,9 +3891,9 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
             constraints: const BoxConstraints(maxWidth: 280),
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
             decoration: BoxDecoration(
-              color: const Color(0xFF232326),
-              borderRadius: BorderRadius.circular(6),
-              border: Border.all(color: Colors.white24),
+              color: kDlgPanelBg,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: kDlgBorder),
               boxShadow: [
                 BoxShadow(
                     color: Colors.black.withOpacity(0.24),
@@ -3294,7 +3902,7 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
               ],
             ),
             child: Text(_hoverTooltipText,
-                style: const TextStyle(color: Colors.white70, fontSize: 13)),
+                style: const TextStyle(color: kDlgTextSub, fontSize: 13)),
           ),
         ),
       );
@@ -3360,21 +3968,21 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
         mainAxisSize: MainAxisSize.max,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('학교/학년 선택', style: TextStyle(color: Colors.white70)),
+          const YggDialogSectionHeader(
+              icon: Icons.apartment_outlined, title: '학교·학년 선택'),
           const SizedBox(height: 8),
-          // 기존 FutureBuilder 제거: 프리로드/메모리 캐시 주입을 우선 사용
-          // (필요 시 외부에서 _preloadExamDialogData 실행 후, 다이얼로그 build 시 주입됨)
+          // 프리로드 데이터는 _ExamScheduleWizardState.initState에서 맵에 반영됨
           Expanded(
             child: Container(
               decoration: BoxDecoration(
-                  color: const Color(0xFF2A2A2A),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.white24)),
+                  color: kDlgPanelBg,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: kDlgBorder)),
               child: ListView.separated(
                 padding: const EdgeInsets.symmetric(vertical: 4),
                 itemCount: widget.schoolGrade.length,
                 separatorBuilder: (_, __) =>
-                    const Divider(height: 1, color: Colors.white12),
+                    const Divider(height: 1, color: kDlgBorder),
                 itemBuilder: (context, i) {
                   final item = widget.schoolGrade[i];
                   final partsIdx = item.lastIndexOf(' ');
@@ -3467,31 +4075,56 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                                   context: context,
                                   builder: (ctx) {
                                     return AlertDialog(
-                                      backgroundColor: const Color(0xFF1F1F1F),
-                                      shape: RoundedRectangleBorder(
-                                          borderRadius:
-                                              BorderRadius.circular(12)),
-                                      title: const Text('삭제 확인',
-                                          style:
-                                              TextStyle(color: Colors.white)),
+                                      backgroundColor: kDlgBg,
+                                      shape: _examDlgShape(),
+                                      titlePadding: const EdgeInsets.fromLTRB(
+                                          24, 24, 24, 8),
+                                      contentPadding: const EdgeInsets.fromLTRB(
+                                          24, 8, 24, 8),
+                                      actionsPadding: const EdgeInsets.fromLTRB(
+                                          24, 0, 24, 20),
+                                      title: const Text(
+                                          '삭제 확인',
+                                          style: TextStyle(
+                                              color: kDlgText,
+                                              fontSize: 20,
+                                              fontWeight: FontWeight.w900)),
                                       content: Text(
                                           '$schoolName $gradeText 데이터를 삭제할까요?',
                                           style: const TextStyle(
-                                              color: Colors.white70)),
+                                              color: kDlgTextSub,
+                                              fontWeight: FontWeight.w600,
+                                              height: 1.35)),
                                       actions: [
                                         TextButton(
                                             onPressed: () =>
                                                 Navigator.of(ctx).pop(false),
-                                            child: const Text('취소',
-                                                style: TextStyle(
-                                                    color: Colors.white70))),
+                                            style: TextButton.styleFrom(
+                                                foregroundColor: kDlgTextSub,
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                        horizontal: 20,
+                                                        vertical: 14)),
+                                            child: const Text('취소')),
                                         FilledButton(
                                             onPressed: () =>
                                                 Navigator.of(ctx).pop(true),
                                             style: FilledButton.styleFrom(
                                                 backgroundColor:
-                                                    const Color(0xFFD32F2F)),
-                                            child: const Text('삭제')),
+                                                    const Color(0xFFD32F2F),
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                        horizontal: 24,
+                                                        vertical: 14),
+                                                shape: RoundedRectangleBorder(
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                            10))),
+                                            child: const Text('삭제',
+                                                style: TextStyle(
+                                                    color: Colors.white,
+                                                    fontWeight:
+                                                        FontWeight.w900))),
                                       ],
                                     );
                                   },
@@ -3531,9 +4164,10 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                                   schoolName,
                                   style: TextStyle(
                                       color: isSelectedSchool
-                                          ? Colors.white
-                                          : Colors.white70,
-                                      fontSize: 16),
+                                          ? kDlgText
+                                          : kDlgTextSub,
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w700),
                                   overflow: TextOverflow.ellipsis,
                                 ),
                               ),
@@ -3549,9 +4183,10 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                                 gradeText,
                                 style: TextStyle(
                                     color: isSelectedSchool
-                                        ? Colors.white
-                                        : Colors.white60,
-                                    fontSize: 16),
+                                        ? kDlgText
+                                        : kDlgTextSub,
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w600),
                               ),
                             ),
                           ),
@@ -3562,7 +4197,7 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                               spacing: 6,
                               runSpacing: 6,
                               children: [
-                                // 스켈레톤: 프리로드 결과가 아직 주입되지 않은 초기 1프레임 대비
+                                // 데이터가 전혀 없을 때만 플레이스홀더(해당 위저드에 저장 일정 없음)
                                 if ((_savedBySchoolGrade.isEmpty &&
                                     _rangesBySchoolGrade.isEmpty)) ...[
                                   for (int k = 0; k < 3; k++)
@@ -3570,10 +4205,10 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                                       width: 80 + (k * 18),
                                       height: 22,
                                       decoration: BoxDecoration(
-                                        color: const Color(0xFF2A2A2A),
+                                        color: kDlgFieldBg,
                                         borderRadius: BorderRadius.circular(6),
                                         border:
-                                            Border.all(color: Colors.white12),
+                                            Border.all(color: kDlgBorder),
                                       ),
                                     ),
                                 ],
@@ -3592,17 +4227,18 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                                       padding: const EdgeInsets.symmetric(
                                           horizontal: 10, vertical: 6),
                                       decoration: BoxDecoration(
-                                        color: const Color(0xFF2A2A2A),
+                                        color: kDlgFieldBg,
                                         borderRadius: BorderRadius.circular(6),
                                         border: Border.all(
                                             color: transparentBorder
                                                 ? Colors.transparent
-                                                : Colors.white24),
+                                                : kDlgBorder),
                                       ),
                                       child: Text(text,
                                           style: TextStyle(
-                                              color: Colors.white70,
-                                              fontSize: fs)),
+                                              color: kDlgTextSub,
+                                              fontSize: fs,
+                                              fontWeight: FontWeight.w600)),
                                     );
                                     return onTap == null
                                         ? core
@@ -3704,18 +4340,19 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                                         padding: const EdgeInsets.symmetric(
                                             horizontal: 10, vertical: 6),
                                         decoration: BoxDecoration(
-                                          color: const Color(0xFF2A2A2A),
+                                          color: kDlgFieldBg,
                                           borderRadius:
                                               BorderRadius.circular(6),
                                           border: Border.all(
                                               color: transparentBorder
                                                   ? Colors.transparent
-                                                  : Colors.white24),
+                                                  : kDlgBorder),
                                         ),
                                         child: Text(t,
                                             style: TextStyle(
-                                                color: Colors.white70,
-                                                fontSize: fs)),
+                                                color: kDlgTextSub,
+                                                fontSize: fs,
+                                                fontWeight: FontWeight.w600)),
                                       );
                                   return Row(
                                     mainAxisSize: MainAxisSize.min,
@@ -3744,11 +4381,16 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                                 });
                               },
                               style: TextButton.styleFrom(
-                                  foregroundColor: Colors.white70,
-                                  backgroundColor: Colors.white12,
+                                  foregroundColor: kDlgText,
+                                  backgroundColor: kDlgFieldBg,
+                                  side: const BorderSide(color: kDlgBorder),
                                   padding: const EdgeInsets.symmetric(
-                                      horizontal: 10, vertical: 6)),
-                              child: const Text('일정'),
+                                      horizontal: 12, vertical: 8),
+                                  shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(10))),
+                              child: const Text('일정',
+                                  style:
+                                      TextStyle(fontWeight: FontWeight.w700)),
                             ),
                           ],
                           if (!_hasRangeForSg) ...[
@@ -3777,11 +4419,16 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                                 }
                               },
                               style: TextButton.styleFrom(
-                                  foregroundColor: Colors.white70,
-                                  backgroundColor: Colors.white12,
+                                  foregroundColor: kDlgText,
+                                  backgroundColor: kDlgFieldBg,
+                                  side: const BorderSide(color: kDlgBorder),
                                   padding: const EdgeInsets.symmetric(
-                                      horizontal: 10, vertical: 6)),
-                              child: const Text('범위'),
+                                      horizontal: 12, vertical: 8),
+                                  shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(10))),
+                              child: const Text('범위',
+                                  style:
+                                      TextStyle(fontWeight: FontWeight.w700)),
                             ),
                           ],
                         ],
