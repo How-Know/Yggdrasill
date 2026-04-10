@@ -35,7 +35,7 @@ class AcademyDbService {
         mem ? inMemoryDatabasePath : await _resolveLocalDbPath();
     return await openDatabaseWithLog(
       path,
-      version: 55,
+      version: 56,
       onConfigure: (db) async {
         // 잠금 최소화를 위한 설정은 유지
         await db.execute('PRAGMA journal_mode=WAL');
@@ -53,7 +53,8 @@ class AcademyDbService {
             lesson_duration INTEGER,
             payment_type TEXT,
             logo BLOB,
-            session_cycle INTEGER DEFAULT 1 -- [추가] 수강 횟수
+            session_cycle INTEGER DEFAULT 1,
+            active_exam_season_id INTEGER NOT NULL DEFAULT 1
           )
         ''');
         // tag_events: 수업 태그 이벤트 저장 테이블
@@ -413,8 +414,9 @@ class AcademyDbService {
             level INTEGER,
             grade INTEGER,
             date TEXT,
+            season_id INTEGER NOT NULL DEFAULT 1,
             names_json TEXT,
-            PRIMARY KEY (school, level, grade, date)
+            PRIMARY KEY (school, level, grade, date, season_id)
           )
         ''');
         await db.execute('''
@@ -423,8 +425,9 @@ class AcademyDbService {
             level INTEGER,
             grade INTEGER,
             date TEXT,
+            season_id INTEGER NOT NULL DEFAULT 1,
             range_text TEXT,
-            PRIMARY KEY (school, level, grade, date)
+            PRIMARY KEY (school, level, grade, date, season_id)
           )
         ''');
         await db.execute('''
@@ -433,7 +436,8 @@ class AcademyDbService {
             level INTEGER,
             grade INTEGER,
             date TEXT,
-            PRIMARY KEY (school, level, grade, date)
+            season_id INTEGER NOT NULL DEFAULT 1,
+            PRIMARY KEY (school, level, grade, date, season_id)
           )
         ''');
         // Resources tables (folders/files)
@@ -1843,6 +1847,93 @@ class AcademyDbService {
                 '[DB][마이그레이션] v55 session_overrides.change_reason 추가 실패: $e');
           }
         }
+        if (oldVersion < 56) {
+          try {
+            Future<void> rebuildExamTable({
+              required String name,
+              required String createSql,
+              required String insertSelect,
+            }) async {
+              final info = await db.rawQuery('PRAGMA table_info($name)');
+              if (info.any((c) => c['name'] == 'season_id')) return;
+              final exists = await db.rawQuery(
+                  "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                  [name]);
+              if (exists.isEmpty) {
+                await db.execute(createSql);
+                return;
+              }
+              final tmp = '${name}_old_v55';
+              await db.execute('ALTER TABLE $name RENAME TO $tmp');
+              await db.execute(createSql);
+              await db.execute(insertSelect);
+              await db.execute('DROP TABLE $tmp');
+            }
+
+            await rebuildExamTable(
+              name: 'exam_schedules',
+              createSql: '''
+                CREATE TABLE exam_schedules (
+                  school TEXT,
+                  level INTEGER,
+                  grade INTEGER,
+                  date TEXT,
+                  season_id INTEGER NOT NULL DEFAULT 1,
+                  names_json TEXT,
+                  PRIMARY KEY (school, level, grade, date, season_id)
+                )
+              ''',
+              insertSelect: '''
+                INSERT INTO exam_schedules (school, level, grade, date, season_id, names_json)
+                SELECT school, level, grade, date, 1, names_json FROM exam_schedules_old_v55
+              ''',
+            );
+            await rebuildExamTable(
+              name: 'exam_ranges',
+              createSql: '''
+                CREATE TABLE exam_ranges (
+                  school TEXT,
+                  level INTEGER,
+                  grade INTEGER,
+                  date TEXT,
+                  season_id INTEGER NOT NULL DEFAULT 1,
+                  range_text TEXT,
+                  PRIMARY KEY (school, level, grade, date, season_id)
+                )
+              ''',
+              insertSelect: '''
+                INSERT INTO exam_ranges (school, level, grade, date, season_id, range_text)
+                SELECT school, level, grade, date, 1, range_text FROM exam_ranges_old_v55
+              ''',
+            );
+            await rebuildExamTable(
+              name: 'exam_days',
+              createSql: '''
+                CREATE TABLE exam_days (
+                  school TEXT,
+                  level INTEGER,
+                  grade INTEGER,
+                  date TEXT,
+                  season_id INTEGER NOT NULL DEFAULT 1,
+                  PRIMARY KEY (school, level, grade, date, season_id)
+                )
+              ''',
+              insertSelect: '''
+                INSERT INTO exam_days (school, level, grade, date, season_id)
+                SELECT school, level, grade, date, 1 FROM exam_days_old_v55
+              ''',
+            );
+
+            final asCols =
+                await db.rawQuery('PRAGMA table_info(academy_settings)');
+            if (!asCols.any((c) => c['name'] == 'active_exam_season_id')) {
+              await db.execute(
+                  'ALTER TABLE academy_settings ADD COLUMN active_exam_season_id INTEGER NOT NULL DEFAULT 1');
+            }
+          } catch (e) {
+            print('[DB][마이그레이션] v56 exam season_id / active_exam_season_id 실패: $e');
+          }
+        }
       },
     );
   }
@@ -1895,8 +1986,9 @@ class AcademyDbService {
         level INTEGER,
         grade INTEGER,
         date TEXT,
+        season_id INTEGER NOT NULL DEFAULT 1,
         names_json TEXT,
-        PRIMARY KEY (school, level, grade, date)
+        PRIMARY KEY (school, level, grade, date, season_id)
       )
     ''');
     await dbClient.execute('''
@@ -1905,8 +1997,9 @@ class AcademyDbService {
         level INTEGER,
         grade INTEGER,
         date TEXT,
+        season_id INTEGER NOT NULL DEFAULT 1,
         range_text TEXT,
-        PRIMARY KEY (school, level, grade, date)
+        PRIMARY KEY (school, level, grade, date, season_id)
       )
     ''');
     await dbClient.execute('''
@@ -1915,7 +2008,8 @@ class AcademyDbService {
         level INTEGER,
         grade INTEGER,
         date TEXT,
-        PRIMARY KEY (school, level, grade, date)
+        season_id INTEGER NOT NULL DEFAULT 1,
+        PRIMARY KEY (school, level, grade, date, season_id)
       )
     ''');
     await dbClient.execute('''
@@ -1968,19 +2062,19 @@ class AcademyDbService {
     required String school,
     required int level,
     required int grade,
+    required int seasonId,
     required Map<String, List<String>> titlesByDateIso,
     required Map<String, String> rangesByDateIso,
   }) async {
     final dbClient = await db;
     await ensureExamTables();
     await dbClient.transaction((txn) async {
-      // 기존 데이터 삭제 후 저장 (해당 school/level/grade 범위)
       await txn.delete('exam_schedules',
-          where: 'school = ? AND level = ? AND grade = ?',
-          whereArgs: [school, level, grade]);
+          where: 'school = ? AND level = ? AND grade = ? AND season_id = ?',
+          whereArgs: [school, level, grade, seasonId]);
       await txn.delete('exam_ranges',
-          where: 'school = ? AND level = ? AND grade = ?',
-          whereArgs: [school, level, grade]);
+          where: 'school = ? AND level = ? AND grade = ? AND season_id = ?',
+          whereArgs: [school, level, grade, seasonId]);
       for (final e in titlesByDateIso.entries) {
         await txn.insert(
             'exam_schedules',
@@ -1989,6 +2083,7 @@ class AcademyDbService {
               'level': level,
               'grade': grade,
               'date': e.key,
+              'season_id': seasonId,
               'names_json': e.value.isEmpty ? '[]' : jsonEncode(e.value),
             },
             conflictAlgorithm: ConflictAlgorithm.replace);
@@ -2001,6 +2096,7 @@ class AcademyDbService {
               'level': level,
               'grade': grade,
               'date': e.key,
+              'season_id': seasonId,
               'range_text': e.value,
             },
             conflictAlgorithm: ConflictAlgorithm.replace);
@@ -2012,11 +2108,12 @@ class AcademyDbService {
     required String school,
     required int level,
     required int grade,
+    required int seasonId,
   }) async {
     final dbClient = await db;
     await ensureExamTables();
-    const where = 'school = ? AND level = ? AND grade = ?';
-    final args = [school, level, grade];
+    const where = 'school = ? AND level = ? AND grade = ? AND season_id = ?';
+    final args = [school, level, grade, seasonId];
     final rows = await Future.wait([
       dbClient.query('exam_schedules',
           where: where, whereArgs: args),
@@ -2034,14 +2131,15 @@ class AcademyDbService {
     required String school,
     required int level,
     required int grade,
+    required int seasonId,
     required List<String> daysIso,
   }) async {
     final dbClient = await db;
     await ensureExamTables();
     await dbClient.transaction((txn) async {
       await txn.delete('exam_days',
-          where: 'school = ? AND level = ? AND grade = ?',
-          whereArgs: [school, level, grade]);
+          where: 'school = ? AND level = ? AND grade = ? AND season_id = ?',
+          whereArgs: [school, level, grade, seasonId]);
       for (final d in daysIso) {
         await txn.insert(
             'exam_days',
@@ -2050,6 +2148,7 @@ class AcademyDbService {
               'level': level,
               'grade': grade,
               'date': d,
+              'season_id': seasonId,
             },
             conflictAlgorithm: ConflictAlgorithm.replace);
       }
@@ -2062,10 +2161,30 @@ class AcademyDbService {
     return await dbClient.query('exam_schedules', orderBy: 'date ASC');
   }
 
+  Future<List<Map<String, dynamic>>> loadAllExamSchedulesForSeason(
+      int seasonId) async {
+    final dbClient = await db;
+    await ensureExamTables();
+    return await dbClient.query('exam_schedules',
+        where: 'season_id = ?',
+        whereArgs: [seasonId],
+        orderBy: 'date ASC');
+  }
+
   Future<List<Map<String, dynamic>>> loadAllExamDays() async {
     final dbClient = await db;
     await ensureExamTables();
     return await dbClient.query('exam_days', orderBy: 'date ASC');
+  }
+
+  Future<List<Map<String, dynamic>>> loadAllExamDaysForSeason(
+      int seasonId) async {
+    final dbClient = await db;
+    await ensureExamTables();
+    return await dbClient.query('exam_days',
+        where: 'season_id = ?',
+        whereArgs: [seasonId],
+        orderBy: 'date ASC');
   }
 
   Future<List<Map<String, dynamic>>> loadAllExamRanges() async {
@@ -2074,24 +2193,51 @@ class AcademyDbService {
     return await dbClient.query('exam_ranges', orderBy: 'date ASC');
   }
 
+  Future<List<Map<String, dynamic>>> loadAllExamRangesForSeason(
+      int seasonId) async {
+    final dbClient = await db;
+    await ensureExamTables();
+    return await dbClient.query('exam_ranges',
+        where: 'season_id = ?',
+        whereArgs: [seasonId],
+        orderBy: 'date ASC');
+  }
+
   Future<void> deleteExamDataForSchoolGrade({
     required String school,
     required int level,
     required int grade,
+    required int seasonId,
   }) async {
     final dbClient = await db;
     await ensureExamTables();
     await dbClient.transaction((txn) async {
       await txn.delete('exam_schedules',
-          where: 'school = ? AND level = ? AND grade = ?',
-          whereArgs: [school, level, grade]);
+          where: 'school = ? AND level = ? AND grade = ? AND season_id = ?',
+          whereArgs: [school, level, grade, seasonId]);
       await txn.delete('exam_ranges',
-          where: 'school = ? AND level = ? AND grade = ?',
-          whereArgs: [school, level, grade]);
+          where: 'school = ? AND level = ? AND grade = ? AND season_id = ?',
+          whereArgs: [school, level, grade, seasonId]);
       await txn.delete('exam_days',
-          where: 'school = ? AND level = ? AND grade = ?',
-          whereArgs: [school, level, grade]);
+          where: 'school = ? AND level = ? AND grade = ? AND season_id = ?',
+          whereArgs: [school, level, grade, seasonId]);
     });
+  }
+
+  Future<void> setActiveExamSeasonId(int seasonId) async {
+    final dbClient = await db;
+    final info =
+        await dbClient.rawQuery('PRAGMA table_info(academy_settings)');
+    if (!info.any((c) => c['name'] == 'active_exam_season_id')) {
+      await dbClient.execute(
+          'ALTER TABLE academy_settings ADD COLUMN active_exam_season_id INTEGER NOT NULL DEFAULT 1');
+    }
+    await dbClient.update(
+      'academy_settings',
+      {'active_exam_season_id': seasonId},
+      where: 'id = ?',
+      whereArgs: [1],
+    );
   }
 
   Future<Database> openDatabaseWithLog(String path,
@@ -2145,6 +2291,7 @@ class AcademyDbService {
           'payment_type': paymentTypeStr,
           'logo': settings.logo,
           'session_cycle': settings.sessionCycle, // [추가]
+          'active_exam_season_id': settings.activeExamSeasonId,
         },
         conflictAlgorithm: ConflictAlgorithm.replace,
       );

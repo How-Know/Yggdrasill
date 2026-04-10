@@ -215,12 +215,12 @@ class BackfillRunner {
                   'level': r['level'],
                   'grade': r['grade'],
                   'date': r['date'],
+                  'season_id': r['season_id'] ?? 1,
                   'names_json': r['names_json'],
                 })
             .toList();
-        await supa
-            .from('exam_schedules')
-            .upsert(rows, onConflict: 'academy_id,school,level,grade,date');
+        await supa.from('exam_schedules').upsert(rows,
+            onConflict: 'academy_id,school,level,grade,date,season_id');
         debugPrint('[BACKFILL][exam_schedules] upserted=${rows.length}');
       }
     } catch (e, st) {
@@ -237,12 +237,12 @@ class BackfillRunner {
                   'level': r['level'],
                   'grade': r['grade'],
                   'date': r['date'],
+                  'season_id': r['season_id'] ?? 1,
                   'range_text': r['range_text'],
                 })
             .toList();
-        await supa
-            .from('exam_ranges')
-            .upsert(rows, onConflict: 'academy_id,school,level,grade,date');
+        await supa.from('exam_ranges').upsert(rows,
+            onConflict: 'academy_id,school,level,grade,date,season_id');
         debugPrint('[BACKFILL][exam_ranges] upserted=${rows.length}');
       }
     } catch (e, st) {
@@ -259,11 +259,11 @@ class BackfillRunner {
                   'level': r['level'],
                   'grade': r['grade'],
                   'date': r['date'],
+                  'season_id': r['season_id'] ?? 1,
                 })
             .toList();
-        await supa
-            .from('exam_days')
-            .upsert(rows, onConflict: 'academy_id,school,level,grade,date');
+        await supa.from('exam_days').upsert(rows,
+            onConflict: 'academy_id,school,level,grade,date,season_id');
         debugPrint('[BACKFILL][exam_days] upserted=${rows.length}');
       }
     } catch (e, st) {
@@ -287,6 +287,7 @@ class BackfillRunner {
           // 'logo': local['logo'], // bytea 전송 호환 이슈 시 제외 유지
           'session_cycle': local['session_cycle'],
           'openai_api_key': local['openai_api_key'],
+          'active_exam_season_id': local['active_exam_season_id'] ?? 1,
         }..removeWhere((k, v) => v == null);
         await supa
             .from('academy_settings')

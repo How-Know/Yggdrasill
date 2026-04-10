@@ -3124,6 +3124,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       sessionCycle:
                           int.tryParse(_courseCountController.text.trim()) ??
                               1, // [추가]
+                      activeExamSeasonId:
+                          DataManager.instance.academySettings.activeExamSeasonId,
                     );
                     DataManager.instance.paymentType =
                         _paymentType; // [수정] public setter 사용

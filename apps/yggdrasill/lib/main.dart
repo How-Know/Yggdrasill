@@ -172,6 +172,17 @@ int _sgGrade(String sg) {
 Future<void> _preloadOneSg(String sg, EducationLevel level) async {
   final school = _sgSchool(sg);
   final gradeNum = _sgGrade(sg);
+  final copy = DataManager.instance
+      .copyExamCachesForWizardIfReady(school, level, gradeNum);
+  if (copy != null) {
+    if (copy.titles.isNotEmpty) {
+      _preloadedSavedBySg[sg] = copy.titles;
+    }
+    if (copy.ranges.isNotEmpty) {
+      _preloadedRangesBySg[sg] = copy.ranges;
+    }
+    return;
+  }
   final res = await DataManager.instance.loadExamFor(school, level, gradeNum);
   // schedules
   final Map<DateTime, List<String>> saved = <DateTime, List<String>>{};
@@ -218,7 +229,18 @@ Future<void> _preloadExamDataFor(
   await Future.wait(sgLabels.map((sg) => _preloadOneSg(sg, level)));
 }
 
+bool _examDialogSgSynced(String label, EducationLevel level) {
+  if (DataManager.instance.isExamBulkHydratedForCurrentSeason) {
+    final school = _sgSchool(label);
+    final grade = _sgGrade(label);
+    return DataManager.instance.hasExamCacheKeyFor(school, level, grade);
+  }
+  return _preloadedSavedBySg.containsKey(label) ||
+      _preloadedRangesBySg.containsKey(label);
+}
+
 Future<void> _preloadExamDialogData() async {
+  await DataManager.instance.preloadAllExamData();
   // 학년 필터 불러와 대상 SG 라벨 산출 후 프리로드
   final prefs = await SharedPreferences.getInstance();
   final List<String> filter =
@@ -250,15 +272,12 @@ Future<void> _preloadExamDialogData() async {
       .where((m) => m['level'] == EducationLevel.high)
       .map((m) => '${m['school']} ${m['grade']}학년')
       .toList();
-  // 이미 프리로드된 항목은 재요청 생략
-  bool _hasPreloaded(String label) {
-    return _preloadedSavedBySg.containsKey(label) ||
-        _preloadedRangesBySg.containsKey(label);
-  }
-
-  final List<String> middle =
-      middleAll.where((l) => !_hasPreloaded(l)).toList();
-  final List<String> high = highAll.where((l) => !_hasPreloaded(l)).toList();
+  final List<String> middle = middleAll
+      .where((l) => !_examDialogSgSynced(l, EducationLevel.middle))
+      .toList();
+  final List<String> high = highAll
+      .where((l) => !_examDialogSgSynced(l, EducationLevel.high))
+      .toList();
   if (middle.isEmpty && high.isEmpty) return;
   await Future.wait([
     _preloadExamDataFor(middle, EducationLevel.middle),
@@ -740,8 +759,10 @@ class _MyAppState extends State<MyApp> with WindowListener {
           await SyncService.instance.runInitialSyncIfNeeded();
           // until 미설정 또는 과거인 경우 DB 기반 자동 복원
           await ExamModeService.instance.ensureOnFromDatabase(
-            () => AcademyDbService.instance.loadAllExamDays(),
-            () => AcademyDbService.instance.loadAllExamSchedules(),
+            () => AcademyDbService.instance
+                .loadAllExamDaysForSeason(DataManager.instance.activeExamSeasonId),
+            () => AcademyDbService.instance.loadAllExamSchedulesForSeason(
+                DataManager.instance.activeExamSeasonId),
           );
         }(),
         builder: (context, snapshot) {
@@ -1881,11 +1902,12 @@ class _ExamFabCluster extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         decoration: BoxDecoration(
-          color: const Color(0xCC202024),
+          // 이전 0xCC 대비 알파 낮춤 — 뒤 화면이 더 비치도록
+          color: const Color(0x85202024),
           borderRadius: BorderRadius.circular(24),
-          border: Border.all(color: Colors.white12),
+          border: Border.all(color: Colors.white10),
           boxShadow: const [
-            BoxShadow(color: Colors.black45, blurRadius: 10, spreadRadius: 2)
+            BoxShadow(color: Colors.black38, blurRadius: 10, spreadRadius: 2)
           ],
         ),
         child: Row(
@@ -1936,7 +1958,7 @@ class _ExamTickerBoardState extends State<_ExamTickerBoard> {
   List<Map<String, dynamic>> _items = [];
   int _index = 0;
   Timer? _timer;
-  final double _fixedWidth = 220; // 고정 너비
+  final double _fixedWidth = 286; // 고정 너비 (기존 220 대비 ~30% 확대)
   int? _hoverIndex;
 
   @override
@@ -1955,7 +1977,8 @@ class _ExamTickerBoardState extends State<_ExamTickerBoard> {
   }
 
   Future<void> _load() async {
-    final rows = await AcademyDbService.instance.loadAllExamSchedules();
+    final rows = await AcademyDbService.instance.loadAllExamSchedulesForSeason(
+        DataManager.instance.activeExamSeasonId);
     final list = List<Map<String, dynamic>>.from(rows);
     list.sort((a, b) =>
         ((a['date'] as String?) ?? '').compareTo((b['date'] as String?) ?? ''));
@@ -1971,16 +1994,13 @@ class _ExamTickerBoardState extends State<_ExamTickerBoard> {
   @override
   Widget build(BuildContext context) {
     if (_items.isEmpty) {
-      return Container(
+      return SizedBox(
         width: _fixedWidth,
-        constraints: const BoxConstraints(minHeight: 36),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        decoration: BoxDecoration(
-            color: const Color(0xFF232326),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: Colors.white24)),
-        child:
-            const Text('등록된 시험일정 없음', style: TextStyle(color: Colors.white38)),
+        child: const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          child: Text('등록된 시험일정 없음',
+              style: TextStyle(color: Colors.white38)),
+        ),
       );
     }
     final it = _items[_index];
@@ -1999,23 +2019,20 @@ class _ExamTickerBoardState extends State<_ExamTickerBoard> {
     return MouseRegion(
       onEnter: (_) => setState(() => _hoverIndex = _index),
       onExit: (_) => setState(() => _hoverIndex = null),
-      child: Container(
+      child: SizedBox(
         width: _fixedWidth,
-        constraints: const BoxConstraints(minHeight: 36),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        decoration: BoxDecoration(
-            color: const Color(0xFF232326),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: Colors.white24)),
-        child: _hoverIndex == _index && names.isNotEmpty
-            ? Text('범위: $names',
-                style: const TextStyle(color: Colors.white60),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis)
-            : Text(label,
-                style: const TextStyle(color: Colors.white70),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          child: _hoverIndex == _index && names.isNotEmpty
+              ? Text('범위: $names',
+                  style: const TextStyle(color: Colors.white60),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis)
+              : Text(label,
+                  style: const TextStyle(color: Colors.white70),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis),
+        ),
       ),
     );
   }
@@ -3045,42 +3062,18 @@ class _ExamScheduleDialogState extends State<_ExamScheduleDialog> {
   @override
   Widget build(BuildContext context) {
     if (!_preloadReady) {
-      return AlertDialog(
-        backgroundColor: kDlgBg,
-        shape: _examDlgShape(),
-        titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 8),
-        contentPadding: const EdgeInsets.fromLTRB(24, 8, 24, 8),
-        actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
-        title: const Text(
-          '시험 일정',
-          style: TextStyle(
-              color: kDlgText, fontSize: 20, fontWeight: FontWeight.w900),
-        ),
-        content: const Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Divider(color: kDlgBorder, height: 1),
-            SizedBox(height: 20),
-            SizedBox(
-              width: 280,
-              height: 100,
-              child: Center(
-                child: CircularProgressIndicator(color: kDlgAccent),
-              ),
+      return Center(
+        child: Material(
+          type: MaterialType.transparency,
+          child: SizedBox(
+            width: 40,
+            height: 40,
+            child: CircularProgressIndicator(
+              color: kDlgAccent,
+              strokeWidth: 3,
             ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            style: TextButton.styleFrom(
-              foregroundColor: kDlgTextSub,
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-            ),
-            child: const Text('닫기'),
           ),
-        ],
+        ),
       );
     }
 

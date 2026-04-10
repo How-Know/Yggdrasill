@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:uuid/uuid.dart';
 import 'tenant_service.dart';
 import 'homework_assignment_store.dart';
+import 'learning_problem_bank_service.dart';
 
 enum HomeworkStatus { inProgress, completed, homework }
 
@@ -17,6 +18,7 @@ class HomeworkItem {
   String? page;
   int? count;
   int? timeLimitMinutes;
+  String? pbPresetId;
   String? memo;
   String? content;
   String? bookId;
@@ -55,6 +57,7 @@ class HomeworkItem {
     this.page,
     this.count,
     this.timeLimitMinutes,
+    this.pbPresetId,
     this.memo,
     this.content,
     this.bookId,
@@ -166,6 +169,7 @@ class HomeworkRecentTemplatePart {
   final String? page;
   final int? count;
   final int? timeLimitMinutes;
+  final String? pbPresetId;
   final String? memo;
   final String? content;
   final String? bookId;
@@ -186,6 +190,7 @@ class HomeworkRecentTemplatePart {
     this.page,
     this.count,
     this.timeLimitMinutes,
+    this.pbPresetId,
     this.memo,
     this.content,
     this.bookId,
@@ -271,6 +276,9 @@ class HomeworkStore {
   final ValueNotifier<int> revision = ValueNotifier<int>(0);
   // 확인 단계 이후, 다음 '대기' 진입 시 자동 완료 처리할 항목 ID들
   final Set<String> _autoCompleteOnNextWaiting = <String>{};
+  final LearningProblemBankService _problemBankService =
+      LearningProblemBankService();
+  bool _supportsPbPresetIdColumn = true;
   // 간단 영속화 캐시 (앱 시작 시 한번 로드, 변경 시 저장)
   bool _loaded = false;
   RealtimeChannel? _rt;
@@ -301,6 +309,12 @@ class HomeworkStore {
   bool _isMissingTimeLimitColumnError(Object error) {
     final message = error.toString().toLowerCase();
     return message.contains('time_limit_minutes') &&
+        (message.contains('does not exist') || message.contains('42703'));
+  }
+
+  bool _isMissingPbPresetIdColumnError(Object error) {
+    final message = error.toString().toLowerCase();
+    return message.contains('pb_preset_id') &&
         (message.contains('does not exist') || message.contains('42703'));
   }
 
@@ -392,6 +406,49 @@ class HomeworkStore {
       return baseRows;
     }
 
+    Future<List<Map<String, dynamic>>> attachPbPresetIds(
+      List<Map<String, dynamic>> baseRows,
+    ) async {
+      if (baseRows.isEmpty) return baseRows;
+      try {
+        dynamic query = supa
+            .from('homework_items')
+            .select('id,pb_preset_id')
+            .eq('academy_id', academyId);
+        if (studentId != null && studentId.trim().isNotEmpty) {
+          query = query.eq('student_id', studentId.trim());
+        }
+        final raw = await query;
+        final rows = (raw as List<dynamic>).cast<Map<String, dynamic>>();
+        final byId = <String, String?>{};
+        for (final row in rows) {
+          final id = (row['id'] as String?)?.trim();
+          if (id == null || id.isEmpty) continue;
+          final presetId = (row['pb_preset_id'] as String?)?.trim();
+          byId[id] = (presetId == null || presetId.isEmpty) ? null : presetId;
+        }
+        for (final row in baseRows) {
+          final id = (row['id'] as String?)?.trim();
+          if (id == null || id.isEmpty) continue;
+          if (byId.containsKey(id)) {
+            row['pb_preset_id'] = byId[id];
+          }
+        }
+      } catch (e) {
+        if (!_isMissingPbPresetIdColumnError(e)) {
+          rethrow;
+        }
+      }
+      return baseRows;
+    }
+
+    Future<List<Map<String, dynamic>>> attachOptionalColumns(
+      List<Map<String, dynamic>> baseRows,
+    ) async {
+      final withTimeLimit = await attachTimeLimitMinutes(baseRows);
+      return attachPbPresetIds(withTimeLimit);
+    }
+
     List<Map<String, dynamic>> rows;
     try {
       rows = await runSelectWithCycleFallback(
@@ -405,14 +462,14 @@ class HomeworkStore {
             withCycleBase: _homeworkItemSelectLegacy,
             withoutCycleBase: _homeworkItemSelectLegacyNoCycleBase,
           );
-          return attachTimeLimitMinutes(rows);
+          return attachOptionalColumns(rows);
         } catch (legacyError) {
           if (_isMissingMemoColumnError(legacyError)) {
             rows = await runSelectWithCycleFallback(
               withCycleBase: _homeworkItemSelectLegacyNoMemo,
               withoutCycleBase: _homeworkItemSelectLegacyNoMemoNoCycleBase,
             );
-            return attachTimeLimitMinutes(rows);
+            return attachOptionalColumns(rows);
           }
           rethrow;
         }
@@ -423,21 +480,21 @@ class HomeworkStore {
             withCycleBase: _homeworkItemSelectWithSplitNoMemo,
             withoutCycleBase: _homeworkItemSelectWithSplitNoMemoNoCycleBase,
           );
-          return attachTimeLimitMinutes(rows);
+          return attachOptionalColumns(rows);
         } catch (memoFallbackError) {
           if (_isMissingDefaultSplitPartsError(memoFallbackError)) {
             rows = await runSelectWithCycleFallback(
               withCycleBase: _homeworkItemSelectLegacyNoMemo,
               withoutCycleBase: _homeworkItemSelectLegacyNoMemoNoCycleBase,
             );
-            return attachTimeLimitMinutes(rows);
+            return attachOptionalColumns(rows);
           }
           rethrow;
         }
       }
       rethrow;
     }
-    return attachTimeLimitMinutes(rows);
+    return attachOptionalColumns(rows);
   }
 
   DateTime? _parseTsOpt(dynamic v) {
@@ -453,6 +510,12 @@ class HomeworkStore {
     if (v is num) return v.toInt();
     if (v is String) return int.tryParse(v.trim());
     return int.tryParse('$v');
+  }
+
+  String? _parseTrimmedTextOpt(dynamic v) {
+    if (v == null) return null;
+    final s = '$v'.trim();
+    return s.isEmpty ? null : s;
   }
 
   int _parseInt(dynamic v, {int fallback = 0}) {
@@ -476,6 +539,7 @@ class HomeworkStore {
       count: _parseIntOpt(r['count']),
       timeLimitMinutes:
           _normalizePositiveInt(_parseIntOpt(r['time_limit_minutes'])),
+      pbPresetId: _parseTrimmedTextOpt(r['pb_preset_id']),
       memo: (r['memo'] as String?)?.trim(),
       content: (r['content'] as String?)?.trim(),
       bookId: (r['book_id'] as String?)?.trim(),
@@ -962,6 +1026,9 @@ class HomeworkStore {
       page: item.page,
       count: item.count,
       timeLimitMinutes: _normalizePositiveInt(item.timeLimitMinutes),
+      pbPresetId: (item.pbPresetId ?? '').trim().isEmpty
+          ? null
+          : item.pbPresetId!.trim(),
       memo: item.memo,
       content: item.content,
       bookId: item.bookId,
@@ -1402,6 +1469,10 @@ class HomeworkStore {
         'page': it.page,
         'count': it.count,
         'time_limit_minutes': _normalizePositiveInt(it.timeLimitMinutes),
+        if (_supportsPbPresetIdColumn)
+          'pb_preset_id': (it.pbPresetId ?? '').trim().isEmpty
+              ? null
+              : it.pbPresetId!.trim(),
         if (it.memo != null) 'memo': it.memo,
         'content': it.content,
         'book_id': it.bookId,
@@ -1485,6 +1556,11 @@ class HomeworkStore {
       await _reloadStudent(studentId);
       throw StateError('CONFLICT_HOMEWORK_VERSION');
     } catch (e, st) {
+      if (_supportsPbPresetIdColumn && _isMissingPbPresetIdColumnError(e)) {
+        _supportsPbPresetIdColumn = false;
+        await _upsertItem(studentId, it);
+        return;
+      }
       // ignore: avoid_print
       print('[HW][upsert][ERROR] ' + e.toString() + '\n' + st.toString());
     }
@@ -1794,6 +1870,7 @@ class HomeworkStore {
     String? page,
     int? count,
     int? timeLimitMinutes,
+    String? pbPresetId,
     String? memo,
     String? content,
     String? bookId,
@@ -1817,6 +1894,7 @@ class HomeworkStore {
       page: page,
       count: count,
       timeLimitMinutes: _normalizePositiveInt(timeLimitMinutes),
+      pbPresetId: (pbPresetId ?? '').trim().isEmpty ? null : pbPresetId!.trim(),
       memo: memo,
       content: content,
       bookId: bookId,
@@ -1868,6 +1946,9 @@ class HomeworkStore {
       'page': item.page ?? '',
       'count': item.count,
       'time_limit_minutes': _normalizePositiveInt(item.timeLimitMinutes),
+      'pb_preset_id': (item.pbPresetId ?? '').trim().isEmpty
+          ? null
+          : item.pbPresetId!.trim(),
       if (item.memo != null) 'memo': item.memo,
       'content': item.content ?? '',
       'book_id': item.bookId ?? '',
@@ -2692,6 +2773,7 @@ class HomeworkStore {
     String? type,
     String? page,
     int? count,
+    String? pbPresetId,
     String? memo,
     String? content,
     int? defaultSplitParts,
@@ -2706,6 +2788,7 @@ class HomeworkStore {
         type: type,
         page: page,
         count: count,
+        pbPresetId: pbPresetId,
         memo: memo,
         content: content ?? body,
         defaultSplitParts: defaultSplitParts ?? 1,
@@ -2721,6 +2804,7 @@ class HomeworkStore {
         type: type,
         page: page,
         count: count,
+        pbPresetId: pbPresetId,
         memo: memo,
         content: content ?? body,
         defaultSplitParts: defaultSplitParts ?? 1,
@@ -2736,6 +2820,9 @@ class HomeworkStore {
       type: type ?? src.type,
       page: page ?? src.page,
       count: count ?? src.count,
+      pbPresetId: (pbPresetId ?? '').trim().isEmpty
+          ? src.pbPresetId
+          : pbPresetId!.trim(),
       memo: memo ?? src.memo,
       content: content ?? src.content ?? body,
       bookId: src.bookId,
@@ -2774,6 +2861,67 @@ class HomeworkStore {
       );
     }
     return out;
+  }
+
+  Future<Map<String, String>> _buildLiveReleaseIdByItem({
+    required String academyId,
+    required Iterable<HomeworkItem> items,
+  }) async {
+    final presetIdByItemId = <String, String>{};
+    for (final item in items) {
+      final itemId = item.id.trim();
+      final presetId = (item.pbPresetId ?? '').trim();
+      if (itemId.isEmpty || presetId.isEmpty) continue;
+      presetIdByItemId[itemId] = presetId;
+    }
+    if (presetIdByItemId.isEmpty) return const <String, String>{};
+    try {
+      final liveReleaseByPreset =
+          await _problemBankService.getLatestLiveReleaseMapForPresets(
+        academyId: academyId,
+        presetIds: presetIdByItemId.values,
+      );
+      final out = <String, String>{};
+      for (final entry in presetIdByItemId.entries) {
+        final releaseId = (liveReleaseByPreset[entry.value]?.id ?? '').trim();
+        if (releaseId.isEmpty) continue;
+        out[entry.key] = releaseId;
+      }
+      return out;
+    } catch (_) {
+      return const <String, String>{};
+    }
+  }
+
+  Future<void> _recordAssignmentsWithLiveRelease({
+    required String studentId,
+    required List<HomeworkItem> items,
+    DateTime? dueDate,
+    int splitParts = 1,
+    Map<String, int>? splitPartsByItem,
+    Map<String, HomeworkAssignmentGroupMeta>? groupMetaByItemId,
+  }) async {
+    if (items.isEmpty) return;
+    Map<String, String> liveReleaseIdByItem = const <String, String>{};
+    try {
+      final academyId = (await TenantService.instance.getActiveAcademyId()) ??
+          await TenantService.instance.ensureActiveAcademy();
+      liveReleaseIdByItem = await _buildLiveReleaseIdByItem(
+        academyId: academyId,
+        items: items,
+      );
+    } catch (_) {
+      liveReleaseIdByItem = const <String, String>{};
+    }
+    await HomeworkAssignmentStore.instance.recordAssignments(
+      studentId,
+      items,
+      dueDate: dueDate,
+      splitParts: splitParts,
+      splitPartsByItem: splitPartsByItem,
+      groupMetaByItemId: groupMetaByItemId,
+      liveReleaseIdByItem: liveReleaseIdByItem,
+    );
   }
 
   // 하원 시 미완료 과제들을 숙제로 표시
@@ -2819,9 +2967,9 @@ class HomeworkStore {
         };
         final groupMetaByItem =
             _buildAssignmentGroupMetaByItem(studentId, toAssign);
-        unawaited(HomeworkAssignmentStore.instance.recordAssignments(
-          studentId,
-          toAssign,
+        unawaited(_recordAssignmentsWithLiveRelease(
+          studentId: studentId,
+          items: toAssign,
           splitPartsByItem: splitPartsByItem,
           groupMetaByItemId: groupMetaByItem,
         ));
@@ -2902,9 +3050,9 @@ class HomeworkStore {
     if (toAssign.isNotEmpty) {
       final groupMetaByItem =
           _buildAssignmentGroupMetaByItem(studentId, toAssign);
-      unawaited(HomeworkAssignmentStore.instance.recordAssignments(
-        studentId,
-        toAssign,
+      unawaited(_recordAssignmentsWithLiveRelease(
+        studentId: studentId,
+        items: toAssign,
         dueDate: dueDate,
         splitParts: splitParts,
         splitPartsByItem: splitPartsByItem,
@@ -3348,6 +3496,7 @@ class HomeworkStore {
     String? page,
     int? count,
     int? timeLimitMinutes,
+    String? pbPresetId,
     String? type,
     String? memo,
     String? content,
@@ -3409,6 +3558,11 @@ class HomeworkStore {
     final int? resolvedCount = (count != null && count > 0) ? count : null;
     final int? resolvedTimeLimit = _normalizePositiveInt(timeLimitMinutes) ??
         _normalizePositiveInt(template?.timeLimitMinutes);
+    final String? resolvedPbPresetId = (pbPresetId ?? '').trim().isNotEmpty
+        ? pbPresetId!.trim()
+        : ((template?.pbPresetId ?? '').trim().isNotEmpty
+            ? template!.pbPresetId!.trim()
+            : null);
     final resolvedColor = color ?? template?.color ?? const Color(0xFF1976D2);
     final resolvedSplitParts =
         (defaultSplitParts ?? template?.defaultSplitParts ?? 1)
@@ -3427,6 +3581,7 @@ class HomeworkStore {
       page: resolvedPage.isEmpty ? template?.page : resolvedPage,
       count: resolvedCount,
       timeLimitMinutes: resolvedTimeLimit,
+      pbPresetId: resolvedPbPresetId,
       memo: resolvedMemo.isEmpty ? template?.memo : resolvedMemo,
       content: resolvedContent.isEmpty ? template?.content : resolvedContent,
       bookId: resolvedBookId.isEmpty ? template?.bookId : resolvedBookId,
@@ -3481,7 +3636,7 @@ class HomeworkStore {
       return item.id;
     }
 
-    try {
+    Future<void> persistToServer() async {
       final academyId = (await TenantService.instance.getActiveAcademyId()) ??
           await TenantService.instance.ensureActiveAcademy();
       final supa = Supabase.instance.client;
@@ -3495,6 +3650,10 @@ class HomeworkStore {
         'page': item.page,
         'count': item.count,
         'time_limit_minutes': _normalizePositiveInt(item.timeLimitMinutes),
+        if (_supportsPbPresetIdColumn)
+          'pb_preset_id': (item.pbPresetId ?? '').trim().isEmpty
+              ? null
+              : item.pbPresetId!.trim(),
         if (item.memo != null) 'memo': item.memo,
         'content': item.content,
         'book_id': item.bookId,
@@ -3548,8 +3707,23 @@ class HomeworkStore {
       if (!deferReload) {
         await _reloadStudent(studentId);
       }
+    }
+
+    try {
+      await persistToServer();
       return item.id;
     } catch (e, st) {
+      if (_supportsPbPresetIdColumn && _isMissingPbPresetIdColumnError(e)) {
+        _supportsPbPresetIdColumn = false;
+        try {
+          await persistToServer();
+          return item.id;
+        } catch (retryError, retrySt) {
+          print(
+            '[HW][addWaitingItemToGroup][RETRY_ERROR] $retryError\n$retrySt',
+          );
+        }
+      }
       print('[HW][addWaitingItemToGroup][ERROR] $e\n$st');
       await _reloadStudent(studentId);
       return null;
@@ -3623,6 +3797,7 @@ class HomeworkStore {
       final page = asText(entry['page']);
       final countText = asText(entry['count']);
       final timeLimitMinutes = asPositiveInt(entry['timeLimitMinutes']);
+      final pbPresetId = asNullableText(entry['pbPresetId']);
       final content = asText(entry['content']);
       final title = titleRaw.isEmpty ? '과제' : titleRaw;
       var body = asText(entry['body']);
@@ -3644,6 +3819,7 @@ class HomeworkStore {
         'title': title,
         'body': body,
         if (timeLimitMinutes != null) 'timeLimitMinutes': timeLimitMinutes,
+        if (pbPresetId != null) 'pbPresetId': pbPresetId,
       });
     }
     if (normalized.isEmpty) return const <HomeworkItem>[];
@@ -3702,6 +3878,7 @@ class HomeworkStore {
             page: asText(entry['page']),
             count: asPositiveInt(entry['count']),
             timeLimitMinutes: asPositiveInt(entry['timeLimitMinutes']),
+            pbPresetId: asNullableText(entry['pbPresetId']),
             type: asText(entry['type']),
             memo: asText(entry['memo']),
             content: asText(entry['content']),

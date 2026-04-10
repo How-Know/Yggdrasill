@@ -720,6 +720,7 @@ class _GradingModePageState extends State<GradingModePage> {
       timeLimitMinutes: displaySeed.timeLimitMinutes ?? first.timeLimitMinutes,
       memo: displaySeed.memo,
       content: displaySeed.content,
+      pbPresetId: displaySeed.pbPresetId ?? first.pbPresetId,
       bookId: displaySeed.bookId,
       gradeLabel: displaySeed.gradeLabel,
       sourceUnitLevel: displaySeed.sourceUnitLevel,

@@ -3713,6 +3713,7 @@ extension on _MainScreenState {
           ? null
           : int.tryParse(countStr),
       timeLimitMinutes: item.timeLimitMinutes,
+      pbPresetId: item.pbPresetId,
       content: (edited['content'] as String?)?.trim(),
       bookId: item.bookId,
       gradeLabel: item.gradeLabel,

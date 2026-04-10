@@ -73,6 +73,62 @@ class PrintRoutingService {
     }
   }
 
+  String _normalizePaperSizeText(String raw) {
+    return raw.trim().toUpperCase().replaceAll(RegExp(r'[\s\-_]+'), '');
+  }
+
+  String? _windowsPaperSizeToken(String raw) {
+    var normalized = _normalizePaperSizeText(raw);
+    if (normalized.endsWith('ROTATED')) {
+      normalized =
+          normalized.substring(0, normalized.length - 'ROTATED'.length);
+    }
+    if (normalized.isEmpty) return null;
+    switch (normalized) {
+      case 'A3':
+        return 'A3';
+      case 'A4':
+        return 'A4';
+      case 'A5':
+        return 'A5';
+      case 'B4':
+      case 'B4JIS':
+      case 'JISB4':
+        return 'B4JIS';
+      case 'B5':
+      case 'B5JIS':
+      case 'JISB5':
+        return 'B5JIS';
+      case 'LETTER':
+      case 'NORTHAMERICALETTER':
+        return 'NorthAmericaLetter';
+      case 'LEGAL':
+      case 'NORTHAMERICALEGAL':
+        return 'NorthAmericaLegal';
+      default:
+        return null;
+    }
+  }
+
+  String _paperSizeLabel(String raw) {
+    final token = _windowsPaperSizeToken(raw);
+    if (token != null) return token;
+    return raw.trim().isEmpty ? 'systemDefault' : raw.trim();
+  }
+
+  bool _isSamePaperSize({
+    required String currentRaw,
+    required String requestedRaw,
+  }) {
+    final currentToken = _windowsPaperSizeToken(currentRaw);
+    final requestedToken = _windowsPaperSizeToken(requestedRaw);
+    if (currentToken != null && requestedToken != null) {
+      return currentToken.toLowerCase() == requestedToken.toLowerCase();
+    }
+    return _normalizePaperSizeText(currentRaw) ==
+        _normalizePaperSizeText(requestedRaw);
+  }
+
   PrintDuplexMode _parseWindowsDuplexMode(String raw) {
     final normalized = raw.trim().toLowerCase();
     if (normalized.contains('twosidedshortedge')) {
@@ -85,6 +141,104 @@ class PrintRoutingService {
       return PrintDuplexMode.oneSided;
     }
     return PrintDuplexMode.systemDefault;
+  }
+
+  Future<String?> _loadWindowsPrinterPaperSize(String printerName) async {
+    if (!Platform.isWindows) return null;
+    final escapedName = printerName.replaceAll("'", "''");
+    try {
+      final result = await Process.run(
+        'powershell',
+        <String>[
+          '-NoProfile',
+          '-Command',
+          "\$cfg = Get-PrintConfiguration -PrinterName '$escapedName' -ErrorAction SilentlyContinue; if (\$null -ne \$cfg) { Write-Output \"\$(\$cfg.PaperSize)\" }",
+        ],
+      );
+      if (result.exitCode != 0) return null;
+      final line = (result.stdout?.toString() ?? '')
+          .split(RegExp(r'[\r\n]+'))
+          .map((e) => e.trim())
+          .firstWhere(
+            (e) => e.isNotEmpty,
+            orElse: () => '',
+          );
+      if (line.isEmpty) return null;
+      return line;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<bool> _setWindowsPrinterPaperSize({
+    required String printerName,
+    required String paperSizeToken,
+    required String debugSource,
+  }) async {
+    if (!Platform.isWindows) return false;
+    final safeToken = paperSizeToken.trim();
+    if (safeToken.isEmpty) return false;
+    final escapedName = printerName.replaceAll("'", "''");
+    try {
+      final result = await Process.run(
+        'powershell',
+        <String>[
+          '-NoProfile',
+          '-Command',
+          "Set-PrintConfiguration -PrinterName '$escapedName' -PaperSize $safeToken -ErrorAction Stop",
+        ],
+        runInShell: true,
+      );
+      _printLog(
+        debugSource,
+        'Set paper size=$safeToken exit=${result.exitCode} stdout="${_compact(result.stdout)}" stderr="${_compact(result.stderr)}"',
+      );
+      return result.exitCode == 0;
+    } catch (e) {
+      _printLog(debugSource, 'Set paper size failed: ${_compact(e)}');
+      return false;
+    }
+  }
+
+  Future<void> _restoreWindowsPrinterPaperSizeLater({
+    required String printerName,
+    required String paperSizeToken,
+    required String debugSource,
+    Duration delay = const Duration(seconds: 12),
+  }) async {
+    await Future<void>.delayed(delay);
+    await _setWindowsPrinterPaperSize(
+      printerName: printerName,
+      paperSizeToken: paperSizeToken,
+      debugSource: '$debugSource.restore',
+    );
+  }
+
+  Future<int?> _loadWindowsPrinterJobCount(String printerName) async {
+    if (!Platform.isWindows) return null;
+    final escapedName = printerName.replaceAll("'", "''");
+    try {
+      final result = await Process.run(
+        'powershell',
+        <String>[
+          '-NoProfile',
+          '-Command',
+          "\$jobs = Get-PrintJob -PrinterName '$escapedName' -ErrorAction SilentlyContinue; if (\$null -eq \$jobs) { Write-Output '0' } else { Write-Output \"\$(\$jobs.Count)\" }",
+        ],
+      );
+      if (result.exitCode != 0) return null;
+      final line = (result.stdout?.toString() ?? '')
+          .split(RegExp(r'[\r\n]+'))
+          .map((e) => e.trim())
+          .firstWhere(
+            (e) => e.isNotEmpty,
+            orElse: () => '',
+          );
+      if (line.isEmpty) return null;
+      return int.tryParse(line);
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<PrintDuplexMode?> _loadWindowsPrinterDuplexMode(
@@ -233,9 +387,11 @@ class PrintRoutingService {
     }
 
     try {
+      final beforeJobCount =
+          await _loadWindowsPrinterJobCount(normalizedPrinter);
       _printLog(
         debugSource,
-        'Try direct Acrobat /t exe="$acrobatExe" printer="$normalizedPrinter" driver="${meta.driver}" port="${meta.port}"',
+        'Try direct Acrobat /t exe="$acrobatExe" printer="$normalizedPrinter" driver="${meta.driver}" port="${meta.port}" beforeJobs=${beforeJobCount ?? -1}',
       );
       final process = await Process.start(
         acrobatExe,
@@ -253,25 +409,38 @@ class PrintRoutingService {
         runInShell: false,
       );
       _printLog(
-        debugSource,
-        'Direct Acrobat /t process started pid=${process.pid}',
-      );
-      unawaited(process.exitCode.then((code) {
-        _printLog(debugSource, 'Direct Acrobat /t process exit=$code');
-      }));
-      unawaited(process.stdout.transform(utf8.decoder).join().then((out) {
-        final msg = out.trim();
-        if (msg.isNotEmpty) {
-          _printLog(debugSource, 'Direct Acrobat /t stdout="${_compact(msg)}"');
+          debugSource, 'Direct Acrobat /t process started pid=${process.pid}');
+
+      final stdoutFuture = process.stdout.transform(utf8.decoder).join();
+      final stderrFuture = process.stderr.transform(utf8.decoder).join();
+      final exitCode = await process.exitCode;
+      final out = (await stdoutFuture).trim();
+      final err = (await stderrFuture).trim();
+      if (out.isNotEmpty) {
+        _printLog(debugSource, 'Direct Acrobat /t stdout="${_compact(out)}"');
+      }
+      if (err.isNotEmpty) {
+        _printLog(debugSource, 'Direct Acrobat /t stderr="${_compact(err)}"');
+      }
+      _printLog(debugSource, 'Direct Acrobat /t process exit=$exitCode');
+      if (exitCode == 0) return true;
+
+      if (beforeJobCount != null) {
+        for (var attempt = 0; attempt < 16; attempt += 1) {
+          await Future<void>.delayed(const Duration(milliseconds: 250));
+          final afterJobCount = await _loadWindowsPrinterJobCount(
+            normalizedPrinter,
+          );
+          if (afterJobCount != null && afterJobCount > beforeJobCount) {
+            _printLog(
+              debugSource,
+              'Direct Acrobat /t accepted by spooler despite exit=$exitCode (jobs: $beforeJobCount -> $afterJobCount)',
+            );
+            return true;
+          }
         }
-      }));
-      unawaited(process.stderr.transform(utf8.decoder).join().then((err) {
-        final msg = err.trim();
-        if (msg.isNotEmpty) {
-          _printLog(debugSource, 'Direct Acrobat /t stderr="${_compact(msg)}"');
-        }
-      }));
-      return true;
+      }
+      return false;
     } catch (_) {
       _printLog(debugSource, 'Direct Acrobat /t threw exception.');
       return false;
@@ -330,6 +499,7 @@ class PrintRoutingService {
     required String path,
     required PrintRoutingChannel channel,
     PrintDuplexMode duplexMode = PrintDuplexMode.systemDefault,
+    String preferredPaperSize = '',
     String debugSource = 'unknown',
   }) async {
     final target = path.trim();
@@ -342,13 +512,14 @@ class PrintRoutingService {
     final exists = await File(target).exists();
     _printLog(
       debugSource,
-      'printFile request channel=$channel exists=$exists duplex=${_duplexModeLabel(duplexMode)} printer="${configuredPrinter ?? ''}" path="$target"',
+      'printFile request channel=$channel exists=$exists duplex=${_duplexModeLabel(duplexMode)} paper=${_paperSizeLabel(preferredPaperSize)} printer="${configuredPrinter ?? ''}" path="$target"',
     );
     return _printWithRouting(
       target: target,
       printerName: configuredPrinter,
       channel: channel,
       duplexMode: duplexMode,
+      preferredPaperSize: preferredPaperSize,
       debugSource: debugSource,
     );
   }
@@ -358,6 +529,7 @@ class PrintRoutingService {
     required String? printerName,
     required PrintRoutingChannel channel,
     required PrintDuplexMode duplexMode,
+    required String preferredPaperSize,
     required String debugSource,
   }) async {
     try {
@@ -366,10 +538,13 @@ class PrintRoutingService {
         final normalizedPrinter = (printerName ?? '').trim();
         _printLog(
           debugSource,
-          'Windows route start channel=$channel duplex=${_duplexModeLabel(duplexMode)} printer="${normalizedPrinter.isEmpty ? '(none)' : normalizedPrinter}"',
+          'Windows route start channel=$channel duplex=${_duplexModeLabel(duplexMode)} paper=${_paperSizeLabel(preferredPaperSize)} printer="${normalizedPrinter.isEmpty ? '(none)' : normalizedPrinter}"',
         );
         bool shouldRestoreDuplex = false;
         PrintDuplexMode? restoreDuplexMode;
+        bool shouldRestorePaperSize = false;
+        String? restorePaperSizeToken;
+        Duration paperRestoreDelay = const Duration(seconds: 12);
         try {
           if (normalizedPrinter.isNotEmpty &&
               duplexMode != PrintDuplexMode.systemDefault) {
@@ -391,36 +566,100 @@ class PrintRoutingService {
           }
 
           if (normalizedPrinter.isNotEmpty) {
+            final requestedPaperToken =
+                _windowsPaperSizeToken(preferredPaperSize);
+            if (requestedPaperToken != null) {
+              final currentPaperRaw =
+                  await _loadWindowsPrinterPaperSize(normalizedPrinter);
+              if (currentPaperRaw != null &&
+                  currentPaperRaw.trim().isNotEmpty &&
+                  !_isSamePaperSize(
+                    currentRaw: currentPaperRaw,
+                    requestedRaw: requestedPaperToken,
+                  )) {
+                final currentToken = _windowsPaperSizeToken(currentPaperRaw) ??
+                    currentPaperRaw.trim();
+                final applied = await _setWindowsPrinterPaperSize(
+                  printerName: normalizedPrinter,
+                  paperSizeToken: requestedPaperToken,
+                  debugSource: '$debugSource.paper',
+                );
+                shouldRestorePaperSize = applied;
+                restorePaperSizeToken = currentToken;
+              } else {
+                _printLog(
+                  '$debugSource.paper',
+                  'Skip paper override: current=${_paperSizeLabel(currentPaperRaw ?? '')} requested=${_paperSizeLabel(requestedPaperToken)}',
+                );
+              }
+            }
+
+            final qPrinter = _psSingleQuoted(normalizedPrinter);
+            final printerMeta =
+                await _loadWindowsPrinterMeta(normalizedPrinter);
+            final printToCommand = (printerMeta == null)
+                ? 'Start-Process -FilePath $qPath -Verb PrintTo -ArgumentList $qPrinter'
+                : (() {
+                    final qDriver = _psSingleQuoted(printerMeta.driver);
+                    final qPort = _psSingleQuoted(printerMeta.port);
+                    return 'Start-Process -FilePath $qPath -Verb PrintTo -ArgumentList @($qPrinter,$qDriver,$qPort)';
+                  })();
+            final printTo = await Process.run(
+              'powershell',
+              <String>[
+                '-NoProfile',
+                '-Command',
+                printToCommand,
+              ],
+              runInShell: true,
+            );
+            _printLog(
+              debugSource,
+              'PrintTo exit=${printTo.exitCode} meta=${printerMeta == null ? "none" : "driver+port"} stdout="${_compact(printTo.stdout)}" stderr="${_compact(printTo.stderr)}"',
+            );
+            if (printTo.exitCode == 0) {
+              if (shouldRestorePaperSize) {
+                // Avoid blocking the UI on spooler polling.
+                paperRestoreDelay = const Duration(seconds: 120);
+                _printLog(
+                  '$debugSource.paper',
+                  'Skip synchronous spooler wait; use delayed restore to avoid print UI stall.',
+                );
+              }
+              _printLog(debugSource, 'Printed via PowerShell PrintTo route.');
+              return true;
+            }
+
             final directAcrobatPrinted = await _tryDirectAcrobatPrintTo(
               target: target,
               printerName: normalizedPrinter,
               debugSource: debugSource,
             );
             if (directAcrobatPrinted) {
+              if (shouldRestorePaperSize) {
+                paperRestoreDelay = const Duration(seconds: 45);
+              }
               _printLog(debugSource, 'Printed via direct Acrobat /t route.');
-              return true;
-            }
-
-            final qPrinter = _psSingleQuoted(normalizedPrinter);
-            final printTo = await Process.run(
-              'powershell',
-              <String>[
-                '-NoProfile',
-                '-Command',
-                'Start-Process -FilePath $qPath -Verb PrintTo -ArgumentList $qPrinter',
-              ],
-              runInShell: true,
-            );
-            _printLog(
-              debugSource,
-              'PrintTo exit=${printTo.exitCode} stdout="${_compact(printTo.stdout)}" stderr="${_compact(printTo.stderr)}"',
-            );
-            if (printTo.exitCode == 0) {
-              _printLog(debugSource, 'Printed via PowerShell PrintTo route.');
               return true;
             }
           }
         } finally {
+          final paperTokenToRestore = restorePaperSizeToken;
+          if (normalizedPrinter.isNotEmpty &&
+              shouldRestorePaperSize &&
+              paperTokenToRestore != null &&
+              paperTokenToRestore.trim().isNotEmpty) {
+            _printLog(
+              '$debugSource.paper',
+              'Schedule paper restore token=$paperTokenToRestore delay=${paperRestoreDelay.inSeconds}s',
+            );
+            unawaited(_restoreWindowsPrinterPaperSizeLater(
+              printerName: normalizedPrinter,
+              paperSizeToken: paperTokenToRestore,
+              debugSource: debugSource,
+              delay: paperRestoreDelay,
+            ));
+          }
           if (normalizedPrinter.isNotEmpty &&
               shouldRestoreDuplex &&
               restoreDuplexMode != null &&

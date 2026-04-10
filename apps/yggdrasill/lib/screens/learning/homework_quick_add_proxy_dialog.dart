@@ -656,6 +656,7 @@ class HomeworkQuickAddProxyDialogState
                 .trim();
         if (key.isNotEmpty) {
           linkedKeys.add(key);
+          final presetId = preset.id.trim();
           final questionCount = preset.selectedQuestionCount > 0
               ? preset.selectedQuestionCount
               : preset.selectedQuestionUids.length;
@@ -669,6 +670,7 @@ class HomeworkQuickAddProxyDialogState
           autoValuesByKey.putIfAbsent(
             key,
             () => _NaesinPresetAutoValues(
+              presetId: presetId.isEmpty ? null : presetId,
               questionCount: questionCount,
               questionPageCount: questionPageCount,
               timeLimitMinutes: timeLimitMinutes,
@@ -806,6 +808,7 @@ class HomeworkQuickAddProxyDialogState
       color: _colorForType(resolvedType),
       splitParts: _selectedSplitParts.clamp(1, 4).toInt(),
       timeLimitMinutes: timeLimitMinutes,
+      pbPresetId: autoValues?.presetId,
       naesinLinkKey: linkKey,
       naesinGroupTitle: groupTitle,
     );
@@ -5532,11 +5535,13 @@ class HomeworkQuickAddProxyDialogState
 
 class _NaesinPresetAutoValues {
   const _NaesinPresetAutoValues({
+    this.presetId,
     required this.questionCount,
     this.questionPageCount,
     this.timeLimitMinutes,
   });
 
+  final String? presetId;
   final int questionCount;
   final int? questionPageCount;
   final int? timeLimitMinutes;
@@ -5562,6 +5567,7 @@ class _DraftGroupItem {
   final Color color;
   final int splitParts;
   final int? timeLimitMinutes;
+  final String? pbPresetId;
   final String? naesinLinkKey;
   final String? naesinGroupTitle;
 
@@ -5583,6 +5589,7 @@ class _DraftGroupItem {
     required this.color,
     required this.splitParts,
     this.timeLimitMinutes,
+    this.pbPresetId,
     this.naesinLinkKey,
     this.naesinGroupTitle,
   });
@@ -5604,6 +5611,7 @@ class _DraftGroupItem {
     Color? color,
     int? splitParts,
     Object? timeLimitMinutes = _unset,
+    Object? pbPresetId = _unset,
     Object? naesinLinkKey = _unset,
     Object? naesinGroupTitle = _unset,
   }) {
@@ -5627,6 +5635,9 @@ class _DraftGroupItem {
       timeLimitMinutes: identical(timeLimitMinutes, _unset)
           ? this.timeLimitMinutes
           : timeLimitMinutes as int?,
+      pbPresetId: identical(pbPresetId, _unset)
+          ? this.pbPresetId
+          : pbPresetId as String?,
       naesinLinkKey: identical(naesinLinkKey, _unset)
           ? this.naesinLinkKey
           : naesinLinkKey as String?,
@@ -5649,6 +5660,8 @@ class _DraftGroupItem {
       'splitParts': splitParts.clamp(1, 4).toInt(),
       if (timeLimitMinutes != null && timeLimitMinutes! > 0)
         'timeLimitMinutes': timeLimitMinutes,
+      if (pbPresetId != null && pbPresetId!.trim().isNotEmpty)
+        'pbPresetId': pbPresetId!.trim(),
       if (bookId.trim().isNotEmpty) 'bookId': bookId.trim(),
       if (gradeLabel.trim().isNotEmpty) 'gradeLabel': gradeLabel.trim(),
       if (sourceUnitLevel != null && sourceUnitLevel!.trim().isNotEmpty)

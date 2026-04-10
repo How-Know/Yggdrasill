@@ -328,9 +328,8 @@ class LearningProblemExportJob {
       paperSize: '${map['paper_size'] ?? ''}',
       includeAnswerSheet: map['include_answer_sheet'] == true,
       includeExplanation: map['include_explanation'] == true,
-      selectedQuestionUids: _listOrEmpty(selectedQuestionUidsRaw)
-          .map((e) => '$e')
-          .toList(),
+      selectedQuestionUids:
+          _listOrEmpty(selectedQuestionUidsRaw).map((e) => '$e').toList(),
       outputUrl: '${map['output_url'] ?? ''}',
       outputStorageBucket: '${map['output_storage_bucket'] ?? ''}'.trim(),
       outputStoragePath: '${map['output_storage_path'] ?? ''}'.trim(),
@@ -525,7 +524,8 @@ class LearningProblemSavedSettingsDocumentResult {
     final document = _mapOrEmpty(payload['document']);
     final presetMap = _mapOrEmpty(payload['preset']);
     return LearningProblemSavedSettingsDocumentResult(
-      documentId: '${document['id'] ?? payload['sourceDocumentId'] ?? ''}'.trim(),
+      documentId:
+          '${document['id'] ?? payload['sourceDocumentId'] ?? ''}'.trim(),
       copiedQuestionCount: _intOrZero(payload['copiedQuestionCount']),
       selectedQuestionUids: _listOrEmpty(
         _listOrEmpty(payload['selectedQuestionUids']).isNotEmpty
@@ -1170,22 +1170,67 @@ class LearningProblemBankService {
     return LearningProblemDocumentExportPreset.fromMap(_mapOrEmpty(updated));
   }
 
+  Future<LearningProblemDocumentExportPreset?> getExportPresetById({
+    required String academyId,
+    required String presetId,
+  }) async {
+    final safeAcademyId = academyId.trim();
+    final safePresetId = presetId.trim();
+    if (safeAcademyId.isEmpty || safePresetId.isEmpty) return null;
+
+    if (hasGateway) {
+      try {
+        final json = await _gatewayGet(
+          '/pb/export-presets/$safePresetId',
+          query: <String, String>{'academyId': safeAcademyId},
+        );
+        final presetMap = _mapOrEmpty(json['preset']);
+        if (presetMap.isNotEmpty) {
+          return LearningProblemDocumentExportPreset.fromMap(presetMap);
+        }
+      } catch (_) {
+        // fallback
+      }
+    }
+
+    dynamic row;
+    try {
+      row = await _client
+          .from('pb_export_presets')
+          .select('*')
+          .eq('academy_id', safeAcademyId)
+          .eq('id', safePresetId)
+          .maybeSingle();
+    } catch (_) {
+      return null;
+    }
+    if (row == null) return null;
+    return LearningProblemDocumentExportPreset.fromMap(_mapOrEmpty(row));
+  }
+
   Future<void> deleteExportPreset({
     required String academyId,
     required String presetId,
   }) async {
+    final safeAcademyId = academyId.trim();
+    final safePresetId = presetId.trim();
+    if (safeAcademyId.isEmpty || safePresetId.isEmpty) return;
     if (hasGateway) {
-      await _gatewayPost(
-        '/pb/export-presets/$presetId/delete',
-        body: <String, dynamic>{'academyId': academyId},
-      );
-      return;
+      try {
+        await _gatewayPost(
+          '/pb/export-presets/$safePresetId/delete',
+          body: <String, dynamic>{'academyId': safeAcademyId},
+        );
+        return;
+      } catch (_) {
+        // gateway 장애/네트워크 실패 시 DB 직접 삭제로 폴백
+      }
     }
     await _client
         .from('pb_export_presets')
         .delete()
-        .eq('academy_id', academyId)
-        .eq('id', presetId);
+        .eq('academy_id', safeAcademyId)
+        .eq('id', safePresetId);
   }
 
   Future<LearningProblemDocumentExportPreset?> getDocumentExportPreset({
@@ -1303,6 +1348,50 @@ class LearningProblemBankService {
     return LearningProblemLiveRelease.fromMap(_mapOrEmpty(row));
   }
 
+  Future<Map<String, LearningProblemLiveRelease>>
+      getLatestLiveReleaseMapForPresets({
+    required String academyId,
+    required Iterable<String> presetIds,
+  }) async {
+    final safePresetIds = presetIds
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    if (academyId.trim().isEmpty || safePresetIds.isEmpty) {
+      return const <String, LearningProblemLiveRelease>{};
+    }
+    final out = <String, LearningProblemLiveRelease>{};
+    const chunkSize = 120;
+    for (var offset = 0; offset < safePresetIds.length; offset += chunkSize) {
+      final end = (offset + chunkSize < safePresetIds.length)
+          ? offset + chunkSize
+          : safePresetIds.length;
+      final chunk = safePresetIds.sublist(offset, end);
+      dynamic rows;
+      try {
+        rows = await _client
+            .from('pb_live_releases')
+            .select('*')
+            .eq('academy_id', academyId)
+            .inFilter('preset_id', chunk)
+            .order('updated_at', ascending: false);
+      } catch (e) {
+        if (_isMissingLiveReleaseRelationError(e)) {
+          return const <String, LearningProblemLiveRelease>{};
+        }
+        rethrow;
+      }
+      for (final raw in _listOrEmpty(rows)) {
+        final release = LearningProblemLiveRelease.fromMap(_mapOrEmpty(raw));
+        final key = release.presetId.trim();
+        if (key.isEmpty || out.containsKey(key)) continue;
+        out[key] = release;
+      }
+    }
+    return out;
+  }
+
   Future<LearningProblemLiveRelease?> upsertLiveReleaseForPreset({
     required String academyId,
     required String presetId,
@@ -1332,9 +1421,8 @@ class LearningProblemBankService {
       'academy_id': academyId,
       'preset_id': safePresetId,
       'source_document_ids': safeSourceDocumentIds,
-      'template_profile': templateProfile.trim().isEmpty
-          ? 'csat'
-          : templateProfile.trim(),
+      'template_profile':
+          templateProfile.trim().isEmpty ? 'csat' : templateProfile.trim(),
       'paper_size': paperSize.trim().isEmpty ? 'A4' : paperSize.trim(),
       'active_export_job_id':
           activeExportJobId.trim().isEmpty ? null : activeExportJobId.trim(),
@@ -1360,9 +1448,9 @@ class LearningProblemBankService {
         row = await _client
             .from('pb_live_releases')
             .insert(<String, dynamic>{
-          ...basePayload,
-          'created_by': userId,
-        })
+              ...basePayload,
+              'created_by': userId,
+            })
             .select('*')
             .maybeSingle();
       }
@@ -1690,14 +1778,11 @@ class LearningProblemBankService {
         .eq('academy_id', academyId)
         .order('created_at', ascending: false)
         .limit(limit.clamp(1, 2000));
-    final docs = (rows as List<dynamic>)
-        .map(_mapOrEmpty)
-        .where((row) {
-          final meta = _mapOrEmpty(row['meta']);
-          final saved = meta['saved_settings'] ?? meta['savedSettings'];
-          return saved is Map;
-        })
-        .toList(growable: false);
+    final docs = (rows as List<dynamic>).map(_mapOrEmpty).where((row) {
+      final meta = _mapOrEmpty(row['meta']);
+      final saved = meta['saved_settings'] ?? meta['savedSettings'];
+      return saved is Map;
+    }).toList(growable: false);
     final ids = docs
         .map((row) => '${row['id'] ?? ''}'.trim())
         .where((id) => id.isNotEmpty)

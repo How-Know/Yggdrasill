@@ -138,15 +138,19 @@ class HomeworkAssignmentStore {
   final LearningProblemBankService _problemBankService =
       LearningProblemBankService();
   static const String reservationNote = '__reserved_homework__';
+
   /// Synthetic assignment ids merged into [loadActiveAssignments] until the server row exists.
   static const String optimisticReservedAssignmentIdPrefix = '__opt_resv__:';
   final ValueNotifier<int> revision = ValueNotifier<int>(0);
+
   /// Stale-while-revalidate: last successful [loadActiveAssignments] per student.
-  final Map<String, List<HomeworkAssignmentDetail>> _activeAssignmentsCacheByStudent =
-      {};
+  final Map<String, List<HomeworkAssignmentDetail>>
+      _activeAssignmentsCacheByStudent = {};
+
   /// Students for whom [loadActiveAssignments] has finished at least once (success or handled error).
   /// Used so UI does not paint "current" chips from [HomeworkStore] alone before assignment rows are known.
   final Set<String> _activeAssignmentsLoadCompletedForStudent = <String>{};
+
   /// Item ids that must stay off "current" chip rows until server reservation row is seen.
   final Map<String, Set<String>> _pendingReservedHomeworkItemIdsByStudent = {};
   RealtimeChannel? _rtAssignments;
@@ -159,7 +163,8 @@ class HomeworkAssignmentStore {
 
   /// For [FutureBuilder.initialData] / first paint before the network returns.
   /// Empty list is a valid cache entry; missing key returns null.
-  List<HomeworkAssignmentDetail>? peekCachedActiveAssignments(String studentId) {
+  List<HomeworkAssignmentDetail>? peekCachedActiveAssignments(
+      String studentId) {
     final key = studentId.trim();
     if (key.isEmpty) return null;
     return _activeAssignmentsCacheByStudent[key];
@@ -188,12 +193,13 @@ class HomeworkAssignmentStore {
   void _addPendingReservedHomeworkItemIds(String studentId, Set<String> ids) {
     final key = studentId.trim();
     if (key.isEmpty || ids.isEmpty) return;
-    final bucket =
-        _pendingReservedHomeworkItemIdsByStudent.putIfAbsent(key, () => <String>{});
+    final bucket = _pendingReservedHomeworkItemIdsByStudent.putIfAbsent(
+        key, () => <String>{});
     bucket.addAll(ids);
   }
 
-  void _removePendingReservedHomeworkItemIds(String studentId, Iterable<String> ids) {
+  void _removePendingReservedHomeworkItemIds(
+      String studentId, Iterable<String> ids) {
     final key = studentId.trim();
     if (key.isEmpty) return;
     final bucket = _pendingReservedHomeworkItemIdsByStudent[key];
@@ -249,8 +255,7 @@ class HomeworkAssignmentStore {
         .toList(growable: false);
     if (optimistic.isEmpty) return server;
     final serverItemIds = <String>{
-      for (final a in server)
-        a.homeworkItemId.trim(),
+      for (final a in server) a.homeworkItemId.trim(),
     };
     final kept = optimistic
         .where((o) => !serverItemIds.contains(o.homeworkItemId.trim()))
@@ -267,7 +272,8 @@ class HomeworkAssignmentStore {
   }) {
     final key = studentId.trim();
     if (key.isEmpty || items.isEmpty) return;
-    final idSet = items.map((e) => e.id.trim()).where((e) => e.isNotEmpty).toSet();
+    final idSet =
+        items.map((e) => e.id.trim()).where((e) => e.isNotEmpty).toSet();
     if (idSet.isEmpty) return;
     _addPendingReservedHomeworkItemIds(key, idSet);
     final now = DateTime.now();
@@ -321,7 +327,8 @@ class HomeworkAssignmentStore {
     Iterable<String> homeworkItemIds,
   ) {
     final key = studentId.trim();
-    final idSet = homeworkItemIds.map((e) => e.trim()).where((e) => e.isNotEmpty).toSet();
+    final idSet =
+        homeworkItemIds.map((e) => e.trim()).where((e) => e.isNotEmpty).toSet();
     if (key.isEmpty || idSet.isEmpty) return;
     final cur = peekCachedActiveAssignments(key);
     if (cur == null || cur.isEmpty) return;
@@ -518,7 +525,8 @@ class HomeworkAssignmentStore {
     final status = _asTrimmed(assignmentRow['status']).toLowerCase();
     final liveReleaseId = _asTrimmed(assignmentRow['live_release_id']);
     if (liveReleaseId.isEmpty) return '';
-    final releaseExportJobId = _asTrimmed(assignmentRow['release_export_job_id']);
+    final releaseExportJobId =
+        _asTrimmed(assignmentRow['release_export_job_id']);
     final releaseRow = _extractJoinedMap(assignmentRow['pb_live_releases']);
     final activeExportJobId = _asTrimmed(releaseRow?['active_export_job_id']);
     final frozenExportJobId = _asTrimmed(releaseRow?['frozen_export_job_id']);
@@ -1124,7 +1132,8 @@ class HomeworkAssignmentStore {
           liveReleaseExportJobIds.add(exportJobId);
         }
       }
-      final signedUrlByExportJobId = await _loadLiveReleaseSignedUrlByExportJobId(
+      final signedUrlByExportJobId =
+          await _loadLiveReleaseSignedUrlByExportJobId(
         academyId: academyId,
         exportJobIds: liveReleaseExportJobIds,
       );
@@ -1168,10 +1177,9 @@ class HomeworkAssignmentStore {
             releaseExportJobId:
                 releaseExportJobId.isEmpty ? null : releaseExportJobId,
             liveReleaseLockedAt: parseTs(r['live_release_locked_at']),
-            liveReleaseSignedUrl:
-                signedUrl == null || signedUrl.trim().isEmpty
-                    ? null
-                    : signedUrl.trim(),
+            liveReleaseSignedUrl: signedUrl == null || signedUrl.trim().isEmpty
+                ? null
+                : signedUrl.trim(),
           ),
         );
       }
@@ -1574,6 +1582,7 @@ class HomeworkAssignmentStore {
     Map<String, int>? splitPartsByItem,
     Map<String, HomeworkAssignmentGroupMeta>? groupMetaByItemId,
     String? liveReleaseId,
+    Map<String, String>? liveReleaseIdByItem,
   }) async {
     if (items.isEmpty) return;
     try {
@@ -1583,6 +1592,15 @@ class HomeworkAssignmentStore {
       final supa = Supabase.instance.client;
       final dueDateIso = _dueDateIso(dueDate);
       final safeLiveReleaseId = (liveReleaseId ?? '').trim();
+      final resolvedLiveReleaseIdByItem = <String, String>{};
+      if (liveReleaseIdByItem != null && liveReleaseIdByItem.isNotEmpty) {
+        for (final entry in liveReleaseIdByItem.entries) {
+          final itemId = entry.key.trim();
+          final releaseId = entry.value.trim();
+          if (itemId.isEmpty || releaseId.isEmpty) continue;
+          resolvedLiveReleaseIdByItem[itemId] = releaseId;
+        }
+      }
       final resolvedGroupMetaByItem = <String, HomeworkAssignmentGroupMeta>{};
       if (groupMetaByItemId != null && groupMetaByItemId.isNotEmpty) {
         for (final entry in groupMetaByItemId.entries) {
@@ -1722,6 +1740,8 @@ class HomeworkAssignmentStore {
         final titleSnapshot = groupMeta?.groupTitleSnapshot.trim() ?? '';
         final fallbackTitle =
             item.title.trim().isEmpty ? '그룹 과제' : item.title.trim();
+        final itemLiveReleaseId =
+            resolvedLiveReleaseIdByItem[item.id] ?? safeLiveReleaseId;
         rows.add({
           'id': const Uuid().v4(),
           'academy_id': academyId,
@@ -1736,7 +1756,7 @@ class HomeworkAssignmentStore {
           'status': 'assigned',
           'note': note,
           'live_release_id':
-              safeLiveReleaseId.isEmpty ? null : safeLiveReleaseId,
+              itemLiveReleaseId.isEmpty ? null : itemLiveReleaseId,
           'release_export_job_id': null,
           'live_release_locked_at': null,
           'repeat_index': repeatIndex,
@@ -1928,15 +1948,16 @@ class HomeworkAssignmentStore {
       dynamic query = Supabase.instance.client
           .from('homework_assignments')
           .update(<String, dynamic>{
-        'live_release_id': safeLiveReleaseId,
-        'release_export_job_id': null,
-        'live_release_locked_at': null,
-      })
+            'live_release_id': safeLiveReleaseId,
+            'release_export_job_id': null,
+            'live_release_locked_at': null,
+          })
           .eq('academy_id', academyId)
           .eq('student_id', studentId)
           .inFilter('id', safeAssignmentIds);
       if (onlyUncompleted) {
-        query = query.inFilter('status', const <String>['assigned', 'in_progress']);
+        query =
+            query.inFilter('status', const <String>['assigned', 'in_progress']);
       }
       await query;
       _bump();
@@ -1963,13 +1984,14 @@ class HomeworkAssignmentStore {
       dynamic query = Supabase.instance.client
           .from('homework_assignments')
           .update(<String, dynamic>{
-        'live_release_id': null,
-      })
+            'live_release_id': null,
+          })
           .eq('academy_id', academyId)
           .eq('student_id', studentId)
           .inFilter('id', safeAssignmentIds);
       if (onlyUncompleted) {
-        query = query.inFilter('status', const <String>['assigned', 'in_progress']);
+        query =
+            query.inFilter('status', const <String>['assigned', 'in_progress']);
       }
       await query;
       _bump();

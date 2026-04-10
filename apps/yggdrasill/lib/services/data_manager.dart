@@ -150,10 +150,13 @@ class DataManager {
       slogan: '',
       defaultCapacity: 30,
       lessonDuration: 50,
-      logo: null);
+      logo: null,
+      activeExamSeasonId: 1);
   PaymentType _paymentType = PaymentType.monthly;
 
   AcademySettings get academySettings => _academySettings;
+  /// 시험 일정 read/write에 사용하는 현재 시즌(학원 설정과 동기).
+  int get activeExamSeasonId => _academySettings.activeExamSeasonId;
   PaymentType get paymentType => _paymentType;
 
   List<StudentPausePeriod> get studentPausePeriods =>
@@ -902,9 +905,224 @@ class DataManager {
   final Map<String, Map<DateTime, List<String>>> _examTitlesBySg = {};
   final Map<String, Map<DateTime, String>> _examRangesBySg = {};
   final Map<String, Set<DateTime>> _examDaysBySg = {};
+  /// `preloadAllExamData`가 현재 활성 시즌에 대해 벌크로 채운 뒤 설정됨. `loadExamFor` 메모리 히트에 사용.
+  int? _examBulkHydratedSeasonId;
+  Future<void>? _preloadAllExamDataInFlight;
 
   String _sgKey(String school, EducationLevel level, int grade) =>
       '${level.index}|$school|$grade';
+
+  bool get isExamBulkHydratedForCurrentSeason =>
+      _examBulkHydratedSeasonId == activeExamSeasonId;
+
+  bool hasExamCacheKeyFor(String school, EducationLevel level, int grade) =>
+      _examTitlesBySg.containsKey(_sgKey(school, level, grade));
+
+  /// 벌크 프리로드가 끝난 뒤 위저드용 맵 복사. 키 없으면 null(폴백 `loadExamFor`).
+  ({Map<DateTime, List<String>> titles, Map<DateTime, String> ranges})?
+      copyExamCachesForWizardIfReady(
+          String school, EducationLevel level, int grade) {
+    if (!isExamBulkHydratedForCurrentSeason) return null;
+    final key = _sgKey(school, level, grade);
+    if (!_examTitlesBySg.containsKey(key)) return null;
+    final t = _examTitlesBySg[key]!;
+    final r = _examRangesBySg[key] ?? {};
+    return (
+      titles: Map<DateTime, List<String>>.fromEntries(
+        t.entries.map((e) => MapEntry(e.key, List<String>.from(e.value)))),
+      ranges: Map<DateTime, String>.from(r),
+    );
+  }
+
+  Map<String, dynamic> _examResFromCachedKey(String key) {
+    final titles = _examTitlesBySg[key] ?? {};
+    final rangesMap = _examRangesBySg[key] ?? {};
+    final daysSet = _examDaysBySg[key] ?? {};
+    final schedules = <Map<String, dynamic>>[];
+    final sortedDates = titles.keys.toList()..sort();
+    for (final d in sortedDates) {
+      final list = titles[d] ?? const <String>[];
+      schedules.add({
+        'date': DateTime(d.year, d.month, d.day).toIso8601String(),
+        'names_json': jsonEncode(list),
+      });
+    }
+    final ranges = <Map<String, dynamic>>[];
+    final sortedR = rangesMap.keys.toList()..sort();
+    for (final d in sortedR) {
+      ranges.add({
+        'date': DateTime(d.year, d.month, d.day).toIso8601String(),
+        'range_text': rangesMap[d] ?? '',
+      });
+    }
+    final days = <Map<String, dynamic>>[];
+    final sortedDays = daysSet.toList()..sort();
+    for (final d in sortedDays) {
+      days.add({
+        'date': DateTime(d.year, d.month, d.day).toIso8601String(),
+      });
+    }
+    return {'schedules': schedules, 'ranges': ranges, 'days': days};
+  }
+
+  void _materializeEmptyExamKeysForStudents() {
+    final seen = <String>{};
+    for (final sw in _studentsWithInfo) {
+      final st = sw.student;
+      final level = st.educationLevel;
+      if (level == EducationLevel.elementary) continue;
+      final school = st.school.trim();
+      final grade = st.grade;
+      final key = _sgKey(school, level, grade);
+      if (seen.contains(key)) continue;
+      seen.add(key);
+      _examTitlesBySg.putIfAbsent(key, () => {});
+      _examRangesBySg.putIfAbsent(key, () => {});
+      _examDaysBySg.putIfAbsent(key, () => {});
+    }
+  }
+
+  Future<void> _fillExamMapsFromSqlite(int seasonId) async {
+    final schedules = await AcademyDbService.instance
+        .loadAllExamSchedulesForSeason(seasonId);
+    for (final r in schedules) {
+      final school = (r['school'] as String?) ?? '';
+      final level = EducationLevel.values[(r['level'] as int?) ?? 0];
+      final grade = (r['grade'] as int?) ?? 0;
+      final iso = (r['date'] as String?) ?? '';
+      if (school.isEmpty || iso.isEmpty) continue;
+      final d = DateTime.parse(iso);
+      List<dynamic> list;
+      try {
+        list = jsonDecode((r['names_json'] as String?) ?? '[]');
+      } catch (_) {
+        list = [];
+      }
+      final key = _sgKey(school, level, grade);
+      final map = _examTitlesBySg.putIfAbsent(key, () => {});
+      map[DateTime(d.year, d.month, d.day)] =
+          list.map((e) => e.toString()).toList();
+    }
+    final ranges =
+        await AcademyDbService.instance.loadAllExamRangesForSeason(seasonId);
+    for (final r in ranges) {
+      final school = (r['school'] as String?) ?? '';
+      final level = EducationLevel.values[(r['level'] as int?) ?? 0];
+      final grade = (r['grade'] as int?) ?? 0;
+      final iso = (r['date'] as String?) ?? '';
+      final text = (r['range_text'] as String?) ?? '';
+      if (school.isEmpty || iso.isEmpty) continue;
+      final d = DateTime.parse(iso);
+      final key = _sgKey(school, level, grade);
+      final map = _examRangesBySg.putIfAbsent(key, () => {});
+      map[DateTime(d.year, d.month, d.day)] = text;
+    }
+    final days =
+        await AcademyDbService.instance.loadAllExamDaysForSeason(seasonId);
+    for (final r in days) {
+      final school = (r['school'] as String?) ?? '';
+      final level = EducationLevel.values[(r['level'] as int?) ?? 0];
+      final grade = (r['grade'] as int?) ?? 0;
+      final iso = (r['date'] as String?) ?? '';
+      if (school.isEmpty || iso.isEmpty) continue;
+      final d = DateTime.parse(iso);
+      final key = _sgKey(school, level, grade);
+      final set = _examDaysBySg.putIfAbsent(key, () => {});
+      set.add(DateTime(d.year, d.month, d.day));
+    }
+  }
+
+  Future<void> _mergeExamMapsFromSupabaseBulk(int seasonId) async {
+    final academyId = await TenantService.instance.getActiveAcademyId() ??
+        await TenantService.instance.ensureActiveAcademy();
+    final supa = Supabase.instance.client;
+    final match = {'academy_id': academyId, 'season_id': seasonId};
+    final fetched = await Future.wait([
+      supa
+          .from('exam_schedules')
+          .select('school,level,grade,date,names_json')
+          .match(match)
+          .order('date'),
+      supa
+          .from('exam_ranges')
+          .select('school,level,grade,date,range_text')
+          .match(match)
+          .order('date'),
+      supa
+          .from('exam_days')
+          .select('school,level,grade,date')
+          .match(match)
+          .order('date'),
+    ]);
+    final schedules = fetched[0] as List;
+    for (final raw in schedules) {
+      if (raw is! Map) continue;
+      final r = Map<String, dynamic>.from(raw);
+      final school = (r['school'] as String?) ?? '';
+      final levelIdx = (r['level'] as num?)?.toInt() ?? 0;
+      final grade = (r['grade'] as num?)?.toInt() ?? 0;
+      final iso = (r['date'] as String?) ?? '';
+      if (school.isEmpty ||
+          iso.isEmpty ||
+          levelIdx < 0 ||
+          levelIdx >= EducationLevel.values.length) {
+        continue;
+      }
+      final level = EducationLevel.values[levelIdx];
+      final d = DateTime.parse(iso);
+      List<dynamic> list;
+      try {
+        list = jsonDecode((r['names_json'] as String?) ?? '[]');
+      } catch (_) {
+        list = [];
+      }
+      final key = _sgKey(school, level, grade);
+      final map = _examTitlesBySg.putIfAbsent(key, () => {});
+      map[DateTime(d.year, d.month, d.day)] =
+          list.map((e) => e.toString()).toList();
+    }
+    final ranges = fetched[1] as List;
+    for (final raw in ranges) {
+      if (raw is! Map) continue;
+      final r = Map<String, dynamic>.from(raw);
+      final school = (r['school'] as String?) ?? '';
+      final levelIdx = (r['level'] as num?)?.toInt() ?? 0;
+      final grade = (r['grade'] as num?)?.toInt() ?? 0;
+      final iso = (r['date'] as String?) ?? '';
+      if (school.isEmpty ||
+          iso.isEmpty ||
+          levelIdx < 0 ||
+          levelIdx >= EducationLevel.values.length) {
+        continue;
+      }
+      final level = EducationLevel.values[levelIdx];
+      final d = DateTime.parse(iso);
+      final text = (r['range_text'] as String?) ?? '';
+      final key = _sgKey(school, level, grade);
+      final map = _examRangesBySg.putIfAbsent(key, () => {});
+      map[DateTime(d.year, d.month, d.day)] = text;
+    }
+    final days = fetched[2] as List;
+    for (final raw in days) {
+      if (raw is! Map) continue;
+      final r = Map<String, dynamic>.from(raw);
+      final school = (r['school'] as String?) ?? '';
+      final levelIdx = (r['level'] as num?)?.toInt() ?? 0;
+      final grade = (r['grade'] as num?)?.toInt() ?? 0;
+      final iso = (r['date'] as String?) ?? '';
+      if (school.isEmpty ||
+          iso.isEmpty ||
+          levelIdx < 0 ||
+          levelIdx >= EducationLevel.values.length) {
+        continue;
+      }
+      final level = EducationLevel.values[levelIdx];
+      final d = DateTime.parse(iso);
+      final key = _sgKey(school, level, grade);
+      final set = _examDaysBySg.putIfAbsent(key, () => {});
+      set.add(DateTime(d.year, d.month, d.day));
+    }
+  }
 
   List<SelfStudyTimeBlock> get selfStudyTimeBlocks =>
       List.unmodifiable(_selfStudyTimeBlocks);
@@ -1159,7 +1377,8 @@ class DataManager {
         slogan: '',
         defaultCapacity: 30,
         lessonDuration: 50,
-        logo: null);
+        logo: null,
+        activeExamSeasonId: 1);
     _paymentType = PaymentType.monthly;
     _notifyListeners();
   }
@@ -1549,7 +1768,7 @@ class DataManager {
             final data = await supa
                 .from('academy_settings')
                 .select(
-                    'name,slogan,address,default_capacity,lesson_duration,payment_type,logo,session_cycle,logo_bucket,logo_path,logo_url')
+                    'name,slogan,address,default_capacity,lesson_duration,payment_type,logo,session_cycle,logo_bucket,logo_path,logo_url,active_exam_season_id')
                 .eq('academy_id', academyId)
                 .maybeSingle();
             if (data != null) {
@@ -1561,7 +1780,7 @@ class DataManager {
             final legacyData = await supa
                 .from('academy_settings')
                 .select(
-                    'name,slogan,default_capacity,lesson_duration,payment_type,logo,session_cycle,logo_bucket,logo_path,logo_url')
+                    'name,slogan,default_capacity,lesson_duration,payment_type,logo,session_cycle,logo_bucket,logo_path,logo_url,active_exam_season_id')
                 .eq('academy_id', academyId)
                 .maybeSingle();
             if (legacyData != null) {
@@ -1606,6 +1825,10 @@ class DataManager {
         }
         print(
             '[DataManager] loadAcademySettings: storage bucket=${dbData['logo_bucket']}, path=${dbData['logo_path']}, resolvedBytes=${logoBytes?.length ?? 0}');
+        final seasonRaw = dbData['active_exam_season_id'];
+        final seasonId = seasonRaw is int
+            ? seasonRaw
+            : (seasonRaw is num ? seasonRaw.toInt() : 1);
         _academySettings = AcademySettings(
           name: dbData['name'] as String? ?? '',
           slogan: dbData['slogan'] as String? ?? '',
@@ -1614,6 +1837,7 @@ class DataManager {
           lessonDuration: dbData['lesson_duration'] as int? ?? 50,
           logo: logoBytes,
           sessionCycle: dbData['session_cycle'] as int? ?? 1, // [추가]
+          activeExamSeasonId: seasonId,
         );
         // [추가] payment_type을 enum으로 변환하여 _paymentType에 할당
         final paymentTypeStr = dbData['payment_type'] as String? ?? 'monthly';
@@ -1629,7 +1853,8 @@ class DataManager {
             defaultCapacity: 30,
             lessonDuration: 50,
             logo: null,
-            sessionCycle: 1);
+            sessionCycle: 1,
+            activeExamSeasonId: 1);
         _paymentType = PaymentType.monthly;
       }
     } catch (e) {
@@ -1640,7 +1865,8 @@ class DataManager {
           defaultCapacity: 30,
           lessonDuration: 50,
           logo: null,
-          sessionCycle: 1);
+          sessionCycle: 1,
+          activeExamSeasonId: 1);
       _paymentType = PaymentType.monthly;
     }
   }
@@ -1688,6 +1914,7 @@ class DataManager {
             'payment_type':
                 _paymentType == PaymentType.monthly ? 'monthly' : 'session',
             'session_cycle': settings.sessionCycle,
+            'active_exam_season_id': settings.activeExamSeasonId,
           };
 
           if (logoBucket != null && logoPath != null) {
@@ -7264,10 +7491,12 @@ class DataManager {
   // ===== EXAM (persisted) =====
   Future<void> saveExamFor(String school, EducationLevel level, int grade,
       Map<DateTime, List<String>> titles, Map<DateTime, String> ranges) async {
+    final sid = activeExamSeasonId;
     await AcademyDbService.instance.saveExamDataForSchoolGrade(
       school: school,
       level: level.index,
       grade: grade,
+      seasonId: sid,
       titlesByDateIso: {
         for (final e in titles.entries)
           DateTime(e.key.year, e.key.month, e.key.day).toIso8601String():
@@ -7300,7 +7529,8 @@ class DataManager {
           'academy_id': academyId,
           'school': school,
           'level': level.index,
-          'grade': grade
+          'grade': grade,
+          'season_id': sid,
         });
         if (titles.isNotEmpty) {
           final rows = titles.entries
@@ -7309,6 +7539,7 @@ class DataManager {
                     'school': school,
                     'level': level.index,
                     'grade': grade,
+                    'season_id': sid,
                     'date': DateTime(e.key.year, e.key.month, e.key.day)
                         .toIso8601String()
                         .substring(0, 10),
@@ -7322,7 +7553,8 @@ class DataManager {
           'academy_id': academyId,
           'school': school,
           'level': level.index,
-          'grade': grade
+          'grade': grade,
+          'season_id': sid,
         });
         if (ranges.isNotEmpty) {
           final rows2 = ranges.entries
@@ -7331,6 +7563,7 @@ class DataManager {
                     'school': school,
                     'level': level.index,
                     'grade': grade,
+                    'season_id': sid,
                     'date': DateTime(e.key.year, e.key.month, e.key.day)
                         .toIso8601String()
                         .substring(0, 10),
@@ -7345,6 +7578,11 @@ class DataManager {
 
   Future<Map<String, dynamic>> loadExamFor(
       String school, EducationLevel level, int grade) async {
+    final cacheKey = _sgKey(school, level, grade);
+    if (_examBulkHydratedSeasonId == activeExamSeasonId &&
+        _examTitlesBySg.containsKey(cacheKey)) {
+      return _examResFromCachedKey(cacheKey);
+    }
     if (TagPresetService.preferSupabaseRead) {
       try {
         final academyId = await TenantService.instance.getActiveAcademyId() ??
@@ -7354,7 +7592,8 @@ class DataManager {
           'academy_id': academyId,
           'school': school,
           'level': level.index,
-          'grade': grade
+          'grade': grade,
+          'season_id': activeExamSeasonId,
         };
         final fetched = await Future.wait([
           supa
@@ -7436,6 +7675,7 @@ class DataManager {
       school: school,
       level: level.index,
       grade: grade,
+      seasonId: activeExamSeasonId,
     );
     // 기존 캐시 반영 로직 유지
     final titles = <DateTime, List<String>>{};
@@ -7476,7 +7716,8 @@ class DataManager {
 
   Future<void> deleteExamData(
       String school, EducationLevel level, int grade) async {
-    // 서버 우선: Supabase에서 삭제, 실패 시 로컬로 폴백
+    final sid = activeExamSeasonId;
+    // Supabase 사용 시에도 로컬 SQLite는 반드시 같이 비움 (티커·loadAllExam* 등이 로컬을 읽음)
     if (TagPresetService.preferSupabaseRead) {
       try {
         final academyId = await TenantService.instance.getActiveAcademyId() ??
@@ -7486,41 +7727,38 @@ class DataManager {
           'academy_id': academyId,
           'school': school,
           'level': level.index,
-          'grade': grade
+          'grade': grade,
+          'season_id': sid,
         });
         await supa.from('exam_ranges').delete().match({
           'academy_id': academyId,
           'school': school,
           'level': level.index,
-          'grade': grade
+          'grade': grade,
+          'season_id': sid,
         });
         await supa.from('exam_days').delete().match({
           'academy_id': academyId,
           'school': school,
           'level': level.index,
-          'grade': grade
+          'grade': grade,
+          'season_id': sid,
         });
       } catch (e, st) {
         print('[SUPA][exam delete] $e\n$st');
-        // 폴백: 로컬 삭제
-        await AcademyDbService.instance.deleteExamDataForSchoolGrade(
-          school: school,
-          level: level.index,
-          grade: grade,
-        );
       }
-    } else {
-      await AcademyDbService.instance.deleteExamDataForSchoolGrade(
-        school: school,
-        level: level.index,
-        grade: grade,
-      );
     }
-    // 캐시 정리
+    await AcademyDbService.instance.deleteExamDataForSchoolGrade(
+      school: school,
+      level: level.index,
+      grade: grade,
+      seasonId: sid,
+    );
+    // 캐시: 키 유지(벌크 hydration과 동일하게 빈 맵으로 표시)
     final key = _sgKey(school, level, grade);
-    _examTitlesBySg.remove(key);
-    _examRangesBySg.remove(key);
-    _examDaysBySg.remove(key);
+    _examTitlesBySg[key] = {};
+    _examRangesBySg[key] = {};
+    _examDaysBySg[key] = {};
   }
 
   /// 단일 학교·학년의 활성 시험 데이터를 스냅샷 엔트리 형태로 직렬화. 비어 있으면 null.
@@ -7745,7 +7983,7 @@ class DataManager {
     }
   }
 
-  /// 스냅샷에 넣을 데이터가 있을 때만 DB에 기록한 뒤, 대상 학교·학년 활성 데이터를 모두 삭제.
+  /// 스냅샷에 넣을 데이터가 있을 때만 JSON으로 기록한 뒤, 활성 시험 시즌 ID를 1 증가(행 삭제 없음).
   Future<void> archiveAndClearExamsForNewSeason(
       List<({String school, EducationLevel level, int grade})> targets) async {
     final entries = <Map<String, dynamic>>[];
@@ -7763,13 +8001,47 @@ class DataManager {
             '시험 기록 스냅샷을 저장하지 못했습니다. 네트워크와 로그인 상태를 확인한 뒤 다시 시도하세요.');
       }
     }
-    for (final t in targets) {
-      await deleteExamData(t.school, t.level, t.grade);
+    await bumpActiveExamSeasonId();
+  }
+
+  /// 활성 시험 시즌을 1 증가시키고 서버·로컬·메모리 캐시를 맞춤. 과거 시즌 행은 DB에 유지.
+  Future<void> bumpActiveExamSeasonId() async {
+    final next = _academySettings.activeExamSeasonId + 1;
+    _academySettings = AcademySettings(
+      name: _academySettings.name,
+      slogan: _academySettings.slogan,
+      address: _academySettings.address,
+      defaultCapacity: _academySettings.defaultCapacity,
+      lessonDuration: _academySettings.lessonDuration,
+      logo: _academySettings.logo,
+      sessionCycle: _academySettings.sessionCycle,
+      activeExamSeasonId: next,
+    );
+    if (!RuntimeFlags.serverOnly) {
+      await AcademyDbService.instance.setActiveExamSeasonId(next);
     }
+    if (TagPresetService.preferSupabaseRead || TagPresetService.dualWrite) {
+      try {
+        final academyId = await TenantService.instance.getActiveAcademyId() ??
+            await TenantService.instance.ensureActiveAcademy();
+        await Supabase.instance.client
+            .from('academy_settings')
+            .update({'active_exam_season_id': next}).eq('academy_id', academyId);
+      } catch (e, st) {
+        // ignore: avoid_print
+        print('[bumpActiveExamSeasonId][supa] $e\n$st');
+      }
+    }
+    _examTitlesBySg.clear();
+    _examRangesBySg.clear();
+    _examDaysBySg.clear();
+    _examBulkHydratedSeasonId = null;
+    await preloadAllExamData();
   }
 
   Future<void> saveExamDays(String school, EducationLevel level, int grade,
       Set<DateTime> days) async {
+    final sid = activeExamSeasonId;
     final list = days
         .map((d) => DateTime(d.year, d.month, d.day).toIso8601String())
         .toList();
@@ -7777,6 +8049,7 @@ class DataManager {
       school: school,
       level: level.index,
       grade: grade,
+      seasonId: sid,
       daysIso: list,
     );
     final key = _sgKey(school, level, grade);
@@ -7794,7 +8067,8 @@ class DataManager {
           'academy_id': academyId,
           'school': school,
           'level': level.index,
-          'grade': grade
+          'grade': grade,
+          'season_id': sid,
         });
         if (list.isNotEmpty) {
           final rows = list
@@ -7803,6 +8077,7 @@ class DataManager {
                     'school': school,
                     'level': level.index,
                     'grade': grade,
+                    'season_id': sid,
                     'date': iso.substring(0, 10),
                   })
               .toList();
@@ -7828,51 +8103,45 @@ class DataManager {
   }
 
   Future<void> preloadAllExamData() async {
+    if (_examBulkHydratedSeasonId == activeExamSeasonId) return;
+    while (_preloadAllExamDataInFlight != null) {
+      await _preloadAllExamDataInFlight;
+      if (_examBulkHydratedSeasonId == activeExamSeasonId) return;
+    }
+    final run = _preloadAllExamDataImpl();
+    _preloadAllExamDataInFlight = run;
     try {
-      final schedules = await AcademyDbService.instance.loadAllExamSchedules();
-      for (final r in schedules) {
-        final school = (r['school'] as String?) ?? '';
-        final level = EducationLevel.values[(r['level'] as int?) ?? 0];
-        final grade = (r['grade'] as int?) ?? 0;
-        final iso = (r['date'] as String?) ?? '';
-        if (school.isEmpty || iso.isEmpty) continue;
-        final d = DateTime.parse(iso);
-        List<dynamic> list;
+      await run;
+    } finally {
+      if (identical(_preloadAllExamDataInFlight, run)) {
+        _preloadAllExamDataInFlight = null;
+      }
+    }
+  }
+
+  Future<void> _preloadAllExamDataImpl() async {
+    try {
+      _examTitlesBySg.clear();
+      _examRangesBySg.clear();
+      _examDaysBySg.clear();
+      _examBulkHydratedSeasonId = null;
+      final sid = activeExamSeasonId;
+      if (TagPresetService.preferSupabaseRead) {
         try {
-          list = jsonDecode((r['names_json'] as String?) ?? '[]');
-        } catch (_) {
-          list = [];
+          await _mergeExamMapsFromSupabaseBulk(sid);
+        } catch (e, st) {
+          // ignore: avoid_print
+          print('[preloadAllExamData][supa bulk] $e\n$st');
+          await _fillExamMapsFromSqlite(sid);
         }
-        final key = _sgKey(school, level, grade);
-        final map = _examTitlesBySg.putIfAbsent(key, () => {});
-        map[DateTime(d.year, d.month, d.day)] =
-            list.map((e) => e.toString()).toList();
+      } else {
+        await _fillExamMapsFromSqlite(sid);
       }
-      final ranges = await AcademyDbService.instance.loadAllExamRanges();
-      for (final r in ranges) {
-        final school = (r['school'] as String?) ?? '';
-        final level = EducationLevel.values[(r['level'] as int?) ?? 0];
-        final grade = (r['grade'] as int?) ?? 0;
-        final iso = (r['date'] as String?) ?? '';
-        final text = (r['range_text'] as String?) ?? '';
-        if (school.isEmpty || iso.isEmpty) continue;
-        final d = DateTime.parse(iso);
-        final key = _sgKey(school, level, grade);
-        final map = _examRangesBySg.putIfAbsent(key, () => {});
-        map[DateTime(d.year, d.month, d.day)] = text;
-      }
-      final days = await AcademyDbService.instance.loadAllExamDays();
-      for (final r in days) {
-        final school = (r['school'] as String?) ?? '';
-        final level = EducationLevel.values[(r['level'] as int?) ?? 0];
-        final grade = (r['grade'] as int?) ?? 0;
-        final iso = (r['date'] as String?) ?? '';
-        if (school.isEmpty || iso.isEmpty) continue;
-        final d = DateTime.parse(iso);
-        final key = _sgKey(school, level, grade);
-        final set = _examDaysBySg.putIfAbsent(key, () => {});
-        set.add(DateTime(d.year, d.month, d.day));
-      }
-    } catch (_) {}
+      _materializeEmptyExamKeysForStudents();
+      _examBulkHydratedSeasonId = activeExamSeasonId;
+    } catch (e, st) {
+      // ignore: avoid_print
+      print('[preloadAllExamData] $e\n$st');
+    }
   }
 }

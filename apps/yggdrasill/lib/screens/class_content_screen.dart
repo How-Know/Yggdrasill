@@ -12,6 +12,7 @@ import '../services/tenant_service.dart';
 import '../services/homework_store.dart';
 import '../services/student_flow_store.dart';
 import '../services/homework_assignment_store.dart';
+import '../services/learning_problem_bank_service.dart';
 import '../services/print_routing_service.dart';
 import '../models/attendance_record.dart';
 import '../models/student_flow.dart';
@@ -1331,6 +1332,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           'timeLimitMinutes': part.timeLimitMinutes,
           'memo': part.memo,
           'content': part.content,
+          'pbPresetId': part.pbPresetId,
           'bookId': part.bookId,
           'gradeLabel': part.gradeLabel,
           'sourceUnitLevel': part.sourceUnitLevel,
@@ -1372,6 +1374,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         timeLimitMinutes: part.timeLimitMinutes,
         memo: part.memo,
         content: part.content,
+        pbPresetId: part.pbPresetId,
         bookId: part.bookId,
         gradeLabel: part.gradeLabel,
         sourceUnitLevel: part.sourceUnitLevel,
@@ -1553,6 +1556,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
             count: parsePositiveInt(entry['count']),
             timeLimitMinutes: parsePositiveInt(entry['timeLimitMinutes']),
             content: (entry['content'] as String?)?.trim(),
+            pbPresetId: (entry['pbPresetId'] as String?)?.trim(),
             bookId: (entry['bookId'] as String?)?.trim(),
             gradeLabel: (entry['gradeLabel'] as String?)?.trim(),
             sourceUnitLevel: (entry['sourceUnitLevel'] as String?)?.trim(),
@@ -2424,12 +2428,14 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       }
       return;
     }
-    final waitingCandidates = <HomeworkItem>[];
+    final waitingCandidates = <({String studentId, HomeworkItem hw})>[];
     for (final student in attendingStudents) {
       waitingCandidates.addAll(
-        HomeworkStore.instance.items(student.id).where(
-              (hw) => hw.status != HomeworkStatus.completed && hw.phase == 1,
-            ),
+        HomeworkStore.instance
+            .items(student.id)
+            .where(
+                (hw) => hw.status != HomeworkStatus.completed && hw.phase == 1)
+            .map((hw) => (studentId: student.id, hw: hw)),
       );
     }
     if (waitingCandidates.isEmpty) {
@@ -2439,39 +2445,76 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       return;
     }
 
-    var hasPrintableBodyLink = false;
-    for (final hw in waitingCandidates) {
+    final assignmentByStudent =
+        <String, Map<String, HomeworkAssignmentDetail>>{};
+    var hasPrintableSource = false;
+    for (final candidate in waitingCandidates) {
       try {
-        final resolved =
-            await _resolveHomeworkPdfLinks(hw, allowFlowFallback: true);
-        final bodyRaw = resolved.bodyPathRaw.trim();
-        if (bodyRaw.isEmpty) continue;
-        if (_isWebUrl(bodyRaw)) continue;
-        final localPath = _toLocalFilePath(bodyRaw);
-        if (localPath.isEmpty || !await File(localPath).exists()) continue;
-        hasPrintableBodyLink = true;
+        final studentId = candidate.studentId;
+        final assignmentByItemId = assignmentByStudent[studentId] ??
+            await _loadActiveAssignmentByItemId(studentId);
+        assignmentByStudent[studentId] = assignmentByItemId;
+        final canPrint = await _canPrintHomeworkByResolvedSource(
+          studentId: studentId,
+          hw: candidate.hw,
+          assignmentByItemId: assignmentByItemId,
+        );
+        if (!canPrint) continue;
+        hasPrintableSource = true;
         break;
       } catch (_) {}
     }
     if (!mounted) return;
-    if (!hasPrintableBodyLink) {
-      _showHomeworkChipSnackBar(context, '인쇄 가능한 교재 본문 링크가 없습니다.');
+    if (!hasPrintableSource) {
+      _showHomeworkChipSnackBar(context, '인쇄 가능한 문제은행/교재 PDF가 없습니다.');
       return;
     }
     setState(() => _printPickMode = true);
   }
 
-  Future<bool> _canPrintHomeworkByResolvedTextbook(HomeworkItem hw) async {
+  Future<Map<String, HomeworkAssignmentDetail>> _loadActiveAssignmentByItemId(
+    String studentId,
+  ) async {
     try {
-      final resolved = await _resolveHomeworkPdfLinks(
+      final rows = await HomeworkAssignmentStore.instance
+          .loadActiveAssignments(studentId);
+      final out = <String, HomeworkAssignmentDetail>{};
+      for (final row in rows) {
+        final itemId = row.homeworkItemId.trim();
+        if (itemId.isEmpty || out.containsKey(itemId)) continue;
+        out[itemId] = row;
+      }
+      return out;
+    } catch (_) {
+      return const <String, HomeworkAssignmentDetail>{};
+    }
+  }
+
+  Future<bool> _canPrintHomeworkByResolvedSource({
+    required String studentId,
+    required HomeworkItem hw,
+    Map<String, HomeworkAssignmentDetail>? assignmentByItemId,
+  }) async {
+    try {
+      final resolvedAssignments =
+          assignmentByItemId ?? await _loadActiveAssignmentByItemId(studentId);
+      final assignment = resolvedAssignments[hw.id.trim()];
+      if (_isPbPrintTarget(hw: hw, assignment: assignment)) {
+        final pbSource = await _resolvePbPrintSource(
+          hw,
+          assignment: assignment,
+        );
+        if (pbSource != null &&
+            await _isPrintableResolvedHomeworkPrintSource(pbSource)) {
+          return true;
+        }
+        return _canCreatePbPrintFromTarget(hw: hw, assignment: assignment);
+      }
+      final textbookSource = await _resolveTextbookPrintSource(
         hw,
         allowFlowFallback: true,
       );
-      final bodyRaw = resolved.bodyPathRaw.trim();
-      if (bodyRaw.isEmpty || _isWebUrl(bodyRaw)) return false;
-      final bodyPath = _toLocalFilePath(bodyRaw);
-      if (bodyPath.isEmpty) return false;
-      return await File(bodyPath).exists();
+      return _isPrintableResolvedHomeworkPrintSource(textbookSource);
     } catch (_) {
       return false;
     }
@@ -2522,12 +2565,49 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       setState(() => _printPickMode = false);
     }
 
+    final assignmentByItemId = await _loadActiveAssignmentByItemId(studentId);
+    if (!mounted) return;
     final printableById = <String, bool>{};
+    final sourceByItemId = <String, _ResolvedHomeworkPrintSource>{};
+    String? canonicalPipelineKey;
+    final observedPipelineKinds = <String>{};
     for (final child in waitingChildren) {
-      printableById[child.id] =
-          await _canPrintHomeworkByResolvedTextbook(child);
+      final assignment = assignmentByItemId[child.id.trim()];
+      final pipelineKey =
+          _printPipelineKeyForHomework(hw: child, assignment: assignment);
+      observedPipelineKinds.add(pipelineKey);
+      final isPb = pipelineKey == _kPrintPipelinePb;
+      final source = isPb
+          ? (await _resolvePbPrintSource(
+                child,
+                assignment: assignment,
+              ) ??
+              const _ResolvedHomeworkPrintSource(
+                pathRaw: '',
+                sourceKey: 'pb_missing',
+                isProblemBank: true,
+              ))
+          : await _resolveTextbookPrintSource(
+              child,
+              allowFlowFallback: true,
+            );
+      sourceByItemId[child.id] = source;
+      final available = isPb
+          ? (await _isPrintableResolvedHomeworkPrintSource(source) ||
+              _canCreatePbPrintFromTarget(hw: child, assignment: assignment))
+          : await _isPrintableResolvedHomeworkPrintSource(source);
+      if (!available) {
+        printableById[child.id] = false;
+        continue;
+      }
+      canonicalPipelineKey ??= pipelineKey;
+      printableById[child.id] = canonicalPipelineKey == pipelineKey;
     }
     if (!mounted) return;
+    if (observedPipelineKinds.length > 1) {
+      _showHomeworkChipSnackBar(
+          context, '혼합 인쇄는 지원되지 않아요. 문제은행/교재를 분리해서 인쇄해 주세요.');
+    }
     final initialSelectedById = <String, bool>{
       for (final child in waitingChildren)
         child.id: printableById[child.id] ?? false,
@@ -2559,6 +2639,8 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       selectableGroupChildren: waitingChildren,
       groupChildPrintableById: printableById,
       groupInitialSelectionById: initialSelectedById,
+      assignmentByItemId: assignmentByItemId,
+      preResolvedSourceByItemId: sourceByItemId,
     );
   }
 
@@ -4746,6 +4828,7 @@ Future<void> _openHomeworkEditDialogForHome(
     timeLimitMinutes: item.timeLimitMinutes,
     memo: item.memo,
     content: (edited['content'] as String?)?.trim(),
+    pbPresetId: item.pbPresetId,
     bookId: item.bookId,
     gradeLabel: item.gradeLabel,
     sourceUnitLevel: item.sourceUnitLevel,
@@ -4793,6 +4876,7 @@ HomeworkItem _copyHomeworkItemForInlineEdit(
     timeLimitMinutes: source.timeLimitMinutes,
     memo: memo ?? source.memo,
     content: content ?? source.content,
+    pbPresetId: source.pbPresetId,
     bookId: source.bookId,
     gradeLabel: source.gradeLabel,
     sourceUnitLevel: source.sourceUnitLevel,
@@ -5046,6 +5130,7 @@ Future<void> _showAddChildHomeworkDialog({
       type: (entry['type'] as String?)?.trim(),
       memo: (entry['memo'] as String?)?.trim(),
       content: (entry['content'] as String?)?.trim(),
+      pbPresetId: (entry['pbPresetId'] as String?)?.trim(),
       bookId: (entry['bookId'] as String?)?.trim(),
       gradeLabel: (entry['gradeLabel'] as String?)?.trim(),
       sourceUnitLevel: (entry['sourceUnitLevel'] as String?)?.trim(),
@@ -6471,6 +6556,7 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
       timeLimitMinutes: first.timeLimitMinutes,
       memo: first.memo,
       content: first.content,
+      pbPresetId: first.pbPresetId,
       bookId: first.bookId,
       gradeLabel: first.gradeLabel,
       sourceUnitLevel: first.sourceUnitLevel,
@@ -6800,6 +6886,26 @@ class _ResolvedHomeworkPdfLinks {
   });
 }
 
+class _ResolvedHomeworkPrintSource {
+  final String pathRaw;
+  final String sourceKey;
+  final String bookId;
+  final String gradeLabel;
+  final bool isProblemBank;
+  final String preferredPaperSize;
+
+  const _ResolvedHomeworkPrintSource({
+    required this.pathRaw,
+    required this.sourceKey,
+    this.bookId = '',
+    this.gradeLabel = '',
+    this.isProblemBank = false,
+    this.preferredPaperSize = '',
+  });
+
+  bool get isEmpty => pathRaw.trim().isEmpty;
+}
+
 class _HomeworkPrintConfirmResult {
   final String pageRange;
   final List<String> selectedChildIds;
@@ -6991,6 +7097,25 @@ String _toLocalFilePath(String rawPath) {
 void _showHomeworkChipSnackBar(BuildContext context, String message) {
   if (!context.mounted) return;
   ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+}
+
+Future<Map<String, HomeworkAssignmentDetail>>
+    _loadActiveAssignmentByItemIdForPrint(
+  String studentId,
+) async {
+  try {
+    final rows =
+        await HomeworkAssignmentStore.instance.loadActiveAssignments(studentId);
+    final out = <String, HomeworkAssignmentDetail>{};
+    for (final row in rows) {
+      final itemId = row.homeworkItemId.trim();
+      if (itemId.isEmpty || out.containsKey(itemId)) continue;
+      out[itemId] = row;
+    }
+    return out;
+  } catch (_) {
+    return const <String, HomeworkAssignmentDetail>{};
+  }
 }
 
 /// 인쇄 파이프라인이 오류 없이 끝난 뒤, 실제로 인쇄 대상이 된 과제의 유형을 `프린트`로 맞춘다.
@@ -7684,10 +7809,14 @@ void _scheduleTempDelete(String path) {
   });
 }
 
-Future<bool> _openPrintDialogForPath(String path) {
+Future<bool> _openPrintDialogForPath(
+  String path, {
+  String preferredPaperSize = '',
+}) {
   return PrintRoutingService.instance.printFile(
     path: path,
     channel: PrintRoutingChannel.general,
+    preferredPaperSize: preferredPaperSize,
     debugSource: 'class_content.waiting_chip',
   );
 }
@@ -7757,6 +7886,519 @@ Future<_ResolvedHomeworkPdfLinks> _resolveHomeworkPdfLinks(
       solutionPathRaw: '',
     );
   }
+}
+
+String _preferredLiveReleaseExportJobIdForPrint({
+  required LearningProblemLiveRelease release,
+  bool preferFrozen = false,
+}) {
+  final active = release.activeExportJobId.trim();
+  final frozen = release.frozenExportJobId.trim();
+  if (preferFrozen) {
+    if (frozen.isNotEmpty) return frozen;
+    return active;
+  }
+  if (active.isNotEmpty) return active;
+  return frozen;
+}
+
+const String _kPrintPipelinePb = 'pb';
+const String _kPrintPipelineTextbook = 'textbook';
+
+bool _isPbPrintTarget({
+  required HomeworkItem hw,
+  HomeworkAssignmentDetail? assignment,
+}) {
+  final presetId = (hw.pbPresetId ?? '').trim();
+  final liveReleaseId = (assignment?.liveReleaseId ?? '').trim();
+  final exportJobId = (assignment?.releaseExportJobId ?? '').trim();
+  return presetId.isNotEmpty ||
+      liveReleaseId.isNotEmpty ||
+      exportJobId.isNotEmpty;
+}
+
+bool _canCreatePbPrintFromTarget({
+  required HomeworkItem hw,
+  HomeworkAssignmentDetail? assignment,
+}) {
+  return _isPbPrintTarget(hw: hw, assignment: assignment);
+}
+
+String _printPipelineKeyForHomework({
+  required HomeworkItem hw,
+  HomeworkAssignmentDetail? assignment,
+}) {
+  return _isPbPrintTarget(hw: hw, assignment: assignment)
+      ? _kPrintPipelinePb
+      : _kPrintPipelineTextbook;
+}
+
+Future<String> _resolveAcademyIdForPrint() async {
+  var academyId =
+      (await TenantService.instance.getActiveAcademyId() ?? '').trim();
+  if (academyId.isEmpty) {
+    academyId = (await TenantService.instance.ensureActiveAcademy()).trim();
+  }
+  return academyId;
+}
+
+String _normalizePaperSizeForPrint(String raw) {
+  final normalized =
+      raw.trim().toUpperCase().replaceAll(RegExp(r'[\s\-_]+'), '');
+  switch (normalized) {
+    case 'B4JIS':
+    case 'JISB4':
+    case 'B4':
+      return 'B4';
+    case 'B5JIS':
+    case 'JISB5':
+    case 'B5':
+      return 'B5';
+    case 'A3':
+      return 'A3';
+    case 'A4':
+      return 'A4';
+    case 'A5':
+      return 'A5';
+    case 'LETTER':
+    case 'NORTHAMERICALETTER':
+      return 'LETTER';
+    case 'LEGAL':
+    case 'NORTHAMERICALEGAL':
+      return 'LEGAL';
+    default:
+      return normalized;
+  }
+}
+
+bool _isPaperSizeCompatibleForPrint({
+  required String expectedPaperSize,
+  required String actualPaperSize,
+}) {
+  final expected = _normalizePaperSizeForPrint(expectedPaperSize);
+  final actual = _normalizePaperSizeForPrint(actualPaperSize);
+  if (expected.isEmpty || actual.isEmpty) return true;
+  return expected == actual;
+}
+
+Future<_ResolvedHomeworkPrintSource?> _sourceFromPbExportJobForPrint({
+  required String academyId,
+  required String exportJobId,
+  required String sourceKey,
+  LearningProblemBankService? problemBankService,
+  String preferredPaperSize = '',
+}) async {
+  final safeJobId = exportJobId.trim();
+  if (academyId.trim().isEmpty || safeJobId.isEmpty) return null;
+  final pbService = problemBankService ?? LearningProblemBankService();
+  try {
+    final expectedPaperSize = preferredPaperSize.trim();
+    if (expectedPaperSize.isNotEmpty) {
+      try {
+        final job = await pbService.getExportJob(
+          academyId: academyId,
+          jobId: safeJobId,
+        );
+        final actualPaperSize = (job?.paperSize ?? '').trim();
+        if (actualPaperSize.isNotEmpty &&
+            !_isPaperSizeCompatibleForPrint(
+              expectedPaperSize: expectedPaperSize,
+              actualPaperSize: actualPaperSize,
+            )) {
+          return null;
+        }
+      } catch (_) {}
+    }
+    final signedUrl = await pbService.regenerateExportSignedUrl(
+      academyId: academyId,
+      exportJobId: safeJobId,
+    );
+    final safeSignedUrl = signedUrl.trim();
+    if (safeSignedUrl.isEmpty) return null;
+    return _ResolvedHomeworkPrintSource(
+      pathRaw: safeSignedUrl,
+      sourceKey: sourceKey,
+      isProblemBank: true,
+      preferredPaperSize: preferredPaperSize,
+    );
+  } catch (_) {
+    return null;
+  }
+}
+
+List<String> _extractSelectedQuestionUidsFromPreset(
+  LearningProblemDocumentExportPreset preset,
+) {
+  if (preset.selectedQuestionUids.isNotEmpty) {
+    return preset.selectedQuestionUids
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toList(growable: false);
+  }
+
+  List<String> parse(dynamic raw) {
+    if (raw is! List) return const <String>[];
+    return raw
+        .map((e) => '$e'.trim())
+        .where((e) => e.isNotEmpty)
+        .toList(growable: false);
+  }
+
+  final renderConfig = preset.renderConfig;
+  final fromOrdered = parse(renderConfig['selectedQuestionUidsOrdered']);
+  if (fromOrdered.isNotEmpty) return fromOrdered;
+  final fromOrderedLegacy = parse(renderConfig['selectedQuestionIdsOrdered']);
+  if (fromOrderedLegacy.isNotEmpty) return fromOrderedLegacy;
+  final fromRaw = parse(renderConfig['selectedQuestionUids']);
+  if (fromRaw.isNotEmpty) return fromRaw;
+  return parse(renderConfig['selectedQuestionIds']);
+}
+
+bool _parseBoolLooseForPrint(
+  dynamic raw, {
+  required bool fallback,
+}) {
+  if (raw is bool) return raw;
+  final text = '$raw'.trim().toLowerCase();
+  if (text.isEmpty) return fallback;
+  if (text == 'true' || text == '1' || text == 'yes' || text == 'y') {
+    return true;
+  }
+  if (text == 'false' || text == '0' || text == 'no' || text == 'n') {
+    return false;
+  }
+  return fallback;
+}
+
+Future<LearningProblemExportJob?> _waitPbExportCompleted({
+  required String academyId,
+  required LearningProblemExportJob initialJob,
+  LearningProblemBankService? problemBankService,
+  ValueNotifier<String>? progressText,
+  int maxAttempts = 240,
+}) async {
+  final pbService = problemBankService ?? LearningProblemBankService();
+  var current = initialJob;
+  for (var attempt = 0; attempt < maxAttempts; attempt += 1) {
+    if (current.isTerminal) return current;
+    if (progressText != null) {
+      progressText.value = '문제은행 PDF 생성 중입니다...';
+    }
+    await Future<void>.delayed(const Duration(seconds: 2));
+    LearningProblemExportJob? latest;
+    try {
+      latest = await pbService.getExportJob(
+        academyId: academyId,
+        jobId: current.id,
+      );
+    } catch (_) {
+      latest = null;
+    }
+    if (latest == null) continue;
+    current = latest;
+    if (current.isTerminal) return current;
+  }
+  return current;
+}
+
+Future<LearningProblemExportJob?> _ensurePbExportJob({
+  required HomeworkItem hw,
+  HomeworkAssignmentDetail? assignment,
+  String academyId = '',
+  LearningProblemBankService? problemBankService,
+  ValueNotifier<String>? progressText,
+}) async {
+  final pbService = problemBankService ?? LearningProblemBankService();
+  final safeAcademyId = academyId.trim().isNotEmpty
+      ? academyId.trim()
+      : await _resolveAcademyIdForPrint();
+  if (safeAcademyId.isEmpty) return null;
+
+  String presetId = (hw.pbPresetId ?? '').trim();
+  final liveReleaseId = (assignment?.liveReleaseId ?? '').trim();
+  if (presetId.isEmpty && liveReleaseId.isNotEmpty) {
+    try {
+      final liveRelease = await pbService.getLiveReleaseById(
+        academyId: safeAcademyId,
+        liveReleaseId: liveReleaseId,
+      );
+      presetId = (liveRelease?.presetId ?? '').trim();
+    } catch (_) {}
+  }
+  if (presetId.isEmpty) return null;
+
+  progressText?.value = '문제은행 프리셋 정보를 불러오는 중입니다...';
+  final preset = await pbService.getExportPresetById(
+    academyId: safeAcademyId,
+    presetId: presetId,
+  );
+  if (preset == null) return null;
+
+  final documentId = preset.sourceDocumentId.trim().isNotEmpty
+      ? preset.sourceDocumentId.trim()
+      : preset.documentId.trim();
+  if (documentId.isEmpty) return null;
+  final selectedQuestionUids = _extractSelectedQuestionUidsFromPreset(preset);
+  if (selectedQuestionUids.isEmpty) return null;
+
+  final renderConfig = preset.renderConfig;
+  final templateProfile =
+      preset.templateProfile.isNotEmpty ? preset.templateProfile : 'csat';
+  final paperSize = preset.paperSize.isNotEmpty ? preset.paperSize : 'A4';
+  final includeAnswerSheet = _parseBoolLooseForPrint(
+    renderConfig['includeAnswerSheet'],
+    fallback: true,
+  );
+  final includeExplanation = _parseBoolLooseForPrint(
+    renderConfig['includeExplanation'],
+    fallback: false,
+  );
+  final renderHash = '${renderConfig['renderHash'] ?? ''}'.trim();
+  final options = <String, dynamic>{
+    ...renderConfig,
+    if (renderHash.isNotEmpty) 'renderHash': renderHash,
+    'previewOnly': false,
+  };
+
+  progressText?.value = '문제은행 인쇄 PDF 생성을 요청하는 중입니다...';
+  final queuedJob = await pbService.createExportJob(
+    academyId: safeAcademyId,
+    documentId: documentId,
+    templateProfile: templateProfile,
+    paperSize: paperSize,
+    includeAnswerSheet: includeAnswerSheet,
+    includeExplanation: includeExplanation,
+    selectedQuestionUids: selectedQuestionUids,
+    renderHash: renderHash,
+    previewOnly: false,
+    options: options,
+  );
+  final completedJob = await _waitPbExportCompleted(
+    academyId: safeAcademyId,
+    initialJob: queuedJob,
+    problemBankService: pbService,
+    progressText: progressText,
+  );
+  if (completedJob == null) return null;
+
+  if (completedJob.status.trim() == 'completed' &&
+      completedJob.id.trim().isNotEmpty) {
+    final sourceDocumentIds = preset.sourceDocumentIds.isNotEmpty
+        ? preset.sourceDocumentIds
+        : <String>[documentId];
+    try {
+      await pbService.upsertLiveReleaseForPreset(
+        academyId: safeAcademyId,
+        presetId: presetId,
+        sourceDocumentIds: sourceDocumentIds,
+        templateProfile: templateProfile,
+        paperSize: paperSize,
+        activeExportJobId: completedJob.id.trim(),
+        note: 'homework_print_auto_export',
+      );
+    } catch (_) {}
+  }
+  return completedJob;
+}
+
+Future<_ResolvedHomeworkPrintSource?> _resolvePbPrintSource(
+  HomeworkItem hw, {
+  HomeworkAssignmentDetail? assignment,
+  LearningProblemBankService? problemBankService,
+  String academyId = '',
+  bool ensureExportJob = false,
+  ValueNotifier<String>? progressText,
+}) async {
+  final pbService = problemBankService ?? LearningProblemBankService();
+  final safeAcademyId = academyId.trim().isNotEmpty
+      ? academyId.trim()
+      : await _resolveAcademyIdForPrint();
+  if (safeAcademyId.isEmpty) return null;
+
+  String preferredPaperSize = '';
+  LearningProblemLiveRelease? assignmentRelease;
+  final liveReleaseId = (assignment?.liveReleaseId ?? '').trim();
+  if (liveReleaseId.isNotEmpty) {
+    try {
+      assignmentRelease = await pbService.getLiveReleaseById(
+        academyId: safeAcademyId,
+        liveReleaseId: liveReleaseId,
+      );
+      preferredPaperSize = (assignmentRelease?.paperSize ?? '').trim();
+    } catch (_) {
+      assignmentRelease = null;
+    }
+  }
+
+  final lockedExportJobId = (assignment?.releaseExportJobId ?? '').trim();
+  if (lockedExportJobId.isNotEmpty) {
+    final resolved = await _sourceFromPbExportJobForPrint(
+      academyId: safeAcademyId,
+      exportJobId: lockedExportJobId,
+      sourceKey: 'pb_export_job:$lockedExportJobId',
+      problemBankService: pbService,
+      preferredPaperSize: preferredPaperSize,
+    );
+    if (resolved != null) return resolved;
+  }
+
+  if (liveReleaseId.isNotEmpty) {
+    if (assignmentRelease != null) {
+      final preferFrozen =
+          (assignment?.status ?? '').trim().toLowerCase() == 'completed';
+      final exportJobId = _preferredLiveReleaseExportJobIdForPrint(
+        release: assignmentRelease,
+        preferFrozen: preferFrozen,
+      );
+      if (exportJobId.isNotEmpty) {
+        final resolved = await _sourceFromPbExportJobForPrint(
+          academyId: safeAcademyId,
+          exportJobId: exportJobId,
+          sourceKey: 'pb_export_job:$exportJobId',
+          problemBankService: pbService,
+          preferredPaperSize: preferredPaperSize,
+        );
+        if (resolved != null) return resolved;
+      }
+    }
+  }
+
+  final assignmentSignedUrl = (assignment?.liveReleaseSignedUrl ?? '').trim();
+  if (assignmentSignedUrl.isNotEmpty && preferredPaperSize.isEmpty) {
+    return _ResolvedHomeworkPrintSource(
+      pathRaw: assignmentSignedUrl,
+      sourceKey: liveReleaseId.isNotEmpty
+          ? 'pb_live_release:$liveReleaseId'
+          : 'pb_assignment:${assignment?.id ?? hw.id}',
+      isProblemBank: true,
+      preferredPaperSize: preferredPaperSize,
+    );
+  }
+
+  final pbPresetId = (hw.pbPresetId ?? '').trim().isNotEmpty
+      ? (hw.pbPresetId ?? '').trim()
+      : (assignmentRelease?.presetId ?? '').trim();
+  if (pbPresetId.isNotEmpty) {
+    try {
+      final latestRelease = await pbService.getLatestLiveReleaseForPreset(
+        academyId: safeAcademyId,
+        presetId: pbPresetId,
+      );
+      if (latestRelease != null) {
+        if (preferredPaperSize.isEmpty) {
+          preferredPaperSize = latestRelease.paperSize.trim();
+        }
+        final exportJobId = _preferredLiveReleaseExportJobIdForPrint(
+          release: latestRelease,
+          preferFrozen: false,
+        );
+        if (exportJobId.isNotEmpty) {
+          final resolved = await _sourceFromPbExportJobForPrint(
+            academyId: safeAcademyId,
+            exportJobId: exportJobId,
+            sourceKey: 'pb_export_job:$exportJobId',
+            problemBankService: pbService,
+            preferredPaperSize: preferredPaperSize,
+          );
+          if (resolved != null) return resolved;
+        }
+      }
+    } catch (_) {}
+  }
+
+  if (!ensureExportJob) return null;
+
+  final createdOrLatestJob = await _ensurePbExportJob(
+    hw: hw,
+    assignment: assignment,
+    academyId: safeAcademyId,
+    problemBankService: pbService,
+    progressText: progressText,
+  );
+  if (createdOrLatestJob == null) return null;
+  if (createdOrLatestJob.status.trim() != 'completed') return null;
+  final exportJobId = createdOrLatestJob.id.trim();
+  if (exportJobId.isEmpty) return null;
+  if (preferredPaperSize.isEmpty && pbPresetId.isNotEmpty) {
+    try {
+      final preset = await pbService.getExportPresetById(
+        academyId: safeAcademyId,
+        presetId: pbPresetId,
+      );
+      preferredPaperSize = (preset?.paperSize ?? '').trim();
+    } catch (_) {}
+  }
+  return _sourceFromPbExportJobForPrint(
+    academyId: safeAcademyId,
+    exportJobId: exportJobId,
+    sourceKey: 'pb_export_job:$exportJobId',
+    problemBankService: pbService,
+    preferredPaperSize: preferredPaperSize,
+  );
+}
+
+Future<_ResolvedHomeworkPrintSource> _resolveTextbookPrintSource(
+  HomeworkItem hw, {
+  bool allowFlowFallback = false,
+}) async {
+  final textbook = await _resolveHomeworkPdfLinks(
+    hw,
+    allowFlowFallback: allowFlowFallback,
+  );
+  final textbookRaw = textbook.bodyPathRaw.trim();
+  final textbookKey =
+      (textbook.bookId.isNotEmpty && textbook.gradeLabel.isNotEmpty)
+          ? 'textbook:${textbook.bookId}|${textbook.gradeLabel}'
+          : 'textbook_raw:$textbookRaw';
+  return _ResolvedHomeworkPrintSource(
+    pathRaw: textbookRaw,
+    sourceKey: textbookKey,
+    bookId: textbook.bookId,
+    gradeLabel: textbook.gradeLabel,
+    isProblemBank: false,
+  );
+}
+
+Future<bool> _isPrintableResolvedHomeworkPrintSource(
+  _ResolvedHomeworkPrintSource source,
+) async {
+  final raw = source.pathRaw.trim();
+  if (raw.isEmpty) return false;
+  if (_isWebUrl(raw)) return true;
+  final localPath = _toLocalFilePath(raw);
+  if (localPath.isEmpty) return false;
+  return File(localPath).exists();
+}
+
+Future<String?> _materializePrintablePathFromSource(
+  _ResolvedHomeworkPrintSource source, {
+  required String cacheKey,
+  LearningProblemBankService? problemBankService,
+}) async {
+  final raw = source.pathRaw.trim();
+  if (raw.isEmpty) return null;
+  if (_isWebUrl(raw)) {
+    final pbService = problemBankService ?? LearningProblemBankService();
+    try {
+      final bytes = await pbService.downloadPdfBytesFromUrl(raw);
+      if (bytes.isEmpty) return null;
+      final tmpDir = await getTemporaryDirectory();
+      final path = p.join(
+        tmpDir.path,
+        '${cacheKey}_${DateTime.now().millisecondsSinceEpoch}.pdf',
+      );
+      final file = File(path);
+      await file.writeAsBytes(bytes, flush: true);
+      _scheduleTempDelete(path);
+      return path;
+    } catch (_) {
+      return null;
+    }
+  }
+  final localPath = _toLocalFilePath(raw);
+  if (localPath.isEmpty) return null;
+  if (!await File(localPath).exists()) return null;
+  return localPath;
 }
 
 Future<_HomeworkPrintConfirmResult?> _showHomeworkPrintConfirmDialog({
@@ -7851,7 +8493,7 @@ Future<_HomeworkPrintConfirmResult?> _showHomeworkPrintConfirmDialog({
                                   final subtitle = [
                                     if (pageText.isNotEmpty) 'p.$pageText',
                                     countText,
-                                    if (!canPrint) '교재 링크 없음',
+                                    if (!canPrint) '인쇄 소스 없음',
                                   ].join(' · ');
                                   return Container(
                                     decoration: BoxDecoration(
@@ -8125,47 +8767,110 @@ Future<void> _handleWaitingChipLongPressPrint({
   List<HomeworkItem> selectableGroupChildren = const <HomeworkItem>[],
   Map<String, bool> groupChildPrintableById = const <String, bool>{},
   Map<String, bool> groupInitialSelectionById = const <String, bool>{},
+  Map<String, HomeworkAssignmentDetail> assignmentByItemId =
+      const <String, HomeworkAssignmentDetail>{},
+  Map<String, _ResolvedHomeworkPrintSource> preResolvedSourceByItemId =
+      const <String, _ResolvedHomeworkPrintSource>{},
 }) async {
   if (hw.phase != 1) return;
-  final resolved = await _resolveHomeworkPdfLinks(hw, allowFlowFallback: true);
+  final resolvedAssignments = assignmentByItemId.isNotEmpty
+      ? assignmentByItemId
+      : await _loadActiveAssignmentByItemIdForPrint(studentId);
+  final assignment = resolvedAssignments[hw.id.trim()];
+  final isPbTarget = _isPbPrintTarget(hw: hw, assignment: assignment);
+  final preResolved = preResolvedSourceByItemId[hw.id];
+  _ResolvedHomeworkPrintSource resolvedSource;
+  String? bodyPath;
+
+  if (isPbTarget) {
+    var pbSource = (preResolved != null && preResolved.isProblemBank)
+        ? preResolved
+        : const _ResolvedHomeworkPrintSource(
+            pathRaw: '',
+            sourceKey: 'pb_missing',
+            isProblemBank: true,
+          );
+    try {
+      await _runWithPrintProgressDialog(
+        context,
+        run: (progressText) async {
+          progressText.value = '문제은행 인쇄 PDF를 확인하는 중입니다...';
+          final hasPrintableSource =
+              await _isPrintableResolvedHomeworkPrintSource(pbSource);
+          if (pbSource.isEmpty || !hasPrintableSource) {
+            pbSource = await _resolvePbPrintSource(
+                  hw,
+                  assignment: assignment,
+                  ensureExportJob: true,
+                  progressText: progressText,
+                ) ??
+                const _ResolvedHomeworkPrintSource(
+                  pathRaw: '',
+                  sourceKey: 'pb_missing',
+                  isProblemBank: true,
+                );
+          }
+          if (pbSource.isEmpty) return;
+          progressText.value = '문제은행 PDF를 내려받는 중입니다...';
+          bodyPath = await _materializePrintablePathFromSource(
+            pbSource,
+            cacheKey: 'hw_print_${hw.id}',
+          );
+        },
+      );
+    } catch (_) {
+      if (!context.mounted) return;
+      _showHomeworkChipSnackBar(context, '문제은행 인쇄 PDF 준비 중 오류가 발생했습니다.');
+      return;
+    }
+    if (!context.mounted) return;
+    resolvedSource = pbSource;
+    if (resolvedSource.isEmpty || (bodyPath?.isEmpty ?? true)) {
+      _showHomeworkChipSnackBar(context, '문제은행 인쇄 PDF를 준비하지 못했습니다.');
+      return;
+    }
+  } else {
+    resolvedSource = (preResolved != null && !preResolved.isProblemBank)
+        ? preResolved
+        : await _resolveTextbookPrintSource(
+            hw,
+            allowFlowFallback: true,
+          );
+    if (!context.mounted) return;
+    if (resolvedSource.isEmpty) {
+      _showHomeworkChipSnackBar(context, '인쇄 가능한 교재 PDF를 찾지 못했습니다.');
+      return;
+    }
+    bodyPath = await _materializePrintablePathFromSource(
+      resolvedSource,
+      cacheKey: 'hw_print_${hw.id}',
+    );
+    if (!context.mounted) return;
+    if (bodyPath == null || bodyPath.isEmpty) {
+      _showHomeworkChipSnackBar(context, '인쇄 파일을 찾을 수 없습니다.');
+      return;
+    }
+  }
   if (!context.mounted) return;
 
-  final bodyRaw = resolved.bodyPathRaw;
-  if (bodyRaw.isEmpty) {
-    _showHomeworkChipSnackBar(context, '연결된 교재 본문 PDF가 없습니다.');
-    return;
-  }
-  if (_isWebUrl(bodyRaw)) {
-    _showHomeworkChipSnackBar(context, 'URL 인쇄는 지원하지 않습니다. 파일 경로를 사용하세요.');
-    return;
-  }
+  final printablePath = bodyPath!;
 
-  final bodyPath = _toLocalFilePath(bodyRaw);
-  if (bodyPath.isEmpty) {
-    _showHomeworkChipSnackBar(context, '교재 본문 경로를 확인할 수 없습니다.');
-    return;
-  }
-  if (!await File(bodyPath).exists()) {
-    if (!context.mounted) return;
-    _showHomeworkChipSnackBar(context, '교재 본문 파일을 찾을 수 없습니다.');
-    return;
-  }
-
-  final bool isPdf = bodyPath.toLowerCase().endsWith('.pdf');
-  final int pageOffset = isPdf
+  final bool isPdf = printablePath.toLowerCase().endsWith('.pdf');
+  final int pageOffset = (!resolvedSource.isProblemBank && isPdf)
       ? await _loadTextbookPageOffset(
-          bookId: resolved.bookId,
-          gradeLabel: resolved.gradeLabel,
+          bookId: resolvedSource.bookId,
+          gradeLabel: resolvedSource.gradeLabel,
         )
       : 0;
-  final initialRangeRaw =
-      initialRangeOverride ?? (isPdf ? (hw.page ?? '') : '');
+  final initialRangeRaw = resolvedSource.isProblemBank
+      ? ''
+      : (initialRangeOverride ?? (isPdf ? (hw.page ?? '') : ''));
   final initialRange =
       isPdf ? _normalizePageRangeForPrint(initialRangeRaw) : '';
   final confirmResult = await _showHomeworkPrintConfirmDialog(
     context: context,
     hw: hw,
-    filePath: bodyPath,
+    filePath: printablePath,
     isPdf: isPdf,
     initialRange: initialRange,
     dialogTitle: dialogTitleOverride,
@@ -8185,46 +8890,58 @@ Future<void> _handleWaitingChipLongPressPrint({
           .where((child) => selectedIds.contains(child.id))
           .toList(growable: false)
       : <HomeworkItem>[hw];
-  final overlayMeta = await _resolveHomeworkPrintOverlayMeta(
-    studentId: studentId,
-    fallbackHomework: hw,
-    selectedHomeworks: selectedHomeworks,
-  );
-  if (!context.mounted) return;
+  final shouldApplyOverlay = !resolvedSource.isProblemBank;
+  _HomeworkPrintOverlayMeta? overlayMeta;
+  if (shouldApplyOverlay) {
+    overlayMeta = await _resolveHomeworkPrintOverlayMeta(
+      studentId: studentId,
+      fallbackHomework: hw,
+      selectedHomeworks: selectedHomeworks,
+    );
+    if (!context.mounted) return;
+  }
 
   final selectedRange = confirmResult.pageRange;
-  String pathToPrint = bodyPath;
+  String pathToPrint = printablePath;
   final rangeDisplay = _normalizePageRangeForPrint(selectedRange);
-  final rangeRaw = _shiftNormalizedPageRangeForPdf(rangeDisplay, pageOffset);
+  final rangeRaw = resolvedSource.isProblemBank
+      ? ''
+      : _shiftNormalizedPageRangeForPdf(rangeDisplay, pageOffset);
   String? printError;
   var printJobSentToSpooler = false;
   try {
     await _runWithPrintProgressDialog(
       context,
       run: (progressText) async {
-        if (bodyPath.toLowerCase().endsWith('.pdf')) {
-          progressText.value = rangeRaw.isEmpty
-              ? '인쇄 파일을 준비하는 중입니다...'
-              : '선택한 페이지를 인쇄 파일로 만드는 중입니다...';
-          final out = await _buildPdfForPrintRange(
-            inputPath: bodyPath,
-            pageRange: rangeRaw,
-            overlayMeta: overlayMeta,
-          );
-          if (out == null || out.isEmpty) {
-            printError = rangeRaw.isEmpty
-                ? '인쇄 파일 생성에 실패했습니다.'
-                : '페이지 범위를 확인하세요. (예: 10-15, 20)';
-            return;
+        if (printablePath.toLowerCase().endsWith('.pdf')) {
+          final shouldRewritePdf = shouldApplyOverlay || rangeRaw.isNotEmpty;
+          if (shouldRewritePdf) {
+            progressText.value = rangeRaw.isEmpty
+                ? '인쇄 파일을 준비하는 중입니다...'
+                : '선택한 페이지를 인쇄 파일로 만드는 중입니다...';
+            final out = await _buildPdfForPrintRange(
+              inputPath: printablePath,
+              pageRange: rangeRaw,
+              overlayMeta: overlayMeta,
+            );
+            if (out == null || out.isEmpty) {
+              printError = rangeRaw.isEmpty
+                  ? '인쇄 파일 생성에 실패했습니다.'
+                  : '페이지 범위를 확인하세요. (예: 10-15, 20)';
+              return;
+            }
+            pathToPrint = out;
+            _scheduleTempDelete(pathToPrint);
           }
-          pathToPrint = out;
-          _scheduleTempDelete(pathToPrint);
         } else if (rangeRaw.isNotEmpty) {
           printError = '페이지 범위 인쇄는 PDF에서만 지원합니다.';
           return;
         }
         progressText.value = '프린터로 전송 중입니다...';
-        printJobSentToSpooler = await _openPrintDialogForPath(pathToPrint);
+        printJobSentToSpooler = await _openPrintDialogForPath(
+          pathToPrint,
+          preferredPaperSize: resolvedSource.preferredPaperSize,
+        );
       },
     );
   } catch (_) {
