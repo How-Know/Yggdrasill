@@ -155,6 +155,47 @@ async function setQueueStatus(id, fields) {
   await supa.from('makeup_notification_queue').update(fields).eq('id', id);
 }
 
+/** PostgREST .or(created_at…,updated_at…) 조합이 환경에 따라 빈 결과/오류를 낼 수 있어 분리 조회 후 병합 */
+async function fetchMakeupQueueRows(kstDayStartIso) {
+  const selectCols =
+    'id, session_override_id, academy_id, student_id, event_type, status, attempts, created_at, updated_at';
+  const base = () =>
+    supa
+      .from('makeup_notification_queue')
+      .select(selectCols)
+      .in('status', ['pending', 'error'])
+      .lt('attempts', MAX_ATTEMPTS);
+
+  if (!ONLY_TODAY_QUEUE) {
+    const { data, error } = await base()
+      .order('created_at', { ascending: true })
+      .limit(BATCH_SIZE);
+    if (error) throw new Error(error.message);
+    return data || [];
+  }
+
+  const { data: byCreated, error: errCreated } = await base()
+    .gte('created_at', kstDayStartIso)
+    .order('created_at', { ascending: true })
+    .limit(BATCH_SIZE);
+  if (errCreated) throw new Error(errCreated.message);
+
+  const { data: byUpdated, error: errUpdated } = await base()
+    .gte('updated_at', kstDayStartIso)
+    .order('updated_at', { ascending: true })
+    .limit(BATCH_SIZE);
+  if (errUpdated) throw new Error(errUpdated.message);
+
+  const byId = new Map();
+  for (const r of [...(byCreated || []), ...(byUpdated || [])]) {
+    byId.set(r.id, r);
+  }
+  const merged = Array.from(byId.values()).sort(
+    (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+  );
+  return merged.slice(0, BATCH_SIZE);
+}
+
 async function processBatch() {
   const kstDayStartIso = getKstDayStartUtcIso();
   const summary = {
@@ -168,19 +209,11 @@ async function processBatch() {
     enabled: true,
   };
 
-  let queueQuery = supa
-    .from('makeup_notification_queue')
-    .select('id, session_override_id, academy_id, student_id, event_type, status, attempts')
-    .in('status', ['pending', 'error'])
-    .lt('attempts', MAX_ATTEMPTS);
-  if (ONLY_TODAY_QUEUE) {
-    queueQuery = queueQuery.gte('created_at', kstDayStartIso);
-  }
-  queueQuery = queueQuery.order('created_at', { ascending: true }).limit(BATCH_SIZE);
-  const { data: queueRows, error: queueErr } = await queueQuery;
-
-  if (queueErr) {
-    throw new Error(`queue_fetch_failed:${queueErr.message}`);
+  let queueRows;
+  try {
+    queueRows = await fetchMakeupQueueRows(kstDayStartIso);
+  } catch (e) {
+    throw new Error(`queue_fetch_failed:${String(e?.message || e)}`);
   }
   if (!queueRows || queueRows.length === 0) {
     return summary;
@@ -317,17 +350,20 @@ async function processBatch() {
         학생명: String(student?.name ?? ''),
       };
 
-      const { data: alreadySent } = await supa
-        .from('makeup_notification_logs')
-        .select('id')
-        .eq('session_override_id', ov.id)
-        .eq('event_type', 'scheduled_created')
-        .eq('status', 'sent')
-        .limit(1);
-      if (alreadySent && alreadySent.length > 0) {
-        await setQueueStatus(row.id, { status: 'skipped', last_error: 'already_sent' });
-        summary.skipped += 1;
-        continue;
+      // 최초 예약만 중복 차단. 보강 수정(scheduled_updated)은 별도 발송 허용
+      if (row.event_type === 'scheduled_created') {
+        const { data: alreadySent } = await supa
+          .from('makeup_notification_logs')
+          .select('id')
+          .eq('session_override_id', ov.id)
+          .eq('event_type', 'scheduled_created')
+          .eq('status', 'sent')
+          .limit(1);
+        if (alreadySent && alreadySent.length > 0) {
+          await setQueueStatus(row.id, { status: 'skipped', last_error: 'already_sent' });
+          summary.skipped += 1;
+          continue;
+        }
       }
 
       const payload = {

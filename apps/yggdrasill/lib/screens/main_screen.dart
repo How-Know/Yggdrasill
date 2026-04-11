@@ -31,6 +31,8 @@ import '../services/homework_assignment_store.dart';
 import '../services/consult_trial_lesson_service.dart';
 import '../services/student_flow_store.dart';
 import '../services/student_behavior_assignment_store.dart';
+import '../services/right_sheet_grading_search_service.dart';
+import '../services/homework_batch_confirm_service.dart';
 import 'learning/homework_quick_add_proxy_dialog.dart';
 import 'learning/homework_edit_dialog.dart';
 import 'class_content_events_dialog.dart';
@@ -122,6 +124,17 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   final Map<String, Future<List<HomeworkAssignmentDetail>>>
       _activeAssignmentsFutureByStudent =
       <String, Future<List<HomeworkAssignmentDetail>>>{};
+  final HomeworkBatchConfirmService _homeworkBatchConfirmService =
+      HomeworkBatchConfirmService.instance;
+  final RightSheetGradingSearchService _rightSheetGradingSearchService =
+      RightSheetGradingSearchService.instance;
+  late final RightSheetGradingSearchRunAction _gradingSearchRunAction =
+      _rightSheetGradingSearchService.search;
+  late final RightSheetGradingSearchSuggestAction _gradingSearchSuggestAction =
+      _rightSheetGradingSearchService.suggest;
+  late final RightSheetGradingSearchOpenAction _gradingSearchOpenAction =
+      _openGradingSearchResultFromMain;
+  late final AsyncUiAction _globalBatchConfirmAction = _runGlobalBatchConfirm;
 
   // 출석/하원 상태 관리
   final Set<String> _attendedSetIds = {}; // 출석한 setId
@@ -133,6 +146,23 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
   bool _isSameDate(DateTime a, DateTime b) =>
       a.year == b.year && a.month == b.month && a.day == b.day;
+
+  Future<void> _openGradingSearchResultFromMain(
+    RightSheetGradingSearchResult result,
+  ) async {
+    if (!mounted) return;
+    await _rightSheetGradingSearchService.openResult(
+      context: context,
+      result: result,
+    );
+  }
+
+  Future<void> _runGlobalBatchConfirm() async {
+    if (!mounted) return;
+    await _homeworkBatchConfirmService.executePendingBatchConfirm(
+      context: context,
+    );
+  }
 
   void _moveSideSheetToYesterday() {
     final today = _dateOnly(DateTime.now());
@@ -1088,6 +1118,11 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     super.initState();
     // 과제 데이터 DB에서 1회 로드
     HomeworkStore.instance.loadAll();
+    rightSheetGradingSearchRunAction = _gradingSearchRunAction;
+    rightSheetGradingSearchSuggestAction = _gradingSearchSuggestAction;
+    rightSheetGradingSearchOpenAction = _gradingSearchOpenAction;
+    homeBatchConfirmAction = _globalBatchConfirmAction;
+    _homeworkBatchConfirmService.syncPendingCount();
     hideGlobalMemoFloatingBanners.value =
         (_selectedIndex == 0 || _selectedIndex == 1);
     rightSideSheetEdgeOpenEnabled.value = (_selectedIndex != 0);
@@ -1236,6 +1271,24 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   void dispose() {
     // OverlayEntry가 남아있는 상태로 dispose되면 화면에 "유령 툴팁"이 남을 수 있으므로 강제 제거
     _removeTooltip();
+    if (identical(homeBatchConfirmAction, _globalBatchConfirmAction)) {
+      homeBatchConfirmAction = null;
+    }
+    if (identical(rightSheetGradingSearchRunAction, _gradingSearchRunAction)) {
+      rightSheetGradingSearchRunAction = null;
+    }
+    if (identical(
+      rightSheetGradingSearchSuggestAction,
+      _gradingSearchSuggestAction,
+    )) {
+      rightSheetGradingSearchSuggestAction = null;
+    }
+    if (identical(
+      rightSheetGradingSearchOpenAction,
+      _gradingSearchOpenAction,
+    )) {
+      rightSheetGradingSearchOpenAction = null;
+    }
     _classTagBarrierTimer?.cancel();
     _attendedTapTimer?.cancel();
     _classTagBarrierActive.dispose();

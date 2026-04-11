@@ -2123,6 +2123,8 @@ class DataManager {
       }
       final newVer = (res['version'] as num?)?.toInt() ?? (newData.version + 1);
       final idx = _sessionOverrides.indexWhere((o) => o.id == newData.id);
+      final SessionOverride? previousOverride =
+          idx != -1 ? _sessionOverrides[idx] : null;
       final merged = newData.copyWith(version: newVer);
       if (idx != -1) {
         _sessionOverrides[idx] = merged;
@@ -2130,6 +2132,12 @@ class DataManager {
         _sessionOverrides.add(merged);
       }
       sessionOverridesNotifier.value = List.unmodifiable(_sessionOverrides);
+      if (previousOverride != null) {
+        await AttendanceService.instance.removeStalePlannedForOverrideEdit(
+          previous: previousOverride,
+          updated: merged,
+        );
+      }
       await _regeneratePlannedAttendanceForOverride(merged);
     } catch (e) {
       print('[ERROR] updateSessionOverride 실패: $e');

@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../services/ai_summary.dart';
 import '../../services/data_manager.dart';
 import '../../services/homework_store.dart';
+import '../../services/homework_test_grading_result_service.dart';
 import '../../services/learning_problem_bank_service.dart';
 import '../../services/tenant_service.dart';
 import '../../widgets/dialog_tokens.dart';
@@ -169,9 +170,13 @@ class HomeworkQuickAddProxyDialogState
   String _naesinStudentSchool = '';
   final LearningProblemBankService _problemBankService =
       LearningProblemBankService();
+  final HomeworkTestGradingResultService _gradingResultService =
+      HomeworkTestGradingResultService.instance;
   final Set<String> _naesinLinkedCellKeys = <String>{};
   final Map<String, _NaesinPresetAutoValues> _naesinAutoValuesByCellKey =
       <String, _NaesinPresetAutoValues>{};
+  final Map<String, _NaesinCellStatus> _naesinCellStatusByLinkKey =
+      <String, _NaesinCellStatus>{};
   bool _loadingNaesinLinkedCellKeys = false;
 
   bool get _isChildAddMode => widget.childAddMode;
@@ -541,6 +546,83 @@ class HomeworkQuickAddProxyDialogState
     );
   }
 
+  DateTime _naesinIssueTimestampOfHomework(HomeworkItem item) {
+    return item.createdAt ??
+        item.updatedAt ??
+        item.submittedAt ??
+        item.confirmedAt ??
+        item.completedAt ??
+        DateTime.fromMillisecondsSinceEpoch(0);
+  }
+
+  String _formatNaesinCellScoreValue(double value) {
+    final rounded = value.roundToDouble();
+    if ((value - rounded).abs() < 0.0001) {
+      return rounded.toStringAsFixed(0);
+    }
+    return value.toStringAsFixed(1);
+  }
+
+  String _formatNaesinIssuedDate(DateTime value) {
+    final local = value.toLocal();
+    final mm = local.month.toString().padLeft(2, '0');
+    final dd = local.day.toString().padLeft(2, '0');
+    return '$mm.$dd';
+  }
+
+  String _formatNaesinIssuedDateTime(DateTime value) {
+    final local = value.toLocal();
+    final yyyy = local.year.toString().padLeft(4, '0');
+    final mm = local.month.toString().padLeft(2, '0');
+    final dd = local.day.toString().padLeft(2, '0');
+    final hh = local.hour.toString().padLeft(2, '0');
+    final min = local.minute.toString().padLeft(2, '0');
+    return '$yyyy.$mm.$dd $hh:$min';
+  }
+
+  Future<Map<String, _NaesinCellStatus>> _buildNaesinCellStatusMap({
+    required Set<String> linkedKeys,
+  }) async {
+    final grouped = <String, List<HomeworkItem>>{};
+    final itemIds = <String>{};
+    final homeworkItems = HomeworkStore.instance.items(widget.studentId);
+    for (final item in homeworkItems) {
+      if ((item.sourceUnitLevel ?? '').trim().toLowerCase() != 'naesin') {
+        continue;
+      }
+      final linkKey = (item.sourceUnitPath ?? '').trim();
+      if (linkKey.isEmpty) continue;
+      if (linkedKeys.isNotEmpty && !linkedKeys.contains(linkKey)) continue;
+      grouped.putIfAbsent(linkKey, () => <HomeworkItem>[]).add(item);
+      final itemId = item.id.trim();
+      if (itemId.isNotEmpty) itemIds.add(itemId);
+    }
+    if (grouped.isEmpty) return const <String, _NaesinCellStatus>{};
+    final latestScoreByItemId =
+        await _gradingResultService.loadLatestScoreByHomeworkItemIds(itemIds);
+    final out = <String, _NaesinCellStatus>{};
+    grouped.forEach((linkKey, rows) {
+      rows.sort(
+        (a, b) => _naesinIssueTimestampOfHomework(b)
+            .compareTo(_naesinIssueTimestampOfHomework(a)),
+      );
+      final target = rows.first;
+      final isCompleted = target.status == HomeworkStatus.completed;
+      final isEnded = !isCompleted && target.phase >= 3;
+      final score = latestScoreByItemId[target.id.trim()];
+      final scoreLabel = score == null
+          ? ''
+          : '${_formatNaesinCellScoreValue(score.scoreCorrect)}/${_formatNaesinCellScoreValue(score.scoreTotal)}';
+      out[linkKey] = _NaesinCellStatus(
+        issuedAt: target.createdAt ?? target.updatedAt,
+        isEnded: isEnded,
+        isCompleted: isCompleted,
+        scoreLabel: scoreLabel,
+      );
+    });
+    return out;
+  }
+
   Future<void> _loadNaesinLinkedCellKeys() async {
     if (!mounted) return;
     setState(() => _loadingNaesinLinkedCellKeys = true);
@@ -555,6 +637,7 @@ class HomeworkQuickAddProxyDialogState
         setState(() {
           _naesinLinkedCellKeys.clear();
           _naesinAutoValuesByCellKey.clear();
+          _naesinCellStatusByLinkKey.clear();
         });
         return;
       }
@@ -592,6 +675,8 @@ class HomeworkQuickAddProxyDialogState
           );
         }
       }
+      final statusByLinkKey =
+          await _buildNaesinCellStatusMap(linkedKeys: linkedKeys);
       if (!mounted) return;
       setState(() {
         _naesinLinkedCellKeys
@@ -600,12 +685,16 @@ class HomeworkQuickAddProxyDialogState
         _naesinAutoValuesByCellKey
           ..clear()
           ..addAll(autoValuesByKey);
+        _naesinCellStatusByLinkKey
+          ..clear()
+          ..addAll(statusByLinkKey);
       });
     } catch (_) {
       if (!mounted) return;
       setState(() {
         _naesinLinkedCellKeys.clear();
         _naesinAutoValuesByCellKey.clear();
+        _naesinCellStatusByLinkKey.clear();
       });
     } finally {
       if (mounted) {
@@ -4795,18 +4884,47 @@ class HomeworkQuickAddProxyDialogState
     required int year,
     required bool highlightedSchool,
     required bool linkedActive,
+    required _NaesinCellStatus? cellStatus,
     required VoidCallback onTap,
   }) {
-    final borderColor = linkedActive
-        ? _kNaesinLinkedActiveCellColor
-        : (highlightedSchool ? kDlgAccent.withOpacity(0.7) : kDlgBorder);
-    final fillColor = linkedActive
-        ? _kNaesinLinkedActiveCellColor
-        : (highlightedSchool
-            ? const Color(0x1A33A373)
-            : const Color(0xFF151C21));
+    final hasIssued = cellStatus?.issuedAt != null;
+    final isCompleted = cellStatus?.isCompleted == true;
+    final isEnded = (cellStatus?.isEnded == true) || isCompleted;
+    final scoreLabel = (cellStatus?.scoreLabel ?? '').trim();
+    final hasScore = scoreLabel.isNotEmpty;
+    final displayText = () {
+      if (isCompleted) return hasScore ? scoreLabel : '완료';
+      if (isEnded) return hasScore ? scoreLabel : '종료';
+      if (hasIssued) return _formatNaesinIssuedDate(cellStatus!.issuedAt!);
+      return '';
+    }();
+    final borderColor = isCompleted
+        ? const Color(0xFF4DBD7A)
+        : (linkedActive
+            ? _kNaesinLinkedActiveCellColor
+            : (highlightedSchool ? kDlgAccent.withOpacity(0.7) : kDlgBorder));
+    final fillColor = isCompleted
+        ? const Color(0xFF1F4B36)
+        : (linkedActive
+            ? _kNaesinLinkedActiveCellColor
+            : (highlightedSchool
+                ? const Color(0x1A33A373)
+                : const Color(0xFF151C21)));
+    final tooltipLines = <String>['$school · $year'];
+    if (cellStatus?.issuedAt != null) {
+      tooltipLines
+          .add('내준 시각 ${_formatNaesinIssuedDateTime(cellStatus!.issuedAt!)}');
+    }
+    if (isCompleted) {
+      tooltipLines.add('상태 완료');
+    } else if (isEnded) {
+      tooltipLines.add('상태 종료');
+    }
+    if (hasScore) {
+      tooltipLines.add('점수 $scoreLabel');
+    }
     return Tooltip(
-      message: '$school · $year',
+      message: tooltipLines.join('\n'),
       child: Material(
         color: Colors.transparent,
         child: InkWell(
@@ -4820,6 +4938,29 @@ class HomeworkQuickAddProxyDialogState
               borderRadius: BorderRadius.circular(8),
               border: Border.all(color: borderColor),
             ),
+            child: displayText.isEmpty
+                ? null
+                : Center(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 3),
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Text(
+                          displayText,
+                          maxLines: 1,
+                          style: TextStyle(
+                            color: isCompleted
+                                ? const Color(0xFFE4F8EC)
+                                : (isEnded ? kDlgText : kDlgTextSub),
+                            fontWeight:
+                                hasScore ? FontWeight.w800 : FontWeight.w700,
+                            fontSize: hasScore ? 12 : 10.8,
+                            letterSpacing: hasScore ? 0.2 : 0.1,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
           ),
         ),
       ),
@@ -4854,6 +4995,8 @@ class HomeworkQuickAddProxyDialogState
           for (var i = 0; i < _kNaesinYears.length; i++) ...[
             (() {
               final year = _kNaesinYears[i];
+              final linkKey =
+                  _buildNaesinLinkKeyForCell(school: school, year: year);
               final linkedActive =
                   _isNaesinLinkedCellActive(school: school, year: year);
               return _buildNaesinStatusCell(
@@ -4861,6 +5004,7 @@ class HomeworkQuickAddProxyDialogState
                 year: year,
                 highlightedSchool: highlightedSchool,
                 linkedActive: linkedActive,
+                cellStatus: _naesinCellStatusByLinkKey[linkKey],
                 onTap: () => _onNaesinStatusCellTapped(
                   school: school,
                   year: year,
@@ -5459,6 +5603,20 @@ class _NaesinPresetAutoValues {
   final int questionCount;
   final int? questionPageCount;
   final int? timeLimitMinutes;
+}
+
+class _NaesinCellStatus {
+  const _NaesinCellStatus({
+    required this.issuedAt,
+    required this.isEnded,
+    required this.isCompleted,
+    required this.scoreLabel,
+  });
+
+  final DateTime? issuedAt;
+  final bool isEnded;
+  final bool isCompleted;
+  final String scoreLabel;
 }
 
 class _DraftGroupItem {

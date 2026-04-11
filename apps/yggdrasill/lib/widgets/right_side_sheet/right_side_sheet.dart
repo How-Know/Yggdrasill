@@ -16,6 +16,7 @@ import 'package:uuid/uuid.dart';
 import 'file_shortcut_tab.dart';
 import '../latex_text_renderer.dart';
 import '../pill_tab_selector.dart';
+import '../main_fab_alternative.dart';
 import '../../app_overlays.dart';
 import '../../models/memo.dart';
 import '../../services/ai_summary.dart';
@@ -2663,10 +2664,26 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
   static const String _historyPrefKey =
       'right_sheet_grading_recent_searches_v1';
   static const int _historyLimit = 10;
+  static const int _suggestDebounceMs = 200;
 
   final TextEditingController _searchCtrl = ImeAwareTextEditingController();
   final FocusNode _searchFocus = FocusNode();
+  final GlobalKey _searchHeaderFieldKey = GlobalKey();
+  Timer? _searchSuggestDebounce;
+  Timer? _searchBlurHideTimer;
+  OverlayEntry? _searchSuggestionOverlayEntry;
+  int _searchSuggestRequestSeq = 0;
+  bool _searchDropdownTapInProgress = false;
   List<String> _recentSearches = <String>[];
+  List<RightSheetGradingSearchResult> _searchSuggestions =
+      const <RightSheetGradingSearchResult>[];
+  List<RightSheetGradingSearchResult> _searchResults =
+      const <RightSheetGradingSearchResult>[];
+  bool _searchSuggestBusy = false;
+  bool _searchBusy = false;
+  bool _searchOpenBusy = false;
+  String? _searchSuggestError;
+  String? _searchError;
   Map<String, String> _gradingStates = <String, String>{};
   String _boundSessionId = '';
   bool _actionBusy = false;
@@ -2674,6 +2691,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
   @override
   void initState() {
     super.initState();
+    _searchFocus.addListener(_handleSearchFocusChanged);
     _hydrateSessionState(force: true);
     unawaited(_loadRecentSearches());
   }
@@ -2686,9 +2704,95 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
 
   @override
   void dispose() {
+    _searchSuggestDebounce?.cancel();
+    _searchBlurHideTimer?.cancel();
+    _removeSuggestionOverlay();
+    _searchFocus.removeListener(_handleSearchFocusChanged);
     _searchCtrl.dispose();
     _searchFocus.dispose();
     super.dispose();
+  }
+
+  void _handleSearchFocusChanged() {
+    _searchBlurHideTimer?.cancel();
+    if (_searchFocus.hasFocus) {
+      if (!mounted) return;
+      setState(() {});
+      _scheduleSuggestionOverlaySync();
+      return;
+    }
+    _searchBlurHideTimer = Timer(const Duration(milliseconds: 120), () {
+      if (!mounted) return;
+      if (_searchDropdownTapInProgress) return;
+      setState(() {});
+      _scheduleSuggestionOverlaySync();
+    });
+  }
+
+  void _setSearchDropdownTapInProgress(bool value) {
+    if (_searchDropdownTapInProgress == value) return;
+    if (!mounted) return;
+    setState(() {
+      _searchDropdownTapInProgress = value;
+    });
+    _scheduleSuggestionOverlaySync();
+  }
+
+  void _scheduleSuggestionOverlaySync() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _syncSuggestionOverlay();
+    });
+  }
+
+  void _syncSuggestionOverlay() {
+    final shouldShow = _showSuggestionDropdown();
+    if (!shouldShow) {
+      _removeSuggestionOverlay();
+      return;
+    }
+    final overlay = Overlay.of(context, rootOverlay: true);
+    if (_searchSuggestionOverlayEntry == null) {
+      _searchSuggestionOverlayEntry = OverlayEntry(
+        builder: (_) => _buildSuggestionOverlayEntry(),
+      );
+      overlay.insert(_searchSuggestionOverlayEntry!);
+      return;
+    }
+    _searchSuggestionOverlayEntry!.markNeedsBuild();
+  }
+
+  void _removeSuggestionOverlay() {
+    _searchSuggestionOverlayEntry?.remove();
+    _searchSuggestionOverlayEntry = null;
+  }
+
+  Widget _buildSuggestionOverlayEntry() {
+    final fieldContext = _searchHeaderFieldKey.currentContext;
+    final renderObject = fieldContext?.findRenderObject();
+    if (renderObject is! RenderBox || !renderObject.attached) {
+      return const SizedBox.shrink();
+    }
+    final offset = renderObject.localToGlobal(Offset.zero);
+    final size = renderObject.size;
+    return Positioned(
+      left: offset.dx,
+      top: offset.dy + size.height + 4,
+      width: size.width,
+      child: Material(
+        color: _rsPanelBg,
+        elevation: 8,
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          decoration: BoxDecoration(
+            color: _rsPanelBg,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: _rsBorder),
+          ),
+          child: _buildSuggestionDropdown(),
+        ),
+      ),
+    );
   }
 
   String _normalizeState(String? raw) {
@@ -2802,9 +2906,118 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     return '\$\$$normalized\$\$';
   }
 
+  String _normalizeSearchToken(String raw) {
+    return raw.replaceAll(RegExp(r'[^A-Za-z0-9]'), '').toUpperCase();
+  }
+
+  bool _isSuggestionQuery(String raw) {
+    final token = _normalizeSearchToken(raw.trim());
+    return RegExp(r'^[0-9]{4}$').hasMatch(token);
+  }
+
+  void _clearSearchSuggestions({bool clearError = true}) {
+    _searchSuggestDebounce?.cancel();
+    _searchSuggestRequestSeq += 1;
+    if (!mounted) return;
+    setState(() {
+      _searchSuggestions = const <RightSheetGradingSearchResult>[];
+      _searchSuggestBusy = false;
+      if (clearError) {
+        _searchSuggestError = null;
+      }
+    });
+    _scheduleSuggestionOverlaySync();
+  }
+
+  void _scheduleSuggestionSearch(String raw) {
+    _searchSuggestDebounce?.cancel();
+    final term = raw.trim();
+    if (term.isEmpty || !_isSuggestionQuery(term)) {
+      _searchSuggestRequestSeq += 1;
+      if (!mounted) return;
+      setState(() {
+        _searchSuggestions = const <RightSheetGradingSearchResult>[];
+        _searchSuggestBusy = false;
+        _searchSuggestError = null;
+      });
+      _scheduleSuggestionOverlaySync();
+      return;
+    }
+    _searchSuggestDebounce = Timer(
+      const Duration(milliseconds: _suggestDebounceMs),
+      () => unawaited(_runSuggestionSearch(term)),
+    );
+  }
+
+  Future<void> _runSuggestionSearch(String term) async {
+    final suggestAction = rightSheetGradingSearchSuggestAction;
+    if (!_isSuggestionQuery(_searchCtrl.text)) {
+      _clearSearchSuggestions();
+      return;
+    }
+    if (suggestAction == null) {
+      if (!mounted) return;
+      setState(() {
+        _searchSuggestions = const <RightSheetGradingSearchResult>[];
+        _searchSuggestBusy = false;
+        _searchSuggestError = null;
+      });
+      _scheduleSuggestionOverlaySync();
+      return;
+    }
+
+    final requestId = ++_searchSuggestRequestSeq;
+    if (!mounted) return;
+    setState(() {
+      _searchSuggestBusy = true;
+      _searchSuggestError = null;
+    });
+    _scheduleSuggestionOverlaySync();
+
+    try {
+      final suggestions = await suggestAction(term);
+      if (!mounted || requestId != _searchSuggestRequestSeq) return;
+      if (!_isSuggestionQuery(_searchCtrl.text)) {
+        setState(() {
+          _searchSuggestions = const <RightSheetGradingSearchResult>[];
+          _searchSuggestBusy = false;
+        });
+        _scheduleSuggestionOverlaySync();
+        return;
+      }
+      setState(() {
+        _searchSuggestions = suggestions;
+        _searchSuggestBusy = false;
+        _searchSuggestError = null;
+      });
+      _scheduleSuggestionOverlaySync();
+    } catch (e) {
+      if (!mounted || requestId != _searchSuggestRequestSeq) return;
+      setState(() {
+        _searchSuggestions = const <RightSheetGradingSearchResult>[];
+        _searchSuggestBusy = false;
+        _searchSuggestError = '추천 조회 중 오류가 발생했습니다: $e';
+      });
+      _scheduleSuggestionOverlaySync();
+    }
+  }
+
   Future<void> _submitSearch([String? seeded]) async {
+    _searchSuggestDebounce?.cancel();
+    _searchSuggestRequestSeq += 1;
     final term = (seeded ?? _searchCtrl.text).trim();
-    if (term.isEmpty) return;
+    if (term.isEmpty) {
+      if (!mounted) return;
+      setState(() {
+        _searchSuggestions = const <RightSheetGradingSearchResult>[];
+        _searchSuggestBusy = false;
+        _searchSuggestError = null;
+        _searchResults = const <RightSheetGradingSearchResult>[];
+        _searchError = null;
+      });
+      _scheduleSuggestionOverlaySync();
+      return;
+    }
     final next = <String>[term];
     for (final existing in _recentSearches) {
       if (existing == term) continue;
@@ -2815,8 +3028,70 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       _searchCtrl.text = term;
       _searchCtrl.selection = TextSelection.collapsed(offset: term.length);
       _recentSearches = next;
+      _searchSuggestions = const <RightSheetGradingSearchResult>[];
+      _searchSuggestBusy = false;
+      _searchSuggestError = null;
+      _searchBusy = true;
+      _searchError = null;
     });
+    _scheduleSuggestionOverlaySync();
     await _persistRecentSearches();
+
+    final searchAction = rightSheetGradingSearchRunAction;
+    if (searchAction == null) {
+      if (!mounted) return;
+      setState(() {
+        _searchResults = const <RightSheetGradingSearchResult>[];
+        _searchBusy = false;
+        _searchError = '검색 기능이 아직 준비되지 않았습니다.';
+      });
+      _scheduleSuggestionOverlaySync();
+      return;
+    }
+
+    try {
+      final results = await searchAction(term);
+      if (!mounted) return;
+      setState(() {
+        _searchResults = results;
+        _searchBusy = false;
+        _searchError = null;
+      });
+      _scheduleSuggestionOverlaySync();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _searchResults = const <RightSheetGradingSearchResult>[];
+        _searchBusy = false;
+        _searchError = '검색 중 오류가 발생했습니다: $e';
+      });
+      _scheduleSuggestionOverlaySync();
+    }
+  }
+
+  Future<void> _openSearchResult(RightSheetGradingSearchResult result) async {
+    final openAction = rightSheetGradingSearchOpenAction;
+    if (openAction == null || _searchOpenBusy) return;
+    setState(() {
+      _searchOpenBusy = true;
+      _searchError = null;
+    });
+    _scheduleSuggestionOverlaySync();
+    try {
+      await openAction(result);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _searchError = '결과 열기에 실패했습니다: $e';
+      });
+      _scheduleSuggestionOverlaySync();
+    } finally {
+      if (!mounted) return;
+      setState(() {
+        _searchOpenBusy = false;
+      });
+      _scheduleSuggestionOverlaySync();
+    }
   }
 
   Future<void> _removeRecentAt(int index) async {
@@ -2858,7 +3133,6 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
   List<_RightSheetGradingPageVm> _visiblePages() {
     final session = widget.session;
     if (session == null) return const <_RightSheetGradingPageVm>[];
-    final query = _searchCtrl.text.trim().toLowerCase();
     final pages = <_RightSheetGradingPageVm>[];
     for (final rawPage in session.gradingPages) {
       final pageNumber = (rawPage['pageNumber'] is int)
@@ -2875,10 +3149,6 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
             ? rawCell['questionIndex'] as int
             : int.tryParse('${rawCell['questionIndex']}') ?? 0;
         final answer = '${rawCell['answer'] ?? ''}'.trim();
-        final shouldInclude = query.isEmpty ||
-            questionIndex.toString().contains(query) ||
-            answer.toLowerCase().contains(query);
-        if (!shouldInclude) continue;
         parsedCells.add(
           _RightSheetGradingCellVm(
             key: key,
@@ -2901,11 +3171,156 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     return pages;
   }
 
+  bool _showSuggestionDropdown() {
+    final query = _searchCtrl.text.trim();
+    if (!_isSuggestionQuery(query)) return false;
+    if (_searchDropdownTapInProgress) return true;
+    return _searchFocus.hasFocus;
+  }
+
+  Widget _buildSuggestionDropdownItem(RightSheetGradingSearchResult result) {
+    final code = result.assignmentCode.trim().isEmpty
+        ? '-'
+        : result.assignmentCode.trim();
+    final canOpen = result.isTestHomework || result.hasTextbookLink;
+    final subtitle = [
+      result.groupHomeworkTitle.trim().isEmpty
+          ? result.homeworkTitle.trim()
+          : result.groupHomeworkTitle.trim(),
+      if (code != '-') code,
+    ].join(' · ');
+    return InkWell(
+      onTapDown: (_) {
+        _searchBlurHideTimer?.cancel();
+        _setSearchDropdownTapInProgress(true);
+      },
+      onTapCancel: () {
+        _setSearchDropdownTapInProgress(false);
+      },
+      onTap: !_searchOpenBusy
+          ? () {
+              unawaited(
+                _openSearchResult(result).whenComplete(() {
+                  if (!mounted) return;
+                  _setSearchDropdownTapInProgress(false);
+                  _searchFocus.unfocus();
+                  _scheduleSuggestionOverlaySync();
+                }),
+              );
+            }
+          : null,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    result.studentName.trim().isEmpty
+                        ? '학생'
+                        : result.studentName.trim(),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: _rsText,
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: _rsTextSub,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            Text(
+              _actionLabel(result),
+              style: TextStyle(
+                color: canOpen ? _rsAccent : _rsTextSub,
+                fontSize: 11.5,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSuggestionDropdown() {
+    if (_searchSuggestBusy) {
+      return Container(
+        height: 72,
+        alignment: Alignment.center,
+        child: const SizedBox(
+          width: 18,
+          height: 18,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        ),
+      );
+    }
+    if ((_searchSuggestError ?? '').trim().isNotEmpty) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        child: Text(
+          _searchSuggestError!.trim(),
+          style: const TextStyle(
+            color: Color(0xFFE8A3A3),
+            fontSize: 12.5,
+            fontWeight: FontWeight.w700,
+            height: 1.35,
+          ),
+        ),
+      );
+    }
+    if (_searchSuggestions.isEmpty) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        child: Text(
+          '미완료 과제 추천이 없습니다.',
+          style: TextStyle(
+            color: _rsTextSub,
+            fontSize: 12.5,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      );
+    }
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxHeight: 250),
+      child: ListView.separated(
+        shrinkWrap: true,
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        itemCount: _searchSuggestions.length,
+        separatorBuilder: (_, __) => const Divider(
+          height: 1,
+          color: _rsBorder,
+          thickness: 0.8,
+        ),
+        itemBuilder: (context, index) =>
+            _buildSuggestionDropdownItem(_searchSuggestions[index]),
+      ),
+    );
+  }
+
   Widget _buildSearchHeader() {
+    final showSuggestionDropdown = _showSuggestionDropdown();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Container(
+          key: _searchHeaderFieldKey,
           height: 60,
           padding: const EdgeInsets.symmetric(horizontal: 10),
           decoration: BoxDecoration(
@@ -2921,9 +3336,17 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                 child: TextField(
                   controller: _searchCtrl,
                   focusNode: _searchFocus,
-                  onChanged: (_) {
-                    if (!mounted) return;
-                    setState(() {});
+                  onChanged: (value) {
+                    if (value.trim().isEmpty) {
+                      if (!mounted) return;
+                      setState(() {
+                        _searchResults =
+                            const <RightSheetGradingSearchResult>[];
+                        _searchError = null;
+                        _searchBusy = false;
+                      });
+                    }
+                    _scheduleSuggestionSearch(value);
                   },
                   style: const TextStyle(
                     color: _rsText,
@@ -2931,11 +3354,14 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                     fontSize: 14,
                   ),
                   textInputAction: TextInputAction.search,
-                  onSubmitted: (_) => unawaited(_submitSearch()),
+                  onSubmitted: (_) {
+                    _searchFocus.unfocus();
+                    unawaited(_submitSearch());
+                  },
                   decoration: const InputDecoration(
                     isDense: true,
                     border: InputBorder.none,
-                    hintText: '과제번호/문항/학생 검색',
+                    hintText: '과제번호(뒷4자리)/이름/그룹 검색',
                     hintStyle: TextStyle(
                       color: Color(0xFF758787),
                       fontSize: 13,
@@ -2948,20 +3374,37 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                 InkWell(
                   borderRadius: BorderRadius.circular(999),
                   onTap: () {
+                    _searchFocus.unfocus();
+                    _searchSuggestDebounce?.cancel();
+                    _searchSuggestRequestSeq += 1;
                     setState(() {
                       _searchCtrl.clear();
+                      _searchSuggestions =
+                          const <RightSheetGradingSearchResult>[];
+                      _searchSuggestError = null;
+                      _searchSuggestBusy = false;
+                      _searchResults = const <RightSheetGradingSearchResult>[];
+                      _searchError = null;
+                      _searchBusy = false;
                     });
+                    _scheduleSuggestionOverlaySync();
                   },
                   child: const Padding(
                     padding: EdgeInsets.all(4),
-                    child:
-                        Icon(Icons.close_rounded, size: 16, color: _rsTextSub),
+                    child: Icon(
+                      Icons.close_rounded,
+                      size: 16,
+                      color: _rsTextSub,
+                    ),
                   ),
                 ),
               const SizedBox(width: 4),
               InkWell(
                 borderRadius: BorderRadius.circular(999),
-                onTap: () => unawaited(_submitSearch()),
+                onTap: () {
+                  _searchFocus.unfocus();
+                  unawaited(_submitSearch());
+                },
                 child: const Padding(
                   padding: EdgeInsets.all(4),
                   child: Icon(Icons.search, size: 18, color: _rsTextSub),
@@ -2970,73 +3413,251 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
             ],
           ),
         ),
-        const SizedBox(height: 10),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            for (int i = 0; i < _recentSearches.length; i++)
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
-                  color: _rsPanelBg,
-                  borderRadius: BorderRadius.circular(999),
-                  border: Border.all(color: _rsBorder),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    InkWell(
-                      onTap: () => unawaited(_submitSearch(_recentSearches[i])),
-                      child: Text(
-                        _recentSearches[i],
-                        style: const TextStyle(
-                          color: _rsText,
-                          fontSize: 13,
-                          fontWeight: FontWeight.w800,
+        if (!showSuggestionDropdown) ...[
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (int i = 0; i < _recentSearches.length; i++)
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: _rsPanelBg,
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(color: _rsBorder),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      InkWell(
+                        onTap: () =>
+                            unawaited(_submitSearch(_recentSearches[i])),
+                        child: Text(
+                          _recentSearches[i],
+                          style: const TextStyle(
+                            color: _rsText,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w800,
+                          ),
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 6),
-                    InkWell(
-                      onTap: () => unawaited(_removeRecentAt(i)),
-                      child: const Icon(
-                        Icons.close_rounded,
-                        size: 16,
-                        color: _rsTextSub,
+                      const SizedBox(width: 6),
+                      InkWell(
+                        onTap: () => unawaited(_removeRecentAt(i)),
+                        child: const Icon(
+                          Icons.close_rounded,
+                          size: 16,
+                          color: _rsTextSub,
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
-          ],
-        ),
-        if (_recentSearches.isNotEmpty) ...[
-          const SizedBox(height: 8),
-          Align(
-            alignment: Alignment.centerRight,
-            child: TextButton.icon(
-              onPressed: () => unawaited(_clearRecentSearches()),
-              icon: const Icon(Icons.delete_outline_rounded,
-                  size: 16, color: Color(0xFFE06969)),
-              label: const Text(
-                '검색이력 삭제',
-                style: TextStyle(
-                  color: Color(0xFFE06969),
-                  fontSize: 13,
-                  fontWeight: FontWeight.w800,
+            ],
+          ),
+          if (_recentSearches.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                onPressed: () => unawaited(_clearRecentSearches()),
+                icon: const Icon(Icons.delete_outline_rounded,
+                    size: 16, color: Color(0xFFE06969)),
+                label: const Text(
+                  '검색이력 삭제',
+                  style: TextStyle(
+                    color: Color(0xFFE06969),
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                  ),
                 ),
-              ),
-              style: TextButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                minimumSize: Size.zero,
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                style: TextButton.styleFrom(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
               ),
             ),
-          ),
+          ],
         ],
       ],
+    );
+  }
+
+  String _actionLabel(RightSheetGradingSearchResult result) {
+    if (result.isTestHomework) {
+      return result.isSubmitted ? '채점 진입' : '제출 후 채점';
+    }
+    if (result.hasTextbookLink) return '답지 바로가기';
+    return '교재 없음';
+  }
+
+  Widget _buildSearchResultTile(
+    RightSheetGradingSearchResult result, {
+    String? actionOverride,
+  }) {
+    final code = result.assignmentCode.trim().isEmpty
+        ? '-'
+        : result.assignmentCode.trim();
+    final canOpen = result.isTestHomework || result.hasTextbookLink;
+    final openAction = canOpen && !_searchOpenBusy
+        ? () => unawaited(_openSearchResult(result))
+        : null;
+    final subtitleParts = <String>[
+      result.groupHomeworkTitle.trim().isEmpty
+          ? result.homeworkTitle.trim()
+          : result.groupHomeworkTitle.trim(),
+      if (code != '-') code,
+      if (result.isTestHomework) (result.isSubmitted ? '테스트 제출됨' : '테스트 미제출'),
+    ];
+    return InkWell(
+      onTap: openAction,
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(10, 9, 8, 9),
+        decoration: BoxDecoration(
+          color: const Color(0xFF151C21),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: const Color(0xFF223131)),
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    result.studentName.trim().isEmpty
+                        ? '학생'
+                        : result.studentName.trim(),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: _rsText,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitleParts.join(' · '),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: _rsTextSub,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            SizedBox(
+              height: 34,
+              child: OutlinedButton(
+                onPressed: openAction,
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  minimumSize: const Size(70, 34),
+                  side: BorderSide(
+                    color: canOpen ? _rsAccent : _rsBorder,
+                  ),
+                  foregroundColor: canOpen ? _rsAccent : _rsTextSub,
+                  backgroundColor:
+                      canOpen ? const Color(0x1A33A373) : _rsPanelBg,
+                ),
+                child: Text(
+                  actionOverride ?? _actionLabel(result),
+                  style: const TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSearchResultSection() {
+    final query = _searchCtrl.text.trim();
+    if (query.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    if (_searchBusy) {
+      return Container(
+        height: 96,
+        decoration: BoxDecoration(
+          color: _rsPanelBg,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: _rsBorder),
+        ),
+        alignment: Alignment.center,
+        child: const SizedBox(
+          width: 18,
+          height: 18,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        ),
+      );
+    }
+    if ((_searchError ?? '').trim().isNotEmpty) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: _rsPanelBg,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: const Color(0xFF4A2A2A)),
+        ),
+        child: Text(
+          _searchError!.trim(),
+          style: const TextStyle(
+            color: Color(0xFFE8A3A3),
+            fontSize: 12.5,
+            fontWeight: FontWeight.w700,
+            height: 1.35,
+          ),
+        ),
+      );
+    }
+    if (_searchResults.isEmpty) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: _rsPanelBg,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: _rsBorder),
+        ),
+        child: const Text(
+          '검색 결과가 없습니다.',
+          style: TextStyle(
+            color: _rsTextSub,
+            fontSize: 12.5,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      constraints: const BoxConstraints(maxHeight: 220),
+      decoration: BoxDecoration(
+        color: _rsPanelBg,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _rsBorder),
+      ),
+      child: ListView.separated(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+        itemCount: _searchResults.length,
+        separatorBuilder: (_, __) => const SizedBox(height: 8),
+        itemBuilder: (context, index) =>
+            _buildSearchResultTile(_searchResults[index]),
+      ),
     );
   }
 
@@ -3427,12 +4048,18 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
 
   @override
   Widget build(BuildContext context) {
+    _scheduleSuggestionOverlaySync();
     final session = widget.session;
     final pages = _visiblePages();
+    final showSuggestionDropdown = _showSuggestionDropdown();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _buildSearchHeader(),
+        if (_searchCtrl.text.trim().isNotEmpty && !showSuggestionDropdown) ...[
+          const SizedBox(height: 10),
+          _buildSearchResultSection(),
+        ],
         const SizedBox(height: 16),
         Expanded(
           child: session == null
@@ -3536,6 +4163,73 @@ class _AnswerKeyPdfShortcutExplorer extends StatefulWidget {
 class _AnswerKeyPdfShortcutExplorerState
     extends State<_AnswerKeyPdfShortcutExplorer> {
   final ScrollController _scrollCtrl = ScrollController();
+  bool _batchConfirmBusy = false;
+
+  Future<void> _runBatchConfirmAction() async {
+    if (_batchConfirmBusy) return;
+    final action = homeBatchConfirmAction;
+    if (action == null) return;
+    setState(() {
+      _batchConfirmBusy = true;
+    });
+    try {
+      await action();
+    } finally {
+      if (mounted) {
+        setState(() {
+          _batchConfirmBusy = false;
+        });
+      }
+    }
+  }
+
+  Widget _buildBatchProcessButton() {
+    return ValueListenableBuilder<int>(
+      valueListenable: homeBatchConfirmPendingCount,
+      builder: (context, count, _) {
+        final pendingCount = count < 0 ? 0 : count;
+        final actionReady = homeBatchConfirmAction != null;
+        final canRun = pendingCount > 0 && actionReady && !_batchConfirmBusy;
+        return Opacity(
+          opacity: canRun ? 1.0 : 0.45,
+          child: IgnorePointer(
+            ignoring: !canRun,
+            child: SizedBox(
+              width: 122,
+              height: 42,
+              child: FittedBox(
+                fit: BoxFit.contain,
+                alignment: Alignment.centerRight,
+                child: HomeBottomActionPill(
+                  backgroundColor: const Color(0xFF1B6B63),
+                  onTap: () => unawaited(_runBatchConfirmAction()),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(
+                        Icons.check_rounded,
+                        size: 21,
+                        color: Colors.white,
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        '처리 $pendingCount',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 17,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
 
   @override
   void dispose() {
@@ -3550,16 +4244,21 @@ class _AnswerKeyPdfShortcutExplorerState
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Center(
-            child: PillTabSelector(
-              selectedIndex: widget.tabIndex,
-              tabs: _RightSideSheetState._answerKeyTabs,
-              onTabSelected: widget.onTabSelected,
-              width: 220,
-              height: 36,
-              fontSize: 14,
-              padding: 3,
-            ),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              PillTabSelector(
+                selectedIndex: widget.tabIndex,
+                tabs: _RightSideSheetState._answerKeyTabs,
+                onTabSelected: widget.onTabSelected,
+                width: 220,
+                height: 36,
+                fontSize: 14,
+                padding: 3,
+              ),
+              const Spacer(),
+              _buildBatchProcessButton(),
+            ],
           ),
           const SizedBox(height: 18),
           Expanded(

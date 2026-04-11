@@ -176,12 +176,12 @@ Future<void> _preloadOneSg(String sg, EducationLevel level) async {
   final copy = DataManager.instance
       .copyExamCachesForWizardIfReady(school, level, gradeNum);
   if (copy != null) {
-    if (copy.titles.isNotEmpty) {
-      _preloadedSavedBySg[sg] = copy.titles;
-    }
-    if (copy.ranges.isNotEmpty) {
-      _preloadedRangesBySg[sg] = copy.ranges;
-    }
+    _preloadedSavedBySg[sg] = Map<DateTime, List<String>>.fromEntries(
+      copy.titles.entries.map(
+        (e) => MapEntry(e.key, List<String>.from(e.value)),
+      ),
+    );
+    _preloadedRangesBySg[sg] = Map<DateTime, String>.from(copy.ranges);
     return;
   }
   final res = await DataManager.instance.loadExamFor(school, level, gradeNum);
@@ -203,9 +203,6 @@ Future<void> _preloadOneSg(String sg, EducationLevel level) async {
     }
     saved[key] = list.map((e) => e.toString()).toList();
   }
-  if (saved.isNotEmpty) {
-    _preloadedSavedBySg[sg] = saved;
-  }
   // ranges
   final Map<DateTime, String> ranges = <DateTime, String>{};
   final rangesRows = (res['ranges'] as List?)?.cast<Map<String, dynamic>>() ??
@@ -218,25 +215,33 @@ Future<void> _preloadOneSg(String sg, EducationLevel level) async {
     final text = (row['range_text'] as String?) ?? '';
     ranges[key] = text;
   }
-  if (ranges.isNotEmpty) {
-    _preloadedRangesBySg[sg] = ranges;
+  _preloadedSavedBySg[sg] = saved;
+  _preloadedRangesBySg[sg] = ranges;
+}
+
+/// 다이얼로그를 다시 열 때: [DataManager] 메모리 캐시(저장 직후 갱신됨)를 프리로드 맵에 반영.
+/// 이전에는 캐시만 있으면 프리로드를 건너뛰어 위저드가 낡은 [_preloadedSavedBySg]를 읽었음.
+Future<void> _syncPreloadOneSgFromDm(String sg, EducationLevel level) async {
+  final school = _sgSchool(sg);
+  final gradeNum = _sgGrade(sg);
+  final copy = DataManager.instance
+      .copyExamCachesForWizardIfReady(school, level, gradeNum);
+  if (copy != null) {
+    _preloadedSavedBySg[sg] = Map<DateTime, List<String>>.fromEntries(
+      copy.titles.entries.map(
+        (e) => MapEntry(e.key, List<String>.from(e.value)),
+      ),
+    );
+    _preloadedRangesBySg[sg] = Map<DateTime, String>.from(copy.ranges);
+    return;
   }
+  await _preloadOneSg(sg, level);
 }
 
 Future<void> _preloadExamDataFor(
     List<String> sgLabels, EducationLevel level) async {
   if (sgLabels.isEmpty) return;
   await Future.wait(sgLabels.map((sg) => _preloadOneSg(sg, level)));
-}
-
-bool _examDialogSgSynced(String label, EducationLevel level) {
-  if (DataManager.instance.isExamBulkHydratedForCurrentSeason) {
-    final school = _sgSchool(label);
-    final grade = _sgGrade(label);
-    return DataManager.instance.hasExamCacheKeyFor(school, level, grade);
-  }
-  return _preloadedSavedBySg.containsKey(label) ||
-      _preloadedRangesBySg.containsKey(label);
 }
 
 Future<void> _preloadExamDialogData() async {
@@ -272,16 +277,11 @@ Future<void> _preloadExamDialogData() async {
       .where((m) => m['level'] == EducationLevel.high)
       .map((m) => '${m['school']} ${m['grade']}학년')
       .toList();
-  final List<String> middle = middleAll
-      .where((l) => !_examDialogSgSynced(l, EducationLevel.middle))
-      .toList();
-  final List<String> high = highAll
-      .where((l) => !_examDialogSgSynced(l, EducationLevel.high))
-      .toList();
-  if (middle.isEmpty && high.isEmpty) return;
+  if (middleAll.isEmpty && highAll.isEmpty) return;
+  // 매번 DataManager 캐시 → 프리로드 맵 동기화 (저장 후 재오픈 시 위저드와 전광판 불일치 방지)
   await Future.wait([
-    _preloadExamDataFor(middle, EducationLevel.middle),
-    _preloadExamDataFor(high, EducationLevel.high),
+    ...middleAll.map((sg) => _syncPreloadOneSgFromDm(sg, EducationLevel.middle)),
+    ...highAll.map((sg) => _syncPreloadOneSgFromDm(sg, EducationLevel.high)),
   ]);
 }
 

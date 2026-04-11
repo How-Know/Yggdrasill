@@ -290,6 +290,7 @@ class HomeworkStore {
       LearningProblemBankService();
   final math.Random _assignmentCodeRandom = math.Random();
   static final RegExp _assignmentCodePattern = RegExp(r'^[A-Z]{4}[0-9]{4}$');
+  final Set<String> _assignmentCodeSyncInFlightItemIds = <String>{};
   bool _supportsAssignmentCodeColumn = true;
   bool _supportsPbPresetIdColumn = true;
   bool _supportsTestOriginFlowIdColumn = true;
@@ -410,22 +411,31 @@ class HomeworkStore {
       if (baseRows.isEmpty) return baseRows;
       if (!_supportsAssignmentCodeColumn) return baseRows;
       try {
-        dynamic query = supa
-            .from('homework_items')
-            .select('id,assignment_code')
-            .eq('academy_id', academyId);
-        if (studentId != null && studentId.trim().isNotEmpty) {
-          query = query.eq('student_id', studentId.trim());
-        }
-        final raw = await query;
-        final rows = (raw as List<dynamic>).cast<Map<String, dynamic>>();
-        final byId = <String, String?>{};
-        for (final row in rows) {
+        final ids = <String>[];
+        for (final row in baseRows) {
           final id = (row['id'] as String?)?.trim();
-          if (id == null || id.isEmpty) continue;
-          byId[id] = _normalizeAssignmentCode(
-            row['assignment_code'] as String?,
+          if (id != null && id.isNotEmpty) ids.add(id);
+        }
+        if (ids.isEmpty) return baseRows;
+        final byId = <String, String?>{};
+        const batchSize = 300;
+        for (int offset = 0; offset < ids.length; offset += batchSize) {
+          final batch = ids.sublist(
+            offset,
+            offset + batchSize > ids.length ? ids.length : offset + batchSize,
           );
+          final raw = await supa
+              .from('homework_items')
+              .select('id,assignment_code')
+              .inFilter('id', batch);
+          final rows = (raw as List<dynamic>).cast<Map<String, dynamic>>();
+          for (final row in rows) {
+            final id = (row['id'] as String?)?.trim();
+            if (id == null || id.isEmpty) continue;
+            byId[id] = _normalizeAssignmentCode(
+              row['assignment_code'] as String?,
+            );
+          }
         }
         for (final row in baseRows) {
           final id = (row['id'] as String?)?.trim();
@@ -449,21 +459,30 @@ class HomeworkStore {
     ) async {
       if (baseRows.isEmpty) return baseRows;
       try {
-        dynamic query = supa
-            .from('homework_items')
-            .select('id,time_limit_minutes')
-            .eq('academy_id', academyId);
-        if (studentId != null && studentId.trim().isNotEmpty) {
-          query = query.eq('student_id', studentId.trim());
-        }
-        final raw = await query;
-        final rows = (raw as List<dynamic>).cast<Map<String, dynamic>>();
-        final byId = <String, int?>{};
-        for (final row in rows) {
+        final ids = <String>[];
+        for (final row in baseRows) {
           final id = (row['id'] as String?)?.trim();
-          if (id == null || id.isEmpty) continue;
-          byId[id] =
-              _normalizePositiveInt(_parseIntOpt(row['time_limit_minutes']));
+          if (id != null && id.isNotEmpty) ids.add(id);
+        }
+        if (ids.isEmpty) return baseRows;
+        final byId = <String, int?>{};
+        const batchSize = 300;
+        for (int offset = 0; offset < ids.length; offset += batchSize) {
+          final batch = ids.sublist(
+            offset,
+            offset + batchSize > ids.length ? ids.length : offset + batchSize,
+          );
+          final raw = await supa
+              .from('homework_items')
+              .select('id,time_limit_minutes')
+              .inFilter('id', batch);
+          final rows = (raw as List<dynamic>).cast<Map<String, dynamic>>();
+          for (final row in rows) {
+            final id = (row['id'] as String?)?.trim();
+            if (id == null || id.isEmpty) continue;
+            byId[id] =
+                _normalizePositiveInt(_parseIntOpt(row['time_limit_minutes']));
+          }
         }
         for (final row in baseRows) {
           final id = (row['id'] as String?)?.trim();
@@ -485,21 +504,30 @@ class HomeworkStore {
     ) async {
       if (baseRows.isEmpty) return baseRows;
       try {
-        dynamic query = supa
-            .from('homework_items')
-            .select('id,pb_preset_id')
-            .eq('academy_id', academyId);
-        if (studentId != null && studentId.trim().isNotEmpty) {
-          query = query.eq('student_id', studentId.trim());
-        }
-        final raw = await query;
-        final rows = (raw as List<dynamic>).cast<Map<String, dynamic>>();
-        final byId = <String, String?>{};
-        for (final row in rows) {
+        final ids = <String>[];
+        for (final row in baseRows) {
           final id = (row['id'] as String?)?.trim();
-          if (id == null || id.isEmpty) continue;
-          final presetId = (row['pb_preset_id'] as String?)?.trim();
-          byId[id] = (presetId == null || presetId.isEmpty) ? null : presetId;
+          if (id != null && id.isNotEmpty) ids.add(id);
+        }
+        if (ids.isEmpty) return baseRows;
+        final byId = <String, String?>{};
+        const batchSize = 300;
+        for (int offset = 0; offset < ids.length; offset += batchSize) {
+          final batch = ids.sublist(
+            offset,
+            offset + batchSize > ids.length ? ids.length : offset + batchSize,
+          );
+          final raw = await supa
+              .from('homework_items')
+              .select('id,pb_preset_id')
+              .inFilter('id', batch);
+          final rows = (raw as List<dynamic>).cast<Map<String, dynamic>>();
+          for (final row in rows) {
+            final id = (row['id'] as String?)?.trim();
+            if (id == null || id.isEmpty) continue;
+            final presetId = (row['pb_preset_id'] as String?)?.trim();
+            byId[id] = (presetId == null || presetId.isEmpty) ? null : presetId;
+          }
         }
         for (final row in baseRows) {
           final id = (row['id'] as String?)?.trim();
@@ -521,20 +549,29 @@ class HomeworkStore {
     ) async {
       if (baseRows.isEmpty) return baseRows;
       try {
-        dynamic query = supa
-            .from('homework_items')
-            .select('id,test_origin_flow_id')
-            .eq('academy_id', academyId);
-        if (studentId != null && studentId.trim().isNotEmpty) {
-          query = query.eq('student_id', studentId.trim());
-        }
-        final raw = await query;
-        final rows = (raw as List<dynamic>).cast<Map<String, dynamic>>();
-        final byId = <String, String?>{};
-        for (final row in rows) {
+        final ids = <String>[];
+        for (final row in baseRows) {
           final id = (row['id'] as String?)?.trim();
-          if (id == null || id.isEmpty) continue;
-          byId[id] = _parseTrimmedTextOpt(row['test_origin_flow_id']);
+          if (id != null && id.isNotEmpty) ids.add(id);
+        }
+        if (ids.isEmpty) return baseRows;
+        final byId = <String, String?>{};
+        const batchSize = 300;
+        for (int offset = 0; offset < ids.length; offset += batchSize) {
+          final batch = ids.sublist(
+            offset,
+            offset + batchSize > ids.length ? ids.length : offset + batchSize,
+          );
+          final raw = await supa
+              .from('homework_items')
+              .select('id,test_origin_flow_id')
+              .inFilter('id', batch);
+          final rows = (raw as List<dynamic>).cast<Map<String, dynamic>>();
+          for (final row in rows) {
+            final id = (row['id'] as String?)?.trim();
+            if (id == null || id.isEmpty) continue;
+            byId[id] = _parseTrimmedTextOpt(row['test_origin_flow_id']);
+          }
         }
         for (final row in baseRows) {
           final id = (row['id'] as String?)?.trim();
@@ -554,10 +591,28 @@ class HomeworkStore {
     Future<List<Map<String, dynamic>>> attachOptionalColumns(
       List<Map<String, dynamic>> baseRows,
     ) async {
-      final withAssignmentCode = await attachAssignmentCodes(baseRows);
-      final withTimeLimit = await attachTimeLimitMinutes(withAssignmentCode);
-      final withPbPreset = await attachPbPresetIds(withTimeLimit);
-      return attachTestOriginFlowIds(withPbPreset);
+      var rows = baseRows;
+      try {
+        rows = await attachAssignmentCodes(rows);
+      } catch (e) {
+        debugPrint('[HW] attachAssignmentCodes skipped: $e');
+      }
+      try {
+        rows = await attachTimeLimitMinutes(rows);
+      } catch (e) {
+        debugPrint('[HW] attachTimeLimitMinutes skipped: $e');
+      }
+      try {
+        rows = await attachPbPresetIds(rows);
+      } catch (e) {
+        debugPrint('[HW] attachPbPresetIds skipped: $e');
+      }
+      try {
+        rows = await attachTestOriginFlowIds(rows);
+      } catch (e) {
+        debugPrint('[HW] attachTestOriginFlowIds skipped: $e');
+      }
+      return rows;
     }
 
     List<Map<String, dynamic>> rows;
@@ -674,6 +729,85 @@ class HomeworkStore {
       if (!conflict) return candidate;
     }
     return nextCode();
+  }
+
+  Future<String?> _persistAssignmentCodeToServer({
+    required String itemId,
+    required String preferredCode,
+  }) async {
+    if (!_supportsAssignmentCodeColumn) return null;
+    final normalizedItemId = itemId.trim();
+    if (normalizedItemId.isEmpty) return null;
+    final supa = Supabase.instance.client;
+    var candidate =
+        _normalizeAssignmentCode(preferredCode) ?? _issueAssignmentCode();
+    for (int attempt = 0; attempt < 6; attempt++) {
+      try {
+        final raw = await supa
+            .from('homework_items')
+            .update(<String, dynamic>{'assignment_code': candidate})
+            .eq('id', normalizedItemId)
+            .select('assignment_code');
+        final rows = (raw as List<dynamic>).cast<Map<String, dynamic>>();
+        if (rows.isEmpty) {
+          debugPrint(
+            '[HW][assignmentCode][persist] no rows updated for $normalizedItemId',
+          );
+          return null;
+        }
+        final stored = _normalizeAssignmentCode(
+                rows.first['assignment_code'] as String?) ??
+            candidate;
+        return stored;
+      } catch (e, st) {
+        if (_isMissingAssignmentCodeColumnError(e)) {
+          _supportsAssignmentCodeColumn = false;
+          debugPrint(
+            '[HW][assignmentCode][persist] disabled assignment_code support: $e',
+          );
+          return null;
+        }
+        if (_isAssignmentCodeConflictError(e)) {
+          candidate = _issueAssignmentCode();
+          continue;
+        }
+        debugPrint(
+          '[HW][assignmentCode][persist][ERROR] item=$normalizedItemId $e\n$st',
+        );
+        return null;
+      }
+    }
+    return null;
+  }
+
+  void _syncRecoveredAssignmentCodesToServer({
+    required String studentId,
+    required Map<String, String> recoveredCodesByItemId,
+  }) {
+    if (!_supportsAssignmentCodeColumn || recoveredCodesByItemId.isEmpty)
+      return;
+    for (final entry in recoveredCodesByItemId.entries) {
+      final itemId = entry.key.trim();
+      final preferredCode = _normalizeAssignmentCode(entry.value);
+      if (itemId.isEmpty || preferredCode == null) continue;
+      if (!_assignmentCodeSyncInFlightItemIds.add(itemId)) continue;
+      unawaited(() async {
+        try {
+          final stored = await _persistAssignmentCodeToServer(
+            itemId: itemId,
+            preferredCode: preferredCode,
+          );
+          if (stored == null) return;
+          final item = getById(studentId, itemId);
+          if (item == null) return;
+          if (_normalizeAssignmentCode(item.assignmentCode) == stored) return;
+          item.assignmentCode = stored;
+          _bump();
+        } finally {
+          _assignmentCodeSyncInFlightItemIds.remove(itemId);
+        }
+      }());
+    }
   }
 
   HomeworkItem _parseHomeworkItemRow(Map<String, dynamic> r) {
@@ -2236,7 +2370,28 @@ class HomeworkStore {
       await HomeworkAssignmentStore.instance
           .normalizeActiveAssignedOrderForNullDue(studentId);
       await HomeworkAssignmentStore.instance.loadActiveAssignments(studentId);
+      final localCodes = <String, String>{};
+      for (final it in items) {
+        final c = (it.assignmentCode ?? '').trim();
+        if (c.isNotEmpty) localCodes[it.id] = c;
+      }
       await _reloadStudent(studentId);
+      final recoveredCodes = <String, String>{};
+      for (final entry in localCodes.entries) {
+        final fresh = getById(studentId, entry.key);
+        if (fresh != null && (fresh.assignmentCode ?? '').trim().isEmpty) {
+          fresh.assignmentCode = entry.value;
+          recoveredCodes[entry.key] = entry.value;
+          debugPrint(
+            '[HW][commitRpc] patched missing assignmentCode '
+            'for ${entry.key}: ${entry.value}',
+          );
+        }
+      }
+      _syncRecoveredAssignmentCodesToServer(
+        studentId: studentId,
+        recoveredCodesByItemId: recoveredCodes,
+      );
       return true;
     } catch (e, st) {
       print('[HW][commitReservedHomeworkBundleRpc][ERROR] $e\n$st');
@@ -4395,6 +4550,12 @@ class HomeworkStore {
 
   Future<void> _reloadStudent(String studentId) async {
     try {
+      final oldCodes = <String, String>{};
+      for (final old in _byStudentId[studentId] ?? <HomeworkItem>[]) {
+        final c = (old.assignmentCode ?? '').trim();
+        if (c.isNotEmpty) oldCodes[old.id] = c;
+      }
+
       final String academyId =
           (await TenantService.instance.getActiveAcademyId()) ??
               await TenantService.instance.ensureActiveAcademy();
@@ -4408,12 +4569,30 @@ class HomeworkStore {
       for (final r in data) {
         list.add(_parseHomeworkItemRow(r));
       }
+
+      final recoveredCodes = <String, String>{};
+      for (final item in list) {
+        if ((item.assignmentCode ?? '').trim().isEmpty &&
+            oldCodes.containsKey(item.id)) {
+          item.assignmentCode = oldCodes[item.id];
+          recoveredCodes[item.id] = oldCodes[item.id]!;
+          debugPrint(
+            '[HW][_reloadStudent] restored local assignmentCode '
+            'for ${item.id}: ${oldCodes[item.id]}',
+          );
+        }
+      }
+
       _sortStudentList(list);
       _byStudentId[studentId] = list;
       await _reloadGroups(
         academyId: academyId,
         studentId: studentId,
         bump: false,
+      );
+      _syncRecoveredAssignmentCodesToServer(
+        studentId: studentId,
+        recoveredCodesByItemId: recoveredCodes,
       );
       _consumeMarkedAutoCompleteForWaitingItems(studentId);
       _bump();

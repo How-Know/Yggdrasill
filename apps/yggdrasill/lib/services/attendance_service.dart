@@ -5062,6 +5062,46 @@ class AttendanceService {
     }
   }
 
+  /// 보강/세션 오버라이드 수정 시 [replacement]·[original] 시각이 바뀌면,
+  /// 이전 시각에 남아 있던 순수 planned(`attendance_records`)를 제거한다.
+  /// (`regeneratePlannedAttendanceForOverride`는 새 시각만 정리·생성하므로 고아 행이 남던 문제 보완)
+  Future<void> removeStalePlannedForOverrideEdit({
+    required SessionOverride previous,
+    required SessionOverride updated,
+  }) async {
+    if (previous.id != updated.id || previous.studentId != updated.studentId) {
+      return;
+    }
+    bool sameClassMinute(DateTime? a, DateTime? b) {
+      if (a == null && b == null) return true;
+      if (a == null || b == null) return false;
+      return a.year == b.year &&
+          a.month == b.month &&
+          a.day == b.day &&
+          a.hour == b.hour &&
+          a.minute == b.minute;
+    }
+
+    final sid = updated.studentId;
+    final oldRep = previous.replacementClassDateTime;
+    final newRep = updated.replacementClassDateTime;
+    if (oldRep != null && !sameClassMinute(oldRep, newRep)) {
+      await removePlannedAttendanceForDate(
+        studentId: sid,
+        classDateTime: oldRep,
+      );
+    }
+
+    final oldOrig = previous.originalClassDateTime;
+    final newOrig = updated.originalClassDateTime;
+    if (oldOrig != null && !sameClassMinute(oldOrig, newOrig)) {
+      await removePlannedAttendanceForDate(
+        studentId: sid,
+        classDateTime: oldOrig,
+      );
+    }
+  }
+
   Future<void> regeneratePlannedAttendanceForSet({
     required String studentId,
     required String setId,

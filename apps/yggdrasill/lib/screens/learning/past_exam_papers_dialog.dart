@@ -127,6 +127,7 @@ class _PastExamPapersDialogState extends State<PastExamPapersDialog> {
     return ext == '.pdf' ||
         ext == '.hwp' ||
         ext == '.hwpx' ||
+        ext == '.hml' ||
         ext == '.doc' ||
         ext == '.docx';
   }
@@ -151,7 +152,11 @@ class _PastExamPapersDialogState extends State<PastExamPapersDialog> {
     if (!_allowedFilePath(path)) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('PDF, HWP, HWPX, Word 파일만 연결할 수 있어요.')),
+          const SnackBar(
+            content: Text(
+              'PDF, HWP, HWPX, HML, Word 파일만 연결할 수 있어요.',
+            ),
+          ),
         );
       }
       return;

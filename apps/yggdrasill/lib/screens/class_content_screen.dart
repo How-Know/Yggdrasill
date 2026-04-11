@@ -10,6 +10,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../services/data_manager.dart';
 import '../services/tenant_service.dart';
 import '../services/homework_store.dart';
+import '../services/homework_batch_confirm_service.dart';
+import '../services/homework_test_grading_result_service.dart';
 import '../services/student_flow_store.dart';
 import '../services/homework_assignment_store.dart';
 import '../services/learning_problem_bank_service.dart';
@@ -55,19 +57,25 @@ class _ClassContentScreenState extends State<ClassContentScreen>
   DateTime _now = DateTime.now();
   bool _isGradingMode = false;
   bool _printPickMode = false;
-  final Map<({String studentId, String itemId}), bool> _pendingConfirms = {};
+  final HomeworkBatchConfirmService _batchConfirmService =
+      HomeworkBatchConfirmService.instance;
   final Set<String> _expandedHomeworkIds = {};
   String? _expandedReservedStudentId;
   bool _pendingConfirmFabSyncScheduled = false;
   final Map<String, String> _favoriteTemplateBookNameById = <String, String>{};
   final LearningProblemBankService _problemBankService =
       LearningProblemBankService();
+  final HomeworkTestGradingResultService _gradingResultService =
+      HomeworkTestGradingResultService.instance;
   final Map<String, Map<String, HomeworkAnswerCellState>>
       _testGradingDraftStatesByHomeworkId =
       <String, Map<String, HomeworkAnswerCellState>>{};
   final Map<String, List<Map<String, dynamic>>>
       _testGradingSerializedDraftByHomeworkId =
       <String, List<Map<String, dynamic>>>{};
+
+  Map<({String studentId, String itemId}), bool> get _pendingConfirms =>
+      _batchConfirmService.pending;
 
   @override
   void initState() {
@@ -77,8 +85,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       if (!mounted) return;
       gradingModeActive.value = _isGradingMode;
       homeBatchConfirmFabVisible.value = true;
-      homeBatchConfirmPendingCount.value = 0;
-      homeBatchConfirmAction = null;
+      _batchConfirmService.syncPendingCount();
     });
     _uiAnimController = AnimationController(
         duration: const Duration(milliseconds: 1800), vsync: this)
@@ -93,8 +100,6 @@ class _ClassContentScreenState extends State<ClassContentScreen>
 
   @override
   void dispose() {
-    homeBatchConfirmAction = null;
-    homeBatchConfirmPendingCount.value = 0;
     homeBatchConfirmFabVisible.value = false;
     rightSideSheetTestGradingSession.value = null;
     _uiAnimController.dispose();
@@ -109,18 +114,233 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       _pendingConfirmFabSyncScheduled = false;
       if (!mounted) return;
       homeBatchConfirmFabVisible.value = true;
-      final pendingCount = _pendingConfirms.length;
-      if (homeBatchConfirmPendingCount.value != pendingCount) {
-        homeBatchConfirmPendingCount.value = pendingCount;
-      }
-      homeBatchConfirmAction = pendingCount == 0
-          ? null
-          : () async {
-              if (!mounted) return;
-              await _executeBatchConfirm(context);
-              _scheduleHomeBatchConfirmFabSync();
-            };
+      _batchConfirmService.syncPendingCount();
     });
+  }
+
+  bool _isSubmittedHomeworkForGradingSearch(HomeworkItem hw) {
+    return hw.status != HomeworkStatus.completed &&
+        hw.phase == 3 &&
+        hw.completedAt == null;
+  }
+
+  String _normalizeAssignmentSearchToken(String raw) {
+    return raw.replaceAll(RegExp(r'[^A-Za-z0-9]'), '').toUpperCase();
+  }
+
+  int? _assignmentCodeMatchPriority({
+    required String normalizedCode,
+    required String normalizedQuery,
+  }) {
+    if (normalizedCode.isEmpty || normalizedQuery.isEmpty) return null;
+    if (normalizedCode == normalizedQuery) return 0;
+    final numeric4 = RegExp(r'^[0-9]{1,4}$');
+    if (numeric4.hasMatch(normalizedQuery) &&
+        normalizedCode.endsWith(normalizedQuery)) {
+      return 1;
+    }
+    if (normalizedCode.startsWith(normalizedQuery)) return 2;
+    if (normalizedCode.contains(normalizedQuery)) return 3;
+    return null;
+  }
+
+  Future<List<RightSheetGradingSearchResult>> _runRightSheetGradingSearch(
+    String query,
+  ) async {
+    final rawQuery = query.trim();
+    if (rawQuery.isEmpty) return const <RightSheetGradingSearchResult>[];
+    final normalizedQuery = _normalizeAssignmentSearchToken(rawQuery);
+    final lowerQuery = rawQuery.toLowerCase();
+    final ranked = <({
+      RightSheetGradingSearchResult result,
+      int score,
+      DateTime updatedAt
+    })>[];
+    final seen = <String>{};
+    final homeworkStore = HomeworkStore.instance;
+
+    for (final row in DataManager.instance.students) {
+      final studentId = row.student.id.trim();
+      if (studentId.isEmpty) continue;
+      final studentName =
+          row.student.name.trim().isEmpty ? '학생' : row.student.name.trim();
+      final items = homeworkStore.items(studentId);
+      for (final hw in items) {
+        if (hw.status == HomeworkStatus.completed) continue;
+        final uniqueKey = '$studentId:${hw.id}';
+        if (!seen.add(uniqueKey)) continue;
+
+        final assignmentCode = _formatHomeworkAssignmentCode(
+          hw.assignmentCode,
+          fallback: '',
+        );
+        final normalizedCode = _normalizeAssignmentSearchToken(assignmentCode);
+        final groupId = (homeworkStore.groupIdOfItem(hw.id) ?? '').trim();
+        final groupTitle = groupId.isEmpty
+            ? ''
+            : (homeworkStore.groupById(studentId, groupId)?.title ?? '').trim();
+        final resolvedGroupTitle = groupTitle.isEmpty
+            ? (hw.title.trim().isEmpty ? '그룹 과제' : hw.title.trim())
+            : groupTitle;
+        final homeworkTitle = hw.title.trim().isEmpty ? '과제' : hw.title.trim();
+
+        var score = _assignmentCodeMatchPriority(
+          normalizedCode: normalizedCode,
+          normalizedQuery: normalizedQuery,
+        );
+        if (score == null) {
+          final searchableText =
+              '$studentName $resolvedGroupTitle $homeworkTitle'.toLowerCase();
+          if (!searchableText.contains(lowerQuery)) continue;
+          score = 50;
+        }
+
+        ranked.add(
+          (
+            result: RightSheetGradingSearchResult(
+              studentId: studentId,
+              homeworkItemId: hw.id,
+              assignmentCode: assignmentCode,
+              studentName: studentName,
+              groupHomeworkTitle: resolvedGroupTitle,
+              homeworkTitle: homeworkTitle,
+              hasTextbookLink: _hasDirectHomeworkTextbookLink(hw),
+              isTestHomework: _isTestHomeworkType(hw.type),
+              isSubmitted: _isSubmittedHomeworkForGradingSearch(hw),
+            ),
+            score: score,
+            updatedAt: hw.updatedAt ?? hw.createdAt ?? DateTime(1970),
+          ),
+        );
+      }
+    }
+
+    ranked.sort((a, b) {
+      final scoreCmp = a.score.compareTo(b.score);
+      if (scoreCmp != 0) return scoreCmp;
+      final updatedCmp = b.updatedAt.compareTo(a.updatedAt);
+      if (updatedCmp != 0) return updatedCmp;
+      return a.result.assignmentCode.compareTo(b.result.assignmentCode);
+    });
+
+    const maxResults = 50;
+    return ranked
+        .take(maxResults)
+        .map((entry) => entry.result)
+        .toList(growable: false);
+  }
+
+  Future<void> _openHomeworkAnswerShortcutFromSearch({
+    required String studentId,
+    required HomeworkItem hw,
+  }) async {
+    final resolved = await _resolveHomeworkPdfLinks(
+      hw,
+      allowFlowFallback: true,
+    );
+    if (!mounted) return;
+    final answerRaw = resolved.answerPathRaw.trim();
+    if (answerRaw.isEmpty) {
+      _showHomeworkChipSnackBar(context, '연결된 답지 파일을 찾을 수 없습니다.');
+      return;
+    }
+    final answerIsUrl = _isWebUrl(answerRaw);
+    final answerPath =
+        answerIsUrl ? answerRaw : _toLocalFilePath(answerRaw).trim();
+    if (answerPath.isEmpty) {
+      _showHomeworkChipSnackBar(context, '연결된 답지 파일을 찾을 수 없습니다.');
+      return;
+    }
+    if (!answerIsUrl) {
+      if (!answerPath.toLowerCase().endsWith('.pdf') ||
+          !await File(answerPath).exists()) {
+        if (!mounted) return;
+        _showHomeworkChipSnackBar(context, '답지 PDF 파일이 존재하지 않습니다.');
+        return;
+      }
+    }
+
+    String? solutionPath;
+    final solutionRaw = resolved.solutionPathRaw.trim();
+    if (_isWebUrl(solutionRaw)) {
+      solutionPath = solutionRaw;
+    } else if (solutionRaw.isNotEmpty) {
+      final candidate = _toLocalFilePath(solutionRaw).trim();
+      if (candidate.isNotEmpty &&
+          candidate.toLowerCase().endsWith('.pdf') &&
+          await File(candidate).exists()) {
+        solutionPath = candidate;
+      }
+    }
+
+    final closeAction = closeRightSideSheetAction;
+    if (closeAction != null) {
+      await closeAction();
+    }
+    if (!mounted) return;
+    await openHomeworkAnswerViewerPage(
+      context,
+      filePath: answerPath,
+      title: hw.title.trim().isEmpty ? '답지 확인' : hw.title.trim(),
+      solutionFilePath: solutionPath,
+      cacheKey: 'student:$studentId|grading_search_answer:$answerPath',
+      enableConfirm: false,
+    );
+  }
+
+  Future<void> _openRightSheetGradingSearchResult(
+    RightSheetGradingSearchResult result,
+  ) async {
+    if (!mounted) return;
+    final studentId = result.studentId.trim();
+    final itemId = result.homeworkItemId.trim();
+    if (studentId.isEmpty || itemId.isEmpty) return;
+
+    final homeworkStore = HomeworkStore.instance;
+    var hw = homeworkStore.getById(studentId, itemId);
+    if (hw == null) {
+      await homeworkStore.reloadStudentHomework(studentId);
+      if (!mounted) return;
+      hw = homeworkStore.getById(studentId, itemId);
+    }
+    if (hw == null) {
+      _showHomeworkChipSnackBar(context, '해당 과제를 찾지 못했습니다.');
+      return;
+    }
+
+    if (_isTestHomeworkType(hw.type)) {
+      if (!_isSubmittedHomeworkForGradingSearch(hw)) {
+        await homeworkStore.submit(studentId, hw.id);
+        await HomeworkAssignmentStore.instance.clearActiveAssignmentsForItems(
+          studentId,
+          [hw.id],
+        );
+        if (!mounted) return;
+        final refreshed = homeworkStore.getById(studentId, hw.id);
+        if (refreshed != null) {
+          hw = refreshed;
+        }
+      }
+      await _handleSubmittedChipTapForPending(
+        context: context,
+        studentId: studentId,
+        hw: hw,
+        targetKeys: [
+          (studentId: studentId, itemId: hw.id),
+        ],
+      );
+      return;
+    }
+
+    if (_hasDirectHomeworkTextbookLink(hw)) {
+      await _openHomeworkAnswerShortcutFromSearch(studentId: studentId, hw: hw);
+      return;
+    }
+
+    _showHomeworkChipSnackBar(
+      context,
+      '교재가 등록되지 않은 과제라 바로가기를 제공하지 않습니다.',
+    );
   }
 
   Widget _buildHeaderPillIconButton({
@@ -369,7 +589,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                         setState(() {
                                           _isGradingMode = value;
                                           if (!value) {
-                                            _pendingConfirms.clear();
+                                            _batchConfirmService.clearPending();
                                           }
                                         });
                                         gradingModeActive.value = value;
@@ -2607,6 +2827,27 @@ class _ClassContentScreenState extends State<ClassContentScreen>
               gradingPages: payload.gradingPages,
               states: decoded,
             );
+            if (action == 'complete' || action == 'confirm') {
+              final targetItem = HomeworkStore.instance.getById(
+                    studentId,
+                    payload.homeworkId,
+                  ) ??
+                  hw;
+              final saved = await _gradingResultService.saveAttemptFromSession(
+                studentId: studentId,
+                homeworkItem: targetItem,
+                action: action,
+                states: decoded,
+                gradingPages: payload.gradingPages,
+                scoreByQuestionKey: payload.scoreByQuestionKey,
+                groupHomeworkTitleSnapshot: groupHomeworkTitle,
+              );
+              if (!mounted) return;
+              if (!saved) {
+                _showHomeworkChipSnackBar(context, '채점 결과 저장에 실패했습니다.');
+              }
+            }
+            if (!mounted) return;
             setState(() {
               for (final key in keys) {
                 _pendingConfirms[key] = action == 'complete';
@@ -2871,14 +3112,13 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       waitingCandidates.addAll(
         HomeworkStore.instance
             .items(student.id)
-            .where(
-                (hw) => hw.status != HomeworkStatus.completed && hw.phase == 1)
+            .where((hw) => hw.status != HomeworkStatus.completed)
             .map((hw) => (studentId: student.id, hw: hw)),
       );
     }
     if (waitingCandidates.isEmpty) {
       if (mounted) {
-        _showHomeworkChipSnackBar(context, '인쇄 가능한 대기 과제가 없습니다.');
+        _showHomeworkChipSnackBar(context, '인쇄 가능한 과제가 없습니다.');
       }
       return;
     }
@@ -2966,10 +3206,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     if (!_printPickMode) return;
     final latest = HomeworkStore.instance.getById(studentId, hw.id);
     if (latest == null) return;
-    if (latest.phase != 1) {
-      _showHomeworkChipSnackBar(context, '인쇄 모드에서는 대기 상태 과제만 선택할 수 있어요.');
-      return;
-    }
+    if (latest.status == HomeworkStatus.completed) return;
     if (mounted) {
       setState(() => _printPickMode = false);
     }
@@ -2991,11 +3228,11 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     final latestChildren = children
         .map((e) => HomeworkStore.instance.getById(studentId, e.id) ?? e)
         .toList(growable: false);
-    final waitingChildren = latestChildren
-        .where((e) => e.status != HomeworkStatus.completed && e.phase == 1)
+    final eligibleChildren = latestChildren
+        .where((e) => e.status != HomeworkStatus.completed)
         .toList(growable: false);
-    if (waitingChildren.isEmpty) {
-      _showHomeworkChipSnackBar(context, '인쇄 가능한 대기 하위 과제가 없습니다.');
+    if (eligibleChildren.isEmpty) {
+      _showHomeworkChipSnackBar(context, '인쇄 가능한 하위 과제가 없습니다.');
       return;
     }
 
@@ -3009,7 +3246,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     final sourceByItemId = <String, _ResolvedHomeworkPrintSource>{};
     String? canonicalPipelineKey;
     final observedPipelineKinds = <String>{};
-    for (final child in waitingChildren) {
+    for (final child in eligibleChildren) {
       final assignment = assignmentByItemId[child.id.trim()];
       final pipelineKey =
           _printPipelineKeyForHomework(hw: child, assignment: assignment);
@@ -3047,10 +3284,10 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           context, '혼합 인쇄는 지원되지 않아요. 문제은행/교재를 분리해서 인쇄해 주세요.');
     }
     final initialSelectedById = <String, bool>{
-      for (final child in waitingChildren)
+      for (final child in eligibleChildren)
         child.id: printableById[child.id] ?? false,
     };
-    final defaultPrintableChildren = waitingChildren
+    final defaultPrintableChildren = eligibleChildren
         .where((e) => printableById[e.id] ?? false)
         .toList(growable: false);
     if (defaultPrintableChildren.isEmpty) {
@@ -3074,99 +3311,12 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       hw: seed,
       initialRangeOverride: printRange,
       dialogTitleOverride: dialogTitle,
-      selectableGroupChildren: waitingChildren,
+      selectableGroupChildren: eligibleChildren,
       groupChildPrintableById: printableById,
       groupInitialSelectionById: initialSelectedById,
       assignmentByItemId: assignmentByItemId,
       preResolvedSourceByItemId: sourceByItemId,
     );
-  }
-
-  Future<void> _executeBatchConfirm(BuildContext context) async {
-    if (_pendingConfirms.isEmpty) return;
-    final pending =
-        Map<({String studentId, String itemId}), bool>.from(_pendingConfirms);
-    setState(() => _pendingConfirms.clear());
-    unawaited(_processBatchConfirmInBackground(context, pending));
-  }
-
-  Future<void> _processBatchConfirmInBackground(
-    BuildContext context,
-    Map<({String studentId, String itemId}), bool> pending,
-  ) async {
-    final confirmIdsByStudent = <String, Set<String>>{};
-    final checkTargetKeys = <({String studentId, String itemId})>{};
-    final fallbackEntries =
-        <MapEntry<({String studentId, String itemId}), bool>>[];
-
-    for (final entry in pending.entries) {
-      final key = entry.key;
-      final hw = HomeworkStore.instance.getById(key.studentId, key.itemId);
-      if (hw == null) continue;
-      if (entry.value) {
-        HomeworkStore.instance.markAutoCompleteOnNextWaiting(key.itemId);
-      }
-      checkTargetKeys.add(key);
-      if (hw.phase == 3) {
-        confirmIdsByStudent
-            .putIfAbsent(key.studentId, () => <String>{})
-            .add(key.itemId);
-      } else {
-        fallbackEntries.add(entry);
-      }
-    }
-
-    if (confirmIdsByStudent.isNotEmpty) {
-      await Future.wait(
-        confirmIdsByStudent.entries.map(
-          (entry) => HomeworkStore.instance.confirmBatch(
-            entry.key,
-            entry.value,
-            recordAssignmentCheck: false,
-          ),
-        ),
-      );
-    }
-
-    await Future.wait(
-      checkTargetKeys.map((key) async {
-        final target = await _resolveHomeworkCheckTarget(
-          key.studentId,
-          key.itemId,
-          includeHistory: false,
-        );
-        if (target == null) return;
-        await HomeworkAssignmentStore.instance.saveAssignmentCheck(
-          assignmentId: target.assignmentId,
-          studentId: key.studentId,
-          homeworkItemId: key.itemId,
-          progress: target.progress,
-          issueType: null,
-          issueNote: null,
-          markCompleted: false,
-        );
-      }),
-    );
-
-    for (final entry in fallbackEntries) {
-      final key = entry.key;
-      HomeworkStore.instance.restoreItemsToWaiting(
-        key.studentId,
-        [key.itemId],
-      );
-      await HomeworkStore.instance.placeItemAtActiveTail(
-        key.studentId,
-        key.itemId,
-        activateFromHomework: true,
-      );
-      await HomeworkAssignmentStore.instance.clearActiveAssignmentsForItems(
-        key.studentId,
-        [key.itemId],
-      );
-    }
-    if (mounted && context.mounted) {
-      _showHomeworkChipSnackBar(context, '${pending.length}건의 과제를 일괄 처리했어요.');
-    }
   }
 }
 
@@ -5862,7 +6012,7 @@ final ValueNotifier<int> _reservedGroupUiRevision = ValueNotifier<int>(0);
 String _formatHomeworkAssignmentCode(String? raw, {String fallback = '-'}) {
   final code = (raw ?? '').trim().toUpperCase();
   if (!RegExp(r'^[A-Z]{4}[0-9]{4}$').hasMatch(code)) return fallback;
-  return '${code.substring(0, 4)}-${code.substring(4)}';
+  return code;
 }
 
 void _markReservedGroupUiDirty() {
@@ -7032,9 +7182,18 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
     final DateTime? groupCycleStartedAt =
         group.cycleStartedAt ?? runningChild?.runStart;
     final int groupTotalMs = groupCycleBaseMs + groupCycleProgressMs;
+    final HomeworkItem assignmentCodeSource = () {
+      for (final child in children) {
+        if (_formatHomeworkAssignmentCode(child.assignmentCode, fallback: '')
+            .isNotEmpty) {
+          return child;
+        }
+      }
+      return runningChild ?? first;
+    }();
     return HomeworkItem(
       id: (runningChild ?? first).id,
-      assignmentCode: (runningChild ?? first).assignmentCode,
+      assignmentCode: assignmentCodeSource.assignmentCode,
       title: group.title.trim().isEmpty ? first.title : group.title.trim(),
       body: first.body,
       color: first.color,
@@ -7558,6 +7717,7 @@ void _drawHomeworkPrintOverlayOnFirstPage({
   required _HomeworkPrintOverlayMeta meta,
   required sf.PdfFont line1Font,
   required sf.PdfFont line2Font,
+  required sf.PdfFont assignmentCodeFont,
 }) {
   final size = page.getClientSize();
   final line1Parts = <String>[
@@ -7568,7 +7728,8 @@ void _drawHomeworkPrintOverlayOnFirstPage({
   final line1 = line1Parts.isEmpty ? '-' : line1Parts.join(' · ');
   final line2 = meta.studentName.trim().isEmpty ? '학생' : meta.studentName;
   const double rightInset = 14;
-  const double topInset = 9;
+  const double topInset = 5;
+  const double lineH = 13;
   final double boxWidth = math.max(180, size.width * 0.68);
   final double left = math.max(0, size.width - boxWidth - rightInset);
   final format = sf.PdfStringFormat(
@@ -7580,28 +7741,30 @@ void _drawHomeworkPrintOverlayOnFirstPage({
     line1,
     line1Font,
     brush: textBrush,
-    bounds: Rect.fromLTWH(left, topInset, boxWidth, 12),
+    bounds: Rect.fromLTWH(left, topInset, boxWidth, lineH),
     format: format,
   );
   page.graphics.drawString(
     line2,
     line2Font,
     brush: textBrush,
-    bounds: Rect.fromLTWH(left, topInset + 12, boxWidth, 12),
+    bounds: Rect.fromLTWH(left, topInset + lineH, boxWidth, lineH),
     format: format,
   );
+  final assignmentCodeText =
+      meta.assignmentCodeText.trim().isEmpty ? '-' : meta.assignmentCodeText;
+  const double bottomInset = 1;
+  const double codeLineH = 14;
+  final codeTop = math.max(0.0, size.height - bottomInset - codeLineH);
   final codeFormat = sf.PdfStringFormat(
     alignment: sf.PdfTextAlignment.right,
     lineAlignment: sf.PdfVerticalAlignment.bottom,
   );
-  final assignmentCodeText =
-      meta.assignmentCodeText.trim().isEmpty ? '-' : meta.assignmentCodeText;
-  const bottomInset = 10.0;
   page.graphics.drawString(
     assignmentCodeText,
-    line1Font,
+    assignmentCodeFont,
     brush: textBrush,
-    bounds: Rect.fromLTWH(left, 0, boxWidth, size.height - bottomInset),
+    bounds: Rect.fromLTWH(left, codeTop, boxWidth, codeLineH),
     format: codeFormat,
   );
 }
@@ -8264,21 +8427,20 @@ Future<String?> _buildPdfForPrintRange({
     final pageCount = src.pages.count;
     final indices = _parsePageRange(pageRange, pageCount);
     if (indices.isEmpty) return null;
-    sf.PdfFont? line1Font = overlayMeta == null
+    const double kOverlayPrintFontPt = 10.2;
+    sf.PdfFont? overlayPdfFont = overlayMeta == null
         ? null
-        : await _loadHomeworkPrintOverlayFont(8.9, bold: true);
-    sf.PdfFont? line2Font =
-        overlayMeta == null ? null : await _loadHomeworkPrintOverlayFont(8.4);
+        : await _loadHomeworkPrintOverlayFont(kOverlayPrintFontPt, bold: false);
     if (overlayMeta != null &&
         pageRange.trim().isEmpty &&
         pageCount > 0 &&
-        line1Font != null &&
-        line2Font != null) {
+        overlayPdfFont != null) {
       _drawHomeworkPrintOverlayOnFirstPage(
         page: src.pages[0],
         meta: overlayMeta,
-        line1Font: line1Font,
-        line2Font: line2Font,
+        line1Font: overlayPdfFont,
+        line2Font: overlayPdfFont,
+        assignmentCodeFont: overlayPdfFont,
       );
       final outBytes = await src.save();
       final dir = await getTemporaryDirectory();
@@ -8310,15 +8472,13 @@ Future<String?> _buildPdfForPrintRange({
         } catch (_) {
           newPage.graphics.drawPdfTemplate(tmpl, const Offset(0, 0));
         }
-        if (outIndex == 0 &&
-            overlayMeta != null &&
-            line1Font != null &&
-            line2Font != null) {
+        if (outIndex == 0 && overlayMeta != null && overlayPdfFont != null) {
           _drawHomeworkPrintOverlayOnFirstPage(
             page: newPage,
             meta: overlayMeta,
-            line1Font: line1Font,
-            line2Font: line2Font,
+            line1Font: overlayPdfFont,
+            line2Font: overlayPdfFont,
+            assignmentCodeFont: overlayPdfFont,
           );
         }
         continue;
@@ -8335,15 +8495,13 @@ Future<String?> _buildPdfForPrintRange({
       } catch (_) {
         newPage.graphics.drawPdfTemplate(tmpl, const Offset(0, 0));
       }
-      if (outIndex == 0 &&
-          overlayMeta != null &&
-          line1Font != null &&
-          line2Font != null) {
+      if (outIndex == 0 && overlayMeta != null && overlayPdfFont != null) {
         _drawHomeworkPrintOverlayOnFirstPage(
           page: newPage,
           meta: overlayMeta,
-          line1Font: line1Font,
-          line2Font: line2Font,
+          line1Font: overlayPdfFont,
+          line2Font: overlayPdfFont,
+          assignmentCodeFont: overlayPdfFont,
         );
       }
     }
@@ -9392,7 +9550,7 @@ Future<void> _handleWaitingChipLongPressPrint({
   Map<String, _ResolvedHomeworkPrintSource> preResolvedSourceByItemId =
       const <String, _ResolvedHomeworkPrintSource>{},
 }) async {
-  if (hw.phase != 1) return;
+  if (hw.status == HomeworkStatus.completed) return;
   final resolvedAssignments = assignmentByItemId.isNotEmpty
       ? assignmentByItemId
       : await _loadActiveAssignmentByItemIdForPrint(studentId);
@@ -9548,7 +9706,10 @@ Future<void> _handleWaitingChipLongPressPrint({
           .where((child) => selectedIds.contains(child.id))
           .toList(growable: false)
       : <HomeworkItem>[hw];
-  const shouldApplyOverlay = true;
+  // 테스트 과제 PDF는 워커가 만든 문제은행 출력물이라 메타 오버레이를 붙이지 않는다.
+  final bool shouldApplyOverlay = !selectedHomeworks.any(
+    (h) => _isTestHomeworkType(h.type),
+  );
   _HomeworkPrintOverlayMeta? overlayMeta;
   if (shouldApplyOverlay) {
     overlayMeta = await _resolveHomeworkPrintOverlayMeta(
@@ -9926,7 +10087,7 @@ Widget _buildHomeworkChipVisual(
   final String durationText = _formatDurationMs(totalMs);
   final String startedAtText =
       hw.firstStartedAt == null ? '-' : _formatShortTime(hw.firstStartedAt!);
-  final String typeText =
+  final String rawTypeText =
       (hw.type ?? '').trim().isEmpty ? '-' : (hw.type ?? '').trim();
 
   final String startDateText = hw.firstStartedAt != null
@@ -9942,8 +10103,20 @@ Widget _buildHomeworkChipVisual(
   final String line5Right = splitCycleText.isEmpty
       ? repeatCycleText
       : '$repeatCycleText · $splitCycleText';
-  final String assignmentCodeText =
-      _formatHomeworkAssignmentCode(hw.assignmentCode);
+  final sortedAssignmentCodes = (groupChildren.isNotEmpty
+          ? groupChildren
+          : [hw])
+      .map((item) =>
+          _formatHomeworkAssignmentCode(item.assignmentCode, fallback: ''))
+      .where((code) => code.isNotEmpty)
+      .toSet()
+      .toList(growable: false)
+    ..sort();
+  final String assignmentCodeText = sortedAssignmentCodes.isEmpty
+      ? '-'
+      : (sortedAssignmentCodes.length == 1
+          ? sortedAssignmentCodes.first
+          : '${sortedAssignmentCodes.first} 외 ${sortedAssignmentCodes.length - 1}건');
   final double fixedWidth = ClassContentScreen._studentColumnContentWidth;
   final double maxRowW = fixedWidth - leftPad - rightPad;
   final bool hasGroupChildren = groupChildren.isNotEmpty;
@@ -10006,21 +10179,36 @@ Widget _buildHomeworkChipVisual(
   final bool showTimedOutBadge = isTestCard &&
       visualPhase == 1 &&
       _testTimedOutHomeworkKeys.contains(timeoutBadgeKey);
+  final bool hasFinishedTestCycle =
+      isTestCard && visualPhase == 1 && hw.confirmedAt != null;
+  final bool showSubmittedEndedBadge = isTestCard &&
+      !showRunningRemaining &&
+      (visualPhase >= 3 || hasFinishedTestCycle);
+  final bool showEndedBadge = showTimedOutBadge || showSubmittedEndedBadge;
+  final String typeText = () {
+    if (!showEndedBadge) return rawTypeText;
+    if (rawTypeText == '-' || rawTypeText.isEmpty) return '테스트 종료';
+    if (rawTypeText.contains('테스트 종료')) return rawTypeText;
+    if (rawTypeText.contains('테스트')) {
+      return rawTypeText.replaceFirst('테스트', '테스트 종료');
+    }
+    return '$rawTypeText · 테스트 종료';
+  }();
   final String progressText = (testLimitMinutes != null && testLimitMinutes > 0)
       ? '진행 ${progressMinutes}분/$testLimitMinutes분'
       : '진행 ${progressMinutes}분';
   final String? flowChipOverrideText = showRunningRemaining
       ? '남은 ${remainingMinutes}분'
-      : (showTimedOutBadge ? '종료' : null);
+      : (showEndedBadge ? '종료' : null);
   final Color? flowChipOverrideTextColor = showRunningRemaining
       ? const Color(0xFF9FE3C6)
-      : (showTimedOutBadge ? const Color(0xFFC8D4D4) : null);
+      : (showEndedBadge ? const Color(0xFFC8D4D4) : null);
   final Color? flowChipOverrideBackgroundColor = showRunningRemaining
       ? const Color(0x1F4FBF97)
-      : (showTimedOutBadge ? const Color(0x332A3030) : null);
+      : (showEndedBadge ? const Color(0x332A3030) : null);
   final Border? flowChipOverrideBorder = showRunningRemaining
       ? Border.all(color: kDlgAccent, width: 1.05)
-      : (showTimedOutBadge
+      : (showEndedBadge
           ? Border.all(color: const Color(0xFF5F6D6D), width: 1)
           : null);
 

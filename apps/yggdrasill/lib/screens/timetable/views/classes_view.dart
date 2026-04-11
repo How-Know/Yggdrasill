@@ -1119,7 +1119,9 @@ class _ClassesViewState extends State<ClassesView>
                   if (orig == null) continue;
                     if (orig.isBefore(weekStart) || !orig.isBefore(weekEnd))
                       continue;
-                  final int d = (orig.weekday - 1).clamp(0, 6);
+                  // 그리드 슬롯·요일은 로컬 벽시계 기준(UTC로 파싱된 override와 정렬)
+                  final DateTime origWall = orig.toLocal();
+                  final int d = (origWall.weekday - 1).clamp(0, 6);
 
                   String? setId = ov.setId;
                   if (setId == null || setId.isEmpty) {
@@ -1127,7 +1129,8 @@ class _ClassesViewState extends State<ClassesView>
                               ?[ov.studentId] ??
                           const <StudentTimeBlock>[];
                     if (blocksByStudent.isNotEmpty) {
-                      final int origMin = orig.hour * 60 + orig.minute;
+                      final int origMin =
+                          origWall.hour * 60 + origWall.minute;
                       int bestDiff = 1 << 30;
                       for (final b in blocksByStudent) {
                         final int bm = b.startHour * 60 + b.startMinute;
@@ -1150,15 +1153,15 @@ class _ClassesViewState extends State<ClassesView>
                               .clamp(0, 24 * 60);
                     if (minutes <= 0) continue;
                     final DateTime origEnd = DateTime(
-                      orig.year,
-                      orig.month,
-                      orig.day,
-                      orig.hour,
-                      orig.minute,
+                      origWall.year,
+                      origWall.month,
+                      origWall.day,
+                      origWall.hour,
+                      origWall.minute,
                     ).add(Duration(minutes: minutes));
                     if (nowL.isBefore(origEnd)) {
                         final String sk = ConsultInquiryDemandService.slotKey(
-                            d, orig.hour, orig.minute);
+                            d, origWall.hour, origWall.minute);
                         (hiddenOriginalBySlotKey[sk] ??= <String>{})
                             .add(ov.studentId);
                     }
@@ -1181,14 +1184,14 @@ class _ClassesViewState extends State<ClassesView>
                   if (rep == null) continue;
                     if (rep.isBefore(weekStart) || !rep.isBefore(weekEnd))
                       continue;
+                  final DateTime repWall = rep.toLocal();
                     if (DataManager.instance
-                        .isStudentPausedOn(ov.studentId, rep)) continue;
-                  final int d = (rep.weekday - 1).clamp(0, 6);
+                        .isStudentPausedOn(ov.studentId, repWall)) continue;
+                  final int d = (repWall.weekday - 1).clamp(0, 6);
+                  final String skStart = ConsultInquiryDemandService.slotKey(
+                      d, repWall.hour, repWall.minute);
 
-                    final String skStart = ConsultInquiryDemandService.slotKey(
-                        d, rep.hour, rep.minute);
-
-                  // 1) 오버레이: completed도 포함, canceled만 제외(기존 로직 유지)
+                  // 1) 오버레이(보강칩): 시작 슬롯에만 표시 (인원 가산은 아래 duration 전체)
                   bool isCompleted = false;
                   try {
                       final record = DataManager.instance
@@ -1205,11 +1208,11 @@ class _ClassesViewState extends State<ClassesView>
                         ? '$name 추가수업'
                         : '$name 보강';
                   (makeupOverlaysBySlotKey[skStart] ??= <OverlayLabel>[]).add(
-                      OverlayLabel(
-                          overrideId: ov.id,
-                          text: label,
-                          type: ov.overrideType,
-                          isCompleted: isCompleted),
+                    OverlayLabel(
+                        overrideId: ov.id,
+                        text: label,
+                        type: ov.overrideType,
+                        isCompleted: isCompleted),
                   );
 
                   // 2) 인원 가산: planned만(=completed/canceled 제외), duration 범위 슬롯에 학생 id 추가
@@ -1222,7 +1225,7 @@ class _ClassesViewState extends State<ClassesView>
                         (ov.durationMinutes ?? defaultLessonMinutes)
                             .clamp(0, 24 * 60);
                   if (durationMin <= 0) continue;
-                  final int repStartMin = rep.hour * 60 + rep.minute;
+                  final int repStartMin = repWall.hour * 60 + repWall.minute;
                   final int repEndMin = repStartMin + durationMin;
                   int slotMin = ((repStartMin + 29) ~/ 30) * 30;
                   while (slotMin < repEndMin) {

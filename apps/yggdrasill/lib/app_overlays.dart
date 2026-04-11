@@ -12,6 +12,38 @@ typedef RightSheetTestGradingAction = Future<void> Function(
   RightSheetTestGradingStates states,
 );
 
+class RightSheetGradingSearchResult {
+  final String studentId;
+  final String homeworkItemId;
+  final String assignmentCode;
+  final String studentName;
+  final String groupHomeworkTitle;
+  final String homeworkTitle;
+  final bool hasTextbookLink;
+  final bool isTestHomework;
+  final bool isSubmitted;
+
+  const RightSheetGradingSearchResult({
+    required this.studentId,
+    required this.homeworkItemId,
+    required this.assignmentCode,
+    required this.studentName,
+    required this.groupHomeworkTitle,
+    required this.homeworkTitle,
+    required this.hasTextbookLink,
+    required this.isTestHomework,
+    required this.isSubmitted,
+  });
+}
+
+typedef RightSheetGradingSearchRunAction
+    = Future<List<RightSheetGradingSearchResult>> Function(String query);
+typedef RightSheetGradingSearchSuggestAction
+    = Future<List<RightSheetGradingSearchResult>> Function(String query);
+typedef RightSheetGradingSearchOpenAction = Future<void> Function(
+  RightSheetGradingSearchResult result,
+);
+
 class RightSideSheetTestGradingSession {
   final String sessionId;
   final String title;
@@ -79,6 +111,15 @@ final ValueNotifier<bool> rightSideSheetOpen = ValueNotifier<bool>(false);
 final ValueNotifier<RightSideSheetTestGradingSession?>
     rightSideSheetTestGradingSession =
     ValueNotifier<RightSideSheetTestGradingSession?>(null);
+
+/// 우측 시트 채점 검색 실행 액션.
+RightSheetGradingSearchRunAction? rightSheetGradingSearchRunAction;
+
+/// 우측 시트 채점 검색 추천 액션.
+RightSheetGradingSearchSuggestAction? rightSheetGradingSearchSuggestAction;
+
+/// 우측 시트 채점 검색 결과 오픈 액션.
+RightSheetGradingSearchOpenAction? rightSheetGradingSearchOpenAction;
 
 /// 전역 오른쪽 사이드시트 토글 액션.
 AsyncUiAction? toggleRightSideSheetAction;
