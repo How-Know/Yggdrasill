@@ -28,6 +28,15 @@ const double _kGradingSectionGapTop = 22.0;
 const double _kGradingSectionGapBottom = 18.0;
 const EdgeInsets _kGradingPagePadding = EdgeInsets.fromLTRB(24, 0, 24, 24);
 
+/// 채점 카드 하단: 과제 코드(ABCD-1234) 우선, 없으면 순번(orderIndex+1).
+String _gradingCardAssignmentNumberLabel(HomeworkItem hw) {
+  final raw = (hw.assignmentCode ?? '').trim().toUpperCase();
+  if (RegExp(r'^[A-Z]{4}[0-9]{4}$').hasMatch(raw)) {
+    return '${raw.substring(0, 4)}-${raw.substring(4)}';
+  }
+  return '과제 ${hw.orderIndex + 1}';
+}
+
 typedef GradingGroupTapCallback = Future<void> Function(
   String studentId,
   HomeworkGroup? group,
@@ -713,6 +722,7 @@ class _GradingModePageState extends State<GradingModePage> {
 
     return HomeworkItem(
       id: (runningChild ?? first).id,
+      assignmentCode: (runningChild ?? first).assignmentCode,
       title: title.trim().isEmpty ? '(제목 없음)' : title.trim(),
       body: displaySeed.body,
       color: first.color,
@@ -881,9 +891,8 @@ class _SubmittedHomeworkCard extends StatelessWidget {
     final bookStr = _extractBookName(hw).isEmpty ? '-' : _extractBookName(hw);
     final courseStr =
         _extractCourseName(hw).isEmpty ? '-' : _extractCourseName(hw);
-    final pageStr =
-        (hw.page ?? '').trim().isEmpty ? '-' : (hw.page ?? '').trim();
     final countStr = hw.count == null ? '-' : hw.count.toString();
+    final assignmentNumText = _gradingCardAssignmentNumberLabel(hw);
     final scale =
         (cardHeight / _kGradingBaseCardHeight).clamp(0.5, 1.15).toDouble();
     final radius = (14.0 * scale).clamp(10.0, 14.0).toDouble();
@@ -941,7 +950,9 @@ class _SubmittedHomeworkCard extends StatelessWidget {
                           contentPadBottom,
                         ),
                         child: LayoutBuilder(
-                          builder: (context, _) {
+                          builder: (context, boxConstraints) {
+                            final showChildCountMeta =
+                                boxConstraints.maxWidth >= 178;
                             final metaScale =
                                 (metaHeight / _kGradingBaseCardMetaHeight)
                                     .clamp(0.5, 1.2)
@@ -997,18 +1008,20 @@ class _SubmittedHomeworkCard extends StatelessWidget {
                                   ),
                                   Row(
                                     children: [
-                                      Expanded(
-                                        child: Text(
-                                          childCountText,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: cellStyle3,
+                                      if (showChildCountMeta) ...[
+                                        Expanded(
+                                          child: Text(
+                                            childCountText,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: cellStyle3,
+                                          ),
                                         ),
-                                      ),
-                                      const SizedBox(width: 8),
+                                        const SizedBox(width: 8),
+                                      ],
                                       Expanded(
                                         child: Text(
-                                          'p.$pageStr · ${countStr}문항',
+                                          '$assignmentNumText · ${countStr}문항',
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
                                           textAlign: TextAlign.right,

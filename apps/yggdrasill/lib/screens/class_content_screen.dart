@@ -179,7 +179,9 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                   ValueListenableBuilder<int>(
                     valueListenable: HomeworkStore.instance.revision,
                     builder: (context, homeworkRevision, _) {
-                      final submittedCount = _countSubmittedHomeworkItems(list);
+                      final submittedCount = _isGradingMode
+                          ? _countSubmittedHomeworkItems(list)
+                          : 0;
                       return Padding(
                         padding: const EdgeInsets.fromLTRB(40, 8, 16, 0),
                         child: LayoutBuilder(
@@ -230,22 +232,24 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                               spacing: 14 * headerScale,
                               runSpacing: 4,
                               children: [
-                                Text(
-                                  '등원: ${list.length}명',
-                                  style: TextStyle(
-                                    color: Colors.white60,
-                                    fontSize: statsFontSize,
-                                    fontWeight: FontWeight.bold,
+                                if (!_isGradingMode)
+                                  Text(
+                                    '등원: ${list.length}명',
+                                    style: TextStyle(
+                                      color: Colors.white60,
+                                      fontSize: statsFontSize,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  )
+                                else
+                                  Text(
+                                    '제출: $submittedCount개',
+                                    style: TextStyle(
+                                      color: const Color(0xFF8FB3FF),
+                                      fontSize: statsFontSize,
+                                      fontWeight: FontWeight.bold,
+                                    ),
                                   ),
-                                ),
-                                Text(
-                                  '제출: $submittedCount개',
-                                  style: TextStyle(
-                                    color: const Color(0xFF8FB3FF),
-                                    fontSize: statsFontSize,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
                               ],
                             );
                             final Widget infoBlock = statsOnSecondLine
@@ -278,22 +282,24 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                           height: 1.0,
                                         ),
                                       ),
-                                      Text(
-                                        '등원: ${list.length}명',
-                                        style: TextStyle(
-                                          color: Colors.white60,
-                                          fontSize: statsFontSize,
-                                          fontWeight: FontWeight.bold,
+                                      if (!_isGradingMode)
+                                        Text(
+                                          '등원: ${list.length}명',
+                                          style: TextStyle(
+                                            color: Colors.white60,
+                                            fontSize: statsFontSize,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        )
+                                      else
+                                        Text(
+                                          '제출: $submittedCount개',
+                                          style: TextStyle(
+                                            color: const Color(0xFF8FB3FF),
+                                            fontSize: statsFontSize,
+                                            fontWeight: FontWeight.bold,
+                                          ),
                                         ),
-                                      ),
-                                      Text(
-                                        '제출: $submittedCount개',
-                                        style: TextStyle(
-                                          color: const Color(0xFF8FB3FF),
-                                          fontSize: statsFontSize,
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                      ),
                                     ],
                                   );
                             final Widget controls = Wrap(
@@ -2376,6 +2382,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         String homeworkId,
         String title,
         List<HomeworkAnswerGradingPage> gradingPages,
+        Map<String, double> scoreByQuestionKey,
       })?> _resolveTestPbGradingViewerPayload({
     required HomeworkItem seedHomework,
     required List<({String studentId, String itemId})> keys,
@@ -2442,7 +2449,9 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     }
 
     final modeByUid = preset.questionModeByQuestionUid;
+    final presetScoreByUid = preset.questionScoreByQuestionUid;
     final cellsByPage = <int, List<HomeworkAnswerGradingCell>>{};
+    final scoreByQuestionKey = <String, double>{};
     var fallbackIndex = 0;
     for (final uid in selectedUids) {
       final question = questionByKey[uid];
@@ -2456,6 +2465,10 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           previewAnswerForMode(question, modeByUid[uid] ?? '').trim();
       final pageNumber = question.sourcePage > 0 ? question.sourcePage : 1;
       final key = '${baseItem.id}|$pageNumber|$questionIndex|$uid';
+      final uidScore = presetScoreByUid[uid];
+      if (uidScore != null && uidScore.isFinite && uidScore > 0) {
+        scoreByQuestionKey[key] = uidScore;
+      }
       cellsByPage
           .putIfAbsent(pageNumber, () => <HomeworkAnswerGradingCell>[])
           .add(
@@ -2484,6 +2497,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       homeworkId: baseItem.id,
       title: title,
       gradingPages: gradingPages,
+      scoreByQuestionKey: scoreByQuestionKey,
     );
   }
 
@@ -2560,6 +2574,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           studentName: studentName,
           groupHomeworkTitle: groupHomeworkTitle,
           gradingPages: _toRightSheetGradingPages(payload.gradingPages),
+          scoreByQuestionKey: payload.scoreByQuestionKey,
           overlayEntries: overlayEntries
               .map(
                 (entry) => <String, String>{

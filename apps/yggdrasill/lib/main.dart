@@ -187,9 +187,8 @@ Future<void> _preloadOneSg(String sg, EducationLevel level) async {
   final res = await DataManager.instance.loadExamFor(school, level, gradeNum);
   // schedules
   final Map<DateTime, List<String>> saved = <DateTime, List<String>>{};
-  final schedules =
-      (res['schedules'] as List?)?.cast<Map<String, dynamic>>() ??
-          const <Map<String, dynamic>>[];
+  final schedules = (res['schedules'] as List?)?.cast<Map<String, dynamic>>() ??
+      const <Map<String, dynamic>>[];
   for (final row in schedules) {
     final dateIso = (row['date'] as String?) ?? '';
     if (dateIso.isEmpty) continue;
@@ -307,8 +306,7 @@ Future<void> _rehydratePreloadForSchoolGrades(
 }
 
 List<({String school, EducationLevel level, int grade})>
-    _examTargetsFromSchoolGradeLabels(
-        List<String> middle, List<String> high) {
+    _examTargetsFromSchoolGradeLabels(List<String> middle, List<String> high) {
   final out = <({String school, EducationLevel level, int grade})>[];
   for (final sg in middle) {
     final idx = sg.lastIndexOf(' ');
@@ -760,8 +758,8 @@ class _MyAppState extends State<MyApp> with WindowListener {
           await SyncService.instance.runInitialSyncIfNeeded();
           // until 미설정 또는 과거인 경우 DB 기반 자동 복원
           await ExamModeService.instance.ensureOnFromDatabase(
-            () => AcademyDbService.instance
-                .loadAllExamDaysForSeason(DataManager.instance.activeExamSeasonId),
+            () => AcademyDbService.instance.loadAllExamDaysForSeason(
+                DataManager.instance.activeExamSeasonId),
             () => AcademyDbService.instance.loadAllExamSchedulesForSeason(
                 DataManager.instance.activeExamSeasonId),
           );
@@ -1730,9 +1728,8 @@ class _GlobalMemoFloatingBannersState
             valueListenable: DataManager.instance.memosNotifier,
             builder: (context, memos, _) {
               // 문의 탭 전용 메모는 우측 시트에서만 보이게 — 전역 플로팅 배너 제외
-              final forBanners = memos
-                  .where((m) => !memoIsFormInquiryForList(m))
-                  .toList();
+              final forBanners =
+                  memos.where((m) => !memoIsFormInquiryForList(m)).toList();
               // 가까운 미래 포함, 해제되지 않은 배너만 (규칙에 맞게 미래도 표시)
               // 디버그 로그 제거
               final withSchedule =
@@ -1846,7 +1843,8 @@ class _GlobalExamOverlayState extends State<_GlobalExamOverlay>
                       bottom: 0,
                       height: 3,
                       child: ValueListenableBuilder<Color>(
-                        valueListenable: ExamModeService.instance.indicatorColor,
+                        valueListenable:
+                            ExamModeService.instance.indicatorColor,
                         builder: (context, color, _) {
                           return ValueListenableBuilder<String>(
                             valueListenable: ExamModeService.instance.effect,
@@ -1989,8 +1987,8 @@ class _ExamTickerBoardState extends State<_ExamTickerBoard> {
   }
 
   Future<void> _load() async {
-    final rows = await AcademyDbService.instance.loadAllExamSchedulesForSeason(
-        DataManager.instance.activeExamSeasonId);
+    final rows = await AcademyDbService.instance
+        .loadAllExamSchedulesForSeason(DataManager.instance.activeExamSeasonId);
     final list = List<Map<String, dynamic>>.from(rows);
     list.sort((a, b) =>
         ((a['date'] as String?) ?? '').compareTo((b['date'] as String?) ?? ''));
@@ -2010,8 +2008,7 @@ class _ExamTickerBoardState extends State<_ExamTickerBoard> {
         width: _fixedWidth,
         child: const Padding(
           padding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-          child: Text('등록된 시험일정 없음',
-              style: TextStyle(color: Colors.white38)),
+          child: Text('등록된 시험일정 없음', style: TextStyle(color: Colors.white38)),
         ),
       );
     }
@@ -2779,6 +2776,7 @@ class _ExamScheduleDialog extends StatefulWidget {
 class _ExamScheduleDialogState extends State<_ExamScheduleDialog> {
   // 다이얼로그 성능: reassemble 방지를 위해 Key 유지, RepaintBoundary 적용
   final Key _contentKey = const ValueKey('exam-dialog-content');
+
   /// false면 프리로드 중(즉시 다이얼로그 오픈 후 내부에서 로드)
   bool _preloadReady = false;
   // 과정별 학년 필터: 'M1','M2','M3','H1','H2','H3'
@@ -2793,8 +2791,8 @@ class _ExamScheduleDialogState extends State<_ExamScheduleDialog> {
   Future<void> _onTapRefreshSeason(BuildContext context,
       List<String> schoolGradeMiddle, List<String> schoolGradeHigh) async {
     if (_seasonActionBusy) return;
-    final targets = _examTargetsFromSchoolGradeLabels(
-        schoolGradeMiddle, schoolGradeHigh);
+    final targets =
+        _examTargetsFromSchoolGradeLabels(schoolGradeMiddle, schoolGradeHigh);
     if (targets.isEmpty) {
       rootScaffoldMessengerKey.currentState?.showSnackBar(
         const SnackBar(content: Text('표시된 학교·학년이 없습니다. 학년을 선택하세요.')),
@@ -2824,7 +2822,9 @@ class _ExamScheduleDialogState extends State<_ExamScheduleDialog> {
               '현재 시험 일정을 기록에 저장한 뒤 화면을 비웁니다. '
               '학년·과목 설정은 그대로입니다. 계속할까요?',
               style: TextStyle(
-                  color: kDlgTextSub, fontWeight: FontWeight.w600, height: 1.35),
+                  color: kDlgTextSub,
+                  fontWeight: FontWeight.w600,
+                  height: 1.35),
             ),
           ],
         ),
@@ -2856,8 +2856,7 @@ class _ExamScheduleDialogState extends State<_ExamScheduleDialog> {
     setState(() => _seasonActionBusy = true);
     try {
       await DataManager.instance.archiveAndClearExamsForNewSeason(targets);
-      _clearPreloadedForVisibleSchoolGrades(
-          schoolGradeMiddle, schoolGradeHigh);
+      _clearPreloadedForVisibleSchoolGrades(schoolGradeMiddle, schoolGradeHigh);
       _middleKey.currentState?.resetForNewSeason();
       _highKey.currentState?.resetForNewSeason();
       rootScaffoldMessengerKey.currentState?.showSnackBar(
@@ -2902,7 +2901,9 @@ class _ExamScheduleDialogState extends State<_ExamScheduleDialog> {
             Text(
               '선택한 시즌의 일정으로 활성 데이터를 덮어씁니다. 계속할까요?',
               style: TextStyle(
-                  color: kDlgTextSub, fontWeight: FontWeight.w600, height: 1.35),
+                  color: kDlgTextSub,
+                  fontWeight: FontWeight.w600,
+                  height: 1.35),
             ),
           ],
         ),
@@ -2934,8 +2935,7 @@ class _ExamScheduleDialogState extends State<_ExamScheduleDialog> {
     setState(() => _seasonActionBusy = true);
     try {
       await DataManager.instance.restoreExamSeasonSnapshot(snapshotId);
-      _clearPreloadedForVisibleSchoolGrades(
-          schoolGradeMiddle, schoolGradeHigh);
+      _clearPreloadedForVisibleSchoolGrades(schoolGradeMiddle, schoolGradeHigh);
       await _rehydratePreloadForSchoolGrades(
           schoolGradeMiddle, schoolGradeHigh);
       _middleKey.currentState?.reloadFromPreloadMaps();
@@ -3028,8 +3028,8 @@ class _ExamScheduleDialogState extends State<_ExamScheduleDialog> {
                 },
                 style: FilledButton.styleFrom(
                   backgroundColor: kDlgAccent,
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 28, vertical: 14),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 28, vertical: 14),
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(10)),
                 ),
@@ -3264,8 +3264,8 @@ class _ExamScheduleDialogState extends State<_ExamScheduleDialog> {
                         borderRadius: BorderRadius.circular(8),
                         border: Border.all(color: kDlgBorder)),
                     child: Text(label,
-                        style: const TextStyle(
-                            color: kDlgTextSub, fontSize: 13)),
+                        style:
+                            const TextStyle(color: kDlgTextSub, fontSize: 13)),
                   );
                 }),
               ),
@@ -3758,8 +3758,8 @@ Future<void> _openSchoolGradeMultiSelectDialog(
                 onPressed: () => Navigator.of(ctx).pop(),
                 style: TextButton.styleFrom(
                   foregroundColor: kDlgTextSub,
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 20, vertical: 14),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
                 ),
                 child: const Text('취소')),
             FilledButton(
@@ -3772,8 +3772,8 @@ Future<void> _openSchoolGradeMultiSelectDialog(
               },
               style: FilledButton.styleFrom(
                 backgroundColor: kDlgAccent,
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 28, vertical: 14),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 28, vertical: 14),
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(10)),
               ),
@@ -4088,8 +4088,7 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                                           24, 8, 24, 8),
                                       actionsPadding: const EdgeInsets.fromLTRB(
                                           24, 0, 24, 20),
-                                      title: const Text(
-                                          '삭제 확인',
+                                      title: const Text('삭제 확인',
                                           style: TextStyle(
                                               color: kDlgText,
                                               fontSize: 20,
@@ -4212,8 +4211,7 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                                       decoration: BoxDecoration(
                                         color: kDlgFieldBg,
                                         borderRadius: BorderRadius.circular(6),
-                                        border:
-                                            Border.all(color: kDlgBorder),
+                                        border: Border.all(color: kDlgBorder),
                                       ),
                                     ),
                                 ],
@@ -4996,8 +4994,7 @@ class _MemoSlideOverlayState extends State<_MemoSlideOverlay> {
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(builder: (context, constraints) {
-      const double panelWidth =
-          238 * 1.2 * 1.2 * 1.1 * 1.05; // 직전 너비 대비 +5%
+      const double panelWidth = 238 * 1.2 * 1.2 * 1.1 * 1.155; // 직전 너비 대비 +10%
       const double edgeOpenZoneWidth = 9; // 기존 16.8px에서 -30% (호버/엣지 스와이프 오픈 영역)
       return ValueListenableBuilder<bool>(
         valueListenable: blockRightSideSheetOpen,

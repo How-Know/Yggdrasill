@@ -2786,7 +2786,19 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     );
     final looksMath = normalized.contains(r'\') ||
         RegExp(r'[\^\_\=\+\-\*\/]').hasMatch(normalized);
-    if (!looksMath) return trimmed;
+    if (!looksMath) {
+      final escaped = trimmed
+          .replaceAll(r'\', r'\\')
+          .replaceAll('{', r'\{')
+          .replaceAll('}', r'\}')
+          .replaceAll(r'$', r'\$')
+          .replaceAll('%', r'\%')
+          .replaceAll('&', r'\&')
+          .replaceAll('_', r'\_')
+          .replaceAll('#', r'\#')
+          .replaceAll('\n', r' \\ ');
+      return '\$\$\\text{$escaped}\$\$';
+    }
     return '\$\$$normalized\$\$';
   }
 
@@ -2894,7 +2906,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Container(
-          height: 42,
+          height: 60,
           padding: const EdgeInsets.symmetric(horizontal: 10),
           decoration: BoxDecoration(
             color: _rsFieldBg,
@@ -3044,7 +3056,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
           style: const TextStyle(
             color: _rsTextSub,
             fontWeight: FontWeight.w800,
-            fontSize: 12.5,
+            fontSize: 25,
           ),
         ),
         const SizedBox(height: 2),
@@ -3055,37 +3067,186 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
           style: const TextStyle(
             color: _rsText,
             fontWeight: FontWeight.w900,
-            fontSize: 14,
+            fontSize: 20,
           ),
         ),
       ],
     );
   }
 
+  ({double correctScore, double totalScore}) _computeScoreResult(
+    RightSideSheetTestGradingSession session,
+  ) {
+    final scoreMap = session.scoreByQuestionKey;
+    final hasScoreData = scoreMap.isNotEmpty;
+    var correctScore = 0.0;
+    var totalScore = 0.0;
+    final seenKeys = <String>{};
+    for (final rawPage in session.gradingPages) {
+      final rawCells = rawPage['cells'];
+      if (rawCells is! List) continue;
+      for (final rawCell in rawCells) {
+        if (rawCell is! Map) continue;
+        final key = '${rawCell['key'] ?? ''}'.trim();
+        if (key.isEmpty || !seenKeys.add(key)) continue;
+        final pointValue = hasScoreData ? (scoreMap[key] ?? 1.0) : 1.0;
+        totalScore += pointValue;
+        final state = _normalizeState(_gradingStates[key]);
+        if (state == 'correct') {
+          correctScore += pointValue;
+        }
+      }
+    }
+    return (correctScore: correctScore, totalScore: totalScore);
+  }
+
+  String _formatScoreDisplay(double v) {
+    final rounded = v.roundToDouble();
+    if ((v - rounded).abs() < 0.0001) return rounded.toStringAsFixed(0);
+    return v.toStringAsFixed(1);
+  }
+
+  Widget _buildScoreCalculator(RightSideSheetTestGradingSession session) {
+    final result = _computeScoreResult(session);
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+      child: Align(
+        alignment: Alignment.centerRight,
+        child: Text(
+          '총점  ${_formatScoreDisplay(result.correctScore)} / ${_formatScoreDisplay(result.totalScore)}',
+          textAlign: TextAlign.right,
+          style: const TextStyle(
+            color: _rsText,
+            fontWeight: FontWeight.w900,
+            fontSize: 17,
+            letterSpacing: 0.5,
+          ),
+        ),
+      ),
+    );
+  }
+
+  bool _isCircledChoiceAnswer(String raw) {
+    final normalized = raw.trim();
+    return RegExp(r'^[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]$').hasMatch(normalized);
+  }
+
+  int? _circledChoiceToNumber(String raw) {
+    switch (raw.trim()) {
+      case '①':
+        return 1;
+      case '②':
+        return 2;
+      case '③':
+        return 3;
+      case '④':
+        return 4;
+      case '⑤':
+        return 5;
+      case '⑥':
+        return 6;
+      case '⑦':
+        return 7;
+      case '⑧':
+        return 8;
+      case '⑨':
+        return 9;
+      case '⑩':
+        return 10;
+      case '⑪':
+        return 11;
+      case '⑫':
+        return 12;
+      case '⑬':
+        return 13;
+      case '⑭':
+        return 14;
+      case '⑮':
+        return 15;
+      case '⑯':
+        return 16;
+      case '⑰':
+        return 17;
+      case '⑱':
+        return 18;
+      case '⑲':
+        return 19;
+      case '⑳':
+        return 20;
+      default:
+        return null;
+    }
+  }
+
+  double _resolveCellWidth(String raw) {
+    const base = 75.0;
+    final normalized = raw.trim();
+    if (normalized.isEmpty || _isCircledChoiceAnswer(normalized)) return base;
+    final compact = normalized.replaceAll(RegExp(r'\s+'), '');
+    final runesLength = compact.runes.length;
+    if (runesLength <= 3) return base;
+    if (runesLength <= 5) return 90;
+    if (runesLength <= 7) return 105;
+    if (runesLength <= 10) return 123;
+    return 130;
+  }
+
+  double _resolveCellFontSize({
+    required String answerRaw,
+    required bool isCorrect,
+    required bool isWideCell,
+  }) {
+    if (!isCorrect) return 18;
+    final normalized = answerRaw.trim();
+    final isCircled = _isCircledChoiceAnswer(normalized);
+    double size = isCircled ? 30 : (isWideCell ? 21 : 25);
+    if (size < 12) return 12;
+    return size;
+  }
+
+  Widget _buildPageDivider() {
+    return Container(
+      height: 1,
+      color: const Color(0x664C5D68),
+    );
+  }
+
   Widget _buildCell(_RightSheetGradingCellVm cell) {
     final state = _normalizeState(_gradingStates[cell.key]);
-    Color borderColor = const Color(0xFF3F4C4C);
-    Color backgroundColor = const Color(0xFF1F2A2F);
-    Color textColor = const Color(0xFFEAF2F2);
-    String text = _normalizeAnswerForMathRendering(cell.answer);
+    final answerRaw = cell.answer.trim();
+    final circledNumber = _circledChoiceToNumber(answerRaw);
+    final isCircledChoice = circledNumber != null;
+    final latexText = _normalizeAnswerForMathRendering(answerRaw);
+    final cellWidth = _resolveCellWidth(answerRaw);
+    final isWideCell = cellWidth > 75.0;
+    final contentFontSize = _resolveCellFontSize(
+      answerRaw: answerRaw,
+      isCorrect: state == 'correct',
+      isWideCell: isWideCell,
+    );
+    Color borderColor = const Color(0xFF223131);
+    Color backgroundColor = const Color(0xFF151C21);
+    Color textColor = const Color(0xFFEAF2F7);
+    String text = answerRaw;
     switch (state) {
       case 'wrong':
-        borderColor = const Color(0xFFA84A4A);
-        backgroundColor = const Color(0xFF3A2323);
-        textColor = const Color(0xFFFFB3B3);
+        borderColor = const Color(0xFF3A2228);
+        backgroundColor = const Color(0xFF1F1518);
+        textColor = const Color(0xFFFBC6CF);
         text = 'X';
         break;
       case 'unsolved':
-        borderColor = const Color(0xFF596565);
-        backgroundColor = const Color(0xFF202929);
-        textColor = const Color(0xFF8FA1A1);
+        borderColor = const Color(0xFF1E2C38);
+        backgroundColor = const Color(0xFF131A1F);
+        textColor = const Color(0xFFA9BAC4);
         text = '-';
         break;
       case 'correct':
-        borderColor = const Color(0xFF3F4C4C);
-        backgroundColor = const Color(0xFF1F2A2F);
-        textColor = const Color(0xFFEAF2F2);
-        text = _normalizeAnswerForMathRendering(cell.answer);
+        borderColor = const Color(0xFF223131);
+        backgroundColor = const Color(0xFF151C21);
+        textColor = const Color(0xFFEAF2F7);
+        text = answerRaw;
         break;
       default:
         break;
@@ -3096,40 +3257,77 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         borderRadius: BorderRadius.circular(8),
         onTap: () => _toggleCellState(cell.key),
         child: SizedBox(
-          width: 74,
-          height: 46,
+          width: cellWidth,
+          height: 75,
           child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
             decoration: BoxDecoration(
               color: backgroundColor,
               borderRadius: BorderRadius.circular(8),
               border: Border.all(color: borderColor),
             ),
             child: Center(
-              child: state == 'correct'
-                  ? LatexTextRenderer(
-                      text,
-                      textAlign: TextAlign.right,
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      maxLines: 3,
-                      softWrap: true,
-                      style: TextStyle(
-                        color: textColor,
-                        fontWeight: FontWeight.w800,
-                        fontSize: 16,
-                        height: 1.0,
+              child: (state == 'correct' && isCircledChoice)
+                  ? Container(
+                      width: circledNumber >= 10 ? 33 : 30,
+                      height: circledNumber >= 10 ? 33 : 30,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: textColor,
+                          width: 1.2,
+                        ),
+                      ),
+                      child: Text(
+                        '$circledNumber',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: textColor,
+                          fontWeight: FontWeight.w800,
+                          fontSize: circledNumber >= 10 ? 14.5 : 16.5,
+                          height: 1.0,
+                        ),
                       ),
                     )
-                  : Text(
-                      text,
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: textColor,
-                        fontWeight: FontWeight.w800,
-                        fontSize: 16,
-                        height: 1.0,
-                      ),
-                    ),
+                  : (state == 'correct')
+                      ? SizedBox(
+                          width: cellWidth - 14,
+                          height: 64,
+                          child: FittedBox(
+                            fit: BoxFit.scaleDown,
+                            alignment: Alignment.center,
+                            child: LatexTextRenderer(
+                              latexText,
+                              textAlign: TextAlign.center,
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              maxLines: 3,
+                              softWrap: true,
+                              style: TextStyle(
+                                color: textColor,
+                                fontWeight: FontWeight.w800,
+                                fontSize: contentFontSize,
+                                height: 1.0,
+                              ),
+                            ),
+                          ),
+                        )
+                      : FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Text(
+                            text,
+                            textAlign: TextAlign.center,
+                            maxLines: 1,
+                            overflow: TextOverflow.fade,
+                            softWrap: false,
+                            style: TextStyle(
+                              color: textColor,
+                              fontWeight: FontWeight.w800,
+                              fontSize: contentFontSize,
+                              height: 1.0,
+                            ),
+                          ),
+                        ),
             ),
           ),
         ),
@@ -3142,28 +3340,37 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
         Expanded(
-          child: SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                for (int i = 0; i < page.cells.length; i++) ...[
-                  _buildCell(page.cells[i]),
-                  if (i != page.cells.length - 1) const SizedBox(width: 8),
-                ],
-              ],
+          child: LayoutBuilder(
+            builder: (context, constraints) => SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(minWidth: constraints.maxWidth),
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      for (int i = 0; i < page.cells.length; i++) ...[
+                        _buildCell(page.cells[i]),
+                        if (i != page.cells.length - 1)
+                          const SizedBox(width: 9),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
             ),
           ),
         ),
-        const SizedBox(width: 8),
+        const SizedBox(width: 12),
         SizedBox(
-          width: 48,
+          width: 62,
           child: Text(
             'p.${page.pageNumber}',
-            textAlign: TextAlign.right,
+            textAlign: TextAlign.center,
             style: const TextStyle(
               color: Color(0xFF9FB3B3),
-              fontSize: 12,
+              fontSize: 16.5,
               fontWeight: FontWeight.w800,
             ),
           ),
@@ -3179,21 +3386,21 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       bool filled = false,
     }) {
       return SizedBox(
-        height: 34,
+        height: 51,
         child: OutlinedButton(
           onPressed: _actionBusy ? null : onTap,
           style: OutlinedButton.styleFrom(
             backgroundColor: filled ? _rsAccent : _rsPanelBg,
             side: BorderSide(color: filled ? _rsAccent : _rsBorder),
             foregroundColor: Colors.white,
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
-            minimumSize: const Size(68, 34),
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 0),
+            minimumSize: const Size(102, 51),
             tapTargetSize: MaterialTapTargetSize.shrinkWrap,
           ),
           child: Text(
             label,
             style: const TextStyle(
-              fontSize: 12.5,
+              fontSize: 18.5,
               fontWeight: FontWeight.w800,
             ),
           ),
@@ -3226,7 +3433,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _buildSearchHeader(),
-        const SizedBox(height: 10),
+        const SizedBox(height: 16),
         Expanded(
           child: session == null
               ? Container(
@@ -3248,45 +3455,36 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                     ),
                   ),
                 )
-              : Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    _buildSessionHeader(session),
-                    const SizedBox(height: 8),
-                    Expanded(
-                      child: pages.isEmpty
-                          ? const Center(
-                              child: Text(
-                                '검색 결과가 없습니다.',
-                                style: TextStyle(
-                                  color: _rsTextSub,
-                                  fontWeight: FontWeight.w700,
-                                  fontSize: 12.5,
-                                ),
-                              ),
-                            )
-                          : SingleChildScrollView(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.stretch,
-                                children: [
-                                  for (int i = 0; i < pages.length; i++) ...[
-                                    _buildPageRow(pages[i]),
-                                    if (i != pages.length - 1) ...[
-                                      const SizedBox(height: 8),
-                                      Container(
-                                        height: 1,
-                                        color: const Color(0x55FFFFFF),
-                                      ),
-                                      const SizedBox(height: 8),
-                                    ],
-                                  ],
-                                ],
-                              ),
+              : SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _buildSessionHeader(session),
+                      const SizedBox(height: 22),
+                      for (int i = 0; i < pages.length; i++) ...[
+                        _buildPageRow(pages[i]),
+                        if (i != pages.length - 1) const SizedBox(height: 6),
+                      ],
+                      if (pages.isEmpty)
+                        const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 24),
+                          child: Text(
+                            '검색 결과가 없습니다.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: _rsTextSub,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 12.5,
                             ),
-                    ),
-                    const SizedBox(height: 8),
-                    _buildActionButtons(),
-                  ],
+                          ),
+                        ),
+                      const SizedBox(height: 10),
+                      _buildScoreCalculator(session),
+                      const SizedBox(height: 24),
+                      _buildActionButtons(),
+                      const SizedBox(height: 8),
+                    ],
+                  ),
                 ),
         ),
       ],
@@ -3363,7 +3561,7 @@ class _AnswerKeyPdfShortcutExplorerState
               padding: 3,
             ),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 18),
           Expanded(
             child: widget.tabIndex == 0
                 ? _AnswerKeyGradingTabPanel(

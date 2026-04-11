@@ -22,6 +22,7 @@ class RightSideSheetTestGradingSession {
   final RightSheetTestGradingStates initialStates;
   final RightSheetTestGradingStatesChanged? onStatesChanged;
   final RightSheetTestGradingAction? onAction;
+  final Map<String, double> scoreByQuestionKey;
 
   const RightSideSheetTestGradingSession({
     required this.sessionId,
@@ -33,6 +34,7 @@ class RightSideSheetTestGradingSession {
     this.initialStates = const <String, String>{},
     this.onStatesChanged,
     this.onAction,
+    this.scoreByQuestionKey = const <String, double>{},
   });
 }
 
