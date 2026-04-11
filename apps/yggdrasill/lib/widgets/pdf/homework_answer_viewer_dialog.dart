@@ -6,8 +6,37 @@ import 'package:pdfrx/pdfrx.dart';
 
 import '../../app_overlays.dart';
 import '../dialog_tokens.dart';
+import '../latex_text_renderer.dart';
 
 enum HomeworkAnswerViewerAction { confirm, complete }
+
+enum HomeworkAnswerCellState {
+  correct,
+  wrong,
+  unsolved,
+}
+
+class HomeworkAnswerGradingCell {
+  final String key;
+  final int questionIndex;
+  final String answer;
+
+  const HomeworkAnswerGradingCell({
+    required this.key,
+    required this.questionIndex,
+    required this.answer,
+  });
+}
+
+class HomeworkAnswerGradingPage {
+  final int pageNumber;
+  final List<HomeworkAnswerGradingCell> cells;
+
+  const HomeworkAnswerGradingPage({
+    required this.pageNumber,
+    required this.cells,
+  });
+}
 
 class HomeworkAnswerOverlayEntry {
   final String title;
@@ -30,6 +59,13 @@ Future<HomeworkAnswerViewerAction?> openHomeworkAnswerViewerPage(
   bool enableConfirm = true,
   List<HomeworkAnswerOverlayEntry> overlayEntries =
       const <HomeworkAnswerOverlayEntry>[],
+  List<HomeworkAnswerGradingPage> gradingPages =
+      const <HomeworkAnswerGradingPage>[],
+  Map<String, HomeworkAnswerCellState> initialGradingStates =
+      const <String, HomeworkAnswerCellState>{},
+  void Function(Map<String, HomeworkAnswerCellState> states)?
+      onGradingStatesChanged,
+  bool hideSourceDocument = false,
 }) async {
   final previousMemoFloatingHidden = hideGlobalMemoFloatingBanners.value;
   hideGlobalMemoFloatingBanners.value = true;
@@ -43,6 +79,10 @@ Future<HomeworkAnswerViewerAction?> openHomeworkAnswerViewerPage(
           cacheKey: cacheKey,
           enableConfirm: enableConfirm,
           overlayEntries: overlayEntries,
+          gradingPages: gradingPages,
+          initialGradingStates: initialGradingStates,
+          onGradingStatesChanged: onGradingStatesChanged,
+          hideSourceDocument: hideSourceDocument,
         ),
       ),
     );
@@ -58,6 +98,11 @@ class HomeworkAnswerViewerPage extends StatefulWidget {
   final String? cacheKey;
   final bool enableConfirm;
   final List<HomeworkAnswerOverlayEntry> overlayEntries;
+  final List<HomeworkAnswerGradingPage> gradingPages;
+  final Map<String, HomeworkAnswerCellState> initialGradingStates;
+  final void Function(Map<String, HomeworkAnswerCellState> states)?
+      onGradingStatesChanged;
+  final bool hideSourceDocument;
 
   const HomeworkAnswerViewerPage({
     super.key,
@@ -67,10 +112,15 @@ class HomeworkAnswerViewerPage extends StatefulWidget {
     this.cacheKey,
     this.enableConfirm = true,
     this.overlayEntries = const <HomeworkAnswerOverlayEntry>[],
+    this.gradingPages = const <HomeworkAnswerGradingPage>[],
+    this.initialGradingStates = const <String, HomeworkAnswerCellState>{},
+    this.onGradingStatesChanged,
+    this.hideSourceDocument = false,
   });
 
   @override
-  State<HomeworkAnswerViewerPage> createState() => _HomeworkAnswerViewerPageState();
+  State<HomeworkAnswerViewerPage> createState() =>
+      _HomeworkAnswerViewerPageState();
 }
 
 class _ViewerCacheState {
@@ -115,6 +165,8 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
   bool _isViewerReady = false;
   bool _openingSolution = false;
   bool _overlayCollapsed = false;
+  bool _gradingPanelCollapsed = false;
+  late Map<String, HomeworkAnswerCellState> _gradingStates;
   double? _cachedInitialZoom;
   Offset? _cachedInitialCenter;
   Offset? _cachedInitialCenterRatio;
@@ -132,14 +184,19 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
     debugPrint('[ANS_VIEW][RESTORE] $message');
   }
 
-  bool get _hasSolution =>
-      (widget.solutionFilePath ?? '').trim().isNotEmpty;
+  bool get _hasSolution => (widget.solutionFilePath ?? '').trim().isNotEmpty;
+
+  bool get _hasGradingPanel => widget.gradingPages.isNotEmpty;
+  bool get _showDocument => !(widget.hideSourceDocument && _hasGradingPanel);
 
   String get _cacheKey => (widget.cacheKey ?? '').trim();
 
   @override
   void initState() {
     super.initState();
+    _gradingStates = Map<String, HomeworkAnswerCellState>.from(
+      widget.initialGradingStates,
+    );
     final key = _cacheKey;
     if (key.isNotEmpty) {
       final cached = _viewCacheByKey[key];
@@ -164,8 +221,10 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
             cached.panRangeRatioY!,
           );
         }
-        if (cached.matrixStorage != null && cached.matrixStorage!.length == 16) {
-          _cachedInitialMatrixStorage = List<double>.from(cached.matrixStorage!);
+        if (cached.matrixStorage != null &&
+            cached.matrixStorage!.length == 16) {
+          _cachedInitialMatrixStorage =
+              List<double>.from(cached.matrixStorage!);
         }
         if (cached.viewWidth != null && cached.viewHeight != null) {
           _cachedInitialViewSize = Size(cached.viewWidth!, cached.viewHeight!);
@@ -218,8 +277,7 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
             : null);
     final panRangeRatio = _viewerController.isReady
         ? _pagePanRangeRatioForCurrentView()
-        : (previous?.panRangeRatioX != null &&
-                previous?.panRangeRatioY != null
+        : (previous?.panRangeRatioX != null && previous?.panRangeRatioY != null
             ? Offset(previous!.panRangeRatioX!, previous.panRangeRatioY!)
             : null);
     final matrixStorage = _viewerController.isReady
@@ -239,9 +297,8 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
       pageCenterRatioY: pageCenterRatio?.dy,
       panRangeRatioX: panRangeRatio?.dx,
       panRangeRatioY: panRangeRatio?.dy,
-      matrixStorage: matrixStorage == null
-          ? null
-          : List<double>.from(matrixStorage),
+      matrixStorage:
+          matrixStorage == null ? null : List<double>.from(matrixStorage),
       viewWidth: viewSize?.width,
       viewHeight: viewSize?.height,
     );
@@ -312,12 +369,10 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
     final maxY = pageRect.bottom - halfH;
     final rx = ratio.dx.clamp(0.0, 1.0).toDouble();
     final ry = ratio.dy.clamp(0.0, 1.0).toDouble();
-    final cx = (minX >= maxX)
-        ? pageRect.center.dx
-        : (minX + (maxX - minX) * rx);
-    final cy = (minY >= maxY)
-        ? pageRect.center.dy
-        : (minY + (maxY - minY) * ry);
+    final cx =
+        (minX >= maxX) ? pageRect.center.dx : (minX + (maxX - minX) * rx);
+    final cy =
+        (minY >= maxY) ? pageRect.center.dy : (minY + (maxY - minY) * ry);
     return Offset(cx, cy);
   }
 
@@ -370,7 +425,8 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
         context,
         filePath: solutionPath,
         title: '${widget.title} · 해설',
-        cacheKey: 'sol|${_cacheKey.isEmpty ? widget.filePath : _cacheKey}|$solutionPath',
+        cacheKey:
+            'sol|${_cacheKey.isEmpty ? widget.filePath : _cacheKey}|$solutionPath',
         enableConfirm: false,
         overlayEntries: widget.overlayEntries,
       );
@@ -379,11 +435,66 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
     }
   }
 
-  PdfPageLayout _layoutSinglePageVertical(List<PdfPage> pages, PdfViewerParams params) {
-    if (pages.isEmpty) {
-      return PdfPageLayout(pageLayouts: const <Rect>[], documentSize: Size.zero);
+  HomeworkAnswerCellState _nextGradingState(HomeworkAnswerCellState current) {
+    switch (current) {
+      case HomeworkAnswerCellState.correct:
+        return HomeworkAnswerCellState.wrong;
+      case HomeworkAnswerCellState.wrong:
+        return HomeworkAnswerCellState.unsolved;
+      case HomeworkAnswerCellState.unsolved:
+        return HomeworkAnswerCellState.correct;
     }
-    final maxWidth = pages.fold<double>(0, (prev, p) => math.max(prev, p.width));
+  }
+
+  HomeworkAnswerCellState _gradingStateOf(String key) {
+    return _gradingStates[key] ?? HomeworkAnswerCellState.correct;
+  }
+
+  void _emitGradingStates() {
+    final callback = widget.onGradingStatesChanged;
+    if (callback == null) return;
+    callback(Map<String, HomeworkAnswerCellState>.from(_gradingStates));
+  }
+
+  void _toggleGradingCellState(String key) {
+    final current = _gradingStateOf(key);
+    setState(() {
+      _gradingStates[key] = _nextGradingState(current);
+    });
+    _emitGradingStates();
+  }
+
+  String _normalizeAnswerForMathRendering(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) return '-';
+    if (trimmed == '-') return trimmed;
+    if (trimmed.contains(r'$$') || trimmed.contains(r'\(')) {
+      return trimmed;
+    }
+    var normalized = trimmed.replaceAll('\n', r' \\ ');
+    normalized = normalized.replaceAllMapped(
+      RegExp(r'(?<!\\)(\d+)\s*/\s*(\d+)'),
+      (match) =>
+          r'\frac{' +
+          (match.group(1) ?? '') +
+          '}{' +
+          (match.group(2) ?? '') +
+          '}',
+    );
+    final looksMath = normalized.contains(r'\') ||
+        RegExp(r'[\^\_\=\+\-\*\/]').hasMatch(normalized);
+    if (!looksMath) return trimmed;
+    return '\$\$$normalized\$\$';
+  }
+
+  PdfPageLayout _layoutSinglePageVertical(
+      List<PdfPage> pages, PdfViewerParams params) {
+    if (pages.isEmpty) {
+      return PdfPageLayout(
+          pageLayouts: const <Rect>[], documentSize: Size.zero);
+    }
+    final maxWidth =
+        pages.fold<double>(0, (prev, p) => math.max(prev, p.width));
     final width = maxWidth + params.margin * 2;
     const pageGap = 22000.0;
     double y = params.margin;
@@ -423,15 +534,16 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
         return cached.clamp(_minUserZoom, _maxUserZoom).toDouble();
       },
       normalizeMatrix: (matrix, viewSize, layout, controller) {
-        if (controller == null || !controller.isReady || layout.pageLayouts.isEmpty) {
+        if (controller == null ||
+            !controller.isReady ||
+            layout.pageLayouts.isEmpty) {
           return matrix;
         }
         final int index =
             (_lockedPageNumber - 1).clamp(0, layout.pageLayouts.length - 1);
         final Rect pageRect = layout.pageLayouts[index];
-        final double zoom = matrix.zoom
-            .clamp(_minUserZoom, _maxUserZoom)
-            .toDouble();
+        final double zoom =
+            matrix.zoom.clamp(_minUserZoom, _maxUserZoom).toDouble();
         final Offset pos = matrix.calcPosition(viewSize);
         final double halfW = viewSize.width / 2 / zoom;
         final double halfH = viewSize.height / 2 / zoom;
@@ -441,10 +553,12 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
         final double minY = pageRect.top + halfH;
         final double maxY = pageRect.bottom - halfH;
 
-        final double clampedX =
-            (minX > maxX) ? pageRect.center.dx : pos.dx.clamp(minX, maxX).toDouble();
-        final double clampedY =
-            (minY > maxY) ? pageRect.center.dy : pos.dy.clamp(minY, maxY).toDouble();
+        final double clampedX = (minX > maxX)
+            ? pageRect.center.dx
+            : pos.dx.clamp(minX, maxX).toDouble();
+        final double clampedY = (minY > maxY)
+            ? pageRect.center.dy
+            : pos.dy.clamp(minY, maxY).toDouble();
         return controller.calcMatrixFor(
           Offset(clampedX, clampedY),
           zoom: zoom,
@@ -493,7 +607,7 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
             final currentSize = controller.viewSize;
             final sameSize =
                 (currentSize.width - cachedSize.width).abs() < 2.0 &&
-                (currentSize.height - cachedSize.height).abs() < 2.0;
+                    (currentSize.height - cachedSize.height).abs() < 2.0;
             _logRestore(
               'matrix candidate sameSize=$sameSize currentView=(${_fmtNum(currentSize.width)}, ${_fmtNum(currentSize.height)}) '
               'cachedView=(${_fmtNum(cachedSize.width)}, ${_fmtNum(cachedSize.height)})',
@@ -515,9 +629,10 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
           }
           Offset? center;
           final panRangeRatio = _cachedInitialPanRangeRatio;
-          final double targetZoom = (_cachedInitialZoom ?? controller.currentZoom)
-              .clamp(_minUserZoom, _maxUserZoom)
-              .toDouble();
+          final double targetZoom =
+              (_cachedInitialZoom ?? controller.currentZoom)
+                  .clamp(_minUserZoom, _maxUserZoom)
+                  .toDouble();
           if (panRangeRatio != null &&
               requested >= 1 &&
               requested <= controller.layout.pageLayouts.length) {
@@ -648,264 +763,293 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
 
   @override
   Widget build(BuildContext context) {
-    final canPrev = _isViewerReady && _pageNumber > 1;
-    final canNext = _isViewerReady && _pageNumber < _pageCount;
+    final canPrev = _showDocument && _isViewerReady && _pageNumber > 1;
+    final canNext = _showDocument && _isViewerReady && _pageNumber < _pageCount;
+    final showPageSlider = _showDocument && _pageCount > 1;
+    final controlsRightInset = showPageSlider ? 72.0 : 16.0;
     final sliderUiValue = _sliderUiValueFromPage(_sliderPage);
     return Scaffold(
       backgroundColor: kDlgBg,
       body: WillPopScope(
         onWillPop: () async {
           _savePageCache();
+          _emitGradingStates();
           return true;
         },
         child: SafeArea(
           child: Stack(
             children: [
-            Positioned.fill(
-              child: ColoredBox(
-                color: kDlgBg,
-                child: _buildViewer(),
+              Positioned.fill(
+                child: ColoredBox(
+                  color: kDlgBg,
+                  child:
+                      _showDocument ? _buildViewer() : const SizedBox.shrink(),
+                ),
               ),
-            ),
-            Positioned(
-              left: 8,
-              top: 8,
-              right: 8,
-              child: Row(
-                children: [
-                  _circleIconButton(
-                    icon: Icons.arrow_back_rounded,
-                    tooltip: '뒤로가기',
-                    onTap: () {
-                      _savePageCache();
-                      Navigator.of(context).pop(null);
-                    },
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      widget.title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: kDlgText,
-                        fontSize: 17,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            if (widget.overlayEntries.isNotEmpty)
               Positioned(
-                left: 14,
-                top: 92,
-                right: _pageCount > 1 ? 78 : 14,
-                child: _buildChildOverlayPanel(context),
-              ),
-            if (_pageCount > 1)
-              Positioned(
+                left: 8,
+                top: 8,
                 right: 8,
-                top: 84,
-                bottom: 14,
-                child: Container(
-                  width: 54,
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 12),
-                  decoration: BoxDecoration(
-                    color: kDlgPanelBg.withOpacity(0.92),
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: kDlgBorder),
-                  ),
-                  child: Column(
-                    children: [
-                      const Text(
-                        '1',
-                        style: TextStyle(
+                child: Row(
+                  children: [
+                    _circleIconButton(
+                      icon: Icons.arrow_back_rounded,
+                      tooltip: '뒤로가기',
+                      onTap: () {
+                        _savePageCache();
+                        _emitGradingStates();
+                        Navigator.of(context).pop(null);
+                      },
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        widget.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
                           color: kDlgText,
+                          fontSize: 17,
                           fontWeight: FontWeight.w800,
-                          fontSize: 14,
                         ),
                       ),
-                      Expanded(
-                        child: LayoutBuilder(
-                          builder: (context, constraints) {
-                            final int displayPage =
-                                _sliderPage.round().clamp(1, _pageCount);
-                            final double ratio = _pageCount <= 1
-                                ? 0
-                                : (displayPage - 1) / (_pageCount - 1);
-                            const double badgeH = 30;
-                            final double badgeTop = ratio *
-                                (constraints.maxHeight - badgeH)
-                                    .clamp(0.0, double.infinity)
-                                    .toDouble();
-                            return Stack(
-                              clipBehavior: Clip.none,
-                              children: [
-                                Positioned.fill(
-                                  child: RotatedBox(
-                                    quarterTurns: 3,
-                                    child: SliderTheme(
-                                      data: SliderTheme.of(context).copyWith(
-                                        activeTrackColor: kDlgAccent,
-                                        inactiveTrackColor: kDlgBorder,
-                                        thumbColor: kDlgAccent,
-                                        overlayColor: kDlgAccent.withOpacity(0.18),
-                                        trackHeight: 6.0,
-                                        thumbShape: const RoundSliderThumbShape(
-                                          enabledThumbRadius: 9,
+                    ),
+                  ],
+                ),
+              ),
+              if (_showDocument && widget.overlayEntries.isNotEmpty)
+                Positioned(
+                  left: 14,
+                  top: 92,
+                  right: showPageSlider ? 78 : 14,
+                  child: _buildChildOverlayPanel(context),
+                ),
+              if (showPageSlider)
+                Positioned(
+                  right: 8,
+                  top: 84,
+                  bottom: 14,
+                  child: Container(
+                    width: 54,
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 6, vertical: 12),
+                    decoration: BoxDecoration(
+                      color: kDlgPanelBg.withOpacity(0.92),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: kDlgBorder),
+                    ),
+                    child: Column(
+                      children: [
+                        const Text(
+                          '1',
+                          style: TextStyle(
+                            color: kDlgText,
+                            fontWeight: FontWeight.w800,
+                            fontSize: 14,
+                          ),
+                        ),
+                        Expanded(
+                          child: LayoutBuilder(
+                            builder: (context, constraints) {
+                              final int displayPage =
+                                  _sliderPage.round().clamp(1, _pageCount);
+                              final double ratio = _pageCount <= 1
+                                  ? 0
+                                  : (displayPage - 1) / (_pageCount - 1);
+                              const double badgeH = 30;
+                              final double badgeTop = ratio *
+                                  (constraints.maxHeight - badgeH)
+                                      .clamp(0.0, double.infinity)
+                                      .toDouble();
+                              return Stack(
+                                clipBehavior: Clip.none,
+                                children: [
+                                  Positioned.fill(
+                                    child: RotatedBox(
+                                      quarterTurns: 3,
+                                      child: SliderTheme(
+                                        data: SliderTheme.of(context).copyWith(
+                                          activeTrackColor: kDlgAccent,
+                                          inactiveTrackColor: kDlgBorder,
+                                          thumbColor: kDlgAccent,
+                                          overlayColor:
+                                              kDlgAccent.withOpacity(0.18),
+                                          trackHeight: 6.0,
+                                          thumbShape:
+                                              const RoundSliderThumbShape(
+                                            enabledThumbRadius: 9,
+                                          ),
                                         ),
-                                      ),
-                                      child: Slider(
-                                        min: 1,
-                                        max: _pageCount.toDouble(),
-                                        divisions: _pageCount > 1 ? _pageCount - 1 : null,
-                                        value: sliderUiValue,
-                                        onChangeStart: (_) {
-                                          setState(() => _draggingSlider = true);
-                                        },
-                                        onChanged: (v) {
-                                          setState(() {
-                                            _sliderPage = _pageFromSliderUiValue(v);
-                                          });
-                                        },
-                                        onChangeEnd: (v) {
-                                          final target = _pageFromSliderUiValue(v);
-                                          setState(() {
-                                            _draggingSlider = false;
-                                            _sliderPage = target;
-                                          });
-                                          unawaited(_jumpBySlider(target));
-                                        },
+                                        child: Slider(
+                                          min: 1,
+                                          max: _pageCount.toDouble(),
+                                          divisions: _pageCount > 1
+                                              ? _pageCount - 1
+                                              : null,
+                                          value: sliderUiValue,
+                                          onChangeStart: (_) {
+                                            setState(
+                                                () => _draggingSlider = true);
+                                          },
+                                          onChanged: (v) {
+                                            setState(() {
+                                              _sliderPage =
+                                                  _pageFromSliderUiValue(v);
+                                            });
+                                          },
+                                          onChangeEnd: (v) {
+                                            final target =
+                                                _pageFromSliderUiValue(v);
+                                            setState(() {
+                                              _draggingSlider = false;
+                                              _sliderPage = target;
+                                            });
+                                            unawaited(_jumpBySlider(target));
+                                          },
+                                        ),
                                       ),
                                     ),
                                   ),
-                                ),
-                                Positioned(
-                                  left: -16,
-                                  top: badgeTop,
-                                  child: IgnorePointer(
-                                    child: Container(
-                                      constraints: const BoxConstraints(
-                                        minWidth: 28,
-                                      ),
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 6,
-                                        vertical: 4,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: kDlgAccent,
-                                        borderRadius: BorderRadius.circular(8),
-                                      ),
-                                      child: RotatedBox(
-                                        quarterTurns: 0,
-                                        child: Text(
-                                          '$displayPage',
-                                          textAlign: TextAlign.center,
-                                          maxLines: 1,
-                                          softWrap: false,
-                                          style: const TextStyle(
-                                            color: Colors.white,
-                                            fontWeight: FontWeight.w900,
-                                            fontSize: 12,
+                                  Positioned(
+                                    left: -16,
+                                    top: badgeTop,
+                                    child: IgnorePointer(
+                                      child: Container(
+                                        constraints: const BoxConstraints(
+                                          minWidth: 28,
+                                        ),
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 6,
+                                          vertical: 4,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: kDlgAccent,
+                                          borderRadius:
+                                              BorderRadius.circular(8),
+                                        ),
+                                        child: RotatedBox(
+                                          quarterTurns: 0,
+                                          child: Text(
+                                            '$displayPage',
+                                            textAlign: TextAlign.center,
+                                            maxLines: 1,
+                                            softWrap: false,
+                                            style: const TextStyle(
+                                              color: Colors.white,
+                                              fontWeight: FontWeight.w900,
+                                              fontSize: 12,
+                                            ),
                                           ),
                                         ),
                                       ),
                                     ),
                                   ),
-                                ),
-                              ],
-                            );
-                          },
+                                ],
+                              );
+                            },
+                          ),
                         ),
-                      ),
-                      Text(
-                        '$_pageCount',
-                        style: const TextStyle(
-                          color: kDlgTextSub,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 13,
+                        Text(
+                          '$_pageCount',
+                          style: const TextStyle(
+                            color: kDlgTextSub,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 13,
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
-              ),
-            Positioned(
-              right: _pageCount > 1 ? 72 : 16,
-              bottom: 16,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (_hasSolution)
-                    _pillButton(
-                      label: _openingSolution ? '열기...' : '해설',
-                      icon: Icons.menu_book_rounded,
-                      enabled: !_openingSolution,
-                      onTap: () => unawaited(_openSolution()),
-                    ),
-                  if (_hasSolution) const SizedBox(width: 12),
-                  _circleIconButton(
-                    icon: Icons.chevron_left_rounded,
-                    tooltip: '이전 페이지',
-                    enabled: canPrev,
-                    onTap: () => unawaited(_goPrev()),
-                  ),
-                  const SizedBox(width: 12),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-                    decoration: BoxDecoration(
-                      color: kDlgPanelBg.withOpacity(0.92),
-                      borderRadius: BorderRadius.circular(999),
-                      border: Border.all(color: kDlgBorder),
-                    ),
-                    child: Text(
-                      _pageCount > 0 ? '$_pageNumber / $_pageCount' : '- / -',
-                      style: const TextStyle(
-                        color: kDlgTextSub,
-                        fontWeight: FontWeight.w800,
-                        fontSize: 19,
+              if (_hasGradingPanel)
+                Positioned(
+                  right: controlsRightInset,
+                  top: 92,
+                  bottom: 100,
+                  child: _buildGradingAnswerPanel(context),
+                ),
+              Positioned(
+                right: controlsRightInset,
+                bottom: 16,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (_showDocument && _hasSolution)
+                      _pillButton(
+                        label: _openingSolution ? '열기...' : '해설',
+                        icon: Icons.menu_book_rounded,
+                        enabled: !_openingSolution,
+                        onTap: () => unawaited(_openSolution()),
                       ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  _circleIconButton(
-                    icon: Icons.chevron_right_rounded,
-                    tooltip: '다음 페이지',
-                    enabled: canNext,
-                    onTap: () => unawaited(_goNext()),
-                  ),
-                  if (widget.enableConfirm) const SizedBox(width: 12),
-                  if (widget.enableConfirm)
-                    _pillButton(
-                      label: '완료',
-                      icon: Icons.task_alt_rounded,
-                      enabled: true,
-                      onTap: () {
-                        _savePageCache();
-                        Navigator.of(context).pop(
-                          HomeworkAnswerViewerAction.complete,
-                        );
-                      },
-                    ),
-                  if (widget.enableConfirm) const SizedBox(width: 12),
-                  if (widget.enableConfirm)
-                    _pillButton(
-                      label: '확인',
-                      icon: Icons.check_rounded,
-                      enabled: true,
-                      onTap: () {
-                        _savePageCache();
-                        Navigator.of(context).pop(
-                          HomeworkAnswerViewerAction.confirm,
-                        );
-                      },
-                      filled: true,
-                    ),
-                ],
+                    if (_showDocument && _hasSolution)
+                      const SizedBox(width: 12),
+                    if (_showDocument) ...[
+                      _circleIconButton(
+                        icon: Icons.chevron_left_rounded,
+                        tooltip: '이전 페이지',
+                        enabled: canPrev,
+                        onTap: () => unawaited(_goPrev()),
+                      ),
+                      const SizedBox(width: 12),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 18, vertical: 14),
+                        decoration: BoxDecoration(
+                          color: kDlgPanelBg.withOpacity(0.92),
+                          borderRadius: BorderRadius.circular(999),
+                          border: Border.all(color: kDlgBorder),
+                        ),
+                        child: Text(
+                          _pageCount > 0
+                              ? '$_pageNumber / $_pageCount'
+                              : '- / -',
+                          style: const TextStyle(
+                            color: kDlgTextSub,
+                            fontWeight: FontWeight.w800,
+                            fontSize: 19,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      _circleIconButton(
+                        icon: Icons.chevron_right_rounded,
+                        tooltip: '다음 페이지',
+                        enabled: canNext,
+                        onTap: () => unawaited(_goNext()),
+                      ),
+                    ],
+                    if (widget.enableConfirm) const SizedBox(width: 12),
+                    if (widget.enableConfirm)
+                      _pillButton(
+                        label: '완료',
+                        icon: Icons.task_alt_rounded,
+                        enabled: true,
+                        onTap: () {
+                          _savePageCache();
+                          _emitGradingStates();
+                          Navigator.of(context).pop(
+                            HomeworkAnswerViewerAction.complete,
+                          );
+                        },
+                      ),
+                    if (widget.enableConfirm) const SizedBox(width: 12),
+                    if (widget.enableConfirm)
+                      _pillButton(
+                        label: '확인',
+                        icon: Icons.check_rounded,
+                        enabled: true,
+                        onTap: () {
+                          _savePageCache();
+                          _emitGradingStates();
+                          Navigator.of(context).pop(
+                            HomeworkAnswerViewerAction.confirm,
+                          );
+                        },
+                        filled: true,
+                      ),
+                  ],
+                ),
               ),
-            ),
             ],
           ),
         ),
@@ -1044,6 +1188,195 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
                 ),
               ],
             ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildGradingAnswerPanel(BuildContext context) {
+    final pages = widget.gradingPages;
+    if (pages.isEmpty) return const SizedBox.shrink();
+    final panelWidth = widget.hideSourceDocument && _hasGradingPanel
+        ? math.min(MediaQuery.of(context).size.width * 0.72, 760.0)
+        : math.min(MediaQuery.of(context).size.width * 0.42, 520.0);
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxWidth: panelWidth),
+      child: Container(
+        decoration: BoxDecoration(
+          color: const Color(0xFF121A20).withValues(alpha: 0.94),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.16)),
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    '테스트 채점',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.w800,
+                      height: 1.1,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                InkWell(
+                  borderRadius: BorderRadius.circular(999),
+                  onTap: () => setState(() {
+                    _gradingPanelCollapsed = !_gradingPanelCollapsed;
+                  }),
+                  child: Padding(
+                    padding: const EdgeInsets.all(3),
+                    child: Icon(
+                      _gradingPanelCollapsed
+                          ? Icons.expand_more_rounded
+                          : Icons.expand_less_rounded,
+                      size: 20,
+                      color: Colors.white.withValues(alpha: 0.9),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            if (!_gradingPanelCollapsed) ...[
+              const SizedBox(height: 8),
+              Expanded(
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      for (int i = 0; i < pages.length; i++) ...[
+                        _buildGradingPageRow(pages[i]),
+                        if (i != pages.length - 1) ...[
+                          const SizedBox(height: 10),
+                          Container(
+                            height: 1,
+                            color: Colors.white.withValues(alpha: 0.15),
+                          ),
+                          const SizedBox(height: 10),
+                        ],
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildGradingPageRow(HomeworkAnswerGradingPage page) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.end,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            alignment: WrapAlignment.end,
+            runAlignment: WrapAlignment.end,
+            children: [
+              for (final cell in page.cells) _buildGradingCellBox(cell),
+            ],
+          ),
+        ),
+        const SizedBox(width: 10),
+        SizedBox(
+          width: 28,
+          child: RotatedBox(
+            quarterTurns: 1,
+            child: Text(
+              'p.${page.pageNumber}',
+              maxLines: 1,
+              overflow: TextOverflow.visible,
+              textAlign: TextAlign.right,
+              style: const TextStyle(
+                color: Color(0xFF9FB3B3),
+                fontSize: 15,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildGradingCellBox(HomeworkAnswerGradingCell cell) {
+    final state = _gradingStateOf(cell.key);
+    Color borderColor;
+    Color backgroundColor;
+    Color textColor;
+    String text;
+    switch (state) {
+      case HomeworkAnswerCellState.correct:
+        borderColor = const Color(0xFF3F4C4C);
+        backgroundColor = const Color(0xFF1F2A2F);
+        textColor = const Color(0xFFEAF2F2);
+        text = _normalizeAnswerForMathRendering(cell.answer);
+        break;
+      case HomeworkAnswerCellState.wrong:
+        borderColor = const Color(0xFFA84A4A);
+        backgroundColor = const Color(0xFF3A2323);
+        textColor = const Color(0xFFFFB3B3);
+        text = 'X';
+        break;
+      case HomeworkAnswerCellState.unsolved:
+        borderColor = const Color(0xFF596565);
+        backgroundColor = const Color(0xFF202929);
+        textColor = const Color(0xFF8FA1A1);
+        text = '-';
+        break;
+    }
+    return Tooltip(
+      message: '${cell.questionIndex}번',
+      child: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: () => _toggleGradingCellState(cell.key),
+        child: Container(
+          constraints: const BoxConstraints(minWidth: 68, minHeight: 68),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+          decoration: BoxDecoration(
+            color: backgroundColor,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: borderColor),
+          ),
+          child: Center(
+            child: state == HomeworkAnswerCellState.correct
+                ? LatexTextRenderer(
+                    text,
+                    textAlign: TextAlign.right,
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    maxLines: 3,
+                    softWrap: true,
+                    style: TextStyle(
+                      color: textColor,
+                      fontWeight: FontWeight.w800,
+                      fontSize: 25,
+                      height: 1.0,
+                    ),
+                  )
+                : Text(
+                    text,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: textColor,
+                      fontWeight: FontWeight.w800,
+                      fontSize: 25,
+                      height: 1.0,
+                    ),
+                  ),
           ),
         ),
       ),

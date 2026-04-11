@@ -6,9 +6,11 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:open_filex/open_filex.dart';
 
+import '../../models/education_level.dart';
 import '../../services/data_manager.dart';
 import '../../services/learning_problem_bank_service.dart';
 import '../../services/tenant_service.dart';
+import '../../utils/naesin_exam_context.dart';
 import '../../widgets/animated_reorderable_grid.dart';
 import 'models/problem_bank_export_models.dart';
 import 'widgets/problem_bank_bottom_fab_bar.dart';
@@ -51,24 +53,6 @@ class _ProblemBankViewState extends State<ProblemBankView> {
   static const List<String> _levelOptions = <String>['초', '중', '고'];
   static const String _kNaesinLinkConfigKey = 'naesinLinkKey';
   static const List<String> _kNaesinLinkExamTerms = <String>['중간고사', '기말고사'];
-  static const List<int> _kNaesinLinkYears = <int>[
-    2021,
-    2022,
-    2023,
-    2024,
-    2025
-  ];
-  static const List<String> _kNaesinLinkSchools = <String>[
-    '경신중',
-    '능인중',
-    '대륜중',
-    '동도중',
-    '소선여중',
-    '오성중',
-    '정화중',
-    '황금중',
-  ];
-
   final LearningProblemBankService _service = LearningProblemBankService();
 
   String? _academyId;
@@ -1627,21 +1611,15 @@ class _ProblemBankViewState extends State<ProblemBankView> {
   }
 
   String _defaultNaesinExamTermByDate(DateTime now) {
-    final month = now.month;
-    final day = now.day;
-    if (month >= 1 && month <= 4) return '중간고사';
-    if (month == 5) return day <= 15 ? '중간고사' : '기말고사';
-    if (month >= 6 && month <= 7) return '기말고사';
-    if (month >= 8 && month <= 9) return '중간고사';
-    if (month == 10) return day <= 15 ? '중간고사' : '기말고사';
-    return '기말고사';
+    return NaesinExamContext.defaultNaesinExamTermByDate(now);
   }
 
   int _defaultNaesinYearByDate(DateTime now) {
     final year = now.year;
-    if (_kNaesinLinkYears.contains(year)) return year;
-    if (year < _kNaesinLinkYears.first) return _kNaesinLinkYears.first;
-    return _kNaesinLinkYears.last;
+    const years = NaesinExamContext.linkYears;
+    if (years.contains(year)) return year;
+    if (year < years.first) return years.first;
+    return years.last;
   }
 
   String _buildNaesinLinkKey({
@@ -1651,32 +1629,24 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     required String school,
     required int year,
   }) {
-    return '$gradeKey|$courseKey|$examTerm|$school|$year';
-  }
-
-  _NaesinLinkSelection? _parseNaesinLinkKey(String raw) {
-    final normalized = raw.trim();
-    if (normalized.isEmpty) return null;
-    final parts = normalized.split('|');
-    if (parts.length != 5) return null;
-    final gradeKey = parts[0].trim();
-    final courseKey = parts[1].trim();
-    final examTerm = parts[2].trim();
-    final school = parts[3].trim();
-    final year = int.tryParse(parts[4].trim());
-    if (gradeKey.isEmpty ||
-        courseKey.isEmpty ||
-        examTerm.isEmpty ||
-        school.isEmpty ||
-        year == null) {
-      return null;
-    }
-    return _NaesinLinkSelection(
+    return NaesinExamContext.buildNaesinLinkKey(
       gradeKey: gradeKey,
       courseKey: courseKey,
       examTerm: examTerm,
       school: school,
       year: year,
+    );
+  }
+
+  _NaesinLinkSelection? _parseNaesinLinkKey(String raw) {
+    final parsed = NaesinExamContext.parseNaesinLinkKey(raw);
+    if (parsed == null) return null;
+    return _NaesinLinkSelection(
+      gradeKey: parsed.gradeKey,
+      courseKey: parsed.courseKey,
+      examTerm: parsed.examTerm,
+      school: parsed.school,
+      year: parsed.year,
     );
   }
 
@@ -1687,53 +1657,17 @@ class _ProblemBankViewState extends State<ProblemBankView> {
   }
 
   List<_NaesinGradeOption> _naesinGradeOptionsForLevel(String level) {
-    if (level.trim() == '고') {
-      return const <_NaesinGradeOption>[
-        _NaesinGradeOption(key: 'H1', label: '고1'),
-        _NaesinGradeOption(key: 'H2', label: '고2'),
-        _NaesinGradeOption(key: 'H3', label: '고3'),
-      ];
-    }
-    return const <_NaesinGradeOption>[
-      _NaesinGradeOption(key: 'M1', label: '중1'),
-      _NaesinGradeOption(key: 'M2', label: '중2'),
-      _NaesinGradeOption(key: 'M3', label: '중3'),
-    ];
+    final el =
+        level.trim() == '고' ? EducationLevel.high : EducationLevel.middle;
+    return NaesinExamContext.gradeOptionsForLevel(el)
+        .map((e) => _NaesinGradeOption(key: e.key, label: e.label))
+        .toList();
   }
 
   List<_NaesinCourseOption> _naesinCourseOptionsForGrade(String gradeKey) {
-    switch (gradeKey) {
-      case 'M1':
-        return const <_NaesinCourseOption>[
-          _NaesinCourseOption(key: 'M1-1', label: '1-1'),
-          _NaesinCourseOption(key: 'M1-2', label: '1-2'),
-        ];
-      case 'M2':
-        return const <_NaesinCourseOption>[
-          _NaesinCourseOption(key: 'M2-1', label: '2-1'),
-          _NaesinCourseOption(key: 'M2-2', label: '2-2'),
-        ];
-      case 'M3':
-        return const <_NaesinCourseOption>[
-          _NaesinCourseOption(key: 'M3-1', label: '3-1'),
-          _NaesinCourseOption(key: 'M3-2', label: '3-2'),
-        ];
-      case 'H1':
-        return const <_NaesinCourseOption>[
-          _NaesinCourseOption(key: 'H1-c1', label: '공통수학1'),
-          _NaesinCourseOption(key: 'H1-c2', label: '공통수학2'),
-        ];
-      case 'H2':
-      case 'H3':
-        return const <_NaesinCourseOption>[
-          _NaesinCourseOption(key: 'H-algebra', label: '대수'),
-        ];
-      default:
-        return const <_NaesinCourseOption>[
-          _NaesinCourseOption(key: 'M1-1', label: '1-1'),
-          _NaesinCourseOption(key: 'M1-2', label: '1-2'),
-        ];
-    }
+    return NaesinExamContext.courseOptionsForGrade(gradeKey)
+        .map((e) => _NaesinCourseOption(key: e.key, label: e.label))
+        .toList();
   }
 
   ({String gradeKey, String courseKey}) _deriveNaesinDefaultGradeCourse() {
@@ -2137,12 +2071,12 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           }
           final fallbackSchool = (_selectedSchoolName ?? '').trim();
           var selectedSchool = existing?.school ?? fallbackSchool;
-          if (!_kNaesinLinkSchools.contains(selectedSchool)) {
-            selectedSchool = _kNaesinLinkSchools.first;
+          if (!NaesinExamContext.middleSchools.contains(selectedSchool)) {
+            selectedSchool = NaesinExamContext.middleSchools.first;
           }
           var selectedYear = existing?.year ?? _defaultNaesinYearByDate(now);
-          if (!_kNaesinLinkYears.contains(selectedYear)) {
-            selectedYear = _kNaesinLinkYears.last;
+          if (!NaesinExamContext.linkYears.contains(selectedYear)) {
+            selectedYear = NaesinExamContext.linkYears.last;
           }
 
           final nextLinkKey = await showDialog<String>(
@@ -2314,7 +2248,8 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                                     style: fieldTextStyle,
                                     iconEnabledColor: _rsTextMuted,
                                     items: [
-                                      for (final option in _kNaesinLinkYears)
+                                      for (final option
+                                          in NaesinExamContext.linkYears)
                                         DropdownMenuItem<int>(
                                           value: option,
                                           child: Text(
@@ -2341,7 +2276,8 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                               style: fieldTextStyle,
                               iconEnabledColor: _rsTextMuted,
                               items: [
-                                for (final option in _kNaesinLinkSchools)
+                                for (final option
+                                    in NaesinExamContext.middleSchools)
                                   DropdownMenuItem<String>(
                                     value: option,
                                     child: Text(
@@ -2844,16 +2780,14 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                   left: 0,
                   right: 0,
                   bottom: 16,
-                  child: IgnorePointer(
-                      ignoring: false,
-                      child: ProblemBankBottomFabBar(
-                        selectedCount: _selectedQuestionIds.length,
-                        isBusy: exportBusy,
-                        onSelectAll: _selectAllQuestions,
-                        onClearSelection: _clearQuestionSelection,
-                        onPreview: _openExportLayoutPreviewDialog,
-                        onCreatePlaceholder: _showCreatePlaceholder,
-                      )),
+                  child: ProblemBankBottomFabBar(
+                    selectedCount: _selectedQuestionIds.length,
+                    isBusy: exportBusy,
+                    onSelectAll: _selectAllQuestions,
+                    onClearSelection: _clearQuestionSelection,
+                    onPreview: _openExportLayoutPreviewDialog,
+                    onCreatePlaceholder: _showCreatePlaceholder,
+                  ),
                 ),
               ],
             ),
@@ -2918,83 +2852,83 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     }
     return LayoutBuilder(
       builder: (context, constraints) {
-        const spacing = 10.0;
-        // 그리드 미리보기 카드 크기(보내기 워커와 무관, UI 전용)
-        const maxCardWidth = 571.2; // 672 * 0.85
-        const cardHeight = 397.8; // 468 * 0.85
-        final availableWidth =
-            constraints.maxWidth.isFinite ? constraints.maxWidth : maxCardWidth;
-        final cols = math.max(
-          1,
-          ((availableWidth + spacing) / (maxCardWidth + spacing))
-              .floor()
-              .toInt(),
-        );
-        final cardWidth = ((availableWidth - ((cols - 1) * spacing)) / cols)
-            .clamp(1.0, maxCardWidth)
-            .toDouble();
-        final gridWidth = (cols * cardWidth) + ((cols - 1) * spacing);
-        return Padding(
-          padding: const EdgeInsets.fromLTRB(0, 0, 0, 116),
-          child: Align(
-            alignment: Alignment.topLeft,
-            child: SizedBox(
-              width: gridWidth,
-              child: AnimatedReorderableGrid<LearningProblemQuestion>(
-                items: _questions,
-                itemId: (q) => q.id,
-                cardWidth: cardWidth,
-                cardHeight: cardHeight,
-                spacing: spacing,
-                columns: cols,
-                scrollController: _questionGridScrollCtrl,
-                dragAnchorStrategy: pointerDragAnchorStrategy,
-                itemBuilder: (context, question) {
-                  final selected = _selectedQuestionIds.contains(question.id);
-                  return GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onTap: () =>
-                        _toggleQuestionSelection(question.id, !selected),
-                    child: ProblemBankQuestionCard(
-                      question: question,
-                      selected: selected,
-                      selectedMode: _selectedModeOfQuestion(question),
-                      figureUrlsByPath:
-                          _questionFigureUrlsByPath[question.id] ??
-                              const <String, String>{},
-                      previewImageUrl: _questionPreviewUrls[question.id],
-                      onSelectedChanged: (next) {
-                        _toggleQuestionSelection(question.id, next);
-                      },
-                      onModeSelected: (mode) {
-                        _setQuestionModeSelection(question.id, mode);
-                      },
-                    ),
-                  );
-                },
-                feedbackBuilder: (context, question) {
-                  final selected = _selectedQuestionIds.contains(question.id);
-                  return ProblemBankQuestionCard(
+        const spacing = 8.0;
+        // 그리드: 기본 5열, 카드당 최소 너비 미만이면 열 수만 줄임. 높이 고정(워커와 무관, UI 전용).
+        const defaultGridColumns = 5;
+        const minCardWidth = 252.0;
+        const cardHeight = 432.0;
+        final availableWidth = constraints.maxWidth.isFinite
+            ? constraints.maxWidth
+            : (minCardWidth * defaultGridColumns +
+                (defaultGridColumns - 1) * spacing);
+        var cols = defaultGridColumns;
+        while (cols > 1) {
+          final trialWidth =
+              (availableWidth - (cols - 1) * spacing) / cols;
+          if (trialWidth >= minCardWidth) break;
+          cols -= 1;
+        }
+        final cardWidth =
+            (availableWidth - (cols - 1) * spacing) / cols;
+        return Align(
+          alignment: Alignment.topLeft,
+          child: SizedBox(
+            width: availableWidth,
+            child: AnimatedReorderableGrid<LearningProblemQuestion>(
+              items: _questions,
+              itemId: (q) => q.id,
+              cardWidth: cardWidth,
+              cardHeight: cardHeight,
+              spacing: spacing,
+              columns: cols,
+              scrollController: _questionGridScrollCtrl,
+              dragAnchorStrategy: pointerDragAnchorStrategy,
+              scrollBottomPadding: 120,
+              itemBuilder: (context, question) {
+                final selected = _selectedQuestionIds.contains(question.id);
+                return GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () =>
+                      _toggleQuestionSelection(question.id, !selected),
+                  child: ProblemBankQuestionCard(
                     question: question,
                     selected: selected,
                     selectedMode: _selectedModeOfQuestion(question),
-                    figureUrlsByPath: _questionFigureUrlsByPath[question.id] ??
-                        const <String, String>{},
+                    figureUrlsByPath:
+                        _questionFigureUrlsByPath[question.id] ??
+                            const <String, String>{},
                     previewImageUrl: _questionPreviewUrls[question.id],
-                    onSelectedChanged: (_) {},
-                    onModeSelected: null,
+                    onSelectedChanged: (next) {
+                      _toggleQuestionSelection(question.id, next);
+                    },
+                    onModeSelected: (mode) {
+                      _setQuestionModeSelection(question.id, mode);
+                    },
+                  ),
+                );
+              },
+              feedbackBuilder: (context, question) {
+                final selected = _selectedQuestionIds.contains(question.id);
+                return ProblemBankQuestionCard(
+                  question: question,
+                  selected: selected,
+                  selectedMode: _selectedModeOfQuestion(question),
+                  figureUrlsByPath: _questionFigureUrlsByPath[question.id] ??
+                      const <String, String>{},
+                  previewImageUrl: _questionPreviewUrls[question.id],
+                  onSelectedChanged: (_) {},
+                  onModeSelected: null,
+                );
+              },
+              onReorder: (question, targetIndex) {
+                setState(() {
+                  _commitQuestionReorder(
+                    id: question.id,
+                    targetIndex: targetIndex,
                   );
-                },
-                onReorder: (question, targetIndex) {
-                  setState(() {
-                    _commitQuestionReorder(
-                      id: question.id,
-                      targetIndex: targetIndex,
-                    );
-                  });
-                  _requestQuestionOrderSave();
-                },
-              ),
+                });
+                _requestQuestionOrderSave();
+              },
             ),
           ),
         );

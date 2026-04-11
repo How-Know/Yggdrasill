@@ -9,6 +9,10 @@ class ExamModeService {
   /// 전역 시험기간 모드 상태
   final ValueNotifier<bool> isOn = ValueNotifier<bool>(false);
 
+  /// 학습 화면의 문제은행 탭처럼 하단 FAB가 겹칠 때, 시험기간 전역 FAB 클러스터만 숨긴다(하단 라인 인디케이터는 유지).
+  final ValueNotifier<bool> suppressExamActionCluster =
+      ValueNotifier<bool>(false);
+
   /// 인디케이터 커스텀 값
   final ValueNotifier<Color> indicatorColor = ValueNotifier<Color>(const Color(0xFFE53935));
   final ValueNotifier<double> speed = ValueNotifier<double>(1.0); // 1.0 = 기본 속도

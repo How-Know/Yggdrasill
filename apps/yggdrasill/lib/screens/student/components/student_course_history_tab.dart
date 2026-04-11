@@ -17,13 +17,15 @@ class StudentCourseHistoryTab extends StatefulWidget {
   const StudentCourseHistoryTab({super.key, required this.studentWithInfo});
 
   @override
-  State<StudentCourseHistoryTab> createState() => _StudentCourseHistoryTabState();
+  State<StudentCourseHistoryTab> createState() =>
+      _StudentCourseHistoryTabState();
 }
 
 class _StudentCourseHistoryTabState extends State<StudentCourseHistoryTab> {
   final ScrollController _timelineScrollController = ScrollController();
 
-  DateTime _anchorDate = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
+  DateTime _anchorDate =
+      DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
   int _daysLoaded = 31;
   bool _showAttendance = true;
   bool _showTags = true;
@@ -53,7 +55,11 @@ class _StudentCourseHistoryTabState extends State<StudentCourseHistoryTab> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text('수업 기록', style: TextStyle(color: Colors.white, fontSize: 21, fontWeight: FontWeight.w700)),
+        const Text('수업 기록',
+            style: TextStyle(
+                color: Colors.white,
+                fontSize: 21,
+                fontWeight: FontWeight.w700)),
         const SizedBox(height: 16),
         Row(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -65,7 +71,8 @@ class _StudentCourseHistoryTabState extends State<StudentCourseHistoryTab> {
                 builder: (_, __, ___) {
                   return ValueListenableBuilder<int>(
                     valueListenable: TagStore.instance.revision,
-                    builder: (_, ____, _____) => _buildTimelineCard(student, panelHeight),
+                    builder: (_, ____, _____) =>
+                        _buildTimelineCard(student, panelHeight),
                   );
                 },
               ),
@@ -107,23 +114,33 @@ class _StudentCourseHistoryTabState extends State<StudentCourseHistoryTab> {
           children: [
             Row(
               children: [
-                _filterChip(label: '등/하원', selected: _showAttendance, onSelected: (v) => setState(() => _showAttendance = v)),
+                _filterChip(
+                    label: '등/하원',
+                    selected: _showAttendance,
+                    onSelected: (v) => setState(() => _showAttendance = v)),
                 const SizedBox(width: 8),
-                _filterChip(label: '태그', selected: _showTags, onSelected: (v) => setState(() => _showTags = v)),
+                _filterChip(
+                    label: '태그',
+                    selected: _showTags,
+                    onSelected: (v) => setState(() => _showTags = v)),
                 const Spacer(),
-                Text(DateFormat('yyyy.MM.dd').format(_anchorDate), style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w600)),
+                Text(DateFormat('yyyy.MM.dd').format(_anchorDate),
+                    style: const TextStyle(
+                        color: Colors.white70, fontWeight: FontWeight.w600)),
                 IconButton(
                   tooltip: '날짜 선택',
                   onPressed: () async {
                     final picked = await showDatePicker(
                       context: context,
                       initialDate: _anchorDate,
-                      firstDate: DateTime.now().subtract(const Duration(days: 365 * 2)),
+                      firstDate: DateTime.now()
+                          .subtract(const Duration(days: 365 * 2)),
                       lastDate: DateTime.now().add(const Duration(days: 365)),
                       builder: (context, child) {
                         return Theme(
                           data: Theme.of(context).copyWith(
-                            colorScheme: const ColorScheme.dark(primary: Color(0xFF1B6B63)),
+                            colorScheme: const ColorScheme.dark(
+                                primary: Color(0xFF1B6B63)),
                             dialogBackgroundColor: const Color(0xFF0B1112),
                           ),
                           child: child!,
@@ -132,7 +149,8 @@ class _StudentCourseHistoryTabState extends State<StudentCourseHistoryTab> {
                     );
                     if (picked != null) {
                       setState(() {
-                        _anchorDate = DateTime(picked.year, picked.month, picked.day);
+                        _anchorDate =
+                            DateTime(picked.year, picked.month, picked.day);
                         _daysLoaded = 31;
                       });
                       if (_timelineScrollController.hasClients) {
@@ -140,15 +158,19 @@ class _StudentCourseHistoryTabState extends State<StudentCourseHistoryTab> {
                       }
                     }
                   },
-                  icon: const Icon(Icons.event, color: Colors.white70, size: 20),
+                  icon:
+                      const Icon(Icons.event, color: Colors.white70, size: 20),
                 ),
                 IconButton(
                   tooltip: '태그 관리',
                   onPressed: () async {
-                    await showDialog(context: context, builder: (_) => const TagPresetDialog());
+                    await showDialog(
+                        context: context,
+                        builder: (_) => const TagPresetDialog());
                     if (mounted) setState(() {});
                   },
-                  icon: const Icon(Icons.style, color: Colors.white70, size: 20),
+                  icon:
+                      const Icon(Icons.style, color: Colors.white70, size: 20),
                 ),
               ],
             ),
@@ -157,7 +179,9 @@ class _StudentCourseHistoryTabState extends State<StudentCourseHistoryTab> {
             const SizedBox(height: 12),
             Expanded(
               child: items.isEmpty
-                  ? const Center(child: Text('기록이 없습니다.', style: TextStyle(color: Colors.white54)))
+                  ? const Center(
+                      child: Text('기록이 없습니다.',
+                          style: TextStyle(color: Colors.white54)))
                   : ListView.separated(
                       controller: _timelineScrollController,
                       padding: const EdgeInsets.symmetric(vertical: 8),
@@ -168,12 +192,16 @@ class _StudentCourseHistoryTabState extends State<StudentCourseHistoryTab> {
                         if (item is _HistoryTimelineHeader) {
                           return Row(
                             children: [
-                              const Expanded(child: Divider(color: Colors.white12)),
+                              const Expanded(
+                                  child: Divider(color: Colors.white12)),
                               const SizedBox(width: 8),
                               Text(DateFormat('yyyy.MM.dd').format(item.date),
-                                  style: const TextStyle(color: Colors.white60, fontWeight: FontWeight.w700)),
+                                  style: const TextStyle(
+                                      color: Colors.white60,
+                                      fontWeight: FontWeight.w700)),
                               const SizedBox(width: 8),
-                              const Expanded(child: Divider(color: Colors.white12)),
+                              const Expanded(
+                                  child: Divider(color: Colors.white12)),
                             ],
                           );
                         } else if (item is _HistoryTimelineEntry) {
@@ -186,9 +214,11 @@ class _StudentCourseHistoryTabState extends State<StudentCourseHistoryTab> {
                                 decoration: BoxDecoration(
                                   color: item.color.withOpacity(0.15),
                                   shape: BoxShape.circle,
-                                  border: Border.all(color: item.color.withOpacity(0.8)),
+                                  border: Border.all(
+                                      color: item.color.withOpacity(0.8)),
                                 ),
-                                child: Icon(item.icon, color: item.color, size: 18),
+                                child: Icon(item.icon,
+                                    color: item.color, size: 18),
                               ),
                               const SizedBox(width: 12),
                               Expanded(
@@ -197,12 +227,19 @@ class _StudentCourseHistoryTabState extends State<StudentCourseHistoryTab> {
                                   children: [
                                     Text(
                                       '${item.label} · ${DateFormat('HH:mm').format(item.time)}',
-                                      style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600),
+                                      style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 15,
+                                          fontWeight: FontWeight.w600),
                                     ),
-                                    if (item.note != null && item.note!.isNotEmpty)
+                                    if (item.note != null &&
+                                        item.note!.isNotEmpty)
                                       Padding(
                                         padding: const EdgeInsets.only(top: 4),
-                                        child: Text(item.note!, style: const TextStyle(color: Colors.white60, fontSize: 14)),
+                                        child: Text(item.note!,
+                                            style: const TextStyle(
+                                                color: Colors.white60,
+                                                fontSize: 14)),
                                       ),
                                   ],
                                 ),
@@ -236,11 +273,16 @@ class _StudentCourseHistoryTabState extends State<StudentCourseHistoryTab> {
           children: [
             Row(
               children: [
-                const Text('과제 · 수업 기록', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700)),
+                const Text('과제 · 수업 기록',
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700)),
                 const Spacer(),
                 TextButton.icon(
                   onPressed: () async {
-                    final enabledFlows = await ensureEnabledFlowsForHomework(context, sid);
+                    final enabledFlows =
+                        await ensureEnabledFlowsForHomework(context, sid);
                     if (enabledFlows.isEmpty) return;
                     final draft = await _showHomeworkDialog();
                     if (draft != null) {
@@ -255,10 +297,12 @@ class _StudentCourseHistoryTabState extends State<StudentCourseHistoryTab> {
                     }
                   },
                   icon: const Icon(Icons.add, size: 16, color: Colors.white70),
-                  label: const Text('추가', style: TextStyle(color: Colors.white70)),
+                  label:
+                      const Text('추가', style: TextStyle(color: Colors.white70)),
                   style: TextButton.styleFrom(
                     foregroundColor: Colors.white70,
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   ),
                 ),
               ],
@@ -271,7 +315,9 @@ class _StudentCourseHistoryTabState extends State<StudentCourseHistoryTab> {
                   final list = HomeworkStore.instance.items(sid);
                   _ensureHomeworkTicker(sid, list);
                   if (list.isEmpty) {
-                    return const Center(child: Text('등록된 과제가 없습니다.', style: TextStyle(color: Colors.white54)));
+                    return const Center(
+                        child: Text('등록된 과제가 없습니다.',
+                            style: TextStyle(color: Colors.white54)));
                   }
                   return ListView.separated(
                     padding: EdgeInsets.zero,
@@ -280,8 +326,10 @@ class _StudentCourseHistoryTabState extends State<StudentCourseHistoryTab> {
                     itemBuilder: (context, index) {
                       final hw = list[index];
                       final running = hw.runStart != null;
-                      final bool isHomework = hw.status == HomeworkStatus.homework;
-                      final bool isCompleted = hw.status == HomeworkStatus.completed;
+                      final bool isHomework =
+                          hw.status == HomeworkStatus.homework;
+                      final bool isCompleted =
+                          hw.status == HomeworkStatus.completed;
                       final durationText = _formatHomeworkDuration(hw);
                       final infoOpacity = isCompleted ? 0.55 : 1.0;
                       return Container(
@@ -298,26 +346,40 @@ class _StudentCourseHistoryTabState extends State<StudentCourseHistoryTab> {
                               opacity: infoOpacity,
                               child: Row(
                                 children: [
-                                  Container(width: 12, height: 12, decoration: BoxDecoration(color: hw.color, shape: BoxShape.circle)),
+                                  Container(
+                                      width: 12,
+                                      height: 12,
+                                      decoration: BoxDecoration(
+                                          color: hw.color,
+                                          shape: BoxShape.circle)),
                                   const SizedBox(width: 8),
                                   Expanded(
                                     child: Text(
                                       hw.title,
-                                      style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700),
+                                      style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.w700),
                                       overflow: TextOverflow.ellipsis,
                                     ),
                                   ),
                                   const SizedBox(width: 8),
-                                  Text(durationText, style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                                  Text(durationText,
+                                      style: const TextStyle(
+                                          color: Colors.white54, fontSize: 12)),
                                   PopupMenuButton<String>(
                                     itemBuilder: (_) => const [
-                                      PopupMenuItem(value: 'edit', child: Text('편집')),
-                                      PopupMenuItem(value: 'delete', child: Text('삭제')),
+                                      PopupMenuItem(
+                                          value: 'edit', child: Text('편집')),
+                                      PopupMenuItem(
+                                          value: 'delete', child: Text('삭제')),
                                     ],
                                     onSelected: (value) async {
                                       if (value == 'delete') {
-                                        await HomeworkStore.instance.pause(sid, hw.id);
-                                        HomeworkStore.instance.remove(sid, hw.id);
+                                        await HomeworkStore.instance
+                                            .pause(sid, hw.id);
+                                        HomeworkStore.instance
+                                            .remove(sid, hw.id);
                                         setState(() {});
                                       } else if (value == 'edit') {
                                         final draft = await _showHomeworkDialog(
@@ -335,14 +397,20 @@ class _StudentCourseHistoryTabState extends State<StudentCourseHistoryTab> {
                                       }
                                     },
                                     color: const Color(0xFF232B32),
-                                    icon: const Icon(Icons.more_horiz, color: Colors.white54, size: 20),
+                                    icon: const Icon(Icons.more_horiz,
+                                        color: Colors.white54, size: 20),
                                   ),
                                 ],
                               ),
                             ),
                             if (hw.body.isNotEmpty) ...[
                               const SizedBox(height: 6),
-                              Opacity(opacity: infoOpacity, child: Text(hw.body, style: const TextStyle(color: Colors.white70, fontSize: 14))),
+                              Opacity(
+                                  opacity: infoOpacity,
+                                  child: Text(hw.body,
+                                      style: const TextStyle(
+                                          color: Colors.white70,
+                                          fontSize: 14))),
                             ],
                             const SizedBox(height: 10),
                             Row(
@@ -353,28 +421,59 @@ class _StudentCourseHistoryTabState extends State<StudentCourseHistoryTab> {
                                       ? null
                                       : () async {
                                           if (running) {
-                                            await HomeworkStore.instance.pause(sid, hw.id);
+                                            await HomeworkStore.instance
+                                                .pause(sid, hw.id);
                                           } else {
-                                            await HomeworkStore.instance.start(sid, hw.id);
+                                            final isTestCard =
+                                                (hw.type ?? '').trim() == '테스트';
+                                            if (isTestCard &&
+                                                !HomeworkStore.instance
+                                                    .isStudentInClassTime(
+                                                        sid)) {
+                                              if (!context.mounted) return;
+                                              ScaffoldMessenger.of(context)
+                                                  .showSnackBar(
+                                                const SnackBar(
+                                                  content: Text(
+                                                    '테스트 카드는 수업시간에만 수행할 수 있어요.',
+                                                  ),
+                                                ),
+                                              );
+                                              return;
+                                            }
+                                            await HomeworkStore.instance
+                                                .start(sid, hw.id);
                                           }
                                           setState(() {});
                                         },
-                                  icon: Icon(running ? Icons.pause : Icons.play_arrow, color: isCompleted ? Colors.white30 : Colors.white70, size: 20),
+                                  icon: Icon(
+                                      running ? Icons.pause : Icons.play_arrow,
+                                      color: isCompleted
+                                          ? Colors.white30
+                                          : Colors.white70,
+                                      size: 20),
                                 ),
                                 IconButton(
                                   tooltip: '완료',
                                   onPressed: isCompleted
                                       ? null
                                       : () async {
-                                          await HomeworkStore.instance.complete(sid, hw.id);
+                                          await HomeworkStore.instance
+                                              .complete(sid, hw.id);
                                           setState(() {});
                                         },
-                                  icon: Icon(Icons.check_circle, color: isCompleted ? Colors.white30 : Colors.white70, size: 20),
+                                  icon: Icon(Icons.check_circle,
+                                      color: isCompleted
+                                          ? Colors.white30
+                                          : Colors.white70,
+                                      size: 20),
                                 ),
                                 IconButton(
                                   tooltip: '내용 추가',
                                   onPressed: () async {
-                                    final enabledFlows = await ensureEnabledFlowsForHomework(context, sid);
+                                    final enabledFlows =
+                                        await ensureEnabledFlowsForHomework(
+                                            context, sid);
                                     if (enabledFlows.isEmpty) return;
                                     final draft = await _showHomeworkDialog(
                                       initialTitle: hw.title,
@@ -382,7 +481,8 @@ class _StudentCourseHistoryTabState extends State<StudentCourseHistoryTab> {
                                       bodyOnly: true,
                                     );
                                     if (draft != null) {
-                                      final flowId = hw.flowId ?? enabledFlows.first.id;
+                                      final flowId =
+                                          hw.flowId ?? enabledFlows.first.id;
                                       HomeworkStore.instance.continueAdd(
                                         sid,
                                         hw.id,
@@ -392,26 +492,47 @@ class _StudentCourseHistoryTabState extends State<StudentCourseHistoryTab> {
                                       setState(() {});
                                     }
                                   },
-                                  icon: const Icon(Icons.add, color: Colors.white70, size: 20),
+                                  icon: const Icon(Icons.add,
+                                      color: Colors.white70, size: 20),
                                 ),
                                 const Spacer(),
                                 if (hw.firstStartedAt != null)
-                                  Text('시작 ${DateFormat('MM.dd HH:mm').format(hw.firstStartedAt!)}',
-                                      style: const TextStyle(color: Colors.white38, fontSize: 12)),
+                                  Text(
+                                      '시작 ${DateFormat('MM.dd HH:mm').format(hw.firstStartedAt!)}',
+                                      style: const TextStyle(
+                                          color: Colors.white38, fontSize: 12)),
                                 if (isHomework) ...[
                                   const SizedBox(width: 8),
                                   Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                    decoration: BoxDecoration(color: const Color(0xFFFFC107).withOpacity(0.15), borderRadius: BorderRadius.circular(999)),
-                                    child: const Text('숙제', style: TextStyle(color: Color(0xFFFFC107), fontSize: 11, fontWeight: FontWeight.w700)),
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 8, vertical: 4),
+                                    decoration: BoxDecoration(
+                                        color: const Color(0xFFFFC107)
+                                            .withOpacity(0.15),
+                                        borderRadius:
+                                            BorderRadius.circular(999)),
+                                    child: const Text('숙제',
+                                        style: TextStyle(
+                                            color: Color(0xFFFFC107),
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w700)),
                                   ),
                                 ],
                                 if (isCompleted) ...[
                                   const SizedBox(width: 8),
                                   Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                    decoration: BoxDecoration(color: const Color(0xFF2E7D32).withOpacity(0.25), borderRadius: BorderRadius.circular(999)),
-                                    child: const Text('완료', style: TextStyle(color: Color(0xFFA5D6A7), fontSize: 11, fontWeight: FontWeight.w700)),
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 8, vertical: 4),
+                                    decoration: BoxDecoration(
+                                        color: const Color(0xFF2E7D32)
+                                            .withOpacity(0.25),
+                                        borderRadius:
+                                            BorderRadius.circular(999)),
+                                    child: const Text('완료',
+                                        style: TextStyle(
+                                            color: Color(0xFFA5D6A7),
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w700)),
                                   ),
                                 ],
                               ],
@@ -449,15 +570,28 @@ class _StudentCourseHistoryTabState extends State<StudentCourseHistoryTab> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('출결 요약', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700)),
+          const Text('출결 요약',
+              style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700)),
           const SizedBox(height: 12),
           Row(
             children: [
-              _summaryTile('출석률', total == 0 ? '0%' : '${rate(present).toStringAsFixed(1)}%', '$present / $total'),
+              _summaryTile(
+                  '출석률',
+                  total == 0 ? '0%' : '${rate(present).toStringAsFixed(1)}%',
+                  '$present / $total'),
               const SizedBox(width: 12),
-              _summaryTile('지각', total == 0 ? '0%' : '${rate(late).toStringAsFixed(1)}%', '$late 회'),
+              _summaryTile(
+                  '지각',
+                  total == 0 ? '0%' : '${rate(late).toStringAsFixed(1)}%',
+                  '$late 회'),
               const SizedBox(width: 12),
-              _summaryTile('결석', total == 0 ? '0%' : '${rate(absent).toStringAsFixed(1)}%', '$absent 회'),
+              _summaryTile(
+                  '결석',
+                  total == 0 ? '0%' : '${rate(absent).toStringAsFixed(1)}%',
+                  '$absent 회'),
             ],
           ),
           const SizedBox(height: 16),
@@ -491,11 +625,17 @@ class _StudentCourseHistoryTabState extends State<StudentCourseHistoryTab> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(title, style: const TextStyle(color: Colors.white60, fontSize: 13)),
+            Text(title,
+                style: const TextStyle(color: Colors.white60, fontSize: 13)),
             const SizedBox(height: 6),
-            Text(value, style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w700)),
+            Text(value,
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w700)),
             const SizedBox(height: 2),
-            Text(caption, style: const TextStyle(color: Colors.white38, fontSize: 12)),
+            Text(caption,
+                style: const TextStyle(color: Colors.white38, fontSize: 12)),
           ],
         ),
       ),
@@ -514,14 +654,20 @@ class _StudentCourseHistoryTabState extends State<StudentCourseHistoryTab> {
       showCheckmark: false,
       selectedColor: const Color(0xFF1C2328),
       backgroundColor: const Color(0xFF151C21),
-      shape: StadiumBorder(side: BorderSide(color: selected ? const Color(0xFF1B6B63) : Colors.white24, width: 1.2)),
+      shape: StadiumBorder(
+          side: BorderSide(
+              color: selected ? const Color(0xFF1B6B63) : Colors.white24,
+              width: 1.2)),
     );
   }
 
-  List<_HistoryTimelineEntry> _collectTimelineEntries(StudentWithInfo student, DateTime anchor, int days) {
+  List<_HistoryTimelineEntry> _collectTimelineEntries(
+      StudentWithInfo student, DateTime anchor, int days) {
     final List<_HistoryTimelineEntry> all = [];
-    final DateTime normalizedAnchor = DateTime(anchor.year, anchor.month, anchor.day);
-    final records = DataManager.instance.getAttendanceRecordsForStudent(student.student.id);
+    final DateTime normalizedAnchor =
+        DateTime(anchor.year, anchor.month, anchor.day);
+    final records =
+        DataManager.instance.getAttendanceRecordsForStudent(student.student.id);
     for (int i = 0; i < days; i++) {
       final dayStart = normalizedAnchor.subtract(Duration(days: i));
       final dayEnd = dayStart.add(const Duration(days: 1));
@@ -543,7 +689,9 @@ class _StudentCourseHistoryTabState extends State<StudentCourseHistoryTab> {
 
     if (_showAttendance) {
       for (final record in records) {
-        if (record.arrivalTime != null && !record.arrivalTime!.isBefore(start) && record.arrivalTime!.isBefore(end)) {
+        if (record.arrivalTime != null &&
+            !record.arrivalTime!.isBefore(start) &&
+            record.arrivalTime!.isBefore(end)) {
           final key = 'arr_${record.arrivalTime!.millisecondsSinceEpoch}';
           if (seen.add(key)) {
             entries.add(_HistoryTimelineEntry(
@@ -554,7 +702,9 @@ class _StudentCourseHistoryTabState extends State<StudentCourseHistoryTab> {
             ));
           }
         }
-        if (record.departureTime != null && !record.departureTime!.isBefore(start) && record.departureTime!.isBefore(end)) {
+        if (record.departureTime != null &&
+            !record.departureTime!.isBefore(start) &&
+            record.departureTime!.isBefore(end)) {
           final key = 'dep_${record.departureTime!.millisecondsSinceEpoch}';
           if (seen.add(key)) {
             entries.add(_HistoryTimelineEntry(
@@ -571,17 +721,22 @@ class _StudentCourseHistoryTabState extends State<StudentCourseHistoryTab> {
     if (_showTags) {
       final dayIndex = start.weekday - 1;
       final blocks = DataManager.instance.studentTimeBlocks.where(
-        (block) => block.studentId == studentId && block.setId != null && block.dayIndex == dayIndex,
+        (block) =>
+            block.studentId == studentId &&
+            block.setId != null &&
+            block.dayIndex == dayIndex,
       );
       for (final block in blocks) {
         final events = TagStore.instance.getEventsForSet(block.setId!);
         for (final event in events) {
           if (event.timestamp.isAfter(start) && event.timestamp.isBefore(end)) {
-            final key = 'tag_${block.setId}_${event.tagName}_${event.timestamp.millisecondsSinceEpoch}_${event.note ?? ''}';
+            final key =
+                'tag_${block.setId}_${event.tagName}_${event.timestamp.millisecondsSinceEpoch}_${event.note ?? ''}';
             if (seen.add(key)) {
               entries.add(_HistoryTimelineEntry(
                 time: event.timestamp,
-                icon: IconData(event.iconCodePoint, fontFamily: 'MaterialIcons'),
+                icon:
+                    IconData(event.iconCodePoint, fontFamily: 'MaterialIcons'),
                 color: Color(event.colorValue),
                 label: event.tagName,
                 note: event.note,
@@ -600,7 +755,8 @@ class _StudentCourseHistoryTabState extends State<StudentCourseHistoryTab> {
     DateTime? currentDate;
     for (final entry in entries) {
       final date = DateTime(entry.time.year, entry.time.month, entry.time.day);
-      if (currentDate == null || currentDate.millisecondsSinceEpoch != date.millisecondsSinceEpoch) {
+      if (currentDate == null ||
+          currentDate.millisecondsSinceEpoch != date.millisecondsSinceEpoch) {
         currentDate = date;
         list.add(_HistoryTimelineHeader(date: date));
       }
@@ -611,7 +767,8 @@ class _StudentCourseHistoryTabState extends State<StudentCourseHistoryTab> {
 
   void _handleScroll() {
     if (!_timelineScrollController.hasClients) return;
-    if (_timelineScrollController.position.pixels >= _timelineScrollController.position.maxScrollExtent - 80) {
+    if (_timelineScrollController.position.pixels >=
+        _timelineScrollController.position.maxScrollExtent - 80) {
       setState(() {
         _daysLoaded += 31;
       });
@@ -642,7 +799,8 @@ class _StudentCourseHistoryTabState extends State<StudentCourseHistoryTab> {
     bool bodyOnly = false,
   }) async {
     final titleController = TextEditingController(text: initialTitle ?? '');
-    final bodyController = TextEditingController(text: bodyOnly ? '' : (initialBody ?? ''));
+    final bodyController =
+        TextEditingController(text: bodyOnly ? '' : (initialBody ?? ''));
     Color selectedColor = initialColor ?? const Color(0xFF1976D2);
     const palette = [
       Color(0xFF1976D2),
@@ -660,8 +818,13 @@ class _StudentCourseHistoryTabState extends State<StudentCourseHistoryTab> {
           builder: (context, setLocal) {
             return AlertDialog(
               backgroundColor: const Color(0xFF0B1112),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              title: Text(bodyOnly ? '내용 추가' : (initialTitle == null ? '과제 추가' : '과제 편집'), style: const TextStyle(color: Colors.white)),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
+              title: Text(
+                  bodyOnly
+                      ? '내용 추가'
+                      : (initialTitle == null ? '과제 추가' : '과제 편집'),
+                  style: const TextStyle(color: Colors.white)),
               content: SizedBox(
                 width: 420,
                 child: Column(
@@ -675,8 +838,10 @@ class _StudentCourseHistoryTabState extends State<StudentCourseHistoryTab> {
                         decoration: const InputDecoration(
                           labelText: '제목',
                           labelStyle: TextStyle(color: Colors.white60),
-                          enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
-                          focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1B6B63))),
+                          enabledBorder: OutlineInputBorder(
+                              borderSide: BorderSide(color: Colors.white24)),
+                          focusedBorder: OutlineInputBorder(
+                              borderSide: BorderSide(color: Color(0xFF1B6B63))),
                         ),
                       ),
                       const SizedBox(height: 12),
@@ -689,8 +854,10 @@ class _StudentCourseHistoryTabState extends State<StudentCourseHistoryTab> {
                       decoration: const InputDecoration(
                         labelText: '내용',
                         labelStyle: TextStyle(color: Colors.white60),
-                        enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
-                        focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF1B6B63))),
+                        enabledBorder: OutlineInputBorder(
+                            borderSide: BorderSide(color: Colors.white24)),
+                        focusedBorder: OutlineInputBorder(
+                            borderSide: BorderSide(color: Color(0xFF1B6B63))),
                       ),
                     ),
                     if (!bodyOnly) ...[
@@ -716,15 +883,22 @@ class _StudentCourseHistoryTabState extends State<StudentCourseHistoryTab> {
               actions: [
                 TextButton(
                   onPressed: () => Navigator.pop(context, null),
-                  child: const Text('취소', style: TextStyle(color: Colors.white70)),
+                  child:
+                      const Text('취소', style: TextStyle(color: Colors.white70)),
                 ),
                 FilledButton(
-                  style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B6B63)),
+                  style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFF1B6B63)),
                   onPressed: () {
                     final title = titleController.text.trim();
                     final body = bodyController.text.trim();
                     if (!bodyOnly && title.isEmpty) return;
-                    Navigator.pop(context, _HomeworkDraft(title: title.isEmpty ? '과제' : title, body: body, color: selectedColor));
+                    Navigator.pop(
+                        context,
+                        _HomeworkDraft(
+                            title: title.isEmpty ? '과제' : title,
+                            body: body,
+                            color: selectedColor));
                   },
                   child: const Text('확인'),
                 ),
@@ -741,13 +915,16 @@ class _StudentCourseHistoryTabState extends State<StudentCourseHistoryTab> {
   }
 
   List<AttendanceRecord> _uniqueAttendanceRecords(String studentId) {
-    final records = DataManager.instance.getAttendanceRecordsForStudent(studentId)
+    final records = DataManager.instance
+        .getAttendanceRecordsForStudent(studentId)
       ..sort((a, b) => b.classDateTime.compareTo(a.classDateTime));
     final Map<DateTime, AttendanceRecord> uniqueMap = {};
     for (final record in records) {
-      final dayKey = DateTime(record.classDateTime.year, record.classDateTime.month, record.classDateTime.day);
+      final dayKey = DateTime(record.classDateTime.year,
+          record.classDateTime.month, record.classDateTime.day);
       final existing = uniqueMap[dayKey];
-      if (existing == null || _compareAttendancePriority(record, existing) < 0) {
+      if (existing == null ||
+          _compareAttendancePriority(record, existing) < 0) {
         uniqueMap[dayKey] = record;
       }
     }
@@ -757,7 +934,9 @@ class _StudentCourseHistoryTabState extends State<StudentCourseHistoryTab> {
   }
 
   String _formatHomeworkDuration(HomeworkItem hw) {
-    final runningMs = hw.runStart != null ? DateTime.now().difference(hw.runStart!).inMilliseconds : 0;
+    final runningMs = hw.runStart != null
+        ? DateTime.now().difference(hw.runStart!).inMilliseconds
+        : 0;
     final totalMs = hw.accumulatedMs + runningMs;
     final duration = Duration(milliseconds: totalMs);
     final hours = duration.inHours;
@@ -797,7 +976,8 @@ class _HomeworkDraft {
   final String body;
   final Color color;
 
-  _HomeworkDraft({required this.title, required this.body, required this.color});
+  _HomeworkDraft(
+      {required this.title, required this.body, required this.color});
 }
 
 class _ColorDot extends StatelessWidget {
@@ -805,7 +985,8 @@ class _ColorDot extends StatelessWidget {
   final bool selected;
   final VoidCallback onTap;
 
-  const _ColorDot({required this.color, required this.selected, required this.onTap});
+  const _ColorDot(
+      {required this.color, required this.selected, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -817,7 +998,9 @@ class _ColorDot extends StatelessWidget {
         decoration: BoxDecoration(
           color: color,
           shape: BoxShape.circle,
-          border: Border.all(color: selected ? Colors.white : Colors.white24, width: selected ? 2 : 1),
+          border: Border.all(
+              color: selected ? Colors.white : Colors.white24,
+              width: selected ? 2 : 1),
         ),
       ),
     );
@@ -843,5 +1026,3 @@ bool _isLate(AttendanceRecord record) {
 }
 
 bool _isAbsent(AttendanceRecord record) => !record.isPresent;
-
-

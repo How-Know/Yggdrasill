@@ -39,6 +39,7 @@ import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 import 'widgets/right_side_sheet/right_side_sheet.dart';
 import 'widgets/memo_dialogs.dart';
 import 'app_overlays.dart';
+import 'screens/learning/past_exam_papers_dialog.dart';
 
 // 테스트 전용: 전역 RawKeyboardListener의 autofocus를 끌 수 있는 플래그 (기본값: 유지)
 const bool kDisableGlobalKbAutofocus =
@@ -1832,60 +1833,67 @@ class _GlobalExamOverlayState extends State<_GlobalExamOverlay>
           valueListenable: ExamModeService.instance.isOn,
           builder: (context, isOn, _) {
             if (!isOn) return const SizedBox.shrink();
-            return Stack(
-              children: [
-                // 하단 전역 인디케이터(직선, 밝기 시퀀셜 애니메이션)
-                Positioned(
-                  left: 0,
-                  right: 0,
-                  bottom: 0,
-                  height: 3,
-                  child: ValueListenableBuilder<Color>(
-                    valueListenable: ExamModeService.instance.indicatorColor,
-                    builder: (context, color, _) {
-                      return ValueListenableBuilder<String>(
-                        valueListenable: ExamModeService.instance.effect,
-                        builder: (context, effect, __) {
-                          return AnimatedBuilder(
-                            animation: _indicatorCtrl,
-                            builder: (context, _) {
-                              if (effect == 'breath') {
-                                final t = (math.sin(_indicatorCtrl.value *
-                                            2 *
-                                            math.pi) +
-                                        1) /
-                                    2; // 0..1
-                                final opacity = 0.2 + 0.8 * t; // 0.2..1.0
-                                return Container(
-                                    color: color.withOpacity(opacity));
-                              }
-                              if (effect == 'solid') {
-                                return Container(
-                                    color: color.withOpacity(0.85));
-                              }
-                              return RepaintBoundary(
-                                  child: _AnimatedLinearGlow(
-                                progress: _indicatorCtrl.value,
-                                baseColor: color,
-                                dimOpacity: 0.35,
-                                glowOpacity: 1.0,
-                                bandFraction: 0.18,
-                              ));
+            return ValueListenableBuilder<bool>(
+              valueListenable:
+                  ExamModeService.instance.suppressExamActionCluster,
+              builder: (context, suppressFabCluster, _) {
+                return Stack(
+                  children: [
+                    // 하단 전역 인디케이터(직선, 밝기 시퀀셜 애니메이션)
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      height: 3,
+                      child: ValueListenableBuilder<Color>(
+                        valueListenable: ExamModeService.instance.indicatorColor,
+                        builder: (context, color, _) {
+                          return ValueListenableBuilder<String>(
+                            valueListenable: ExamModeService.instance.effect,
+                            builder: (context, effect, __) {
+                              return AnimatedBuilder(
+                                animation: _indicatorCtrl,
+                                builder: (context, _) {
+                                  if (effect == 'breath') {
+                                    final t = (math.sin(_indicatorCtrl.value *
+                                                2 *
+                                                math.pi) +
+                                            1) /
+                                        2; // 0..1
+                                    final opacity = 0.2 + 0.8 * t; // 0.2..1.0
+                                    return Container(
+                                        color: color.withOpacity(opacity));
+                                  }
+                                  if (effect == 'solid') {
+                                    return Container(
+                                        color: color.withOpacity(0.85));
+                                  }
+                                  return RepaintBoundary(
+                                      child: _AnimatedLinearGlow(
+                                    progress: _indicatorCtrl.value,
+                                    baseColor: color,
+                                    dimOpacity: 0.35,
+                                    glowOpacity: 1.0,
+                                    bandFraction: 0.18,
+                                  ));
+                                },
+                              );
                             },
                           );
                         },
-                      );
-                    },
-                  ),
-                ),
-                // 하단 중앙 FAB 클러스터: 기존 전역 FAB라인보다 더 아래 정렬 (정밀 조정)
-                Positioned(
-                  left: 0,
-                  right: 0,
-                  bottom: 30, // 필요 시 더 낮추려면 값 감소 (예: 48/40)
-                  child: Center(child: _ExamFabCluster()),
-                ),
-              ],
+                      ),
+                    ),
+                    // 하단 중앙 FAB 클러스터: 문제은행 탭 등에서 로컬 FAB와 겹치면 숨김
+                    if (!suppressFabCluster)
+                      Positioned(
+                        left: 0,
+                        right: 0,
+                        bottom: 30, // 필요 시 더 낮추려면 값 감소 (예: 48/40)
+                        child: Center(child: _ExamFabCluster()),
+                      ),
+                  ],
+                );
+              },
             );
           },
         ),
@@ -1926,9 +1934,13 @@ class _ExamFabCluster extends StatelessWidget {
             _ExamActionButton(
                 icon: Icons.assignment_turned_in,
                 label: '기출',
-                onPressed: () {
-                  rootScaffoldMessengerKey.currentState?.showSnackBar(
-                      const SnackBar(content: Text('기출 기능은 준비 중입니다.')));
+                onPressed: () async {
+                  final nav = rootNavigatorKey.currentState;
+                  if (nav == null) return;
+                  await showDialog<void>(
+                    context: nav.context,
+                    builder: (ctx) => const PastExamPapersDialog(),
+                  );
                 }),
             const SizedBox(width: 12),
             // 설정 버튼은 아이콘만
@@ -4984,7 +4996,8 @@ class _MemoSlideOverlayState extends State<_MemoSlideOverlay> {
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(builder: (context, constraints) {
-      const double panelWidth = 238 * 1.2; // 기존(238)에서 +20% 확장
+      const double panelWidth =
+          238 * 1.2 * 1.2 * 1.1 * 1.05; // 직전 너비 대비 +5%
       const double edgeOpenZoneWidth = 9; // 기존 16.8px에서 -30% (호버/엣지 스와이프 오픈 영역)
       return ValueListenableBuilder<bool>(
         valueListenable: blockRightSideSheetOpen,

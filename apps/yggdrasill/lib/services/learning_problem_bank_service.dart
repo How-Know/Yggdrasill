@@ -887,6 +887,114 @@ class LearningProblemBankService {
         .toList(growable: false);
   }
 
+  Future<List<LearningProblemQuestion>> loadQuestionsByQuestionUids({
+    required String academyId,
+    required Iterable<String> questionUids,
+  }) async {
+    final safeAcademyId = academyId.trim();
+    final requestedUids = questionUids
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toList(growable: false);
+    if (safeAcademyId.isEmpty || requestedUids.isEmpty) {
+      return const <LearningProblemQuestion>[];
+    }
+    final uniqueRequested = <String>[];
+    final seenRequested = <String>{};
+    for (final uid in requestedUids) {
+      if (!seenRequested.add(uid)) continue;
+      uniqueRequested.add(uid);
+    }
+
+    const selectFields = 'id,question_uid,document_id,question_number,'
+        'question_type,stem,choices,objective_choices,allow_objective,'
+        'allow_subjective,objective_answer_key,subjective_answer,reviewer_notes,'
+        'equations,source_page,source_order,curriculum_code,source_type_code,'
+        'course_label,grade_label,exam_year,semester_label,exam_term_label,'
+        'school_name,publisher_name,material_name,confidence,figure_refs,meta,'
+        'created_at';
+    final byUid = <String, Map<String, dynamic>>{};
+    final byId = <String, Map<String, dynamic>>{};
+    final docIds = <String>{};
+
+    Future<void> collectByField({
+      required String field,
+      required List<String> values,
+    }) async {
+      for (final chunk in _chunkStrings(values, 250)) {
+        dynamic rows;
+        try {
+          rows = await _client
+              .from('pb_questions')
+              .select(selectFields)
+              .eq('academy_id', safeAcademyId)
+              .inFilter(field, chunk);
+        } catch (_) {
+          continue;
+        }
+        for (final raw in _listOrEmpty(rows)) {
+          final row = _mapOrEmpty(raw);
+          if (row.isEmpty) continue;
+          final uid = '${row['question_uid'] ?? ''}'.trim();
+          final id = '${row['id'] ?? ''}'.trim();
+          if (uid.isNotEmpty) {
+            byUid.putIfAbsent(uid, () => row);
+          }
+          if (id.isNotEmpty) {
+            byId.putIfAbsent(id, () => row);
+          }
+          final docId = '${row['document_id'] ?? ''}'.trim();
+          if (docId.isNotEmpty) {
+            docIds.add(docId);
+          }
+        }
+      }
+    }
+
+    await collectByField(field: 'question_uid', values: uniqueRequested);
+    final unresolved = uniqueRequested
+        .where((uid) => !byUid.containsKey(uid) && !byId.containsKey(uid))
+        .toList(growable: false);
+    if (unresolved.isNotEmpty) {
+      await collectByField(field: 'id', values: unresolved);
+    }
+
+    final docNameById = <String, String>{};
+    if (docIds.isNotEmpty) {
+      for (final chunk in _chunkStrings(docIds.toList(growable: false), 250)) {
+        try {
+          final rows = await _client
+              .from('pb_documents')
+              .select('id,source_filename')
+              .eq('academy_id', safeAcademyId)
+              .inFilter('id', chunk);
+          for (final raw in _listOrEmpty(rows)) {
+            final row = _mapOrEmpty(raw);
+            final id = '${row['id'] ?? ''}'.trim();
+            if (id.isEmpty) continue;
+            docNameById[id] = '${row['source_filename'] ?? ''}'.trim();
+          }
+        } catch (_) {
+          continue;
+        }
+      }
+    }
+
+    final out = <LearningProblemQuestion>[];
+    for (final uid in uniqueRequested) {
+      final row = byUid[uid] ?? byId[uid];
+      if (row == null) continue;
+      final docId = '${row['document_id'] ?? ''}'.trim();
+      out.add(
+        LearningProblemQuestion.fromMap(
+          row,
+          documentSourceName: docNameById[docId] ?? '',
+        ),
+      );
+    }
+    return out;
+  }
+
   Future<Map<String, int>> loadQuestionOrders({
     required String academyId,
     required String scopeKey,

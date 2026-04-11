@@ -50,23 +50,23 @@ class ProblemBankQuestionCard extends StatelessWidget {
           Divider(height: 1, color: color.divider),
           Expanded(
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+              padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Expanded(
                     child: _buildPreviewContent(previewQuestion),
                   ),
-                  const SizedBox(height: 6),
+                  const SizedBox(height: 4),
                   Text(
                     _metaSummaryText(),
-                    maxLines: 2,
+                    maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       color: color.textMuted,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                      height: 1.35,
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w600,
+                      height: 1.3,
                     ),
                   ),
                 ],
@@ -122,14 +122,26 @@ class ProblemBankQuestionCard extends StatelessWidget {
   }
 
   Widget _buildNativeFallback(LearningProblemQuestion previewQuestion) {
-    return ProblemBankManagerPreviewPaper(
-      question: previewQuestion,
-      figureUrlsByPath: figureUrlsByPath,
-      expanded: false,
-      scrollable: true,
-      bordered: false,
-      shadow: false,
-      showQuestionNumberPrefix: false,
+    return Builder(
+      builder: (context) {
+        final ts = MediaQuery.textScalerOf(context);
+        final ref = ts.scale(16);
+        final combined = (ref / 16.0 * 1.07).clamp(0.85, 2.0);
+        return MediaQuery(
+          data: MediaQuery.of(context).copyWith(
+            textScaler: TextScaler.linear(combined),
+          ),
+          child: ProblemBankManagerPreviewPaper(
+            question: previewQuestion,
+            figureUrlsByPath: figureUrlsByPath,
+            expanded: true,
+            scrollable: true,
+            bordered: false,
+            shadow: false,
+            showQuestionNumberPrefix: false,
+          ),
+        );
+      },
     );
   }
 
@@ -141,7 +153,7 @@ class ProblemBankQuestionCard extends StatelessWidget {
       selectedMode,
     );
     return Padding(
-      padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
+      padding: const EdgeInsets.fromLTRB(6, 6, 6, 6),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -149,32 +161,33 @@ class ProblemBankQuestionCard extends StatelessWidget {
             Checkbox(
               value: selected,
               visualDensity: VisualDensity.compact,
+              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
               side: BorderSide(color: color.checkBorder),
               activeColor: color.accent,
               onChanged: (v) => onSelectedChanged(v ?? false),
             ),
           Expanded(
             child: Padding(
-              padding: const EdgeInsets.only(top: 3),
+              padding: const EdgeInsets.only(top: 2),
               child: Text(
                 '${question.displayQuestionNumber}번 문항',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
-                  fontSize: 15,
+                  fontSize: 14,
                   fontWeight: FontWeight.w800,
                   color: color.textPrimary,
                 ),
               ),
             ),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 6),
           Flexible(
             child: Align(
               alignment: Alignment.topRight,
               child: Wrap(
-                spacing: 6,
-                runSpacing: 6,
+                spacing: 4,
+                runSpacing: 4,
                 alignment: WrapAlignment.end,
                 children: [
                   for (final mode in availableModes)
@@ -228,7 +241,7 @@ class ProblemBankQuestionCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(999),
         onTap: enabled ? () => onModeSelected?.call(mode) : null,
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
           decoration: BoxDecoration(
             color: bg,
             borderRadius: BorderRadius.circular(999),
@@ -240,15 +253,15 @@ class ProblemBankQuestionCard extends StatelessWidget {
               if (isSelected) ...[
                 Icon(
                   Icons.check_rounded,
-                  size: 13,
+                  size: 12,
                   color: isOriginal ? color.badgeText : color.accent,
                 ),
-                const SizedBox(width: 3),
+                const SizedBox(width: 2),
               ],
               Text(
                 label,
                 style: TextStyle(
-                  fontSize: 12,
+                  fontSize: 11,
                   fontWeight: FontWeight.w700,
                   color: textColor,
                 ),

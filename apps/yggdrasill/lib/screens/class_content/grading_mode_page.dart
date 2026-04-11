@@ -369,13 +369,16 @@ class _GradingModePageState extends State<GradingModePage> {
   }
 
   bool _isPrintCoverEntry(_GradingGroupEntry entry) {
-    if (_normalizedTypeLabel(entry.summary) == '프린트') return true;
+    const printLikeTypes = <String>{'프린트', '테스트'};
+    if (printLikeTypes.contains(_normalizedTypeLabel(entry.summary))) {
+      return true;
+    }
     var hasTypedChild = false;
     for (final child in entry.children) {
       final type = _normalizedTypeLabel(child);
       if (type.isEmpty) continue;
       hasTypedChild = true;
-      if (type != '프린트') return false;
+      if (!printLikeTypes.contains(type)) return false;
     }
     return hasTypedChild;
   }
@@ -714,6 +717,7 @@ class _GradingModePageState extends State<GradingModePage> {
       body: displaySeed.body,
       color: first.color,
       flowId: group.flowId ?? first.flowId,
+      testOriginFlowId: displaySeed.testOriginFlowId ?? first.testOriginFlowId,
       type: summaryType,
       page: pageSummary.isEmpty ? null : pageSummary,
       count: totalCount > 0 ? totalCount : first.count,
@@ -1292,13 +1296,16 @@ class _SubmittedHomeworkCard extends StatelessWidget {
   }
 
   bool _isPrintCoverEntry(_GradingGroupEntry entry) {
-    if (_normalizedTypeLabel(entry.summary) == '프린트') return true;
+    const printLikeTypes = <String>{'프린트', '테스트'};
+    if (printLikeTypes.contains(_normalizedTypeLabel(entry.summary))) {
+      return true;
+    }
     var hasTypedChild = false;
     for (final child in entry.children) {
       final type = _normalizedTypeLabel(child);
       if (type.isEmpty) continue;
       hasTypedChild = true;
-      if (type != '프린트') return false;
+      if (!printLikeTypes.contains(type)) return false;
     }
     return hasTypedChild;
   }
@@ -1306,6 +1313,7 @@ class _SubmittedHomeworkCard extends StatelessWidget {
   Color _coverColorForType(HomeworkItem hw) {
     switch (_normalizedTypeLabel(hw)) {
       case '프린트':
+      case '테스트':
         return Colors.white;
       case '교재':
       case '문제집':

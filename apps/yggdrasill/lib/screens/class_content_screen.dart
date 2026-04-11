@@ -21,6 +21,8 @@ import '../services/tag_preset_service.dart';
 import '../services/tag_store.dart';
 import 'learning/tag_preset_dialog.dart';
 import 'learning/homework_edit_dialog.dart';
+import 'learning/models/problem_bank_export_models.dart'
+    show previewAnswerForMode;
 import '../widgets/dialog_tokens.dart';
 import '../widgets/homework_assign_dialog.dart';
 import '../app_overlays.dart';
@@ -58,6 +60,14 @@ class _ClassContentScreenState extends State<ClassContentScreen>
   String? _expandedReservedStudentId;
   bool _pendingConfirmFabSyncScheduled = false;
   final Map<String, String> _favoriteTemplateBookNameById = <String, String>{};
+  final LearningProblemBankService _problemBankService =
+      LearningProblemBankService();
+  final Map<String, Map<String, HomeworkAnswerCellState>>
+      _testGradingDraftStatesByHomeworkId =
+      <String, Map<String, HomeworkAnswerCellState>>{};
+  final Map<String, List<Map<String, dynamic>>>
+      _testGradingSerializedDraftByHomeworkId =
+      <String, List<Map<String, dynamic>>>{};
 
   @override
   void initState() {
@@ -86,6 +96,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     homeBatchConfirmAction = null;
     homeBatchConfirmPendingCount.value = 0;
     homeBatchConfirmFabVisible.value = false;
+    rightSideSheetTestGradingSession.value = null;
     _uiAnimController.dispose();
     _clockTimer.cancel();
     super.dispose();
@@ -1316,17 +1327,40 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     final normalizedFlowId = forceFlowId.trim().isNotEmpty
         ? forceFlowId.trim()
         : (template.flowId ?? '').trim();
+    final hasTestParts = template.parts.any(
+      (part) => _isTestHomeworkTypeLabel(part.type),
+    );
+    String? testFlowId;
+    if (hasTestParts) {
+      testFlowId = await _ensureTestFlowIdForStudent(studentId);
+      if (testFlowId == null || testFlowId.isEmpty) {
+        return 0;
+      }
+    }
     final splitMap = <String, int>{};
     final createdItems = <HomeworkItem>[];
 
     if (template.isGroup || template.parts.length > 1) {
       final rows = <Map<String, dynamic>>[];
       for (final part in template.parts) {
+        final partType = (part.type ?? '').trim();
+        final isTestPart = _isTestHomeworkTypeLabel(partType);
+        final fallbackOrigin = (part.flowId ?? '').trim();
+        final resolvedOriginFlowId = (part.testOriginFlowId ?? '')
+                .trim()
+                .isNotEmpty
+            ? part.testOriginFlowId!.trim()
+            : (normalizedFlowId.isNotEmpty ? normalizedFlowId : fallbackOrigin);
         rows.add({
           'title': part.title,
           'body': part.body,
           'color': part.color,
-          'type': part.type,
+          'flowId': isTestPart
+              ? testFlowId
+              : ((part.flowId ?? '').trim().isEmpty ? null : part.flowId),
+          'testOriginFlowId':
+              isTestPart ? resolvedOriginFlowId : part.testOriginFlowId,
+          'type': partType,
           'page': part.page,
           'count': part.count,
           'timeLimitMinutes': part.timeLimitMinutes,
@@ -1361,13 +1395,25 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     } else {
       final part = template.parts.first;
       final fallbackFlowId = (part.flowId ?? '').trim();
+      final isTestPart = _isTestHomeworkTypeLabel(part.type);
+      final resolvedFlowId = isTestPart
+          ? testFlowId
+          : (normalizedFlowId.isEmpty ? fallbackFlowId : normalizedFlowId);
+      final resolvedTestOriginFlowId = isTestPart
+          ? ((part.testOriginFlowId ?? '').trim().isNotEmpty
+              ? part.testOriginFlowId!.trim()
+              : (normalizedFlowId.isNotEmpty
+                  ? normalizedFlowId
+                  : fallbackFlowId))
+          : part.testOriginFlowId;
       final reserveSingle = mode == _FavoriteIssueMode.reserve;
       final created = HomeworkStore.instance.add(
         studentId,
         title: part.title,
         body: part.body,
         color: part.color,
-        flowId: normalizedFlowId.isEmpty ? fallbackFlowId : normalizedFlowId,
+        flowId: resolvedFlowId,
+        testOriginFlowId: resolvedTestOriginFlowId,
         type: part.type,
         page: part.page,
         count: part.count,
@@ -1448,6 +1494,21 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     return '교재 정보 없음';
   }
 
+  bool _isTestHomeworkTypeLabel(String? typeLabel) =>
+      (typeLabel ?? '').trim() == '테스트';
+
+  Future<String?> _ensureTestFlowIdForStudent(String studentId) async {
+    try {
+      final flow = await StudentFlowStore.instance.ensureTestFlowForStudent(
+        studentId,
+      );
+      final flowId = (flow?.id ?? '').trim();
+      return flowId.isEmpty ? null : flowId;
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<void> _onAddHomework(BuildContext context, String studentId) async {
     final enabledFlows =
         await ensureEnabledFlowsForHomework(context, studentId);
@@ -1485,11 +1546,36 @@ class _ClassContentScreenState extends State<ClassContentScreen>
             );
             return;
           }
+          final selectedFlowId = (item['flowId'] as String?)?.trim();
+          final hasTestEntries = entries.any(
+            (entry) => _isTestHomeworkTypeLabel(entry['type'] as String?),
+          );
+          if (hasTestEntries) {
+            final testFlowId = await _ensureTestFlowIdForStudent(studentId);
+            if (testFlowId == null || testFlowId.isEmpty) {
+              if (!context.mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('테스트 플로우를 준비하지 못했습니다.')),
+              );
+              return;
+            }
+            for (final entry in entries) {
+              if (!_isTestHomeworkTypeLabel(entry['type'] as String?)) continue;
+              entry['flowId'] = testFlowId;
+              final existingOrigin =
+                  (entry['testOriginFlowId'] as String?)?.trim() ?? '';
+              if (existingOrigin.isEmpty &&
+                  selectedFlowId != null &&
+                  selectedFlowId.isNotEmpty) {
+                entry['testOriginFlowId'] = selectedFlowId;
+              }
+            }
+          }
           final createdItems =
               await HomeworkStore.instance.createGroupWithWaitingItems(
             studentId: studentId,
             groupTitle: (item['groupTitle'] as String?)?.trim() ?? '',
-            flowId: (item['flowId'] as String?)?.trim(),
+            flowId: selectedFlowId,
             items: entries,
             reserveAssignments: isReserve,
           );
@@ -1520,6 +1606,20 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         } else {
           entries.add(item);
         }
+        final hasTestEntries = entries.any(
+          (entry) => _isTestHomeworkTypeLabel(entry['type'] as String?),
+        );
+        String? testFlowId;
+        if (hasTestEntries) {
+          testFlowId = await _ensureTestFlowIdForStudent(studentId);
+          if (testFlowId == null || testFlowId.isEmpty) {
+            if (!context.mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('테스트 플로우를 준비하지 못했습니다.')),
+            );
+            return;
+          }
+        }
         int parseSplitParts(dynamic value) {
           if (value is int) return value.clamp(1, 4).toInt();
           if (value is num) return value.toInt().clamp(1, 4).toInt();
@@ -1545,13 +1645,22 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         for (final entry in entries) {
           final splitParts =
               parseSplitParts(entry['splitParts'] ?? item['splitParts']);
+          final typeLabel = (entry['type'] as String?)?.trim();
+          final bool isTestCard = _isTestHomeworkTypeLabel(typeLabel);
+          final resolvedFlowId = isTestCard ? testFlowId : flowId;
+          final existingOrigin =
+              (entry['testOriginFlowId'] as String?)?.trim() ?? '';
+          final resolvedTestOriginFlowId = isTestCard
+              ? (existingOrigin.isNotEmpty ? existingOrigin : flowId?.trim())
+              : null;
           final created = HomeworkStore.instance.add(
             item['studentId'],
             title: (entry['title'] as String?) ?? '',
             body: (entry['body'] as String?) ?? '',
             color: (entry['color'] as Color?) ?? const Color(0xFF1976D2),
-            flowId: flowId,
-            type: (entry['type'] as String?)?.trim(),
+            flowId: resolvedFlowId,
+            testOriginFlowId: resolvedTestOriginFlowId,
+            type: typeLabel,
             page: (entry['page'] as String?)?.trim(),
             count: parsePositiveInt(entry['count']),
             timeLimitMinutes: parsePositiveInt(entry['timeLimitMinutes']),
@@ -2048,6 +2157,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           unselectedIds,
         );
       }
+      HomeworkStore.instance.convertAllTestCardsToPrintForDeparture(studentId);
       if (selection.printTodoOnConfirm) {
         try {
           await printHomeworkTodoSheet(
@@ -2136,6 +2246,247 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     );
   }
 
+  List<HomeworkAnswerOverlayEntry> _buildOverlayEntriesForPendingKeys({
+    required List<({String studentId, String itemId})> keys,
+    required HomeworkItem fallbackHomework,
+  }) {
+    final seenItemIds = <String>{};
+    final overlayEntries = <HomeworkAnswerOverlayEntry>[];
+    for (final key in keys) {
+      final item = HomeworkStore.instance.getById(key.studentId, key.itemId);
+      if (item == null) continue;
+      if (!seenItemIds.add(item.id)) continue;
+      final title = item.title.trim().isEmpty ? '(제목 없음)' : item.title.trim();
+      final pageRaw = (item.page ?? '').trim();
+      final pageText = pageRaw.isEmpty ? '-' : 'p.$pageRaw';
+      final memoRaw = (item.memo ?? '').trim();
+      final memoText = memoRaw.isEmpty ? '-' : memoRaw;
+      overlayEntries.add(
+        HomeworkAnswerOverlayEntry(
+          title: title,
+          page: pageText,
+          memo: memoText,
+        ),
+      );
+    }
+    if (overlayEntries.isEmpty) {
+      final fallbackPage = (fallbackHomework.page ?? '').trim();
+      final fallbackMemo = (fallbackHomework.memo ?? '').trim();
+      overlayEntries.add(
+        HomeworkAnswerOverlayEntry(
+          title: fallbackHomework.title.trim().isEmpty
+              ? '(제목 없음)'
+              : fallbackHomework.title.trim(),
+          page: fallbackPage.isEmpty ? '-' : 'p.$fallbackPage',
+          memo: fallbackMemo.isEmpty ? '-' : fallbackMemo,
+        ),
+      );
+    }
+    return overlayEntries;
+  }
+
+  List<Map<String, dynamic>> _serializeTestGradingDraftRows({
+    required String homeworkId,
+    required List<HomeworkAnswerGradingPage> gradingPages,
+    required Map<String, HomeworkAnswerCellState> states,
+  }) {
+    final rows = <Map<String, dynamic>>[];
+    for (final page in gradingPages) {
+      for (final cell in page.cells) {
+        rows.add(<String, dynamic>{
+          'homeworkId': homeworkId,
+          'page': page.pageNumber,
+          'questionIndex': cell.questionIndex,
+          'state': _encodeTestGradingState(
+            states[cell.key] ?? HomeworkAnswerCellState.correct,
+          ),
+        });
+      }
+    }
+    return rows;
+  }
+
+  String _encodeTestGradingState(HomeworkAnswerCellState state) {
+    switch (state) {
+      case HomeworkAnswerCellState.correct:
+        return 'correct';
+      case HomeworkAnswerCellState.wrong:
+        return 'wrong';
+      case HomeworkAnswerCellState.unsolved:
+        return 'unsolved';
+    }
+  }
+
+  HomeworkAnswerCellState _decodeTestGradingState(String? raw) {
+    final normalized = (raw ?? '').trim().toLowerCase();
+    switch (normalized) {
+      case 'wrong':
+        return HomeworkAnswerCellState.wrong;
+      case 'unsolved':
+        return HomeworkAnswerCellState.unsolved;
+      case 'correct':
+      default:
+        return HomeworkAnswerCellState.correct;
+    }
+  }
+
+  Map<String, String> _toRightSheetStateMap(
+    Map<String, HomeworkAnswerCellState> states,
+  ) {
+    final out = <String, String>{};
+    states.forEach((key, value) {
+      out[key] = _encodeTestGradingState(value);
+    });
+    return out;
+  }
+
+  Map<String, HomeworkAnswerCellState> _fromRightSheetStateMap(
+    Map<String, String> states,
+  ) {
+    final out = <String, HomeworkAnswerCellState>{};
+    states.forEach((key, value) {
+      out[key] = _decodeTestGradingState(value);
+    });
+    return out;
+  }
+
+  List<Map<String, dynamic>> _toRightSheetGradingPages(
+    List<HomeworkAnswerGradingPage> pages,
+  ) {
+    return pages
+        .map(
+          (page) => <String, dynamic>{
+            'pageNumber': page.pageNumber,
+            'cells': page.cells
+                .map(
+                  (cell) => <String, dynamic>{
+                    'key': cell.key,
+                    'questionIndex': cell.questionIndex,
+                    'answer': cell.answer,
+                  },
+                )
+                .toList(growable: false),
+          },
+        )
+        .toList(growable: false);
+  }
+
+  Future<
+      ({
+        String homeworkId,
+        String title,
+        List<HomeworkAnswerGradingPage> gradingPages,
+      })?> _resolveTestPbGradingViewerPayload({
+    required HomeworkItem seedHomework,
+    required List<({String studentId, String itemId})> keys,
+  }) async {
+    final seenItemIds = <String>{};
+    final allItems = <HomeworkItem>[];
+    for (final key in keys) {
+      final item = HomeworkStore.instance.getById(key.studentId, key.itemId);
+      if (item == null) continue;
+      if (!seenItemIds.add(item.id)) continue;
+      allItems.add(item);
+    }
+    if (allItems.isEmpty) {
+      allItems.add(seedHomework);
+    }
+    final testPbItems = allItems
+        .where(
+          (item) =>
+              _isTestHomeworkType(item.type) &&
+              (item.pbPresetId ?? '').trim().isNotEmpty,
+        )
+        .toList(growable: false);
+    if (testPbItems.isEmpty) return null;
+
+    final baseItem = testPbItems.firstWhere(
+      (item) => item.id == seedHomework.id,
+      orElse: () => testPbItems.first,
+    );
+    final presetId = (baseItem.pbPresetId ?? '').trim();
+    if (presetId.isEmpty) return null;
+
+    final academyId = await _resolveAcademyIdForPrint();
+    if (academyId.isEmpty) return null;
+    final preset = await _problemBankService.getExportPresetById(
+      academyId: academyId,
+      presetId: presetId,
+    );
+    if (preset == null) return null;
+    final selectedUids = preset.selectedQuestionUids
+        .map((uid) => uid.trim())
+        .where((uid) => uid.isNotEmpty)
+        .toList(growable: false);
+    if (selectedUids.isEmpty) return null;
+
+    final questions = await _problemBankService.loadQuestionsByQuestionUids(
+      academyId: academyId,
+      questionUids: selectedUids,
+    );
+    if (questions.isEmpty) return null;
+    final questionByKey = <String, LearningProblemQuestion>{};
+    for (final question in questions) {
+      final stableKey = question.stableQuestionKey.trim();
+      if (stableKey.isNotEmpty) {
+        questionByKey.putIfAbsent(stableKey, () => question);
+      }
+      final uid = question.questionUid.trim();
+      if (uid.isNotEmpty) {
+        questionByKey.putIfAbsent(uid, () => question);
+      }
+      final id = question.id.trim();
+      if (id.isNotEmpty) {
+        questionByKey.putIfAbsent(id, () => question);
+      }
+    }
+
+    final modeByUid = preset.questionModeByQuestionUid;
+    final cellsByPage = <int, List<HomeworkAnswerGradingCell>>{};
+    var fallbackIndex = 0;
+    for (final uid in selectedUids) {
+      final question = questionByKey[uid];
+      if (question == null) continue;
+      fallbackIndex += 1;
+      final rawIndex = int.tryParse(question.displayQuestionNumber.trim());
+      final questionIndex = rawIndex != null && rawIndex > 0
+          ? rawIndex
+          : (question.sourceOrder > 0 ? question.sourceOrder : fallbackIndex);
+      final answer =
+          previewAnswerForMode(question, modeByUid[uid] ?? '').trim();
+      final pageNumber = question.sourcePage > 0 ? question.sourcePage : 1;
+      final key = '${baseItem.id}|$pageNumber|$questionIndex|$uid';
+      cellsByPage
+          .putIfAbsent(pageNumber, () => <HomeworkAnswerGradingCell>[])
+          .add(
+            HomeworkAnswerGradingCell(
+              key: key,
+              questionIndex: questionIndex,
+              answer: answer.isEmpty ? '-' : answer,
+            ),
+          );
+    }
+    if (cellsByPage.isEmpty) return null;
+    final gradingPages = cellsByPage.entries
+        .map(
+          (entry) => HomeworkAnswerGradingPage(
+            pageNumber: entry.key,
+            cells: entry.value
+              ..sort((a, b) => a.questionIndex.compareTo(b.questionIndex)),
+          ),
+        )
+        .toList(growable: false)
+      ..sort((a, b) => a.pageNumber.compareTo(b.pageNumber));
+
+    final title =
+        baseItem.title.trim().isEmpty ? '답지 확인' : baseItem.title.trim();
+    return (
+      homeworkId: baseItem.id,
+      title: title,
+      gradingPages: gradingPages,
+    );
+  }
+
   Future<void> _handleSubmittedChipTapForPending({
     required BuildContext context,
     required String studentId,
@@ -2157,6 +2508,109 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       });
       return;
     }
+
+    final overlayEntries = _buildOverlayEntriesForPendingKeys(
+      keys: keys,
+      fallbackHomework: hw,
+    );
+    final hasTestPbCandidate = keys.any((key) {
+      final item = HomeworkStore.instance.getById(key.studentId, key.itemId);
+      if (item == null) return false;
+      if (!_isTestHomeworkType(item.type)) return false;
+      return (item.pbPresetId ?? '').trim().isNotEmpty;
+    });
+    if (hasTestPbCandidate) {
+      final payload = await _resolveTestPbGradingViewerPayload(
+        seedHomework: hw,
+        keys: keys,
+      );
+      if (!context.mounted) return;
+      if (payload != null) {
+        final cachedStates =
+            _testGradingDraftStatesByHomeworkId[payload.homeworkId] ??
+                const <String, HomeworkAnswerCellState>{};
+        final homeworkStore = HomeworkStore.instance;
+        final studentName = _resolveHomeworkPrintStudentName(studentId);
+        final groupHomeworkTitle = () {
+          for (final key in keys) {
+            final item = homeworkStore.getById(key.studentId, key.itemId);
+            if (item == null) continue;
+            final groupId = (homeworkStore.groupIdOfItem(item.id) ?? '').trim();
+            if (groupId.isEmpty) continue;
+            final group = homeworkStore.groupById(key.studentId, groupId);
+            final title = (group?.title ?? '').trim();
+            if (title.isNotEmpty) return title;
+          }
+          final fallbackGroupId =
+              (homeworkStore.groupIdOfItem(hw.id) ?? '').trim();
+          if (fallbackGroupId.isNotEmpty) {
+            final group = homeworkStore.groupById(studentId, fallbackGroupId);
+            final title = (group?.title ?? '').trim();
+            if (title.isNotEmpty) return title;
+          }
+          final fallbackTitle = hw.title.trim();
+          if (fallbackTitle.isNotEmpty) return fallbackTitle;
+          final payloadTitle = payload.title.trim();
+          return payloadTitle.isEmpty ? '그룹 과제' : payloadTitle;
+        }();
+        rightSideSheetTestGradingSession.value =
+            RightSideSheetTestGradingSession(
+          sessionId: 'student:$studentId|test_pb_grade:${payload.homeworkId}',
+          title: payload.title,
+          studentName: studentName,
+          groupHomeworkTitle: groupHomeworkTitle,
+          gradingPages: _toRightSheetGradingPages(payload.gradingPages),
+          overlayEntries: overlayEntries
+              .map(
+                (entry) => <String, String>{
+                  'title': entry.title,
+                  'page': entry.page,
+                  'memo': entry.memo,
+                },
+              )
+              .toList(growable: false),
+          initialStates: _toRightSheetStateMap(cachedStates),
+          onStatesChanged: (states) {
+            final decoded = _fromRightSheetStateMap(states);
+            _testGradingDraftStatesByHomeworkId[payload.homeworkId] =
+                Map<String, HomeworkAnswerCellState>.from(decoded);
+            _testGradingSerializedDraftByHomeworkId[payload.homeworkId] =
+                _serializeTestGradingDraftRows(
+              homeworkId: payload.homeworkId,
+              gradingPages: payload.gradingPages,
+              states: decoded,
+            );
+          },
+          onAction: (action, states) async {
+            if (!mounted) return;
+            final decoded = _fromRightSheetStateMap(states);
+            _testGradingDraftStatesByHomeworkId[payload.homeworkId] =
+                Map<String, HomeworkAnswerCellState>.from(decoded);
+            _testGradingSerializedDraftByHomeworkId[payload.homeworkId] =
+                _serializeTestGradingDraftRows(
+              homeworkId: payload.homeworkId,
+              gradingPages: payload.gradingPages,
+              states: decoded,
+            );
+            setState(() {
+              for (final key in keys) {
+                _pendingConfirms[key] = action == 'complete';
+              }
+            });
+          },
+        );
+        blockRightSideSheetOpen.value = false;
+        if (!rightSideSheetOpen.value) {
+          final toggleAction = toggleRightSideSheetAction;
+          if (toggleAction != null) {
+            await toggleAction();
+          }
+        }
+        return;
+      }
+      _showHomeworkChipSnackBar(context, '테스트 답안 매핑에 실패해 기본 답지 흐름으로 전환했어요.');
+    }
+    rightSideSheetTestGradingSession.value = null;
 
     var hasLinkedTextbook = _hasDirectHomeworkTextbookLink(hw);
     if (!hasLinkedTextbook) {
@@ -2313,37 +2767,6 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           await File(candidate).exists()) {
         solutionPath = candidate;
       }
-    }
-
-    final seenOverlayItemIds = <String>{};
-    final overlayEntries = <HomeworkAnswerOverlayEntry>[];
-    for (final key in keys) {
-      final item = HomeworkStore.instance.getById(key.studentId, key.itemId);
-      if (item == null) continue;
-      if (!seenOverlayItemIds.add(item.id)) continue;
-      final title = item.title.trim().isEmpty ? '(제목 없음)' : item.title.trim();
-      final pageRaw = (item.page ?? '').trim();
-      final pageText = pageRaw.isEmpty ? '-' : 'p.$pageRaw';
-      final memoRaw = (item.memo ?? '').trim();
-      final memoText = memoRaw.isEmpty ? '-' : memoRaw;
-      overlayEntries.add(
-        HomeworkAnswerOverlayEntry(
-          title: title,
-          page: pageText,
-          memo: memoText,
-        ),
-      );
-    }
-    if (overlayEntries.isEmpty) {
-      final fallbackPage = (hw.page ?? '').trim();
-      final fallbackMemo = (hw.memo ?? '').trim();
-      overlayEntries.add(
-        HomeworkAnswerOverlayEntry(
-          title: hw.title.trim().isEmpty ? '(제목 없음)' : hw.title.trim(),
-          page: fallbackPage.isEmpty ? '-' : 'p.$fallbackPage',
-          memo: fallbackMemo.isEmpty ? '-' : fallbackMemo,
-        ),
-      );
     }
 
     final closeAction = closeRightSideSheetAction;
@@ -4665,6 +5088,13 @@ Future<void> _showHomeworkChipDetailDialog(
       : 0;
   final int totalMs = hw.accumulatedMs + runningMs;
   final String durationText = _formatDurationMs(totalMs);
+  final int? testLimitMinutes =
+      (_isTestHomeworkType(hw.type) && (hw.timeLimitMinutes ?? 0) > 0)
+          ? hw.timeLimitMinutes
+          : null;
+  final String durationDisplay = testLimitMinutes == null
+      ? durationText
+      : '$durationText / ${testLimitMinutes}분';
   final String homeworkText = assignmentCount > 0 ? 'H$assignmentCount' : 'H0';
   final String displayFlow = flowName.isNotEmpty ? flowName : '플로우 미지정';
   final String page = (hw.page ?? '').trim();
@@ -4703,7 +5133,7 @@ Future<void> _showHomeworkChipDetailDialog(
               const SizedBox(height: 8),
               _detailRow('문항수', count.isEmpty ? '-' : '$count문항'),
               const SizedBox(height: 8),
-              _detailRow('진행시간', durationText),
+              _detailRow('진행시간', durationDisplay),
               const SizedBox(height: 8),
               _detailRow('검사횟수', '${hw.checkCount}회'),
               const SizedBox(height: 8),
@@ -4817,10 +5247,12 @@ Future<void> _openHomeworkEditDialogForHome(
   final countStr = (edited['count'] as String?)?.trim();
   final updated = HomeworkItem(
     id: item.id,
+    assignmentCode: item.assignmentCode,
     title: (edited['title'] as String).trim(),
     body: (edited['body'] as String).trim(),
     color: (edited['color'] as Color),
     flowId: item.flowId,
+    testOriginFlowId: item.testOriginFlowId,
     type: (edited['type'] as String?)?.trim(),
     page: (edited['page'] as String?)?.trim(),
     count:
@@ -4866,10 +5298,12 @@ HomeworkItem _copyHomeworkItemForInlineEdit(
 }) {
   return HomeworkItem(
     id: source.id,
+    assignmentCode: source.assignmentCode,
     title: source.title,
     body: source.body,
     color: source.color,
     flowId: source.flowId,
+    testOriginFlowId: source.testOriginFlowId,
     type: source.type,
     page: page ?? source.page,
     count: source.count,
@@ -5117,8 +5551,34 @@ Future<void> _showAddChildHomeworkDialog({
   }
 
   final flowId = (result['flowId'] as String?)?.trim();
+  final hasTestEntries = entries.any(
+    (entry) => _isTestHomeworkType(entry['type'] as String?),
+  );
+  String? testFlowId;
+  if (hasTestEntries) {
+    try {
+      final ensured = await StudentFlowStore.instance.ensureTestFlowForStudent(
+        studentId,
+      );
+      testFlowId = (ensured?.id ?? '').trim();
+    } catch (_) {
+      testFlowId = null;
+    }
+    if (testFlowId == null || testFlowId.isEmpty) {
+      if (!context.mounted) return;
+      _showHomeworkChipSnackBar(context, '테스트 플로우를 준비하지 못했습니다.');
+      return;
+    }
+  }
   int createdCount = 0;
   for (final entry in entries) {
+    final typeLabel = (entry['type'] as String?)?.trim();
+    final isTestCard = _isTestHomeworkType(typeLabel);
+    final resolvedFlowId = isTestCard ? testFlowId : flowId;
+    final existingOrigin = (entry['testOriginFlowId'] as String?)?.trim() ?? '';
+    final resolvedTestOriginFlowId = isTestCard
+        ? (existingOrigin.isNotEmpty ? existingOrigin : flowId)
+        : null;
     final createdId = await HomeworkStore.instance.addWaitingItemToGroup(
       studentId: studentId,
       groupId: group.id,
@@ -5127,7 +5587,8 @@ Future<void> _showAddChildHomeworkDialog({
       page: (entry['page'] as String?)?.trim(),
       count: parsePositiveInt(entry['count']),
       timeLimitMinutes: parsePositiveInt(entry['timeLimitMinutes']),
-      type: (entry['type'] as String?)?.trim(),
+      testOriginFlowId: resolvedTestOriginFlowId,
+      type: typeLabel,
       memo: (entry['memo'] as String?)?.trim(),
       content: (entry['content'] as String?)?.trim(),
       pbPresetId: (entry['pbPresetId'] as String?)?.trim(),
@@ -5137,7 +5598,7 @@ Future<void> _showAddChildHomeworkDialog({
       sourceUnitPath: (entry['sourceUnitPath'] as String?)?.trim(),
       unitMappings: parseUnitMappings(entry['unitMappings']),
       templateItemId: template?.id,
-      flowId: flowId,
+      flowId: resolvedFlowId,
       color: entry['color'] as Color?,
       defaultSplitParts: parsePositiveInt(entry['splitParts']),
     );
@@ -5345,8 +5806,8 @@ Future<void> _moveGroupChildByDrag({
   }
 }
 
-const double _homeworkChipCollapsedHeight = 136.0;
-const double _homeworkChipExpandedHeight = 210.0;
+const double _homeworkChipCollapsedHeight = 160.0;
+const double _homeworkChipExpandedHeight = 238.0;
 double _homeworkGroupExpandedHeightForChildCount(int childCount) {
   if (childCount <= 0) return _homeworkChipExpandedHeight;
   // 상단 정보와 하위 리스트를 충분히 분리하고,
@@ -5376,10 +5837,18 @@ const String _homeworkPrintTempPrefix = 'hw_print_';
 final Map<String, String> _groupCycleIdentityByGroupId = <String, String>{};
 final Map<String, Map<String, int>> _groupChildCycleBaseByGroupId =
     <String, Map<String, int>>{};
+final Set<String> _testTimedOutHomeworkKeys = <String>{};
+final Set<String> _testAutoSubmitTriggeredKeys = <String>{};
 final Map<String, String> _expandedReservedGroupKeyByStudent =
     <String, String>{};
 final Set<String> _activatingReservedGroupActionKeys = <String>{};
 final ValueNotifier<int> _reservedGroupUiRevision = ValueNotifier<int>(0);
+
+String _formatHomeworkAssignmentCode(String? raw, {String fallback = '-'}) {
+  final code = (raw ?? '').trim().toUpperCase();
+  if (!RegExp(r'^[A-Z]{4}[0-9]{4}$').hasMatch(code)) return fallback;
+  return '${code.substring(0, 4)}-${code.substring(4)}';
+}
 
 void _markReservedGroupUiDirty() {
   _reservedGroupUiRevision.value = _reservedGroupUiRevision.value + 1;
@@ -6246,7 +6715,11 @@ List<Widget> _buildReservedHomeworkChipsForStudent(
               ),
               if (isExpanded) ...[
                 const SizedBox(height: 20),
-                const Divider(height: 1, thickness: 1, color: kDlgBorder),
+                const Divider(
+                  height: 1,
+                  thickness: 1.2,
+                  color: Color(0x80FFFFFF),
+                ),
                 const SizedBox(height: 16),
                 Text(
                   '그룹 과제 ${entries.length}개',
@@ -6546,10 +7019,12 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
     final int groupTotalMs = groupCycleBaseMs + groupCycleProgressMs;
     return HomeworkItem(
       id: (runningChild ?? first).id,
+      assignmentCode: (runningChild ?? first).assignmentCode,
       title: group.title.trim().isEmpty ? first.title : group.title.trim(),
       body: first.body,
       color: first.color,
       flowId: group.flowId ?? first.flowId,
+      testOriginFlowId: first.testOriginFlowId,
       type: summaryType,
       page: pageSummary,
       count: totalCount > 0 ? totalCount : null,
@@ -6632,6 +7107,8 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
     final bool groupIsSubmitted = submittedKeys.isNotEmpty;
     final bool groupIsWaiting = summary.phase == 1;
     final bool groupIsConfirmed = summary.phase == 4;
+    final bool hasTestChild =
+        children.any((child) => _isTestHomeworkType(child.type));
     final bool blockDoubleTapForUncheckedHomework =
         hasHomeworkAssignment && !groupIsSubmitted && !groupIsConfirmed;
     final bool groupSlideDownIsEdit = groupIsWaiting || groupIsConfirmed;
@@ -6741,6 +7218,12 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
         if (blockDoubleTapForUncheckedHomework) return;
         if (submittedChildren.isNotEmpty) {
           onGroupSubmittedDoubleTap?.call(studentId, submittedChildren);
+          return;
+        }
+        if (summary.phase == 1 &&
+            hasTestChild &&
+            !HomeworkStore.instance.isStudentInClassTime(studentId)) {
+          _showHomeworkChipSnackBar(context, '테스트 카드는 수업시간에만 수행할 수 있어요.');
           return;
         }
         unawaited(
@@ -6909,10 +7392,12 @@ class _ResolvedHomeworkPrintSource {
 class _HomeworkPrintConfirmResult {
   final String pageRange;
   final List<String> selectedChildIds;
+  final PrintDuplexMode duplexMode;
 
   const _HomeworkPrintConfirmResult({
     required this.pageRange,
     this.selectedChildIds = const <String>[],
+    this.duplexMode = PrintDuplexMode.twoSidedLongEdge,
   });
 }
 
@@ -6920,11 +7405,13 @@ class _HomeworkPrintOverlayMeta {
   final String assignedDateText;
   final String bookCourseText;
   final String studentName;
+  final String assignmentCodeText;
 
   const _HomeworkPrintOverlayMeta({
     required this.assignedDateText,
     required this.bookCourseText,
     required this.studentName,
+    required this.assignmentCodeText,
   });
 }
 
@@ -6961,6 +7448,7 @@ Future<_HomeworkPrintOverlayMeta> _resolveHomeworkPrintOverlayMeta({
       assignedDateText: '-',
       bookCourseText: '교재 미기재',
       studentName: _resolveHomeworkPrintStudentName(studentId),
+      assignmentCodeText: '-',
     );
   }
 
@@ -7000,10 +7488,23 @@ Future<_HomeworkPrintOverlayMeta> _resolveHomeworkPrintOverlayMeta({
   final DateTime? assignedDateBase = firstAssignedAt ?? firstCreatedAt;
   final String assignedDateText =
       assignedDateBase == null ? '-' : _formatDateShort(assignedDateBase);
+  final sortedCodes = byId.values
+      .map((hw) =>
+          _formatHomeworkAssignmentCode(hw.assignmentCode, fallback: ''))
+      .where((code) => code.isNotEmpty)
+      .toSet()
+      .toList(growable: false)
+    ..sort();
+  final String assignmentCodeText = sortedCodes.isEmpty
+      ? '-'
+      : (sortedCodes.length == 1
+          ? sortedCodes.first
+          : '${sortedCodes.first} 외 ${sortedCodes.length - 1}건');
   return _HomeworkPrintOverlayMeta(
     assignedDateText: assignedDateText,
     bookCourseText: bookCourseText,
     studentName: _resolveHomeworkPrintStudentName(studentId),
+    assignmentCodeText: assignmentCodeText,
   );
 }
 
@@ -7074,6 +7575,20 @@ void _drawHomeworkPrintOverlayOnFirstPage({
     bounds: Rect.fromLTWH(left, topInset + 12, boxWidth, 12),
     format: format,
   );
+  final codeFormat = sf.PdfStringFormat(
+    alignment: sf.PdfTextAlignment.right,
+    lineAlignment: sf.PdfVerticalAlignment.bottom,
+  );
+  final assignmentCodeText =
+      meta.assignmentCodeText.trim().isEmpty ? '-' : meta.assignmentCodeText;
+  const bottomInset = 10.0;
+  page.graphics.drawString(
+    assignmentCodeText,
+    line1Font,
+    brush: textBrush,
+    bounds: Rect.fromLTWH(left, 0, boxWidth, size.height - bottomInset),
+    format: codeFormat,
+  );
 }
 
 bool _isWebUrl(String raw) {
@@ -7124,9 +7639,11 @@ void _applyHomeworkTypePrintAfterSuccessfulPrint({
   required Iterable<String> itemIds,
 }) {
   const printType = '프린트';
+  const testType = '테스트';
   for (final id in itemIds) {
     final latest = HomeworkStore.instance.getById(studentId, id);
     if (latest == null) continue;
+    if ((latest.type ?? '').trim() == testType) continue;
     if ((latest.type ?? '').trim() == printType) continue;
     latest.type = printType;
     HomeworkStore.instance.edit(studentId, latest);
@@ -7347,6 +7864,7 @@ Future<void> _showHomeworkGroupActionDialog({
   final runningCount = children.where((e) => e.phase == 2).length;
   final submittedCount = children.where((e) => e.phase == 3).length;
   final confirmedCount = children.where((e) => e.phase == 4).length;
+  final hasTestChild = children.any((child) => _isTestHomeworkType(child.type));
 
   await showDialog<void>(
     context: context,
@@ -7413,6 +7931,17 @@ Future<void> _showHomeworkGroupActionDialog({
                           : (confirmedCount > 0
                               ? 4
                               : (waitingCount > 0 ? 1 : null));
+                      if (fromPhase == 1 &&
+                          hasTestChild &&
+                          !HomeworkStore.instance
+                              .isStudentInClassTime(studentId)) {
+                        if (!context.mounted) return;
+                        _showHomeworkChipSnackBar(
+                          context,
+                          '테스트 카드는 수업시간에만 수행할 수 있어요.',
+                        );
+                        return;
+                      }
                       final changed =
                           await HomeworkStore.instance.bulkTransitionGroup(
                         studentId,
@@ -7720,11 +8249,30 @@ Future<String?> _buildPdfForPrintRange({
     final pageCount = src.pages.count;
     final indices = _parsePageRange(pageRange, pageCount);
     if (indices.isEmpty) return null;
-    sf.PdfFont? line1Font;
-    sf.PdfFont? line2Font;
-    if (overlayMeta != null) {
-      line1Font = await _loadHomeworkPrintOverlayFont(8.9, bold: true);
-      line2Font = await _loadHomeworkPrintOverlayFont(8.4);
+    sf.PdfFont? line1Font = overlayMeta == null
+        ? null
+        : await _loadHomeworkPrintOverlayFont(8.9, bold: true);
+    sf.PdfFont? line2Font =
+        overlayMeta == null ? null : await _loadHomeworkPrintOverlayFont(8.4);
+    if (overlayMeta != null &&
+        pageRange.trim().isEmpty &&
+        pageCount > 0 &&
+        line1Font != null &&
+        line2Font != null) {
+      _drawHomeworkPrintOverlayOnFirstPage(
+        page: src.pages[0],
+        meta: overlayMeta,
+        line1Font: line1Font,
+        line2Font: line2Font,
+      );
+      final outBytes = await src.save();
+      final dir = await getTemporaryDirectory();
+      final outPath = p.join(
+        dir.path,
+        '${_homeworkPrintTempPrefix}${DateTime.now().millisecondsSinceEpoch}.pdf',
+      );
+      await File(outPath).writeAsBytes(outBytes, flush: true);
+      return outPath;
     }
     for (int outIndex = 0; outIndex < indices.length; outIndex++) {
       final i = indices[outIndex];
@@ -7812,10 +8360,12 @@ void _scheduleTempDelete(String path) {
 Future<bool> _openPrintDialogForPath(
   String path, {
   String preferredPaperSize = '',
+  PrintDuplexMode duplexMode = PrintDuplexMode.systemDefault,
 }) {
   return PrintRoutingService.instance.printFile(
     path: path,
     channel: PrintRoutingChannel.general,
+    duplexMode: duplexMode,
     preferredPaperSize: preferredPaperSize,
     debugSource: 'class_content.waiting_chip',
   );
@@ -8432,6 +8982,7 @@ Future<_HomeworkPrintConfirmResult?> _showHomeworkPrintConfirmDialog({
     return _normalizePageRangeForPrint(_mergeGroupPageText(picked));
   }
 
+  var duplexMode = PrintDuplexMode.twoSidedLongEdge;
   final result = await showDialog<_HomeworkPrintConfirmResult>(
     context: context,
     builder: (ctx) {
@@ -8640,6 +9191,59 @@ Future<_HomeworkPrintConfirmResult?> _showHomeworkPrintConfirmDialog({
                           ),
                         ),
                       ],
+                      const SizedBox(height: 14),
+                      const YggDialogSectionHeader(
+                        icon: Icons.flip_rounded,
+                        title: '인쇄 면',
+                      ),
+                      Row(
+                        children: [
+                          ChoiceChip(
+                            label: const Text('양면'),
+                            selected:
+                                duplexMode == PrintDuplexMode.twoSidedLongEdge,
+                            onSelected: (_) => setLocalState(() {
+                              duplexMode = PrintDuplexMode.twoSidedLongEdge;
+                            }),
+                            selectedColor: kDlgAccent,
+                            labelStyle: TextStyle(
+                              color:
+                                  duplexMode == PrintDuplexMode.twoSidedLongEdge
+                                      ? Colors.white
+                                      : kDlgText,
+                              fontWeight: FontWeight.w700,
+                            ),
+                            backgroundColor: kDlgPanelBg,
+                            side: BorderSide(
+                              color:
+                                  duplexMode == PrintDuplexMode.twoSidedLongEdge
+                                      ? kDlgAccent
+                                      : kDlgBorder,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          ChoiceChip(
+                            label: const Text('단면'),
+                            selected: duplexMode == PrintDuplexMode.oneSided,
+                            onSelected: (_) => setLocalState(() {
+                              duplexMode = PrintDuplexMode.oneSided;
+                            }),
+                            selectedColor: kDlgAccent,
+                            labelStyle: TextStyle(
+                              color: duplexMode == PrintDuplexMode.oneSided
+                                  ? Colors.white
+                                  : kDlgText,
+                              fontWeight: FontWeight.w700,
+                            ),
+                            backgroundColor: kDlgPanelBg,
+                            side: BorderSide(
+                              color: duplexMode == PrintDuplexMode.oneSided
+                                  ? kDlgAccent
+                                  : kDlgBorder,
+                            ),
+                          ),
+                        ],
+                      ),
                     ],
                   ),
                 ),
@@ -8659,6 +9263,7 @@ Future<_HomeworkPrintConfirmResult?> _showHomeworkPrintConfirmDialog({
                                 ? controller.text.trim()
                                 : '',
                             selectedChildIds: selectedChildIds,
+                            duplexMode: duplexMode,
                           ),
                         )
                     : null,
@@ -8779,90 +9384,104 @@ Future<void> _handleWaitingChipLongPressPrint({
   final assignment = resolvedAssignments[hw.id.trim()];
   final isPbTarget = _isPbPrintTarget(hw: hw, assignment: assignment);
   final preResolved = preResolvedSourceByItemId[hw.id];
-  _ResolvedHomeworkPrintSource resolvedSource;
-  String? bodyPath;
 
-  if (isPbTarget) {
-    var pbSource = (preResolved != null && preResolved.isProblemBank)
-        ? preResolved
-        : const _ResolvedHomeworkPrintSource(
-            pathRaw: '',
-            sourceKey: 'pb_missing',
-            isProblemBank: true,
-          );
+  // ── Phase 1: kick off background PDF preparation ──
+  final bgCompleter = Completer<
+      ({
+        _ResolvedHomeworkPrintSource source,
+        String? bodyPath,
+        String? error,
+      })>();
+
+  unawaited(() async {
     try {
-      await _runWithPrintProgressDialog(
-        context,
-        run: (progressText) async {
-          progressText.value = '문제은행 인쇄 PDF를 확인하는 중입니다...';
-          final hasPrintableSource =
-              await _isPrintableResolvedHomeworkPrintSource(pbSource);
-          if (pbSource.isEmpty || !hasPrintableSource) {
-            pbSource = await _resolvePbPrintSource(
-                  hw,
-                  assignment: assignment,
-                  ensureExportJob: true,
-                  progressText: progressText,
-                ) ??
-                const _ResolvedHomeworkPrintSource(
-                  pathRaw: '',
-                  sourceKey: 'pb_missing',
-                  isProblemBank: true,
-                );
-          }
-          if (pbSource.isEmpty) return;
-          progressText.value = '문제은행 PDF를 내려받는 중입니다...';
-          bodyPath = await _materializePrintablePathFromSource(
-            pbSource,
-            cacheKey: 'hw_print_${hw.id}',
-          );
-        },
+      _ResolvedHomeworkPrintSource resolvedSource;
+      String? bodyPath;
+
+      if (isPbTarget) {
+        var pbSource = (preResolved != null && preResolved.isProblemBank)
+            ? preResolved
+            : const _ResolvedHomeworkPrintSource(
+                pathRaw: '',
+                sourceKey: 'pb_missing',
+                isProblemBank: true,
+              );
+        final hasPrintableSource =
+            await _isPrintableResolvedHomeworkPrintSource(pbSource);
+        if (pbSource.isEmpty || !hasPrintableSource) {
+          pbSource = await _resolvePbPrintSource(
+                hw,
+                assignment: assignment,
+                ensureExportJob: true,
+              ) ??
+              const _ResolvedHomeworkPrintSource(
+                pathRaw: '',
+                sourceKey: 'pb_missing',
+                isProblemBank: true,
+              );
+        }
+        if (pbSource.isEmpty) {
+          bgCompleter.complete((
+            source: pbSource,
+            bodyPath: null,
+            error: '문제은행 인쇄 PDF를 준비하지 못했습니다.',
+          ));
+          return;
+        }
+        bodyPath = await _materializePrintablePathFromSource(
+          pbSource,
+          cacheKey: 'hw_print_${hw.id}',
+        );
+        resolvedSource = pbSource;
+      } else {
+        resolvedSource = (preResolved != null && !preResolved.isProblemBank)
+            ? preResolved
+            : await _resolveTextbookPrintSource(
+                hw,
+                allowFlowFallback: true,
+              );
+        if (resolvedSource.isEmpty) {
+          bgCompleter.complete((
+            source: resolvedSource,
+            bodyPath: null,
+            error: '인쇄 가능한 교재 PDF를 찾지 못했습니다.',
+          ));
+          return;
+        }
+        bodyPath = await _materializePrintablePathFromSource(
+          resolvedSource,
+          cacheKey: 'hw_print_${hw.id}',
+        );
+      }
+
+      if (bodyPath == null || bodyPath.isEmpty) {
+        bgCompleter.complete((
+          source: resolvedSource,
+          bodyPath: null,
+          error: '인쇄 파일을 찾을 수 없습니다.',
+        ));
+        return;
+      }
+      bgCompleter.complete(
+        (source: resolvedSource, bodyPath: bodyPath, error: null),
       );
-    } catch (_) {
-      if (!context.mounted) return;
-      _showHomeworkChipSnackBar(context, '문제은행 인쇄 PDF 준비 중 오류가 발생했습니다.');
-      return;
+    } catch (e) {
+      if (!bgCompleter.isCompleted) {
+        bgCompleter.complete((
+          source: const _ResolvedHomeworkPrintSource(
+            pathRaw: '',
+            sourceKey: 'bg_error',
+          ),
+          bodyPath: null,
+          error: '인쇄 PDF 준비 중 오류가 발생했습니다.',
+        ));
+      }
     }
-    if (!context.mounted) return;
-    resolvedSource = pbSource;
-    if (resolvedSource.isEmpty || (bodyPath?.isEmpty ?? true)) {
-      _showHomeworkChipSnackBar(context, '문제은행 인쇄 PDF를 준비하지 못했습니다.');
-      return;
-    }
-  } else {
-    resolvedSource = (preResolved != null && !preResolved.isProblemBank)
-        ? preResolved
-        : await _resolveTextbookPrintSource(
-            hw,
-            allowFlowFallback: true,
-          );
-    if (!context.mounted) return;
-    if (resolvedSource.isEmpty) {
-      _showHomeworkChipSnackBar(context, '인쇄 가능한 교재 PDF를 찾지 못했습니다.');
-      return;
-    }
-    bodyPath = await _materializePrintablePathFromSource(
-      resolvedSource,
-      cacheKey: 'hw_print_${hw.id}',
-    );
-    if (!context.mounted) return;
-    if (bodyPath == null || bodyPath.isEmpty) {
-      _showHomeworkChipSnackBar(context, '인쇄 파일을 찾을 수 없습니다.');
-      return;
-    }
-  }
-  if (!context.mounted) return;
+  }());
 
-  final printablePath = bodyPath!;
-
-  final bool isPdf = printablePath.toLowerCase().endsWith('.pdf');
-  final int pageOffset = (!resolvedSource.isProblemBank && isPdf)
-      ? await _loadTextbookPageOffset(
-          bookId: resolvedSource.bookId,
-          gradeLabel: resolvedSource.gradeLabel,
-        )
-      : 0;
-  final initialRangeRaw = resolvedSource.isProblemBank
+  // ── Phase 2: show print confirm dialog immediately ──
+  final isPdf = true;
+  final initialRangeRaw = isPbTarget
       ? ''
       : (initialRangeOverride ?? (isPdf ? (hw.page ?? '') : ''));
   final initialRange =
@@ -8870,7 +9489,7 @@ Future<void> _handleWaitingChipLongPressPrint({
   final confirmResult = await _showHomeworkPrintConfirmDialog(
     context: context,
     hw: hw,
-    filePath: printablePath,
+    filePath: '인쇄 파일 준비 중...',
     isPdf: isPdf,
     initialRange: initialRange,
     dialogTitle: dialogTitleOverride,
@@ -8884,13 +9503,37 @@ Future<void> _handleWaitingChipLongPressPrint({
     _showHomeworkChipSnackBar(context, '인쇄 가능한 하위 과제를 선택하세요.');
     return;
   }
+
+  // ── Phase 3: wait for background PDF if not done yet ──
+  final bgResult = bgCompleter.isCompleted
+      ? await bgCompleter.future
+      : await () async {
+          late final result;
+          await _runWithPrintProgressDialog(
+            context,
+            run: (progressText) async {
+              progressText.value = '인쇄 파일을 준비하는 중입니다...';
+              result = await bgCompleter.future;
+            },
+          );
+          return result;
+        }();
+  if (!context.mounted) return;
+
+  if (bgResult.error != null) {
+    _showHomeworkChipSnackBar(context, bgResult.error!);
+    return;
+  }
+  final resolvedSource = bgResult.source;
+  final printablePath = bgResult.bodyPath!;
+
   final selectedIds = confirmResult.selectedChildIds.toSet();
   final selectedHomeworks = selectableGroupChildren.isNotEmpty
       ? selectableGroupChildren
           .where((child) => selectedIds.contains(child.id))
           .toList(growable: false)
       : <HomeworkItem>[hw];
-  final shouldApplyOverlay = !resolvedSource.isProblemBank;
+  const shouldApplyOverlay = true;
   _HomeworkPrintOverlayMeta? overlayMeta;
   if (shouldApplyOverlay) {
     overlayMeta = await _resolveHomeworkPrintOverlayMeta(
@@ -8901,6 +9544,12 @@ Future<void> _handleWaitingChipLongPressPrint({
     if (!context.mounted) return;
   }
 
+  final int pageOffset = (!resolvedSource.isProblemBank && isPdf)
+      ? await _loadTextbookPageOffset(
+          bookId: resolvedSource.bookId,
+          gradeLabel: resolvedSource.gradeLabel,
+        )
+      : 0;
   final selectedRange = confirmResult.pageRange;
   String pathToPrint = printablePath;
   final rangeDisplay = _normalizePageRangeForPrint(selectedRange);
@@ -8941,6 +9590,7 @@ Future<void> _handleWaitingChipLongPressPrint({
         printJobSentToSpooler = await _openPrintDialogForPath(
           pathToPrint,
           preferredPaperSize: resolvedSource.preferredPaperSize,
+          duplexMode: confirmResult.duplexMode,
         );
       },
     );
@@ -9047,31 +9697,43 @@ Future<void> _handleSubmittedChipTapWithAnswerViewer({
   }
 }
 
+bool _isTestHomeworkType(String? typeLabel) =>
+    (typeLabel ?? '').trim() == '테스트';
+
 Widget _buildFlowChip(
   String flowName, {
   String? dueLabel,
   bool isHomeworkDue = false,
+  String? overrideText,
+  Color? overrideTextColor,
+  Color? overrideBackgroundColor,
+  Border? overrideBorder,
 }) {
   final normalizedFlowName = flowName.trim();
   final normalizedDueLabel = (dueLabel ?? '').trim();
-  final chipText = isHomeworkDue
-      ? (normalizedDueLabel.isEmpty ? '검사일 미정' : normalizedDueLabel)
-      : (normalizedDueLabel.isEmpty
-          ? (normalizedFlowName.isEmpty ? '플로우 미지정' : normalizedFlowName)
-          : (normalizedFlowName.isEmpty
-              ? normalizedDueLabel
-              : '$normalizedFlowName · $normalizedDueLabel'));
+  final normalizedOverrideText = (overrideText ?? '').trim();
+  final chipText = normalizedOverrideText.isNotEmpty
+      ? normalizedOverrideText
+      : (isHomeworkDue
+          ? (normalizedDueLabel.isEmpty ? '검사일 미정' : normalizedDueLabel)
+          : (normalizedDueLabel.isEmpty
+              ? (normalizedFlowName.isEmpty ? '플로우 미지정' : normalizedFlowName)
+              : (normalizedFlowName.isEmpty
+                  ? normalizedDueLabel
+                  : '$normalizedFlowName · $normalizedDueLabel')));
   final bool isDefault = normalizedFlowName == '현행' && !isHomeworkDue;
-  final Color backgroundColor = isHomeworkDue
-      ? const Color(0x1F4FBF97)
-      : (isDefault ? Colors.transparent : const Color(0xFF2A3030));
-  final Border? border = isHomeworkDue
-      ? Border.all(color: kDlgAccent, width: 1.05)
-      : (isDefault
-          ? Border.all(color: const Color(0xFF4A5858), width: 1)
-          : null);
-  final Color textColor =
-      isHomeworkDue ? const Color(0xFF9FE3C6) : const Color(0xFF9FB3B3);
+  final Color backgroundColor = overrideBackgroundColor ??
+      (isHomeworkDue
+          ? const Color(0x1F4FBF97)
+          : (isDefault ? Colors.transparent : const Color(0xFF2A3030)));
+  final Border? border = overrideBorder ??
+      (isHomeworkDue
+          ? Border.all(color: kDlgAccent, width: 1.05)
+          : (isDefault
+              ? Border.all(color: const Color(0xFF4A5858), width: 1)
+              : null));
+  final Color textColor = overrideTextColor ??
+      (isHomeworkDue ? const Color(0xFF9FE3C6) : const Color(0xFF9FB3B3));
   return Container(
     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
     decoration: BoxDecoration(
@@ -9265,10 +9927,87 @@ Widget _buildHomeworkChipVisual(
   final String line5Right = splitCycleText.isEmpty
       ? repeatCycleText
       : '$repeatCycleText · $splitCycleText';
+  final String assignmentCodeText =
+      _formatHomeworkAssignmentCode(hw.assignmentCode);
   final double fixedWidth = ClassContentScreen._studentColumnContentWidth;
   final double maxRowW = fixedWidth - leftPad - rightPad;
   final bool hasGroupChildren = groupChildren.isNotEmpty;
+  final bool isTestCard = hasGroupChildren
+      ? groupChildren.any((child) => _isTestHomeworkType(child.type))
+      : _isTestHomeworkType(hw.type);
+  final int? testLimitMinutes = isTestCard
+      ? () {
+          if (hasGroupChildren) {
+            for (final child in groupChildren) {
+              final limit = child.timeLimitMinutes;
+              if (limit != null && limit > 0) return limit;
+            }
+          }
+          final fallbackLimit = hw.timeLimitMinutes;
+          if (fallbackLimit != null && fallbackLimit > 0) return fallbackLimit;
+          return null;
+        }()
+      : null;
+  final int? testLimitMs = (testLimitMinutes != null && testLimitMinutes > 0)
+      ? testLimitMinutes * 60000
+      : null;
+  final int remainingMs =
+      testLimitMs == null ? 0 : math.max(0, testLimitMs - progressMs);
+  final int remainingMinutes = testLimitMs == null
+      ? 0
+      : (remainingMs <= 0 ? 0 : ((remainingMs + 59999) ~/ 60000));
+  final bool showRunningRemaining =
+      testLimitMs != null && visualPhase == 2 && !isReservation;
+  final bool shouldAutoSubmitForTimeout =
+      showRunningRemaining && remainingMs <= 0;
   final String resolvedGroupId = (groupId ?? '').trim();
+  final String autoSubmitKey = '$studentId|${hw.id}';
+  final String timeoutBadgeKey = hasGroupChildren && resolvedGroupId.isNotEmpty
+      ? '$studentId|group:$resolvedGroupId'
+      : autoSubmitKey;
+  if (!isTestCard) {
+    _testTimedOutHomeworkKeys.remove(timeoutBadgeKey);
+    _testAutoSubmitTriggeredKeys.remove(autoSubmitKey);
+  } else {
+    if (!shouldAutoSubmitForTimeout) {
+      _testAutoSubmitTriggeredKeys.remove(autoSubmitKey);
+    }
+    if (visualPhase == 2 && remainingMs > 0) {
+      _testTimedOutHomeworkKeys.remove(timeoutBadgeKey);
+    }
+    if (shouldAutoSubmitForTimeout &&
+        !_testAutoSubmitTriggeredKeys.contains(autoSubmitKey)) {
+      _testAutoSubmitTriggeredKeys.add(autoSubmitKey);
+      _testTimedOutHomeworkKeys.add(timeoutBadgeKey);
+      unawaited(() async {
+        await HomeworkStore.instance.submit(studentId, hw.id);
+        final latest = HomeworkStore.instance.getById(studentId, hw.id);
+        if (latest != null && latest.phase == 2) {
+          _testAutoSubmitTriggeredKeys.remove(autoSubmitKey);
+        }
+      }());
+    }
+  }
+  final bool showTimedOutBadge = isTestCard &&
+      visualPhase == 1 &&
+      _testTimedOutHomeworkKeys.contains(timeoutBadgeKey);
+  final String progressText = (testLimitMinutes != null && testLimitMinutes > 0)
+      ? '진행 ${progressMinutes}분/$testLimitMinutes분'
+      : '진행 ${progressMinutes}분';
+  final String? flowChipOverrideText = showRunningRemaining
+      ? '남은 ${remainingMinutes}분'
+      : (showTimedOutBadge ? '종료' : null);
+  final Color? flowChipOverrideTextColor = showRunningRemaining
+      ? const Color(0xFF9FE3C6)
+      : (showTimedOutBadge ? const Color(0xFFC8D4D4) : null);
+  final Color? flowChipOverrideBackgroundColor = showRunningRemaining
+      ? const Color(0x1F4FBF97)
+      : (showTimedOutBadge ? const Color(0x332A3030) : null);
+  final Border? flowChipOverrideBorder = showRunningRemaining
+      ? Border.all(color: kDlgAccent, width: 1.05)
+      : (showTimedOutBadge
+          ? Border.all(color: const Color(0xFF5F6D6D), width: 1)
+          : null);
 
   String textbookKeyOfHomework(HomeworkItem item) {
     final bookId = (item.bookId ?? '').trim();
@@ -9352,6 +10091,10 @@ Widget _buildHomeworkChipVisual(
           displayFlowName,
           dueLabel: dueLabel,
           isHomeworkDue: isHomeworkDue,
+          overrideText: flowChipOverrideText,
+          overrideTextColor: flowChipOverrideTextColor,
+          overrideBackgroundColor: flowChipOverrideBackgroundColor,
+          overrideBorder: flowChipOverrideBorder,
         ),
       ],
     ),
@@ -9397,17 +10140,33 @@ Widget _buildHomeworkChipVisual(
       children: [
         Text(startDateText, style: statStyle),
         const SizedBox(width: 8),
-        Text('진행 ${progressMinutes}분', style: statStyle),
+        Text(progressText, style: statStyle),
         const Spacer(),
         Text('총 $durationText', style: statStyle),
       ],
     ),
   );
 
+  Widget collapsedRow4 = ConstrainedBox(
+    constraints: BoxConstraints(maxWidth: maxRowW),
+    child: Row(
+      children: [
+        Text('과제번호', style: line4Style),
+        const Spacer(),
+        Text(
+          assignmentCodeText,
+          style: line4Style.copyWith(color: const Color(0xFFB9C9C9)),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          textAlign: TextAlign.right,
+        ),
+      ],
+    ),
+  );
+
   final List<Widget> columnChildren;
   if (isExpanded) {
-    final String expandedLine3Left =
-        '시작 $startedAtText · 진행 ${progressMinutes}분';
+    final String expandedLine3Left = '시작 $startedAtText · $progressText';
     final String expandedLine3Right = '총 $durationText';
     final visibleGroupChildren = hasGroupChildren ? groupChildren.length : 0;
 
@@ -9686,12 +10445,39 @@ Widget _buildHomeworkChipVisual(
           ],
         ),
       ),
+      const SizedBox(height: 6),
+      ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: maxRowW),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                '과제번호',
+                style: line4Style,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            const SizedBox(width: 10),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 220),
+              child: Text(
+                assignmentCodeText,
+                style: line4Style.copyWith(color: const Color(0xFFB9C9C9)),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.right,
+              ),
+            ),
+          ],
+        ),
+      ),
       if (hasGroupChildren) ...[
         const SizedBox(height: 16),
         Container(
           width: maxRowW,
           height: 1,
-          color: const Color(0x334D5A5A),
+          color: const Color(0x80FFFFFF),
         ),
         const SizedBox(height: 12),
         ConstrainedBox(
@@ -9747,7 +10533,7 @@ Widget _buildHomeworkChipVisual(
             Container(
               width: maxRowW,
               height: 1.3,
-              color: const Color(0x223A4545),
+              color: const Color(0x66FFFFFF),
             ),
             const SizedBox(height: 10),
           ],
@@ -9762,6 +10548,8 @@ Widget _buildHomeworkChipVisual(
       row2,
       const SizedBox(height: 7),
       collapsedRow3,
+      const SizedBox(height: 6),
+      collapsedRow4,
     ];
   }
 

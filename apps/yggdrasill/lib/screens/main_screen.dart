@@ -2930,6 +2930,9 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                       unselectedIds,
                     );
                   }
+                  HomeworkStore.instance.convertAllTestCardsToPrintForDeparture(
+                    t.student.id,
+                  );
                   if (selection.printTodoOnConfirm) {
                     try {
                       await printHomeworkTodoSheet(
@@ -3707,6 +3710,7 @@ extension on _MainScreenState {
       body: (edited['body'] as String).trim(),
       color: (edited['color'] as Color),
       flowId: item.flowId,
+      testOriginFlowId: item.testOriginFlowId,
       type: (edited['type'] as String?)?.trim(),
       page: (edited['page'] as String?)?.trim(),
       count: (countStr == null || countStr.isEmpty)
@@ -3880,11 +3884,44 @@ extension on _MainScreenState {
             );
             return;
           }
+          final selectedFlowId = (result['flowId'] as String?)?.trim();
+          final hasTestEntries = entries.any(
+            (entry) => ((entry['type'] as String?)?.trim() ?? '') == '테스트',
+          );
+          if (hasTestEntries) {
+            String? testFlowId;
+            try {
+              final ensured = await StudentFlowStore.instance
+                  .ensureTestFlowForStudent(target.student.id);
+              testFlowId = (ensured?.id ?? '').trim();
+            } catch (_) {
+              testFlowId = null;
+            }
+            if (testFlowId == null || testFlowId.isEmpty) {
+              if (!context.mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('테스트 플로우를 준비하지 못했습니다.')),
+              );
+              return;
+            }
+            for (final entry in entries) {
+              final type = (entry['type'] as String?)?.trim() ?? '';
+              if (type != '테스트') continue;
+              entry['flowId'] = testFlowId;
+              final existingOrigin =
+                  (entry['testOriginFlowId'] as String?)?.trim() ?? '';
+              if (existingOrigin.isEmpty &&
+                  selectedFlowId != null &&
+                  selectedFlowId.isNotEmpty) {
+                entry['testOriginFlowId'] = selectedFlowId;
+              }
+            }
+          }
           final createdItems =
               await HomeworkStore.instance.createGroupWithWaitingItems(
             studentId: target.student.id,
             groupTitle: (result['groupTitle'] as String?)?.trim() ?? '',
-            flowId: (result['flowId'] as String?)?.trim(),
+            flowId: selectedFlowId,
             items: entries,
             reserveAssignments: isReserve,
           );
@@ -3916,6 +3953,26 @@ extension on _MainScreenState {
         } else {
           entries.add(result);
         }
+        final hasTestEntries = entries.any(
+          (entry) => ((entry['type'] as String?)?.trim() ?? '') == '테스트',
+        );
+        String? testFlowId;
+        if (hasTestEntries) {
+          try {
+            final ensured = await StudentFlowStore.instance
+                .ensureTestFlowForStudent(target.student.id);
+            testFlowId = (ensured?.id ?? '').trim();
+          } catch (_) {
+            testFlowId = null;
+          }
+          if (testFlowId == null || testFlowId.isEmpty) {
+            if (!context.mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('테스트 플로우를 준비하지 못했습니다.')),
+            );
+            return;
+          }
+        }
         int _parseSplitParts(dynamic value) {
           if (value is int) return value.clamp(1, 4).toInt();
           if (value is num) return value.toInt().clamp(1, 4).toInt();
@@ -3925,22 +3982,42 @@ extension on _MainScreenState {
           return 1;
         }
 
+        int? _parsePositiveInt(dynamic value) {
+          if (value is int) return value > 0 ? value : null;
+          if (value is num) {
+            final parsed = value.toInt();
+            return parsed > 0 ? parsed : null;
+          }
+          if (value is String) {
+            final parsed = int.tryParse(value.trim());
+            return (parsed != null && parsed > 0) ? parsed : null;
+          }
+          return null;
+        }
+
         for (final entry in entries) {
-          final countStr = (entry['count'] as String?)?.trim();
           final splitParts = _parseSplitParts(
             entry['splitParts'] ?? result['splitParts'],
           );
+          final typeLabel = (entry['type'] as String?)?.trim();
+          final isTestCard = (typeLabel ?? '') == '테스트';
+          final resolvedFlowId = isTestCard ? testFlowId : flowId;
+          final existingOrigin =
+              (entry['testOriginFlowId'] as String?)?.trim() ?? '';
+          final resolvedTestOriginFlowId = isTestCard
+              ? (existingOrigin.isNotEmpty ? existingOrigin : flowId?.trim())
+              : null;
           final created = HomeworkStore.instance.add(
             result['studentId'],
             title: (entry['title'] as String?) ?? '',
             body: (entry['body'] as String?) ?? '',
             color: (entry['color'] as Color?) ?? const Color(0xFF1976D2),
-            flowId: flowId,
-            type: (entry['type'] as String?)?.trim(),
+            flowId: resolvedFlowId,
+            testOriginFlowId: resolvedTestOriginFlowId,
+            type: typeLabel,
             page: (entry['page'] as String?)?.trim(),
-            count: (countStr == null || countStr.isEmpty)
-                ? null
-                : int.tryParse(countStr),
+            count: _parsePositiveInt(entry['count']),
+            timeLimitMinutes: _parsePositiveInt(entry['timeLimitMinutes']),
             content: (entry['content'] as String?)?.trim(),
             bookId: (entry['bookId'] as String?)?.trim(),
             gradeLabel: (entry['gradeLabel'] as String?)?.trim(),

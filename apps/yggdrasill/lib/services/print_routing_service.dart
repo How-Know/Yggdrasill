@@ -94,11 +94,13 @@ class PrintRoutingService {
       case 'B4':
       case 'B4JIS':
       case 'JISB4':
-        return 'B4JIS';
+      case 'ISOB4':
+        return 'B4';
       case 'B5':
       case 'B5JIS':
       case 'JISB5':
-        return 'B5JIS';
+      case 'ISOB5':
+        return 'B5';
       case 'LETTER':
       case 'NORTHAMERICALETTER':
         return 'NorthAmericaLetter';
@@ -120,11 +122,6 @@ class PrintRoutingService {
     required String currentRaw,
     required String requestedRaw,
   }) {
-    final currentToken = _windowsPaperSizeToken(currentRaw);
-    final requestedToken = _windowsPaperSizeToken(requestedRaw);
-    if (currentToken != null && requestedToken != null) {
-      return currentToken.toLowerCase() == requestedToken.toLowerCase();
-    }
     return _normalizePaperSizeText(currentRaw) ==
         _normalizePaperSizeText(requestedRaw);
   }
@@ -389,6 +386,7 @@ class PrintRoutingService {
     try {
       final beforeJobCount =
           await _loadWindowsPrinterJobCount(normalizedPrinter);
+      final startedAt = DateTime.now();
       _printLog(
         debugSource,
         'Try direct Acrobat /t exe="$acrobatExe" printer="$normalizedPrinter" driver="${meta.driver}" port="${meta.port}" beforeJobs=${beforeJobCount ?? -1}',
@@ -422,12 +420,16 @@ class PrintRoutingService {
       if (err.isNotEmpty) {
         _printLog(debugSource, 'Direct Acrobat /t stderr="${_compact(err)}"');
       }
-      _printLog(debugSource, 'Direct Acrobat /t process exit=$exitCode');
+      final elapsedMs = DateTime.now().difference(startedAt).inMilliseconds;
+      _printLog(
+        debugSource,
+        'Direct Acrobat /t process exit=$exitCode elapsedMs=$elapsedMs',
+      );
       if (exitCode == 0) return true;
 
       if (beforeJobCount != null) {
-        for (var attempt = 0; attempt < 16; attempt += 1) {
-          await Future<void>.delayed(const Duration(milliseconds: 250));
+        for (var attempt = 0; attempt < 24; attempt += 1) {
+          await Future<void>.delayed(const Duration(milliseconds: 500));
           final afterJobCount = await _loadWindowsPrinterJobCount(
             normalizedPrinter,
           );
@@ -440,9 +442,91 @@ class PrintRoutingService {
           }
         }
       }
+      if (out.isEmpty && err.isEmpty && elapsedMs >= 5000) {
+        _printLog(
+          debugSource,
+          'Direct Acrobat /t exited non-zero but looked accepted (silent output + elapsed=${elapsedMs}ms). Skip PrintTo fallback to avoid duplicate print dialog.',
+        );
+        return true;
+      }
       return false;
     } catch (_) {
       _printLog(debugSource, 'Direct Acrobat /t threw exception.');
+      return false;
+    }
+  }
+
+  String? _extractIpFromPrinterPort(String portRaw) {
+    final cleaned = portRaw.trim();
+    if (cleaned.isEmpty) return null;
+    final match =
+        RegExp(r'(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})').firstMatch(cleaned);
+    return match?.group(1);
+  }
+
+  String? _pjlDuplexCommands(PrintDuplexMode mode) {
+    switch (mode) {
+      case PrintDuplexMode.systemDefault:
+        return null;
+      case PrintDuplexMode.oneSided:
+        return '@PJL SET DUPLEX=OFF\r\n';
+      case PrintDuplexMode.twoSidedLongEdge:
+        return '@PJL SET DUPLEX=ON\r\n@PJL SET BINDING=LONGEDGE\r\n';
+      case PrintDuplexMode.twoSidedShortEdge:
+        return '@PJL SET DUPLEX=ON\r\n@PJL SET BINDING=SHORTEDGE\r\n';
+    }
+  }
+
+  Future<bool> _tryRawTcpPrint({
+    required String target,
+    required String portIp,
+    required String debugSource,
+    int tcpPort = 9100,
+    PrintDuplexMode duplexMode = PrintDuplexMode.systemDefault,
+  }) async {
+    if (!Platform.isWindows) return false;
+
+    final file = File(target);
+    if (!await file.exists()) {
+      _printLog(debugSource, 'Raw TCP: file not found "$target"');
+      return false;
+    }
+
+    try {
+      final duplexLabel = _duplexModeLabel(duplexMode);
+      _printLog(
+        debugSource,
+        'Try raw TCP print to $portIp:$tcpPort duplex=$duplexLabel',
+      );
+      final socket = await Socket.connect(
+        portIp,
+        tcpPort,
+        timeout: const Duration(seconds: 15),
+      );
+
+      final pdfBytes = await file.readAsBytes();
+      _printLog(
+        debugSource,
+        'Raw TCP connected, sending ${pdfBytes.length} bytes',
+      );
+
+      const uel = '\x1b%-12345X';
+      final duplexPjl = _pjlDuplexCommands(duplexMode) ?? '';
+      socket.add(utf8.encode(
+        '$uel@PJL\r\n$duplexPjl@PJL ENTER LANGUAGE = PDF\r\n',
+      ));
+      socket.add(pdfBytes);
+      socket.add(utf8.encode('$uel@PJL EOJ\r\n$uel'));
+
+      await socket.flush();
+      await socket.close();
+      _printLog(
+        debugSource,
+        'Raw TCP print completed (${pdfBytes.length} bytes, duplex=$duplexLabel).',
+      );
+      return true;
+    } catch (e) {
+      _printLog(debugSource, 'Raw TCP print failed: ${_compact(e)}');
       return false;
     }
   }
@@ -568,6 +652,32 @@ class PrintRoutingService {
           if (normalizedPrinter.isNotEmpty) {
             final requestedPaperToken =
                 _windowsPaperSizeToken(preferredPaperSize);
+
+            // For prints with specific paper size, try raw TCP first.
+            // Sends the PDF directly to the printer which respects the
+            // PDF's native page size, bypassing Acrobat's page scaling.
+            if (requestedPaperToken != null) {
+              final tcpMeta = await _loadWindowsPrinterMeta(normalizedPrinter);
+              if (tcpMeta != null) {
+                final portIp = _extractIpFromPrinterPort(tcpMeta.port);
+                if (portIp != null) {
+                  final rawPrinted = await _tryRawTcpPrint(
+                    target: target,
+                    portIp: portIp,
+                    debugSource: debugSource,
+                    duplexMode: duplexMode,
+                  );
+                  if (rawPrinted) {
+                    _printLog(
+                      debugSource,
+                      'Printed via raw TCP to $portIp:9100.',
+                    );
+                    return true;
+                  }
+                }
+              }
+            }
+
             if (requestedPaperToken != null) {
               final currentPaperRaw =
                   await _loadWindowsPrinterPaperSize(normalizedPrinter);
@@ -592,6 +702,19 @@ class PrintRoutingService {
                   'Skip paper override: current=${_paperSizeLabel(currentPaperRaw ?? '')} requested=${_paperSizeLabel(requestedPaperToken)}',
                 );
               }
+            }
+
+            final directAcrobatPrinted = await _tryDirectAcrobatPrintTo(
+              target: target,
+              printerName: normalizedPrinter,
+              debugSource: debugSource,
+            );
+            if (directAcrobatPrinted) {
+              if (shouldRestorePaperSize) {
+                paperRestoreDelay = const Duration(seconds: 45);
+              }
+              _printLog(debugSource, 'Printed via direct Acrobat /t route.');
+              return true;
             }
 
             final qPrinter = _psSingleQuoted(normalizedPrinter);
@@ -619,27 +742,10 @@ class PrintRoutingService {
             );
             if (printTo.exitCode == 0) {
               if (shouldRestorePaperSize) {
-                // Avoid blocking the UI on spooler polling.
+                // PrintTo completion timing is app-dependent; keep longer restore window.
                 paperRestoreDelay = const Duration(seconds: 120);
-                _printLog(
-                  '$debugSource.paper',
-                  'Skip synchronous spooler wait; use delayed restore to avoid print UI stall.',
-                );
               }
               _printLog(debugSource, 'Printed via PowerShell PrintTo route.');
-              return true;
-            }
-
-            final directAcrobatPrinted = await _tryDirectAcrobatPrintTo(
-              target: target,
-              printerName: normalizedPrinter,
-              debugSource: debugSource,
-            );
-            if (directAcrobatPrinted) {
-              if (shouldRestorePaperSize) {
-                paperRestoreDelay = const Duration(seconds: 45);
-              }
-              _printLog(debugSource, 'Printed via direct Acrobat /t route.');
               return true;
             }
           }

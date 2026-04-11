@@ -3,6 +3,38 @@ import 'models/behavior_card_drag_payload.dart';
 import 'models/textbook_drag_payload.dart';
 
 typedef AsyncUiAction = Future<void> Function();
+typedef RightSheetTestGradingStates = Map<String, String>;
+typedef RightSheetTestGradingStatesChanged = void Function(
+  RightSheetTestGradingStates states,
+);
+typedef RightSheetTestGradingAction = Future<void> Function(
+  String action,
+  RightSheetTestGradingStates states,
+);
+
+class RightSideSheetTestGradingSession {
+  final String sessionId;
+  final String title;
+  final String studentName;
+  final String groupHomeworkTitle;
+  final List<Map<String, dynamic>> gradingPages;
+  final List<Map<String, String>> overlayEntries;
+  final RightSheetTestGradingStates initialStates;
+  final RightSheetTestGradingStatesChanged? onStatesChanged;
+  final RightSheetTestGradingAction? onAction;
+
+  const RightSideSheetTestGradingSession({
+    required this.sessionId,
+    required this.title,
+    this.studentName = '',
+    this.groupHomeworkTitle = '',
+    required this.gradingPages,
+    this.overlayEntries = const <Map<String, String>>[],
+    this.initialStates = const <String, String>{},
+    this.onStatesChanged,
+    this.onAction,
+  });
+}
 
 /// MaterialApp.builder에서 만든 최상위 Overlay(=Navigator 밖) 안에
 /// "FAB 드롭다운 전용 레이어"를 만들기 위한 키.
@@ -40,6 +72,11 @@ final ValueNotifier<bool> rightSideSheetEdgeOpenEnabled =
 
 /// 전역 오른쪽 사이드시트 열림 상태.
 final ValueNotifier<bool> rightSideSheetOpen = ValueNotifier<bool>(false);
+
+/// 우측 시트 테스트 채점 세션 데이터.
+final ValueNotifier<RightSideSheetTestGradingSession?>
+    rightSideSheetTestGradingSession =
+    ValueNotifier<RightSideSheetTestGradingSession?>(null);
 
 /// 전역 오른쪽 사이드시트 토글 액션.
 AsyncUiAction? toggleRightSideSheetAction;

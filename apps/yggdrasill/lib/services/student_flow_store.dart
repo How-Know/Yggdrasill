@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:uuid/uuid.dart';
 
 import '../models/student_flow.dart';
 import 'tenant_service.dart';
@@ -9,16 +10,20 @@ import 'tenant_service.dart';
 class StudentFlowStore {
   StudentFlowStore._internal();
   static final StudentFlowStore instance = StudentFlowStore._internal();
+  static const String _testFlowName = '테스트';
 
-  final Map<String, List<StudentFlow>> _byStudentId = <String, List<StudentFlow>>{};
+  final Map<String, List<StudentFlow>> _byStudentId =
+      <String, List<StudentFlow>>{};
   final Map<String, Completer<void>> _loading = <String, Completer<void>>{};
   final ValueNotifier<int> revision = ValueNotifier<int>(0);
 
   List<StudentFlow> cached(String studentId) {
-    return List<StudentFlow>.from(_byStudentId[studentId] ?? const <StudentFlow>[]);
+    return List<StudentFlow>.from(
+        _byStudentId[studentId] ?? const <StudentFlow>[]);
   }
 
-  Future<List<StudentFlow>> loadForStudent(String studentId, {bool force = false}) async {
+  Future<List<StudentFlow>> loadForStudent(String studentId,
+      {bool force = false}) async {
     if (!force && _byStudentId.containsKey(studentId)) {
       return cached(studentId);
     }
@@ -30,8 +35,8 @@ class StudentFlowStore {
     final completer = Completer<void>();
     _loading[studentId] = completer;
     try {
-      final academyId = await TenantService.instance.getActiveAcademyId()
-          ?? await TenantService.instance.ensureActiveAcademy();
+      final academyId = await TenantService.instance.getActiveAcademyId() ??
+          await TenantService.instance.ensureActiveAcademy();
       final supa = Supabase.instance.client;
       final data = await supa
           .from('student_flows')
@@ -66,8 +71,8 @@ class StudentFlowStore {
   Future<void> loadForStudents(List<String> studentIds) async {
     if (studentIds.isEmpty) return;
     try {
-      final academyId = await TenantService.instance.getActiveAcademyId()
-          ?? await TenantService.instance.ensureActiveAcademy();
+      final academyId = await TenantService.instance.getActiveAcademyId() ??
+          await TenantService.instance.ensureActiveAcademy();
       final supa = Supabase.instance.client;
       final data = await supa
           .from('student_flows')
@@ -82,14 +87,15 @@ class StudentFlowStore {
         final sid = (row['student_id'] as String?) ?? '';
         if (id.isEmpty || sid.isEmpty) continue;
         map.putIfAbsent(sid, () => <StudentFlow>[]).add(StudentFlow(
-          id: id,
-          name: (row['name'] as String?) ?? '',
-          enabled: (row['enabled'] as bool?) ?? false,
-          orderIndex: (row['order_index'] as int?) ?? 0,
-        ));
+              id: id,
+              name: (row['name'] as String?) ?? '',
+              enabled: (row['enabled'] as bool?) ?? false,
+              orderIndex: (row['order_index'] as int?) ?? 0,
+            ));
       }
       for (final sid in studentIds) {
-        _byStudentId[sid] = List<StudentFlow>.from(map[sid] ?? const <StudentFlow>[]);
+        _byStudentId[sid] =
+            List<StudentFlow>.from(map[sid] ?? const <StudentFlow>[]);
       }
       revision.value++;
     } catch (e, st) {
@@ -100,8 +106,8 @@ class StudentFlowStore {
 
   Future<void> saveFlows(String studentId, List<StudentFlow> flows) async {
     try {
-      final academyId = await TenantService.instance.getActiveAcademyId()
-          ?? await TenantService.instance.ensureActiveAcademy();
+      final academyId = await TenantService.instance.getActiveAcademyId() ??
+          await TenantService.instance.ensureActiveAcademy();
       final supa = Supabase.instance.client;
       final rows = flows.asMap().entries.map((e) {
         final flow = e.value;
@@ -128,5 +134,28 @@ class StudentFlowStore {
       print('[StudentFlow][saveFlows] $e\n$st');
       rethrow;
     }
+  }
+
+  Future<StudentFlow?> ensureTestFlowForStudent(String studentId) async {
+    final flows = await loadForStudent(studentId);
+    final idx = flows.indexWhere((flow) => flow.name.trim() == _testFlowName);
+    if (idx >= 0) {
+      final existing = flows[idx];
+      if (existing.enabled) return existing;
+      final updated = existing.copyWith(enabled: true);
+      final next = List<StudentFlow>.from(flows);
+      next[idx] = updated;
+      await saveFlows(studentId, next);
+      return updated.copyWith(orderIndex: idx);
+    }
+    final created = StudentFlow(
+      id: const Uuid().v4(),
+      name: _testFlowName,
+      enabled: true,
+      orderIndex: flows.length,
+    );
+    final next = List<StudentFlow>.from(flows)..add(created);
+    await saveFlows(studentId, next);
+    return created.copyWith(orderIndex: next.length - 1);
   }
 }

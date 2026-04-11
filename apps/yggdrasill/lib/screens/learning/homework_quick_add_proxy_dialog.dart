@@ -14,6 +14,7 @@ import '../../widgets/dialog_tokens.dart';
 import '../../widgets/latex_text_renderer.dart';
 import '../../models/education_level.dart';
 import '../../models/student_flow.dart';
+import '../../utils/naesin_exam_context.dart';
 
 class HomeworkQuickAddProxyDialog extends StatefulWidget {
   final String studentId;
@@ -390,11 +391,7 @@ class HomeworkQuickAddProxyDialogState
   }
 
   String _naesinCourseLabel(String courseKey) {
-    final options = _naesinCourseOptionsForGrade(_naesinGradeKey);
-    for (final item in options) {
-      if (item.key == courseKey) return item.label;
-    }
-    return courseKey.trim();
+    return NaesinExamContext.courseLabel(courseKey);
   }
 
   int _safeIntFromDynamic(dynamic raw) {
@@ -479,125 +476,36 @@ class HomeworkQuickAddProxyDialogState
     return null;
   }
 
-  String _defaultNaesinExamTermByDate(DateTime now) {
-    final month = now.month;
-    final day = now.day;
-    if (month <= 4) return '중간고사';
-    if (month == 5) return day <= 15 ? '중간고사' : '기말고사';
-    if (month <= 7) return '기말고사';
-    if (month <= 9) return '중간고사';
-    if (month == 10) return day <= 15 ? '중간고사' : '기말고사';
-    return '기말고사';
-  }
-
-  int _defaultSemesterByDate(DateTime now) => now.month <= 7 ? 1 : 2;
-
   List<_NaesinGradeOption> _naesinGradeOptionsForLevel(EducationLevel level) {
-    switch (level) {
-      case EducationLevel.high:
-        return const <_NaesinGradeOption>[
-          _NaesinGradeOption(
-            key: 'H1',
-            label: '고1',
-            level: EducationLevel.high,
-            grade: 1,
+    return NaesinExamContext.gradeOptionsForLevel(level)
+        .map(
+          (e) => _NaesinGradeOption(
+            key: e.key,
+            label: e.label,
+            level: e.level,
+            grade: e.grade,
           ),
-          _NaesinGradeOption(
-            key: 'H2',
-            label: '고2',
-            level: EducationLevel.high,
-            grade: 2,
-          ),
-          _NaesinGradeOption(
-            key: 'H3',
-            label: '고3',
-            level: EducationLevel.high,
-            grade: 3,
-          ),
-        ];
-      case EducationLevel.middle:
-      case EducationLevel.elementary:
-        return const <_NaesinGradeOption>[
-          _NaesinGradeOption(
-            key: 'M1',
-            label: '중1',
-            level: EducationLevel.middle,
-            grade: 1,
-          ),
-          _NaesinGradeOption(
-            key: 'M2',
-            label: '중2',
-            level: EducationLevel.middle,
-            grade: 2,
-          ),
-          _NaesinGradeOption(
-            key: 'M3',
-            label: '중3',
-            level: EducationLevel.middle,
-            grade: 3,
-          ),
-        ];
-    }
+        )
+        .toList();
   }
 
   List<_NaesinCourseOption> _naesinCourseOptionsForGrade(String gradeKey) {
-    switch (gradeKey) {
-      case 'M1':
-        return const <_NaesinCourseOption>[
-          _NaesinCourseOption(key: 'M1-1', label: '1-1'),
-          _NaesinCourseOption(key: 'M1-2', label: '1-2'),
-        ];
-      case 'M2':
-        return const <_NaesinCourseOption>[
-          _NaesinCourseOption(key: 'M2-1', label: '2-1'),
-          _NaesinCourseOption(key: 'M2-2', label: '2-2'),
-        ];
-      case 'M3':
-        return const <_NaesinCourseOption>[
-          _NaesinCourseOption(key: 'M3-1', label: '3-1'),
-          _NaesinCourseOption(key: 'M3-2', label: '3-2'),
-        ];
-      case 'H1':
-        return const <_NaesinCourseOption>[
-          _NaesinCourseOption(key: 'H1-c1', label: '공통수학1'),
-          _NaesinCourseOption(key: 'H1-c2', label: '공통수학2'),
-        ];
-      case 'H2':
-      case 'H3':
-        return const <_NaesinCourseOption>[
-          _NaesinCourseOption(key: 'H-algebra', label: '대수'),
-        ];
-      default:
-        return const <_NaesinCourseOption>[
-          _NaesinCourseOption(key: 'M1-1', label: '1-1'),
-          _NaesinCourseOption(key: 'M1-2', label: '1-2'),
-        ];
-    }
+    return NaesinExamContext.courseOptionsForGrade(gradeKey)
+        .map((e) => _NaesinCourseOption(key: e.key, label: e.label))
+        .toList();
   }
 
   void _initNaesinFilterDefaults() {
     final now = DateTime.now();
     final info = _studentInfoForDialog();
-    final student = info?.student;
-    final level = student?.educationLevel == EducationLevel.high
-        ? EducationLevel.high
-        : EducationLevel.middle;
-    final rawGrade = student?.grade ?? 1;
-    final safeGrade = rawGrade.clamp(1, 3);
-    final semester = _defaultSemesterByDate(now);
-    final gradeKey =
-        level == EducationLevel.high ? 'H$safeGrade' : 'M$safeGrade';
-    final courseKey = switch (gradeKey) {
-      'M1' => semester == 1 ? 'M1-1' : 'M1-2',
-      'M2' => semester == 1 ? 'M2-1' : 'M2-2',
-      'M3' => semester == 1 ? 'M3-1' : 'M3-2',
-      'H1' => semester == 1 ? 'H1-c1' : 'H1-c2',
-      _ => 'H-algebra',
-    };
-    _naesinGradeKey = gradeKey;
-    _naesinCourseKey = courseKey;
-    _naesinExamTerm = _defaultNaesinExamTermByDate(now);
-    _naesinStudentSchool = (student?.school ?? '').trim();
+    final derived = NaesinExamContext.initialGradeCourseFromStudent(
+      info?.student,
+      now,
+    );
+    _naesinGradeKey = derived.gradeKey;
+    _naesinCourseKey = derived.courseKey;
+    _naesinExamTerm = NaesinExamContext.defaultNaesinExamTermByDate(now);
+    _naesinStudentSchool = (info?.student.school ?? '').trim();
   }
 
   void _syncNaesinCourseWithGrade() {
@@ -610,7 +518,13 @@ class HomeworkQuickAddProxyDialogState
     required String school,
     required int year,
   }) {
-    return '$_naesinGradeKey|$_naesinCourseKey|$_naesinExamTerm|$school|$year';
+    return NaesinExamContext.buildNaesinLinkKey(
+      gradeKey: _naesinGradeKey,
+      courseKey: _naesinCourseKey,
+      examTerm: _naesinExamTerm,
+      school: school,
+      year: year,
+    );
   }
 
   bool _isNaesinLinkedCellActive({

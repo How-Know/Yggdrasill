@@ -25,7 +25,11 @@ class AnimatedReorderableGrid<T extends Object> extends StatefulWidget {
     this.dragAnchorStrategy = childDragAnchorStrategy,
     this.onDragStarted,
     this.onDragEnded,
+    this.scrollBottomPadding = 0,
   });
+
+  /// 스크롤 영역 맨 아래에 비워 둘 높이(오버레이 FAB 등). 뷰포트는 줄이지 않음.
+  final double scrollBottomPadding;
 
   final List<T> items;
   final String Function(T item) itemId;
@@ -179,9 +183,11 @@ class _AnimatedReorderableGridState<T extends Object> extends State<AnimatedReor
   Widget build(BuildContext context) {
     final previewItems = _buildPreviewItems();
     final rowCount = (previewItems.length / widget.columns).ceil();
-    final contentHeight = rowCount == 0
+    final baseContentHeight = rowCount == 0
         ? widget.cardHeight
         : (rowCount * widget.cardHeight) + ((rowCount - 1) * widget.spacing);
+    final contentHeight =
+        baseContentHeight + widget.scrollBottomPadding;
     final gridWidth = (widget.columns * widget.cardWidth) + ((widget.columns - 1) * widget.spacing);
 
     Widget buildDraggableItem(T item, int index) {

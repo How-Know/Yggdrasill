@@ -1,19 +1,23 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:uuid/uuid.dart';
 import 'tenant_service.dart';
 import 'homework_assignment_store.dart';
 import 'learning_problem_bank_service.dart';
+import 'attendance_service.dart';
 
 enum HomeworkStatus { inProgress, completed, homework }
 
 class HomeworkItem {
   final String id;
+  String? assignmentCode;
   String title;
   String body;
   Color color;
   String? flowId;
+  String? testOriginFlowId;
   String? type;
   String? page;
   int? count;
@@ -49,10 +53,12 @@ class HomeworkItem {
   int version; // OCC 버전
   HomeworkItem({
     required this.id,
+    this.assignmentCode,
     required this.title,
     required this.body,
     this.color = const Color(0xFF1976D2),
     this.flowId,
+    this.testOriginFlowId,
     this.type,
     this.page,
     this.count,
@@ -161,10 +167,12 @@ class HomeworkSplitPartInput {
 
 class HomeworkRecentTemplatePart {
   final String sourceItemId;
+  final String? assignmentCode;
   final String title;
   final String body;
   final Color color;
   final String? flowId;
+  final String? testOriginFlowId;
   final String? type;
   final String? page;
   final int? count;
@@ -182,10 +190,12 @@ class HomeworkRecentTemplatePart {
 
   const HomeworkRecentTemplatePart({
     required this.sourceItemId,
+    this.assignmentCode,
     required this.title,
     required this.body,
     required this.color,
     this.flowId,
+    this.testOriginFlowId,
     this.type,
     this.page,
     this.count,
@@ -278,7 +288,11 @@ class HomeworkStore {
   final Set<String> _autoCompleteOnNextWaiting = <String>{};
   final LearningProblemBankService _problemBankService =
       LearningProblemBankService();
+  final math.Random _assignmentCodeRandom = math.Random();
+  static final RegExp _assignmentCodePattern = RegExp(r'^[A-Z]{4}[0-9]{4}$');
+  bool _supportsAssignmentCodeColumn = true;
   bool _supportsPbPresetIdColumn = true;
+  bool _supportsTestOriginFlowIdColumn = true;
   // 간단 영속화 캐시 (앱 시작 시 한번 로드, 변경 시 저장)
   bool _loaded = false;
   RealtimeChannel? _rt;
@@ -315,6 +329,26 @@ class HomeworkStore {
   bool _isMissingPbPresetIdColumnError(Object error) {
     final message = error.toString().toLowerCase();
     return message.contains('pb_preset_id') &&
+        (message.contains('does not exist') || message.contains('42703'));
+  }
+
+  bool _isMissingAssignmentCodeColumnError(Object error) {
+    final message = error.toString().toLowerCase();
+    return message.contains('assignment_code') &&
+        (message.contains('does not exist') || message.contains('42703'));
+  }
+
+  bool _isAssignmentCodeConflictError(Object error) {
+    final message = error.toString().toLowerCase();
+    return message.contains('assignment_code') &&
+        (message.contains('duplicate key') ||
+            message.contains('unique') ||
+            message.contains('23505'));
+  }
+
+  bool _isMissingTestOriginFlowIdColumnError(Object error) {
+    final message = error.toString().toLowerCase();
+    return message.contains('test_origin_flow_id') &&
         (message.contains('does not exist') || message.contains('42703'));
   }
 
@@ -368,6 +402,46 @@ class HomeworkStore {
         }
         rethrow;
       }
+    }
+
+    Future<List<Map<String, dynamic>>> attachAssignmentCodes(
+      List<Map<String, dynamic>> baseRows,
+    ) async {
+      if (baseRows.isEmpty) return baseRows;
+      if (!_supportsAssignmentCodeColumn) return baseRows;
+      try {
+        dynamic query = supa
+            .from('homework_items')
+            .select('id,assignment_code')
+            .eq('academy_id', academyId);
+        if (studentId != null && studentId.trim().isNotEmpty) {
+          query = query.eq('student_id', studentId.trim());
+        }
+        final raw = await query;
+        final rows = (raw as List<dynamic>).cast<Map<String, dynamic>>();
+        final byId = <String, String?>{};
+        for (final row in rows) {
+          final id = (row['id'] as String?)?.trim();
+          if (id == null || id.isEmpty) continue;
+          byId[id] = _normalizeAssignmentCode(
+            row['assignment_code'] as String?,
+          );
+        }
+        for (final row in baseRows) {
+          final id = (row['id'] as String?)?.trim();
+          if (id == null || id.isEmpty) continue;
+          if (byId.containsKey(id)) {
+            row['assignment_code'] = byId[id];
+          }
+        }
+      } catch (e) {
+        if (_isMissingAssignmentCodeColumnError(e)) {
+          _supportsAssignmentCodeColumn = false;
+          return baseRows;
+        }
+        rethrow;
+      }
+      return baseRows;
     }
 
     Future<List<Map<String, dynamic>>> attachTimeLimitMinutes(
@@ -442,11 +516,48 @@ class HomeworkStore {
       return baseRows;
     }
 
+    Future<List<Map<String, dynamic>>> attachTestOriginFlowIds(
+      List<Map<String, dynamic>> baseRows,
+    ) async {
+      if (baseRows.isEmpty) return baseRows;
+      try {
+        dynamic query = supa
+            .from('homework_items')
+            .select('id,test_origin_flow_id')
+            .eq('academy_id', academyId);
+        if (studentId != null && studentId.trim().isNotEmpty) {
+          query = query.eq('student_id', studentId.trim());
+        }
+        final raw = await query;
+        final rows = (raw as List<dynamic>).cast<Map<String, dynamic>>();
+        final byId = <String, String?>{};
+        for (final row in rows) {
+          final id = (row['id'] as String?)?.trim();
+          if (id == null || id.isEmpty) continue;
+          byId[id] = _parseTrimmedTextOpt(row['test_origin_flow_id']);
+        }
+        for (final row in baseRows) {
+          final id = (row['id'] as String?)?.trim();
+          if (id == null || id.isEmpty) continue;
+          if (byId.containsKey(id)) {
+            row['test_origin_flow_id'] = byId[id];
+          }
+        }
+      } catch (e) {
+        if (!_isMissingTestOriginFlowIdColumnError(e)) {
+          rethrow;
+        }
+      }
+      return baseRows;
+    }
+
     Future<List<Map<String, dynamic>>> attachOptionalColumns(
       List<Map<String, dynamic>> baseRows,
     ) async {
-      final withTimeLimit = await attachTimeLimitMinutes(baseRows);
-      return attachPbPresetIds(withTimeLimit);
+      final withAssignmentCode = await attachAssignmentCodes(baseRows);
+      final withTimeLimit = await attachTimeLimitMinutes(withAssignmentCode);
+      final withPbPreset = await attachPbPresetIds(withTimeLimit);
+      return attachTestOriginFlowIds(withPbPreset);
     }
 
     List<Map<String, dynamic>> rows;
@@ -527,13 +638,53 @@ class HomeworkStore {
     return value;
   }
 
+  String? _normalizeAssignmentCode(String? raw) {
+    final normalized = (raw ?? '').trim().toUpperCase();
+    if (normalized.isEmpty) return null;
+    if (!_assignmentCodePattern.hasMatch(normalized)) return null;
+    return normalized;
+  }
+
+  String _issueAssignmentCode() {
+    const letters = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+    const digits = '0123456789';
+    String nextCode() {
+      final sb = StringBuffer();
+      for (int i = 0; i < 4; i++) {
+        sb.write(letters[_assignmentCodeRandom.nextInt(letters.length)]);
+      }
+      for (int i = 0; i < 4; i++) {
+        sb.write(digits[_assignmentCodeRandom.nextInt(digits.length)]);
+      }
+      return sb.toString();
+    }
+
+    for (int i = 0; i < 128; i++) {
+      final candidate = nextCode();
+      var conflict = false;
+      for (final items in _byStudentId.values) {
+        for (final item in items) {
+          if (_normalizeAssignmentCode(item.assignmentCode) == candidate) {
+            conflict = true;
+            break;
+          }
+        }
+        if (conflict) break;
+      }
+      if (!conflict) return candidate;
+    }
+    return nextCode();
+  }
+
   HomeworkItem _parseHomeworkItemRow(Map<String, dynamic> r) {
     return HomeworkItem(
       id: (r['id'] as String?) ?? const Uuid().v4(),
+      assignmentCode: _normalizeAssignmentCode(r['assignment_code'] as String?),
       title: (r['title'] as String?) ?? '',
       body: (r['body'] as String?) ?? '',
       color: Color(_parseInt(r['color'], fallback: 0xFF1976D2)),
       flowId: r['flow_id'] as String?,
+      testOriginFlowId: _parseTrimmedTextOpt(r['test_origin_flow_id']),
       type: (r['type'] as String?)?.trim(),
       page: (r['page'] as String?)?.trim(),
       count: _parseIntOpt(r['count']),
@@ -1018,10 +1169,14 @@ class HomeworkStore {
   HomeworkRecentTemplatePart _toRecentTemplatePart(HomeworkItem item) {
     return HomeworkRecentTemplatePart(
       sourceItemId: item.id,
+      assignmentCode: _normalizeAssignmentCode(item.assignmentCode),
       title: item.title.trim().isEmpty ? '(제목 없음)' : item.title.trim(),
       body: item.body,
       color: item.color,
       flowId: item.flowId,
+      testOriginFlowId: (item.testOriginFlowId ?? '').trim().isEmpty
+          ? null
+          : item.testOriginFlowId!.trim(),
       type: item.type,
       page: item.page,
       count: item.count,
@@ -1465,6 +1620,12 @@ class HomeworkStore {
         'body': it.body,
         'color': it.color.value,
         'flow_id': it.flowId,
+        if (_supportsTestOriginFlowIdColumn)
+          'test_origin_flow_id': (it.testOriginFlowId ?? '').trim().isEmpty
+              ? null
+              : it.testOriginFlowId!.trim(),
+        if (_supportsAssignmentCodeColumn)
+          'assignment_code': _normalizeAssignmentCode(it.assignmentCode),
         'type': it.type,
         'page': it.page,
         'count': it.count,
@@ -1493,17 +1654,25 @@ class HomeworkStore {
         'waiting_at': it.waitingAt?.toUtc().toIso8601String(),
       };
       // OCC update: 0행이면 예외 없이 빈 배열을 받도록 select() (list)로 처리
+      final selectColumns =
+          _supportsAssignmentCodeColumn ? 'version,assignment_code' : 'version';
       final updatedRows = await supa
           .from('homework_items')
           .update(base)
           .eq('id', it.id)
           .eq('version', it.version)
-          .select('version');
+          .select(selectColumns);
       final typedUpdatedRows =
           (updatedRows as List<dynamic>).cast<Map<String, dynamic>>();
       if (typedUpdatedRows.isNotEmpty) {
         final row = typedUpdatedRows.first;
         it.version = (row['version'] as num?)?.toInt() ?? (it.version + 1);
+        if (_supportsAssignmentCodeColumn) {
+          it.assignmentCode =
+              _normalizeAssignmentCode(row['assignment_code'] as String?) ??
+                  _normalizeAssignmentCode(it.assignmentCode) ??
+                  _issueAssignmentCode();
+        }
         await _syncUnitMappings(
           academyId: academyId,
           studentId: studentId,
@@ -1529,12 +1698,20 @@ class HomeworkStore {
         'version': it.version,
       };
       final insRows =
-          await supa.from('homework_items').insert(insertRow).select('version');
+          await supa.from('homework_items').insert(insertRow).select(
+                selectColumns,
+              );
       final typedInsertRows =
           (insRows as List<dynamic>).cast<Map<String, dynamic>>();
       if (typedInsertRows.isNotEmpty) {
         final row = typedInsertRows.first;
         it.version = (row['version'] as num?)?.toInt() ?? 1;
+        if (_supportsAssignmentCodeColumn) {
+          it.assignmentCode =
+              _normalizeAssignmentCode(row['assignment_code'] as String?) ??
+                  _normalizeAssignmentCode(it.assignmentCode) ??
+                  _issueAssignmentCode();
+        }
         await _syncUnitMappings(
           academyId: academyId,
           studentId: studentId,
@@ -1558,6 +1735,23 @@ class HomeworkStore {
     } catch (e, st) {
       if (_supportsPbPresetIdColumn && _isMissingPbPresetIdColumnError(e)) {
         _supportsPbPresetIdColumn = false;
+        await _upsertItem(studentId, it);
+        return;
+      }
+      if (_supportsAssignmentCodeColumn &&
+          _isMissingAssignmentCodeColumnError(e)) {
+        _supportsAssignmentCodeColumn = false;
+        await _upsertItem(studentId, it);
+        return;
+      }
+      if (_supportsTestOriginFlowIdColumn &&
+          _isMissingTestOriginFlowIdColumnError(e)) {
+        _supportsTestOriginFlowIdColumn = false;
+        await _upsertItem(studentId, it);
+        return;
+      }
+      if (_supportsAssignmentCodeColumn && _isAssignmentCodeConflictError(e)) {
+        it.assignmentCode = _issueAssignmentCode();
         await _upsertItem(studentId, it);
         return;
       }
@@ -1864,8 +2058,10 @@ class HomeworkStore {
     String studentId, {
     required String title,
     required String body,
+    String? assignmentCode,
     Color color = const Color(0xFF1976D2),
     String? flowId,
+    String? testOriginFlowId,
     String? type,
     String? page,
     int? count,
@@ -1884,12 +2080,18 @@ class HomeworkStore {
   }) {
     final id = const Uuid().v4();
     final orderIndex = _nextActiveOrderIndex(studentId);
+    final resolvedAssignmentCode =
+        _normalizeAssignmentCode(assignmentCode) ?? _issueAssignmentCode();
     final item = HomeworkItem(
       id: id,
+      assignmentCode: resolvedAssignmentCode,
       title: title,
       body: body,
       color: color,
       flowId: flowId,
+      testOriginFlowId: (testOriginFlowId ?? '').trim().isEmpty
+          ? null
+          : testOriginFlowId!.trim(),
       type: type,
       page: page,
       count: count,
@@ -1942,6 +2144,10 @@ class HomeworkStore {
       'body': item.body,
       'color': item.color.value,
       'flow_id': item.flowId ?? '',
+      'test_origin_flow_id': (item.testOriginFlowId ?? '').trim().isEmpty
+          ? null
+          : item.testOriginFlowId!.trim(),
+      'assignment_code': _normalizeAssignmentCode(item.assignmentCode),
       'type': item.type ?? '',
       'page': item.page ?? '',
       'count': item.count,
@@ -2363,6 +2569,10 @@ class HomeworkStore {
     if (list == null) return;
     final idx = list.indexWhere((e) => e.id == id);
     if (idx == -1) return;
+    final item = list[idx];
+    if (_isTestTypeLabel(item.type) && !isStudentInClassTime(studentId)) {
+      return;
+    }
     try {
       final String academyId =
           (await TenantService.instance.getActiveAcademyId()) ??
@@ -2770,9 +2980,11 @@ class HomeworkStore {
     String sourceId, {
     required String body,
     String? flowId,
+    String? testOriginFlowId,
     String? type,
     String? page,
     int? count,
+    int? timeLimitMinutes,
     String? pbPresetId,
     String? memo,
     String? content,
@@ -2785,9 +2997,11 @@ class HomeworkStore {
         title: '과제',
         body: body,
         flowId: flowId,
+        testOriginFlowId: testOriginFlowId,
         type: type,
         page: page,
         count: count,
+        timeLimitMinutes: _normalizePositiveInt(timeLimitMinutes),
         pbPresetId: pbPresetId,
         memo: memo,
         content: content ?? body,
@@ -2801,9 +3015,11 @@ class HomeworkStore {
         title: '과제',
         body: body,
         flowId: flowId,
+        testOriginFlowId: testOriginFlowId,
         type: type,
         page: page,
         count: count,
+        timeLimitMinutes: _normalizePositiveInt(timeLimitMinutes),
         pbPresetId: pbPresetId,
         memo: memo,
         content: content ?? body,
@@ -2811,15 +3027,22 @@ class HomeworkStore {
       );
     }
     final src = list[idx];
+    final resolvedTimeLimit = _normalizePositiveInt(timeLimitMinutes) ??
+        _normalizePositiveInt(src.timeLimitMinutes);
+    final resolvedTestOriginFlowId = (testOriginFlowId ?? '').trim().isNotEmpty
+        ? testOriginFlowId!.trim()
+        : src.testOriginFlowId;
     final created = add(
       studentId,
       title: src.title,
       body: body,
       color: src.color,
       flowId: flowId ?? src.flowId,
+      testOriginFlowId: resolvedTestOriginFlowId,
       type: type ?? src.type,
       page: page ?? src.page,
       count: count ?? src.count,
+      timeLimitMinutes: resolvedTimeLimit,
       pbPresetId: (pbPresetId ?? '').trim().isEmpty
           ? src.pbPresetId
           : pbPresetId!.trim(),
@@ -2924,6 +3147,108 @@ class HomeworkStore {
     );
   }
 
+  bool _isTestTypeLabel(String? type) => (type ?? '').trim() == '테스트';
+
+  bool _isTimeoutEndedTestItem(
+    HomeworkItem item, {
+    DateTime? at,
+  }) {
+    if (!_isTestTypeLabel(item.type)) return false;
+    final limit = _normalizePositiveInt(item.timeLimitMinutes);
+    if (limit == null || limit <= 0) return false;
+    final now = at ?? DateTime.now();
+    final runningMs = item.runStart == null
+        ? 0
+        : now.difference(item.runStart!).inMilliseconds;
+    final elapsedMs = item.accumulatedMs + runningMs;
+    return elapsedMs >= limit * 60000;
+  }
+
+  bool isStudentInClassTime(String studentId, {DateTime? at}) {
+    final now = (at ?? DateTime.now()).toLocal();
+    bool sameDay(DateTime a, DateTime b) =>
+        a.year == b.year && a.month == b.month && a.day == b.day;
+    final records =
+        AttendanceService.instance.getAttendanceRecordsForStudent(studentId);
+    for (final record in records) {
+      if (!sameDay(record.classDateTime.toLocal(), now)) continue;
+      final hasArrived = record.arrivalTime != null || record.isPresent;
+      if (!hasArrived) continue;
+      if (record.departureTime != null) continue;
+      return true;
+    }
+    return false;
+  }
+
+  void convertAllTestCardsToPrintForDeparture(String studentId) {
+    final list = _byStudentId[studentId];
+    if (list == null || list.isEmpty) return;
+    bool changed = false;
+    final now = DateTime.now();
+    for (final item in list) {
+      if (item.status == HomeworkStatus.completed) continue;
+      if (!_isTestTypeLabel(item.type)) continue;
+      bool updated = false;
+      final keepTimedOutTestAsHomework =
+          item.status == HomeworkStatus.homework &&
+              _isTimeoutEndedTestItem(item, at: now);
+      if (keepTimedOutTestAsHomework) {
+        if (item.runStart != null) {
+          item.accumulatedMs += now.difference(item.runStart!).inMilliseconds;
+          item.runStart = null;
+          updated = true;
+        }
+        if (item.phase == 2) {
+          item.phase = 1;
+          item.waitingAt = now;
+          updated = true;
+        }
+        if (updated) {
+          item.updatedAt = now;
+          changed = true;
+          unawaited(_upsertItem(studentId, item));
+        }
+        continue;
+      }
+      if (item.runStart != null) {
+        item.accumulatedMs += now.difference(item.runStart!).inMilliseconds;
+        item.runStart = null;
+        updated = true;
+      }
+      final restoredFlow = (item.testOriginFlowId ?? '').trim();
+      if (restoredFlow.isNotEmpty &&
+          (item.flowId ?? '').trim() != restoredFlow) {
+        item.flowId = restoredFlow;
+        updated = true;
+      }
+      if ((item.type ?? '').trim() != '프린트') {
+        item.type = '프린트';
+        updated = true;
+      }
+      if (item.timeLimitMinutes != null) {
+        item.timeLimitMinutes = null;
+        updated = true;
+      }
+      if ((item.testOriginFlowId ?? '').trim().isNotEmpty) {
+        item.testOriginFlowId = null;
+        updated = true;
+      }
+      if (item.phase == 2) {
+        item.phase = 1;
+        item.waitingAt = now;
+        updated = true;
+      }
+      if (updated) {
+        item.updatedAt = now;
+        changed = true;
+        unawaited(_upsertItem(studentId, item));
+      }
+    }
+    if (changed) {
+      _bump();
+    }
+  }
+
   // 하원 시 미완료 과제들을 숙제로 표시
   void markIncompleteAsHomework(String studentId) {
     final list = _byStudentId[studentId];
@@ -3007,9 +3332,11 @@ class HomeworkStore {
           e.id,
           body: e.body,
           flowId: e.flowId,
+          testOriginFlowId: e.testOriginFlowId,
           type: e.type,
           page: e.page,
           count: e.count,
+          timeLimitMinutes: e.timeLimitMinutes,
           content: e.content,
         );
         byId[e.id] = e;
@@ -3233,6 +3560,30 @@ class HomeworkStore {
     final cleanedGroupId = groupId.trim();
     if (cleanedGroupId.isEmpty) return 0;
     final normalizedFromPhase = fromPhase;
+    final groupChildren = itemsInGroup(
+      studentId,
+      cleanedGroupId,
+      includeCompleted: true,
+    )
+        .where((e) => e.status != HomeworkStatus.completed)
+        .toList(growable: false);
+    final bool hasWaitingTestChild = groupChildren.any(
+      (child) => _isTestTypeLabel(child.type) && child.phase == 1,
+    );
+    final bool hasRunningChild = groupChildren.any((child) => child.phase == 2);
+    final bool hasSubmittedOrConfirmedChild = groupChildren.any(
+      (child) => child.phase == 3 || child.phase == 4,
+    );
+    final bool canStartWaiting = normalizedFromPhase == 1 ||
+        (normalizedFromPhase == null &&
+            hasWaitingTestChild &&
+            !hasRunningChild &&
+            !hasSubmittedOrConfirmedChild);
+    if (canStartWaiting &&
+        hasWaitingTestChild &&
+        !isStudentInClassTime(studentId)) {
+      return 0;
+    }
     final now = DateTime.now();
     final beforeChildren = (normalizedFromPhase == 4)
         ? itemsInGroup(studentId, cleanedGroupId, includeCompleted: true)
@@ -3492,10 +3843,12 @@ class HomeworkStore {
     required String studentId,
     required String groupId,
     required String title,
+    String? assignmentCode,
     String? body,
     String? page,
     int? count,
     int? timeLimitMinutes,
+    String? testOriginFlowId,
     String? pbPresetId,
     String? type,
     String? memo,
@@ -3558,12 +3911,20 @@ class HomeworkStore {
     final int? resolvedCount = (count != null && count > 0) ? count : null;
     final int? resolvedTimeLimit = _normalizePositiveInt(timeLimitMinutes) ??
         _normalizePositiveInt(template?.timeLimitMinutes);
+    final String? resolvedTestOriginFlowId =
+        (testOriginFlowId ?? '').trim().isNotEmpty
+            ? testOriginFlowId!.trim()
+            : ((template?.testOriginFlowId ?? '').trim().isNotEmpty
+                ? template!.testOriginFlowId!.trim()
+                : null);
     final String? resolvedPbPresetId = (pbPresetId ?? '').trim().isNotEmpty
         ? pbPresetId!.trim()
         : ((template?.pbPresetId ?? '').trim().isNotEmpty
             ? template!.pbPresetId!.trim()
             : null);
     final resolvedColor = color ?? template?.color ?? const Color(0xFF1976D2);
+    final resolvedAssignmentCode =
+        _normalizeAssignmentCode(assignmentCode) ?? _issueAssignmentCode();
     final resolvedSplitParts =
         (defaultSplitParts ?? template?.defaultSplitParts ?? 1)
             .clamp(1, 4)
@@ -3571,12 +3932,14 @@ class HomeworkStore {
 
     final item = HomeworkItem(
       id: const Uuid().v4(),
+      assignmentCode: resolvedAssignmentCode,
       title: resolvedTitle,
       body: resolvedBody,
       color: resolvedColor,
       flowId: resolvedFlowId.isNotEmpty
           ? resolvedFlowId
           : (template?.flowId ?? group?.flowId),
+      testOriginFlowId: resolvedTestOriginFlowId,
       type: resolvedType.isEmpty ? template?.type : resolvedType,
       page: resolvedPage.isEmpty ? template?.page : resolvedPage,
       count: resolvedCount,
@@ -3646,6 +4009,12 @@ class HomeworkStore {
         'body': item.body,
         'color': item.color.value,
         'flow_id': item.flowId,
+        if (_supportsTestOriginFlowIdColumn)
+          'test_origin_flow_id': (item.testOriginFlowId ?? '').trim().isEmpty
+              ? null
+              : item.testOriginFlowId!.trim(),
+        if (_supportsAssignmentCodeColumn)
+          'assignment_code': _normalizeAssignmentCode(item.assignmentCode),
         'type': item.type,
         'page': item.page,
         'count': item.count,
@@ -3679,11 +4048,20 @@ class HomeworkStore {
         'academy_id': academyId,
         ...base,
         'version': item.version,
-      }).select('version');
+      }).select(
+        _supportsAssignmentCodeColumn ? 'version,assignment_code' : 'version',
+      );
       final typedInsertRows =
           (insRows as List<dynamic>).cast<Map<String, dynamic>>();
       if (typedInsertRows.isNotEmpty) {
         item.version = (typedInsertRows.first['version'] as num?)?.toInt() ?? 1;
+        if (_supportsAssignmentCodeColumn) {
+          item.assignmentCode = _normalizeAssignmentCode(
+                typedInsertRows.first['assignment_code'] as String?,
+              ) ??
+              _normalizeAssignmentCode(item.assignmentCode) ??
+              _issueAssignmentCode();
+        }
       }
 
       await supa.from('homework_group_items').upsert({
@@ -3721,6 +4099,41 @@ class HomeworkStore {
         } catch (retryError, retrySt) {
           print(
             '[HW][addWaitingItemToGroup][RETRY_ERROR] $retryError\n$retrySt',
+          );
+        }
+      }
+      if (_supportsAssignmentCodeColumn &&
+          _isMissingAssignmentCodeColumnError(e)) {
+        _supportsAssignmentCodeColumn = false;
+        try {
+          await persistToServer();
+          return item.id;
+        } catch (retryError, retrySt) {
+          print(
+            '[HW][addWaitingItemToGroup][RETRY_ASSIGNMENT_CODE_ERROR] $retryError\n$retrySt',
+          );
+        }
+      }
+      if (_supportsTestOriginFlowIdColumn &&
+          _isMissingTestOriginFlowIdColumnError(e)) {
+        _supportsTestOriginFlowIdColumn = false;
+        try {
+          await persistToServer();
+          return item.id;
+        } catch (retryError, retrySt) {
+          print(
+            '[HW][addWaitingItemToGroup][RETRY_TEST_ORIGIN_ERROR] $retryError\n$retrySt',
+          );
+        }
+      }
+      if (_supportsAssignmentCodeColumn && _isAssignmentCodeConflictError(e)) {
+        item.assignmentCode = _issueAssignmentCode();
+        try {
+          await persistToServer();
+          return item.id;
+        } catch (retryError, retrySt) {
+          print(
+            '[HW][addWaitingItemToGroup][RETRY_ASSIGNMENT_CODE_CONFLICT] $retryError\n$retrySt',
           );
         }
       }
@@ -3797,6 +4210,7 @@ class HomeworkStore {
       final page = asText(entry['page']);
       final countText = asText(entry['count']);
       final timeLimitMinutes = asPositiveInt(entry['timeLimitMinutes']);
+      final testOriginFlowId = asNullableText(entry['testOriginFlowId']);
       final pbPresetId = asNullableText(entry['pbPresetId']);
       final content = asText(entry['content']);
       final title = titleRaw.isEmpty ? '과제' : titleRaw;
@@ -3819,6 +4233,7 @@ class HomeworkStore {
         'title': title,
         'body': body,
         if (timeLimitMinutes != null) 'timeLimitMinutes': timeLimitMinutes,
+        if (testOriginFlowId != null) 'testOriginFlowId': testOriginFlowId,
         if (pbPresetId != null) 'pbPresetId': pbPresetId,
       });
     }
@@ -3874,6 +4289,9 @@ class HomeworkStore {
             studentId: studentId,
             groupId: groupId,
             title: asText(entry['title']),
+            assignmentCode: asNullableText(
+              entry['assignmentCode'] ?? entry['assignment_code'],
+            ),
             body: asText(entry['body']),
             page: asText(entry['page']),
             count: asPositiveInt(entry['count']),
@@ -3887,7 +4305,9 @@ class HomeworkStore {
             sourceUnitLevel: asNullableText(entry['sourceUnitLevel']),
             sourceUnitPath: asNullableText(entry['sourceUnitPath']),
             unitMappings: asUnitMappings(entry['unitMappings']),
-            flowId: cleanedFlowId.isEmpty ? null : cleanedFlowId,
+            flowId: asNullableText(entry['flowId']) ??
+                (cleanedFlowId.isEmpty ? null : cleanedFlowId),
+            testOriginFlowId: asNullableText(entry['testOriginFlowId']),
             color: asColor(entry['color']),
             defaultSplitParts: asSplitParts(entry['splitParts']),
             itemOrderIndexOverride: idx,
