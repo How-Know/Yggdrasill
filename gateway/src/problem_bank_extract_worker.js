@@ -430,7 +430,9 @@ function looksLikeQuestionTerminalLine(line) {
   if (/\?\s*\)$/.test(input)) return true;
   if (/이다\.\s*\)?$/.test(input)) return true;
   if (/\)\s*$/.test(input) && /(단,|이고|이다|상수|자연수)/.test(input)) return true;
-  return /(구하시오|고르시오|쓰시오|값은|넓이는|옳은 것은|것은|것을|쓰시오)\.?\s*\)?$/.test(input);
+  return /(구하시오|고르시오|쓰시오|적으시오|서술하시오|값은|넓이는|옳은 것은|것은|것을)\.?\s*\)?$/.test(
+    input,
+  );
 }
 
 function parseChoiceLine(line) {
@@ -863,6 +865,41 @@ function extractEndNoteAnswerHints(xmlText, equations = []) {
   return hints;
 }
 
+/**
+ * 조건제시 박스에서 (가)(나)(다)… 가 한 줄로 붙을 때 줄바꿈 삽입.
+ * 표는 행/셀 경계도 줄바꿈으로 보존한 뒤 동일 규칙 적용.
+ */
+function splitKoreanConditionMarkersInBoxText(text) {
+  const raw = String(text || '');
+  const lines = raw.split(/\n/);
+  const out = [];
+  for (const line of lines) {
+    let s = normalizeWhitespace(line);
+    if (!s) continue;
+    s = s.replace(
+      /([^\n])\s*((?:\(|（)\s*[가나다라마바사아자차카타파하]\s*(?:\)|\）))/g,
+      '$1\n$2',
+    );
+    for (const part of s.split('\n')) {
+      const t = normalizeWhitespace(part);
+      if (t) out.push(t);
+    }
+  }
+  return out.join('\n');
+}
+
+function flattenBoxXmlToText(match, { table = false } = {}) {
+  let inner = String(match || '')
+    .replace(/<hp:pic[\s\S]*?<\/hp:pic>/gi, ' [그림] ')
+    .replace(/<hp:shape[\s\S]*?<\/hp:shape>/gi, ' [도형] ');
+  if (table) {
+    inner = inner.replace(/<\/hp:tr>/gi, '\n');
+    inner = inner.replace(/<\/hp:tc>/gi, '\n');
+  }
+  inner = inner.replace(/<[^>]+>/g, ' ');
+  return splitKoreanConditionMarkersInBoxText(inner);
+}
+
 function transformXmlToLines(xmlText, sectionIndex) {
   const { replacedXml, equations } = collectEquationCandidates(
     xmlText,
@@ -877,24 +914,14 @@ function transformXmlToLines(xmlText, sectionIndex) {
 
   // hp:tbl (표) → [박스시작]/[박스끝] 마커로 감싸기 (hp:p로 래핑하여 파싱 보장)
   purifiedXml = purifiedXml.replace(/<hp:tbl\b[\s\S]*?<\/hp:tbl>/gi, (match) => {
-    const innerText = match
-      .replace(/<hp:pic[\s\S]*?<\/hp:pic>/gi, ' [그림] ')
-      .replace(/<hp:shape[\s\S]*?<\/hp:shape>/gi, ' [도형] ')
-      .replace(/<[^>]+>/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
+    const innerText = flattenBoxXmlToText(match, { table: true }).trim();
     if (!innerText) return '';
     return `<hp:p><hp:t>[박스시작]</hp:t></hp:p><hp:p><hp:t>${innerText}</hp:t></hp:p><hp:p><hp:t>[박스끝]</hp:t></hp:p>`;
   });
 
   // hp:rect (사각형 도형) → [박스시작]/[박스끝] 마커로 감싸기
   purifiedXml = purifiedXml.replace(/<hp:rect\b[\s\S]*?<\/hp:rect>/gi, (match) => {
-    const innerText = match
-      .replace(/<hp:pic[\s\S]*?<\/hp:pic>/gi, ' [그림] ')
-      .replace(/<hp:shape[\s\S]*?<\/hp:shape>/gi, ' [도형] ')
-      .replace(/<[^>]+>/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
+    const innerText = flattenBoxXmlToText(match, { table: false }).trim();
     if (!innerText) return '';
     return `<hp:p><hp:t>[박스시작]</hp:t></hp:p><hp:p><hp:t>${innerText}</hp:t></hp:p><hp:p><hp:t>[박스끝]</hp:t></hp:p>`;
   });
@@ -2302,17 +2329,54 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
     }
 
     if (splitAfterScoreAnnotation && current) {
-      splitAfterScoreAnnotation = false;
-      const implicitQuestionNumber = reserveQuestionNumber('', {
-        allowFallback: true,
-      });
-      flushCurrent();
-      current = createQuestionSeed({
-        questionNumber: implicitQuestionNumber,
-        row,
-        stemLines: [],
-        sourcePatterns: ['implicit_after_score_terminal'],
-      });
+      const peekCleaned = stripPotentialWatermarkText(
+        normalizeWhitespace(
+          line.replace(/\[\[PB_EQ_[^\]]+\]\] ?/g, (match) => {
+            const token = match.replace(/ $/, '');
+            const eq = equationMap.get(token);
+            const rendered = normalizeWhitespace(eq?.latex || eq?.raw || '');
+            return rendered || '[수식]';
+          }),
+        ),
+      );
+      const isStructuralOrEmpty =
+        !peekCleaned ||
+        /^\[(문단|박스시작|박스끝|그림|도형)\]$/.test(peekCleaned);
+      const isChoiceLike =
+        Boolean(parseChoiceLine(peekCleaned)) ||
+        parseInlineCircledChoices(peekCleaned).length >= 2;
+      const isViewOrConditionLead =
+        isViewBlockLine(peekCleaned) ||
+        /^<\s*보\s*기>\s*$/.test(peekCleaned) ||
+        /^[\(（]?\s*[가나다라마바사아자차카타파하ㄱ-ㅎ]\s*[\)）]\s*/.test(peekCleaned);
+      const looksPromptForSplit = looksLikePromptLineForImplicitSplit(peekCleaned);
+      const looksNarrativeLead =
+        peekCleaned.length >= 8 &&
+        /[가-힣]/.test(peekCleaned) &&
+        !/^[\[\(<（]/.test(peekCleaned);
+      if (!isStructuralOrEmpty) {
+        // [배점] 뒤 분리는 "실제 다음 문항 프롬프트"일 때만 허용한다.
+        // (보기 박스/조건 (가)(나)/선택지가 뒤따르는 객관식은 같은 문항으로 유지)
+        splitAfterScoreAnnotation = false;
+        if (
+          !isChoiceLike &&
+          !isViewOrConditionLead &&
+          (looksPromptForSplit || looksNarrativeLead)
+        ) {
+          const implicitQuestionNumber = reserveQuestionNumber('', {
+            allowFallback: true,
+          });
+          if (implicitQuestionNumber) {
+            flushCurrent();
+            current = createQuestionSeed({
+              questionNumber: implicitQuestionNumber,
+              row,
+              stemLines: [],
+              sourcePatterns: ['implicit_after_score_terminal'],
+            });
+          }
+        }
+      }
     }
 
     if (!current && questions.length === 0) {
@@ -2350,12 +2414,14 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
     if (!current) continue;
     current.source_anchors.line_end = row.lineIndex;
 
+    const lineEquationRefs = [];
     const eqTokens = line.match(/\[\[PB_EQ_[^\]]+\]\]/g) || [];
     if (eqTokens.length > 0) {
       stats.equationRefs += eqTokens.length;
       for (const token of eqTokens) {
         const eq = equationMap.get(token);
         if (!eq) continue;
+        lineEquationRefs.push(eq);
         current.equations.push(eq);
       }
     }
@@ -2411,6 +2477,16 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
       const implicitQuestionNumber = reserveQuestionNumber('', {
         allowFallback: true,
       });
+      if (lineEquationRefs.length > 0) {
+        const movedKeys = new Set(
+          lineEquationRefs.map((eq) =>
+            JSON.stringify([eq?.raw || '', eq?.latex || '']),
+          ),
+        );
+        current.equations = current.equations.filter(
+          (eq) => !movedKeys.has(JSON.stringify([eq?.raw || '', eq?.latex || ''])),
+        );
+      }
       flushCurrent();
       current = createQuestionSeed({
         questionNumber: implicitQuestionNumber,
@@ -2418,6 +2494,9 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
         stemLines: [cleanedLine],
         sourcePatterns: ['implicit_after_block'],
       });
+      if (lineEquationRefs.length > 0) {
+        current.equations.push(...lineEquationRefs);
+      }
       continue;
     }
     if (
