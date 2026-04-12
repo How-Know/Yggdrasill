@@ -23,9 +23,6 @@ dependencies:
   image: ^4.2.0
   desktop_drop: ^0.6.1
   
-  # PDF 생성
-  syncfusion_flutter_pdf: ^24.1.41
-  
   # File & Storage
   file_picker: ^6.1.1
   path_provider: ^2.1.1
@@ -43,7 +40,6 @@ dependencies:
   window_manager: ^0.3.7
   webview_windows: ^0.4.0
   flutter_markdown: ^0.7.7+1
-  screenshot: ^3.0.0
   crypto: ^3.0.7
 
 dev_dependencies:

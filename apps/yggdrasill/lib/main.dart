@@ -1202,27 +1202,41 @@ Future<void> _openRangeAddDialog(BuildContext context) async {
       String selectedName = candidates.first;
       return StatefulBuilder(builder: (ctxSB, setSB) {
         return AlertDialog(
-          backgroundColor: const Color(0xFF1F1F1F),
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          title: const Text('시험명/범위 추가', style: TextStyle(color: Colors.white)),
+          backgroundColor: kDlgBg,
+          shape: _examDlgShape(),
+          titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 8),
+          contentPadding: const EdgeInsets.fromLTRB(24, 8, 24, 8),
+          actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+          title: const Text(
+            '시험명/범위 추가',
+            style: TextStyle(
+              color: kDlgText,
+              fontSize: 20,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
           content: SizedBox(
             width: 520,
             child: Column(
               mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                const Divider(color: kDlgBorder, height: 1),
+                const SizedBox(height: 12),
                 DropdownButtonHideUnderline(
                   child: Container(
                     decoration: BoxDecoration(
-                      border: Border.all(color: Colors.white24),
-                      borderRadius: BorderRadius.circular(4),
+                      color: kDlgFieldBg,
+                      border: Border.all(color: kDlgBorder),
+                      borderRadius: BorderRadius.circular(10),
                     ),
                     padding: const EdgeInsets.symmetric(horizontal: 12),
                     child: DropdownButton<String>(
                       value: selectedName,
-                      dropdownColor: const Color(0xFF1F1F1F),
-                      iconEnabledColor: Colors.white70,
-                      style: const TextStyle(color: Colors.white),
+                      isExpanded: true,
+                      dropdownColor: kDlgPanelBg,
+                      iconEnabledColor: kDlgTextSub,
+                      style: const TextStyle(color: kDlgText, fontSize: 15),
                       items: candidates
                           .map((e) => DropdownMenuItem<String>(
                               value: e, child: Text(e)))
@@ -1233,21 +1247,16 @@ Future<void> _openRangeAddDialog(BuildContext context) async {
                     ),
                   ),
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 10),
                 TextField(
                   controller: ctrlRange,
                   minLines: 2,
                   maxLines: 4,
-                  style: const TextStyle(color: Colors.white),
-                  decoration: const InputDecoration(
+                  textAlign: TextAlign.end,
+                  style: const TextStyle(color: kDlgText, fontSize: 15),
+                  decoration: _examSubDlgInputDecoration(
                     labelText: '범위',
-                    labelStyle: TextStyle(color: Colors.white70),
                     hintText: '예: 수학 I 1~3단원',
-                    hintStyle: TextStyle(color: Colors.white38),
-                    enabledBorder: OutlineInputBorder(
-                        borderSide: BorderSide(color: Colors.white24)),
-                    focusedBorder: OutlineInputBorder(
-                        borderSide: BorderSide(color: Color(0xFF1976D2))),
                   ),
                 ),
               ],
@@ -1256,7 +1265,8 @@ Future<void> _openRangeAddDialog(BuildContext context) async {
           actions: [
             TextButton(
               onPressed: () => Navigator.of(ctxSB).pop(),
-              child: const Text('취소', style: TextStyle(color: Colors.white70)),
+              style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
+              child: const Text('취소'),
             ),
             FilledButton(
               onPressed: () {
@@ -1283,7 +1293,9 @@ Future<void> _openRangeAddDialog(BuildContext context) async {
                 Navigator.of(ctxSB).pop();
               },
               style: FilledButton.styleFrom(
-                  backgroundColor: const Color(0xFF1976D2)),
+                backgroundColor: kDlgAccent,
+                foregroundColor: Colors.white,
+              ),
               child: const Text('추가'),
             ),
           ],
@@ -1470,36 +1482,51 @@ Future<Map<DateTime, List<String>>?> _openDateSelectAndSaveDialog(
             builder: (ctx2) {
               final ctrl = ImeAwareTextEditingController();
               return AlertDialog(
-                backgroundColor: const Color(0xFF1F1F1F),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12)),
-                title: Text('${d.year}.${d.month}.${d.day} 시험명',
-                    style: const TextStyle(color: Colors.white)),
+                backgroundColor: kDlgBg,
+                shape: _examDlgShape(),
+                titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 8),
+                contentPadding: const EdgeInsets.fromLTRB(24, 8, 24, 8),
+                actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+                title: Text(
+                  '${d.year}.${d.month}.${d.day} 시험명',
+                  style: const TextStyle(
+                    color: kDlgText,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
                 content: SizedBox(
                   width: 420,
-                  child: TextField(
-                    controller: ctrl,
-                    style: const TextStyle(color: Colors.white),
-                    decoration: const InputDecoration(
-                      hintText: '예: 중간고사 수학',
-                      hintStyle: TextStyle(color: Colors.white38),
-                      enabledBorder: OutlineInputBorder(
-                          borderSide: BorderSide(color: Colors.white24)),
-                      focusedBorder: OutlineInputBorder(
-                          borderSide: BorderSide(color: Color(0xFF1976D2))),
-                    ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const Divider(color: kDlgBorder, height: 1),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: ctrl,
+                        style: const TextStyle(color: kDlgText, fontSize: 15),
+                        decoration: _examSubDlgInputDecoration(
+                          hintText: '예: 중간고사 수학',
+                        ),
+                      ),
+                    ],
                   ),
                 ),
                 actions: [
                   TextButton(
-                      onPressed: () => Navigator.of(ctx2).pop(),
-                      child: const Text('취소',
-                          style: TextStyle(color: Colors.white70))),
+                    onPressed: () => Navigator.of(ctx2).pop(),
+                    style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
+                    child: const Text('취소'),
+                  ),
                   FilledButton(
-                      onPressed: () => Navigator.of(ctx2).pop(ctrl.text.trim()),
-                      style: FilledButton.styleFrom(
-                          backgroundColor: const Color(0xFF1976D2)),
-                      child: const Text('저장')),
+                    onPressed: () => Navigator.of(ctx2).pop(ctrl.text.trim()),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: kDlgAccent,
+                      foregroundColor: Colors.white,
+                    ),
+                    child: const Text('저장'),
+                  ),
                 ],
               );
             },
@@ -1514,62 +1541,109 @@ Future<Map<DateTime, List<String>>?> _openDateSelectAndSaveDialog(
         }
 
         return AlertDialog(
-          backgroundColor: const Color(0xFF1F1F1F),
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          title: const Text('날짜 선택', style: TextStyle(color: Colors.white)),
+          backgroundColor: kDlgBg,
+          shape: _examDlgShape(),
+          titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 8),
+          contentPadding: const EdgeInsets.fromLTRB(24, 8, 24, 8),
+          actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+          title: const Text(
+            '날짜 선택',
+            style: TextStyle(
+              color: kDlgText,
+              fontSize: 20,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
           content: SizedBox(
             width: 360,
             height: 300,
-            child: ListView.builder(
-              itemCount: sorted.length,
-              itemBuilder: (c, i) {
-                final d = sorted[i];
-                final key = DateTime(d.year, d.month, d.day);
-                final titles = localTitles[key] ?? [];
-                final selected = titles.isNotEmpty ? titles.first : null;
-                return ListTile(
-                  title: Text('${d.year}.${d.month}.${d.day}',
-                      style: const TextStyle(color: Colors.white)),
-                  trailing: DropdownButtonHideUnderline(
-                    child: DropdownButton<String>(
-                      value:
-                          selected != null && candidateNames.contains(selected)
-                              ? selected
-                              : null,
-                      hint: const Text('시험명',
-                          style: TextStyle(color: Colors.white70)),
-                      dropdownColor: const Color(0xFF1F1F1F),
-                      style: const TextStyle(color: Colors.white),
-                      items: candidateNames
-                          .map((e) => DropdownMenuItem<String>(
-                              value: e, child: Text(e)))
-                          .toList(),
-                      onChanged: (val) {
-                        setSB(() {
-                          final key = DateTime(d.year, d.month, d.day);
-                          localTitles[key] =
-                              val == null ? <String>[] : <String>[val];
-                        });
-                      },
-                    ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Divider(color: kDlgBorder, height: 1),
+                const SizedBox(height: 12),
+                Expanded(
+                  child: ListView.builder(
+                    itemCount: sorted.length,
+                    itemBuilder: (c, i) {
+                      final d = sorted[i];
+                      final key = DateTime(d.year, d.month, d.day);
+                      final titles = localTitles[key] ?? [];
+                      final selected =
+                          titles.isNotEmpty ? titles.first : null;
+                      return ListTile(
+                        title: Text(
+                          '${d.year}.${d.month}.${d.day}',
+                          style: const TextStyle(
+                            color: kDlgText,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        trailing: DropdownButtonHideUnderline(
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8),
+                            decoration: BoxDecoration(
+                              color: kDlgFieldBg,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: kDlgBorder),
+                            ),
+                            child: DropdownButton<String>(
+                              value: selected != null &&
+                                      candidateNames.contains(selected)
+                                  ? selected
+                                  : null,
+                              hint: Text(
+                                '시험명',
+                                style: TextStyle(
+                                  color: kDlgTextSub.withOpacity(0.85),
+                                ),
+                              ),
+                              dropdownColor: kDlgPanelBg,
+                              iconEnabledColor: kDlgTextSub,
+                              style: const TextStyle(
+                                color: kDlgText,
+                                fontSize: 14,
+                              ),
+                              items: candidateNames
+                                  .map((e) => DropdownMenuItem<String>(
+                                        value: e,
+                                        child: Text(e),
+                                      ))
+                                  .toList(),
+                              onChanged: (val) {
+                                setSB(() {
+                                  final k2 =
+                                      DateTime(d.year, d.month, d.day);
+                                  localTitles[k2] = val == null
+                                      ? <String>[]
+                                      : <String>[val];
+                                });
+                              },
+                            ),
+                          ),
+                        ),
+                      );
+                    },
                   ),
-                );
-              },
+                ),
+              ],
             ),
           ),
           actions: [
             TextButton(
-                onPressed: () => Navigator.of(ctxSB).pop(),
-                child:
-                    const Text('닫기', style: TextStyle(color: Colors.white70))),
+              onPressed: () => Navigator.of(ctxSB).pop(),
+              style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
+              child: const Text('닫기'),
+            ),
             FilledButton(
               onPressed: () {
                 result = localTitles;
                 Navigator.of(ctxSB).pop();
               },
               style: FilledButton.styleFrom(
-                  backgroundColor: const Color(0xFF1976D2)),
+                backgroundColor: kDlgAccent,
+                foregroundColor: Colors.white,
+              ),
               child: const Text('저장'),
             ),
           ],
@@ -1588,17 +1662,13 @@ Future<Map<DateTime, String>?> _openRangeEditDialog(BuildContext context,
   _dlog(
       '[RANGE_EDIT][init] schoolGrade=$schoolGradeKey, saved dates=${savedNames.keys.toList()}');
   // 참고: 여기서는 기존 구현과 동일하게 임시 값으로 채우되, 실제 상태 객체 값도 비교 로그로 남긴다.
+  final stInit = context.findAncestorStateOfType<_ExamScheduleWizardState>();
   savedNames.forEach((date, names) {
     final key = DateTime(date.year, date.month, date.day);
-    final existingWrong =
-        (_ExamScheduleWizardState()._rangesBySchoolGrade[schoolGradeKey] ??
-                {})[key] ??
-            '';
-    final st = context.findAncestorStateOfType<_ExamScheduleWizardState>();
-    final existingActual = st?._rangesBySchoolGrade[schoolGradeKey]?[key] ?? '';
-    _dlog(
-        '[RANGE_EDIT][init] date=$key, existing(wrongCtor)="$existingWrong", existing(actual)="$existingActual"');
-    localRanges[key] = existingWrong;
+    final existingActual =
+        stInit?._rangesBySchoolGrade[schoolGradeKey]?[key] ?? '';
+    _dlog('[RANGE_EDIT][init] date=$key, existing(actual)="$existingActual"');
+    localRanges[key] = existingActual;
   });
   final result = await showDialog<Map<DateTime, String>>(
     context: context,
@@ -1606,61 +1676,89 @@ Future<Map<DateTime, String>?> _openRangeEditDialog(BuildContext context,
     builder: (ctx) {
       final sorted = savedNames.keys.toList()..sort();
       return AlertDialog(
-        backgroundColor: const Color(0xFF1F1F1F),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        title: const Text('범위 입력', style: TextStyle(color: Colors.white)),
+        backgroundColor: kDlgBg,
+        shape: _examDlgShape(),
+        titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 8),
+        contentPadding: const EdgeInsets.fromLTRB(24, 8, 24, 8),
+        actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+        title: const Text(
+          '범위 입력',
+          style: TextStyle(
+            color: kDlgText,
+            fontSize: 20,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
         content: SizedBox(
           width: 460,
           height: 360,
-          child: ListView.builder(
-            itemCount: sorted.length,
-            itemBuilder: (c, i) {
-              final d = sorted[i];
-              final names = savedNames[d] ?? [];
-              final dateLabel = '${d.year}.${d.month}.${d.day}';
-              final firstName = names.isNotEmpty ? names.first : '';
-              final ctrl = ImeAwareTextEditingController(
-                  text: localRanges[DateTime(d.year, d.month, d.day)] ?? '');
-              return Padding(
-                padding: const EdgeInsets.symmetric(vertical: 6),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    Expanded(
-                        child: Text('$dateLabel  $firstName',
-                            style: const TextStyle(
-                                color: Colors.white, fontSize: 17))),
-                    const SizedBox(width: 8),
-                    SizedBox(
-                      width: 260,
-                      child: TextField(
-                        controller: ctrl,
-                        minLines: 1,
-                        maxLines: 3,
-                        style: const TextStyle(color: Colors.white),
-                        decoration: const InputDecoration(
-                          hintText: '범위 입력',
-                          hintStyle: TextStyle(color: Colors.white38),
-                          enabledBorder: OutlineInputBorder(
-                              borderSide: BorderSide(color: Colors.white24)),
-                          focusedBorder: OutlineInputBorder(
-                              borderSide: BorderSide(color: Color(0xFF1976D2))),
-                        ),
-                        onChanged: (v) {
-                          localRanges[DateTime(d.year, d.month, d.day)] = v;
-                        },
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Divider(color: kDlgBorder, height: 1),
+              const SizedBox(height: 12),
+              Expanded(
+                child: ListView.builder(
+                  itemCount: sorted.length,
+                  itemBuilder: (c, i) {
+                    final d = sorted[i];
+                    final names = savedNames[d] ?? [];
+                    final dateLabel = '${d.year}.${d.month}.${d.day}';
+                    final firstName = names.isNotEmpty ? names.first : '';
+                    final ctrl = ImeAwareTextEditingController(
+                        text: localRanges[DateTime(d.year, d.month, d.day)] ??
+                            '');
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 6),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          Expanded(
+                            child: Text(
+                              '$dateLabel  $firstName',
+                              style: const TextStyle(
+                                color: kDlgText,
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          SizedBox(
+                            width: 260,
+                            child: TextField(
+                              controller: ctrl,
+                              minLines: 1,
+                              maxLines: 3,
+                              textAlign: TextAlign.end,
+                              style: const TextStyle(
+                                color: kDlgText,
+                                fontSize: 15,
+                              ),
+                              decoration: _examSubDlgInputDecoration(
+                                hintText: '범위 입력',
+                              ),
+                              onChanged: (v) {
+                                localRanges[
+                                    DateTime(d.year, d.month, d.day)] = v;
+                              },
+                            ),
+                          ),
+                        ],
                       ),
-                    ),
-                  ],
+                    );
+                  },
                 ),
-              );
-            },
+              ),
+            ],
           ),
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('닫기', style: TextStyle(color: Colors.white70))),
+            onPressed: () => Navigator.of(ctx).pop(),
+            style: TextButton.styleFrom(foregroundColor: kDlgTextSub),
+            child: const Text('닫기'),
+          ),
           FilledButton(
             onPressed: () {
               final map = <DateTime, String>{}..addAll(localRanges);
@@ -1669,7 +1767,9 @@ Future<Map<DateTime, String>?> _openRangeEditDialog(BuildContext context,
               Navigator.of(ctx).pop(map);
             },
             style: FilledButton.styleFrom(
-                backgroundColor: const Color(0xFF1976D2)),
+              backgroundColor: kDlgAccent,
+              foregroundColor: Colors.white,
+            ),
             child: const Text('저장'),
           ),
         ],
@@ -2601,6 +2701,42 @@ RoundedRectangleBorder _examDlgShape() => RoundedRectangleBorder(
       borderRadius: BorderRadius.circular(16),
       side: const BorderSide(color: kDlgBorder),
     );
+
+InputDecoration _examSubDlgInputDecoration({
+  String? labelText,
+  String? hintText,
+}) {
+  return InputDecoration(
+    isDense: true,
+    labelText: labelText,
+    hintText: hintText,
+    floatingLabelBehavior: FloatingLabelBehavior.auto,
+    labelStyle: const TextStyle(
+      color: kDlgTextSub,
+      fontWeight: FontWeight.w600,
+      fontSize: 13,
+    ),
+    hintStyle: TextStyle(
+      color: kDlgTextSub.withOpacity(0.55),
+      fontWeight: FontWeight.w500,
+      fontSize: 14,
+    ),
+    filled: true,
+    fillColor: kDlgFieldBg,
+    border: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(10),
+      borderSide: const BorderSide(color: kDlgBorder),
+    ),
+    enabledBorder: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(10),
+      borderSide: const BorderSide(color: kDlgBorder),
+    ),
+    focusedBorder: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(10),
+      borderSide: const BorderSide(color: kDlgAccent, width: 1.25),
+    ),
+  );
+}
 
 /// 시간표 필터 다이얼로그와 유사한 상단 액션 칩
 Widget _examScheduleHeaderChip({
@@ -4254,76 +4390,88 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
 
                                   final dateKey = DateTime(
                                       e.key.year, e.key.month, e.key.day);
+                                  final rangeStr = range?.trim() ?? '';
+                                  final hasRange = rangeStr.isNotEmpty;
+                                  final leftChips = Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      chip(e.value, onTap: () async {
+                                        final edited =
+                                            await _openDateSelectAndSaveDialog(
+                                                context, [dateKey],
+                                                schoolGradeLabel: sg);
+                                        if (edited != null &&
+                                            edited.isNotEmpty) {
+                                          setState(() {
+                                            final map = _savedBySchoolGrade[
+                                                    sg] ??
+                                                <DateTime, List<String>>{};
+                                            map[dateKey] =
+                                                edited[dateKey] ?? <String>[];
+                                            _savedBySchoolGrade[sg] = map;
+                                          });
+                                        }
+                                      }),
+                                      const SizedBox(width: 6),
+                                      chip('${e.key.month}.${e.key.day}',
+                                          fs: 13, onTap: () async {
+                                        final edited =
+                                            await _openDateSelectAndSaveDialog(
+                                                context, [dateKey],
+                                                schoolGradeLabel: sg);
+                                        if (edited != null &&
+                                            edited.isNotEmpty) {
+                                          setState(() {
+                                            final map = _savedBySchoolGrade[
+                                                    sg] ??
+                                                <DateTime, List<String>>{};
+                                            map[dateKey] =
+                                                edited[dateKey] ?? <String>[];
+                                            _savedBySchoolGrade[sg] = map;
+                                          });
+                                        }
+                                      }),
+                                    ],
+                                  );
+                                  if (!hasRange) {
+                                    return leftChips;
+                                  }
                                   return Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        // 시험명 배지 클릭: 해당 날짜의 시험명 편집
-                                        chip(e.value, onTap: () async {
-                                          final edited =
-                                              await _openDateSelectAndSaveDialog(
-                                                  context, [dateKey],
-                                                  schoolGradeLabel: sg);
-                                          if (edited != null &&
-                                              edited.isNotEmpty) {
-                                            setState(() {
-                                              final map = _savedBySchoolGrade[
-                                                      sg] ??
-                                                  <DateTime, List<String>>{};
-                                              map[dateKey] =
-                                                  edited[dateKey] ?? <String>[];
-                                              _savedBySchoolGrade[sg] = map;
-                                            });
-                                          }
-                                        }),
-                                        const SizedBox(width: 6),
-                                        // 날짜 배지 클릭: 동일하게 해당 날짜의 시험명 편집 다이얼로그로 연결
-                                        chip('${e.key.month}.${e.key.day}',
-                                            fs: 13, onTap: () async {
-                                          final edited =
-                                              await _openDateSelectAndSaveDialog(
-                                                  context, [dateKey],
-                                                  schoolGradeLabel: sg);
-                                          if (edited != null &&
-                                              edited.isNotEmpty) {
-                                            setState(() {
-                                              final map = _savedBySchoolGrade[
-                                                      sg] ??
-                                                  <DateTime, List<String>>{};
-                                              map[dateKey] =
-                                                  edited[dateKey] ?? <String>[];
-                                              _savedBySchoolGrade[sg] = map;
-                                            });
-                                          }
-                                        }),
-                                        if (range != null &&
-                                            range.trim().isNotEmpty) ...[
-                                          const SizedBox(width: 6),
-                                          // 범위 배지 클릭: 해당 날짜만 범위 편집
-                                          chip(range,
-                                              fs: 13, transparentBorder: true,
-                                              onTap: () async {
-                                            final single =
-                                                <DateTime, List<String>>{
-                                              dateKey: (_savedBySchoolGrade[sg]
-                                                      ?[dateKey] ??
-                                                  <String>[])
-                                            };
-                                            final newRangeMap =
-                                                await _openRangeEditDialog(
-                                                    context, sg, single);
-                                            if (newRangeMap != null) {
-                                              setState(() {
-                                                final map =
-                                                    _rangesBySchoolGrade[sg] ??
-                                                        <DateTime, String>{};
-                                                final r = newRangeMap[dateKey];
-                                                if (r != null) map[dateKey] = r;
-                                                _rangesBySchoolGrade[sg] = map;
-                                              });
-                                            }
-                                          }),
-                                        ],
-                                      ]);
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.center,
+                                    children: [
+                                      Expanded(
+                                        child: Align(
+                                          alignment: Alignment.centerLeft,
+                                          child: leftChips,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 6),
+                                      chip(rangeStr,
+                                          fs: 13, transparentBorder: true,
+                                          onTap: () async {
+                                        final single =
+                                            <DateTime, List<String>>{
+                                          dateKey: (_savedBySchoolGrade[sg]
+                                                  ?[dateKey] ??
+                                              <String>[])
+                                        };
+                                        final newRangeMap =
+                                            await _openRangeEditDialog(
+                                                context, sg, single);
+                                        if (newRangeMap != null) {
+                                          setState(() {
+                                            final map =
+                                                _rangesBySchoolGrade[sg] ??
+                                                    <DateTime, String>{};
+                                            final r = newRangeMap[dateKey];
+                                            if (r != null) map[dateKey] = r;
+                                            _rangesBySchoolGrade[sg] = map;
+                                          });
+                                        }
+                                      }),
+                                    ],
+                                  );
                                 }).toList(),
                                 // 범위만 추가된 임시 배지: "이름: 범위" → 시험명 → (날짜 없음) → 범위
                                 ...(_rangeBadgesBySchoolGrade[item] ??
@@ -4357,15 +4505,28 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                                                 fontSize: fs,
                                                 fontWeight: FontWeight.w600)),
                                       );
+                                  if (range.isEmpty) {
+                                    return Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [chip(name)],
+                                    );
+                                  }
                                   return Row(
-                                    mainAxisSize: MainAxisSize.min,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.center,
                                     children: [
-                                      chip(name),
-                                      if (range.isNotEmpty) ...[
-                                        const SizedBox(width: 6),
-                                        chip(range,
-                                            fs: 13, transparentBorder: true),
-                                      ],
+                                      Expanded(
+                                        child: Align(
+                                          alignment: Alignment.centerLeft,
+                                          child: Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [chip(name)],
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 6),
+                                      chip(range,
+                                          fs: 13, transparentBorder: true),
                                     ],
                                   );
                                 }).toList(),
@@ -4733,36 +4894,56 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                   builder: (ctx) {
                     final ctrl = ImeAwareTextEditingController();
                     return AlertDialog(
-                      backgroundColor: const Color(0xFF1F1F1F),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12)),
-                      title: const Text('일정 추가',
-                          style: TextStyle(color: Colors.white)),
+                      backgroundColor: kDlgBg,
+                      shape: _examDlgShape(),
+                      titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 8),
+                      contentPadding: const EdgeInsets.fromLTRB(24, 8, 24, 8),
+                      actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+                      title: const Text(
+                        '일정 추가',
+                        style: TextStyle(
+                          color: kDlgText,
+                          fontSize: 20,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
                       content: SizedBox(
-                          width: 420,
-                          child: TextField(
+                        width: 420,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            const Divider(color: kDlgBorder, height: 1),
+                            const SizedBox(height: 12),
+                            TextField(
                               controller: ctrl,
-                              style: const TextStyle(color: Colors.white),
-                              decoration: const InputDecoration(
-                                  hintText: '예: 시험 시작 15:00',
-                                  hintStyle: TextStyle(color: Colors.white38),
-                                  enabledBorder: OutlineInputBorder(
-                                      borderSide:
-                                          BorderSide(color: Colors.white24)),
-                                  focusedBorder: OutlineInputBorder(
-                                      borderSide: BorderSide(
-                                          color: Color(0xFF1976D2)))))),
+                              style: const TextStyle(
+                                color: kDlgText,
+                                fontSize: 15,
+                              ),
+                              decoration: _examSubDlgInputDecoration(
+                                hintText: '예: 시험 시작 15:00',
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                       actions: [
                         TextButton(
-                            onPressed: () => Navigator.of(ctx).pop(),
-                            child: const Text('취소',
-                                style: TextStyle(color: Colors.white70))),
+                          onPressed: () => Navigator.of(ctx).pop(),
+                          style:
+                              TextButton.styleFrom(foregroundColor: kDlgTextSub),
+                          child: const Text('취소'),
+                        ),
                         FilledButton(
-                            onPressed: () =>
-                                Navigator.of(ctx).pop(ctrl.text.trim()),
-                            style: FilledButton.styleFrom(
-                                backgroundColor: const Color(0xFF1976D2)),
-                            child: const Text('추가')),
+                          onPressed: () =>
+                              Navigator.of(ctx).pop(ctrl.text.trim()),
+                          style: FilledButton.styleFrom(
+                            backgroundColor: kDlgAccent,
+                            foregroundColor: Colors.white,
+                          ),
+                          child: const Text('추가'),
+                        ),
                       ],
                     );
                   },
@@ -4786,38 +4967,59 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                   builder: (ctx) {
                     final ctrl = ImeAwareTextEditingController();
                     return AlertDialog(
-                      backgroundColor: const Color(0xFF1F1F1F),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12)),
-                      title: const Text('범위 추가',
-                          style: TextStyle(color: Colors.white)),
+                      backgroundColor: kDlgBg,
+                      shape: _examDlgShape(),
+                      titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 8),
+                      contentPadding: const EdgeInsets.fromLTRB(24, 8, 24, 8),
+                      actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+                      title: const Text(
+                        '범위 추가',
+                        style: TextStyle(
+                          color: kDlgText,
+                          fontSize: 20,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
                       content: SizedBox(
-                          width: 420,
-                          child: TextField(
+                        width: 420,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            const Divider(color: kDlgBorder, height: 1),
+                            const SizedBox(height: 12),
+                            TextField(
                               controller: ctrl,
                               minLines: 2,
                               maxLines: 4,
-                              style: const TextStyle(color: Colors.white),
-                              decoration: const InputDecoration(
-                                  hintText: '예: 수학 I 1~3단원',
-                                  hintStyle: TextStyle(color: Colors.white38),
-                                  enabledBorder: OutlineInputBorder(
-                                      borderSide:
-                                          BorderSide(color: Colors.white24)),
-                                  focusedBorder: OutlineInputBorder(
-                                      borderSide: BorderSide(
-                                          color: Color(0xFF1976D2)))))),
+                              textAlign: TextAlign.end,
+                              style: const TextStyle(
+                                color: kDlgText,
+                                fontSize: 15,
+                              ),
+                              decoration: _examSubDlgInputDecoration(
+                                hintText: '예: 수학 I 1~3단원',
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                       actions: [
                         TextButton(
-                            onPressed: () => Navigator.of(ctx).pop(),
-                            child: const Text('취소',
-                                style: TextStyle(color: Colors.white70))),
+                          onPressed: () => Navigator.of(ctx).pop(),
+                          style:
+                              TextButton.styleFrom(foregroundColor: kDlgTextSub),
+                          child: const Text('취소'),
+                        ),
                         FilledButton(
-                            onPressed: () =>
-                                Navigator.of(ctx).pop(ctrl.text.trim()),
-                            style: FilledButton.styleFrom(
-                                backgroundColor: const Color(0xFF1976D2)),
-                            child: const Text('추가')),
+                          onPressed: () =>
+                              Navigator.of(ctx).pop(ctrl.text.trim()),
+                          style: FilledButton.styleFrom(
+                            backgroundColor: kDlgAccent,
+                            foregroundColor: Colors.white,
+                          ),
+                          child: const Text('추가'),
+                        ),
                       ],
                     );
                   },
@@ -4854,66 +5056,75 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                     final ctrl = ImeAwareTextEditingController();
                     final rangeCtrl = ImeAwareTextEditingController();
                     return AlertDialog(
-                      backgroundColor: const Color(0xFF1F1F1F),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12)),
-                      title: Text('${key.year}.${key.month}.${key.day} 시험 정보',
-                          style: const TextStyle(color: Colors.white)),
+                      backgroundColor: kDlgBg,
+                      shape: _examDlgShape(),
+                      titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 8),
+                      contentPadding: const EdgeInsets.fromLTRB(24, 8, 24, 8),
+                      actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+                      title: Text(
+                        '${key.year}.${key.month}.${key.day} 시험 정보',
+                        style: const TextStyle(
+                          color: kDlgText,
+                          fontSize: 20,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
                       content: SizedBox(
                         width: 460,
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
+                            const Divider(color: kDlgBorder, height: 1),
+                            const SizedBox(height: 12),
                             TextField(
-                                controller: ctrl,
-                                style: const TextStyle(color: Colors.white),
-                                decoration: const InputDecoration(
-                                    labelText: '시험명',
-                                    labelStyle:
-                                        TextStyle(color: Colors.white70),
-                                    hintText: '예: 중간고사 수학',
-                                    hintStyle: TextStyle(color: Colors.white38),
-                                    enabledBorder: OutlineInputBorder(
-                                        borderSide:
-                                            BorderSide(color: Colors.white24)),
-                                    focusedBorder: OutlineInputBorder(
-                                        borderSide: BorderSide(
-                                            color: Color(0xFF1976D2))))),
-                            const SizedBox(height: 8),
+                              controller: ctrl,
+                              style: const TextStyle(
+                                color: kDlgText,
+                                fontSize: 15,
+                              ),
+                              decoration: _examSubDlgInputDecoration(
+                                labelText: '시험명',
+                                hintText: '예: 중간고사 수학',
+                              ),
+                            ),
+                            const SizedBox(height: 10),
                             TextField(
-                                controller: rangeCtrl,
-                                minLines: 2,
-                                maxLines: 4,
-                                style: const TextStyle(color: Colors.white),
-                                decoration: const InputDecoration(
-                                    labelText: '시험 범위',
-                                    labelStyle:
-                                        TextStyle(color: Colors.white70),
-                                    hintText: '예: 수학 I 1~3단원',
-                                    hintStyle: TextStyle(color: Colors.white38),
-                                    enabledBorder: OutlineInputBorder(
-                                        borderSide:
-                                            BorderSide(color: Colors.white24)),
-                                    focusedBorder: OutlineInputBorder(
-                                        borderSide: BorderSide(
-                                            color: Color(0xFF1976D2))))),
+                              controller: rangeCtrl,
+                              minLines: 2,
+                              maxLines: 4,
+                              textAlign: TextAlign.end,
+                              style: const TextStyle(
+                                color: kDlgText,
+                                fontSize: 15,
+                              ),
+                              decoration: _examSubDlgInputDecoration(
+                                labelText: '시험 범위',
+                                hintText: '예: 수학 I 1~3단원',
+                              ),
+                            ),
                           ],
                         ),
                       ),
                       actions: [
                         TextButton(
-                            onPressed: () => Navigator.of(ctx).pop(),
-                            child: const Text('취소',
-                                style: TextStyle(color: Colors.white70))),
+                          onPressed: () => Navigator.of(ctx).pop(),
+                          style:
+                              TextButton.styleFrom(foregroundColor: kDlgTextSub),
+                          child: const Text('취소'),
+                        ),
                         FilledButton(
-                            onPressed: () => Navigator.of(ctx).pop(ctrl.text
-                                    .trim()
-                                    .isEmpty
+                          onPressed: () => Navigator.of(ctx).pop(
+                            ctrl.text.trim().isEmpty
                                 ? null
-                                : '${ctrl.text.trim()}|${rangeCtrl.text.trim()}'),
-                            style: FilledButton.styleFrom(
-                                backgroundColor: const Color(0xFF1976D2)),
-                            child: const Text('추가')),
+                                : '${ctrl.text.trim()}|${rangeCtrl.text.trim()}',
+                          ),
+                          style: FilledButton.styleFrom(
+                            backgroundColor: kDlgAccent,
+                            foregroundColor: Colors.white,
+                          ),
+                          child: const Text('추가'),
+                        ),
                       ],
                     );
                   },

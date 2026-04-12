@@ -20,22 +20,23 @@ class ProblemBankModeTabBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      height: 56,
-      decoration: BoxDecoration(
-        color: panelColor,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: borderColor),
-      ),
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-      child: AnimatedBuilder(
-        animation: controller,
-        builder: (context, _) {
-          final selectedIndex = controller.index;
-          return Row(
-            children: [
-              Expanded(
-                child: _ModeTabButton(
+    return IntrinsicWidth(
+      child: Container(
+        height: 38,
+        decoration: BoxDecoration(
+          color: panelColor,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: borderColor),
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
+        child: AnimatedBuilder(
+          animation: controller,
+          builder: (context, _) {
+            final selectedIndex = controller.index;
+            return Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _ModeTabButton(
                   label: '업로드',
                   icon: Icons.cloud_upload_outlined,
                   selected: selectedIndex == 0,
@@ -48,10 +49,8 @@ class ProblemBankModeTabBar extends StatelessWidget {
                     }
                   },
                 ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: _ModeTabButton(
+                const SizedBox(width: 4),
+                _ModeTabButton(
                   label: '분류',
                   icon: Icons.grid_view_rounded,
                   selected: selectedIndex == 1,
@@ -64,10 +63,10 @@ class ProblemBankModeTabBar extends StatelessWidget {
                     }
                   },
                 ),
-              ),
-            ],
-          );
-        },
+              ],
+            );
+          },
+        ),
       ),
     );
   }
@@ -98,17 +97,18 @@ class _ModeTabButton extends StatelessWidget {
       color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(8),
         splashColor: Colors.transparent,
         highlightColor: accentColor.withValues(alpha: 0.12),
         child: Container(
-          height: 42,
-          padding: const EdgeInsets.symmetric(horizontal: 12),
+          constraints: const BoxConstraints(minWidth: 100),
+          height: 30,
+          padding: const EdgeInsets.symmetric(horizontal: 10),
           decoration: BoxDecoration(
             color: selected
                 ? accentColor.withValues(alpha: 0.16)
                 : Colors.transparent,
-            borderRadius: BorderRadius.circular(10),
+            borderRadius: BorderRadius.circular(8),
             border: selected
                 ? Border.all(
                     color: accentColor.withValues(alpha: 0.28), width: 1)
@@ -116,18 +116,19 @@ class _ModeTabButton extends StatelessWidget {
           ),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
             children: [
               Icon(
                 icon,
-                size: 18,
+                size: 16,
                 color: selected ? accentColor : textSubColor,
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 6),
               Text(
                 label,
                 style: TextStyle(
                   color: selected ? textColor : textSubColor,
-                  fontSize: 14,
+                  fontSize: 12.5,
                   fontWeight: selected ? FontWeight.w700 : FontWeight.w600,
                 ),
               ),

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
@@ -27,6 +28,7 @@ import 'learning/models/problem_bank_export_models.dart'
     show previewAnswerForMode;
 import '../widgets/dialog_tokens.dart';
 import '../widgets/homework_assign_dialog.dart';
+import '../widgets/homework_overview_naesin_past_exam_panel.dart';
 import '../app_overlays.dart';
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 import '../widgets/flow_setup_dialog.dart';
@@ -890,18 +892,21 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                           ),
                         ),
                         const SizedBox(width: 4),
-                        SizedBox(
-                          width: 58,
-                          height: 58,
-                          child: IconButton(
-                            onPressed: () => _showHomeworkOverviewDialog(
-                              context,
-                              student.id,
+                        Tooltip(
+                          message: '과제 현황',
+                          child: SizedBox(
+                            width: 58,
+                            height: 58,
+                            child: IconButton(
+                              onPressed: () => _showHomeworkOverviewDialog(
+                                context,
+                                student.id,
+                              ),
+                              icon: const Icon(Icons.assignment_rounded),
+                              iconSize: 25,
+                              color: kDlgTextSub,
+                              splashRadius: 29,
                             ),
-                            icon: const Icon(Icons.assignment_rounded),
-                            iconSize: 25,
-                            color: kDlgTextSub,
-                            splashRadius: 29,
                           ),
                         ),
                         const SizedBox(width: 4),
@@ -1974,7 +1979,20 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           .loadChecksForStudent(studentId);
       final assignmentsByItem = await HomeworkAssignmentStore.instance
           .loadAssignmentsForStudent(studentId);
+      await StudentFlowStore.instance.loadForStudent(studentId);
       if (!context.mounted) return;
+
+      final flowNameById = <String, String>{
+        for (final f in StudentFlowStore.instance.cached(studentId))
+          f.id: f.name,
+      };
+      String homeworkOverviewFlowLabel(String itemId) {
+        final hw = HomeworkStore.instance.getById(studentId, itemId);
+        final fid = (hw?.flowId ?? '').trim();
+        if (fid.isEmpty) return '플로우 미지정';
+        final name = (flowNameById[fid] ?? '').trim();
+        return name.isEmpty ? '플로우 미지정' : name;
+      }
 
       final today = _dateOnly(DateTime.now());
       bool isToday(DateTime dt) => _dateOnly(dt) == today;
@@ -1996,6 +2014,12 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         final titleRaw = assignment.title.trim().isNotEmpty
             ? assignment.title.trim()
             : fallbackTitle;
+        final xp = _homeworkOverviewExpandParts(
+          studentId: studentId,
+          itemId: itemId,
+          checks: checks,
+          assignedAt: assignment.assignedAt,
+        );
         entries.add(
           _HomeworkOverviewEntry(
             homeworkItemId: itemId,
@@ -2006,6 +2030,13 @@ class _ClassContentScreenState extends State<ClassContentScreen>
             checkedAt: latestTodayCheck?.checkedAt,
             progress: latestTodayCheck?.progress ?? assignment.progress,
             isActive: true,
+            flowLabel: homeworkOverviewFlowLabel(itemId),
+            overviewLine1Left: xp.overviewLine1Left,
+            expandLine4Left: xp.expandLine4Left,
+            expandLine4Right: xp.expandLine4Right,
+            expandLine5Left: xp.expandLine5Left,
+            expandLine5Right: xp.expandLine5Right,
+            expandChildren: xp.expandChildren,
           ),
         );
         seenItemIds.add(itemId);
@@ -2031,6 +2062,12 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         final fallbackTitle =
             HomeworkStore.instance.getById(studentId, itemId)?.title.trim() ??
                 '';
+        final xp2 = _homeworkOverviewExpandParts(
+          studentId: studentId,
+          itemId: itemId,
+          checks: checks,
+          assignedAt: latestBrief?.assignedAt ?? latestTodayCheck.checkedAt,
+        );
         entries.add(
           _HomeworkOverviewEntry(
             homeworkItemId: itemId,
@@ -2041,6 +2078,13 @@ class _ClassContentScreenState extends State<ClassContentScreen>
             checkedAt: latestTodayCheck.checkedAt,
             progress: latestTodayCheck.progress,
             isActive: false,
+            flowLabel: homeworkOverviewFlowLabel(itemId),
+            overviewLine1Left: xp2.overviewLine1Left,
+            expandLine4Left: xp2.expandLine4Left,
+            expandLine4Right: xp2.expandLine4Right,
+            expandLine5Left: xp2.expandLine5Left,
+            expandLine5Right: xp2.expandLine5Right,
+            expandChildren: xp2.expandChildren,
           ),
         );
       }
@@ -2098,6 +2142,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         }
       }
       final expandedCompletedGroupIds = <String>{};
+      final expandedHomeworkOverviewItemIds = <String>{};
       String selectedSessionFilterId = sessionFilterOptions.first.id;
 
       await showDialog<void>(
@@ -2127,7 +2172,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                   borderRadius: BorderRadius.circular(16),
                 ),
                 title: Text(
-                  '$studentName 숙제 리스트',
+                  '$studentName 과제 현황',
                   style: const TextStyle(
                     color: kDlgText,
                     fontWeight: FontWeight.w900,
@@ -2184,6 +2229,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                   setDialogState(() {
                                     selectedSessionFilterId = value;
                                     expandedCompletedGroupIds.clear();
+                                    expandedHomeworkOverviewItemIds.clear();
                                   });
                                 },
                               ),
@@ -2284,16 +2330,39 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                           itemCount: entries.length,
                                           separatorBuilder: (_, __) =>
                                               const SizedBox(height: 10),
-                                          itemBuilder: (context, index) =>
-                                              _buildHomeworkOverviewCard(
-                                            entries[index],
-                                          ),
+                                          itemBuilder: (context, index) {
+                                            final e = entries[index];
+                                            final isOvEx =
+                                                expandedHomeworkOverviewItemIds
+                                                    .contains(
+                                                        e.homeworkItemId);
+                                            return _buildHomeworkOverviewCard(
+                                              e,
+                                              isExpanded: isOvEx,
+                                              onTap: () {
+                                                setDialogState(() {
+                                                  if (isOvEx) {
+                                                    expandedHomeworkOverviewItemIds
+                                                        .remove(
+                                                            e.homeworkItemId);
+                                                  } else {
+                                                    expandedHomeworkOverviewItemIds
+                                                        .add(e.homeworkItemId);
+                                                  }
+                                                });
+                                              },
+                                            );
+                                          },
                                         ),
                                 ),
                               ],
                             ),
                           ),
                         ],
+                      ),
+                      const SizedBox(height: 12),
+                      HomeworkOverviewNaesinPastExamPanel(
+                        studentId: studentId,
                       ),
                     ],
                   ),
@@ -4599,116 +4668,393 @@ Widget _detailRow(String label, String value) {
   );
 }
 
-Widget _buildHomeworkOverviewCard(_HomeworkOverviewEntry entry) {
-  final indicatorValue = (entry.progress.clamp(0, 100)) / 100.0;
-  final badgeBg =
-      entry.isActive ? const Color(0x3340A883) : const Color(0x334A6871);
-  final badgeText = entry.isActive ? '활성' : '오늘 검사';
-  return Container(
-    width: double.infinity,
-    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-    decoration: BoxDecoration(
-      color: const Color(0x221D2B2C),
-      borderRadius: BorderRadius.circular(12),
-      border: Border.all(color: const Color(0xFF31464C)),
-    ),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
+({
+  String overviewLine1Left,
+  String expandLine4Left,
+  String expandLine4Right,
+  String expandLine5Left,
+  String expandLine5Right,
+  List<_HomeworkOverviewCompletedChildEntry> expandChildren,
+}) _homeworkOverviewExpandParts({
+  required String studentId,
+  required String itemId,
+  required List<HomeworkAssignmentCheck> checks,
+  required DateTime assignedAt,
+}) {
+  final hw = HomeworkStore.instance.getById(studentId, itemId);
+  final overviewLine1Left =
+      hw != null ? _homeworkBookCourseLabel(hw) : '-';
+  final page = (hw?.page ?? '').trim();
+  final expandLine4Left = page.isEmpty ? '-' : 'p.$page';
+  final count = hw?.count ?? 0;
+  final expandLine4Right = count > 0 ? '${count}문항' : '-';
+  final expandLine5Left = '검사 ${checks.length}회';
+  final expandLine5Right = _formatDateTime(assignedAt);
+  final sortedChecks = List<HomeworkAssignmentCheck>.from(checks)
+    ..sort((a, b) => b.checkedAt.compareTo(a.checkedAt));
+  final expandChildren = <_HomeworkOverviewCompletedChildEntry>[
+    for (int i = 0; i < sortedChecks.length; i++)
+      _HomeworkOverviewCompletedChildEntry(
+        title: '${i + 1}. ${_formatDateTime(sortedChecks[i].checkedAt)}',
+        pageCount: '진행 ${sortedChecks[i].progress}%',
+        memo: '',
+      ),
+  ];
+  return (
+    overviewLine1Left: overviewLine1Left,
+    expandLine4Left: expandLine4Left,
+    expandLine4Right: expandLine4Right,
+    expandLine5Left: expandLine5Left,
+    expandLine5Right: expandLine5Right,
+    expandChildren: expandChildren,
+  );
+}
+
+Widget _buildHomeworkOverviewCard(
+  _HomeworkOverviewEntry entry, {
+  required bool isExpanded,
+  required VoidCallback onTap,
+}) {
+  final double indicatorValue = (entry.progress.clamp(0, 100)) / 100.0;
+  final String dueLeftText = entry.dueDate == null
+      ? '미정'
+      : _formatDateWithWeekdayShort(entry.dueDate!);
+  final String checkLabelText = entry.checkedToday
+      ? (entry.checkedAt == null
+          ? '완료'
+          : '완료 (${_formatDateTime(entry.checkedAt!)})')
+      : '미완료';
+
+  final childRows = <Widget>[];
+  for (int i = 0; i < entry.expandChildren.length; i++) {
+    final child = entry.expandChildren[i];
+    childRows.add(
+      Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Expanded(
+            Text(
+              child.title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Color(0xFFB9C3BA),
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+                height: 1.15,
+              ),
+            ),
+            const SizedBox(height: 3),
+            SizedBox(
+              width: double.infinity,
               child: Text(
-                entry.title,
+                child.pageCount.isEmpty ? '-' : child.pageCount,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.right,
                 style: const TextStyle(
-                  color: kDlgText,
-                  fontSize: 15,
-                  fontWeight: FontWeight.w800,
+                  color: Color(0xFF8FA1A1),
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w600,
+                  height: 1.1,
                 ),
               ),
             ),
-            const SizedBox(width: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-              decoration: BoxDecoration(
-                color: badgeBg,
-                borderRadius: BorderRadius.circular(999),
-                border: Border.all(color: const Color(0xFF4A6871)),
-              ),
-              child: Text(
-                badgeText,
-                style: const TextStyle(
-                  color: kDlgTextSub,
-                  fontSize: 11.5,
-                  fontWeight: FontWeight.w700,
+            if (child.memo.isNotEmpty) ...[
+              const SizedBox(height: 2),
+              SizedBox(
+                width: double.infinity,
+                child: Text(
+                  child.memo,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.right,
+                  style: const TextStyle(
+                    color: Color(0xFF7D8E8F),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    height: 1.1,
+                  ),
                 ),
               ),
-            ),
+            ],
           ],
         ),
-        const SizedBox(height: 8),
-        Text(
-          '내준 시각: ${_formatDateTime(entry.assignedAt)}',
-          style: const TextStyle(
-            color: kDlgTextSub,
-            fontSize: 12.5,
-            fontWeight: FontWeight.w600,
-            height: 1.2,
-          ),
+      ),
+    );
+    if (i != entry.expandChildren.length - 1) {
+      childRows.addAll([
+        const SizedBox(height: 6),
+        Container(
+          width: double.infinity,
+          height: 1,
+          color: const Color(0x223A4545),
         ),
-        const SizedBox(height: 4),
-        Text(
-          entry.dueDate == null
-              ? '검사일: 미정'
-              : '검사일: ${_formatDateWithWeekdayShort(entry.dueDate!)}',
-          style: const TextStyle(
-            color: kDlgTextSub,
-            fontSize: 12.5,
-            fontWeight: FontWeight.w600,
-            height: 1.2,
-          ),
+        const SizedBox(height: 6),
+      ]);
+    }
+  }
+
+  return GestureDetector(
+    onTap: onTap,
+    behavior: HitTestBehavior.opaque,
+    child: AnimatedContainer(
+      duration: const Duration(milliseconds: 170),
+      curve: Curves.easeOutCubic,
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0x221D2B2C),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: isExpanded ? const Color(0xFF36525A) : const Color(0xFF31464C),
         ),
-        const SizedBox(height: 4),
-        Text(
-          entry.checkedToday
-              ? '오늘 검사: 완료${entry.checkedAt == null ? '' : ' (${_formatDateTime(entry.checkedAt!)})'}'
-              : '오늘 검사: 미완료',
-          style: TextStyle(
-            color: entry.checkedToday ? kDlgAccent : const Color(0xFF8EA3A8),
-            fontSize: 12.5,
-            fontWeight: FontWeight.w700,
-            height: 1.2,
-          ),
-        ),
-        const SizedBox(height: 8),
-        Row(
-          children: [
-            Expanded(
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(999),
-                child: LinearProgressIndicator(
-                  value: indicatorValue,
-                  minHeight: 7,
-                  backgroundColor: const Color(0xFF23363B),
-                  valueColor: const AlwaysStoppedAnimation<Color>(kDlgAccent),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  entry.overviewLine1Left,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Color(0xFFCAD2C5),
+                    fontSize: 14.5,
+                    fontWeight: FontWeight.w700,
+                    height: 1.1,
+                  ),
                 ),
               ),
+              const SizedBox(width: 8),
+              SizedBox(
+                width: 120,
+                child: Text(
+                  entry.flowLabel,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.right,
+                  style: const TextStyle(
+                    color: Color(0xFF8FA1A1),
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w700,
+                    height: 1.1,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  entry.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: kDlgText,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
+                    height: 1.1,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              const Text(
+                '1개 과제',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: Color(0xFFCAD2C5),
+                  fontSize: 13.5,
+                  fontWeight: FontWeight.w700,
+                  height: 1.1,
+                ),
+              ),
+              const SizedBox(width: 6),
+              Icon(
+                isExpanded
+                    ? Icons.keyboard_arrow_up_rounded
+                    : Icons.keyboard_arrow_down_rounded,
+                size: 18,
+                color: kDlgTextSub,
+              ),
+            ],
+          ),
+          const SizedBox(height: 7),
+          if (!isExpanded)
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Flexible(
+                  child: Text(
+                    dueLeftText,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: kDlgTextSub,
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w600,
+                      height: 1.2,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(999),
+                    child: LinearProgressIndicator(
+                      value: indicatorValue,
+                      minHeight: 7,
+                      backgroundColor: const Color(0xFF23363B),
+                      valueColor:
+                          const AlwaysStoppedAnimation<Color>(kDlgAccent),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  '${entry.progress}%',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Color(0xFF8EA3A8),
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w700,
+                    height: 1.2,
+                  ),
+                ),
+              ],
+            )
+          else
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '내준 ${_formatDateTime(entry.assignedAt)}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: kDlgTextSub,
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w600,
+                      height: 1.2,
+                    ),
+                  ),
+                ),
+                Text(
+                  checkLabelText,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: entry.checkedToday
+                        ? kDlgAccent
+                        : const Color(0xFF8EA3A8),
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w700,
+                    height: 1.2,
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(width: 10),
+          if (isExpanded) ...[
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    entry.expandLine4Left,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Color(0xFF748686),
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w600,
+                      height: 1.1,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  entry.expandLine4Right,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Color(0xFF748686),
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600,
+                    height: 1.1,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    entry.expandLine5Left,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Color(0xFF748686),
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w600,
+                      height: 1.1,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 220),
+                  child: Text(
+                    entry.expandLine5Right,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.right,
+                    style: const TextStyle(
+                      color: Color(0xFF748686),
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w600,
+                      height: 1.1,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            const Divider(height: 1, thickness: 1, color: kDlgBorder),
+            const SizedBox(height: 8),
             Text(
-              '완료율 ${entry.progress}%',
+              '검사 기록 ${entry.expandChildren.length}건',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: const TextStyle(
-                color: kDlgText,
-                fontSize: 12,
+                color: Color(0xFFCAD2C5),
+                fontSize: 14.5,
                 fontWeight: FontWeight.w700,
                 height: 1.1,
               ),
             ),
+            const SizedBox(height: 8),
+            if (childRows.isEmpty)
+              const Text(
+                '검사 기록이 없습니다.',
+                style: TextStyle(
+                  color: kDlgTextSub,
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w600,
+                ),
+              )
+            else
+              ...childRows,
           ],
-        ),
-      ],
+        ],
+      ),
     ),
   );
 }
@@ -7718,8 +8064,13 @@ void _drawHomeworkPrintOverlayOnFirstPage({
   required sf.PdfFont line1Font,
   required sf.PdfFont line2Font,
   required sf.PdfFont assignmentCodeFont,
+  double topInsetOverride = 5,
+  double bottomInsetOverride = 1,
+  sf.PdfGraphics? graphicsOverride,
+  bool bottomLeftLayout = false,
 }) {
   final size = page.getClientSize();
+  final g = graphicsOverride ?? page.graphics;
   final line1Parts = <String>[
     if (meta.assignedDateText.trim().isNotEmpty && meta.assignedDateText != '-')
       meta.assignedDateText,
@@ -7727,9 +8078,71 @@ void _drawHomeworkPrintOverlayOnFirstPage({
   ];
   final line1 = line1Parts.isEmpty ? '-' : line1Parts.join(' · ');
   final line2 = meta.studentName.trim().isEmpty ? '학생' : meta.studentName;
+  final assignmentCodeText =
+      meta.assignmentCodeText.trim().isEmpty ? '-' : meta.assignmentCodeText;
+
+  if (bottomLeftLayout) {
+    const double leftInset = 14;
+    const double lineH = 14;
+    const double pad = 2;
+    final double bottomInset = bottomInsetOverride;
+    final textBrush = sf.PdfSolidBrush(sf.PdfColor(32, 32, 32));
+
+    final double infoBlockH = lineH * 2;
+    final double infoTop = size.height - bottomInset - infoBlockH;
+    final infoBgRect = Rect.fromLTWH(
+      leftInset - pad,
+      infoTop - pad,
+      180 + pad * 2,
+      infoBlockH + pad * 2,
+    );
+    g.drawRectangle(
+      brush: sf.PdfSolidBrush(sf.PdfColor(255, 255, 255)),
+      bounds: infoBgRect,
+    );
+    final leftFormat = sf.PdfStringFormat(
+      alignment: sf.PdfTextAlignment.left,
+      lineAlignment: sf.PdfVerticalAlignment.top,
+    );
+    g.drawString(line1, line1Font,
+      brush: textBrush,
+      bounds: Rect.fromLTWH(leftInset, infoTop, 180, lineH),
+      format: leftFormat,
+    );
+    g.drawString(line2, line2Font,
+      brush: textBrush,
+      bounds: Rect.fromLTWH(leftInset, infoTop + lineH, 180, lineH),
+      format: leftFormat,
+    );
+
+    const double codeW = 120;
+    final double codeTop = size.height - bottomInset - lineH;
+    final double codeLeft = size.width - 14 - codeW;
+    final codeBgRect = Rect.fromLTWH(
+      codeLeft - pad,
+      codeTop - pad,
+      codeW + pad * 2,
+      lineH + pad * 2,
+    );
+    g.drawRectangle(
+      brush: sf.PdfSolidBrush(sf.PdfColor(255, 255, 255)),
+      bounds: codeBgRect,
+    );
+    final rightFormat = sf.PdfStringFormat(
+      alignment: sf.PdfTextAlignment.right,
+      lineAlignment: sf.PdfVerticalAlignment.top,
+    );
+    g.drawString(assignmentCodeText, assignmentCodeFont,
+      brush: textBrush,
+      bounds: Rect.fromLTWH(codeLeft, codeTop, codeW, lineH),
+      format: rightFormat,
+    );
+    return;
+  }
+
   const double rightInset = 14;
-  const double topInset = 5;
-  const double lineH = 13;
+  final double topInset = topInsetOverride;
+  const double lineH = 18;
   final double boxWidth = math.max(180, size.width * 0.68);
   final double left = math.max(0, size.width - boxWidth - rightInset);
   final format = sf.PdfStringFormat(
@@ -7737,30 +8150,28 @@ void _drawHomeworkPrintOverlayOnFirstPage({
     lineAlignment: sf.PdfVerticalAlignment.top,
   );
   final textBrush = sf.PdfSolidBrush(sf.PdfColor(32, 32, 32));
-  page.graphics.drawString(
+  g.drawString(
     line1,
     line1Font,
     brush: textBrush,
     bounds: Rect.fromLTWH(left, topInset, boxWidth, lineH),
     format: format,
   );
-  page.graphics.drawString(
+  g.drawString(
     line2,
     line2Font,
     brush: textBrush,
     bounds: Rect.fromLTWH(left, topInset + lineH, boxWidth, lineH),
     format: format,
   );
-  final assignmentCodeText =
-      meta.assignmentCodeText.trim().isEmpty ? '-' : meta.assignmentCodeText;
-  const double bottomInset = 1;
-  const double codeLineH = 14;
+  final double bottomInset = bottomInsetOverride;
+  const double codeLineH = 18;
   final codeTop = math.max(0.0, size.height - bottomInset - codeLineH);
   final codeFormat = sf.PdfStringFormat(
     alignment: sf.PdfTextAlignment.right,
     lineAlignment: sf.PdfVerticalAlignment.bottom,
   );
-  page.graphics.drawString(
+  g.drawString(
     assignmentCodeText,
     assignmentCodeFont,
     brush: textBrush,
@@ -8435,21 +8846,42 @@ Future<String?> _buildPdfForPrintRange({
         pageRange.trim().isEmpty &&
         pageCount > 0 &&
         overlayPdfFont != null) {
-      _drawHomeworkPrintOverlayOnFirstPage(
-        page: src.pages[0],
-        meta: overlayMeta,
-        line1Font: overlayPdfFont,
-        line2Font: overlayPdfFont,
-        assignmentCodeFont: overlayPdfFont,
+      // 외부 생성 PDF는 page.graphics 수정이 기존 콘텐츠 아래에 깔린다.
+      // round-trip 정규화 후 페이지 레이어를 추가해 콘텐츠 위에 오버레이를 그린다.
+      final normalizedBytes = await src.save();
+      final normalizedDoc = sf.PdfDocument(
+        inputBytes: Uint8List.fromList(normalizedBytes),
       );
-      final outBytes = await src.save();
-      final dir = await getTemporaryDirectory();
-      final outPath = p.join(
-        dir.path,
-        '${_homeworkPrintTempPrefix}${DateTime.now().millisecondsSinceEpoch}.pdf',
-      );
-      await File(outPath).writeAsBytes(outBytes, flush: true);
-      return outPath;
+      try {
+        final overlayFont = await _loadHomeworkPrintOverlayFont(
+          kOverlayPrintFontPt,
+          bold: false,
+        );
+        final firstPage = normalizedDoc.pages[0];
+        final layer = firstPage.layers.add(name: 'hw_overlay');
+        _drawHomeworkPrintOverlayOnFirstPage(
+          page: firstPage,
+          meta: overlayMeta,
+          line1Font: overlayFont,
+          line2Font: overlayFont,
+          assignmentCodeFont: overlayFont,
+          bottomInsetOverride: 25,
+          graphicsOverride: layer.graphics,
+          bottomLeftLayout: true,
+        );
+        final outBytes = await normalizedDoc.save();
+        print('[OVERLAY] layer: ${outBytes.length} bytes (normalized=${normalizedBytes.length})');
+        final dir = await getTemporaryDirectory();
+        print('[OVERLAY] temp dir: ${dir.path}');
+        final outPath = p.join(
+          dir.path,
+          '${_homeworkPrintTempPrefix}${DateTime.now().millisecondsSinceEpoch}.pdf',
+        );
+        await File(outPath).writeAsBytes(outBytes, flush: true);
+        return outPath;
+      } finally {
+        normalizedDoc.dispose();
+      }
     }
     for (int outIndex = 0; outIndex < indices.length; outIndex++) {
       final i = indices[outIndex];
@@ -9706,19 +10138,12 @@ Future<void> _handleWaitingChipLongPressPrint({
           .where((child) => selectedIds.contains(child.id))
           .toList(growable: false)
       : <HomeworkItem>[hw];
-  // 테스트 과제 PDF는 워커가 만든 문제은행 출력물이라 메타 오버레이를 붙이지 않는다.
-  final bool shouldApplyOverlay = !selectedHomeworks.any(
-    (h) => _isTestHomeworkType(h.type),
+  final overlayMeta = await _resolveHomeworkPrintOverlayMeta(
+    studentId: studentId,
+    fallbackHomework: hw,
+    selectedHomeworks: selectedHomeworks,
   );
-  _HomeworkPrintOverlayMeta? overlayMeta;
-  if (shouldApplyOverlay) {
-    overlayMeta = await _resolveHomeworkPrintOverlayMeta(
-      studentId: studentId,
-      fallbackHomework: hw,
-      selectedHomeworks: selectedHomeworks,
-    );
-    if (!context.mounted) return;
-  }
+  if (!context.mounted) return;
 
   final int pageOffset = (!resolvedSource.isProblemBank && isPdf)
       ? await _loadTextbookPageOffset(
@@ -9739,7 +10164,7 @@ Future<void> _handleWaitingChipLongPressPrint({
       context,
       run: (progressText) async {
         if (printablePath.toLowerCase().endsWith('.pdf')) {
-          final shouldRewritePdf = shouldApplyOverlay || rangeRaw.isNotEmpty;
+          final shouldRewritePdf = true;
           if (shouldRewritePdf) {
             progressText.value = rangeRaw.isEmpty
                 ? '인쇄 파일을 준비하는 중입니다...'
@@ -10081,9 +10506,8 @@ Widget _buildHomeworkChipVisual(
   final int cycleProgressMs = math.max(0, totalMs - cycleBaseMs);
   final bool isPausedWaiting =
       visualPhase == 1 && cycleProgressMs > 0 && hw.firstStartedAt != null;
-  final int progressMs =
+  final int cycleProgressMsForDisplay =
       (visualPhase == 1 && !isPausedWaiting) ? 0 : cycleProgressMs;
-  final int progressMinutes = progressMs <= 0 ? 0 : (progressMs ~/ 60000);
   final String durationText = _formatDurationMs(totalMs);
   final String startedAtText =
       hw.firstStartedAt == null ? '-' : _formatShortTime(hw.firstStartedAt!);
@@ -10123,6 +10547,10 @@ Widget _buildHomeworkChipVisual(
   final bool isTestCard = hasGroupChildren
       ? groupChildren.any((child) => _isTestHomeworkType(child.type))
       : _isTestHomeworkType(hw.type);
+  final int progressMsForDisplay =
+      isTestCard ? totalMs : cycleProgressMsForDisplay;
+  final int progressMinutes =
+      progressMsForDisplay <= 0 ? 0 : (progressMsForDisplay ~/ 60000);
   final int? testLimitMinutes = isTestCard
       ? () {
           if (hasGroupChildren) {
@@ -10139,13 +10567,23 @@ Widget _buildHomeworkChipVisual(
   final int? testLimitMs = (testLimitMinutes != null && testLimitMinutes > 0)
       ? testLimitMinutes * 60000
       : null;
+  final bool hasConfirmedCycleHistory = isTestCard && hw.confirmedAt != null;
+  final bool showRunningExtraTime = testLimitMs != null &&
+      visualPhase == 2 &&
+      !isReservation &&
+      hasConfirmedCycleHistory;
+  final bool showRunningRemaining = testLimitMs != null &&
+      visualPhase == 2 &&
+      !isReservation &&
+      !showRunningExtraTime;
   final int remainingMs =
-      testLimitMs == null ? 0 : math.max(0, testLimitMs - progressMs);
+      testLimitMs == null ? 0 : math.max(0, testLimitMs - progressMsForDisplay);
   final int remainingMinutes = testLimitMs == null
       ? 0
       : (remainingMs <= 0 ? 0 : ((remainingMs + 59999) ~/ 60000));
-  final bool showRunningRemaining =
-      testLimitMs != null && visualPhase == 2 && !isReservation;
+  final int extraMs =
+      testLimitMs == null ? 0 : math.max(0, progressMsForDisplay - testLimitMs);
+  final int extraMinutes = extraMs <= 0 ? 0 : ((extraMs + 59999) ~/ 60000);
   final bool shouldAutoSubmitForTimeout =
       showRunningRemaining && remainingMs <= 0;
   final String resolvedGroupId = (groupId ?? '').trim();
@@ -10183,6 +10621,7 @@ Widget _buildHomeworkChipVisual(
       isTestCard && visualPhase == 1 && hw.confirmedAt != null;
   final bool showSubmittedEndedBadge = isTestCard &&
       !showRunningRemaining &&
+      !showRunningExtraTime &&
       (visualPhase >= 3 || hasFinishedTestCycle);
   final bool showEndedBadge = showTimedOutBadge || showSubmittedEndedBadge;
   final String typeText = () {
@@ -10194,23 +10633,29 @@ Widget _buildHomeworkChipVisual(
     }
     return '$rawTypeText · 테스트 종료';
   }();
-  final String progressText = (testLimitMinutes != null && testLimitMinutes > 0)
-      ? '진행 ${progressMinutes}분/$testLimitMinutes분'
-      : '진행 ${progressMinutes}분';
+  final String progressText = '진행 ${progressMinutes}분';
   final String? flowChipOverrideText = showRunningRemaining
       ? '남은 ${remainingMinutes}분'
-      : (showEndedBadge ? '종료' : null);
+      : (showRunningExtraTime
+          ? '추가 ${extraMinutes}분'
+          : (showEndedBadge ? '종료' : null));
   final Color? flowChipOverrideTextColor = showRunningRemaining
       ? const Color(0xFF9FE3C6)
-      : (showEndedBadge ? const Color(0xFFC8D4D4) : null);
+      : (showRunningExtraTime
+          ? const Color(0xFFFFD39A)
+          : (showEndedBadge ? const Color(0xFFC8D4D4) : null));
   final Color? flowChipOverrideBackgroundColor = showRunningRemaining
       ? const Color(0x1F4FBF97)
-      : (showEndedBadge ? const Color(0x332A3030) : null);
+      : (showRunningExtraTime
+          ? const Color(0x333A2A18)
+          : (showEndedBadge ? const Color(0x332A3030) : null));
   final Border? flowChipOverrideBorder = showRunningRemaining
       ? Border.all(color: kDlgAccent, width: 1.05)
-      : (showEndedBadge
-          ? Border.all(color: const Color(0xFF5F6D6D), width: 1)
-          : null);
+      : (showRunningExtraTime
+          ? Border.all(color: const Color(0xFFB77A2C), width: 1.05)
+          : (showEndedBadge
+              ? Border.all(color: const Color(0xFF5F6D6D), width: 1)
+              : null));
 
   String textbookKeyOfHomework(HomeworkItem item) {
     final bookId = (item.bookId ?? '').trim();
@@ -10944,6 +11389,13 @@ class _HomeworkOverviewEntry {
   final DateTime? checkedAt;
   final int progress;
   final bool isActive;
+  final String flowLabel;
+  final String overviewLine1Left;
+  final String expandLine4Left;
+  final String expandLine4Right;
+  final String expandLine5Left;
+  final String expandLine5Right;
+  final List<_HomeworkOverviewCompletedChildEntry> expandChildren;
 
   const _HomeworkOverviewEntry({
     required this.homeworkItemId,
@@ -10954,6 +11406,13 @@ class _HomeworkOverviewEntry {
     required this.checkedAt,
     required this.progress,
     required this.isActive,
+    required this.flowLabel,
+    required this.overviewLine1Left,
+    required this.expandLine4Left,
+    required this.expandLine4Right,
+    required this.expandLine5Left,
+    required this.expandLine5Right,
+    required this.expandChildren,
   });
 }
 

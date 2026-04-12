@@ -415,8 +415,9 @@ function looksLikePromptLineForImplicitSplit(line) {
   if (isSourceMarkerLine(input)) return false;
   if (parseChoiceLine(input)) return false;
   if (parseAnswerLine(input)) return false;
-  if (isViewBlockLine(input) || isFigureLine(input)) return false;
+  if (isFigureReferenceLine(input)) return false;
   if (/^([ㄱ-ㅎ]|[①②③④⑤⑥⑦⑧⑨⑩])\s*[\.\)]/.test(input)) return false;
+  if (/^[\(（]?\s*[가나다라ㄱㄴㄷㄹ]\s*[\)）]\s/.test(input)) return false;
   return /(다음|옳은|설명|구하|계산|고른|것은|값|함수|수열|부등식|넓이|확률|미분|적분|\?)/.test(
     input,
   );
@@ -426,7 +427,10 @@ function looksLikeQuestionTerminalLine(line) {
   const input = normalizeWhitespace(line);
   if (!input) return false;
   if (/\?$/.test(input)) return true;
-  return /(구하시오|고르시오|쓰시오|값은|넓이는|옳은 것은)\.?$/.test(input);
+  if (/\?\s*\)$/.test(input)) return true;
+  if (/이다\.\s*\)?$/.test(input)) return true;
+  if (/\)\s*$/.test(input) && /(단,|이고|이다|상수|자연수)/.test(input)) return true;
+  return /(구하시오|고르시오|쓰시오|값은|넓이는|옳은 것은|것은|것을|쓰시오)\.?\s*\)?$/.test(input);
 }
 
 function parseChoiceLine(line) {
@@ -696,6 +700,13 @@ function isFigureLine(line) {
   return /(그림|도표|도형|표\s*\d*|자료|그래프|지도)/.test(line);
 }
 
+function isFigureReferenceLine(line) {
+  const input = normalizeWhitespace(line);
+  if (/\[(그림|도표|도형|표\s*\d*|자료|그래프|지도)\]/.test(input)) return true;
+  if (/^(그림|도표|도형|그래프|지도)\s*\d*\s*$/i.test(input)) return true;
+  return input === '[그림]' || input === '[도형]' || input === '[표]';
+}
+
 function isViewBlockLine(line) {
   return /(\[?\s*보기\s*\]?|<보기>|다음\s*자료)/.test(line);
 }
@@ -714,16 +725,39 @@ function normalizeEquationRaw(raw) {
   const s = stripPotentialWatermarkText(raw, { equation: true });
   if (!s) return '';
   return s
-    .replace(/`+/g, '')
+    .replace(/`+/g, ' ')
+    .replace(/\s+/g, ' ')
     .replace(/\{rm\{([^}]*)\}\}it/gi, '\\mathrm{$1}')
     .replace(/rm\{([^}]*)\}it/gi, '\\mathrm{$1}')
-    .replace(/\bleft\b/gi, '\\left')
-    .replace(/\bright\b/gi, '\\right')
-    .replace(/\btimes\b/gi, '\\times ')
-    .replace(/\bdiv\b/gi, '\\div ')
+    .replace(/(\{[^{}]*\})\s*over\s*(\{[^{}]*\})/gi, '\\frac$1$2')
     .replace(/\bover\b/gi, '\\over ')
+    .replace(/\bLEFT\b/g, '\\left')
+    .replace(/\bRIGHT\b/g, '\\right')
+    .replace(/\bleft\b/g, '\\left')
+    .replace(/\bright\b/g, '\\right')
+    .replace(/\bTIMES\b/g, '\\times ')
+    .replace(/\btimes\b/g, '\\times ')
+    .replace(/\bDIV\b/g, '\\div ')
+    .replace(/\bdiv\b/g, '\\div ')
+    .replace(/\bRARROW\b/g, '\\Rightarrow ')
+    .replace(/\bLARROW\b/g, '\\Leftarrow ')
+    .replace(/\bLRARROW\b/g, '\\Leftrightarrow ')
+    .replace(/\brarrow\b/g, '\\rightarrow ')
+    .replace(/\blarrow\b/g, '\\leftarrow ')
+    .replace(/\blrarrow\b/g, '\\leftrightarrow ')
+    .replace(/\bSIM\b/g, '\\sim ')
+    .replace(/\bAPPROX\b/g, '\\approx ')
+    .replace(/\bPROPTO\b/g, '\\propto ')
+    .replace(/\bPERMIL\b/g, '\\permil ')
+    .replace(/\bDEG\b/g, '^{\\circ}')
     .replace(/\ble\b/gi, '\\le ')
     .replace(/\bge\b/gi, '\\ge ')
+    .replace(/\bne\b/gi, '\\ne ')
+    .replace(/\blt\b/g, '< ')
+    .replace(/\bgt\b/g, '> ')
+    .replace(/\bAND\b/g, '\\cap ')
+    .replace(/\bOR\b/g, '\\cup ')
+    .replace(/\bINF\b/g, '\\infty ')
     .replace(/×/g, '\\times ')
     .replace(/÷/g, '\\div ')
     .replace(/≤/g, '\\le ')
@@ -2108,6 +2142,7 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
 
   const questions = [];
   let current = null;
+  let splitAfterScoreAnnotation = false;
   const stats = {
     circledChoices: 0,
     viewBlocks: 0,
@@ -2225,6 +2260,30 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
 
     const start = parseQuestionStart(line);
     if (start) {
+      splitAfterScoreAnnotation = false;
+      // score_only ("[3.00점]") 라인이 이미 stem이 있는 현재 문항 바로 뒤에 나오면
+      // 새 문항이 아니라 현재 문항의 배점 메타데이터로 취급한다.
+      // 번호 없는 문서에서 stem → [배점] → 선택지 순서를 올바르게 처리하기 위함.
+      if (
+        start.style === 'score_only' &&
+        current &&
+        current.stemLines.length > 0 &&
+        current.choices.length === 0
+      ) {
+        current.score_point = start.scorePoint ?? current.score_point;
+        current.sourcePatterns.push('score_annotation');
+        const lastNonStructuralStem = (() => {
+          for (let si = current.stemLines.length - 1; si >= 0; si--) {
+            const c = normalizeWhitespace(current.stemLines[si]);
+            if (c && !/^\[(문단|박스시작|박스끝|그림|도형)\]$/.test(c)) return c;
+          }
+          return '';
+        })();
+        if (looksLikeQuestionTerminalLine(lastNonStructuralStem)) {
+          splitAfterScoreAnnotation = true;
+        }
+        continue;
+      }
       const questionNumber = reserveQuestionNumber(start.number, {
         allowFallback: start.style === 'score_only',
       });
@@ -2240,6 +2299,20 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
         scorePoint: start.scorePoint ?? null,
       });
       continue;
+    }
+
+    if (splitAfterScoreAnnotation && current) {
+      splitAfterScoreAnnotation = false;
+      const implicitQuestionNumber = reserveQuestionNumber('', {
+        allowFallback: true,
+      });
+      flushCurrent();
+      current = createQuestionSeed({
+        questionNumber: implicitQuestionNumber,
+        row,
+        stemLines: [],
+        sourcePatterns: ['implicit_after_score_terminal'],
+      });
     }
 
     if (!current && questions.length === 0) {
@@ -2302,24 +2375,29 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
       current.sourcePatterns.push('watermark_line');
       continue;
     }
-    const hasEnoughChoices = meaningfulChoiceTextCount(current.choices || []) >= 4;
-    const previousStemLine = normalizeWhitespace(
-      current.stemLines.length > 0
-        ? current.stemLines[current.stemLines.length - 1]
-        : '',
-    );
+    const hasEnoughChoices =
+      meaningfulChoiceTextCount(current.choices || []) >= 4 ||
+      (current.choices || []).length >= 4;
+    const previousStemLine = (() => {
+      for (let si = (current.stemLines || []).length - 1; si >= 0; si -= 1) {
+        const candidate = normalizeWhitespace(current.stemLines[si]);
+        if (candidate && !/^\[(문단|박스시작|박스끝|그림|도형)\]$/.test(candidate)) {
+          return candidate;
+        }
+      }
+      return '';
+    })();
     const isChoiceLine = Boolean(parseChoiceLine(cleanedLine));
     const parsedAnswerKey = parseAnswerLine(cleanedLine);
     const isAnswerLine = Boolean(parsedAnswerKey);
     const isSourceLine = isSourceMarkerLine(cleanedLine);
-    const isViewOrFigureLine =
-      isViewBlockLine(cleanedLine) || isFigureLine(cleanedLine);
+    const isFigureRefOnly = isFigureReferenceLine(cleanedLine);
     const canSplitAfterChoices =
       hasEnoughChoices &&
       !isChoiceLine &&
       !isAnswerLine &&
       !isSourceLine &&
-      !isViewOrFigureLine &&
+      !isFigureRefOnly &&
       cleanedLine.length >= 8 &&
       /[가-힣A-Za-z]/.test(cleanedLine) &&
       !isLikelyKoreanPersonName(cleanedLine);

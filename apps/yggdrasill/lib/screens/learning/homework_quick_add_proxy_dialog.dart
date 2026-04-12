@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -100,10 +101,13 @@ class HomeworkQuickAddProxyDialogState
   static const Curve _kTreeSmallsExpandCurve = Curves.easeInOutCubic;
 
   /// 페이지 리스트 한 줄 높이(디바이더 포함 영역과 동일).
-  static const double _kSmallPageListRowStride = 44;
+  static const double _kSmallPageListRowStride = 54;
 
   /// 오른쪽 패널 소단원 구간 헤더 높이.
-  static const double _kMidRightSmallHeaderHeight = 40;
+  static const double _kMidRightSmallHeaderHeight = 49;
+
+  /// 트리 체크박스 열과 제목 열 사이 (기준 6의 1.5배).
+  static const double _kLeftSmallCheckboxToTitleGap = 9;
 
   /// 대단원 하위 중단원 열의 왼쪽 들여쓰기; 소단원 목록에 한 단계 더 동일 적용.
   static const double _kTreeMidIndentFromBig = 22;
@@ -151,6 +155,8 @@ class HomeworkQuickAddProxyDialogState
   static const double _kNaesinGridSchoolLabelWidth = 120;
   static const double _kNaesinGridCellSize = 58;
   static const double _kNaesinGridCellGap = 12;
+  /// 라벨 열(학교/년도)과 첫 셀 열 사이.
+  static const double _kNaesinGridLabelToCellsGap = 12;
   static const Color _kNaesinLinkedActiveCellColor = Color(0xFF282828);
   static const List<String> _kNaesinSchools = <String>[
     '경신중',
@@ -546,13 +552,36 @@ class HomeworkQuickAddProxyDialogState
     );
   }
 
-  DateTime _naesinIssueTimestampOfHomework(HomeworkItem item) {
-    return item.createdAt ??
-        item.updatedAt ??
-        item.submittedAt ??
+  DateTime _naesinStatusTimestampOfHomework(HomeworkItem item) {
+    return item.completedAt ??
         item.confirmedAt ??
-        item.completedAt ??
+        item.submittedAt ??
+        item.waitingAt ??
+        item.updatedAt ??
+        item.createdAt ??
         DateTime.fromMillisecondsSinceEpoch(0);
+  }
+
+  bool _isNaesinEndedHomework(HomeworkItem item) {
+    return item.phase >= 3 || item.confirmedAt != null;
+  }
+
+  int _naesinElapsedMsOfHomework(HomeworkItem item) {
+    final runningMs = item.runStart == null
+        ? 0
+        : DateTime.now().difference(item.runStart!).inMilliseconds;
+    return math.max(0, item.accumulatedMs + runningMs);
+  }
+
+  String _formatNaesinElapsedDuration(int elapsedMs) {
+    final safeMs = math.max(0, elapsedMs);
+    final totalMinutes = safeMs ~/ 60000;
+    final hours = totalMinutes ~/ 60;
+    final minutes = totalMinutes % 60;
+    if (hours > 0) {
+      return '$hours시간 ${minutes.toString().padLeft(2, '0')}분';
+    }
+    return '${totalMinutes}분';
   }
 
   String _formatNaesinCellScoreValue(double value) {
@@ -602,19 +631,45 @@ class HomeworkQuickAddProxyDialogState
         await _gradingResultService.loadLatestScoreByHomeworkItemIds(itemIds);
     final out = <String, _NaesinCellStatus>{};
     grouped.forEach((linkKey, rows) {
-      rows.sort(
-        (a, b) => _naesinIssueTimestampOfHomework(b)
-            .compareTo(_naesinIssueTimestampOfHomework(a)),
-      );
-      final target = rows.first;
+      DateTime? firstIssuedAt;
+      HomeworkItem? target;
+      HomeworkTestLatestScore? latestScore;
+      var targetPriority = -1;
+      var targetAt = DateTime.fromMillisecondsSinceEpoch(0);
+      for (final item in rows) {
+        final issuedAt = item.createdAt ?? item.updatedAt;
+        if (issuedAt != null &&
+            (firstIssuedAt == null || issuedAt.isBefore(firstIssuedAt))) {
+          firstIssuedAt = issuedAt;
+        }
+        final isCompleted = item.status == HomeworkStatus.completed;
+        final isEnded = _isNaesinEndedHomework(item);
+        final priority = isCompleted ? 3 : (isEnded ? 2 : 1);
+        final at = _naesinStatusTimestampOfHomework(item);
+        if (target == null ||
+            priority > targetPriority ||
+            (priority == targetPriority && at.isAfter(targetAt))) {
+          target = item;
+          targetPriority = priority;
+          targetAt = at;
+        }
+        final score = latestScoreByItemId[item.id.trim()];
+        if (score != null &&
+            (latestScore == null ||
+                score.gradedAt.isAfter(latestScore.gradedAt))) {
+          latestScore = score;
+        }
+      }
+      if (target == null) return;
       final isCompleted = target.status == HomeworkStatus.completed;
-      final isEnded = !isCompleted && target.phase >= 3;
-      final score = latestScoreByItemId[target.id.trim()];
-      final scoreLabel = score == null
+      final isEnded = !isCompleted && _isNaesinEndedHomework(target);
+      final scoreLabel = latestScore == null
           ? ''
-          : '${_formatNaesinCellScoreValue(score.scoreCorrect)}/${_formatNaesinCellScoreValue(score.scoreTotal)}';
+          : '${_formatNaesinCellScoreValue(latestScore.scoreCorrect)}/${_formatNaesinCellScoreValue(latestScore.scoreTotal)}';
       out[linkKey] = _NaesinCellStatus(
         issuedAt: target.createdAt ?? target.updatedAt,
+        firstIssuedAt: firstIssuedAt,
+        elapsedMs: _naesinElapsedMsOfHomework(target),
         isEnded: isEnded,
         isCompleted: isCompleted,
         scoreLabel: scoreLabel,
@@ -4313,7 +4368,7 @@ class HomeworkQuickAddProxyDialogState
                         ? const Color(0xFF6D7777)
                         : (pageChecked ? kDlgAccent : kDlgBorder),
                   ),
-                  const SizedBox(width: 10),
+                  const SizedBox(width: 15),
                   Expanded(
                     child: Text(
                       'P.$pageNum',
@@ -4560,7 +4615,7 @@ class HomeworkQuickAddProxyDialogState
     final doneText = _smallRowStatusSuffix(small);
     return Padding(
       key: _leftSmallRowKeys.putIfAbsent(expandKey, GlobalKey.new),
-      padding: const EdgeInsets.only(bottom: 4),
+      padding: const EdgeInsets.only(bottom: 6),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 140),
         decoration: BoxDecoration(
@@ -4589,6 +4644,7 @@ class HomeworkQuickAddProxyDialogState
                 disabled: blocked,
               ),
             ),
+            const SizedBox(width: _kLeftSmallCheckboxToTitleGap),
             Expanded(
               child: Material(
                 color: Colors.transparent,
@@ -4600,7 +4656,7 @@ class HomeworkQuickAddProxyDialogState
                   child: Padding(
                     padding: const EdgeInsets.symmetric(
                       horizontal: 4,
-                      vertical: 7,
+                      vertical: 10,
                     ),
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -4911,9 +4967,13 @@ class HomeworkQuickAddProxyDialogState
                 ? const Color(0x1A33A373)
                 : const Color(0xFF151C21)));
     final tooltipLines = <String>['$school · $year'];
-    if (cellStatus?.issuedAt != null) {
+    if (cellStatus?.firstIssuedAt != null) {
+      tooltipLines.add(
+          '처음 내준 시각 ${_formatNaesinIssuedDateTime(cellStatus!.firstIssuedAt!)}');
+    }
+    if (cellStatus != null) {
       tooltipLines
-          .add('내준 시각 ${_formatNaesinIssuedDateTime(cellStatus!.issuedAt!)}');
+          .add('걸린 시간 ${_formatNaesinElapsedDuration(cellStatus.elapsedMs)}');
     }
     if (isCompleted) {
       tooltipLines.add('상태 완료');
@@ -4991,7 +5051,7 @@ class HomeworkQuickAddProxyDialogState
               ),
             ),
           ),
-          const SizedBox(width: 8),
+          SizedBox(width: _kNaesinGridLabelToCellsGap),
           for (var i = 0; i < _kNaesinYears.length; i++) ...[
             (() {
               final year = _kNaesinYears[i];
@@ -5044,7 +5104,7 @@ class HomeworkQuickAddProxyDialogState
                   ),
                 ),
               ),
-              const SizedBox(width: 8),
+              SizedBox(width: _kNaesinGridLabelToCellsGap),
               for (var i = 0; i < _kNaesinYears.length; i++) ...[
                 SizedBox(
                   width: _kNaesinGridCellSize,
@@ -5608,12 +5668,16 @@ class _NaesinPresetAutoValues {
 class _NaesinCellStatus {
   const _NaesinCellStatus({
     required this.issuedAt,
+    required this.firstIssuedAt,
+    required this.elapsedMs,
     required this.isEnded,
     required this.isCompleted,
     required this.scoreLabel,
   });
 
   final DateTime? issuedAt;
+  final DateTime? firstIssuedAt;
+  final int elapsedMs;
   final bool isEnded;
   final bool isCompleted;
   final String scoreLabel;
