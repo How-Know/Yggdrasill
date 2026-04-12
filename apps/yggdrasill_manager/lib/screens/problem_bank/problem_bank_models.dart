@@ -601,7 +601,7 @@ class ProblemBankQuestion {
 }
 
 String _stripPotentialWatermarkText(String value) {
-  var out = value.trim().replaceAll(RegExp(r'\s+'), ' ');
+  var out = _normalizeMultilineWhitespace(value);
   if (out.isEmpty) return '';
   out = out
       .replaceAll(RegExp(r'(?:중등|고등)\s*내신기출\s*\d{4}\.\d{2}\.\d{2}'), '')
@@ -631,7 +631,18 @@ String _stripPotentialWatermarkText(String value) {
       out = rest;
     }
   }
-  return out.trim();
+  return _normalizeMultilineWhitespace(out);
+}
+
+String _normalizeMultilineWhitespace(String value) {
+  final lines = value
+      .replaceAll('\r\n', '\n')
+      .replaceAll('\r', '\n')
+      .split('\n')
+      .map((line) => line.replaceAll(RegExp(r'[ \t]+'), ' ').trim())
+      .where((line) => line.isNotEmpty)
+      .toList(growable: false);
+  return lines.join('\n');
 }
 
 bool _isLikelyKoreanPersonName(String value) {

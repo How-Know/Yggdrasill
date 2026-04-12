@@ -11,8 +11,10 @@ const BOX_START = /\[박스시작\]/;
 const BOX_END = /\[박스끝\]/;
 const BOGI_RE = /<\s*보\s*기\s*>/;
 const FIGURE_MARKER_RE = /\[(?:그림|도형|도표|표)\]/g;
-const BOGI_ITEM_SPLIT_RE = /(?=([ㄱ-ㅎ])\.\s)/;
-const BOGI_ITEM_RE = /^([ㄱ-ㅎ])\.\s*/;
+const BOGI_ITEM_SPLIT_RE =
+  /(?=(?:[ㄱ-ㅎ]\.\s|(?:\(|（)\s*[가나다라마바사아자차카타파하]\s*(?:\)|）)\s))/;
+const BOGI_ITEM_RE =
+  /^(?:([ㄱ-ㅎ])\.\s*|(?:\(|（)\s*([가나다라마바사아자차카타파하])\s*(?:\)|）)\s*)/;
 
 function cleanLine(line) {
   return line
@@ -119,6 +121,7 @@ function splitBogiItemsFromText(text) {
     const part = parts[i].trim();
     if (!part) continue;
     if (/^[ㄱ-ㅎ]$/.test(part) && i + 1 < parts.length) continue;
+    if (/^[가나다라마바사아자차카타파하]$/.test(part) && i + 1 < parts.length) continue;
     items.push(part);
   }
   return items;
@@ -141,18 +144,21 @@ function renderBogiItems(lines, mathRenderer, equations) {
   for (const part of allParts) {
     const match = part.match(BOGI_ITEM_RE);
     if (match) {
-      const label = match[1];
+      const consonantLabel = match[1] || '';
+      const syllableLabel = match[2] || '';
+      const label = consonantLabel || syllableLabel;
+      const labelText = consonantLabel ? `${label}.` : `(${label})`;
       const text = part.slice(match[0].length).trim();
       const rendered = composeLineV1(text, mathRenderer, equations);
       if (rendered.hasFraction) hasFraction = true;
       result.push(
-        `<div class="bogi-item"><span class="bogi-item-label">${escapeHtml(label)}.</span><span class="bogi-item-text">${rendered.html}</span></div>`,
+        `<div class="bogi-item"><span class="bogi-item-label">${escapeHtml(labelText)}</span><span class="bogi-item-text">${rendered.html}</span></div>`,
       );
     } else {
       const r = renderOneLine(part, mathRenderer, equations);
       if (r) {
         if (r.hasFraction) hasFraction = true;
-        result.push(r.html);
+        result.push(`<div class="bogi-line">${r.html}</div>`);
       }
     }
   }

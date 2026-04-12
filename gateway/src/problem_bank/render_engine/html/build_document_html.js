@@ -317,6 +317,12 @@ function buildStyles({
     .bogi-item-text {
       min-width: 0;
     }
+    .bogi-line {
+      margin-bottom: 2pt;
+    }
+    .bogi-line:last-child {
+      margin-bottom: 0;
+    }
     .figure-container {
       margin: 6pt 0;
       text-align: center;

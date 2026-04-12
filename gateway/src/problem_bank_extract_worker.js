@@ -192,6 +192,31 @@ function normalizeWhitespace(value) {
     .trim();
 }
 
+/** HWPX/OWPML에서 쓰는 다양한 줄바꿈 태그를 \n 으로 통일 (제네릭 태그 제거 전에 호출) */
+function replaceHwpSoftBreakElements(s) {
+  return String(s || '')
+    .replace(/<(?:[\w-]+:)?lineBreak\b[^>]*\/?>/gi, '\n')
+    .replace(/<\/(?:[\w-]+:)?lineBreak>/gi, '\n')
+    .replace(/<w:br\b[^>]*\/?>/gi, '\n')
+    .replace(/<br\b[^>]*\/?>/gi, '\n')
+    .replace(/<(?:[\w-]+:)?columnBreak\b[^>]*\/?>/gi, '\n');
+}
+
+/**
+ * 태그 제거·디코드 후 문단 본문: CR/LF·유니코드 줄바꿈 보존, 줄마다 공백만 정리
+ */
+function splitParagraphTextToLines(s) {
+  let t = String(s ?? '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .replace(/\u2028|\u2029/g, '\n')
+    .replace(/\u000b/g, '\n');
+  return t
+    .split('\n')
+    .map((line) => normalizeWhitespace(line))
+    .filter((line) => line.length > 0);
+}
+
 function normalizeCurriculumCode(raw, fallback = 'rev_2022') {
   const code = normalizeWhitespace(raw);
   return CURRICULUM_CODES.has(code) ? code : fallback;
@@ -946,16 +971,15 @@ function transformXmlToLines(xmlText, sectionIndex) {
     );
     s = s.replace(/<hp:pic[\s\S]*?<\/hp:pic>/gi, ' [그림] ');
     s = s.replace(/<hp:shape[\s\S]*?<\/hp:shape>/gi, ' [도형] ');
-    s = s.replace(/<br\s*\/?>/gi, '\n');
-    s = s.replace(/<hp:lineBreak\s*\/?>/gi, '\n');
+    s = replaceHwpSoftBreakElements(s);
     s = s.replace(
       /<\/(hp:run|hp:r|hp:span|hp:ctrl|hp:subList|hp:tc|hp:tr|tr|li)>/gi,
       ' ',
     );
     s = s.replace(/<[^>]+>/g, ' ');
     s = htmlDecode(s);
-    s = normalizeWhitespace(s);
-    if (!s) {
+    const paragraphLines = splitParagraphTextToLines(s);
+    if (paragraphLines.length === 0) {
       if (prevParagraphHadContent) {
         lines.push({
           section: sectionIndex,
@@ -980,10 +1004,6 @@ function transformXmlToLines(xmlText, sectionIndex) {
       lineIndex += 1;
     }
 
-    const paragraphLines = s
-      .split('\n')
-      .map((line) => normalizeWhitespace(line))
-      .filter((line) => line.length > 0);
     const isStructuralMarker = paragraphLines.length === 1 &&
       /^\[(박스시작|박스끝|문단)\]$/.test(paragraphLines[0]);
     for (const text of paragraphLines) {
