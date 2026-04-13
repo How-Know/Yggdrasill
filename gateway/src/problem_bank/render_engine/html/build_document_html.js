@@ -323,6 +323,9 @@ function buildStyles({
     .bogi-line:last-child {
       margin-bottom: 0;
     }
+    .bogi-line.bogi-line-center {
+      text-align: center;
+    }
     .figure-container {
       margin: 6pt 0;
       text-align: center;

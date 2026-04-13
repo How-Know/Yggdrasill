@@ -69,8 +69,9 @@ class _ProblemBankViewState extends State<ProblemBankView> {
   String _selectedSourceTypeCode = 'school_past';
 
   List<String> _courseOptions = const <String>['전체'];
-  List<String> _schoolNames = const <String>[];
-  String? _selectedSchoolName;
+  List<LearningProblemDocumentSummary> _schoolPastDocuments =
+      const <LearningProblemDocumentSummary>[];
+  String? _selectedDocumentId;
 
   List<LearningProblemQuestion> _questions = const <LearningProblemQuestion>[];
   final Set<String> _selectedQuestionIds = <String>{};
@@ -226,8 +227,8 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     } else {
       if (mounted) {
         setState(() {
-          _schoolNames = const <String>[];
-          _selectedSchoolName = null;
+          _schoolPastDocuments = const <LearningProblemDocumentSummary>[];
+          _selectedDocumentId = null;
         });
       }
     }
@@ -240,7 +241,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       _isLoadingSchools = true;
     });
     try {
-      final schools = await _service.listSchoolsForSchoolPast(
+      final docs = await _service.listReadyDocumentsForSchoolPast(
         academyId: _academyId!,
         curriculumCode: _selectedCurriculumCode,
         schoolLevel: _selectedSchoolLevel,
@@ -248,14 +249,14 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       );
       if (!mounted) return;
       setState(() {
-        _schoolNames = schools;
-        if (_selectedSchoolName == null ||
-            !schools.contains(_selectedSchoolName)) {
-          _selectedSchoolName = schools.isNotEmpty ? schools.first : null;
+        _schoolPastDocuments = docs;
+        if (_selectedDocumentId == null ||
+            !docs.any((d) => d.id == _selectedDocumentId)) {
+          _selectedDocumentId = docs.isNotEmpty ? docs.first.id : null;
         }
       });
     } catch (e) {
-      _showSnack('학교 목록 조회 실패: $e');
+      _showSnack('문서 목록 조회 실패: $e');
     } finally {
       if (mounted) {
         setState(() {
@@ -279,8 +280,8 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         schoolLevel: _selectedSchoolLevel,
         detailedCourse: _selectedDetailedCourse,
         sourceTypeCode: _selectedSourceTypeCode,
-        schoolName: _selectedSourceTypeCode == 'school_past'
-            ? _selectedSchoolName
+        documentId: _selectedSourceTypeCode == 'school_past'
+            ? _selectedDocumentId
             : null,
       );
       final defaultSorted = _sortedQuestionsByDefaultOrder(fetched);
@@ -365,7 +366,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
 
   String _questionOrderScopeKey() {
     final schoolScope = _selectedSourceTypeCode == 'school_past'
-        ? (_selectedSchoolName ?? '').trim()
+        ? (_selectedDocumentId ?? '').trim()
         : '';
     String enc(String value) => Uri.encodeComponent(value.trim());
     return <String>[
@@ -513,12 +514,21 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     await _reloadSchoolsAndQuestions(resetSelection: true);
   }
 
-  Future<void> _onSchoolSelected(String school) async {
-    if (school == _selectedSchoolName) return;
+  Future<void> _onSchoolPastDocumentSelected(String documentId) async {
+    if (documentId == _selectedDocumentId) return;
     setState(() {
-      _selectedSchoolName = school;
+      _selectedDocumentId = documentId;
     });
     await _reloadQuestions(resetSelection: true);
+  }
+
+  String _fallbackNaesinSchoolFromSelectedDocument() {
+    final id = _selectedDocumentId;
+    if (id == null) return '';
+    for (final d in _schoolPastDocuments) {
+      if (d.id == id) return d.schoolName.trim();
+    }
+    return '';
   }
 
   void _toggleQuestionSelection(String id, bool selected) {
@@ -2069,7 +2079,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           if (!_kNaesinLinkExamTerms.contains(selectedExamTerm)) {
             selectedExamTerm = _kNaesinLinkExamTerms.first;
           }
-          final fallbackSchool = (_selectedSchoolName ?? '').trim();
+          final fallbackSchool = _fallbackNaesinSchoolFromSelectedDocument();
           var selectedSchool = existing?.school ?? fallbackSchool;
           if (!NaesinExamContext.middleSchools.contains(selectedSchool)) {
             selectedSchool = NaesinExamContext.middleSchools.first;
@@ -2760,9 +2770,9 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                           width: 260,
                           child: ProblemBankSchoolSheet(
                             selectedSourceTypeCode: _selectedSourceTypeCode,
-                            schoolNames: _schoolNames,
-                            selectedSchoolName: _selectedSchoolName,
-                            onSchoolSelected: _onSchoolSelected,
+                            documents: _schoolPastDocuments,
+                            selectedDocumentId: _selectedDocumentId,
+                            onDocumentSelected: _onSchoolPastDocumentSelected,
                             isLoading: _isLoadingSchools,
                           ),
                         ),

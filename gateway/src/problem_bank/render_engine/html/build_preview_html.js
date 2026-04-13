@@ -159,6 +159,7 @@ function buildPreviewStyles({ stemSizePt, lineHeightPt, choiceGapPt }) {
     .bogi-item-text { min-width: 0; }
     .bogi-line { margin-bottom: 2pt; }
     .bogi-line:last-child { margin-bottom: 0; }
+    .bogi-line.bogi-line-center { text-align: center; }
     .figure-container { margin: 6pt 0; text-align: center; }
     .figure-img { max-width: 100%; height: auto; display: block; }
     .figure-anchor-center { text-align: center; }

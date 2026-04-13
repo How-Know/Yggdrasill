@@ -112,6 +112,19 @@ function renderOneLine(text, mathRenderer, equations) {
   };
 }
 
+function looksCenterAlignedMathOnlyLine(text) {
+  const src = String(text || '').trim();
+  if (!src) return false;
+  if (/[가-힣]/.test(src)) return false;
+  if (/^[\[\]<>]+$/.test(src)) return false;
+  const hasMathLike =
+    /\\(?:frac|dfrac|tfrac|sqrt|times|div|cdot|left|right|le|ge|ne)\b/.test(src)
+    || /[\d+\-*/=<>(),.]/.test(src);
+  if (!hasMathLike) return false;
+  // 숫자/수식/콤마 나열형 줄은 보통 박스 중앙 정렬로 렌더링
+  return /^[\d\s+\-*/=<>(),.\\{}_^|[\]]+$/.test(src);
+}
+
 function splitBogiItemsFromText(text) {
   const cleaned = text.replace(BOGI_RE, '').trim();
   if (!cleaned) return [];
@@ -158,7 +171,10 @@ function renderBogiItems(lines, mathRenderer, equations) {
       const r = renderOneLine(part, mathRenderer, equations);
       if (r) {
         if (r.hasFraction) hasFraction = true;
-        result.push(`<div class="bogi-line">${r.html}</div>`);
+        const centerClass = looksCenterAlignedMathOnlyLine(part)
+          ? ' bogi-line-center'
+          : '';
+        result.push(`<div class="bogi-line${centerClass}">${r.html}</div>`);
       }
     }
   }

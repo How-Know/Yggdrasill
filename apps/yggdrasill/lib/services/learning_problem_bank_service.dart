@@ -255,6 +255,45 @@ class LearningProblemQuestion {
   }
 }
 
+/// `pb_documents` 한 행(매니저 추출 단위) 요약 — 문제은행 왼쪽 문서 목록용.
+class LearningProblemDocumentSummary {
+  const LearningProblemDocumentSummary({
+    required this.id,
+    required this.schoolName,
+    required this.sourceFilename,
+    required this.courseLabel,
+    required this.gradeLabel,
+    this.updatedAt,
+  });
+
+  final String id;
+  final String schoolName;
+  final String sourceFilename;
+  final String courseLabel;
+  final String gradeLabel;
+  final DateTime? updatedAt;
+
+  String get displayTitle {
+    final name = sourceFilename.trim();
+    if (name.isNotEmpty) return name;
+    final raw = id.trim();
+    if (raw.length <= 12) return raw.isEmpty ? '(문서)' : raw;
+    return '${raw.substring(0, 12)}…';
+  }
+
+  String get displaySubtitle {
+    final parts = <String>[];
+    final school = schoolName.trim();
+    if (school.isNotEmpty) parts.add(school);
+    final cg = <String>[
+      courseLabel.trim(),
+      gradeLabel.trim(),
+    ].where((e) => e.isNotEmpty).join(' · ');
+    if (cg.isNotEmpty) parts.add(cg);
+    return parts.join(' · ');
+  }
+}
+
 class LearningProblemExportJob {
   const LearningProblemExportJob({
     required this.id,
@@ -708,7 +747,7 @@ class LearningProblemBankService {
     }
   }
 
-  Future<List<String>> listSchoolsForSchoolPast({
+  Future<List<LearningProblemDocumentSummary>> listReadyDocumentsForSchoolPast({
     required String academyId,
     required String curriculumCode,
     required String schoolLevel,
@@ -718,7 +757,7 @@ class LearningProblemBankService {
     final rows = await _client
         .from('pb_documents')
         .select(
-          'school_name,course_label,grade_label,source_type_code,curriculum_code,meta',
+          'id,school_name,course_label,grade_label,source_type_code,curriculum_code,meta,source_filename,updated_at',
         )
         .eq('academy_id', academyId)
         .eq('curriculum_code', curriculumCode)
@@ -726,21 +765,47 @@ class LearningProblemBankService {
         .eq('status', 'ready')
         .limit(limit);
 
-    final out = <String>{};
+    final list = <LearningProblemDocumentSummary>[];
     for (final item in (rows as List<dynamic>)) {
       final row = _mapOrEmpty(item);
       if (_isSavedSettingsDocumentRow(row)) continue;
-      final schoolName = '${row['school_name'] ?? ''}'.trim();
-      if (schoolName.isEmpty) continue;
+      final docId = '${row['id'] ?? ''}'.trim();
+      if (docId.isEmpty) continue;
       final courseLabel = '${row['course_label'] ?? ''}'.trim();
       final gradeLabel = '${row['grade_label'] ?? ''}'.trim();
       if (!_matchesLevel(schoolLevel, courseLabel, gradeLabel)) continue;
       if (!_matchesDetailedCourse(detailedCourse, courseLabel, gradeLabel)) {
         continue;
       }
-      out.add(schoolName);
+      list.add(
+        LearningProblemDocumentSummary(
+          id: docId,
+          schoolName: '${row['school_name'] ?? ''}'.trim(),
+          sourceFilename: '${row['source_filename'] ?? ''}'.trim(),
+          courseLabel: courseLabel,
+          gradeLabel: gradeLabel,
+          updatedAt: _dateTimeOrNull(row['updated_at']),
+        ),
+      );
     }
-    return out.toList(growable: false);
+    list.sort((a, b) {
+      final ae = a.schoolName.isEmpty;
+      final be = b.schoolName.isEmpty;
+      if (ae != be) return ae ? 1 : -1;
+      final c = a.schoolName.compareTo(b.schoolName);
+      if (c != 0) return c;
+      final f = a.sourceFilename.compareTo(b.sourceFilename);
+      if (f != 0) return f;
+      final ua = a.updatedAt;
+      final ub = b.updatedAt;
+      if (ua == null && ub == null) return a.id.compareTo(b.id);
+      if (ua == null) return 1;
+      if (ub == null) return -1;
+      final t = ub.compareTo(ua);
+      if (t != 0) return t;
+      return a.id.compareTo(b.id);
+    });
+    return list;
   }
 
   Future<List<LearningProblemQuestion>> searchQuestions({
@@ -750,8 +815,10 @@ class LearningProblemBankService {
     required String detailedCourse,
     required String sourceTypeCode,
     String? schoolName,
+    String? documentId,
     int limit = 400,
   }) async {
+    final safeDocId = (documentId ?? '').trim();
     final safeSchoolName = (schoolName ?? '').trim();
     final readyDocRows = await _client
         .from('pb_documents')
@@ -771,8 +838,13 @@ class LearningProblemBankService {
       if (_isSavedSettingsDocumentRow(row)) continue;
       final docId = '${row['id'] ?? ''}'.trim();
       if (docId.isEmpty) continue;
+      if (safeDocId.isNotEmpty && docId != safeDocId) {
+        continue;
+      }
       final docSchoolName = '${row['school_name'] ?? ''}'.trim();
-      if (safeSchoolName.isNotEmpty && docSchoolName != safeSchoolName) {
+      if (safeDocId.isEmpty &&
+          safeSchoolName.isNotEmpty &&
+          docSchoolName != safeSchoolName) {
         continue;
       }
       final courseLabel = '${row['course_label'] ?? ''}'.trim();
@@ -799,6 +871,7 @@ class LearningProblemBankService {
           .select(
             [
               'id',
+              'question_uid',
               'document_id',
               'question_number',
               'question_type',
@@ -834,7 +907,7 @@ class LearningProblemBankService {
           .eq('source_type_code', sourceTypeCode)
           .inFilter('document_id', docChunk);
 
-      if (safeSchoolName.isNotEmpty) {
+      if (safeDocId.isEmpty && safeSchoolName.isNotEmpty) {
         q = q.eq('school_name', safeSchoolName);
       }
       final rows = await q.order('created_at', ascending: false).limit(limit);
@@ -1585,6 +1658,21 @@ class LearningProblemBankService {
     Map<String, dynamic> options = const <String, dynamic>{},
   }) async {
     final safeRenderHash = renderHash.trim();
+    final selectedUids = selectedQuestionUids
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toList(growable: false);
+    final payloadOptions = <String, dynamic>{
+      ...options,
+      // 워커가 uid 순서 fallback을 id 배열로 잘못 해석하지 않도록
+      // 선택 uid 배열을 명시적으로 전달한다.
+      'selectedQuestionUids': selectedUids,
+      'selectedQuestionIds': selectedUids,
+      if (!(options.containsKey('selectedQuestionUidsOrdered')))
+        'selectedQuestionUidsOrdered': selectedUids,
+      if (!(options.containsKey('selectedQuestionIdsOrdered')))
+        'selectedQuestionIdsOrdered': selectedUids,
+    };
     if (hasGateway) {
       final json = await _gatewayPost(
         '/pb/jobs/export',
@@ -1596,10 +1684,10 @@ class LearningProblemBankService {
           'paperSize': paperSize,
           'includeAnswerSheet': includeAnswerSheet,
           'includeExplanation': includeExplanation,
-          'selectedQuestionUids': selectedQuestionUids,
+          'selectedQuestionUids': selectedUids,
           'renderHash': safeRenderHash,
           'previewOnly': previewOnly,
-          'options': options,
+          'options': payloadOptions,
         },
       );
       return LearningProblemExportJob.fromMap(_mapOrEmpty(json['job']));
@@ -1614,8 +1702,8 @@ class LearningProblemBankService {
       'paper_size': paperSize.trim(),
       'include_answer_sheet': includeAnswerSheet,
       'include_explanation': includeExplanation,
-      'selected_question_ids': selectedQuestionUids,
-      'options': options,
+      'selected_question_ids': selectedUids,
+      'options': payloadOptions,
       'output_storage_bucket': 'problem-exports',
       'output_storage_path': '',
       'output_url': '',
