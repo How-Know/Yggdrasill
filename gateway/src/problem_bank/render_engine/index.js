@@ -6,6 +6,8 @@ import { renderHtmlToPdfBuffer, renderHtmlToImageBuffer } from './chrome/render_
 import { createMathSvgRenderer } from './math/mathjax_svg_renderer.js';
 import { normalizeWhitespace } from './utils/text.js';
 
+const _DEBUG_MATH_DOTS = process.env.PB_DEBUG_MATH_DOTS === '1';
+
 function ptToMm(pt) {
   return Number(pt || 0) * 0.3527777778;
 }
@@ -556,6 +558,7 @@ export async function renderPdfWithHtmlEngine({
     }),
     maxQuestionsPerPage: maxQuestionsPerPage || 99,
     layoutMeta,
+    debugDots: _DEBUG_MATH_DOTS,
   });
   const rendered = await renderHtmlToPdfBuffer(html);
   return {
@@ -623,6 +626,7 @@ export async function buildQuestionPreviewHtml({
   qnumFontPath,
   layout,
   supabaseClient,
+  debugDots = false,
 }) {
   const mathRenderer = createMathSvgRenderer();
   const q = normalizeQuestionForHtml(question);
@@ -637,6 +641,7 @@ export async function buildQuestionPreviewHtml({
     mathRenderer,
     fontFaceCss,
     layout: layout || {},
+    debugDots,
   });
 }
 
@@ -675,6 +680,7 @@ export async function buildDocumentPreviewHtml({
       subjectFontPath: subjectFontPath || '',
     }),
     maxQuestionsPerPage: maxQuestionsPerPage || 99,
+    debugDots: _DEBUG_MATH_DOTS,
   });
 }
 
@@ -687,6 +693,7 @@ export async function renderQuestionPreview({
   supabaseClient,
   viewportWidth = 400,
   deviceScaleFactor = 3,
+  debugDots = false,
 }) {
   const html = await buildQuestionPreviewHtml({
     question,
@@ -695,6 +702,7 @@ export async function renderQuestionPreview({
     qnumFontPath,
     layout,
     supabaseClient,
+    debugDots,
   });
   const pngBuffer = await renderHtmlToImageBuffer(html, viewportWidth, deviceScaleFactor);
   return { pngBuffer, html };

@@ -217,6 +217,189 @@ function splitParagraphTextToLines(s) {
     .filter((line) => line.length > 0);
 }
 
+function escapeRegex(source) {
+  return String(source || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function normalizeParagraphAlign(raw) {
+  const value = String(raw || '').trim().toLowerCase();
+  if (!value) return '';
+  if (
+    value === 'left'
+    || value === 'right'
+    || value === 'center'
+    || value === 'justify'
+  ) {
+    return value;
+  }
+  if (value === 'both' || value === 'distributed' || value === 'distribute') {
+    return 'justify';
+  }
+  if (value === 'middle') return 'center';
+  return '';
+}
+
+function normalizeParagraphAlignSafe(raw) {
+  const normalized = normalizeParagraphAlign(raw);
+  return normalized || 'left';
+}
+
+function extractXmlAttrValue(attrs, keyCandidates = []) {
+  const src = String(attrs || '');
+  for (const key of keyCandidates) {
+    const m = src.match(
+      new RegExp(`\\b${escapeRegex(key)}\\s*=\\s*["']?([^"'\\s>]+)`, 'i'),
+    );
+    if (m && m[1]) return String(m[1]).trim();
+  }
+  return '';
+}
+
+function extractParagraphAlignFromXmlSnippet(snippet) {
+  const src = String(snippet || '');
+  const attrRegex = /\b(?:textAlign|text-align|align|horizontal|horzAlign)\s*=\s*["']([^"']+)["']/gi;
+  let m = null;
+  while ((m = attrRegex.exec(src)) !== null) {
+    const aligned = normalizeParagraphAlign(m[1]);
+    if (aligned) return aligned;
+  }
+  const tagRegex = /<(?:[\w-]+:)?align\b[^>]*>([^<]+)<\/(?:[\w-]+:)?align>/gi;
+  while ((m = tagRegex.exec(src)) !== null) {
+    const aligned = normalizeParagraphAlign(m[1]);
+    if (aligned) return aligned;
+  }
+  return '';
+}
+
+function buildHwpxParagraphAlignResolver(zip) {
+  const paraAlignById = new Map();
+  const styleAlignById = new Map();
+  const styleParaRefById = new Map();
+  const headerEntries = zip
+    .getEntries()
+    .filter(
+      (entry) =>
+        !entry.isDirectory
+        && /contents\/(?:header|styles)\.xml$/i.test(String(entry.entryName || '')),
+    );
+  for (const entry of headerEntries) {
+    const xml = decodeZipEntry(entry);
+    if (!xml) continue;
+    const paraBlockRegex = /<(?:[\w-]+:)?paraPr\b([^>]*)>([\s\S]*?)<\/(?:[\w-]+:)?paraPr>/gi;
+    let m = null;
+    while ((m = paraBlockRegex.exec(xml)) !== null) {
+      const attrs = String(m[1] || '');
+      const body = String(m[2] || '');
+      const paraId = extractXmlAttrValue(attrs, ['id', 'paraPrID', 'paraPrId']);
+      const align = extractParagraphAlignFromXmlSnippet(`${attrs} ${body}`);
+      if (paraId && align) {
+        paraAlignById.set(paraId, align);
+      }
+    }
+    const paraSelfRegex = /<(?:[\w-]+:)?paraPr\b([^>]*)\/>/gi;
+    while ((m = paraSelfRegex.exec(xml)) !== null) {
+      const attrs = String(m[1] || '');
+      const paraId = extractXmlAttrValue(attrs, ['id', 'paraPrID', 'paraPrId']);
+      const align = extractParagraphAlignFromXmlSnippet(attrs);
+      if (paraId && align) {
+        paraAlignById.set(paraId, align);
+      }
+    }
+    const styleBlockRegex = /<(?:[\w-]+:)?style\b([^>]*)>([\s\S]*?)<\/(?:[\w-]+:)?style>/gi;
+    while ((m = styleBlockRegex.exec(xml)) !== null) {
+      const attrs = String(m[1] || '');
+      const body = String(m[2] || '');
+      const styleId = extractXmlAttrValue(attrs, ['id', 'styleID', 'styleId']);
+      if (!styleId) continue;
+      const align = extractParagraphAlignFromXmlSnippet(`${attrs} ${body}`);
+      const paraRef =
+        extractXmlAttrValue(attrs, ['paraPrIDRef', 'paraShapeIDRef'])
+        || extractXmlAttrValue(body, ['paraPrIDRef', 'paraShapeIDRef']);
+      if (align) {
+        styleAlignById.set(styleId, align);
+      }
+      if (paraRef) {
+        styleParaRefById.set(styleId, paraRef);
+      }
+    }
+    const styleSelfRegex = /<(?:[\w-]+:)?style\b([^>]*)\/>/gi;
+    while ((m = styleSelfRegex.exec(xml)) !== null) {
+      const attrs = String(m[1] || '');
+      const styleId = extractXmlAttrValue(attrs, ['id', 'styleID', 'styleId']);
+      if (!styleId) continue;
+      const align = extractParagraphAlignFromXmlSnippet(attrs);
+      const paraRef = extractXmlAttrValue(attrs, ['paraPrIDRef', 'paraShapeIDRef']);
+      if (align) {
+        styleAlignById.set(styleId, align);
+      }
+      if (paraRef) {
+        styleParaRefById.set(styleId, paraRef);
+      }
+    }
+  }
+  for (const [styleId, paraRef] of styleParaRefById.entries()) {
+    if (styleAlignById.has(styleId)) continue;
+    const align = paraAlignById.get(paraRef);
+    if (align) {
+      styleAlignById.set(styleId, align);
+    }
+  }
+  return {
+    paraAlignById,
+    styleAlignById,
+    styleParaRefById,
+  };
+}
+
+function resolveParagraphAlign(attrs, body, alignResolver = null) {
+  const attrText = String(attrs || '');
+  const bodyText = String(body || '');
+  const customAlign = normalizeParagraphAlign(
+    extractXmlAttrValue(attrText, ['pb-align', 'pbAlign']),
+  );
+  if (customAlign) return customAlign;
+  const direct = extractParagraphAlignFromXmlSnippet(attrText);
+  if (direct) return direct;
+  const paraRef = extractXmlAttrValue(attrText, ['paraPrIDRef', 'paraShapeIDRef']);
+  if (paraRef && alignResolver?.paraAlignById?.has(paraRef)) {
+    return alignResolver.paraAlignById.get(paraRef) || 'left';
+  }
+  const styleRef = extractXmlAttrValue(attrText, ['styleIDRef', 'styleRefID']);
+  if (styleRef) {
+    const fromStyle = alignResolver?.styleAlignById?.get(styleRef);
+    if (fromStyle) return fromStyle;
+    const styleParaRef = alignResolver?.styleParaRefById?.get(styleRef);
+    if (styleParaRef && alignResolver?.paraAlignById?.has(styleParaRef)) {
+      return alignResolver.paraAlignById.get(styleParaRef) || 'left';
+    }
+  }
+  const inlineParaPr = bodyText.match(
+    /<(?:[\w-]+:)?paraPr\b([^>]*)>([\s\S]*?)<\/(?:[\w-]+:)?paraPr>|<(?:[\w-]+:)?paraPr\b([^>]*)\/>/i,
+  );
+  if (inlineParaPr) {
+    const inlineAttrs = String(inlineParaPr[1] || inlineParaPr[3] || '');
+    const inlineBody = String(inlineParaPr[2] || '');
+    const inlineDirect = extractParagraphAlignFromXmlSnippet(
+      `${inlineAttrs} ${inlineBody}`,
+    );
+    if (inlineDirect) return inlineDirect;
+    const inlineParaRef = extractXmlAttrValue(inlineAttrs, ['paraPrIDRef', 'paraShapeIDRef']);
+    if (inlineParaRef && alignResolver?.paraAlignById?.has(inlineParaRef)) {
+      return alignResolver.paraAlignById.get(inlineParaRef) || 'left';
+    }
+  }
+  const bodyDirect = extractParagraphAlignFromXmlSnippet(bodyText);
+  if (bodyDirect) return bodyDirect;
+  return 'left';
+}
+
+function encodeXmlText(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
 function normalizeCurriculumCode(raw, fallback = 'rev_2022') {
   const code = normalizeWhitespace(raw);
   return CURRICULUM_CODES.has(code) ? code : fallback;
@@ -913,7 +1096,25 @@ function splitKoreanConditionMarkersInBoxText(text) {
   return out.join('\n');
 }
 
-function flattenBoxXmlToText(match, { table = false } = {}) {
+function transformParagraphBodyToLines(body) {
+  let s = String(body || '');
+  s = s.replace(
+    /<hp:autoNum[^>]*num="(\d+)"[^>]*>[\s\S]*?<\/hp:autoNum>/gi,
+    ' $1 ',
+  );
+  s = s.replace(/<hp:pic[\s\S]*?<\/hp:pic>/gi, ' [그림] ');
+  s = s.replace(/<hp:shape[\s\S]*?<\/hp:shape>/gi, ' [도형] ');
+  s = replaceHwpSoftBreakElements(s);
+  s = s.replace(
+    /<\/(hp:run|hp:r|hp:span|hp:ctrl|hp:subList|hp:tc|hp:tr|tr|li)>/gi,
+    ' ',
+  );
+  s = s.replace(/<[^>]+>/g, ' ');
+  s = htmlDecode(s);
+  return splitParagraphTextToLines(s);
+}
+
+function flattenBoxXmlToRows(match, { table = false, alignResolver = null } = {}) {
   let inner = String(match || '')
     .replace(/<hp:pic[\s\S]*?<\/hp:pic>/gi, ' [그림] ')
     .replace(/<hp:shape[\s\S]*?<\/hp:shape>/gi, ' [도형] ');
@@ -921,11 +1122,57 @@ function flattenBoxXmlToText(match, { table = false } = {}) {
     inner = inner.replace(/<\/hp:tr>/gi, '\n');
     inner = inner.replace(/<\/hp:tc>/gi, '\n');
   }
-  inner = inner.replace(/<[^>]+>/g, ' ');
-  return splitKoreanConditionMarkersInBoxText(inner);
+  const rows = [];
+  const paragraphRegex = /<hp:p\b([^>]*)>([\s\S]*?)<\/hp:p>/gi;
+  let m = null;
+  while ((m = paragraphRegex.exec(inner)) !== null) {
+    const attrs = String(m[1] || '');
+    const body = String(m[2] || '');
+    const align = normalizeParagraphAlignSafe(
+      resolveParagraphAlign(attrs, body, alignResolver),
+    );
+    const paragraphLines = transformParagraphBodyToLines(body);
+    for (const line of paragraphLines) {
+      const normalized = splitKoreanConditionMarkersInBoxText(line)
+        .split('\n')
+        .map((part) => normalizeWhitespace(part))
+        .filter(Boolean);
+      for (const one of normalized) {
+        rows.push({
+          text: one,
+          align,
+        });
+      }
+    }
+  }
+  if (rows.length > 0) return rows;
+  const fallback = splitKoreanConditionMarkersInBoxText(
+    inner.replace(/<[^>]+>/g, ' '),
+  )
+    .split('\n')
+    .map((line) => normalizeWhitespace(line))
+    .filter(Boolean);
+  return fallback.map((text) => ({
+    text,
+    align: 'left',
+  }));
 }
 
-function transformXmlToLines(xmlText, sectionIndex) {
+function flattenBoxXmlToParagraphXml(match, { table = false, alignResolver = null } = {}) {
+  const rows = flattenBoxXmlToRows(match, { table, alignResolver });
+  if (rows.length === 0) return '';
+  const out = ['<hp:p><hp:t>[박스시작]</hp:t></hp:p>'];
+  for (const row of rows) {
+    const align = normalizeParagraphAlignSafe(row.align);
+    out.push(
+      `<hp:p pb-align="${align}"><hp:t>${encodeXmlText(row.text)}</hp:t></hp:p>`,
+    );
+  }
+  out.push('<hp:p><hp:t>[박스끝]</hp:t></hp:p>');
+  return out.join('');
+}
+
+function transformXmlToLines(xmlText, sectionIndex, { alignResolver = null } = {}) {
   const { replacedXml, equations } = collectEquationCandidates(
     xmlText,
     sectionIndex,
@@ -939,16 +1186,18 @@ function transformXmlToLines(xmlText, sectionIndex) {
 
   // hp:tbl (표) → [박스시작]/[박스끝] 마커로 감싸기 (hp:p로 래핑하여 파싱 보장)
   purifiedXml = purifiedXml.replace(/<hp:tbl\b[\s\S]*?<\/hp:tbl>/gi, (match) => {
-    const innerText = flattenBoxXmlToText(match, { table: true }).trim();
-    if (!innerText) return '';
-    return `<hp:p><hp:t>[박스시작]</hp:t></hp:p><hp:p><hp:t>${innerText}</hp:t></hp:p><hp:p><hp:t>[박스끝]</hp:t></hp:p>`;
+    return flattenBoxXmlToParagraphXml(match, {
+      table: true,
+      alignResolver,
+    });
   });
 
   // hp:rect (사각형 도형) → [박스시작]/[박스끝] 마커로 감싸기
   purifiedXml = purifiedXml.replace(/<hp:rect\b[\s\S]*?<\/hp:rect>/gi, (match) => {
-    const innerText = flattenBoxXmlToText(match, { table: false }).trim();
-    if (!innerText) return '';
-    return `<hp:p><hp:t>[박스시작]</hp:t></hp:p><hp:p><hp:t>${innerText}</hp:t></hp:p><hp:p><hp:t>[박스끝]</hp:t></hp:p>`;
+    return flattenBoxXmlToParagraphXml(match, {
+      table: false,
+      alignResolver,
+    });
   });
 
   const lines = [];
@@ -960,25 +1209,13 @@ function transformXmlToLines(xmlText, sectionIndex) {
   while ((m = paragraphRegex.exec(purifiedXml)) !== null) {
     const attrs = String(m[1] || '');
     const body = String(m[2] || '');
+    const paragraphAlign = normalizeParagraphAlignSafe(
+      resolveParagraphAlign(attrs, body, alignResolver),
+    );
     if (/pageBreak\s*=\s*["']1["']/.test(attrs) && lineIndex > 0) {
       page += 1;
     }
-
-    let s = body;
-    s = s.replace(
-      /<hp:autoNum[^>]*num="(\d+)"[^>]*>[\s\S]*?<\/hp:autoNum>/gi,
-      ' $1 ',
-    );
-    s = s.replace(/<hp:pic[\s\S]*?<\/hp:pic>/gi, ' [그림] ');
-    s = s.replace(/<hp:shape[\s\S]*?<\/hp:shape>/gi, ' [도형] ');
-    s = replaceHwpSoftBreakElements(s);
-    s = s.replace(
-      /<\/(hp:run|hp:r|hp:span|hp:ctrl|hp:subList|hp:tc|hp:tr|tr|li)>/gi,
-      ' ',
-    );
-    s = s.replace(/<[^>]+>/g, ' ');
-    s = htmlDecode(s);
-    const paragraphLines = splitParagraphTextToLines(s);
+    const paragraphLines = transformParagraphBodyToLines(body);
     if (paragraphLines.length === 0) {
       if (prevParagraphHadContent) {
         lines.push({
@@ -986,6 +1223,7 @@ function transformXmlToLines(xmlText, sectionIndex) {
           index: lineIndex,
           page,
           text: '[문단]',
+          align: paragraphAlign,
         });
         lineIndex += 1;
         prevParagraphHadContent = false;
@@ -1000,6 +1238,7 @@ function transformXmlToLines(xmlText, sectionIndex) {
         index: lineIndex,
         page,
         text: '[문단]',
+        align: paragraphAlign,
       });
       lineIndex += 1;
     }
@@ -1012,6 +1251,7 @@ function transformXmlToLines(xmlText, sectionIndex) {
         index: lineIndex,
         page,
         text,
+        align: paragraphAlign,
       });
       lineIndex += 1;
     }
@@ -2168,6 +2408,7 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
           lineIndex: line.index,
           page: Number(line.page || 1),
           text: seg,
+          align: normalizeParagraphAlignSafe(line.align),
         });
       }
     }
@@ -2182,6 +2423,7 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
           lineIndex: line.index,
           page: Number(line.page || 1),
           text: line.text,
+          align: normalizeParagraphAlignSafe(line.align),
         });
       }
     }
@@ -2229,10 +2471,86 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
     return fallback;
   };
 
+  const normalizeStemAlign = (raw) => normalizeParagraphAlignSafe(raw);
+  const isInsideBoxContext = (stemLines) => {
+    let depth = 0;
+    for (const one of Array.isArray(stemLines) ? stemLines : []) {
+      const line = String(one || '');
+      if (/\[박스시작\]/.test(line)) depth += 1;
+      if (/\[박스끝\]/.test(line)) depth = Math.max(0, depth - 1);
+    }
+    return depth > 0;
+  };
+  const appendStemLine = (target, text, align = 'left') => {
+    const safeText = normalizeWhitespace(String(text || ''));
+    if (!safeText || !target) return;
+    target.stemLines.push(safeText);
+    if (!Array.isArray(target.stemLineAligns)) {
+      target.stemLineAligns = [];
+    }
+    target.stemLineAligns.push(normalizeStemAlign(align));
+  };
+  const rebalanceConsonantChoicesIntoViewBlock = (target) => {
+    if (!target) return;
+    const choices = Array.isArray(target.choices) ? target.choices : [];
+    if (choices.length === 0) return;
+    const stemLines = Array.isArray(target.stemLines) ? target.stemLines : [];
+    const hasViewBlockContext = stemLines.some((line) =>
+      /\[박스시작\]|<\s*보\s*기>|보\s*기/.test(String(line || '')),
+    );
+    if (!hasViewBlockContext) return;
+    const hasObjectiveOptions = choices.some((choice) =>
+      /^[①②③④⑤⑥⑦⑧⑨⑩]$/.test(String(choice?.label || '').trim()),
+    );
+    if (!hasObjectiveOptions) return;
+    const consonantChoices = choices.filter((choice) =>
+      /^[ㄱ-ㅎ]$/.test(String(choice?.label || '').trim()),
+    );
+    if (consonantChoices.length === 0) return;
+    target.choices = choices.filter(
+      (choice) => !/^[ㄱ-ㅎ]$/.test(String(choice?.label || '').trim()),
+    );
+    if (!Array.isArray(target.stemLineAligns)) {
+      target.stemLineAligns = stemLines.map(() => 'left');
+    }
+    const firstConsonantStemIdx = stemLines.findIndex((line) =>
+      /^[ㄱ-ㅎ]\.\s*/.test(String(line || '').trim()),
+    );
+    const viewMarkerIdx = stemLines.findIndex((line) =>
+      /<\s*보\s*기>|보\s*기/.test(String(line || '')),
+    );
+    const boxEndIdx = stemLines.findIndex((line) =>
+      /\[박스끝\]/.test(String(line || '')),
+    );
+    let insertAt = firstConsonantStemIdx;
+    if (insertAt < 0) {
+      if (viewMarkerIdx >= 0) {
+        insertAt = viewMarkerIdx + 1;
+      } else if (boxEndIdx >= 0) {
+        insertAt = boxEndIdx;
+      } else {
+        insertAt = stemLines.length;
+      }
+    }
+    const injectedLines = consonantChoices.map((choice) => {
+      const label = String(choice?.label || '').trim();
+      const text = normalizeWhitespace(String(choice?.text || ''));
+      return text ? `${label}. ${text}` : `${label}.`;
+    });
+    stemLines.splice(insertAt, 0, ...injectedLines);
+    target.stemLineAligns.splice(
+      insertAt,
+      0,
+      ...injectedLines.map(() => 'left'),
+    );
+    target.sourcePatterns.push('choice_consonant_rebalanced_to_view');
+  };
+
   const createQuestionSeed = ({
     questionNumber,
     row,
     stemLines = [],
+    stemLineAligns = [],
     sourcePatterns = [],
     scorePoint = null,
   }) => ({
@@ -2245,6 +2563,7 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
     question_type: '미분류',
     stem: '',
     stemLines: [...stemLines],
+    stemLineAligns: [...stemLineAligns],
     choices: [],
     figure_refs: [],
     equations: [],
@@ -2267,7 +2586,18 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
 
   const flushCurrent = () => {
     if (!current) return;
+    rebalanceConsonantChoicesIntoViewBlock(current);
     current.stem = normalizeWhitespace(current.stemLines.join('\n'));
+    const stemLineAligns = Array.isArray(current.stemLineAligns)
+      ? current.stemLineAligns.map((value) => normalizeStemAlign(value))
+      : [];
+    while (stemLineAligns.length < current.stemLines.length) {
+      stemLineAligns.push('left');
+    }
+    if (stemLineAligns.length > current.stemLines.length) {
+      stemLineAligns.length = current.stemLines.length;
+    }
+    current.stemLineAligns = stemLineAligns;
     current.question_type = guessQuestionType(current);
     if (!current.answer_key) {
       const hinted = answerHintMap.get(String(current.question_number || '').trim());
@@ -2287,6 +2617,8 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
       source_patterns: current.sourcePatterns,
       contains_figure: current.figure_refs.length > 0,
       contains_equation: current.equations.length > 0,
+      stem_line_aligns: stemLineAligns,
+      stemLineAligns: stemLineAligns,
       score_point: Number(current.score_point || 0) || null,
       answer_key: current.answer_key || '',
     };
@@ -2342,6 +2674,7 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
         questionNumber,
         row,
         stemLines: start.rest ? [start.rest] : [],
+        stemLineAligns: start.rest ? [normalizeStemAlign(row.align)] : [],
         sourcePatterns: [start.style],
         scorePoint: start.scorePoint ?? null,
       });
@@ -2425,6 +2758,7 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
           questionNumber: implicitQuestionNumber,
           row,
           stemLines: [firstLineCandidate],
+          stemLineAligns: [normalizeStemAlign(row.align)],
           sourcePatterns: ['implicit_first'],
         });
         continue;
@@ -2512,6 +2846,7 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
         questionNumber: implicitQuestionNumber,
         row,
         stemLines: [cleanedLine],
+        stemLineAligns: [normalizeStemAlign(row.align)],
         sourcePatterns: ['implicit_after_block'],
       });
       if (lineEquationRefs.length > 0) {
@@ -2541,7 +2876,7 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
     if (inlineChoices.length >= 2) {
       const leadStem = leadingStemBeforeInlineChoices(cleanedLine);
       if (leadStem) {
-        current.stemLines.push(leadStem);
+        appendStemLine(current, leadStem, row.align);
       }
       stats.circledChoices += inlineChoices.length;
       current.sourcePatterns.push('choice_inline_circled');
@@ -2556,12 +2891,13 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
 
     const choice = isChoiceLine ? parseChoiceLine(cleanedLine) : null;
     if (choice) {
+      const inBox = isInsideBoxContext(current.stemLines);
       if (
         choice.style === 'consonant' &&
-        (current.flags.includes('view_block') || cleanedLine.length >= 20)
+        (inBox || current.flags.includes('view_block') || cleanedLine.length >= 20)
       ) {
         // <보기>의 ㄱ/ㄴ/ㄷ 항목은 선택지보다 본문으로 본다.
-        current.stemLines.push(cleanedLine);
+        appendStemLine(current, cleanedLine, row.align);
         current.sourcePatterns.push('view_item');
         continue;
       }
@@ -2594,7 +2930,7 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
       current.flags.push('math_symbol');
     }
 
-    current.stemLines.push(cleanedLine);
+    appendStemLine(current, cleanedLine, row.align);
   }
 
   flushCurrent();
@@ -2646,6 +2982,7 @@ function decodeZipEntry(entry) {
 
 function parseHwpxBuffer(buffer) {
   const zip = new AdmZip(buffer);
+  const alignResolver = buildHwpxParagraphAlignResolver(zip);
   const entries = zip
     .getEntries()
     .filter(
@@ -2670,7 +3007,7 @@ function parseHwpxBuffer(buffer) {
     hints.scoreHeaderCount += countScoreHeadersFromXml(rawXml);
     const xmlParsed = tryParseXml(rawXml);
     void xmlParsed; // parse 가능성 점검용 (실패해도 텍스트 파싱은 진행)
-    const transformed = transformXmlToLines(rawXml, i);
+    const transformed = transformXmlToLines(rawXml, i, { alignResolver });
     sections.push({
       section: i,
       path: entry.entryName,
@@ -3515,7 +3852,23 @@ async function main() {
   console.log('[pb-extract-worker] exit');
 }
 
-main().catch((err) => {
-  console.error('[pb-extract-worker] fatal', compact(err?.message || err));
-  process.exit(1);
-});
+import { pathToFileURL } from 'node:url';
+const _IS_DIRECT_RUN =
+  typeof process.argv[1] === 'string' &&
+  process.argv[1].length > 0 &&
+  import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (_IS_DIRECT_RUN) {
+  main().catch((err) => {
+    console.error('[pb-extract-worker] fatal', compact(err?.message || err));
+    process.exit(1);
+  });
+}
+
+export {
+  parseHwpxBuffer as _parseHwpxBuffer,
+  buildQuestionRows as _buildQuestionRows,
+  normalizeEquationRaw as _normalizeEquationRaw,
+  transformXmlToLines as _transformXmlToLines,
+  extractEndNoteAnswerHints as _extractEndNoteAnswerHints,
+};

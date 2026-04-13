@@ -69,8 +69,9 @@ class _ProblemBankViewState extends State<ProblemBankView> {
   String _selectedSourceTypeCode = 'school_past';
 
   List<String> _courseOptions = const <String>['전체'];
-  List<LearningProblemDocumentSummary> _schoolPastDocuments =
+  List<LearningProblemDocumentSummary> _sidebarDocuments =
       const <LearningProblemDocumentSummary>[];
+  int _sidebarRevision = 0;
   String? _selectedDocumentId;
 
   List<LearningProblemQuestion> _questions = const <LearningProblemQuestion>[];
@@ -222,34 +223,31 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     required bool resetSelection,
   }) async {
     if (_academyId == null) return;
-    if (_selectedSourceTypeCode == 'school_past') {
-      await _reloadSchools();
-    } else {
-      if (mounted) {
-        setState(() {
-          _schoolPastDocuments = const <LearningProblemDocumentSummary>[];
-          _selectedDocumentId = null;
-        });
-      }
+    if (mounted) {
+      setState(() {
+        _sidebarRevision++;
+      });
     }
+    await _reloadSidebarDocuments();
     await _reloadQuestions(resetSelection: resetSelection);
   }
 
-  Future<void> _reloadSchools() async {
+  Future<void> _reloadSidebarDocuments() async {
     if (_academyId == null) return;
     setState(() {
       _isLoadingSchools = true;
     });
     try {
-      final docs = await _service.listReadyDocumentsForSchoolPast(
+      final docs = await _service.listReadyDocuments(
         academyId: _academyId!,
         curriculumCode: _selectedCurriculumCode,
         schoolLevel: _selectedSchoolLevel,
         detailedCourse: _selectedDetailedCourse,
+        sourceTypeCode: _selectedSourceTypeCode,
       );
       if (!mounted) return;
       setState(() {
-        _schoolPastDocuments = docs;
+        _sidebarDocuments = docs;
         if (_selectedDocumentId == null ||
             !docs.any((d) => d.id == _selectedDocumentId)) {
           _selectedDocumentId = docs.isNotEmpty ? docs.first.id : null;
@@ -280,9 +278,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         schoolLevel: _selectedSchoolLevel,
         detailedCourse: _selectedDetailedCourse,
         sourceTypeCode: _selectedSourceTypeCode,
-        documentId: _selectedSourceTypeCode == 'school_past'
-            ? _selectedDocumentId
-            : null,
+        documentId: _selectedDocumentId,
       );
       final defaultSorted = _sortedQuestionsByDefaultOrder(fetched);
       final scopeKey = _questionOrderScopeKey();
@@ -365,9 +361,6 @@ class _ProblemBankViewState extends State<ProblemBankView> {
   }
 
   String _questionOrderScopeKey() {
-    final schoolScope = _selectedSourceTypeCode == 'school_past'
-        ? (_selectedDocumentId ?? '').trim()
-        : '';
     String enc(String value) => Uri.encodeComponent(value.trim());
     return <String>[
       'pb_scope_v1',
@@ -375,7 +368,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       enc(_selectedSchoolLevel),
       enc(_selectedDetailedCourse),
       enc(_selectedSourceTypeCode),
-      enc(schoolScope),
+      enc((_selectedDocumentId ?? '').trim()),
     ].join('|');
   }
 
@@ -514,7 +507,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     await _reloadSchoolsAndQuestions(resetSelection: true);
   }
 
-  Future<void> _onSchoolPastDocumentSelected(String documentId) async {
+  Future<void> _onSidebarDocumentSelected(String documentId) async {
     if (documentId == _selectedDocumentId) return;
     setState(() {
       _selectedDocumentId = documentId;
@@ -525,7 +518,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
   String _fallbackNaesinSchoolFromSelectedDocument() {
     final id = _selectedDocumentId;
     if (id == null) return '';
-    for (final d in _schoolPastDocuments) {
+    for (final d in _sidebarDocuments) {
       if (d.id == id) return d.schoolName.trim();
     }
     return '';
@@ -2769,10 +2762,11 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                         child: SizedBox(
                           width: 260,
                           child: ProblemBankSchoolSheet(
+                            sidebarRevision: _sidebarRevision,
                             selectedSourceTypeCode: _selectedSourceTypeCode,
-                            documents: _schoolPastDocuments,
+                            documents: _sidebarDocuments,
                             selectedDocumentId: _selectedDocumentId,
-                            onDocumentSelected: _onSchoolPastDocumentSelected,
+                            onDocumentSelected: _onSidebarDocumentSelected,
                             isLoading: _isLoadingSchools,
                           ),
                         ),

@@ -2982,7 +2982,7 @@ static lv_obj_t* create_hw_card(lv_obj_t* parent, int group_idx) {
     if (s_p4_cnt < 8) { s_p4_cards[s_p4_cnt] = card; s_p4_colors[s_p4_cnt] = srv_color; s_p4_cnt++; }
   }
 
-  // 페이지·문항 문자열 (테스트 2열 폴백)
+  // 페이지·문항 문자열 (테스트 2열: 그룹명 없을 때 폴백)
   char page_count_buf[64] = {0};
   {
     const char* page = g.page_summary;
@@ -2992,11 +2992,10 @@ static lv_obj_t* create_hw_card(lv_obj_t* parent, int group_idx) {
     else if (count > 0) snprintf(page_count_buf, sizeof(page_count_buf), "%d%s", count, u8"문항");
   }
 
-  // 2열 좌: 테스트는 RPC 요약(m5_wait_title); 비테스트는 기존
+  // 2열 좌: 테스트는 그룹 과제명; 비테스트는 기존
   if (phase == 3) {
     if (is_test_card) {
-      const char* sub = g.m5_wait_title[0] ? g.m5_wait_title
-          : (g.group_title[0] ? g.group_title : page_count_buf);
+      const char* sub = g.group_title[0] ? g.group_title : page_count_buf;
       if (sub[0]) {
         lv_obj_t* pc_lbl = lv_label_create(card);
         lv_obj_set_style_text_font(pc_lbl, &kakao_kr_16, 0);
@@ -3029,7 +3028,7 @@ static lv_obj_t* create_hw_card(lv_obj_t* parent, int group_idx) {
   } else {
     const bool learning_group = (strcmp(g.item_type, u8"학습") == 0);
     if (is_test_card) {
-      const char* sub = g.m5_wait_title[0] ? g.m5_wait_title : page_count_buf;
+      const char* sub = g.group_title[0] ? g.group_title : page_count_buf;
       if (sub[0]) {
         lv_obj_t* pc_lbl = lv_label_create(card);
         lv_obj_set_style_text_font(pc_lbl, &kakao_kr_16, 0);

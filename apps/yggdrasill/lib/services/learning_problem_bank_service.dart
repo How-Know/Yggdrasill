@@ -255,6 +255,34 @@ class LearningProblemQuestion {
   }
 }
 
+/// 학습앱 UI의 출처 키 → Supabase `pb_documents.source_type_code` (매니저와 동일).
+List<String> pbSourceTypeCodesForLearningUi(String uiSourceTypeCode) {
+  switch (uiSourceTypeCode.trim()) {
+    case 'private_material':
+      return const <String>['market_book', 'lecture_book', 'ebs_book'];
+    case 'self_made':
+      return const <String>['original_item'];
+    default:
+      return <String>[uiSourceTypeCode.trim()];
+  }
+}
+
+/// 문서 정렬용: 초·중·고 단계와 학년 숫자를 휴리스틱으로 합친 값(작을수록 저학년 쪽).
+int pbDocumentGradeSortRank(String gradeLabel, String courseLabel) {
+  final merged = '$gradeLabel$courseLabel'.replaceAll(RegExp(r'\s'), '');
+  var levelBase = 500;
+  if (merged.contains('초')) {
+    levelBase = 0;
+  } else if (merged.contains('중')) {
+    levelBase = 100;
+  } else if (merged.contains('고')) {
+    levelBase = 200;
+  }
+  final m = RegExp(r'(\d+)').firstMatch(merged);
+  final n = m != null ? int.tryParse(m.group(1) ?? '') ?? 50 : 50;
+  return levelBase + n;
+}
+
 /// `pb_documents` 한 행(매니저 추출 단위) 요약 — 문제은행 왼쪽 문서 목록용.
 class LearningProblemDocumentSummary {
   const LearningProblemDocumentSummary({
@@ -263,6 +291,9 @@ class LearningProblemDocumentSummary {
     required this.sourceFilename,
     required this.courseLabel,
     required this.gradeLabel,
+    this.examYear,
+    this.semesterLabel = '',
+    this.examTermLabel = '',
     this.updatedAt,
   });
 
@@ -271,6 +302,9 @@ class LearningProblemDocumentSummary {
   final String sourceFilename;
   final String courseLabel;
   final String gradeLabel;
+  final int? examYear;
+  final String semesterLabel;
+  final String examTermLabel;
   final DateTime? updatedAt;
 
   String get displayTitle {
@@ -281,15 +315,23 @@ class LearningProblemDocumentSummary {
     return '${raw.substring(0, 12)}…';
   }
 
+  /// 트리에서 학교/연도를 따로 쓰므로 행 부제는 과정·학년·시험 메타 중심.
   String get displaySubtitle {
     final parts = <String>[];
-    final school = schoolName.trim();
-    if (school.isNotEmpty) parts.add(school);
     final cg = <String>[
       courseLabel.trim(),
       gradeLabel.trim(),
     ].where((e) => e.isNotEmpty).join(' · ');
     if (cg.isNotEmpty) parts.add(cg);
+    final sem = semesterLabel.trim();
+    final term = examTermLabel.trim();
+    if (sem.isNotEmpty && term.isNotEmpty) {
+      parts.add('$sem · $term');
+    } else if (sem.isNotEmpty) {
+      parts.add(sem);
+    } else if (term.isNotEmpty) {
+      parts.add(term);
+    }
     return parts.join(' · ');
   }
 }
@@ -747,21 +789,23 @@ class LearningProblemBankService {
     }
   }
 
-  Future<List<LearningProblemDocumentSummary>> listReadyDocumentsForSchoolPast({
+  Future<List<LearningProblemDocumentSummary>> listReadyDocuments({
     required String academyId,
     required String curriculumCode,
     required String schoolLevel,
     required String detailedCourse,
+    required String sourceTypeCode,
     int limit = 2000,
   }) async {
+    final dbCodes = pbSourceTypeCodesForLearningUi(sourceTypeCode);
     final rows = await _client
         .from('pb_documents')
         .select(
-          'id,school_name,course_label,grade_label,source_type_code,curriculum_code,meta,source_filename,updated_at',
+          'id,school_name,course_label,grade_label,source_type_code,curriculum_code,meta,source_filename,updated_at,exam_year,semester_label,exam_term_label',
         )
         .eq('academy_id', academyId)
         .eq('curriculum_code', curriculumCode)
-        .eq('source_type_code', 'school_past')
+        .inFilter('source_type_code', dbCodes)
         .eq('status', 'ready')
         .limit(limit);
 
@@ -784,16 +828,36 @@ class LearningProblemBankService {
           sourceFilename: '${row['source_filename'] ?? ''}'.trim(),
           courseLabel: courseLabel,
           gradeLabel: gradeLabel,
+          examYear: _intOrNull(row['exam_year']),
+          semesterLabel: '${row['semester_label'] ?? ''}'.trim(),
+          examTermLabel: '${row['exam_term_label'] ?? ''}'.trim(),
           updatedAt: _dateTimeOrNull(row['updated_at']),
         ),
       );
     }
     list.sort((a, b) {
-      final ae = a.schoolName.isEmpty;
-      final be = b.schoolName.isEmpty;
+      final ae = a.schoolName.trim().isEmpty;
+      final be = b.schoolName.trim().isEmpty;
       if (ae != be) return ae ? 1 : -1;
       final c = a.schoolName.compareTo(b.schoolName);
       if (c != 0) return c;
+      final ya = a.examYear;
+      final yb = b.examYear;
+      if (ya != yb) {
+        if (ya == null && yb == null) {
+          // fall through
+        } else if (ya == null) {
+          return 1;
+        } else if (yb == null) {
+          return -1;
+        } else {
+          final ycmp = yb.compareTo(ya);
+          if (ycmp != 0) return ycmp;
+        }
+      }
+      final ga = pbDocumentGradeSortRank(a.gradeLabel, a.courseLabel);
+      final gb = pbDocumentGradeSortRank(b.gradeLabel, b.courseLabel);
+      if (ga != gb) return ga.compareTo(gb);
       final f = a.sourceFilename.compareTo(b.sourceFilename);
       if (f != 0) return f;
       final ua = a.updatedAt;
@@ -820,6 +884,7 @@ class LearningProblemBankService {
   }) async {
     final safeDocId = (documentId ?? '').trim();
     final safeSchoolName = (schoolName ?? '').trim();
+    final dbSourceCodes = pbSourceTypeCodesForLearningUi(sourceTypeCode);
     final readyDocRows = await _client
         .from('pb_documents')
         .select(
@@ -827,7 +892,7 @@ class LearningProblemBankService {
         )
         .eq('academy_id', academyId)
         .eq('curriculum_code', curriculumCode)
-        .eq('source_type_code', sourceTypeCode)
+        .inFilter('source_type_code', dbSourceCodes)
         .eq('status', 'ready')
         .limit(4000);
 
@@ -904,7 +969,7 @@ class LearningProblemBankService {
           )
           .eq('academy_id', academyId)
           .eq('curriculum_code', curriculumCode)
-          .eq('source_type_code', sourceTypeCode)
+          .inFilter('source_type_code', dbSourceCodes)
           .inFilter('document_id', docChunk);
 
       if (safeDocId.isEmpty && safeSchoolName.isNotEmpty) {

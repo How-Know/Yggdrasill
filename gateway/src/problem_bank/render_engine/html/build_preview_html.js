@@ -36,6 +36,10 @@ function buildPreviewStyles({ stemSizePt, lineHeightPt, choiceGapPt }) {
       box-decoration-break: clone;
     }
     .lc-line.lc-fraction { line-height: var(--lc-line-fraction); }
+    .stem-line { display: block; text-indent: 0; }
+    .stem-line.stem-line-center { text-align: center; }
+    .stem-line.stem-line-right { text-align: right; }
+    .stem-line.stem-line-justify { text-align: justify; }
     .debug-first { display: inline; position: relative; }
     .bogi-box, .figure-container, .choice-list, .choice-grid-row1, .choice-grid-row2 {
       text-indent: 0;
@@ -49,10 +53,13 @@ function buildPreviewStyles({ stemSizePt, lineHeightPt, choiceGapPt }) {
     .choice-list.has-fraction { row-gap: calc((var(--choice-gap-pt) + 1) * 1pt); }
     .choice {
       display: inline-flex;
-      align-items: center;
+      align-items: flex-start;
       gap: 4.5pt;
       min-width: 0;
       overflow: visible;
+    }
+    .choice.has-fraction {
+      align-items: center;
     }
     .choice .math-inline { transform: translateY(-1pt); }
     .choice-label { white-space: nowrap; flex-shrink: 0; }
@@ -96,11 +103,12 @@ function buildPreviewStyles({ stemSizePt, lineHeightPt, choiceGapPt }) {
       display: inline-block;
       position: relative;
       line-height: 1;
-      margin: 0 0.05em;
+      margin: 0 0.12em 0 0.05em;
       vertical-align: middle;
       overflow: visible;
     }
     .math-inline svg { display: block; overflow: visible; }
+    .math-var svg { transform: scaleX(0.94); }
     .math-inline.fraction {
       vertical-align: middle;
       padding-top: calc(var(--line-height-pt) * 0.25 * 1pt);
@@ -154,12 +162,27 @@ function buildPreviewStyles({ stemSizePt, lineHeightPt, choiceGapPt }) {
       grid-template-columns: auto 1fr;
       column-gap: 3pt;
       margin-bottom: 2pt;
+      align-items: baseline;
     }
-    .bogi-item-label { white-space: nowrap; font-weight: 400; }
+    .bogi-item-label { white-space: nowrap; font-weight: 400; line-height: var(--lc-line-normal); }
     .bogi-item-text { min-width: 0; }
+    .bogi-item .math-inline { transform: translateY(-1pt); }
+    .bogi-item.bogi-item-center { text-align: center; }
+    .bogi-item.bogi-item-right { text-align: right; }
+    .bogi-item.bogi-item-justify { text-align: justify; }
     .bogi-line { margin-bottom: 2pt; }
     .bogi-line:last-child { margin-bottom: 0; }
     .bogi-line.bogi-line-center { text-align: center; }
+    .bogi-line.bogi-line-right { text-align: right; }
+    .bogi-line.bogi-line-justify { text-align: justify; }
+    .math-inline { position: relative; }
+    .math-debug-dot {
+      position: absolute; top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      width: 4px; height: 4px; border-radius: 50%;
+      pointer-events: none; opacity: 0.9; z-index: 10;
+    }
+    .math-debug-dot.dot-forced    { background: #e53935; }
     .figure-container { margin: 6pt 0; text-align: center; }
     .figure-img { max-width: 100%; height: auto; display: block; }
     .figure-anchor-center { text-align: center; }
@@ -193,12 +216,12 @@ function buildPreviewStyles({ stemSizePt, lineHeightPt, choiceGapPt }) {
   `;
 }
 
-export function buildPreviewHtml({ question, mathRenderer, fontFaceCss = '', layout = {} }) {
+export function buildPreviewHtml({ question, mathRenderer, fontFaceCss = '', layout = {}, debugDots = false }) {
   const stemSizePt = Number(layout.stemSizePt || 11.0);
   const lineHeightPt = Number(layout.lineHeightPt || 15.0);
   const choiceGapPt = Number(layout.choiceGapPt || 2);
 
-  const qHtml = renderQuestionBlock(question, mathRenderer, { stemSizePt });
+  const qHtml = renderQuestionBlock(question, mathRenderer, { stemSizePt, debugDots });
   const styles = buildPreviewStyles({ stemSizePt, lineHeightPt, choiceGapPt });
 
   return `<!doctype html>

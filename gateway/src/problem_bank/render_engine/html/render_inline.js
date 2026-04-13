@@ -8,17 +8,23 @@ import {
 const MATH_EXCEPTION_RE = /^[,?.]+$/;
 const BOGAGI_RE = /^<보기>$/;
 
+function debugDotHtml() {
+  return '<span class="math-debug-dot dot-forced"></span>';
+}
+
 /**
  * Render mixed text+math content to HTML.
  *
  * @param {string} input - raw text (stem line or choice text)
  * @param {object} mathRenderer - { renderInline(latex) => { ok, svg } }
  * @param {Array} equations - the question's equations array from DB
+ * @param {{ debugDots?: boolean }} [opts]
  */
-export function renderInlineMixedContent(input, mathRenderer, equations) {
+export function renderInlineMixedContent(input, mathRenderer, equations, opts) {
   const tokens = tokenizeWithEquations(input, equations);
   if (tokens.length === 0) return { html: '', hasFraction: false };
 
+  const showDots = opts?.debugDots === true;
   let hasFraction = false;
   const chunks = [];
 
@@ -52,9 +58,11 @@ export function renderInlineMixedContent(input, mathRenderer, equations) {
 
     const fraction = isFractionLatex(latex);
     if (fraction) hasFraction = true;
-    const klass = fraction ? 'math-inline fraction' : 'math-inline';
+    const isVar = /^[a-zA-Z]$/.test(raw);
+    const klass = (fraction ? 'math-inline fraction' : 'math-inline') + (isVar ? ' math-var' : '');
+    const dot = showDots ? debugDotHtml() : '';
     chunks.push(
-      `<span class="${klass}" data-latex="${escapeHtml(latex)}">${rendered.svg}</span>`,
+      `<span class="${klass}" data-latex="${escapeHtml(latex)}" data-render-path="forced">${rendered.svg}${dot}</span>`,
     );
   }
 

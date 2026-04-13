@@ -1,0 +1,23 @@
+---
+description: HWPX 추출 워커 수정 시 회귀 테스트 실행 규칙
+globs: gateway/src/problem_bank_extract_worker.js
+alwaysApply: false
+---
+
+# 추출 워커 수정 시 회귀 테스트
+
+`problem_bank_extract_worker.js`를 수정한 후에는 반드시 회귀 테스트를 실행하세요.
+
+```bash
+cd gateway && npm run test:pb-extract
+```
+
+- 22개 전체 통과해야 함 (fail 0)
+- 실패 시 수정 전 상태로 돌아가서 원인 파악
+- 새 HWPX 파일에서 버그를 수정했다면 `test/fixtures/hwpx/`에 픽스처 추가 + `test/snapshots/extract/`에 기대값 JSON 추가
+
+## 테스트 추가 방법
+
+1. HWPX 파일을 `gateway/test/fixtures/hwpx/`에 복사
+2. 추출 후 정답 상태를 `gateway/test/snapshots/extract/{name}.json`에 기록
+3. 스냅샷 형식: `{ fixture, extractVersion, expectations: { totalQuestions, questionNumbers, questions: { [qNum]: { choiceCount, equationCountMin, ... } } } }`

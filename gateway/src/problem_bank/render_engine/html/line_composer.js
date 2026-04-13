@@ -6,7 +6,7 @@ function wrapLineHtml(html, profile) {
   return `<span class="lc-line lc-${safeProfile}" data-lc-profile="${safeProfile}">${html}</span>`;
 }
 
-export function composeLineV1(text, mathRenderer, equations) {
+export function composeLineV1(text, mathRenderer, equations, opts) {
   const safeText = String(text || '').trim();
   if (!safeText) {
     return {
@@ -15,7 +15,7 @@ export function composeLineV1(text, mathRenderer, equations) {
       hasFraction: false,
     };
   }
-  const rendered = renderInlineMixedContent(safeText, mathRenderer, equations);
+  const rendered = renderInlineMixedContent(safeText, mathRenderer, equations, opts);
   const profile = rendered.hasFraction ? 'fraction' : 'normal';
   return {
     html: wrapLineHtml(rendered.html, profile),
@@ -24,12 +24,12 @@ export function composeLineV1(text, mathRenderer, equations) {
   };
 }
 
-export function composeLinesV1(lines, mathRenderer, equations) {
+export function composeLinesV1(lines, mathRenderer, equations, opts) {
   const src = Array.isArray(lines) ? lines : [lines];
   const out = [];
   let hasFraction = false;
   for (const line of src) {
-    const one = composeLineV1(line, mathRenderer, equations);
+    const one = composeLineV1(line, mathRenderer, equations, opts);
     if (!one.html) continue;
     out.push(one);
     if (one.hasFraction) hasFraction = true;

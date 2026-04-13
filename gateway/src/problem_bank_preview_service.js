@@ -26,7 +26,8 @@ const PREVIEW_BUCKET = 'problem-previews';
 const SIGNED_URL_EXPIRY_SECONDS = 3600;
 const PREVIEW_VIEWPORT_WIDTH = 520;
 const PREVIEW_DPR = 3;
-const PREVIEW_STYLE_VERSION = 'pv32zf_dual_anchor_row_stable';
+const PREVIEW_STYLE_VERSION = 'pv43_size10_margin';
+const DEBUG_MATH_DOTS = process.env.PB_DEBUG_MATH_DOTS === '1';
 
 function repoAssetPath(...segments) {
   return path.resolve(REPO_ROOT, ...segments);
@@ -66,12 +67,18 @@ function getDefaultFontPaths() {
 
 function questionContentHash(question) {
   const meta = question?.meta && typeof question.meta === 'object' ? question.meta : {};
+  const stemLineAligns = Array.isArray(meta.stem_line_aligns)
+    ? meta.stem_line_aligns
+    : Array.isArray(meta.stemLineAligns)
+      ? meta.stemLineAligns
+      : [];
   const payload = JSON.stringify({
     style_version: PREVIEW_STYLE_VERSION,
     stem: question?.stem || '',
     choices: question?.choices || [],
     equations: question?.equations || [],
     figure_refs: question?.figure_refs || [],
+    meta_stem_line_aligns: stemLineAligns,
     meta_figure_assets: meta.figure_assets || [],
     meta_figure_layout: meta.figure_layout || null,
     meta_figure_render_scales: meta.figure_render_scales || null,
@@ -146,6 +153,7 @@ export async function generateQuestionPreviews({
         supabaseClient,
         viewportWidth: PREVIEW_VIEWPORT_WIDTH,
         deviceScaleFactor: PREVIEW_DPR,
+        debugDots: DEBUG_MATH_DOTS,
       });
 
       const { error: uploadErr } = await supabaseClient.storage

@@ -70,7 +70,7 @@ function latexCandidates(value) {
   return out;
 }
 
-const EX_TO_EM = 0.45;
+const EX_TO_EM = 0.495;
 
 /**
  * Keep MathJax's own sizing but convert ex units to em so that

@@ -2,7 +2,8 @@ import { composeLineV1, composeLinesV1 } from '../line_composer.js';
 import { renderChoiceItem, chooseLayout, renderChoiceContainer } from './choice_block.js';
 import {
   escapeHtml,
-  splitStemByNewline,
+  isFractionLatex,
+  normalizeMathLatex,
 } from '../../utils/text.js';
 import { resolveFigureLayout } from '../../utils/figure_layout.js';
 
@@ -103,14 +104,81 @@ function replacePlaceholdersWithImages(html, dataUrls, layoutItems, figureLayout
   });
 }
 
-function renderOneLine(text, mathRenderer, equations) {
+function augmentEquations(equations, texts, { includeVars = false, includeNumbers = false } = {}) {
+  const base = Array.isArray(equations) ? equations : [];
+  const seen = new Set(base.map((eq) => String(eq?.latex || '').trim()).filter(Boolean));
+  const extra = [];
+  const sources = Array.isArray(texts) ? texts : [texts];
+  for (const text of sources) {
+    const src = String(text || '');
+    if (includeVars) {
+      for (const m of src.matchAll(/\b[a-z]\b/g)) {
+        if (!seen.has(m[0])) { seen.add(m[0]); extra.push({ raw: m[0], latex: m[0], mathml: '', confidence: 0.5 }); }
+      }
+    }
+    if (includeNumbers) {
+      for (const m of src.matchAll(/\b\d+(?:\.\d+)?\b/g)) {
+        if (!seen.has(m[0])) { seen.add(m[0]); extra.push({ raw: m[0], latex: m[0], mathml: '', confidence: 0.5 }); }
+      }
+    }
+  }
+  return extra.length > 0 ? [...base, ...extra] : base;
+}
+
+function renderOneLine(text, mathRenderer, equations, opts) {
   if (!text) return null;
-  const rendered = composeLineV1(text, mathRenderer, equations);
+  if (looksNumericMathOnlyLine(text)) {
+    const forced = renderForcedMathLine(text, mathRenderer, opts);
+    if (forced) return forced;
+  }
+  const augmented = augmentEquations(equations, text, { includeVars: true });
+  const rendered = composeLineV1(text, mathRenderer, augmented, opts);
   return {
     html: rendered.html,
     hasFraction: rendered.hasFraction,
   };
 }
+
+function normalizeLineAlign(value) {
+  const raw = String(value || '').trim().toLowerCase();
+  if (raw === 'center' || raw === 'right' || raw === 'justify') return raw;
+  return 'left';
+}
+
+function normalizeStemLineAligns(rawAligns, lineCount) {
+  const src = Array.isArray(rawAligns) ? rawAligns : [];
+  const out = [];
+  for (let i = 0; i < lineCount; i += 1) {
+    out.push(normalizeLineAlign(src[i]));
+  }
+  return out;
+}
+
+function looksNumericMathOnlyLine(text) {
+  const src = String(text || '').trim();
+  if (!src) return false;
+  if (/[가-힣]/.test(src)) return false;
+  const withoutCommands = src.replace(/\\[A-Za-z]+/g, ' ');
+  if (!/[0-9]/.test(withoutCommands)) return false;
+  if (/[A-Za-z]/.test(withoutCommands)) return false;
+  return /^[0-9\s+\-*/=<>(),.\\{}_^|[\]:A-Za-z]+$/.test(src);
+}
+
+function renderForcedMathLine(text, mathRenderer, opts) {
+  const latex = normalizeMathLatex(text);
+  if (!latex) return null;
+  const rendered = mathRenderer.renderInline(latex);
+  if (!rendered?.ok || !rendered?.svg) return null;
+  const hasFraction = isFractionLatex(latex);
+  const profile = hasFraction ? 'fraction' : 'normal';
+  const klass = hasFraction ? 'math-inline fraction' : 'math-inline';
+  const dot = opts?.debugDots ? '<span class="math-debug-dot dot-forced"></span>' : '';
+  return {
+    html: `<span class="lc-line lc-${profile}" data-lc-profile="${profile}"><span class="${klass}" data-latex="${escapeHtml(latex)}" data-render-path="forced">${rendered.svg}${dot}</span></span>`,
+    hasFraction,
+  };
+}
+
 
 function looksCenterAlignedMathOnlyLine(text) {
   const src = String(text || '').trim();
@@ -140,21 +208,36 @@ function splitBogiItemsFromText(text) {
   return items;
 }
 
-function renderBogiItems(lines, mathRenderer, equations) {
+function renderBogiItems(lines, mathRenderer, equations, opts) {
   const allParts = [];
   let hasFraction = false;
   for (const line of lines) {
-    const items = splitBogiItemsFromText(line);
+    const lineText =
+      typeof line === 'string' ? line : String(line?.text || '');
+    const lineAlign = normalizeLineAlign(line?.align);
+    const items = splitBogiItemsFromText(lineText);
     if (items.length > 0) {
-      allParts.push(...items);
+      allParts.push(
+        ...items.map((text) => ({
+          text,
+          align: lineAlign,
+        })),
+      );
     } else {
-      const clean = line.replace(BOGI_RE, '').trim();
-      if (clean) allParts.push(clean);
+      const clean = lineText.replace(BOGI_RE, '').trim();
+      if (clean) {
+        allParts.push({
+          text: clean,
+          align: lineAlign,
+        });
+      }
     }
   }
 
   const result = [];
-  for (const part of allParts) {
+  for (const one of allParts) {
+    const part = String(one?.text || '');
+    const lineAlign = normalizeLineAlign(one?.align);
     const match = part.match(BOGI_ITEM_RE);
     if (match) {
       const consonantLabel = match[1] || '';
@@ -162,19 +245,27 @@ function renderBogiItems(lines, mathRenderer, equations) {
       const label = consonantLabel || syllableLabel;
       const labelText = consonantLabel ? `${label}.` : `(${label})`;
       const text = part.slice(match[0].length).trim();
-      const rendered = composeLineV1(text, mathRenderer, equations);
+      const bogiEqs = augmentEquations(equations, text, { includeVars: true, includeNumbers: true });
+      const rendered = renderOneLine(text, mathRenderer, bogiEqs, opts);
+      if (!rendered) continue;
       if (rendered.hasFraction) hasFraction = true;
+      const alignClass =
+        lineAlign === 'left' ? '' : ` bogi-item-${lineAlign}`;
       result.push(
-        `<div class="bogi-item"><span class="bogi-item-label">${escapeHtml(labelText)}</span><span class="bogi-item-text">${rendered.html}</span></div>`,
+        `<div class="bogi-item${alignClass}"><span class="bogi-item-label">${escapeHtml(labelText)}</span><span class="bogi-item-text">${rendered.html}</span></div>`,
       );
     } else {
-      const r = renderOneLine(part, mathRenderer, equations);
+      const bogiEqs = augmentEquations(equations, part, { includeVars: true, includeNumbers: true });
+      const r = renderOneLine(part, mathRenderer, bogiEqs, opts);
       if (r) {
         if (r.hasFraction) hasFraction = true;
-        const centerClass = looksCenterAlignedMathOnlyLine(part)
-          ? ' bogi-line-center'
-          : '';
-        result.push(`<div class="bogi-line${centerClass}">${r.html}</div>`);
+        let alignClass = '';
+        if (lineAlign !== 'left') {
+          alignClass = ` bogi-line-${lineAlign}`;
+        } else if (looksCenterAlignedMathOnlyLine(part)) {
+          alignClass = ' bogi-line-center';
+        }
+        result.push(`<div class="bogi-line${alignClass}">${r.html}</div>`);
       }
     }
   }
@@ -198,11 +289,21 @@ function cleanLineKeepingPlaceholders(line) {
     .trim();
 }
 
-function renderStemWithBoxes(stem, mathRenderer, equations, { dataUrls = [], layoutItems = [], figureLayout = null } = {}) {
+function renderStemWithBoxes(stem, mathRenderer, equations, {
+  dataUrls = [],
+  layoutItems = [],
+  figureLayout = null,
+  stemLineAligns = [],
+  debugDots = false,
+} = {}) {
+  const opts = debugDots ? { debugDots: true } : undefined;
   const totalMarkers = countFigureMarkers(stem);
   const hasInlineFigures = totalMarkers > 0 && dataUrls.length > 0;
 
-  const lines = splitStemByNewline(stem);
+  const lines = String(stem || '')
+    .replace(/\r/g, '')
+    .split('\n');
+  const lineAligns = normalizeStemLineAligns(stemLineAligns, lines.length);
   const blocks = [];
   let hasFraction = false;
   let inBox = false;
@@ -225,27 +326,57 @@ function renderStemWithBoxes(stem, mathRenderer, equations, { dataUrls = [], lay
 
   const flushInline = () => {
     if (inlineBuffer.length === 0) return;
-    const composed = composeLinesV1(inlineBuffer, mathRenderer, equations);
-    if (!composed.html) {
-      inlineBuffer = [];
-      return;
+    const htmlParts = [];
+    let leftRun = [];
+    const flushLeftRun = () => {
+      if (leftRun.length === 0) return;
+      const augmented = augmentEquations(equations, leftRun.map((e) => e.text), { includeVars: true });
+      const composed = composeLinesV1(
+        leftRun.map((entry) => entry.text),
+        mathRenderer,
+        augmented,
+        opts,
+      );
+      if (composed.html) {
+        if (composed.hasFraction) hasFraction = true;
+        htmlParts.push(composed.html);
+      }
+      leftRun = [];
+    };
+    for (const entry of inlineBuffer) {
+      const align = normalizeLineAlign(entry?.align);
+      const text = String(entry?.text || '');
+      if (align === 'left') {
+        leftRun.push({ text });
+        continue;
+      }
+      flushLeftRun();
+      const one = renderOneLine(text, mathRenderer, equations, opts);
+      if (!one?.html) continue;
+      if (one.hasFraction) hasFraction = true;
+      htmlParts.push(
+        `<div class="stem-line stem-line-${align}">${one.html}</div>`,
+      );
     }
-    if (composed.hasFraction) hasFraction = true;
-    blocks.push({ type: 'inline', html: composed.html });
+    flushLeftRun();
+    const html = htmlParts.join('');
+    if (html) {
+      blocks.push({ type: 'inline', html });
+    }
     inlineBuffer = [];
   };
 
   const flushBox = () => {
     if (boxLines.length === 0) return;
     flushInline();
-    const hasBogi = boxLines.some((l) => BOGI_RE.test(l));
+    const hasBogi = boxLines.some((line) => BOGI_RE.test(String(line?.text || '')));
     const boxSvg = '<svg class="bogi-box-border" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><rect x="0.5" y="0.5" width="99" height="99" fill="none" stroke="#333" stroke-width="0.5" vector-effect="non-scaling-stroke" shape-rendering="geometricPrecision"/></svg>';
     const bogiSvgLeft = '<svg class="bogi-bracket" viewBox="0 0 7 14" width="0.55em" height="1.05em"><path d="M7 0 L0 7 L7 14" fill="none" stroke="#333" stroke-width="0.35"/></svg>';
     const bogiSvgRight = '<svg class="bogi-bracket" viewBox="0 0 7 14" width="0.55em" height="1.05em"><path d="M0 0 L7 7 L0 14" fill="none" stroke="#333" stroke-width="0.35"/></svg>';
     const title = hasBogi
       ? `<div class="bogi-title">${bogiSvgLeft}<span class="bogi-title-text">보 기</span>${bogiSvgRight}</div>`
       : '';
-    const inner = renderBogiItems(boxLines, mathRenderer, equations);
+    const inner = renderBogiItems(boxLines, mathRenderer, equations, opts);
     if (inner.hasFraction) hasFraction = true;
     const innerHtml = inner.html;
     if (innerHtml) {
@@ -257,34 +388,42 @@ function renderStemWithBoxes(stem, mathRenderer, equations, { dataUrls = [], lay
     boxLines = [];
   };
 
-  for (const rawLine of lines) {
+  for (let lineIdx = 0; lineIdx < lines.length; lineIdx += 1) {
+    const rawLine = lines[lineIdx];
+    const lineAlign = lineAligns[lineIdx] || 'left';
+    if (/^\s*\[문단\]\s*$/.test(rawLine)) {
+      if (!inBox) {
+        flushInline();
+      }
+      continue;
+    }
     const hasStart = BOX_START.test(rawLine);
     const hasEnd = BOX_END.test(rawLine);
 
     if (hasEnd && !inBox && !hasStart) {
       const clean = prepareLine(rawLine);
       if (!clean) continue;
-      inlineBuffer.push(clean);
+      inlineBuffer.push({ text: clean, align: lineAlign });
       continue;
     }
 
     if (hasStart && !inBox) {
       inBox = true;
       const clean = prepareLine(rawLine);
-      if (clean) boxLines.push(clean);
+      if (clean) boxLines.push({ text: clean, align: lineAlign });
       if (hasEnd) { inBox = false; flushBox(); }
       continue;
     }
     if (inBox) {
       const clean = prepareLine(rawLine);
-      if (clean) boxLines.push(clean);
+      if (clean) boxLines.push({ text: clean, align: lineAlign });
       if (hasEnd) { inBox = false; flushBox(); }
       continue;
     }
 
     const clean = prepareLine(rawLine);
     if (!clean) continue;
-    inlineBuffer.push(clean);
+    inlineBuffer.push({ text: clean, align: lineAlign });
   }
   flushBox();
   flushInline();
@@ -494,11 +633,19 @@ export function renderQuestionBlock(
     stemSizePt = 11,
     includeQuestionScore = false,
     questionScoreByQuestionId = {},
+    debugDots = false,
   } = {},
 ) {
   const number = String(question?.question_number || '?');
   const equations = Array.isArray(question?.equations) ? question.equations : [];
   const dataUrls = Array.isArray(question?.figure_data_urls) ? question.figure_data_urls : [];
+  const meta =
+    question?.meta && typeof question.meta === 'object' ? question.meta : {};
+  const stemLineAligns = Array.isArray(meta.stem_line_aligns)
+    ? meta.stem_line_aligns
+    : Array.isArray(meta.stemLineAligns)
+      ? meta.stemLineAligns
+      : [];
 
   const figureLayout = resolveFigureLayout(question, stemSizePt);
   const layoutItems = figureLayout ? figureLayout.items : [];
@@ -507,12 +654,15 @@ export function renderQuestionBlock(
     dataUrls,
     layoutItems,
     figureLayout,
+    stemLineAligns,
+    debugDots,
   });
 
   const choices = Array.isArray(question?.choices) ? question.choices : [];
   let choiceHtml = '';
   if (choices.length > 0) {
-    const items = choices.map((ch) => renderChoiceItem(ch, mathRenderer, equations));
+    const choiceOpts = debugDots ? { debugDots: true } : undefined;
+    const items = choices.map((ch) => renderChoiceItem(ch, mathRenderer, equations, choiceOpts));
     const layout = chooseLayout(items);
     choiceHtml = renderChoiceContainer(items, layout);
   }

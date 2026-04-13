@@ -595,7 +595,7 @@ function normalizeFigureQuality(rawFigureQuality, options = {}) {
   return { targetDpi, minDpi };
 }
 
-const EXPORT_RENDER_CONFIG_VERSION = 'pb_render_v33_ref_uid_live_release';
+const EXPORT_RENDER_CONFIG_VERSION = 'pb_render_v34_q9_math_match_fix';
 const DEFAULT_TITLE_PAGE_TOP_TEXT = '2026학년도 대학수학능력시험 문제지';
 
 const QUESTION_COPY_SELECT_COLUMNS = [

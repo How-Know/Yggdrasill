@@ -23,6 +23,8 @@
     "worker:pb-export": "node src/problem_bank_export_worker.js",
     "worker:pb-export:once": "node src/problem_bank_export_worker.js --once",
     "test:pb": "node --test test/problem_bank_export_render_contract.test.js",
+    "test:pb-extract": "node --test test/problem_bank_extract_regression.test.js",
+    "test:pb-all": "node --test test/",
     "quality:pb": "node src/problem_bank_quality_gate.js",
     "quality:pb:metrics": "node src/problem_bank_quality_metrics.js"
   },

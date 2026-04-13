@@ -1,0 +1,237 @@
+{
+  "fixture": "gyeongshin_g7_midterm1_math1.hwpx",
+  "extractVersion": "v34",
+  "expectations": {
+    "totalQuestions": 19,
+    "questionNumbers": [
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "8",
+      "9",
+      "10",
+      "11",
+      "12",
+      "13",
+      "14",
+      "15",
+      "16",
+      "17",
+      "18",
+      "19"
+    ],
+    "questions": {
+      "1": {
+        "choiceCount": 5,
+        "choiceLabels": [
+          "①",
+          "②",
+          "③",
+          "④",
+          "⑤"
+        ],
+        "equationCountMin": 5,
+        "stemLineAlignsLength": 5
+      },
+      "2": {
+        "choiceCount": 5,
+        "choiceLabels": [
+          "①",
+          "②",
+          "③",
+          "④",
+          "⑤"
+        ],
+        "equationCountMin": 8,
+        "stemLineAlignsLength": 5
+      },
+      "3": {
+        "choiceCount": 5,
+        "choiceLabels": [
+          "①",
+          "②",
+          "③",
+          "④",
+          "⑤"
+        ],
+        "equationCountMin": 5,
+        "stemLineAlignsLength": 5
+      },
+      "4": {
+        "choiceCount": 5,
+        "choiceLabels": [
+          "①",
+          "②",
+          "③",
+          "④",
+          "⑤"
+        ],
+        "equationCountMin": 7,
+        "stemLineAlignsLength": 5
+      },
+      "5": {
+        "choiceCount": 5,
+        "choiceLabels": [
+          "①",
+          "②",
+          "③",
+          "④",
+          "⑤"
+        ],
+        "equationCountMin": 7,
+        "stemLineAlignsLength": 5
+      },
+      "6": {
+        "choiceCount": 5,
+        "choiceLabels": [
+          "①",
+          "②",
+          "③",
+          "④",
+          "⑤"
+        ],
+        "equationCountMin": 14,
+        "stemLineAlignsLength": 8
+      },
+      "7": {
+        "choiceCount": 5,
+        "choiceLabels": [
+          "①",
+          "②",
+          "③",
+          "④",
+          "⑤"
+        ],
+        "equationCountMin": 11,
+        "stemLineAlignsLength": 5
+      },
+      "8": {
+        "choiceCount": 5,
+        "choiceLabels": [
+          "①",
+          "②",
+          "③",
+          "④",
+          "⑤"
+        ],
+        "equationCountMin": 10,
+        "hasBoxContent": true,
+        "stemLineAlignsLength": 14
+      },
+      "9": {
+        "choiceCount": 5,
+        "choiceLabels": [
+          "①",
+          "②",
+          "③",
+          "④",
+          "⑤"
+        ],
+        "equationCountMin": 6,
+        "stemLineAlignsLength": 5,
+        "stemContains": "\\left(-4.2"
+      },
+      "10": {
+        "choiceCount": 5,
+        "choiceLabels": [
+          "①",
+          "②",
+          "③",
+          "④",
+          "⑤"
+        ],
+        "equationCountMin": 1,
+        "hasBoxContent": true,
+        "stemLineAlignsLength": 23,
+        "stemContains": "ㄱ."
+      },
+      "11": {
+        "choiceCount": 5,
+        "choiceLabels": [
+          "①",
+          "②",
+          "③",
+          "④",
+          "⑤"
+        ],
+        "equationCountMin": 9,
+        "stemLineAlignsLength": 5
+      },
+      "12": {
+        "choiceCount": 5,
+        "choiceLabels": [
+          "①",
+          "②",
+          "③",
+          "④",
+          "⑤"
+        ],
+        "equationCountMin": 13,
+        "stemLineAlignsLength": 5
+      },
+      "13": {
+        "choiceCount": 5,
+        "choiceLabels": [
+          "①",
+          "②",
+          "③",
+          "④",
+          "⑤"
+        ],
+        "equationCountMin": 10,
+        "hasBoxContent": true,
+        "stemLineAlignsLength": 13
+      },
+      "14": {
+        "choiceCount": 5,
+        "choiceLabels": [
+          "①",
+          "②",
+          "③",
+          "④",
+          "⑤"
+        ],
+        "equationCountMin": 13,
+        "stemLineAlignsLength": 5
+      },
+      "15": {
+        "choiceCount": 5,
+        "choiceLabels": [
+          "①",
+          "②",
+          "③",
+          "④",
+          "⑤"
+        ],
+        "equationCountMin": 15,
+        "hasBoxContent": true,
+        "stemLineAlignsLength": 15
+      },
+      "16": {
+        "choiceCount": 0,
+        "equationCountMin": 6,
+        "stemLineAlignsLength": 3
+      },
+      "17": {
+        "choiceCount": 0,
+        "equationCountMin": 10,
+        "stemLineAlignsLength": 3
+      },
+      "18": {
+        "choiceCount": 0,
+        "equationCountMin": 7,
+        "stemLineAlignsLength": 3
+      },
+      "19": {
+        "choiceCount": 0,
+        "equationCountMin": 14,
+        "hasBoxContent": true,
+        "stemLineAlignsLength": 13
+      }
+    }
+  }
+}

@@ -32,24 +32,23 @@ function looksLikeNumericMathChoice(text) {
   return false;
 }
 
-function wrapMathLine(svg, latex, hasFraction) {
+function wrapMathLine(svg, latex, hasFraction, dot = '') {
   const lineProfile = hasFraction ? 'fraction' : 'normal';
   const mathClass = hasFraction ? 'math-inline fraction' : 'math-inline';
   return `<span class="lc-line lc-${lineProfile}" data-lc-profile="${lineProfile}">`
-    + `<span class="${mathClass}" data-latex="${escapeHtml(latex)}">${svg}</span>`
+    + `<span class="${mathClass}" data-latex="${escapeHtml(latex)}" data-render-path="forced">${svg}${dot}</span>`
     + '</span>';
 }
 
-export function renderChoiceItem(choice, mathRenderer, equations) {
+export function renderChoiceItem(choice, mathRenderer, equations, opts) {
   const label = String(choice?.label || '').trim() || '-';
   const text = String(choice?.text || '');
   const forceNumericMath = looksLikeNumericMathChoice(text);
-  // Avoid partial equation-index matches (e.g. "1" in "10") on AI-generated
-  // objective choices by bypassing equation-token slicing for numeric options.
   const rendered = composeLineV1(
     text,
     mathRenderer,
     forceNumericMath ? [] : equations,
+    opts,
   );
   let html = rendered.html;
   let hasFraction = rendered.hasFraction;
@@ -62,7 +61,8 @@ export function renderChoiceItem(choice, mathRenderer, equations) {
     const math = latex ? mathRenderer.renderInline(latex) : { ok: false, svg: '' };
     if (math.ok && math.svg) {
       hasFraction = isFractionLatex(latex);
-      html = wrapMathLine(math.svg, latex, hasFraction);
+      const dot = opts?.debugDots ? '<span class="math-debug-dot dot-forced"></span>' : '';
+      html = wrapMathLine(math.svg, latex, hasFraction, dot);
     }
   }
   return {

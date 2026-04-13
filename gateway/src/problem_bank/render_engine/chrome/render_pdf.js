@@ -165,8 +165,9 @@ async function renderOnce(html) {
         });
       });
 
-      // Align math-inline vertical center to hangul center (blue line → red line match)
-      // Scoped per block: only match math with debug-first in the same parent container
+      // Two-pass math vertical alignment:
+      //   Pass 1: math near Korean text → center-to-center with hangul (anchored)
+      //   Pass 2: orphan math (no Korean nearby) → bottom-align to nearest anchored math
       document.querySelectorAll('.q-stem, .bogi-item-text').forEach(function (block) {
         var localRefs = Array.from(block.querySelectorAll('.debug-first')).map(function (df) {
           var r = df.getBoundingClientRect();
@@ -174,13 +175,18 @@ async function renderOnce(html) {
         });
         if (!localRefs.length) return;
 
-        block.querySelectorAll('.math-inline').forEach(function (math) {
+        var allMath = Array.from(block.querySelectorAll('.math-inline'));
+        var anchored = [];
+        var orphans = [];
+
+        // Pass 1: align math that has Korean reference on the same line
+        for (var mi = 0; mi < allMath.length; mi++) {
+          var math = allMath[mi];
           var mr = math.getBoundingClientRect();
           var mathCenterY = mr.top + mr.height / 2;
           var mathTop = mr.top;
           var mathBottom = mr.top + mr.height;
 
-          // Find debug-first on the same visual line (Y ranges overlap)
           var best = null;
           var bestDist = Infinity;
           for (var i = 0; i < localRefs.length; i++) {
@@ -196,7 +202,6 @@ async function renderOnce(html) {
             }
           }
 
-          // Fallback: closest by distance within tight range
           if (!best) {
             for (var i = 0; i < localRefs.length; i++) {
               var dist = Math.abs(localRefs[i].centerY - mathCenterY);
@@ -212,8 +217,42 @@ async function renderOnce(html) {
             if (Math.abs(offset) > 0.3) {
               math.style.transform = 'translateY(' + offset.toFixed(2) + 'px)';
             }
+            var afterRect = math.getBoundingClientRect();
+            anchored.push({ el: math, bottom: afterRect.top + afterRect.height, centerY: afterRect.top + afterRect.height / 2, top: afterRect.top });
+          } else {
+            orphans.push({ el: math, rect: mr });
           }
-        });
+        }
+
+        // Pass 2: orphan math → bottom-align to nearest anchored math on same line
+        for (var oi = 0; oi < orphans.length; oi++) {
+          var orph = orphans[oi];
+          var oRect = orph.rect;
+          var oCenterY = oRect.top + oRect.height / 2;
+          var oBottom = oRect.top + oRect.height;
+
+          var bestAnch = null;
+          var bestAnchDist = Infinity;
+          for (var ai = 0; ai < anchored.length; ai++) {
+            var anch = anchored[ai];
+            var overlapTop = Math.max(oRect.top, anch.top);
+            var overlapBot = Math.min(oBottom, anch.bottom);
+            if (overlapBot >= overlapTop - 4) {
+              var dist = Math.abs(anch.centerY - oCenterY);
+              if (dist < bestAnchDist) {
+                bestAnchDist = dist;
+                bestAnch = anch;
+              }
+            }
+          }
+
+          if (bestAnch) {
+            var offset = bestAnch.bottom - oBottom;
+            if (Math.abs(offset) > 0.3) {
+              orph.el.style.transform = 'translateY(' + offset.toFixed(2) + 'px)';
+            }
+          }
+        }
       });
 
       function rectCenterY(rect) {
