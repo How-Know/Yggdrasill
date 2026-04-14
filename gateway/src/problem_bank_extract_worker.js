@@ -523,6 +523,17 @@ function stripPotentialWatermarkText(raw, { equation = false } = {}) {
   return normalizeWhitespace(s);
 }
 
+function stripLeadingDialogueDotArtifact(raw) {
+  const input = normalizeWhitespace(raw);
+  if (!input) return '';
+  return normalizeWhitespace(
+    input.replace(
+      /^(?:\\?cdot|·|∙)\s*(?=[가-힣A-Za-z]{1,8}\s*[:：])/i,
+      '',
+    ),
+  );
+}
+
 function isLikelyWatermarkOnlyLine(line) {
   const input = normalizeWhitespace(line);
   if (!input) return false;
@@ -1114,7 +1125,78 @@ function transformParagraphBodyToLines(body) {
   return splitParagraphTextToLines(s);
 }
 
+function normalizeBoxTextParts(line) {
+  return splitKoreanConditionMarkersInBoxText(line)
+    .split('\n')
+    .map((part) => normalizeWhitespace(part))
+    .filter(Boolean);
+}
+
+function flattenTableXmlToRows(tableXml, { alignResolver = null } = {}) {
+  const rows = [];
+  const rowRegex = /<hp:tr\b[^>]*>([\s\S]*?)<\/hp:tr>/gi;
+  let rowMatch = null;
+  let hasRow = false;
+
+  while ((rowMatch = rowRegex.exec(String(tableXml || ''))) !== null) {
+    hasRow = true;
+    const rowBody = String(rowMatch[1] || '');
+    rows.push({ text: '[표행]', align: 'left' });
+
+    const cellRegex = /<hp:tc\b[^>]*>([\s\S]*?)<\/hp:tc>/gi;
+    let cellMatch = null;
+    let hasCell = false;
+
+    while ((cellMatch = cellRegex.exec(rowBody)) !== null) {
+      hasCell = true;
+      const cellBody = String(cellMatch[1] || '');
+      rows.push({ text: '[표셀]', align: 'left' });
+
+      const paragraphRegex = /<hp:p\b([^>]*)>([\s\S]*?)<\/hp:p>/gi;
+      let p = null;
+      let hasParagraph = false;
+      while ((p = paragraphRegex.exec(cellBody)) !== null) {
+        hasParagraph = true;
+        const attrs = String(p[1] || '');
+        const body = String(p[2] || '');
+        const align = normalizeParagraphAlignSafe(
+          resolveParagraphAlign(attrs, body, alignResolver),
+        );
+        const paragraphLines = transformParagraphBodyToLines(body);
+        for (const line of paragraphLines) {
+          for (const text of normalizeBoxTextParts(line)) {
+            rows.push({ text, align });
+          }
+        }
+      }
+
+      if (!hasParagraph) {
+        const fallbackLines = normalizeBoxTextParts(cellBody.replace(/<[^>]+>/g, ' '));
+        for (const text of fallbackLines) {
+          rows.push({ text, align: 'left' });
+        }
+      }
+    }
+
+    if (!hasCell) {
+      rows.push({ text: '[표셀]', align: 'left' });
+      const fallbackLines = normalizeBoxTextParts(rowBody.replace(/<[^>]+>/g, ' '));
+      for (const text of fallbackLines) {
+        rows.push({ text, align: 'left' });
+      }
+    }
+  }
+
+  if (!hasRow) return [];
+  return rows;
+}
+
 function flattenBoxXmlToRows(match, { table = false, alignResolver = null } = {}) {
+  if (table) {
+    const tableRows = flattenTableXmlToRows(match, { alignResolver });
+    if (tableRows.length > 0) return tableRows;
+  }
+
   let inner = String(match || '')
     .replace(/<hp:pic[\s\S]*?<\/hp:pic>/gi, ' [그림] ')
     .replace(/<hp:shape[\s\S]*?<\/hp:shape>/gi, ' [도형] ');
@@ -1133,10 +1215,7 @@ function flattenBoxXmlToRows(match, { table = false, alignResolver = null } = {}
     );
     const paragraphLines = transformParagraphBodyToLines(body);
     for (const line of paragraphLines) {
-      const normalized = splitKoreanConditionMarkersInBoxText(line)
-        .split('\n')
-        .map((part) => normalizeWhitespace(part))
-        .filter(Boolean);
+      const normalized = normalizeBoxTextParts(line);
       for (const one of normalized) {
         rows.push({
           text: one,
@@ -1146,12 +1225,7 @@ function flattenBoxXmlToRows(match, { table = false, alignResolver = null } = {}
     }
   }
   if (rows.length > 0) return rows;
-  const fallback = splitKoreanConditionMarkersInBoxText(
-    inner.replace(/<[^>]+>/g, ' '),
-  )
-    .split('\n')
-    .map((line) => normalizeWhitespace(line))
-    .filter(Boolean);
+  const fallback = normalizeBoxTextParts(inner.replace(/<[^>]+>/g, ' '));
   return fallback.map((text) => ({
     text,
     align: 'left',
@@ -1244,7 +1318,7 @@ function transformXmlToLines(xmlText, sectionIndex, { alignResolver = null } = {
     }
 
     const isStructuralMarker = paragraphLines.length === 1 &&
-      /^\[(박스시작|박스끝|문단)\]$/.test(paragraphLines[0]);
+      /^\[(박스시작|박스끝|문단|표행|표셀)\]$/.test(paragraphLines[0]);
     for (const text of paragraphLines) {
       lines.push({
         section: sectionIndex,
@@ -2654,7 +2728,7 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
         const lastNonStructuralStem = (() => {
           for (let si = current.stemLines.length - 1; si >= 0; si--) {
             const c = normalizeWhitespace(current.stemLines[si]);
-            if (c && !/^\[(문단|박스시작|박스끝|그림|도형)\]$/.test(c)) return c;
+            if (c && !/^\[(문단|박스시작|박스끝|그림|도형|표행|표셀)\]$/.test(c)) return c;
           }
           return '';
         })();
@@ -2682,19 +2756,22 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
     }
 
     if (splitAfterScoreAnnotation && current) {
-      const peekCleaned = stripPotentialWatermarkText(
-        normalizeWhitespace(
-          line.replace(/\[\[PB_EQ_[^\]]+\]\] ?/g, (match) => {
-            const token = match.replace(/ $/, '');
-            const eq = equationMap.get(token);
-            const rendered = normalizeWhitespace(eq?.latex || eq?.raw || '');
-            return rendered || '[수식]';
-          }),
+      const inBox = isInsideBoxContext(current.stemLines);
+      const peekCleaned = stripLeadingDialogueDotArtifact(
+        stripPotentialWatermarkText(
+          normalizeWhitespace(
+            line.replace(/\[\[PB_EQ_[^\]]+\]\] ?/g, (match) => {
+              const token = match.replace(/ $/, '');
+              const eq = equationMap.get(token);
+              const rendered = normalizeWhitespace(eq?.latex || eq?.raw || '');
+              return rendered || '[수식]';
+            }),
+          ),
         ),
       );
       const isStructuralOrEmpty =
         !peekCleaned ||
-        /^\[(문단|박스시작|박스끝|그림|도형)\]$/.test(peekCleaned);
+        /^\[(문단|박스시작|박스끝|그림|도형|표행|표셀)\]$/.test(peekCleaned);
       const isChoiceLike =
         Boolean(parseChoiceLine(peekCleaned)) ||
         parseInlineCircledChoices(peekCleaned).length >= 2;
@@ -2712,6 +2789,7 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
         // (보기 박스/조건 (가)(나)/선택지가 뒤따르는 객관식은 같은 문항으로 유지)
         splitAfterScoreAnnotation = false;
         if (
+          !inBox &&
           !isChoiceLike &&
           !isViewOrConditionLead &&
           (looksPromptForSplit || looksNarrativeLead)
@@ -2733,14 +2811,16 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
     }
 
     if (!current && questions.length === 0) {
-      const firstLineCandidate = stripPotentialWatermarkText(
-        normalizeWhitespace(
-          line.replace(/\[\[PB_EQ_[^\]]+\]\] ?/g, (match) => {
-            const token = match.replace(/ $/, '');
-            const eq = equationMap.get(token);
-            const rendered = normalizeWhitespace(eq?.latex || eq?.raw || '');
-            return rendered || '[수식]';
-          }),
+      const firstLineCandidate = stripLeadingDialogueDotArtifact(
+        stripPotentialWatermarkText(
+          normalizeWhitespace(
+            line.replace(/\[\[PB_EQ_[^\]]+\]\] ?/g, (match) => {
+              const token = match.replace(/ $/, '');
+              const eq = equationMap.get(token);
+              const rendered = normalizeWhitespace(eq?.latex || eq?.raw || '');
+              return rendered || '[수식]';
+            }),
+          ),
         ),
       );
       const looksPromptLike =
@@ -2780,14 +2860,16 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
       }
     }
 
-    const cleanedLine = stripPotentialWatermarkText(
-      normalizeWhitespace(
-        line.replace(/\[\[PB_EQ_[^\]]+\]\] ?/g, (match) => {
-          const token = match.replace(/ $/, '');
-          const eq = equationMap.get(token);
-          const rendered = normalizeWhitespace(eq?.latex || eq?.raw || '');
-          return rendered || '[수식]';
-        }),
+    const cleanedLine = stripLeadingDialogueDotArtifact(
+      stripPotentialWatermarkText(
+        normalizeWhitespace(
+          line.replace(/\[\[PB_EQ_[^\]]+\]\] ?/g, (match) => {
+            const token = match.replace(/ $/, '');
+            const eq = equationMap.get(token);
+            const rendered = normalizeWhitespace(eq?.latex || eq?.raw || '');
+            return rendered || '[수식]';
+          }),
+        ),
       ),
     );
     if (!cleanedLine) continue;
@@ -2801,7 +2883,7 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
     const previousStemLine = (() => {
       for (let si = (current.stemLines || []).length - 1; si >= 0; si -= 1) {
         const candidate = normalizeWhitespace(current.stemLines[si]);
-        if (candidate && !/^\[(문단|박스시작|박스끝|그림|도형)\]$/.test(candidate)) {
+        if (candidate && !/^\[(문단|박스시작|박스끝|그림|도형|표행|표셀)\]$/.test(candidate)) {
           return candidate;
         }
       }

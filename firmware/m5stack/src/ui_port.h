@@ -35,7 +35,7 @@ void fw_publish_unbind();
 void fw_clear_local_binding_state(void);
 void fw_publish_student_info(const char* studentId);
 void fw_publish_homework_action(const char* action, const char* itemId);
-void fw_publish_group_transition(const char* groupId, int from_phase = 0);
+bool fw_publish_group_transition(const char* groupId, int from_phase = 0);
 void fw_publish_pause_all();
 void fw_publish_raise_question();
 void fw_publish_create_descriptive_writing(void);

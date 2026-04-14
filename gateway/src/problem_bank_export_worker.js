@@ -2436,6 +2436,7 @@ function buildRenderConfigFromJob(job) {
     subjectTitleText,
     titlePageTopText,
     timeLimitText,
+    mathEngine: String(options.mathEngine || '').trim() || undefined,
   };
 }
 
@@ -2483,6 +2484,7 @@ function computeRenderHash(renderConfig) {
     titlePageTopText: renderConfig.titlePageTopText,
     timeLimitText: renderConfig.timeLimitText,
     includeAcademyLogo: renderConfig.includeAcademyLogo === true,
+    mathEngine: renderConfig.mathEngine || undefined,
   };
   const canonical = JSON.stringify(canonicalizeJson(payload));
   return createHash('sha256').update(canonical).digest('hex');
@@ -3849,6 +3851,7 @@ async function renderPdf(job, questions, renderConfig) {
     fontSize: configuredFontSize,
     baseLayout,
     supabaseClient: supa,
+    mathEngine: renderConfig?.mathEngine,
   });
 
   const pdfDoc = await PDFDocument.create();

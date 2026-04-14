@@ -170,6 +170,59 @@ int _sgGrade(String sg) {
   return int.tryParse(gradeText.replaceAll('학년', '')) ?? 0;
 }
 
+/// 학교·학년 라벨에 대해 시험명 후보 목록(날짜 선택 다이얼로그·요약 달력과 동일 규칙)
+List<String> examNamesForSchoolGradeLabel(String? sgLabel) {
+  if (sgLabel == null || sgLabel.isEmpty) {
+    return _examNames.value.isEmpty ? <String>['수학'] : [..._examNames.value];
+  }
+  final re = RegExp(r'^(.*)\s+(\d+)학년$');
+  String schoolName = sgLabel;
+  int? grade;
+  final m = re.firstMatch(sgLabel);
+  if (m != null) {
+    schoolName = m.group(1)!.trim();
+    grade = int.tryParse(m.group(2)!);
+  }
+  EducationLevel? level;
+  for (final s in DataManager.instance.students) {
+    if (s.student.school.trim() == schoolName &&
+        (grade == null || s.student.grade == grade)) {
+      level = s.student.educationLevel;
+      break;
+    }
+  }
+  if (level == null) {
+    for (final s in DataManager.instance.students) {
+      if (s.student.school.trim() == schoolName) {
+        level = s.student.educationLevel;
+        break;
+      }
+    }
+  }
+  if (level == null) {
+    return _examNames.value.isEmpty ? <String>['수학'] : [..._examNames.value];
+  }
+  final schoolKey = '${level.index}|$schoolName';
+  final Set<String> names = <String>{};
+  _examAssignmentByName.forEach((name, assign) {
+    final set = assign[schoolKey];
+    if (set != null && (grade == null || set.contains(grade))) {
+      names.add(name);
+    }
+  });
+  if (names.isEmpty) names.add('수학');
+  final list = names.toList()..sort();
+  return list;
+}
+
+bool _titleIsMathExamForSchoolGrade(String title, String sg) {
+  final t = title.trim();
+  if (t.isEmpty) return false;
+  final allowed = examNamesForSchoolGradeLabel(sg).toSet();
+  if (!allowed.contains(t)) return false;
+  return t == '수학' || t.startsWith('수학');
+}
+
 Future<void> _preloadOneSg(String sg, EducationLevel level) async {
   final school = _sgSchool(sg);
   final gradeNum = _sgGrade(sg);
@@ -1289,6 +1342,7 @@ Future<void> _openRangeAddDialog(BuildContext context) async {
                           '[RANGE_ADD] saved temp badge: sg=$sg, list=${state._rangeBadgesBySchoolGrade[sg]}');
                     }
                   });
+                  state.notifyExamScheduleChanged();
                 }
                 Navigator.of(ctxSB).pop();
               },
@@ -1426,51 +1480,9 @@ Future<Map<DateTime, List<String>>?> _openDateSelectAndSaveDialog(
   final List<DateTime> sorted = [...days]..sort();
   final Map<DateTime, List<String>> localTitles = {};
   Map<DateTime, List<String>>? result;
-  // 선택된 학교/학년에 매칭되는 시험명 목록 산출
-  List<String> _examNamesFor(String? sgLabel) {
-    if (sgLabel == null || sgLabel.isEmpty)
-      return _examNames.value.isEmpty ? <String>['수학'] : [..._examNames.value];
-    final re = RegExp(r'^(.*)\s+(\d+)학년$');
-    String schoolName = sgLabel;
-    int? grade;
-    final m = re.firstMatch(sgLabel);
-    if (m != null) {
-      schoolName = m.group(1)!.trim();
-      grade = int.tryParse(m.group(2)!);
-    }
-    EducationLevel? level;
-    for (final s in DataManager.instance.students) {
-      if (s.student.school.trim() == schoolName &&
-          (grade == null || s.student.grade == grade)) {
-        level = s.student.educationLevel;
-        break;
-      }
-    }
-    if (level == null) {
-      // fallback: 동일 학교 아무 레벨이나
-      for (final s in DataManager.instance.students) {
-        if (s.student.school.trim() == schoolName) {
-          level = s.student.educationLevel;
-          break;
-        }
-      }
-    }
-    if (level == null)
-      return _examNames.value.isEmpty ? <String>['수학'] : [..._examNames.value];
-    final schoolKey = '${level.index}|$schoolName';
-    final Set<String> names = <String>{};
-    _examAssignmentByName.forEach((name, assign) {
-      final set = assign[schoolKey];
-      if (set != null && (grade == null || set.contains(grade))) {
-        names.add(name);
-      }
-    });
-    if (names.isEmpty) names.add('수학');
-    final list = names.toList()..sort();
-    return list;
-  }
 
-  final List<String> candidateNames = _examNamesFor(schoolGradeLabel);
+  final List<String> candidateNames =
+      examNamesForSchoolGradeLabel(schoolGradeLabel);
   await showDialog<void>(
     context: context,
     barrierDismissible: true,
@@ -2923,6 +2935,44 @@ class _ExamScheduleDialogState extends State<_ExamScheduleDialog> {
       GlobalKey<_ExamScheduleWizardState>();
   static const String _kGradeFilterKey = 'exam_dialog_grade_filter';
   bool _seasonActionBusy = false;
+  int _examLevelTabIndex = 0;
+  String? _overviewHighlightSg;
+  Set<DateTime> _overviewHighlightDays = {};
+
+  void _onWizardExamDataChanged() {
+    if (mounted) setState(() {});
+  }
+
+  Widget _examLevelTabChip(String label, int index) {
+    final sel = _examLevelTabIndex == index;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: () => setState(() {
+          _examLevelTabIndex = index;
+          _overviewHighlightSg = null;
+          _overviewHighlightDays = {};
+        }),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+          decoration: BoxDecoration(
+            color: sel ? kDlgAccent.withOpacity(0.18) : kDlgFieldBg,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: sel ? kDlgAccent : kDlgBorder),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              color: sel ? kDlgText : kDlgTextSub,
+              fontWeight: FontWeight.w800,
+              fontSize: 14,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 
   Future<void> _onTapRefreshSeason(BuildContext context,
       List<String> schoolGradeMiddle, List<String> schoolGradeHigh) async {
@@ -3358,22 +3408,86 @@ class _ExamScheduleDialogState extends State<_ExamScheduleDialog> {
         key: _contentKey,
         child: SizedBox(
           height: MediaQuery.of(context).size.height * 0.60,
-          width: 1360,
+          width: 1480,
           child: Stack(
             children: [
               Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Expanded(
-                      child: _ExamScheduleWizard(
-                          key: _middleKey,
-                          schoolGrade: schoolGradeMiddle,
-                          level: EducationLevel.middle)),
+                    flex: 2,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Row(
+                          children: [
+                            _examLevelTabChip('중등', 0),
+                            const SizedBox(width: 8),
+                            _examLevelTabChip('고등', 1),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+                        Expanded(
+                          child: IndexedStack(
+                            index: _examLevelTabIndex.clamp(0, 1),
+                            sizing: StackFit.expand,
+                            children: [
+                              _ExamScheduleWizard(
+                                key: _middleKey,
+                                schoolGrade: schoolGradeMiddle,
+                                level: EducationLevel.middle,
+                                onExamDataChanged: _onWizardExamDataChanged,
+                              ),
+                              _ExamScheduleWizard(
+                                key: _highKey,
+                                schoolGrade: schoolGradeHigh,
+                                level: EducationLevel.high,
+                                onExamDataChanged: _onWizardExamDataChanged,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                   const SizedBox(width: 12),
                   Expanded(
-                      child: _ExamScheduleWizard(
-                          key: _highKey,
-                          schoolGrade: schoolGradeHigh,
-                          level: EducationLevel.high)),
+                    flex: 3,
+                    child: _ExamScheduleOverviewPanel(
+                      level: _examLevelTabIndex == 0
+                          ? EducationLevel.middle
+                          : EducationLevel.high,
+                      labels: _examLevelTabIndex == 0
+                          ? schoolGradeMiddle
+                          : schoolGradeHigh,
+                      wizardState: _examLevelTabIndex == 0
+                          ? _middleKey.currentState
+                          : _highKey.currentState,
+                      highlightSg: _overviewHighlightSg,
+                      highlightDays: _overviewHighlightDays,
+                      onSchoolPeriodTap: (sg) {
+                        if (sg.isEmpty) {
+                          setState(() {
+                            _overviewHighlightSg = null;
+                            _overviewHighlightDays = {};
+                          });
+                          return;
+                        }
+                        final st = _examLevelTabIndex == 0
+                            ? _middleKey.currentState
+                            : _highKey.currentState;
+                        if (st == null) return;
+                        final lev = _examLevelTabIndex == 0
+                            ? EducationLevel.middle
+                            : EducationLevel.high;
+                        setState(() {
+                          _overviewHighlightSg = sg;
+                          _overviewHighlightDays =
+                              _periodDaysForWizardRow(sg, lev, st);
+                        });
+                      },
+                    ),
+                  ),
                 ],
               ),
               // 외부 오버레이: 호버된 행의 날짜 요약 표시
@@ -3381,7 +3495,9 @@ class _ExamScheduleDialogState extends State<_ExamScheduleDialog> {
                 right: 8,
                 top: 40,
                 child: Builder(builder: (context) {
-                  final st = _middleKey.currentState ?? _highKey.currentState;
+                  final mid = _middleKey.currentState;
+                  final hi = _highKey.currentState;
+                  final st = _examLevelTabIndex == 0 ? (mid ?? hi) : (hi ?? mid);
                   if (st == null) return const SizedBox.shrink();
                   final sg = st._hoveredSchoolGrade;
                   if (sg == null) return const SizedBox.shrink();
@@ -3927,13 +4043,26 @@ Future<void> _openSchoolGradeMultiSelectDialog(
 class _ExamScheduleWizard extends StatefulWidget {
   final List<String> schoolGrade;
   final EducationLevel? level;
-  const _ExamScheduleWizard({Key? key, required this.schoolGrade, this.level})
-      : super(key: key);
+  final VoidCallback? onExamDataChanged;
+  const _ExamScheduleWizard({
+    Key? key,
+    required this.schoolGrade,
+    this.level,
+    this.onExamDataChanged,
+  }) : super(key: key);
   @override
   State<_ExamScheduleWizard> createState() => _ExamScheduleWizardState();
 }
 
 class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
+  void notifyExamScheduleChanged() {
+    final cb = widget.onExamDataChanged;
+    if (cb == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) cb();
+    });
+  }
+
   int _step = 0; // 0: 학교/학년 선택, 1: 날짜 다중 선택, 2: 날짜 카드 관리
   String? _selectedSchoolGrade;
   final Set<DateTime> _selectedDays = {};
@@ -3966,6 +4095,8 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
         _rangesBySchoolGrade[sg] = Map<DateTime, String>.from(rng);
       }
     }
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => notifyExamScheduleChanged());
   }
 
   /// 다음 시험 시즌: 활성 DB는 비워진 뒤 호출. 프리로드 맵에서 해당 학교·학년 키는 다이얼로그에서 먼저 제거할 것.
@@ -3984,6 +4115,7 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
       _hoveredSchoolGrade = null;
     });
     _titleCtrl.clear();
+    notifyExamScheduleChanged();
   }
 
   void reloadFromPreloadMaps() {
@@ -4002,6 +4134,7 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
         }
       }
     });
+    notifyExamScheduleChanged();
   }
 
   @override
@@ -4091,13 +4224,10 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      width: 620,
-      child: RepaintBoundary(
-        child: AnimatedSwitcher(
-          duration: const Duration(milliseconds: 200),
-          child: _buildStep(),
-        ),
+    return RepaintBoundary(
+      child: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 200),
+        child: _buildStep(),
       ),
     );
   }
@@ -4109,9 +4239,6 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
         mainAxisSize: MainAxisSize.max,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const YggDialogSectionHeader(
-              icon: Icons.apartment_outlined, title: '학교·학년 선택'),
-          const SizedBox(height: 8),
           // 프리로드 데이터는 _ExamScheduleWizardState.initState에서 맵에 반영됨
           Expanded(
             child: Container(
@@ -4290,6 +4417,7 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                                     _preloadedRangesBySg.remove(item);
                                     _selectedDaysBySchoolGrade.remove(item);
                                   });
+                                  notifyExamScheduleChanged();
                                 }
                               },
                               child: Container(
@@ -4410,6 +4538,7 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                                                 edited[dateKey] ?? <String>[];
                                             _savedBySchoolGrade[sg] = map;
                                           });
+                                          notifyExamScheduleChanged();
                                         }
                                       }),
                                       const SizedBox(width: 6),
@@ -4429,6 +4558,7 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                                                 edited[dateKey] ?? <String>[];
                                             _savedBySchoolGrade[sg] = map;
                                           });
+                                          notifyExamScheduleChanged();
                                         }
                                       }),
                                     ],
@@ -4468,6 +4598,7 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                                             if (r != null) map[dateKey] = r;
                                             _rangesBySchoolGrade[sg] = map;
                                           });
+                                          notifyExamScheduleChanged();
                                         }
                                       }),
                                     ],
@@ -4543,6 +4674,7 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                                   _selectedDays.clear();
                                   _step = 1;
                                 });
+                                notifyExamScheduleChanged();
                               },
                               style: TextButton.styleFrom(
                                   foregroundColor: kDlgText,
@@ -4564,6 +4696,7 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                                 setState(() {
                                   _selectedSchoolGrade = item;
                                 });
+                                notifyExamScheduleChanged();
                                 final savedMap =
                                     _savedBySchoolGrade[item] ?? {};
                                 final hasNames =
@@ -4577,6 +4710,7 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                                       _dlog(
                                           '[RANGE_EDIT][apply] schoolGrade=$item, keys=${res.keys.toList()}');
                                     });
+                                    notifyExamScheduleChanged();
                                   }
                                 } else {
                                   await _openRangeAddDialog(context);
@@ -4731,6 +4865,7 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                           _selectedDays.add(key);
                         }
                       });
+                      notifyExamScheduleChanged();
                     },
                     child: AnimatedContainer(
                       duration: const Duration(milliseconds: 120),
@@ -4760,7 +4895,10 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
                 TextButton(
-                  onPressed: () => setState(() => _step = 0),
+                  onPressed: () {
+                    setState(() => _step = 0);
+                    notifyExamScheduleChanged();
+                  },
                   style: TextButton.styleFrom(foregroundColor: Colors.white70),
                   child: const Text('뒤로'),
                 ),
@@ -4854,6 +4992,7 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                           await DataManager.instance.saveExamDays(
                               schoolName, level, gradeNum, list.toSet());
                         }
+                        notifyExamScheduleChanged();
                       }
                     },
                     style: FilledButton.styleFrom(
@@ -4953,6 +5092,7 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                   setState(() {
                     _titlesByDate[key] = [...titles, text];
                   });
+                  notifyExamScheduleChanged();
                 }
               },
               icon: const Icon(Icons.event, size: 16),
@@ -5029,13 +5169,17 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                   setState(() {
                     _titlesByDate[key] = [...titles, '범위|$text'];
                   });
+                  notifyExamScheduleChanged();
                 }
               },
               icon: const Icon(Icons.notes, size: 16),
               label: const Text('범위')),
           const SizedBox(width: 12),
           TextButton.icon(
-              onPressed: () => setState(() => _step = 1),
+              onPressed: () {
+                setState(() => _step = 1);
+                notifyExamScheduleChanged();
+              },
               icon: const Icon(Icons.arrow_back, size: 16),
               label: const Text('뒤로')),
         ]),
@@ -5133,6 +5277,7 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                   setState(() {
                     _titlesByDate[key] = [...titles, text];
                   });
+                  notifyExamScheduleChanged();
                 }
               },
               child: Container(
@@ -5167,6 +5312,415 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
             style: FilledButton.styleFrom(
                 backgroundColor: const Color(0xFF1976D2)),
             child: const Text('저장'),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+DateTime _mondayOfWeekDate(DateTime d) {
+  final day = DateTime(d.year, d.month, d.day);
+  return day.subtract(Duration(days: day.weekday - 1));
+}
+
+Set<DateTime> _periodDaysForWizardRow(
+    String sg, EducationLevel level, _ExamScheduleWizardState st) {
+  final sessionPicked = st._selectedDaysBySchoolGrade[sg] ?? <DateTime>{};
+  if (sessionPicked.isNotEmpty) {
+    return sessionPicked
+        .map((d) => DateTime(d.year, d.month, d.day))
+        .toSet();
+  }
+  final idx = sg.lastIndexOf(' ');
+  final schoolName = idx > 0 ? sg.substring(0, idx) : sg;
+  final gradeText = idx > 0 ? sg.substring(idx + 1) : '';
+  final gradeNum = int.tryParse(gradeText.replaceAll('학년', '')) ?? 0;
+  return DataManager.instance.getExamDaysForSchoolGrade(
+    school: schoolName,
+    level: level,
+    grade: gradeNum,
+  );
+}
+
+Set<DateTime> _allExamRelatedDatesForOverview(
+    String sg, EducationLevel level, _ExamScheduleWizardState st) {
+  final out = <DateTime>{};
+  final saved = st._savedBySchoolGrade[sg];
+  if (saved != null) {
+    for (final e in saved.entries) {
+      if (e.value.any((x) => x.trim().isNotEmpty)) {
+        out.add(DateTime(e.key.year, e.key.month, e.key.day));
+      }
+    }
+  }
+  final sess = st._selectedDaysBySchoolGrade[sg];
+  if (sess != null) {
+    for (final d in sess) {
+      out.add(DateTime(d.year, d.month, d.day));
+    }
+  }
+  out.addAll(_periodDaysForWizardRow(sg, level, st));
+  return out;
+}
+
+/// 요약 달력 상단: 시험일이 걸친 월 범위를 `_MonthlyCalendar` 월 타이틀 톤으로 표시
+String _monthHeadingForExamOverview(Set<DateTime> allDays) {
+  if (allDays.isEmpty) return '';
+  final sorted = allDays.toList()..sort();
+  final a = sorted.first;
+  final b = sorted.last;
+  if (a.year == b.year && a.month == b.month) {
+    return '${a.year}년 ${a.month}월';
+  }
+  if (a.year == b.year) {
+    return '${a.year}년 ${a.month}월 – ${b.month}월';
+  }
+  return '${a.year}년 ${a.month}월 – ${b.year}년 ${b.month}월';
+}
+
+/// 시간표 일정 탭 `_MonthlyCalendar._buildDayNumber`와 동일한 요일 색 규칙
+Widget _examOverviewDayNumber(DateTime date, TextStyle base) {
+  Color color = base.color ?? kDlgTextSub;
+  if (date.weekday == DateTime.saturday) {
+    color = const Color(0xFF7FB2E5);
+  } else if (date.weekday == DateTime.sunday) {
+    color = const Color(0xFFE07B7B);
+  }
+  return Text('${date.day}', style: base.copyWith(color: color));
+}
+
+/// 시간표 일정 탭 `_EventStripe`와 동일한 좌측 컬러 바 + 제목/부제 스트라이프
+class _ExamOverviewMathStripe extends StatelessWidget {
+  final String title;
+  final String? subtitle;
+  final VoidCallback onTap;
+
+  const _ExamOverviewMathStripe({
+    required this.title,
+    this.subtitle,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          margin: const EdgeInsets.only(bottom: 3),
+          child: IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Container(
+                  width: 5,
+                  decoration: BoxDecoration(
+                    color: kDlgAccent,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: kDlgText,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      if (subtitle != null && subtitle!.trim().isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 2),
+                          child: Text(
+                            subtitle!.trim(),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: kDlgTextSub,
+                              fontSize: 12,
+                              height: 1.25,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ExamScheduleOverviewPanel extends StatelessWidget {
+  final EducationLevel level;
+  final List<String> labels;
+  final _ExamScheduleWizardState? wizardState;
+  final String? highlightSg;
+  final Set<DateTime> highlightDays;
+  final ValueChanged<String> onSchoolPeriodTap;
+
+  const _ExamScheduleOverviewPanel({
+    required this.level,
+    required this.labels,
+    required this.wizardState,
+    required this.highlightSg,
+    required this.highlightDays,
+    required this.onSchoolPeriodTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final st = wizardState;
+    if (st == null || labels.isEmpty) {
+      return Center(
+        child: Text(
+          labels.isEmpty
+              ? '학년 필터로 표시할 학교를 선택하세요.'
+              : '일정을 불러오는 중입니다.',
+          textAlign: TextAlign.center,
+          style: const TextStyle(
+            color: kDlgTextSub,
+            fontWeight: FontWeight.w600,
+            height: 1.35,
+          ),
+        ),
+      );
+    }
+    final allDays = <DateTime>{};
+    for (final sg in labels) {
+      allDays.addAll(_allExamRelatedDatesForOverview(sg, level, st));
+    }
+    if (allDays.isEmpty) {
+      return Center(
+        child: Text(
+          '시험 일이 있는 주가 없습니다.',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: kDlgTextSub.withOpacity(0.9),
+            fontWeight: FontWeight.w600,
+            height: 1.35,
+          ),
+        ),
+      );
+    }
+    final weekStarts = allDays.map(_mondayOfWeekDate).toSet().toList()..sort();
+
+    // 시간표 일정 탭 `_MonthlyCalendar`와 동일한 일·요일 숫자 타이포
+    const textStyleDim = TextStyle(
+      color: kDlgTextSub,
+      fontSize: 21,
+      fontWeight: FontWeight.w500,
+    );
+    const textStyleNorm = TextStyle(
+      color: kDlgText,
+      fontSize: 21,
+      fontWeight: FontWeight.w700,
+    );
+    const dowStyle = TextStyle(
+      color: kDlgTextSub,
+      fontSize: 23,
+      fontWeight: FontWeight.w600,
+    );
+    const overviewTitleStyle = TextStyle(
+      color: kDlgText,
+      fontSize: 26,
+      fontWeight: FontWeight.w700,
+    );
+
+    // 일정 탭 달력처럼 패널 박스 없이 Column만 (배경은 다이얼로그 kDlgBg)
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(0, 8, 0, 0),
+          child: Row(
+            children: [
+              const Icon(Icons.calendar_view_week_rounded,
+                  size: 28, color: kDlgTextSub),
+              const SizedBox(width: 10),
+              const Expanded(
+                child: Text(
+                  '시험 주간 요약',
+                  style: overviewTitleStyle,
+                ),
+              ),
+              if (highlightSg != null)
+                TextButton(
+                  onPressed: () => onSchoolPeriodTap(''),
+                  style: TextButton.styleFrom(
+                    foregroundColor: kDlgTextSub,
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                  ),
+                  child: const Text('강조 해제', style: TextStyle(fontSize: 13)),
+                ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        Center(
+          child: Text(
+            _monthHeadingForExamOverview(allDays),
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: kDlgText,
+              fontSize: 33,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 14),
+          child: Row(
+            children: const [
+              Expanded(child: Center(child: Text('월', style: dowStyle))),
+              Expanded(child: Center(child: Text('화', style: dowStyle))),
+              Expanded(child: Center(child: Text('수', style: dowStyle))),
+              Expanded(child: Center(child: Text('목', style: dowStyle))),
+              Expanded(child: Center(child: Text('금', style: dowStyle))),
+              Expanded(
+                child: Center(
+                  child: Text(
+                    '토',
+                    style: TextStyle(
+                      color: Color(0xFF6FA6DD),
+                      fontSize: 23,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ),
+              Expanded(
+                child: Center(
+                  child: Text(
+                    '일',
+                    style: TextStyle(
+                      color: Color(0xFFE07B7B),
+                      fontSize: 23,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        Expanded(
+          child: ListView.separated(
+            padding: EdgeInsets.zero,
+            itemCount: weekStarts.length,
+            separatorBuilder: (_, __) => const Divider(
+              height: 1,
+              thickness: 1,
+              color: kDlgBorder,
+            ),
+            itemBuilder: (context, wi) {
+              final mon = weekStarts[wi];
+              const double rowH = 208;
+              return SizedBox(
+                height: rowH,
+                child: Row(
+                  children: List.generate(7, (di) {
+                    final d = mon.add(Duration(days: di));
+                    final key = DateTime(d.year, d.month, d.day);
+                    final inWeek = allDays.contains(key);
+                    final hi = highlightDays.contains(key);
+                    final textStyle = inWeek ? textStyleNorm : textStyleDim;
+                    final stripes = <Widget>[];
+                    if (inWeek) {
+                      for (final sg in labels) {
+                        final titles = st._savedBySchoolGrade[sg]?[key] ??
+                            const <String>[];
+                        if (!titles.any(
+                            (t) => _titleIsMathExamForSchoolGrade(t, sg))) {
+                          continue;
+                        }
+                        final idx = sg.lastIndexOf(' ');
+                        final school = idx > 0 ? sg.substring(0, idx) : sg;
+                        final gradeText =
+                            idx > 0 ? sg.substring(idx + 1) : '';
+                        final sub = gradeText.isEmpty
+                            ? (school.isEmpty ? null : school)
+                            : '$school $gradeText';
+                        stripes.add(
+                          _ExamOverviewMathStripe(
+                            title: '수학',
+                            subtitle: sub,
+                            onTap: () => onSchoolPeriodTap(sg),
+                          ),
+                        );
+                      }
+                    }
+                    return Expanded(
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 150),
+                          margin: const EdgeInsets.symmetric(vertical: 4),
+                          padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
+                          decoration: BoxDecoration(
+                            color: hi
+                                ? kDlgAccent.withOpacity(0.18)
+                                : Colors.transparent,
+                            borderRadius: BorderRadius.circular(10),
+                            border: hi
+                                ? Border.all(
+                                    color: kDlgAccent.withOpacity(0.4),
+                                    width: 1,
+                                  )
+                                : null,
+                          ),
+                          child: Stack(
+                            clipBehavior: Clip.none,
+                            children: [
+                              Align(
+                                alignment: Alignment.topLeft,
+                                child: _examOverviewDayNumber(d, textStyle),
+                              ),
+                              if (stripes.isNotEmpty)
+                                Positioned.fill(
+                                  child: Padding(
+                                    padding: const EdgeInsets.only(
+                                      left: 2,
+                                      right: 2,
+                                      top: 28,
+                                      bottom: 2,
+                                    ),
+                                    child: ClipRect(
+                                      child: SingleChildScrollView(
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.stretch,
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: stripes,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    );
+                  }),
+                ),
+              );
+            },
           ),
         ),
       ],

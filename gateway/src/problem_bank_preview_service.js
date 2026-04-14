@@ -65,7 +65,7 @@ function getDefaultFontPaths() {
   };
 }
 
-function questionContentHash(question) {
+function questionContentHash(question, mathEngine) {
   const meta = question?.meta && typeof question.meta === 'object' ? question.meta : {};
   const stemLineAligns = Array.isArray(meta.stem_line_aligns)
     ? meta.stem_line_aligns
@@ -74,6 +74,7 @@ function questionContentHash(question) {
       : [];
   const payload = JSON.stringify({
     style_version: PREVIEW_STYLE_VERSION,
+    math_engine: mathEngine || 'mathjax-svg',
     stem: question?.stem || '',
     choices: question?.choices || [],
     equations: question?.equations || [],
@@ -109,6 +110,7 @@ export async function generateQuestionPreviews({
   layout,
   supabaseClient,
   force = false,
+  mathEngine,
 }) {
   if (!supabaseClient) throw new Error('supabaseClient is required');
   if (!Array.isArray(questions) || questions.length === 0) return [];
@@ -125,7 +127,7 @@ export async function generateQuestionPreviews({
       continue;
     }
 
-    const hash = questionContentHash(question);
+    const hash = questionContentHash(question, mathEngine);
     const storagePath = `${academyId || 'global'}/q_${qId}_${hash}.png`;
 
     if (!force) {
@@ -154,6 +156,7 @@ export async function generateQuestionPreviews({
         viewportWidth: PREVIEW_VIEWPORT_WIDTH,
         deviceScaleFactor: PREVIEW_DPR,
         debugDots: DEBUG_MATH_DOTS,
+        mathEngine,
       });
 
       const { error: uploadErr } = await supabaseClient.storage

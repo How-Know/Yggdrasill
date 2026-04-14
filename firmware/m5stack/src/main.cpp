@@ -75,6 +75,17 @@ static portMUX_TYPE g_hw_mux = portMUX_INITIALIZER_UNLOCKED;
 static volatile bool g_hw_pending = false;
 static String g_hw_pending_json;
 
+// GROUP_CMD_V2 (server-authoritative group transition) states
+static const char* GROUP_CMD_V2_TARGET_DEVICE = "m5-device-001";
+static const uint32_t GROUP_CMD_V2_ACK_TIMEOUT_MS = 2500;
+static const uint32_t GROUP_CMD_V2_TAP_LOCK_MS = 1200;
+static bool g_group_transition_pending = false;
+static String g_group_transition_pending_group_id;
+static String g_group_transition_pending_request_id;
+static uint32_t g_group_transition_pending_since_ms = 0;
+static String g_group_transition_lock_group_id;
+static uint32_t g_group_transition_lock_until_ms = 0;
+
 // LVGL objects
 static lv_disp_draw_buf_t g_lv_draw_buf;
 static lv_color_t* g_lv_buf1 = nullptr;
@@ -161,6 +172,136 @@ static void configureMqttServer() {
 
 void fw_publish_list_homeworks(const char* studentIdArg);
 
+static void persist_student_id_nvs(const String& sid) {
+  Preferences prefs;
+  prefs.begin("m5cfg", false);
+  if (sid.length() > 0) {
+    prefs.putString("student_id", sid);
+  } else {
+    prefs.remove("student_id");
+  }
+  prefs.end();
+}
+
+static String load_student_id_nvs() {
+  Preferences prefs;
+  prefs.begin("m5cfg", true);
+  String sid = prefs.getString("student_id", "");
+  prefs.end();
+  sid.trim();
+  return sid;
+}
+
+static bool is_group_cmd_v2_enabled() {
+  return deviceId == GROUP_CMD_V2_TARGET_DEVICE;
+}
+
+static String make_group_transition_request_id(const char* groupId) {
+  uint16_t gidHash = 0;
+  if (groupId) {
+    for (size_t i = 0; groupId[i] != '\0'; ++i) {
+      gidHash = (uint16_t)((gidHash * 131u) ^ (uint8_t)groupId[i]);
+    }
+  }
+  char buf[56];
+  uint32_t r1 = (uint32_t)esp_random();
+  uint32_t r2 = (uint32_t)esp_random();
+  uint32_t tick = millis();
+  snprintf(
+      buf,
+      sizeof(buf),
+      "%08lx%08lx%08lx%04x",
+      (unsigned long)r1,
+      (unsigned long)r2,
+      (unsigned long)tick,
+      (unsigned int)gidHash);
+  return String(buf);
+}
+
+static void set_group_transition_lock(const char* groupId, uint32_t nowMs) {
+  if (!groupId || !*groupId) return;
+  g_group_transition_lock_group_id = groupId;
+  g_group_transition_lock_until_ms = nowMs + GROUP_CMD_V2_TAP_LOCK_MS;
+}
+
+static void clear_group_transition_pending(const char* reason, bool requestRefresh) {
+  if (g_group_transition_pending) {
+    Serial.printf(
+        "[GROUP_CMD_V2] clear pending reason=%s group=%s request_id=%s refresh=%d\n",
+        reason ? reason : "unknown",
+        g_group_transition_pending_group_id.c_str(),
+        g_group_transition_pending_request_id.c_str(),
+        requestRefresh ? 1 : 0);
+  }
+  g_group_transition_pending = false;
+  g_group_transition_pending_group_id.remove(0);
+  g_group_transition_pending_request_id.remove(0);
+  g_group_transition_pending_since_ms = 0;
+
+  if (requestRefresh && studentId.length() > 0) {
+    fw_publish_list_homeworks(studentId.c_str());
+  }
+}
+
+static bool should_block_group_transition(const char* groupId, uint32_t nowMs) {
+  if (!groupId || !*groupId) return true;
+
+  if (g_group_transition_pending &&
+      g_group_transition_pending_group_id == groupId) {
+    uint32_t age = (nowMs >= g_group_transition_pending_since_ms)
+        ? (nowMs - g_group_transition_pending_since_ms)
+        : 0;
+    if (age < GROUP_CMD_V2_ACK_TIMEOUT_MS) return true;
+    clear_group_transition_pending("stale_before_send", true);
+  }
+
+  if (g_group_transition_lock_until_ms > nowMs &&
+      g_group_transition_lock_group_id == groupId) {
+    return true;
+  }
+
+  return false;
+}
+
+static void handle_group_transition_device_ack(const char* body) {
+  if (!is_group_cmd_v2_enabled()) return;
+  if (!body || !body[0]) return;
+
+  StaticJsonDocument<384> doc;
+  DeserializationError err = deserializeJson(doc, body);
+  if (err) return;
+
+  const char* action = doc["action"] | "";
+  if (strcmp(action, "group_transition") != 0) return;
+
+  const char* requestId = doc["request_id"] | "";
+  if (!requestId || !requestId[0]) {
+    Serial.println("[GROUP_CMD_V2] ack missing request_id");
+    return;
+  }
+
+  if (!g_group_transition_pending) return;
+  if (g_group_transition_pending_request_id != String(requestId)) {
+    Serial.printf(
+        "[GROUP_CMD_V2] ack ignored request_id=%s pending=%s\n",
+        requestId,
+        g_group_transition_pending_request_id.c_str());
+    return;
+  }
+
+  const bool ok = doc["ok"] | false;
+  const bool dedup = doc["dedup"] | false;
+  const int changed = doc.containsKey("changed") ? (int)doc["changed"] : 0;
+  Serial.printf(
+      "[GROUP_CMD_V2] ack matched request_id=%s ok=%d dedup=%d changed=%d\n",
+      requestId,
+      ok ? 1 : 0,
+      dedup ? 1 : 0,
+      changed);
+
+  clear_group_transition_pending("ack", !ok);
+}
+
 // 서버 하원(unbound) 또는 로컬 로그아웃 시 공통: NVS 추적용 studentId + LittleFS 정리 (MQTT 송신 없음)
 void fw_clear_local_binding_state(void) {
   if (LittleFS.begin()) {
@@ -170,8 +311,15 @@ void fw_clear_local_binding_state(void) {
     }
     LittleFS.end();
   }
+  persist_student_id_nvs("");
   studentId = "";
   g_mqtt_bind_announced = false;
+  g_group_transition_pending = false;
+  g_group_transition_pending_group_id.remove(0);
+  g_group_transition_pending_request_id.remove(0);
+  g_group_transition_pending_since_ms = 0;
+  g_group_transition_lock_group_id.remove(0);
+  g_group_transition_lock_until_ms = 0;
 }
 
 void onMqttConnect(bool sessionPresent) {
@@ -278,6 +426,7 @@ void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties 
     if (total && da_received < total) { return; }
     g_last_mqtt_rx_ack_ms = nowMs;
     Serial.print("DEV_ACK: "); Serial.println(da_acc);
+    handle_group_transition_device_ack(da_acc.c_str());
     ui_port_on_device_ack_json(da_acc.c_str());
     da_acc.remove(0);
   }
@@ -360,6 +509,7 @@ void sendCommand(const char* action, const char* itemId) {
 void fw_publish_bind(const char* studentIdArg) {
   if (!studentIdArg || !*studentIdArg) return;
   studentId = studentIdArg; // track bound student on device
+  persist_student_id_nvs(studentId);
   
   // LittleFS에 바인딩된 학생 ID 저장 (재시작 후 복원용)
   if (LittleFS.begin()) {
@@ -427,23 +577,65 @@ void fw_publish_homework_action(const char* action, const char* itemId) {
   mqtt.publish(topic.c_str(), 1, false, payload.c_str());
 }
 
-void fw_publish_group_transition(const char* groupId, int from_phase) {
-  if (!groupId || !*groupId || !studentId.length()) return;
-  DynamicJsonDocument doc(256);
+bool fw_publish_group_transition(const char* groupId, int from_phase) {
+  if (!groupId || !*groupId || !studentId.length()) return false;
+
+  const bool useV2 = is_group_cmd_v2_enabled();
+  const uint32_t nowMs = millis();
+  if (useV2 && should_block_group_transition(groupId, nowMs)) {
+    Serial.printf(
+        "[GROUP_CMD_V2] blocked duplicate group=%s pending=%d lock_until=%lu\n",
+        groupId,
+        g_group_transition_pending ? 1 : 0,
+        (unsigned long)g_group_transition_lock_until_ms);
+    return false;
+  }
+
+  DynamicJsonDocument doc(320);
   doc["action"] = "group_transition";
   doc["academy_id"] = academyId;
   doc["student_id"] = studentId;
   doc["item_id"] = "GROUP";
   doc["group_id"] = groupId;
   if (from_phase > 0) doc["from_phase"] = from_phase;
-  doc["idempotency_key"] = String((uint32_t)esp_random(), HEX);
   doc["at"] = "";
   doc["updated_by"] = studentId;
+
+  String topic;
+  String requestId;
+  if (useV2) {
+    requestId = make_group_transition_request_id(groupId);
+    doc["request_id"] = requestId;
+    doc["idempotency_key"] = requestId;
+    topic = String("academies/") + academyId + "/devices/" + deviceId + "/command";
+  } else {
+    doc["idempotency_key"] = String((uint32_t)esp_random(), HEX);
+    topic = String("academies/") + academyId + "/students/" + studentId + "/homework/GROUP/command";
+  }
+
   String payload;
   serializeJson(doc, payload);
-  String topic =
-      String("academies/") + academyId + "/students/" + studentId + "/homework/GROUP/command";
-  mqtt.publish(topic.c_str(), 1, false, payload.c_str());
+  uint16_t pkt = mqtt.publish(topic.c_str(), 1, false, payload.c_str());
+  if (pkt == 0) {
+    Serial.printf("[GROUP_CMD_V2] publish failed group=%s topic=%s\n", groupId, topic.c_str());
+    return false;
+  }
+
+  if (useV2) {
+    g_group_transition_pending = true;
+    g_group_transition_pending_group_id = groupId;
+    g_group_transition_pending_request_id = requestId;
+    g_group_transition_pending_since_ms = nowMs;
+    set_group_transition_lock(groupId, nowMs);
+    Serial.printf(
+        "[GROUP_CMD_V2] sent request_id=%s group=%s phase=%d packet=%u\n",
+        requestId.c_str(),
+        groupId,
+        from_phase,
+        (unsigned)pkt);
+  }
+
+  return true;
 }
 
 void fw_publish_pause_all() {
@@ -528,6 +720,14 @@ void setup() {
     }
 #endif
     prefs.end();
+  }
+  {
+    String restoredStudentId = load_student_id_nvs();
+    if (restoredStudentId.length() > 0) {
+      studentId = restoredStudentId;
+      g_mqtt_bind_announced = false;
+      Serial.printf("[NVS] restored student_id: %s\n", studentId.c_str());
+    }
   }
 
   initLvgl();
@@ -678,6 +878,15 @@ void loop() {
     nextMqttReconnectMs = 0;
     mqtt.connect();
     Serial.println("MQTT reconnect...");
+  }
+
+  if (is_group_cmd_v2_enabled() && g_group_transition_pending && g_group_transition_pending_since_ms > 0) {
+    uint32_t pendingAge = (now >= g_group_transition_pending_since_ms)
+        ? (now - g_group_transition_pending_since_ms)
+        : 0;
+    if (pendingAge >= GROUP_CMD_V2_ACK_TIMEOUT_MS) {
+      clear_group_transition_pending("timeout", true);
+    }
   }
 
   // MQTT stale watchdog: 바인딩된 상태에서 수신 정체를 감지하면 재요청/재연결

@@ -766,6 +766,7 @@ function normalizeExportRenderConfig(options, selectedQuestionUids, defaults = {
     selectedQuestionIdsOrdered: selectedQuestionUidsOrdered,
     questionModeByQuestionId: questionModeByQuestionUid,
     questionScoreByQuestionId: questionScoreByQuestionUid,
+    mathEngine: String(src.mathEngine || '').trim() || undefined,
   };
 }
 
@@ -1381,6 +1382,7 @@ async function createExportJob(body, res) {
     selectedQuestionIdsOrdered: renderConfig.selectedQuestionUidsOrdered,
     questionModeByQuestionUid: renderConfig.questionModeByQuestionUid,
     questionModeByQuestionId: renderConfig.questionModeByQuestionUid,
+    mathEngine: renderConfig.mathEngine,
   };
   const renderHash = computeRenderHash(renderHashPayload);
 
@@ -1418,6 +1420,7 @@ async function createExportJob(body, res) {
     selectedQuestionIdsOrdered: renderConfig.selectedQuestionUidsOrdered,
     questionModeByQuestionUid: renderConfig.questionModeByQuestionUid,
     questionModeByQuestionId: renderConfig.questionModeByQuestionUid,
+    mathEngine: renderConfig.mathEngine,
     renderHash,
     previewOnly,
   };
@@ -2468,6 +2471,7 @@ async function previewQuestions(res, req) {
   const questionIds = Array.isArray(body?.questionIds) ? body.questionIds.map(String) : [];
   const layout = body?.layout || {};
   const force = body?.force === true;
+  const mathEngine = body?.mathEngine || undefined;
 
   if (!academyId || questionIds.length === 0) {
     sendJson(res, 400, { ok: false, error: 'academyId and questionIds[] required' });
@@ -2492,6 +2496,7 @@ async function previewQuestions(res, req) {
       layout,
       supabaseClient: supa,
       force,
+      mathEngine,
     });
     sendJson(res, 200, { ok: true, previews });
   } catch (err) {

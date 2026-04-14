@@ -99,6 +99,12 @@ class HomeworkGroup {
   String status;
   String? sourceHomeworkItemId;
   DateTime? cycleStartedAt; // 현재 사이클에서 처음 수행 진입한 시각
+  int runtimePhase; // 0: runtime 없음, 1~4: 그룹 runtime phase
+  int runtimeAccumulatedMs;
+  DateTime? runtimeRunStart;
+  DateTime? runtimeFirstStartedAt;
+  int runtimeCheckCount;
+  DateTime? runtimeUpdatedAt;
   DateTime? createdAt;
   DateTime? updatedAt;
   int version;
@@ -111,6 +117,12 @@ class HomeworkGroup {
     this.status = 'active',
     this.sourceHomeworkItemId,
     this.cycleStartedAt,
+    this.runtimePhase = 0,
+    this.runtimeAccumulatedMs = 0,
+    this.runtimeRunStart,
+    this.runtimeFirstStartedAt,
+    this.runtimeCheckCount = 0,
+    this.runtimeUpdatedAt,
     this.createdAt,
     this.updatedAt,
     this.version = 1,
@@ -276,6 +288,8 @@ class HomeworkStore {
       'id,student_id,title,flow_id,order_index,status,source_homework_item_id,cycle_started_at,created_at,updated_at,version';
   static const String _homeworkGroupSelectNoCycleStarted =
       'id,student_id,title,flow_id,order_index,status,source_homework_item_id,created_at,updated_at,version';
+  static const String _homeworkGroupRuntimeSelect =
+      'group_id,student_id,phase,accumulated_ms,run_start,first_started_at,check_count,updated_at';
   static const String _homeworkGroupItemSelect =
       'id,group_id,student_id,homework_item_id,item_order_index,created_at,updated_at,version';
 
@@ -364,6 +378,14 @@ class HomeworkStore {
     if (message.contains('42p01') || message.contains('does not exist')) {
       return message.contains('homework_groups') ||
           message.contains('homework_group_items');
+    }
+    return false;
+  }
+
+  bool _isMissingGroupRuntimeTableError(Object error) {
+    final message = error.toString().toLowerCase();
+    if (message.contains('42p01') || message.contains('does not exist')) {
+      return message.contains('homework_group_runtime');
     }
     return false;
   }
@@ -1096,6 +1118,27 @@ class HomeworkStore {
       final groupItemRowsRaw = await groupItemQuery;
       final groupItemRows =
           (groupItemRowsRaw as List<dynamic>).cast<Map<String, dynamic>>();
+      List<Map<String, dynamic>> runtimeRows = const [];
+      try {
+        dynamic runtimeQuery = supa
+            .from('homework_group_runtime')
+            .select(_homeworkGroupRuntimeSelect)
+            .eq('academy_id', academyId);
+        if (targetStudent != null) {
+          runtimeQuery = runtimeQuery.eq('student_id', targetStudent);
+        }
+        final runtimeRowsRaw = await runtimeQuery;
+        runtimeRows =
+            (runtimeRowsRaw as List<dynamic>).cast<Map<String, dynamic>>();
+      } catch (e) {
+        if (!_isMissingGroupRuntimeTableError(e)) rethrow;
+      }
+      final runtimeByGroupId = <String, Map<String, dynamic>>{};
+      for (final row in runtimeRows) {
+        final gid = (row['group_id'] as String?)?.trim() ?? '';
+        if (gid.isEmpty) continue;
+        runtimeByGroupId[gid] = row;
+      }
 
       if (targetStudent != null) {
         _clearGroupCacheForStudent(targetStudent);
@@ -1109,6 +1152,16 @@ class HomeworkStore {
       for (final row in groupRows) {
         final g = _parseHomeworkGroupRow(row);
         if (g.studentId.isEmpty) continue;
+        final runtime = runtimeByGroupId[g.id];
+        if (runtime != null) {
+          g.runtimePhase =
+              (_parseInt(runtime['phase'], fallback: 0)).clamp(0, 4).toInt();
+          g.runtimeAccumulatedMs = _parseInt(runtime['accumulated_ms']);
+          g.runtimeRunStart = _parseTsOpt(runtime['run_start']);
+          g.runtimeFirstStartedAt = _parseTsOpt(runtime['first_started_at']);
+          g.runtimeCheckCount = _parseInt(runtime['check_count']);
+          g.runtimeUpdatedAt = _parseTsOpt(runtime['updated_at']);
+        }
         _groupsByStudentId.putIfAbsent(g.studentId, () => []).add(g);
         groupIds.add(g.id);
       }
@@ -1677,6 +1730,21 @@ class HomeworkStore {
               academyId: targetAcademyId,
               studentId: sid,
             ));
+          },
+        )
+        ..onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'homework_group_runtime',
+          callback: (payload) {
+            if (!_payloadMatchesAcademy(payload, targetAcademyId)) return;
+            String sid = (payload.newRecord['student_id'] as String?) ?? '';
+            if (sid.isEmpty) {
+              sid = (payload.oldRecord['student_id'] as String?) ?? '';
+            }
+            if (sid.isEmpty) return;
+            debugPrint('[HW][rt][RUNTIME] student=$sid');
+            _scheduleRealtimeReload(sid);
           },
         )
         ..subscribe((status, [error]) {
@@ -2715,7 +2783,7 @@ class HomeworkStore {
   HomeworkItem? runningOf(String studentId) {
     final list = _byStudentId[studentId];
     if (list == null) return null;
-    final idx = list.indexWhere((e) => e.runStart != null);
+    final idx = list.indexWhere((e) => e.runStart != null || e.phase == 2);
     return idx == -1 ? null : list[idx];
   }
 
@@ -2964,6 +3032,11 @@ class HomeworkStore {
         'p_academy_id': academyId,
         'p_updated_by': updatedBy,
       });
+      await _syncGroupRuntimeForConfirmedItems(
+        academyId: academyId,
+        studentId: studentId,
+        itemIds: [id],
+      );
       unawaited(_reloadStudent(studentId));
       if (recordAssignmentCheck) {
         unawaited(
@@ -3026,6 +3099,11 @@ class HomeworkStore {
           }),
         ),
       );
+      await _syncGroupRuntimeForConfirmedItems(
+        academyId: academyId,
+        studentId: studentId,
+        itemIds: confirmedIds,
+      );
       unawaited(_reloadStudent(studentId));
       if (recordAssignmentCheck) {
         for (final id in confirmedIds) {
@@ -3041,6 +3119,57 @@ class HomeworkStore {
       // ignore: avoid_print
       print('[HW][confirmBatch][ERROR] ' + e.toString());
       unawaited(_reloadStudent(studentId));
+    }
+  }
+
+  Future<void> _syncGroupRuntimeForConfirmedItems({
+    required String academyId,
+    required String studentId,
+    required Iterable<String> itemIds,
+  }) async {
+    final groups = _groupsByStudentId[studentId];
+    if (groups == null || groups.isEmpty) return;
+
+    final groupById = <String, HomeworkGroup>{
+      for (final group in groups) group.id: group,
+    };
+
+    final targetGroupIds = <String>{};
+    for (final itemId in itemIds) {
+      final groupId = (_groupIdByItemId[itemId] ?? '').trim();
+      if (groupId.isNotEmpty) {
+        targetGroupIds.add(groupId);
+      }
+    }
+    if (targetGroupIds.isEmpty) return;
+
+    for (final groupId in targetGroupIds) {
+      final children = itemsInGroup(
+        studentId,
+        groupId,
+        includeCompleted: true,
+      )
+          .where((item) => item.status != HomeworkStatus.completed)
+          .toList(growable: false);
+      if (children.isEmpty) continue;
+
+      final hasSubmitted = children.any((item) => item.phase == 3);
+      final hasConfirmed = children.any((item) => item.phase == 4);
+      if (hasSubmitted || !hasConfirmed) continue;
+
+      final runtimePhase = groupById[groupId]?.runtimePhase ?? 0;
+      if (runtimePhase == 4) continue;
+
+      try {
+        await Supabase.instance.client.rpc(
+          'm5_group_transition_state_v3',
+          params: {
+            'p_academy_id': academyId,
+            'p_group_id': groupId,
+            'p_from_phase': 3,
+          },
+        );
+      } catch (_) {}
     }
   }
 
@@ -3783,6 +3912,24 @@ class HomeworkStore {
           'p_from_phase': normalizedFromPhase,
         },
       );
+      try {
+        final int runtimeFromPhase = normalizedFromPhase ??
+            (hasRunningChild
+                ? 2
+                : (groupChildren.any((child) => child.phase == 3)
+                    ? 3
+                    : (groupChildren.any((child) => child.phase == 4)
+                        ? 4
+                        : 1)));
+        await Supabase.instance.client.rpc(
+          'm5_group_transition_state_v3',
+          params: {
+            'p_academy_id': academyId,
+            'p_group_id': cleanedGroupId,
+            'p_from_phase': runtimeFromPhase,
+          },
+        );
+      } catch (_) {}
       await _reloadStudent(studentId);
       if (normalizedFromPhase == 4 &&
           groupCycleDeltaMs > 0 &&

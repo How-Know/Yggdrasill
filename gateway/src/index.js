@@ -49,6 +49,24 @@ const cfg = {
   staleActivityWindowMs: validInt(GW_STALE_ACTIVITY_WINDOW_MS, 600000),
   recoveryCooldownMs: validInt(GW_RECOVERY_COOLDOWN_MS, 60000)
 };
+const GROUP_CMD_V2_DEVICE_ID = process.env.GROUP_CMD_V2_DEVICE_ID || 'm5-device-001';
+const GROUP_CMD_V2_LOG_TAG = 'GROUP_CMD_V2';
+const GROUP_CMD_V2_SUPPRESS_MS = validInt(
+  Number.parseInt(process.env.GROUP_CMD_V2_SUPPRESS_MS ?? '1800', 10),
+  1800
+);
+const HOMEWORK_PUSH_COALESCE_MS = validInt(
+  Number.parseInt(process.env.HOMEWORK_PUSH_COALESCE_MS ?? '140', 10),
+  140
+);
+const M5_GROUP_CHILDREN_LIMIT = validInt(
+  Number.parseInt(process.env.M5_GROUP_CHILDREN_LIMIT ?? '8', 10),
+  8
+);
+const M5_GROUP_COUNT_LIMIT = validInt(
+  Number.parseInt(process.env.M5_GROUP_COUNT_LIMIT ?? '8', 10),
+  8
+);
 
 function logEvent(level, message, payload = {}) {
   const body = Object.keys(payload).length ? payload : undefined;
@@ -186,9 +204,11 @@ client.on('connect', (packet = {}) => {
 // simple idempotency cache (10 minutes TTL)
 const processed = new Map(); // key -> timestamp
 const IDEMP_TTL_MS = 10 * 60 * 1000;
+const groupTransitionInflightUntil = new Map();
 setInterval(() => {
   const now = Date.now();
   for (const [k, ts] of processed.entries()) if (now - ts > IDEMP_TTL_MS) processed.delete(k);
+  for (const [k, ts] of groupTransitionInflightUntil.entries()) if (ts <= now) groupTransitionInflightUntil.delete(k);
 }, 60 * 1000);
 
 setInterval(() => {
@@ -237,6 +257,19 @@ logEvent('log', '[gateway] mqtt runtime config', {
 
 /** 학생 단위로 RPC+푸시를 직렬화해 빠른 연속 DB 이벤트 시 스냅샷 역전·중간 상태 유실 완화 */
 const homeworkPublishChains = new Map();
+const homeworkPublishCoalesce = new Map();
+
+function sanitizeGroupsForDevicePayload(groups) {
+  if (!Array.isArray(groups)) return [];
+  const trimmed = groups.slice(0, M5_GROUP_COUNT_LIMIT);
+  return trimmed.map((group) => {
+    if (!group || typeof group !== 'object') return group;
+    const children = Array.isArray(group.children)
+      ? group.children.slice(0, M5_GROUP_CHILDREN_LIMIT)
+      : group.children;
+    return { ...group, children };
+  });
+}
 
 async function publishHomeworksToBoundDevicesImpl(academy_id, student_id, source = 'unknown') {
   const { data: binds, error: bErr } = await supa
@@ -260,12 +293,13 @@ async function publishHomeworksToBoundDevicesImpl(academy_id, student_id, source
     console.error('[gateway] realtime list_homework_groups error', { source, error });
     return;
   }
+  const payloadGroups = sanitizeGroupsForDevicePayload(groups || []);
 
   for (const b of binds) {
     const device_id = b.device_id;
     publish(
       `academies/${academy_id}/devices/${device_id}/homeworks`,
-      JSON.stringify({ groups: groups || [] }),
+      JSON.stringify({ groups: payloadGroups }),
       { qos: 1, retain: false }
     );
   }
@@ -283,6 +317,34 @@ async function publishHomeworksToBoundDevices(academy_id, student_id, source = '
     });
   homeworkPublishChains.set(key, job);
   return job;
+}
+
+async function queueHomeworksToBoundDevices(academy_id, student_id, source = 'unknown') {
+  if (!academy_id || !student_id) return;
+  if (HOMEWORK_PUSH_COALESCE_MS <= 0) {
+    return publishHomeworksToBoundDevices(academy_id, student_id, source);
+  }
+
+  const key = `${academy_id}::${student_id}`;
+  let slot = homeworkPublishCoalesce.get(key);
+  if (!slot) {
+    slot = { timer: null, sources: new Set(), waiters: [] };
+    homeworkPublishCoalesce.set(key, slot);
+  }
+  slot.sources.add(source);
+
+  return new Promise((resolve, reject) => {
+    slot.waiters.push({ resolve, reject });
+    if (slot.timer) return;
+    slot.timer = setTimeout(() => {
+      const packedSource = Array.from(slot.sources).join(',');
+      const waiters = slot.waiters.slice();
+      homeworkPublishCoalesce.delete(key);
+      publishHomeworksToBoundDevices(academy_id, student_id, packedSource)
+        .then(() => waiters.forEach((w) => w.resolve()))
+        .catch((err) => waiters.forEach((w) => w.reject(err)));
+    }, HOMEWORK_PUSH_COALESCE_MS);
+  });
 }
 
 client.on('message', async (topic, payload) => {
@@ -374,6 +436,112 @@ client.on('message', async (topic, payload) => {
       const device_id = parts[3];
       const action = msg.action; // e.g., bind, unbind, list_today
       console.log('[gateway] device command', { action, academy_id, device_id });
+      if (action === 'group_transition') {
+        const group_id = (msg.group_id || '').toString().trim();
+        const student_id = (msg.student_id || '').toString().trim();
+        const request_id = (msg.request_id || msg.idempotency_key || '').toString().trim();
+        const from_phase = Number.isFinite(Number(msg.from_phase)) ? Number(msg.from_phase) : null;
+        const ackTopic = `academies/${academy_id}/devices/${device_id}/ack`;
+
+        if (device_id !== GROUP_CMD_V2_DEVICE_ID) {
+          publish(
+            ackTopic,
+            JSON.stringify({
+              ok: false,
+              action: 'group_transition',
+              request_id: request_id || null,
+              error: 'group_transition_v2_disabled_for_device'
+            }),
+            { qos: 1, retain: false }
+          );
+          return;
+        }
+
+        if (!group_id || !student_id || !request_id) {
+          publish(
+            ackTopic,
+            JSON.stringify({
+              ok: false,
+              action: 'group_transition',
+              request_id: request_id || null,
+              error: 'missing_group_or_student_or_request_id'
+            }),
+            { qos: 1, retain: false }
+          );
+          return;
+        }
+
+        const inflightKey = `${academy_id}::${student_id}::${group_id}`;
+        const now = nowMs();
+        const inflightUntil = groupTransitionInflightUntil.get(inflightKey) || 0;
+        if (inflightUntil > now) {
+          publish(
+            ackTopic,
+            JSON.stringify({
+              ok: true,
+              action: 'group_transition',
+              request_id,
+              group_id,
+              student_id,
+              changed: 0,
+              dedup: true,
+              suppressed: 'inflight'
+            }),
+            { qos: 1, retain: false }
+          );
+          logSampled(
+            `${GROUP_CMD_V2_LOG_TAG}:suppressed:${inflightKey}`,
+            1000,
+            'log',
+            `[${GROUP_CMD_V2_LOG_TAG}] suppressed duplicate transition`,
+            { academy_id, device_id, student_id, group_id, request_id, inflightUntil }
+          );
+          return;
+        }
+        groupTransitionInflightUntil.set(inflightKey, now + GROUP_CMD_V2_SUPPRESS_MS);
+
+        const { data, error } = await supa.rpc('m5_group_transition_command', {
+          p_academy_id: academy_id,
+          p_group_id: group_id,
+          p_from_phase: from_phase,
+          p_request_id: request_id,
+          p_device_id: device_id
+        });
+        const row = data && typeof data === 'object' ? data : {};
+        const ok = !error && row.ok !== false;
+        if (error || !ok) {
+          console.error(`[${GROUP_CMD_V2_LOG_TAG}] rpc error`, {
+            academy_id,
+            device_id,
+            student_id,
+            group_id,
+            request_id,
+            error: error?.message ?? row.error ?? 'unknown'
+          });
+        }
+
+        publish(
+          ackTopic,
+          JSON.stringify({
+            ok,
+            action: 'group_transition',
+            request_id,
+            group_id,
+            student_id,
+            from_phase,
+            mode: row.mode || (from_phase === 99 ? 'commit' : 'state'),
+            changed: Number(row.changed ?? 0) || 0,
+            dedup: !!row.dedup,
+            error: error?.message ?? row.error
+          }),
+          { qos: 1, retain: false }
+        );
+
+        if (ok) {
+          await queueHomeworksToBoundDevices(academy_id, student_id, `${GROUP_CMD_V2_LOG_TAG}:device_command`);
+        }
+        return;
+      }
       if (action === 'bind') {
         const student_id = msg.student_id;
         const { error } = await supa.rpc('m5_bind_device', { p_academy_id: academy_id, p_device_id: device_id, p_student_id: student_id });
@@ -384,7 +552,11 @@ client.on('message', async (topic, payload) => {
         // after bind, ensure attendance and list homeworks
         const { data: groups, error: lerr } = await supa.rpc('m5_list_homework_groups', { p_academy_id: academy_id, p_student_id: student_id });
         if (lerr) console.error('[gateway] list_homework_groups error', lerr);
-        publish(`academies/${academy_id}/devices/${device_id}/homeworks`, JSON.stringify({ groups: groups || [] }), { qos: 1, retain: false });
+        publish(
+          `academies/${academy_id}/devices/${device_id}/homeworks`,
+          JSON.stringify({ groups: sanitizeGroupsForDevicePayload(groups || []) }),
+          { qos: 1, retain: false }
+        );
         publish(`academies/${academy_id}/devices/${device_id}/ack`, JSON.stringify({ ok: !error && !lerr, action: 'bind', error: error?.message || lerr?.message, student_id }), { qos: 1, retain: false });
         return;
       }
@@ -427,7 +599,11 @@ client.on('message', async (topic, payload) => {
         const student_id = msg.student_id;
         const { data: groups, error } = await supa.rpc('m5_list_homework_groups', { p_academy_id: academy_id, p_student_id: student_id });
         if (error) { console.error('[gateway] list_homework_groups error', error); return; }
-        publish(`academies/${academy_id}/devices/${device_id}/homeworks`, JSON.stringify({ groups: groups || [] }), { qos: 1, retain: false });
+        publish(
+          `academies/${academy_id}/devices/${device_id}/homeworks`,
+          JSON.stringify({ groups: sanitizeGroupsForDevicePayload(groups || []) }),
+          { qos: 1, retain: false }
+        );
         publish(`academies/${academy_id}/devices/${device_id}/ack`, JSON.stringify({ ok: true, action: 'list_homeworks', count: (groups||[]).length }), { qos: 1, retain: false });
         return;
       }
@@ -526,7 +702,7 @@ try {
           const rec = payload?.new ?? payload?.old ?? payload?.record ?? {};
           const academy_id = rec.academy_id;
           const student_id = rec.student_id;
-          await publishHomeworksToBoundDevices(academy_id, student_id, 'homework_items');
+          await queueHomeworksToBoundDevices(academy_id, student_id, 'homework_items');
         } catch (e) {
           console.error('[gateway] realtime homework_items handler error', e);
         }
@@ -551,7 +727,7 @@ try {
           const rec = payload?.new ?? payload?.old ?? payload?.record ?? {};
           const academy_id = rec.academy_id;
           const student_id = rec.student_id;
-          await publishHomeworksToBoundDevices(academy_id, student_id, 'homework_assignments');
+          await queueHomeworksToBoundDevices(academy_id, student_id, 'homework_assignments');
         } catch (e) {
           console.error('[gateway] realtime homework_assignments handler error', e);
         }
@@ -576,7 +752,7 @@ try {
           const rec = payload?.new ?? payload?.old ?? payload?.record ?? {};
           const academy_id = rec.academy_id;
           const student_id = rec.student_id;
-          await publishHomeworksToBoundDevices(academy_id, student_id, 'homework_groups');
+          await queueHomeworksToBoundDevices(academy_id, student_id, 'homework_groups');
         } catch (e) {
           console.error('[gateway] realtime homework_groups handler error', e);
         }
@@ -613,7 +789,7 @@ try {
               student_id = student_id || g.student_id;
             }
           }
-          await publishHomeworksToBoundDevices(academy_id, student_id, 'homework_group_items');
+          await queueHomeworksToBoundDevices(academy_id, student_id, 'homework_group_items');
         } catch (e) {
           console.error('[gateway] realtime homework_group_items handler error', e);
         }
@@ -623,6 +799,31 @@ try {
   console.log('[gateway] realtime: homework_group_items subscribed init');
 } catch (e) {
   console.warn('[gateway] realtime homework_group_items subscribe failed', e);
+}
+
+// Realtime: homework_group_runtime changes → push updated homeworks to bound devices
+try {
+  try { supa.realtime.setAuth?.(SUPABASE_SERVICE); } catch (_) {}
+  const runtimeChannel = supa
+    .channel('public:homework_group_runtime')
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'homework_group_runtime' },
+      async (payload) => {
+        try {
+          const rec = payload?.new ?? payload?.old ?? payload?.record ?? {};
+          const academy_id = rec.academy_id;
+          const student_id = rec.student_id;
+          await queueHomeworksToBoundDevices(academy_id, student_id, 'homework_group_runtime');
+        } catch (e) {
+          console.error('[gateway] realtime homework_group_runtime handler error', e);
+        }
+      }
+    )
+    .subscribe((status) => console.log('[gateway][rt] homework_group_runtime', status));
+  console.log('[gateway] realtime: homework_group_runtime subscribed init');
+} catch (e) {
+  console.warn('[gateway] realtime homework_group_runtime subscribe failed', e);
 }
 
 // Realtime: listen m5_device_bindings changes → notify device on unbind

@@ -108,6 +108,22 @@ for (const snapshotFile of snapshotFiles) {
             );
           }
 
+          if (Array.isArray(qExp.stemContainsAll)) {
+            for (const token of qExp.stemContainsAll) {
+              assert.ok(
+                (q.stem || '').includes(token),
+                `Q${qNum}: stem missing "${token}"`,
+              );
+            }
+          }
+
+          if (qExp.stemNotContains) {
+            assert.ok(
+              !(q.stem || '').includes(qExp.stemNotContains),
+              `Q${qNum}: stem should not include "${qExp.stemNotContains}"`,
+            );
+          }
+
           if (qExp.stemLineAlignsLength !== undefined) {
             const meta = q.meta || {};
             const aligns = meta.stem_line_aligns || meta.stemLineAligns || [];

@@ -5,6 +5,13 @@ import { buildPreviewHtml } from './html/build_preview_html.js';
 import { renderHtmlToPdfBuffer, renderHtmlToImageBuffer } from './chrome/render_pdf.js';
 import { createMathSvgRenderer } from './math/mathjax_svg_renderer.js';
 import { normalizeWhitespace } from './utils/text.js';
+import { renderQuestionWithXeLatex, renderPdfWithXeLatex } from './xelatex/renderer.js';
+
+const VALID_MATH_ENGINES = new Set(['mathjax-svg', 'xelatex']);
+function normalizeMathEngine(raw) {
+  const v = String(raw || '').trim().toLowerCase();
+  return VALID_MATH_ENGINES.has(v) ? v : 'mathjax-svg';
+}
 
 const _DEBUG_MATH_DOTS = process.env.PB_DEBUG_MATH_DOTS === '1';
 
@@ -534,7 +541,29 @@ export async function renderPdfWithHtmlEngine({
   fontSize,
   baseLayout,
   supabaseClient,
+  mathEngine: rawEngine,
 }) {
+  const mathEngine = normalizeMathEngine(rawEngine);
+
+  if (mathEngine === 'xelatex') {
+    return renderPdfWithXeLatex({
+      questions,
+      renderConfig,
+      profile,
+      paper,
+      modeByQuestionId,
+      questionMode,
+      layoutColumns,
+      maxQuestionsPerPage,
+      renderConfigVersion,
+      fontFamilyRequested,
+      fontFamilyResolved,
+      fontRegularPath,
+      fontBoldPath,
+      fontSize,
+    });
+  }
+
   const mathRenderer = createMathSvgRenderer();
   const htmlQuestions = (questions || []).map(normalizeQuestionForHtml);
   const figureStats = await hydrateFiguresForHtml(htmlQuestions, supabaseClient);
@@ -627,6 +656,7 @@ export async function buildQuestionPreviewHtml({
   layout,
   supabaseClient,
   debugDots = false,
+  mathEngine: rawEngine,
 }) {
   const mathRenderer = createMathSvgRenderer();
   const q = normalizeQuestionForHtml(question);
@@ -694,7 +724,19 @@ export async function renderQuestionPreview({
   viewportWidth = 400,
   deviceScaleFactor = 3,
   debugDots = false,
+  mathEngine: rawEngine,
 }) {
+  const mathEngine = normalizeMathEngine(rawEngine);
+
+  if (mathEngine === 'xelatex') {
+    const { pngBuffer, texSource } = await renderQuestionWithXeLatex({
+      question,
+      viewportWidth,
+      deviceScaleFactor,
+    });
+    return { pngBuffer, html: texSource, mathEngine };
+  }
+
   const html = await buildQuestionPreviewHtml({
     question,
     fontRegularPath,
@@ -703,7 +745,8 @@ export async function renderQuestionPreview({
     layout,
     supabaseClient,
     debugDots,
+    mathEngine,
   });
   const pngBuffer = await renderHtmlToImageBuffer(html, viewportWidth, deviceScaleFactor);
-  return { pngBuffer, html };
+  return { pngBuffer, html, mathEngine };
 }

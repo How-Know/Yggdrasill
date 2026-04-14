@@ -84,6 +84,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
   int _figureLoadVersion = 0;
   LearningProblemExportSettings _exportSettings =
       LearningProblemExportSettings.initial();
+  String _previewMathEngine = 'mathjax-svg';
   LearningProblemExportJob? _activeExportJob;
   _QuestionOrderSaveRequest? _queuedQuestionOrderSave;
   bool _questionOrderSaveInFlight = false;
@@ -895,6 +896,11 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         return out;
       }
 
+      String normalizeMathEngineValue(dynamic raw) {
+        final v = '$raw'.trim().toLowerCase();
+        return v == 'xelatex' ? 'xelatex' : 'mathjax-svg';
+      }
+
       Map<String, dynamic> buildRenderPatch(
         ProblemBankPreviewRefreshRequest request,
       ) {
@@ -913,6 +919,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           'includeQuestionScore': request.includeQuestionScore,
           'questionScoreByQuestionUid': request.questionScoreByQuestionId,
           'questionScoreByQuestionId': request.questionScoreByQuestionId,
+          'mathEngine': request.mathEngine,
         };
         if (_exportSettings.layoutColumnCount == 2) {
           patch['layoutMode'] = 'custom_columns';
@@ -929,7 +936,9 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           .map((q) => q.documentId.trim())
           .where((id) => id.isNotEmpty)
           .toSet();
-      var initialRenderPatch = <String, dynamic>{};
+      var initialRenderPatch = <String, dynamic>{
+        'mathEngine': _previewMathEngine,
+      };
 
       if (academyId != null &&
           academyId.isNotEmpty &&
@@ -946,6 +955,9 @@ class _ProblemBankViewState extends State<ProblemBankView> {
               base: _exportSettings,
               renderConfig: preset.renderConfig,
             );
+            final presetMathEngine = normalizeMathEngineValue(
+              preset.renderConfig['mathEngine'],
+            );
             final presetModeMap = <String, String>{};
             for (final question in selected) {
               final rawMode = preset
@@ -961,6 +973,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
             if (mounted) {
               setState(() {
                 _exportSettings = presetSettings;
+                _previewMathEngine = presetMathEngine;
                 _selectedQuestionModes
                   ..clear()
                   ..addAll(presetModeMap);
@@ -978,6 +991,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                   ? kLearningDefaultTitlePageTopText
                   : titlePageTopText,
               'timeLimitText': timeLimitText,
+              'mathEngine': presetMathEngine,
               'includeAcademyLogo': readBoolFlag(
                 preset.renderConfig['includeAcademyLogo'],
                 null,
@@ -1059,6 +1073,16 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       final initialTimeLimitText =
           '${completed.resultSummary['timeLimitText'] ?? completed.options['timeLimitText'] ?? _exportSettings.timeLimitText}'
               .trim();
+      final initialMathEngine = normalizeMathEngineValue(
+        completed.resultSummary['mathEngine'] ??
+            completed.options['mathEngine'] ??
+            _previewMathEngine,
+      );
+      if (mounted) {
+        setState(() {
+          _previewMathEngine = initialMathEngine;
+        });
+      }
       final scoreEntries = buildScoreEntries(selected);
       await ProblemBankExportServerPreviewDialog.open(
         context,
@@ -1114,6 +1138,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           completed.options['includeQuestionScore'],
           _exportSettings.includeQuestionScore,
         ),
+        initialMathEngine: initialMathEngine,
         initialQuestionScoreByQuestionId: readScoreMap(
           completed.resultSummary['questionScoreByQuestionUid'],
           completed.options['questionScoreByQuestionUid'] ??
@@ -1139,6 +1164,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           );
           setState(() {
             _exportSettings = nextSettings;
+            _previewMathEngine = normalizeMathEngineValue(request.mathEngine);
           });
           final renderPatch = buildRenderPatch(request);
           final refreshed = await _ensureCompletedExportForSelection(
@@ -1155,6 +1181,17 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                 : refreshed.errorCode;
             _showSnack(
               '미리보기 생성 실패: ${err.isEmpty ? refreshed.status : err}',
+            );
+            return null;
+          }
+          final refreshedMathEngine = normalizeMathEngineValue(
+            refreshed.resultSummary['mathEngine'] ??
+                refreshed.options['mathEngine'] ??
+                request.mathEngine,
+          );
+          if (refreshedMathEngine != normalizeMathEngineValue(request.mathEngine)) {
+            _showSnack(
+              '미리보기 생성 실패: 요청 엔진(${request.mathEngine})과 응답 엔진($refreshedMathEngine)이 다릅니다.',
             );
             return null;
           }
@@ -1207,6 +1244,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
               : questionScoreByQuestionId;
           return ProblemBankPreviewRefreshResult(
             pdfUrl: refreshed.outputUrl,
+            mathEngine: refreshedMathEngine,
             titlePageTopText: titlePageTopText.isEmpty
                 ? kLearningDefaultTitlePageTopText
                 : titlePageTopText,
@@ -1250,6 +1288,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           );
           setState(() {
             _exportSettings = nextSettings;
+            _previewMathEngine = normalizeMathEngineValue(request.mathEngine);
           });
           final renderPatch = buildRenderPatch(request);
           final completedPdf = await _ensureCompletedExportForSelection(
@@ -1287,6 +1326,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
               includeQuestionScore: request.includeQuestionScore,
               questionScoreByQuestionId: request.questionScoreByQuestionId,
             );
+            _previewMathEngine = normalizeMathEngineValue(request.mathEngine);
           });
           final orderedQuestionUids =
               _selectedQuestionUidsInCurrentOrder(selected);

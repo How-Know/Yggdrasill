@@ -32,6 +32,7 @@ class ProblemBankPreviewRefreshRequest {
     required this.includeQuestionScore,
     required this.questionScoreByQuestionId,
     this.presetDisplayName = '',
+    this.mathEngine = 'mathjax-svg',
   });
 
   final String subjectTitleText;
@@ -49,6 +50,7 @@ class ProblemBankPreviewRefreshRequest {
   final bool includeQuestionScore;
   final Map<String, double> questionScoreByQuestionId;
   final String presetDisplayName;
+  final String mathEngine;
 
   ProblemBankPreviewRefreshRequest copyWith({
     String? subjectTitleText,
@@ -66,6 +68,7 @@ class ProblemBankPreviewRefreshRequest {
     bool? includeQuestionScore,
     Map<String, double>? questionScoreByQuestionId,
     String? presetDisplayName,
+    String? mathEngine,
   }) {
     return ProblemBankPreviewRefreshRequest(
       subjectTitleText: subjectTitleText ?? this.subjectTitleText,
@@ -85,6 +88,7 @@ class ProblemBankPreviewRefreshRequest {
       questionScoreByQuestionId:
           questionScoreByQuestionId ?? this.questionScoreByQuestionId,
       presetDisplayName: presetDisplayName ?? this.presetDisplayName,
+      mathEngine: mathEngine ?? this.mathEngine,
     );
   }
 }
@@ -92,6 +96,7 @@ class ProblemBankPreviewRefreshRequest {
 class ProblemBankPreviewRefreshResult {
   const ProblemBankPreviewRefreshResult({
     required this.pdfUrl,
+    this.mathEngine = 'mathjax-svg',
     this.titlePageTopText = '2026학년도 대학수학능력시험 문제지',
     this.timeLimitText = '',
     this.pageColumnQuestionCounts = const <Map<String, dynamic>>[],
@@ -108,6 +113,7 @@ class ProblemBankPreviewRefreshResult {
   });
 
   final String pdfUrl;
+  final String mathEngine;
   final String titlePageTopText;
   final String timeLimitText;
   final List<Map<String, dynamic>> pageColumnQuestionCounts;
@@ -157,6 +163,7 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
     this.initialIncludeAnswerSheet = true,
     this.initialIncludeExplanation = false,
     this.initialIncludeQuestionScore = false,
+    this.initialMathEngine = 'mathjax-svg',
     this.initialQuestionScoreByQuestionId = const <String, double>{},
     this.questionScoreEntries = const <ProblemBankPreviewQuestionScoreEntry>[],
     this.onRefreshRequested,
@@ -182,6 +189,7 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
   final bool initialIncludeAnswerSheet;
   final bool initialIncludeExplanation;
   final bool initialIncludeQuestionScore;
+  final String initialMathEngine;
   final Map<String, double> initialQuestionScoreByQuestionId;
   final List<ProblemBankPreviewQuestionScoreEntry> questionScoreEntries;
   final ProblemBankPreviewRefreshCallback? onRefreshRequested;
@@ -211,6 +219,7 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
     bool initialIncludeAnswerSheet = true,
     bool initialIncludeExplanation = false,
     bool initialIncludeQuestionScore = false,
+    String initialMathEngine = 'mathjax-svg',
     Map<String, double> initialQuestionScoreByQuestionId =
         const <String, double>{},
     List<ProblemBankPreviewQuestionScoreEntry> questionScoreEntries =
@@ -255,6 +264,7 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
               initialIncludeAnswerSheet: initialIncludeAnswerSheet,
               initialIncludeExplanation: initialIncludeExplanation,
               initialIncludeQuestionScore: initialIncludeQuestionScore,
+              initialMathEngine: initialMathEngine,
               initialQuestionScoreByQuestionId:
                   initialQuestionScoreByQuestionId,
               questionScoreEntries: questionScoreEntries,
@@ -314,6 +324,8 @@ class _ProblemBankExportServerPreviewDialogState
   bool _isRefreshing = false;
   bool _isGeneratingPdf = false;
   bool _isSavingSettings = false;
+  String _mathEngine = 'mathjax-svg';
+  String? _previewFailureMessage;
   String _lastPresetDisplayName = '';
   late bool _includeAcademyLogo;
   late bool _includeCoverPage;
@@ -339,6 +351,9 @@ class _ProblemBankExportServerPreviewDialogState
   void initState() {
     super.initState();
     _currentPdfUrl = widget.pdfUrl;
+    final initialEngine = widget.initialMathEngine.trim().toLowerCase();
+    _mathEngine = initialEngine == 'xelatex' ? 'xelatex' : 'mathjax-svg';
+    _previewFailureMessage = null;
     _subjectController =
         TextEditingController(text: widget.initialSubjectTitle);
     _titlePageTopTextController = TextEditingController(
@@ -1742,6 +1757,7 @@ class _ProblemBankExportServerPreviewDialogState
       includeQuestionScore: _includeQuestionScore,
       questionScoreByQuestionId: _questionScorePayload(),
       presetDisplayName: '',
+      mathEngine: _mathEngine,
     );
   }
 
@@ -1813,13 +1829,40 @@ class _ProblemBankExportServerPreviewDialogState
   Future<void> _refreshPreview() async {
     final callback = widget.onRefreshRequested;
     if (callback == null || _isRefreshing) return;
+    final requestedEngine = _mathEngine;
     setState(() {
       _isRefreshing = true;
+      _previewFailureMessage = null;
     });
     try {
       final refreshed = await callback(_buildRequestPayload());
       if (!mounted) return;
-      if (refreshed == null || refreshed.pdfUrl.trim().isEmpty) return;
+      if (refreshed == null || refreshed.pdfUrl.trim().isEmpty) {
+        setState(() {
+          _currentPdfUrl = '';
+          _fitZoom = null;
+          _pageNumber = 1;
+          _pageCount = 0;
+          _viewerRevision += 1;
+          _previewFailureMessage = requestedEngine == 'xelatex'
+              ? 'XeLaTeX 렌더링에 실패했습니다. 오류 메시지를 확인해주세요.'
+              : '미리보기 생성에 실패했습니다.';
+        });
+        return;
+      }
+      final refreshedEngine = refreshed.mathEngine.trim().toLowerCase();
+      if (refreshedEngine.isNotEmpty && refreshedEngine != requestedEngine) {
+        setState(() {
+          _currentPdfUrl = '';
+          _fitZoom = null;
+          _pageNumber = 1;
+          _pageCount = 0;
+          _viewerRevision += 1;
+          _previewFailureMessage =
+              '렌더 엔진 응답 불일치($requestedEngine -> $refreshedEngine)로 미리보기를 표시하지 않습니다.';
+        });
+        return;
+      }
       setState(() {
         _currentPdfUrl = refreshed.pdfUrl.trim();
         _fitZoom = null;
@@ -1831,6 +1874,7 @@ class _ProblemBankExportServerPreviewDialogState
         _includeAnswerSheet = refreshed.includeAnswerSheet;
         _includeExplanation = refreshed.includeExplanation;
         _includeQuestionScore = refreshed.includeQuestionScore;
+        _previewFailureMessage = null;
         final refreshedTopText = refreshed.titlePageTopText.trim();
         final nextTopText = refreshedTopText.isNotEmpty
             ? refreshedTopText
@@ -2908,7 +2952,8 @@ class _ProblemBankExportServerPreviewDialogState
 
   @override
   Widget build(BuildContext context) {
-    final uri = Uri.tryParse(_currentPdfUrl.trim());
+    final currentUrl = _currentPdfUrl.trim();
+    final uri = currentUrl.isEmpty ? null : Uri.tryParse(currentUrl);
     final zoomPercent = _viewerController.isReady
         ? (_viewerController.currentZoom * 100).round()
         : 100;
@@ -2998,10 +3043,12 @@ class _ProblemBankExportServerPreviewDialogState
                     child: Container(
                       color: const Color(0xFF0B1112),
                       child: uri == null
-                          ? const Center(
+                          ? Center(
                               child: Text(
-                                '유효한 PDF URL이 아닙니다.',
-                                style: TextStyle(
+                                (_previewFailureMessage ?? '유효한 PDF URL이 아닙니다.')
+                                    .trim(),
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(
                                   color: Color(0xFF9FB3B3),
                                   fontWeight: FontWeight.w700,
                                 ),
@@ -3094,6 +3141,54 @@ class _ProblemBankExportServerPreviewDialogState
               ),
               child: Column(
                 children: [
+                  SizedBox(
+                    width: double.infinity,
+                    child: SegmentedButton<String>(
+                      segments: const <ButtonSegment<String>>[
+                        ButtonSegment<String>(
+                          value: 'mathjax-svg',
+                          label: Text('MathJax SVG'),
+                          icon: Icon(Icons.code_rounded, size: 16),
+                        ),
+                        ButtonSegment<String>(
+                          value: 'xelatex',
+                          label: Text('XeLaTeX'),
+                          icon: Icon(Icons.description_rounded, size: 16),
+                        ),
+                      ],
+                      selected: <String>{_mathEngine},
+                      onSelectionChanged: (Set<String> selected) {
+                        setState(() {
+                          _mathEngine = selected.first;
+                        });
+                        _refreshPreview();
+                      },
+                      style: ButtonStyle(
+                        backgroundColor:
+                            WidgetStateProperty.resolveWith((states) {
+                          if (states.contains(WidgetState.selected)) {
+                            return _accent.withValues(alpha: 0.25);
+                          }
+                          return _panelSectionBg;
+                        }),
+                        foregroundColor:
+                            WidgetStateProperty.resolveWith((states) {
+                          if (states.contains(WidgetState.selected)) {
+                            return _accent;
+                          }
+                          return _textMuted;
+                        }),
+                        side: WidgetStateProperty.all(
+                          const BorderSide(color: _panelBorder),
+                        ),
+                        visualDensity: VisualDensity.compact,
+                        textStyle: WidgetStateProperty.all(
+                          const TextStyle(fontSize: 12),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
                   Row(
                     children: [
                       const Expanded(

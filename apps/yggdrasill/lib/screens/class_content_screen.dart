@@ -5593,7 +5593,7 @@ Future<void> _showHomeworkChipDetailDialog(
   int assignmentCount,
 ) async {
   final bool isRunning =
-      HomeworkStore.instance.runningOf(studentId)?.id == hw.id;
+      HomeworkStore.instance.runningOf(studentId)?.id == hw.id || hw.phase == 2;
   final int runningMs = hw.runStart != null
       ? DateTime.now().difference(hw.runStart!).inMilliseconds
       : 0;
@@ -7424,6 +7424,12 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
         .putIfAbsent(group.id, () => <String, int>{});
     final Set<String> currentChildIds = <String>{};
 
+    final int runtimePhase = group.runtimePhase;
+    final int runtimeAccumulatedMs = group.runtimeAccumulatedMs;
+    final DateTime? runtimeRunStart = group.runtimeRunStart;
+    final DateTime? runtimeFirstStartedAt = group.runtimeFirstStartedAt;
+    final int runtimeCheckCount = group.runtimeCheckCount;
+
     HomeworkItem? runningChild;
     bool hasSubmitted = false;
     bool hasConfirmed = false;
@@ -7500,7 +7506,9 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
         .removeWhere((childId, _) => !currentChildIds.contains(childId));
 
     int phase = 1;
-    if (runningChild != null) {
+    if (runtimePhase >= 1 && runtimePhase <= 4) {
+      phase = runtimePhase;
+    } else if (runningChild != null) {
       phase = 2;
     } else if (hasSubmitted) {
       phase = 3;
@@ -7525,9 +7533,21 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
         : (sortedChildTypes.length == 1
             ? sortedChildTypes.first
             : '${sortedChildTypes.first} 외 ${sortedChildTypes.length - 1}개');
-    final DateTime? groupCycleStartedAt =
-        group.cycleStartedAt ?? runningChild?.runStart;
-    final int groupTotalMs = groupCycleBaseMs + groupCycleProgressMs;
+    if (phase == 2 && runningChild == null && children.isNotEmpty) {
+      runningChild = children.first;
+    }
+
+    final DateTime? groupCycleStartedAt = group.cycleStartedAt ??
+        runtimeFirstStartedAt ??
+        runtimeRunStart ??
+        runningChild?.runStart;
+    final int groupTotalMs = (runtimePhase >= 1 && runtimePhase <= 4)
+        ? (runtimeAccumulatedMs +
+            ((phase == 2 && runtimeRunStart != null)
+                ? math.max(0,
+                    DateTime.now().difference(runtimeRunStart).inMilliseconds)
+                : 0))
+        : (groupCycleBaseMs + groupCycleProgressMs);
     final HomeworkItem assignmentCodeSource = () {
       for (final child in children) {
         if (_formatHomeworkAssignmentCode(child.assignmentCode, fallback: '')
@@ -7557,7 +7577,7 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
       sourceUnitLevel: first.sourceUnitLevel,
       sourceUnitPath: first.sourceUnitPath,
       defaultSplitParts: first.defaultSplitParts,
-      checkCount: groupCheckCount,
+      checkCount: runtimeCheckCount > 0 ? runtimeCheckCount : groupCheckCount,
       orderIndex: group.orderIndex,
       createdAt: first.createdAt,
       updatedAt: latestUpdated ?? first.updatedAt,
@@ -7566,7 +7586,7 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
       accumulatedMs: groupTotalMs,
       cycleBaseAccumulatedMs: groupCycleBaseMs,
       // baseline(합산) + 이번 사이클 진행(delta 1회) 형태로 그룹 타이머를 표현한다.
-      runStart: null,
+      runStart: phase == 2 ? (runtimeRunStart ?? runningChild?.runStart) : null,
       completedAt: null,
       firstStartedAt: groupCycleStartedAt,
       submittedAt: latestSubmitted,
@@ -7586,7 +7606,7 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
     if (children.isEmpty) continue;
     orderedGroupIds.add(group.id);
     final summary = buildGroupSummary(group, children);
-    final bool hasRunningChild =
+    final bool hasRunningChild = summary.phase == 2 ||
         children.any((e) => e.runStart != null || e.phase == 2);
     final bool groupExpanded =
         hasRunningChild || expandedHomeworkIds.contains(group.id);

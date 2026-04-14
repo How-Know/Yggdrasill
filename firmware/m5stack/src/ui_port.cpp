@@ -1064,7 +1064,7 @@ static void show_test_start_confirm_popup(int group_idx) {
     close_test_start_confirm_popup();
     if (idx < 0 || idx >= s_group_cnt) return;
     HwGroupData& grp = s_groups[idx];
-    fw_publish_group_transition(grp.group_id, 1);
+    if (!fw_publish_group_transition(grp.group_id, 1)) return;
     show_homework_detail_page(idx);
     s_detail_playing = true;
     s_detail_manual_override_playing = true;
@@ -1142,8 +1142,9 @@ static void show_test_abort_confirm_popup(void) {
     close_test_abort_confirm_popup();
     if (idx < 0 || idx >= s_group_cnt) return;
     HwGroupData& grp = s_groups[idx];
-    fw_publish_group_transition(grp.group_id, 99);
-    close_homework_detail_page();
+    if (fw_publish_group_transition(grp.group_id, 99)) {
+      close_homework_detail_page();
+    }
   }, LV_EVENT_CLICKED, NULL);
 
   screensaver_attach_activity(s_test_abort_confirm_popup);
@@ -1233,7 +1234,7 @@ static void show_confirm_phase_to_waiting_popup(const char* group_id, int group_
       gid[sizeof(gid) - 1] = '\0';
     }
     close_confirm_to_wait_popup();
-    if (gid[0]) fw_publish_group_transition(gid, 4);
+    if (gid[0]) (void)fw_publish_group_transition(gid, 4);
   }, LV_EVENT_CLICKED, NULL);
 
   screensaver_attach_activity(s_confirm_to_wait_popup);
@@ -3155,7 +3156,7 @@ static lv_obj_t* create_hw_card(lv_obj_t* parent, int group_idx) {
         if (hw_is_test_group(s_groups[dd->group_idx])) {
           show_test_start_confirm_popup(dd->group_idx);
         } else {
-          fw_publish_group_transition(dd->group_id, 1);
+          if (!fw_publish_group_transition(dd->group_id, 1)) return;
           show_homework_detail_page(dd->group_idx);
           s_detail_playing = true;
           s_detail_manual_override_playing = true;
@@ -3924,6 +3925,10 @@ static void show_homework_detail_page(int group_idx) {
         update_detail_play_button_visual();
         fw_publish_pause_all();
       } else {
+        if (!fw_publish_group_transition(grp.group_id, 1)) {
+          update_detail_play_button_visual();
+          return;
+        }
         if (s_detail_cycle_frozen_sec < 0) {
           s_detail_cycle_frozen_sec = (int)grp.cycle_elapsed;
           if (s_detail_cycle_frozen_sec < 0) s_detail_cycle_frozen_sec = 0;
@@ -3934,7 +3939,6 @@ static void show_homework_detail_page(int group_idx) {
         s_detail_manual_override_playing = true;
         s_detail_manual_override_until_ms = millis() + 5000;
         update_detail_play_button_visual();
-        fw_publish_group_transition(grp.group_id, 1);
       }
     }, LV_EVENT_CLICKED, ctx);
     lv_obj_add_event_cb(play_btn, [](lv_event_t* e){
@@ -3952,8 +3956,9 @@ static void show_homework_detail_page(int group_idx) {
       DoneCtx* c = (DoneCtx*)lv_event_get_user_data(e);
       if (c->group_idx < 0 || c->group_idx >= s_group_cnt) return;
       HwGroupData& grp = s_groups[c->group_idx];
-      fw_publish_group_transition(grp.group_id, 99);
-      close_homework_detail_page();
+      if (fw_publish_group_transition(grp.group_id, 99)) {
+        close_homework_detail_page();
+      }
     }, LV_EVENT_CLICKED, dctx);
     lv_obj_add_event_cb(done_btn, [](lv_event_t* e){
       if (lv_event_get_code(e) == LV_EVENT_DELETE) { void* ud = lv_event_get_user_data(e); if (ud) free(ud); }

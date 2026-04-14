@@ -120,7 +120,7 @@
         ],
         "equationCountMin": 10,
         "hasBoxContent": true,
-        "stemLineAlignsLength": 14
+        "stemLineAlignsLength": 18
       },
       "9": {
         "choiceCount": 5,
@@ -146,7 +146,7 @@
         ],
         "equationCountMin": 1,
         "hasBoxContent": true,
-        "stemLineAlignsLength": 23,
+        "stemLineAlignsLength": 41,
         "stemContains": "ㄱ."
       },
       "11": {
@@ -184,7 +184,7 @@
         ],
         "equationCountMin": 10,
         "hasBoxContent": true,
-        "stemLineAlignsLength": 13
+        "stemLineAlignsLength": 17
       },
       "14": {
         "choiceCount": 5,
@@ -209,7 +209,7 @@
         ],
         "equationCountMin": 15,
         "hasBoxContent": true,
-        "stemLineAlignsLength": 15
+        "stemLineAlignsLength": 19
       },
       "16": {
         "choiceCount": 0,
@@ -230,7 +230,7 @@
         "choiceCount": 0,
         "equationCountMin": 14,
         "hasBoxContent": true,
-        "stemLineAlignsLength": 13
+        "stemLineAlignsLength": 17
       }
     }
   }
