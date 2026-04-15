@@ -1,9 +1,14 @@
 import 'dotenv/config';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { createHash } from 'node:crypto';
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createClient } from '@supabase/supabase-js';
+
+const execFileAsync = promisify(execFileCb);
 import fontkit from '@pdf-lib/fontkit';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import sharp from 'sharp';
@@ -14,17 +19,18 @@ import { SVG } from 'mathjax-full/js/output/svg.js';
 import { liteAdaptor } from 'mathjax-full/js/adaptors/liteAdaptor.js';
 import { RegisterHTMLHandler } from 'mathjax-full/js/handlers/html.js';
 import { renderPdfWithHtmlEngine } from './problem_bank/render_engine/index.js';
+import { renderHtmlToImageBuffer } from './problem_bank/render_engine/chrome/render_pdf.js';
 import { resolveFigureLayout, figureLayoutToWidthPt } from './problem_bank/render_engine/utils/figure_layout.js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const WORKER_INTERVAL_MS = Number.parseInt(
-  process.env.PB_EXPORT_WORKER_INTERVAL_MS || '4000',
+  process.env.PB_EXPORT_WORKER_INTERVAL_MS || '1500',
   10,
 );
 const BATCH_SIZE = Math.max(
   1,
-  Number.parseInt(process.env.PB_EXPORT_WORKER_BATCH_SIZE || '2', 10),
+  Number.parseInt(process.env.PB_EXPORT_WORKER_BATCH_SIZE || '4', 10),
 );
 const PROCESS_ONCE =
   process.argv.includes('--once') || process.env.PB_EXPORT_WORKER_ONCE === '1';
@@ -49,7 +55,16 @@ const FONT_PATH_QNUM =
   process.env.PB_PDF_FONT_QNUM_PATH || '';
 const FONT_PATH_SUBJECT =
   process.env.PB_PDF_FONT_SUBJECT_PATH || '';
-const RENDER_CONFIG_VERSION = 'pb_render_v35_xelatex_layout_boxes';
+const RENDER_CONFIG_VERSION = 'pb_render_v42_preview_trimmed_thumbnail_fill';
+const PREVIEW_THUMB_BUCKET = process.env.PB_PREVIEW_THUMB_BUCKET || 'problem-previews';
+const PREVIEW_THUMB_WIDTH_PX = Math.max(
+  420,
+  Number.parseInt(process.env.PB_PREVIEW_THUMB_WIDTH_PX || '820', 10),
+);
+const PREVIEW_THUMB_EXPIRES_SEC = Math.max(
+  60 * 10,
+  Number.parseInt(process.env.PB_PREVIEW_THUMB_EXPIRES_SEC || String(60 * 60 * 24 * 7), 10),
+);
 const DEFAULT_TITLE_PAGE_TOP_TEXT = '2026학년도 대학수학능력시험 문제지';
 const FIGURE_REGEN_COOLDOWN_MIN = Math.max(
   2,
@@ -2394,6 +2409,14 @@ function buildRenderConfigFromJob(job) {
     options.includeCoverPage ?? options.coverPage,
     false,
   );
+  const hidePreviewHeader = normalizeBool(
+    options.hidePreviewHeader ?? options.hideDocumentHeader ?? options.previewHideHeader,
+    false,
+  );
+  const hideQuestionNumber = normalizeBool(
+    options.hideQuestionNumber ?? options.previewHideQuestionNumber,
+    false,
+  );
   const coverPageTexts = normalizeCoverPageTexts(
     options.coverPageTexts || options.coverTexts || options.coverPageTextConfig,
   );
@@ -2413,6 +2436,8 @@ function buildRenderConfigFromJob(job) {
     includeAcademyLogo,
     questionScoreByQuestionUid,
     includeCoverPage,
+    hidePreviewHeader,
+    hideQuestionNumber,
     coverPageTexts,
     layoutColumns,
     maxQuestionsPerPage,
@@ -2432,6 +2457,7 @@ function buildRenderConfigFromJob(job) {
     selectedQuestionIdsOrdered: selectedQuestionUidsOrdered,
     questionModeByQuestionId: questionModeByQuestionUid,
     questionScoreByQuestionId: questionScoreByQuestionUid,
+    hideDocumentHeader: hidePreviewHeader,
     font,
     subjectTitleText,
     titlePageTopText,
@@ -3713,11 +3739,30 @@ async function fetchQuestionsForJob(job, renderConfig) {
     query = query.eq('document_id', documentId).eq('is_checked', true);
   }
 
-  const { data, error } = await query
+  let { data, error } = await query
     .order('source_page', { ascending: true })
     .order('source_order', { ascending: true });
   if (error) {
     throw new Error(`question_fetch_failed:${error.message}`);
+  }
+
+  if ((!data || data.length === 0) && selectedUidSet.size > 0) {
+    const idFallbackQuery = supa
+      .from('pb_questions')
+      .select(
+        'id,question_uid,document_id,question_number,question_type,stem,choices,allow_objective,allow_subjective,objective_choices,objective_answer_key,subjective_answer,objective_generated,figure_refs,equations,confidence,flags,reviewer_notes,source_page,source_order,meta',
+      )
+      .eq('academy_id', academyId)
+      .in('id', Array.from(selectedUidSet))
+      .order('source_page', { ascending: true })
+      .order('source_order', { ascending: true });
+    const idResult = await idFallbackQuery;
+    if (idResult.error) {
+      throw new Error(`question_fetch_failed:${idResult.error.message}`);
+    }
+    if (idResult.data && idResult.data.length > 0) {
+      data = idResult.data;
+    }
   }
   const rows = (data || []).map((row) => ({
     id: String(row.id || ''),
@@ -4025,9 +4070,128 @@ async function renderPdf(job, questions, renderConfig) {
   };
 }
 
+function isPreviewOnlyJob(job) {
+  return job?.preview_only === true || job?.options?.previewOnly === true;
+}
+
+async function createSignedStorageUrl(bucket, objectPath, expiresInSeconds = PREVIEW_THUMB_EXPIRES_SEC) {
+  const safeBucket = String(bucket || '').trim();
+  const safePath = String(objectPath || '').trim();
+  if (!safeBucket || !safePath) return '';
+  try {
+    const { data, error } = await supa.storage
+      .from(safeBucket)
+      .createSignedUrl(safePath, expiresInSeconds);
+    if (error) return '';
+    return String(data?.signedUrl || '');
+  } catch (_) {
+    return '';
+  }
+}
+
+async function renderPdfFirstPageThumbnailBuffer(pdfBytes, widthPx = PREVIEW_THUMB_WIDTH_PX) {
+  const tmpDir = os.tmpdir();
+  const token = `pbt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const tmpPdf = path.join(tmpDir, `${token}.pdf`);
+  const tmpPngBase = path.join(tmpDir, token);
+  fs.writeFileSync(tmpPdf, pdfBytes);
+  try {
+    const dpi = Math.max(72, Math.round((widthPx / 210) * 25.4 * (72 / 25.4)));
+    await execFileAsync(
+      'pdftoppm',
+      ['-png', '-f', '1', '-l', '1', '-r', String(dpi), '-singlefile', tmpPdf, tmpPngBase],
+      { timeout: 15000 },
+    );
+    const pngPath = `${tmpPngBase}.png`;
+    if (!fs.existsSync(pngPath)) throw new Error('pdftoppm produced no output');
+    const raw = fs.readFileSync(pngPath);
+    fs.unlinkSync(pngPath);
+    const trimmed = await sharp(raw)
+      .trim({
+        background: { r: 255, g: 255, b: 255, alpha: 1 },
+        threshold: 72,
+      })
+      .toBuffer();
+    return sharp(trimmed)
+      .resize({ width: widthPx })
+      .png({ compressionLevel: 9 })
+      .toBuffer();
+  } finally {
+    try { fs.unlinkSync(tmpPdf); } catch (_) {}
+  }
+}
+
+async function buildPreviewThumbnailMeta(job, pdfBytes) {
+  const academyId = String(job?.academy_id || '').trim() || 'global';
+  const jobId = String(job?.id || '').trim();
+  if (!jobId) {
+    return {
+      bucket: '',
+      path: '',
+      url: '',
+      width: 0,
+      height: 0,
+      error: 'thumbnail_job_id_missing',
+    };
+  }
+  try {
+    const thumbBuffer = await renderPdfFirstPageThumbnailBuffer(pdfBytes, PREVIEW_THUMB_WIDTH_PX);
+    const meta = await sharp(thumbBuffer).metadata();
+    const objectPath = `${academyId}/pdf-preview/${jobId}_p1.png`;
+    const { error: uploadErr } = await supa.storage
+      .from(PREVIEW_THUMB_BUCKET)
+      .upload(objectPath, thumbBuffer, {
+        contentType: 'image/png',
+        upsert: true,
+      });
+    if (uploadErr) {
+      return {
+        bucket: PREVIEW_THUMB_BUCKET,
+        path: objectPath,
+        url: '',
+        width: Number(meta?.width || 0),
+        height: Number(meta?.height || 0),
+        error: `thumbnail_upload_failed:${uploadErr.message}`,
+      };
+    }
+    const signedUrl = await createSignedStorageUrl(
+      PREVIEW_THUMB_BUCKET,
+      objectPath,
+      PREVIEW_THUMB_EXPIRES_SEC,
+    );
+    return {
+      bucket: PREVIEW_THUMB_BUCKET,
+      path: objectPath,
+      url: signedUrl,
+      width: Number(meta?.width || 0),
+      height: Number(meta?.height || 0),
+      error: '',
+    };
+  } catch (err) {
+    return {
+      bucket: '',
+      path: '',
+      url: '',
+      width: 0,
+      height: 0,
+      error: compact(err?.message || err),
+    };
+  }
+}
+
 async function processOneJob(job) {
   const renderConfig = buildRenderConfigFromJob(job);
-  const renderHash = computeRenderHash(renderConfig);
+  const computedRenderHash = computeRenderHash(renderConfig);
+  const rawOptions = job?.options && typeof job.options === 'object'
+    ? job.options
+    : {};
+  // Keep API-side render hash stable for preview lookup deduplication.
+  const renderHash = String(
+    job?.render_hash
+    || rawOptions.renderHash
+    || rawOptions.render_hash
+    || computedRenderHash,
+  ).trim();
   const fetched = await fetchQuestionsForJob(job, renderConfig);
   const questions = Array.isArray(fetched?.rows) ? fetched.rows : [];
   const missingQuestionUids = Array.isArray(fetched?.missingQuestionUids)
@@ -4076,6 +4240,17 @@ async function processOneJob(job) {
     .createSignedUrl(objectPath, 60 * 60 * 24 * 7);
   const outputUrl = String(signed?.signedUrl || '');
   const nowIso = new Date().toISOString();
+  const previewOnly = isPreviewOnlyJob(job);
+  const previewThumbnail = previewOnly
+    ? await buildPreviewThumbnailMeta(job, rendered.bytes)
+    : {
+        bucket: '',
+        path: '',
+        url: '',
+        width: 0,
+        height: 0,
+        error: '',
+      };
 
   const { error: updErr } = await supa
     .from('pb_exports')
@@ -4086,8 +4261,7 @@ async function processOneJob(job) {
       output_url: outputUrl,
       page_count: rendered.pageCount,
       render_hash: renderHash,
-      preview_only:
-        job.preview_only === true || job?.options?.previewOnly === true,
+      preview_only: previewOnly,
       error_code: '',
       error_message: '',
       result_summary: {
@@ -4136,6 +4310,19 @@ async function processOneJob(job) {
         mathRenderedCount: rendered.mathRenderedCount || 0,
         mathFailedCount: rendered.mathFailedCount || 0,
         mathCacheHitCount: rendered.mathCacheHitCount || 0,
+        previewThumbnail: {
+          bucket: previewThumbnail.bucket,
+          path: previewThumbnail.path,
+          url: previewThumbnail.url,
+          width: previewThumbnail.width,
+          height: previewThumbnail.height,
+        },
+        previewThumbnailBucket: previewThumbnail.bucket,
+        previewThumbnailPath: previewThumbnail.path,
+        previewThumbnailUrl: previewThumbnail.url,
+        previewThumbnailWidth: previewThumbnail.width,
+        previewThumbnailHeight: previewThumbnail.height,
+        previewThumbnailError: previewThumbnail.error,
       },
       finished_at: nowIso,
       updated_at: nowIso,
@@ -4198,6 +4385,19 @@ async function processOneJob(job) {
           mathRenderedCount: rendered.mathRenderedCount || 0,
           mathFailedCount: rendered.mathFailedCount || 0,
           mathCacheHitCount: rendered.mathCacheHitCount || 0,
+          previewThumbnail: {
+            bucket: previewThumbnail.bucket,
+            path: previewThumbnail.path,
+            url: previewThumbnail.url,
+            width: previewThumbnail.width,
+            height: previewThumbnail.height,
+          },
+          previewThumbnailBucket: previewThumbnail.bucket,
+          previewThumbnailPath: previewThumbnail.path,
+          previewThumbnailUrl: previewThumbnail.url,
+          previewThumbnailWidth: previewThumbnail.width,
+          previewThumbnailHeight: previewThumbnail.height,
+          previewThumbnailError: previewThumbnail.error,
         },
         finished_at: nowIso,
         updated_at: nowIso,
@@ -4224,20 +4424,59 @@ async function processOneJob(job) {
     mathRequestedCount: rendered.mathRequestedCount || 0,
     mathRenderedCount: rendered.mathRenderedCount || 0,
     mathFailedCount: rendered.mathFailedCount || 0,
+    previewThumbnailPath: previewThumbnail.path || '',
+    previewThumbnailError: previewThumbnail.error || '',
     outputPath: objectPath,
   };
 }
 
 async function processBatch() {
-  const { data: queue, error } = await supa
+  let queue = [];
+  let previewLookupSupported = true;
+  const { data: previewRows, error: previewErr } = await supa
     .from('pb_exports')
     .select('*')
     .eq('status', 'queued')
-    .order('created_at', { ascending: true })
+    .eq('preview_only', true)
+    .order('created_at', { ascending: false })
     .limit(BATCH_SIZE);
-  if (error) {
-    throw new Error(`export_queue_fetch_failed:${error.message}`);
+  if (previewErr) {
+    if (/preview_only/i.test(String(previewErr.message || ''))) {
+      previewLookupSupported = false;
+    } else {
+      throw new Error(`export_queue_fetch_failed:${previewErr.message}`);
+    }
+  } else if (Array.isArray(previewRows) && previewRows.length > 0) {
+    queue = previewRows;
   }
+
+  if (queue.length < BATCH_SIZE) {
+    const { data: baseQueue, error: baseErr } = await supa
+      .from('pb_exports')
+      .select('*')
+      .eq('status', 'queued')
+      .order('created_at', { ascending: true })
+      .limit(Math.max(BATCH_SIZE * 4, 12));
+    if (baseErr) {
+      throw new Error(`export_queue_fetch_failed:${baseErr.message}`);
+    }
+    const queuedIds = new Set(queue.map((row) => String(row?.id || '').trim()));
+    for (const row of baseQueue || []) {
+      const id = String(row?.id || '').trim();
+      if (!id || queuedIds.has(id)) continue;
+      if (
+        previewLookupSupported &&
+        row?.preview_only === true &&
+        queue.length >= BATCH_SIZE
+      ) {
+        continue;
+      }
+      queue.push(row);
+      queuedIds.add(id);
+      if (queue.length >= BATCH_SIZE) break;
+    }
+  }
+
   if (!queue || queue.length === 0) {
     return { processed: 0, success: 0, failed: 0 };
   }
@@ -4267,6 +4506,8 @@ async function processBatch() {
           mathRequested: result.mathRequestedCount,
           mathRendered: result.mathRenderedCount,
           mathFailed: result.mathFailedCount,
+          previewThumbPath: result.previewThumbnailPath || '',
+          previewThumbError: result.previewThumbnailError || '',
           outputPath: result.outputPath,
         }),
       );

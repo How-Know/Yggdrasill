@@ -1680,6 +1680,8 @@ export function buildDocumentHtml({
     && academyLogoDataUrl.length > 0
     && /^data:image\//i.test(academyLogoDataUrl);
   const includeCoverPage = isMockStyle && layout?.includeCoverPage === true;
+  const hidePreviewHeader = layout?.hidePreviewHeader === true;
+  const hideQuestionNumber = layout?.hideQuestionNumber === true;
   const coverPageTexts = normalizeCoverPageTexts(layout?.coverPageTexts);
   const scoreMap = questionScoreByQuestionId && typeof questionScoreByQuestionId === 'object'
     ? questionScoreByQuestionId
@@ -1690,6 +1692,7 @@ export function buildDocumentHtml({
     stemSizePt,
     includeQuestionScore,
     questionScoreByQuestionId: scoreMap,
+    showQuestionNumber: !hideQuestionNumber,
     debugDots,
   }));
   let autoAnchorCarryMode = null;
@@ -2266,6 +2269,9 @@ export function buildDocumentHtml({
       </div>
     `;
     const renderMockHeader = (pageNo, isTitlePage) => {
+      if (hidePreviewHeader) {
+        return '';
+      }
       if (isTitlePage) {
         const sessionChipHtml = hasAcademyLogo
           ? `<span class="mock-chip-session-wrap"><img class="mock-academy-logo-overlay" src="${escapeHtml(academyLogoDataUrl)}" alt="" /><span class="mock-chip mock-chip-session"><span class="mock-chip-condensed">제 2 교시</span></span></span>`
@@ -2326,11 +2332,13 @@ export function buildDocumentHtml({
         questionChunk: Array.isArray(questionChunksSource[idx]) ? questionChunksSource[idx] : [],
       });
       const isLastPage = idx === totalPages - 1;
-      const noticeMode = isLastPage
-        ? 'compact'
-        : ((hasAdditionalTitlePages && preTitleNoticePages.has(pageNo))
-          ? 'full'
-          : 'none');
+      const noticeMode = hidePreviewHeader
+        ? 'none'
+        : (isLastPage
+          ? 'compact'
+          : ((hasAdditionalTitlePages && preTitleNoticePages.has(pageNo))
+            ? 'full'
+            : 'none'));
       const pageNoteHtml = noticeMode === 'none'
         ? ''
         : renderNoticeBox({
@@ -2345,13 +2353,9 @@ export function buildDocumentHtml({
       const sectionStyle = pageHasNote
         ? ` style="--page-note-box-height:${noteBoxHeightPt}pt;"`
         : '';
-      return `
-        <section class="mock-page${firstClass}${titleClass}${lastClass}${noteClass}${pageBreak}"${sectionStyle}>
-          ${renderMockHeader(pageNo, isTitlePage)}
-          <div class="mock-main">
-            <div class="mock-content">${contentHtml}</div>
-            ${pageNoteHtml}
-          </div>
+      const footerHtml = hidePreviewHeader
+        ? ''
+        : `
           <div class="mock-footer-row">
             <div></div>
             <div class="mock-page-box">
@@ -2360,6 +2364,15 @@ export function buildDocumentHtml({
             </div>
             <div></div>
           </div>
+        `;
+      return `
+        <section class="mock-page${firstClass}${titleClass}${lastClass}${noteClass}${pageBreak}"${sectionStyle}>
+          ${renderMockHeader(pageNo, isTitlePage)}
+          <div class="mock-main">
+            <div class="mock-content">${contentHtml}</div>
+            ${pageNoteHtml}
+          </div>
+          ${footerHtml}
         </section>
       `;
     }).join('')}</div>`;
@@ -2423,7 +2436,7 @@ export function buildDocumentHtml({
         <style>${styles}</style>
       </head>
       <body class="${bodyClass}">
-        <div class="paper-title">${escapeHtml(profileTitle(profile))}</div>
+        ${hidePreviewHeader ? '' : `<div class="paper-title">${escapeHtml(profileTitle(profile))}</div>`}
         <div class="profile-note"></div>
         ${coverHtml}
         ${questionHtml}

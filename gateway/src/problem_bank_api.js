@@ -151,6 +151,11 @@ function normalizePaper(raw) {
   return 'A4';
 }
 
+function normalizeMathEngine(raw) {
+  const v = String(raw || '').trim().toLowerCase();
+  return v === 'xelatex' ? 'xelatex' : 'mathjax-svg';
+}
+
 function normalizeNumeric(raw, fallback, min, max) {
   const n = Number.parseFloat(String(raw ?? ''));
   if (!Number.isFinite(n)) return fallback;
@@ -595,7 +600,7 @@ function normalizeFigureQuality(rawFigureQuality, options = {}) {
   return { targetDpi, minDpi };
 }
 
-const EXPORT_RENDER_CONFIG_VERSION = 'pb_render_v34_q9_math_match_fix';
+const EXPORT_RENDER_CONFIG_VERSION = 'pb_render_v42_preview_trimmed_thumbnail_fill';
 const DEFAULT_TITLE_PAGE_TOP_TEXT = '2026학년도 대학수학능력시험 문제지';
 
 const QUESTION_COPY_SELECT_COLUMNS = [
@@ -717,6 +722,14 @@ function normalizeExportRenderConfig(options, selectedQuestionUids, defaults = {
     src.includeCoverPage ?? src.coverPage,
     normalizeBool(defaults.includeCoverPage, false),
   );
+  const hidePreviewHeader = normalizeBool(
+    src.hidePreviewHeader ?? src.hideDocumentHeader ?? src.previewHideHeader,
+    normalizeBool(defaults.hidePreviewHeader, false),
+  );
+  const hideQuestionNumber = normalizeBool(
+    src.hideQuestionNumber ?? src.previewHideQuestionNumber,
+    normalizeBool(defaults.hideQuestionNumber, false),
+  );
   const coverPageTexts = normalizeCoverPageTexts(
     src.coverPageTexts || src.coverTexts || src.coverPageTextConfig,
     defaults.coverPageTexts,
@@ -739,6 +752,8 @@ function normalizeExportRenderConfig(options, selectedQuestionUids, defaults = {
     titlePageIndices,
     titlePageHeaders,
     includeCoverPage,
+    hidePreviewHeader,
+    hideQuestionNumber,
     coverPageTexts,
     alignPolicy,
     questionMode,
@@ -766,6 +781,7 @@ function normalizeExportRenderConfig(options, selectedQuestionUids, defaults = {
     selectedQuestionIdsOrdered: selectedQuestionUidsOrdered,
     questionModeByQuestionId: questionModeByQuestionUid,
     questionScoreByQuestionId: questionScoreByQuestionUid,
+    hideDocumentHeader: hidePreviewHeader,
     mathEngine: String(src.mathEngine || '').trim() || undefined,
   };
 }
@@ -840,6 +856,274 @@ async function ensureDocumentBelongs(academyId, documentId) {
     throw new Error(`document_lookup_failed:${error.message}`);
   }
   return data;
+}
+
+function parseJsonObjectSafely(raw) {
+  if (!raw) return {};
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? parsed
+        : {};
+    } catch (_) {
+      return {};
+    }
+  }
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw;
+  return {};
+}
+
+function buildRenderHashPayload({
+  renderConfig,
+  templateProfile,
+  paperSize,
+  includeAnswerSheet,
+  includeExplanation,
+}) {
+  return {
+    renderConfigVersion: renderConfig.renderConfigVersion,
+    templateProfile,
+    paperSize,
+    includeAnswerSheet,
+    includeExplanation,
+    includeQuestionScore: renderConfig.includeQuestionScore === true,
+    questionScoreByQuestionUid: renderConfig.questionScoreByQuestionUid,
+    questionScoreByQuestionId: renderConfig.questionScoreByQuestionUid,
+    includeCoverPage: renderConfig.includeCoverPage,
+    hidePreviewHeader: renderConfig.hidePreviewHeader === true,
+    hideQuestionNumber: renderConfig.hideQuestionNumber === true,
+    coverPageTexts: renderConfig.coverPageTexts,
+    layoutColumns: renderConfig.layoutColumns,
+    maxQuestionsPerPage: renderConfig.maxQuestionsPerPage,
+    layoutMode: renderConfig.layoutMode,
+    columnQuestionCounts: renderConfig.columnQuestionCounts,
+    pageColumnQuestionCounts: renderConfig.pageColumnQuestionCounts,
+    columnLabelAnchors: renderConfig.columnLabelAnchors,
+    titlePageIndices: renderConfig.titlePageIndices,
+    titlePageHeaders: renderConfig.titlePageHeaders,
+    alignPolicy: renderConfig.alignPolicy,
+    subjectTitleText: renderConfig.subjectTitleText,
+    titlePageTopText: renderConfig.titlePageTopText,
+    timeLimitText: renderConfig.timeLimitText,
+    includeAcademyLogo: renderConfig.includeAcademyLogo === true,
+    questionMode: renderConfig.questionMode,
+    font: renderConfig.font,
+    layoutTuning: renderConfig.layoutTuning,
+    figureQuality: renderConfig.figureQuality,
+    selectedQuestionUidsOrdered: renderConfig.selectedQuestionUidsOrdered,
+    selectedQuestionIdsOrdered: renderConfig.selectedQuestionUidsOrdered,
+    questionModeByQuestionUid: renderConfig.questionModeByQuestionUid,
+    questionModeByQuestionId: renderConfig.questionModeByQuestionUid,
+    mathEngine: renderConfig.mathEngine,
+  };
+}
+
+function buildExportOptions({
+  rawOptions,
+  sourceDocumentIds,
+  renderConfig,
+  templateProfile,
+  paperSize,
+  includeAnswerSheet,
+  includeExplanation,
+  renderHash,
+  previewOnly,
+}) {
+  return {
+    ...rawOptions,
+    sourceDocumentIds,
+    renderConfigVersion: renderConfig.renderConfigVersion,
+    templateProfile,
+    paperSize,
+    includeAnswerSheet,
+    includeExplanation,
+    includeQuestionScore: renderConfig.includeQuestionScore === true,
+    questionScoreByQuestionUid: renderConfig.questionScoreByQuestionUid,
+    questionScoreByQuestionId: renderConfig.questionScoreByQuestionUid,
+    includeCoverPage: renderConfig.includeCoverPage,
+    hidePreviewHeader: renderConfig.hidePreviewHeader === true,
+    hideQuestionNumber: renderConfig.hideQuestionNumber === true,
+    coverPageTexts: renderConfig.coverPageTexts,
+    layoutColumns: renderConfig.layoutColumns,
+    maxQuestionsPerPage: renderConfig.maxQuestionsPerPage,
+    layoutMode: renderConfig.layoutMode,
+    columnQuestionCounts: renderConfig.columnQuestionCounts,
+    pageColumnQuestionCounts: renderConfig.pageColumnQuestionCounts,
+    columnLabelAnchors: renderConfig.columnLabelAnchors,
+    titlePageIndices: renderConfig.titlePageIndices,
+    titlePageHeaders: renderConfig.titlePageHeaders,
+    alignPolicy: renderConfig.alignPolicy,
+    subjectTitleText: renderConfig.subjectTitleText,
+    titlePageTopText: renderConfig.titlePageTopText,
+    timeLimitText: renderConfig.timeLimitText,
+    includeAcademyLogo: renderConfig.includeAcademyLogo === true,
+    questionMode: renderConfig.questionMode,
+    layoutTuning: renderConfig.layoutTuning,
+    figureQuality: renderConfig.figureQuality,
+    font: renderConfig.font,
+    selectedQuestionUidsOrdered: renderConfig.selectedQuestionUidsOrdered,
+    selectedQuestionIdsOrdered: renderConfig.selectedQuestionUidsOrdered,
+    questionModeByQuestionUid: renderConfig.questionModeByQuestionUid,
+    questionModeByQuestionId: renderConfig.questionModeByQuestionUid,
+    mathEngine: renderConfig.mathEngine,
+    renderHash,
+    previewOnly,
+  };
+}
+
+async function insertExportJobWithFallback(payload) {
+  let { data: job, error } = await supa
+    .from('pb_exports')
+    .insert(payload)
+    .select('*')
+    .maybeSingle();
+  if (error && /render_hash|preview_only/i.test(String(error.message || ''))) {
+    const fallbackPayload = { ...payload };
+    delete fallbackPayload.render_hash;
+    delete fallbackPayload.preview_only;
+    ({ data: job, error } = await supa
+      .from('pb_exports')
+      .insert(fallbackPayload)
+      .select('*')
+      .maybeSingle());
+  }
+  if (error || !job) {
+    throw new Error(`export_job_insert_failed:${error?.message || 'unknown'}`);
+  }
+  return job;
+}
+
+async function loadExistingPreviewJobsByRenderHashes(academyId, renderHashes) {
+  const uniqueHashes = [...new Set(renderHashes.filter((h) => String(h || '').trim()))];
+  const out = new Map();
+  if (!uniqueHashes.length) return out;
+
+  for (const hashChunk of chunkArray(uniqueHashes, 120)) {
+    let rows = null;
+    {
+      const { data, error } = await supa
+        .from('pb_exports')
+        .select('*')
+        .eq('academy_id', academyId)
+        .eq('preview_only', true)
+        .in('render_hash', hashChunk)
+        .order('created_at', { ascending: false })
+        .limit(Math.max(200, hashChunk.length * 4));
+      if (error && /preview_only/i.test(String(error.message || ''))) {
+        const fallback = await supa
+          .from('pb_exports')
+          .select('*')
+          .eq('academy_id', academyId)
+          .in('render_hash', hashChunk)
+          .order('created_at', { ascending: false })
+          .limit(Math.max(200, hashChunk.length * 4));
+        if (fallback.error) {
+          throw new Error(`preview_jobs_lookup_failed:${fallback.error.message}`);
+        }
+        rows = fallback.data || [];
+      } else if (error) {
+        throw new Error(`preview_jobs_lookup_failed:${error.message}`);
+      } else {
+        rows = data || [];
+      }
+    }
+
+    for (const row of rows) {
+      const hash = String(row?.render_hash || '').trim();
+      if (!hash || out.has(hash)) continue;
+      out.set(hash, row);
+    }
+  }
+  return out;
+}
+
+async function createSignedStorageUrl(bucket, objectPath, expiresInSeconds = 60 * 30) {
+  const safeBucket = String(bucket || '').trim();
+  const safePath = String(objectPath || '').trim();
+  if (!safeBucket || !safePath) return '';
+  try {
+    const { data, error } = await supa.storage
+      .from(safeBucket)
+      .createSignedUrl(safePath, expiresInSeconds);
+    if (error) return '';
+    return String(data?.signedUrl || '');
+  } catch (_) {
+    return '';
+  }
+}
+
+function extractPreviewThumbnailMeta(summaryRaw) {
+  const summary = parseJsonObjectSafely(summaryRaw);
+  const fromObject = parseJsonObjectSafely(summary.previewThumbnail);
+  const bucket = String(
+    fromObject.bucket || summary.previewThumbnailBucket || '',
+  ).trim();
+  const path = String(
+    fromObject.path || summary.previewThumbnailPath || '',
+  ).trim();
+  const url = String(
+    fromObject.url || summary.previewThumbnailUrl || '',
+  ).trim();
+  const width = Number(fromObject.width || summary.previewThumbnailWidth || 0);
+  const height = Number(fromObject.height || summary.previewThumbnailHeight || 0);
+  const error = String(
+    fromObject.error || summary.previewThumbnailError || '',
+  ).trim();
+  return {
+    bucket,
+    path,
+    url,
+    width: Number.isFinite(width) ? width : 0,
+    height: Number.isFinite(height) ? height : 0,
+    error,
+  };
+}
+
+async function buildPdfArtifactFromJob(job) {
+  const safeJob = job && typeof job === 'object' ? job : {};
+  const status = String(safeJob.status || 'queued').trim().toLowerCase();
+  const jobId = String(safeJob.id || '').trim();
+  const summary = parseJsonObjectSafely(safeJob.result_summary);
+  const options = parseJsonObjectSafely(safeJob.options);
+  const previewOnly = safeJob.preview_only === true || options.previewOnly === true;
+
+  let pdfUrl = String(safeJob.output_url || '').trim();
+  const pdfBucket = String(safeJob.output_storage_bucket || '').trim();
+  const pdfPath = String(safeJob.output_storage_path || '').trim();
+  const refreshedPdfUrl = await createSignedStorageUrl(pdfBucket, pdfPath, 60 * 30);
+  if (refreshedPdfUrl) pdfUrl = refreshedPdfUrl;
+
+  const thumb = extractPreviewThumbnailMeta(summary);
+  let thumbnailUrl = thumb.url;
+  const refreshedThumbUrl = await createSignedStorageUrl(
+    thumb.bucket,
+    thumb.path,
+    60 * 30,
+  );
+  if (refreshedThumbUrl) thumbnailUrl = refreshedThumbUrl;
+
+  const errorMessage = String(
+    safeJob.error_message || summary.error || thumb.error || '',
+  ).trim();
+  const effectiveStatus =
+    status === 'completed' &&
+    !String(thumbnailUrl || '').trim() &&
+    errorMessage.length > 0
+      ? 'failed'
+      : (status || 'queued');
+  return {
+    jobId,
+    status: effectiveStatus,
+    previewOnly,
+    pdfUrl,
+    thumbnailUrl,
+    thumbnailBucket: thumb.bucket,
+    thumbnailPath: thumb.path,
+    thumbnailWidth: thumb.width,
+    thumbnailHeight: thumb.height,
+    error: errorMessage,
+  };
 }
 
 async function createExtractJob(body, res) {
@@ -2609,6 +2893,332 @@ async function previewUrls(res, req) {
   }
 }
 
+function inferQuestionModeFromRow(row) {
+  const rawType = String(row?.question_type || row?.questionType || '')
+    .replace(/\s+/g, '')
+    .toLowerCase();
+  if (rawType.includes('서술') || rawType.includes('essay')) return 'essay';
+  if (rawType.includes('객관') || rawType.includes('objective')) return 'objective';
+  if (rawType.includes('주관') || rawType.includes('subjective')) return 'subjective';
+  const choices = Array.isArray(row?.choices) ? row.choices : [];
+  return choices.length >= 2 ? 'objective' : 'subjective';
+}
+
+async function previewPdfArtifacts(res, req) {
+  let body;
+  try {
+    body = await readJson(req);
+  } catch (_) {
+    sendJson(res, 400, { ok: false, error: 'invalid_json' });
+    return;
+  }
+
+  const academyId = String(body?.academyId || '').trim();
+  const rawQuestionIds = Array.isArray(body?.questionIds)
+    ? body.questionIds.map((v) => String(v || '').trim())
+    : [];
+  const invalidQuestionIds = rawQuestionIds.filter((id) => !isUuid(id));
+  const questionIds = normalizeUuidListOrdered(rawQuestionIds);
+  const requestedDocumentId = String(body?.documentId || '').trim();
+  const createJobs = body?.createJobs !== false;
+
+  if (!isUuid(academyId) || questionIds.length === 0) {
+    sendJson(res, 400, {
+      ok: false,
+      error: 'academyId must be uuid and questionIds[] must be non-empty',
+    });
+    return;
+  }
+  if (invalidQuestionIds.length > 0) {
+    sendJson(res, 400, { ok: false, error: 'questionIds must be uuid[]' });
+    return;
+  }
+  if (requestedDocumentId && !isUuid(requestedDocumentId)) {
+    sendJson(res, 400, { ok: false, error: 'documentId must be uuid' });
+    return;
+  }
+  if (requestedDocumentId) {
+    const doc = await ensureDocumentBelongs(academyId, requestedDocumentId);
+    if (!doc) {
+      sendJson(res, 404, { ok: false, error: 'document_not_found' });
+      return;
+    }
+  }
+
+  const { data: questionRowsById, error: fetchErr } = await supa
+    .from('pb_questions')
+    .select('id,question_uid,document_id,question_type,choices')
+    .eq('academy_id', academyId)
+    .in('id', questionIds);
+  if (fetchErr) {
+    sendJson(res, 500, { ok: false, error: `fetch_failed:${fetchErr.message}` });
+    return;
+  }
+
+  let questionRows = questionRowsById || [];
+  const foundById = new Set(questionRows.map((r) => String(r?.id || '').trim()));
+  const missingByIdIds = questionIds.filter((id) => !foundById.has(id));
+  if (missingByIdIds.length > 0) {
+    const { data: byUidRows } = await supa
+      .from('pb_questions')
+      .select('id,question_uid,document_id,question_type,choices')
+      .eq('academy_id', academyId)
+      .in('question_uid', missingByIdIds);
+    if (byUidRows && byUidRows.length > 0) {
+      questionRows = [...questionRows, ...byUidRows];
+    }
+  }
+
+  const rowById = new Map();
+  for (const row of questionRows) {
+    const id = String(row?.id || '').trim();
+    const uid = String(row?.question_uid || '').trim();
+    if (id) rowById.set(id, row);
+    if (uid && uid !== id) rowById.set(uid, row);
+  }
+  const baseOptions = {
+    ...normalizeJsonObject(body?.options, {}),
+    ...normalizeJsonObject(body?.renderConfig, {}),
+    ...normalizeJsonObject(body?.layout, {}),
+  };
+  const templateProfile = normalizeTemplateProfile(
+    body?.templateProfile || body?.profile || baseOptions.templateProfile,
+  );
+  const paperSize = normalizePaper(
+    body?.paperSize || body?.paper || baseOptions.paperSize || baseOptions.paper,
+  );
+  const includeAnswerSheet = normalizeBool(
+    body?.includeAnswerSheet ?? baseOptions.includeAnswerSheet,
+    false,
+  );
+  const includeExplanation = normalizeBool(
+    body?.includeExplanation ?? baseOptions.includeExplanation,
+    false,
+  );
+  const forcedMathEngine = normalizeMathEngine(
+    body?.mathEngine || baseOptions.mathEngine || 'xelatex',
+  );
+
+  const descriptors = [];
+  const immediateArtifacts = [];
+  for (const questionId of questionIds) {
+    const row = rowById.get(questionId);
+    if (!row) {
+      immediateArtifacts.push({
+        questionId,
+        questionUid: '',
+        status: 'failed',
+        jobId: '',
+        previewOnly: true,
+        pdfUrl: '',
+        thumbnailUrl: '',
+        thumbnailBucket: '',
+        thumbnailPath: '',
+        thumbnailWidth: 0,
+        thumbnailHeight: 0,
+        error: 'question_not_found',
+      });
+      continue;
+    }
+    const questionUid = String(row?.question_uid || row?.id || '').trim();
+    const questionDocumentId = String(row?.document_id || '').trim();
+    if (!questionUid || !questionDocumentId) {
+      immediateArtifacts.push({
+        questionId,
+        questionUid,
+        status: 'failed',
+        jobId: '',
+        previewOnly: true,
+        pdfUrl: '',
+        thumbnailUrl: '',
+        thumbnailBucket: '',
+        thumbnailPath: '',
+        thumbnailWidth: 0,
+        thumbnailHeight: 0,
+        error: 'invalid_question_row',
+      });
+      continue;
+    }
+    if (requestedDocumentId && requestedDocumentId !== questionDocumentId) {
+      immediateArtifacts.push({
+        questionId,
+        questionUid,
+        status: 'failed',
+        jobId: '',
+        previewOnly: true,
+        pdfUrl: '',
+        thumbnailUrl: '',
+        thumbnailBucket: '',
+        thumbnailPath: '',
+        thumbnailWidth: 0,
+        thumbnailHeight: 0,
+        error: 'question_document_mismatch',
+      });
+      continue;
+    }
+
+    const inferredMode = inferQuestionModeFromRow(row);
+    const selectedQuestionUids = [questionUid];
+    const sourceDocumentIds = [questionDocumentId];
+    const optionsForRender = {
+      ...baseOptions,
+      questionMode: baseOptions.questionMode || baseOptions.question_mode || inferredMode,
+      layoutColumns:
+        baseOptions.layoutColumns ||
+        baseOptions.layout_columns ||
+        baseOptions.columns ||
+        (templateProfile === 'mock' || templateProfile === 'csat' ? 2 : 1),
+      maxQuestionsPerPage:
+        baseOptions.maxQuestionsPerPage ||
+        baseOptions.max_questions_per_page ||
+        baseOptions.perPage ||
+        baseOptions.questionsPerPage ||
+        4,
+      includeCoverPage: false,
+      includeAcademyLogo: false,
+      hidePreviewHeader: true,
+      hideQuestionNumber: true,
+      includeAnswerSheet,
+      includeExplanation,
+      mathEngine: forcedMathEngine,
+    };
+    const renderConfig = normalizeExportRenderConfig(optionsForRender, selectedQuestionUids, {
+      questionMode: optionsForRender.questionMode,
+      layoutColumns: optionsForRender.layoutColumns,
+      maxQuestionsPerPage: optionsForRender.maxQuestionsPerPage,
+    });
+    if (!renderConfig.mathEngine) {
+      renderConfig.mathEngine = forcedMathEngine;
+    }
+    const renderHash = computeRenderHash(
+      buildRenderHashPayload({
+        renderConfig,
+        templateProfile,
+        paperSize,
+        includeAnswerSheet,
+        includeExplanation,
+      }),
+    );
+    const options = buildExportOptions({
+      rawOptions: optionsForRender,
+      sourceDocumentIds,
+      renderConfig,
+      templateProfile,
+      paperSize,
+      includeAnswerSheet,
+      includeExplanation,
+      renderHash,
+      previewOnly: true,
+    });
+
+    descriptors.push({
+      questionId,
+      questionUid,
+      renderHash,
+      payload: {
+        academy_id: academyId,
+        document_id: questionDocumentId,
+        requested_by: null,
+        status: 'queued',
+        template_profile: templateProfile,
+        paper_size: paperSize,
+        include_answer_sheet: includeAnswerSheet,
+        include_explanation: includeExplanation,
+        selected_question_ids: [questionId],
+        render_hash: renderHash,
+        preview_only: true,
+        options,
+        output_storage_bucket: 'problem-exports',
+        output_storage_path: '',
+        output_url: '',
+        page_count: 0,
+        worker_name: '',
+        error_code: '',
+        error_message: '',
+        started_at: null,
+        finished_at: null,
+      },
+    });
+  }
+
+  const existingByHash = await loadExistingPreviewJobsByRenderHashes(
+    academyId,
+    descriptors.map((one) => one.renderHash),
+  );
+  const artifacts = [...immediateArtifacts];
+  for (const one of descriptors) {
+    let job = existingByHash.get(one.renderHash) || null;
+    const status = String(job?.status || '').trim().toLowerCase();
+    const existingThumb = extractPreviewThumbnailMeta(job?.result_summary);
+    const completedThumbBroken =
+      status === 'completed'
+      && !existingThumb.path
+      && !existingThumb.url
+      && String(existingThumb.error || '').trim().length > 0;
+    const shouldCreateNew =
+      !job ||
+      status === 'failed' ||
+      status === 'cancelled' ||
+      status === 'error' ||
+      completedThumbBroken;
+    if (shouldCreateNew && createJobs) {
+      try {
+        job = await insertExportJobWithFallback(one.payload);
+      } catch (err) {
+        artifacts.push({
+          questionId: one.questionId,
+          questionUid: one.questionUid,
+          status: 'failed',
+          jobId: '',
+          previewOnly: true,
+          pdfUrl: '',
+          thumbnailUrl: '',
+          thumbnailBucket: '',
+          thumbnailPath: '',
+          thumbnailWidth: 0,
+          thumbnailHeight: 0,
+          error: compact(err?.message || err),
+        });
+        continue;
+      }
+    }
+    if (!job) {
+      artifacts.push({
+        questionId: one.questionId,
+        questionUid: one.questionUid,
+        status: 'queued',
+        jobId: '',
+        previewOnly: true,
+        pdfUrl: '',
+        thumbnailUrl: '',
+        thumbnailBucket: '',
+        thumbnailPath: '',
+        thumbnailWidth: 0,
+        thumbnailHeight: 0,
+        error: createJobs ? 'job_unavailable' : '',
+      });
+      continue;
+    }
+
+    const artifact = await buildPdfArtifactFromJob(job);
+    artifacts.push({
+      questionId: one.questionId,
+      questionUid: one.questionUid,
+      ...artifact,
+    });
+  }
+
+  const hasPending = artifacts.some((one) => {
+    const status = String(one?.status || '').trim().toLowerCase();
+    return status === 'queued' || status === 'running' || status === 'processing';
+  });
+  sendJson(res, 200, {
+    ok: true,
+    artifacts,
+    pollAfterMs: hasPending ? 1800 : 0,
+  });
+}
+
 async function handler(req, res) {
   if (req.method === 'OPTIONS') {
     sendJson(res, 200, { ok: true });
@@ -2757,6 +3367,11 @@ async function handler(req, res) {
 
     if (method === 'POST' && url.pathname === '/pb/preview/urls') {
       await previewUrls(res, req);
+      return;
+    }
+
+    if (method === 'POST' && url.pathname === '/pb/preview/pdf-artifacts') {
+      await previewPdfArtifacts(res, req);
       return;
     }
 

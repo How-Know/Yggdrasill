@@ -633,6 +633,7 @@ export function renderQuestionBlock(
     stemSizePt = 11,
     includeQuestionScore = false,
     questionScoreByQuestionId = {},
+    showQuestionNumber = true,
     debugDots = false,
   } = {},
 ) {
@@ -672,7 +673,7 @@ export function renderQuestionBlock(
 
   const hasFraction = stem.hasFraction || choiceHtml.includes('has-fraction');
   const questionClass = hasFraction ? 'question has-fraction' : 'question';
-  const indent = numIndentEm(number);
+  const indent = showQuestionNumber ? numIndentEm(number) : '0';
   const scoreSuffix = includeQuestionScore
     ? `<span class="q-score">[${escapeHtml(formatQuestionScore(
       resolveQuestionScore(question, questionScoreByQuestionId),
@@ -693,7 +694,7 @@ export function renderQuestionBlock(
 
   return `
     <article class="${questionClass}" style="padding-left:${indent}em;text-indent:-${indent}em;">
-      <div class="q-stem"><span class="q-num">${escapeHtml(number)}.</span> ${stemHtml}</div>
+      <div class="q-stem">${showQuestionNumber ? `<span class="q-num">${escapeHtml(number)}.</span> ` : ''}${stemHtml}</div>
       ${figureHtml}
       ${choiceHtml}
     </article>

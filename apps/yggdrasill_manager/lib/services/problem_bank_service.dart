@@ -50,6 +50,48 @@ class ProblemBankResetResult {
   final int storageObjectCount;
 }
 
+class ProblemBankPdfPreviewArtifact {
+  const ProblemBankPdfPreviewArtifact({
+    required this.questionId,
+    required this.questionUid,
+    required this.status,
+    required this.jobId,
+    required this.pdfUrl,
+    required this.thumbnailUrl,
+    required this.error,
+    required this.pollAfterMs,
+  });
+
+  final String questionId;
+  final String questionUid;
+  final String status;
+  final String jobId;
+  final String pdfUrl;
+  final String thumbnailUrl;
+  final String error;
+  final int pollAfterMs;
+
+  bool get isPending => status == 'queued' || status == 'running';
+  bool get isCompleted => status == 'completed';
+  bool get isFailed => status == 'failed' || status == 'cancelled';
+
+  factory ProblemBankPdfPreviewArtifact.fromMap(
+    Map<String, dynamic> map, {
+    int defaultPollAfterMs = 0,
+  }) {
+    return ProblemBankPdfPreviewArtifact(
+      questionId: '${map['questionId'] ?? ''}'.trim(),
+      questionUid: '${map['questionUid'] ?? ''}'.trim(),
+      status: '${map['status'] ?? ''}'.trim().toLowerCase(),
+      jobId: '${map['jobId'] ?? ''}'.trim(),
+      pdfUrl: '${map['pdfUrl'] ?? ''}'.trim(),
+      thumbnailUrl: '${map['thumbnailUrl'] ?? ''}'.trim(),
+      error: '${map['error'] ?? ''}'.trim(),
+      pollAfterMs: int.tryParse('${map['pollAfterMs'] ?? defaultPollAfterMs}') ?? defaultPollAfterMs,
+    );
+  }
+}
+
 class ProblemBankService {
   ProblemBankService({
     SupabaseClient? client,
@@ -1868,6 +1910,62 @@ class ProblemBankService {
       return map;
     } catch (_) {
       return {};
+    }
+  }
+
+  Future<Map<String, ProblemBankPdfPreviewArtifact>>
+      fetchQuestionPdfPreviewArtifacts({
+    required String academyId,
+    required List<String> questionIds,
+    String documentId = '',
+    Map<String, dynamic>? renderConfig,
+    String templateProfile = '',
+    String paperSize = '',
+    bool createJobs = true,
+  }) async {
+    if (!hasGateway || questionIds.isEmpty) {
+      return <String, ProblemBankPdfPreviewArtifact>{};
+    }
+    try {
+      final body = <String, dynamic>{
+        'academyId': academyId,
+        'questionIds': questionIds,
+        'createJobs': createJobs,
+        'mathEngine': 'xelatex',
+      };
+      if (documentId.trim().isNotEmpty) body['documentId'] = documentId.trim();
+      if (templateProfile.trim().isNotEmpty) {
+        body['templateProfile'] = templateProfile.trim();
+      }
+      if (paperSize.trim().isNotEmpty) body['paperSize'] = paperSize.trim();
+      if (renderConfig != null && renderConfig.isNotEmpty) {
+        body['renderConfig'] = renderConfig;
+      }
+
+      final result = await _gatewayPost(
+        '/pb/preview/pdf-artifacts',
+        body: body,
+      );
+      final defaultPollAfterMs = _intOrZero(result['pollAfterMs']);
+      final artifacts = result['artifacts'];
+      if (artifacts is! List) {
+        return <String, ProblemBankPdfPreviewArtifact>{};
+      }
+
+      final out = <String, ProblemBankPdfPreviewArtifact>{};
+      for (final one in artifacts) {
+        if (one is! Map) continue;
+        final mapped = _mapFromDynamic(one);
+        final artifact = ProblemBankPdfPreviewArtifact.fromMap(
+          mapped,
+          defaultPollAfterMs: defaultPollAfterMs,
+        );
+        if (artifact.questionId.isEmpty) continue;
+        out[artifact.questionId] = artifact;
+      }
+      return out;
+    } catch (_) {
+      return <String, ProblemBankPdfPreviewArtifact>{};
     }
   }
 

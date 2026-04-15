@@ -430,6 +430,48 @@ class LearningProblemExportJob {
   }
 }
 
+class LearningProblemPdfPreviewArtifact {
+  const LearningProblemPdfPreviewArtifact({
+    required this.questionId,
+    required this.questionUid,
+    required this.status,
+    required this.jobId,
+    required this.pdfUrl,
+    required this.thumbnailUrl,
+    required this.error,
+    required this.pollAfterMs,
+  });
+
+  final String questionId;
+  final String questionUid;
+  final String status;
+  final String jobId;
+  final String pdfUrl;
+  final String thumbnailUrl;
+  final String error;
+  final int pollAfterMs;
+
+  bool get isPending => status == 'queued' || status == 'running';
+  bool get isCompleted => status == 'completed';
+  bool get isFailed => status == 'failed' || status == 'cancelled';
+
+  factory LearningProblemPdfPreviewArtifact.fromMap(
+    Map<String, dynamic> map, {
+    int defaultPollAfterMs = 0,
+  }) {
+    return LearningProblemPdfPreviewArtifact(
+      questionId: '${map['questionId'] ?? ''}'.trim(),
+      questionUid: '${map['questionUid'] ?? ''}'.trim(),
+      status: '${map['status'] ?? ''}'.trim().toLowerCase(),
+      jobId: '${map['jobId'] ?? ''}'.trim(),
+      pdfUrl: '${map['pdfUrl'] ?? ''}'.trim(),
+      thumbnailUrl: '${map['thumbnailUrl'] ?? ''}'.trim(),
+      error: '${map['error'] ?? ''}'.trim(),
+      pollAfterMs: _intOrZero(map['pollAfterMs'] ?? defaultPollAfterMs),
+    );
+  }
+}
+
 class LearningProblemDocumentExportPreset {
   const LearningProblemDocumentExportPreset({
     required this.id,
@@ -2100,6 +2142,61 @@ class LearningProblemBankService {
     return _client.storage
         .from(safeBucket)
         .createSignedUrl(safePath, expiresInSeconds);
+  }
+
+  Future<Map<String, LearningProblemPdfPreviewArtifact>>
+      fetchQuestionPdfPreviewArtifacts({
+    required String academyId,
+    required List<String> questionIds,
+    String documentId = '',
+    Map<String, dynamic>? renderConfig,
+    String templateProfile = '',
+    String paperSize = '',
+    bool createJobs = true,
+  }) async {
+    if (!hasGateway || questionIds.isEmpty) {
+      return <String, LearningProblemPdfPreviewArtifact>{};
+    }
+    try {
+      final body = <String, dynamic>{
+        'academyId': academyId,
+        'questionIds': questionIds,
+        'createJobs': createJobs,
+        'mathEngine': 'xelatex',
+      };
+      if (documentId.trim().isNotEmpty) body['documentId'] = documentId.trim();
+      if (templateProfile.trim().isNotEmpty) {
+        body['templateProfile'] = templateProfile.trim();
+      }
+      if (paperSize.trim().isNotEmpty) body['paperSize'] = paperSize.trim();
+      if (renderConfig != null && renderConfig.isNotEmpty) {
+        body['renderConfig'] = renderConfig;
+      }
+
+      final result = await _gatewayPost(
+        '/pb/preview/pdf-artifacts',
+        body: body,
+      );
+      final defaultPollAfterMs = _intOrZero(result['pollAfterMs']);
+      final artifacts = result['artifacts'];
+      if (artifacts is! List) {
+        return <String, LearningProblemPdfPreviewArtifact>{};
+      }
+
+      final out = <String, LearningProblemPdfPreviewArtifact>{};
+      for (final one in artifacts) {
+        if (one is! Map) continue;
+        final artifact = LearningProblemPdfPreviewArtifact.fromMap(
+          one.map((key, value) => MapEntry('$key', value)),
+          defaultPollAfterMs: defaultPollAfterMs,
+        );
+        if (artifact.questionId.isEmpty) continue;
+        out[artifact.questionId] = artifact;
+      }
+      return out;
+    } catch (_) {
+      return <String, LearningProblemPdfPreviewArtifact>{};
+    }
   }
 
   Future<Map<String, String>> fetchQuestionPreviews({

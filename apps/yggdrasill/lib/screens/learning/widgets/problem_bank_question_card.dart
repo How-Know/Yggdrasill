@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../../../services/learning_problem_bank_service.dart';
 import '../models/problem_bank_export_models.dart';
-import 'problem_bank_manager_preview_paper.dart';
 
 class ProblemBankQuestionCard extends StatelessWidget {
   const ProblemBankQuestionCard({
@@ -16,6 +15,9 @@ class ProblemBankQuestionCard extends StatelessWidget {
     this.showSelectionControl = true,
     this.paperStyle = false,
     this.previewImageUrl,
+    this.previewStatus = '',
+    this.previewErrorMessage = '',
+    this.onRetryPreview,
   });
 
   final LearningProblemQuestion question;
@@ -27,14 +29,13 @@ class ProblemBankQuestionCard extends StatelessWidget {
   final bool showSelectionControl;
   final bool paperStyle;
   final String? previewImageUrl;
+  final String previewStatus;
+  final String previewErrorMessage;
+  final VoidCallback? onRetryPreview;
 
   @override
   Widget build(BuildContext context) {
     final color = _palette(paperStyle: paperStyle, selected: selected);
-    final previewQuestion = questionForLayoutPreviewMode(
-      question,
-      selectedMode,
-    );
     return AnimatedContainer(
       duration: const Duration(milliseconds: 140),
       decoration: BoxDecoration(
@@ -55,7 +56,7 @@ class ProblemBankQuestionCard extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Expanded(
-                    child: _buildPreviewContent(previewQuestion),
+                    child: _buildPreviewContent(),
                   ),
                   const SizedBox(height: 4),
                   Text(
@@ -78,7 +79,7 @@ class ProblemBankQuestionCard extends StatelessWidget {
     );
   }
 
-  Widget _buildPreviewContent(LearningProblemQuestion previewQuestion) {
+  Widget _buildPreviewContent() {
     final wrapper = Container(
       decoration: BoxDecoration(
         color: Colors.white,
@@ -86,18 +87,18 @@ class ProblemBankQuestionCard extends StatelessWidget {
         border: Border.all(color: Colors.grey.shade200),
       ),
       clipBehavior: Clip.antiAlias,
-      child: _buildPreviewInner(previewQuestion),
+      child: _buildPreviewInner(),
     );
     return wrapper;
   }
 
-  Widget _buildPreviewInner(LearningProblemQuestion previewQuestion) {
+  Widget _buildPreviewInner() {
+    final normalizedStatus = previewStatus.trim().toLowerCase();
     if (previewImageUrl != null && previewImageUrl!.isNotEmpty) {
-      return SingleChildScrollView(
-        physics: const ClampingScrollPhysics(),
+      return SizedBox.expand(
         child: Image.network(
           previewImageUrl!,
-          fit: BoxFit.fitWidth,
+          fit: BoxFit.cover,
           alignment: Alignment.topCenter,
           loadingBuilder: (context, child, progress) {
             if (progress == null) return child;
@@ -113,35 +114,81 @@ class ProblemBankQuestionCard extends StatelessWidget {
             );
           },
           errorBuilder: (context, error, stack) {
-            return _buildNativeFallback(previewQuestion);
+            return _buildServerState(
+              message: '서버 PDF 썸네일을 불러오지 못했습니다.',
+              showSpinner: false,
+              isError: true,
+            );
           },
         ),
       );
     }
-    return _buildNativeFallback(previewQuestion);
+    if (normalizedStatus == 'queued' || normalizedStatus == 'running') {
+      return _buildServerState(
+        message: '서버 PDF 미리보기 생성 중...',
+        showSpinner: true,
+      );
+    }
+    if (normalizedStatus == 'failed' || normalizedStatus == 'cancelled') {
+      return _buildServerState(
+        message: previewErrorMessage.trim().isNotEmpty
+            ? previewErrorMessage.trim()
+            : '서버 PDF 미리보기에 실패했습니다.',
+        showSpinner: false,
+        isError: true,
+      );
+    }
+    if (normalizedStatus == 'completed') {
+      return _buildServerState(
+        message: '미리보기 생성 완료 (썸네일 없음)',
+        showSpinner: false,
+      );
+    }
+    return _buildServerState(
+      message: '서버 PDF 미리보기 대기 중...',
+      showSpinner: true,
+    );
   }
 
-  Widget _buildNativeFallback(LearningProblemQuestion previewQuestion) {
-    return Builder(
-      builder: (context) {
-        final ts = MediaQuery.textScalerOf(context);
-        final ref = ts.scale(16);
-        final combined = (ref / 16.0 * 1.07).clamp(0.85, 2.0);
-        return MediaQuery(
-          data: MediaQuery.of(context).copyWith(
-            textScaler: TextScaler.linear(combined),
-          ),
-          child: ProblemBankManagerPreviewPaper(
-            question: previewQuestion,
-            figureUrlsByPath: figureUrlsByPath,
-            expanded: true,
-            scrollable: true,
-            bordered: false,
-            shadow: false,
-            showQuestionNumberPrefix: false,
-          ),
-        );
-      },
+  Widget _buildServerState({
+    required String message,
+    required bool showSpinner,
+    bool isError = false,
+  }) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (showSpinner) ...[
+              const SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+              const SizedBox(height: 8),
+            ],
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 12,
+                color: isError ? const Color(0xFF8B2F2F) : const Color(0xFF5A5A5A),
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            if (isError && onRetryPreview != null) ...[
+              const SizedBox(height: 8),
+              TextButton.icon(
+                onPressed: onRetryPreview,
+                icon: const Icon(Icons.refresh, size: 16),
+                label: const Text('다시 시도'),
+              ),
+            ],
+          ],
+        ),
+      ),
     );
   }
 

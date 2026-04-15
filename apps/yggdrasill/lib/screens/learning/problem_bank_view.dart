@@ -17,7 +17,6 @@ import 'widgets/problem_bank_bottom_fab_bar.dart';
 import 'widgets/problem_bank_export_options_panel.dart';
 import 'widgets/problem_bank_export_server_preview_dialog.dart';
 import 'widgets/problem_bank_filter_bar.dart';
-import 'widgets/problem_bank_manager_preview_paper.dart';
 import 'widgets/problem_bank_question_card.dart';
 import 'widgets/problem_bank_school_sheet.dart';
 
@@ -62,6 +61,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
   bool _isExporting = false;
   bool _isSavingExportLocally = false;
   Timer? _pollTimer;
+  Timer? _previewArtifactPollTimer;
 
   String _selectedCurriculumCode = 'rev_2022';
   String _selectedSchoolLevel = '중';
@@ -81,6 +81,10 @@ class _ProblemBankViewState extends State<ProblemBankView> {
   Map<String, Map<String, String>> _questionFigureUrlsByPath =
       const <String, Map<String, String>>{};
   Map<String, String> _questionPreviewUrls = const <String, String>{};
+  Map<String, String> _questionPreviewPdfUrls = const <String, String>{};
+  Map<String, String> _questionPreviewStatus = const <String, String>{};
+  Map<String, String> _questionPreviewError = const <String, String>{};
+  Set<String> _pendingPreviewQuestionIds = <String>{};
   int _figureLoadVersion = 0;
   LearningProblemExportSettings _exportSettings =
       LearningProblemExportSettings.initial();
@@ -98,6 +102,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
   @override
   void dispose() {
     _pollTimer?.cancel();
+    _previewArtifactPollTimer?.cancel();
     _questionGridScrollCtrl.dispose();
     super.dispose();
   }
@@ -305,12 +310,18 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           ..addAll(nextQuestionModes);
         _questionFigureUrlsByPath = const <String, Map<String, String>>{};
         _questionPreviewUrls = const <String, String>{};
+        _questionPreviewPdfUrls = const <String, String>{};
+        _questionPreviewStatus = const <String, String>{};
+        _questionPreviewError = const <String, String>{};
+        _pendingPreviewQuestionIds = <String>{};
         if (resetSelection) {
           _selectedQuestionIds.clear();
         } else {
           _selectedQuestionIds.removeWhere((id) => !aliveIds.contains(id));
         }
       });
+      _previewArtifactPollTimer?.cancel();
+      _previewArtifactPollTimer = null;
       unawaited(
         _prefetchFigureSignedUrls(
           questions,
@@ -453,26 +464,289 @@ class _ProblemBankViewState extends State<ProblemBankView> {
   Future<void> _fetchQuestionPreviews(
     List<LearningProblemQuestion> questions,
   ) async {
-    if (_academyId == null || questions.isEmpty) return;
-    if (!_service.hasGateway) return;
+    if (_academyId == null || _academyId!.isEmpty) return;
+    if (questions.isEmpty) return;
+    if (!_service.hasGateway) {
+      _markQuestionPreviewBatchFailed(
+        questions,
+        message: '게이트웨이 연결이 없어 서버 미리보기를 불러올 수 없습니다.',
+      );
+      return;
+    }
+    final ordered = List<LearningProblemQuestion>.from(questions);
+    const visibleFirstBatchSize = 24;
+    final firstBatch = ordered.take(visibleFirstBatchSize).toList(growable: false);
+    final restBatch = ordered.skip(visibleFirstBatchSize).toList(growable: false);
+
+    await _fetchQuestionPdfArtifactsBatch(
+      firstBatch,
+      createJobs: true,
+    );
+    if (restBatch.isNotEmpty) {
+      unawaited(_fetchQuestionPdfArtifactsInChunks(restBatch));
+    }
+  }
+
+  Map<String, dynamic> _buildPdfPreviewRenderConfig(
+    List<LearningProblemQuestion> questions,
+  ) {
+    final base = _buildRenderConfigForSelection(questions);
+    return <String, dynamic>{
+      ...base,
+      'mathEngine': 'xelatex',
+      'includeAnswerSheet': false,
+      'includeExplanation': false,
+      'includeQuestionScore': false,
+    };
+  }
+
+  Future<void> _fetchQuestionPdfArtifactsInChunks(
+    List<LearningProblemQuestion> questions,
+  ) async {
+    const chunkSize = 18;
+    for (var i = 0; i < questions.length; i += chunkSize) {
+      if (!mounted) return;
+      final end = math.min(i + chunkSize, questions.length);
+      final chunk = questions.sublist(i, end);
+      await _fetchQuestionPdfArtifactsBatch(
+        chunk,
+        createJobs: true,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+    }
+  }
+
+  Future<void> _fetchQuestionPdfArtifactsBatch(
+    List<LearningProblemQuestion> batch, {
+    required bool createJobs,
+  }) async {
+    final academyId = _academyId;
+    if (academyId == null || academyId.isEmpty) return;
+    if (batch.isEmpty || !_service.hasGateway) return;
     try {
-      final ids = questions.map((q) => q.id).toList();
-      final urls = await _service.fetchQuestionPreviews(
-        academyId: _academyId!,
-        questionIds: ids,
+      final questionIds = batch
+          .map((q) => q.questionUid.trim().isNotEmpty ? q.questionUid.trim() : q.id.trim())
+          .where((id) => id.isNotEmpty)
+          .toList();
+      if (questionIds.isEmpty) return;
+      final renderConfig = _buildPdfPreviewRenderConfig(batch);
+      final documentId = _selectedDocumentId?.trim().isNotEmpty == true
+          ? _selectedDocumentId!.trim()
+          : batch.first.documentId.trim();
+      final artifacts = await _service.fetchQuestionPdfPreviewArtifacts(
+        academyId: academyId,
+        documentId: documentId,
+        questionIds: questionIds,
+        renderConfig: renderConfig,
+        templateProfile: _exportSettings.templateProfile,
+        paperSize: _exportSettings.paperLabel,
+        createJobs: createJobs,
       );
       if (!mounted) return;
-      if (urls.isNotEmpty) {
-        setState(() {
-          _questionPreviewUrls = {
-            ..._questionPreviewUrls,
-            ...urls,
-          };
-        });
+      if (artifacts.isEmpty) {
+        _markQuestionPreviewBatchFailed(
+          batch,
+          message: '서버 미리보기 응답이 비어 있습니다. 다시 시도해 주세요.',
+        );
+        return;
       }
-    } catch (_) {
-      // preview fetch failures are non-critical
+      _applyQuestionPdfArtifacts(artifacts);
+      final uidToId = <String, String>{};
+      for (final q in batch) {
+        final id = q.id.trim();
+        final uid = q.questionUid.trim();
+        if (id.isNotEmpty) uidToId[id] = id;
+        if (uid.isNotEmpty && uid != id) uidToId[uid] = id;
+      }
+      final returnedIds = <String>{};
+      for (final key in artifacts.keys) {
+        final mapped = uidToId[key.trim()] ?? key.trim();
+        if (mapped.isNotEmpty) returnedIds.add(mapped);
+      }
+      final missingIds = batch
+          .map((q) => q.id.trim())
+          .where((id) => id.isNotEmpty && !returnedIds.contains(id))
+          .toList(growable: false);
+      if (missingIds.isNotEmpty) {
+        _markQuestionPreviewIdsFailed(
+          missingIds,
+          message: '일부 문항의 서버 미리보기 응답이 누락되었습니다.',
+        );
+      }
+    } catch (err) {
+      _markQuestionPreviewBatchFailed(
+        batch,
+        message: _normalizePreviewErrorMessage(err),
+      );
     }
+  }
+
+  String _normalizePreviewErrorMessage(Object err) {
+    final raw = err.toString().trim();
+    if (raw.isEmpty) return '서버 미리보기 요청에 실패했습니다.';
+    if (raw.length <= 200) return raw;
+    return '${raw.substring(0, 200)}...';
+  }
+
+  void _markQuestionPreviewBatchFailed(
+    List<LearningProblemQuestion> batch, {
+    required String message,
+  }) {
+    _markQuestionPreviewIdsFailed(
+      batch.map((q) => q.id.trim()),
+      message: message,
+    );
+  }
+
+  void _markQuestionPreviewIdsFailed(
+    Iterable<String> questionIds, {
+    required String message,
+  }) {
+    if (!mounted) return;
+    final safeIds = questionIds
+        .map((id) => id.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet();
+    if (safeIds.isEmpty) return;
+    final safeMessage = message.trim().isNotEmpty
+        ? message.trim()
+        : '서버 미리보기에 실패했습니다.';
+    setState(() {
+      final nextStatus = <String, String>{..._questionPreviewStatus};
+      final nextError = <String, String>{..._questionPreviewError};
+      final nextPending = <String>{..._pendingPreviewQuestionIds};
+      for (final id in safeIds) {
+        nextStatus[id] = 'failed';
+        nextError[id] = safeMessage;
+        nextPending.remove(id);
+      }
+      _questionPreviewStatus = nextStatus;
+      _questionPreviewError = nextError;
+      _pendingPreviewQuestionIds = nextPending;
+    });
+    _ensurePreviewArtifactPolling();
+  }
+
+  void _applyQuestionPdfArtifacts(
+    Map<String, LearningProblemPdfPreviewArtifact> artifacts,
+  ) {
+    final uidToId = <String, String>{};
+    for (final q in _questions) {
+      final uid = q.questionUid.trim();
+      final id = q.id.trim();
+      if (id.isNotEmpty) uidToId[id] = id;
+      if (uid.isNotEmpty && uid != id) uidToId[uid] = id;
+    }
+
+    final nextPreviewUrls = <String, String>{..._questionPreviewUrls};
+    final nextPdfUrls = <String, String>{..._questionPreviewPdfUrls};
+    final nextStatus = <String, String>{..._questionPreviewStatus};
+    final nextError = <String, String>{..._questionPreviewError};
+    final nextPending = <String>{..._pendingPreviewQuestionIds};
+
+    for (final entry in artifacts.entries) {
+      final questionId = uidToId[entry.key.trim()] ?? entry.key.trim();
+      if (questionId.isEmpty) continue;
+      final artifact = entry.value;
+      final status = artifact.status.trim().toLowerCase();
+      if (status.isNotEmpty) {
+        nextStatus[questionId] = status;
+      }
+      if (artifact.thumbnailUrl.isNotEmpty) {
+        nextPreviewUrls[questionId] = artifact.thumbnailUrl;
+      }
+      if (artifact.pdfUrl.isNotEmpty) {
+        nextPdfUrls[questionId] = artifact.pdfUrl;
+      }
+      if (artifact.error.isNotEmpty) {
+        nextError[questionId] = artifact.error;
+      } else {
+        nextError.remove(questionId);
+      }
+
+      if (artifact.isPending) {
+        nextPending.add(questionId);
+      } else {
+        nextPending.remove(questionId);
+      }
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _questionPreviewUrls = nextPreviewUrls;
+      _questionPreviewPdfUrls = nextPdfUrls;
+      _questionPreviewStatus = nextStatus;
+      _questionPreviewError = nextError;
+      _pendingPreviewQuestionIds = nextPending;
+    });
+    _ensurePreviewArtifactPolling();
+  }
+
+  void _ensurePreviewArtifactPolling() {
+    if (_pendingPreviewQuestionIds.isEmpty) {
+      _previewArtifactPollTimer?.cancel();
+      _previewArtifactPollTimer = null;
+      return;
+    }
+    if (_previewArtifactPollTimer != null) return;
+    _previewArtifactPollTimer =
+        Timer.periodic(const Duration(milliseconds: 1800), (_) {
+      unawaited(_pollQuestionPreviewArtifacts());
+    });
+    unawaited(_pollQuestionPreviewArtifacts());
+  }
+
+  Future<void> _pollQuestionPreviewArtifacts() async {
+    final academyId = _academyId;
+    if (academyId == null || academyId.isEmpty) return;
+    if (_pendingPreviewQuestionIds.isEmpty) {
+      _previewArtifactPollTimer?.cancel();
+      _previewArtifactPollTimer = null;
+      return;
+    }
+    final pending = _questions
+        .where((q) => _pendingPreviewQuestionIds.contains(q.id))
+        .toList(growable: false);
+    if (pending.isEmpty) {
+      _previewArtifactPollTimer?.cancel();
+      _previewArtifactPollTimer = null;
+      return;
+    }
+    await _fetchQuestionPdfArtifactsBatch(
+      pending,
+      createJobs: false,
+    );
+  }
+
+  void _retryQuestionPreview(String questionId) {
+    LearningProblemQuestion? target;
+    for (final question in _questions) {
+      if (question.id == questionId) {
+        target = question;
+        break;
+      }
+    }
+    if (target == null) return;
+    setState(() {
+      _questionPreviewStatus = {
+        ..._questionPreviewStatus,
+        questionId: 'queued',
+      };
+      _questionPreviewError = {
+        ..._questionPreviewError,
+      }..remove(questionId);
+      _pendingPreviewQuestionIds = {
+        ..._pendingPreviewQuestionIds,
+        questionId,
+      };
+    });
+    _ensurePreviewArtifactPolling();
+    unawaited(
+      _fetchQuestionPdfArtifactsBatch(
+        <LearningProblemQuestion>[target],
+        createJobs: true,
+      ),
+    );
   }
 
   Future<void> _onCurriculumChanged(String? value) async {
@@ -1587,6 +1861,10 @@ class _ProblemBankViewState extends State<ProblemBankView> {
               separatorBuilder: (_, __) => const SizedBox(height: 10),
               itemBuilder: (context, index) {
                 final q = selected[index];
+                final previewUrl = (_questionPreviewUrls[q.id] ?? '').trim();
+                final previewStatus =
+                    (_questionPreviewStatus[q.id] ?? '').trim().toLowerCase();
+                final previewError = (_questionPreviewError[q.id] ?? '').trim();
                 return Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -1607,15 +1885,51 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                         border: Border.all(color: _rsBorder),
                       ),
                       padding: const EdgeInsets.all(8.5),
-                      child: ProblemBankManagerPreviewPaper(
-                        question: q,
-                        figureUrlsByPath: _questionFigureUrlsByPath[q.id] ??
-                            const <String, String>{},
-                        expanded: true,
-                        scrollable: true,
-                        bordered: true,
-                        shadow: true,
-                        showQuestionNumberPrefix: false,
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: const Color(0xFFD5D5D5)),
+                        ),
+                        child: previewUrl.isNotEmpty
+                            ? SingleChildScrollView(
+                                physics: const ClampingScrollPhysics(),
+                                child: Image.network(
+                                  previewUrl,
+                                  fit: BoxFit.fitWidth,
+                                  alignment: Alignment.topCenter,
+                                  errorBuilder: (_, __, ___) => const Padding(
+                                    padding: EdgeInsets.all(14),
+                                    child: Text(
+                                      '서버 PDF 썸네일을 불러오지 못했습니다.',
+                                      style: TextStyle(
+                                        color: Color(0xFF6E7E96),
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              )
+                            : Padding(
+                                padding: const EdgeInsets.all(14),
+                                child: Text(
+                                  previewStatus == 'queued' ||
+                                          previewStatus == 'running'
+                                      ? '서버 PDF 미리보기 생성 중...'
+                                      : (previewStatus == 'failed' ||
+                                              previewStatus == 'cancelled')
+                                          ? (previewError.isNotEmpty
+                                              ? previewError
+                                              : '서버 PDF 미리보기에 실패했습니다.')
+                                          : '서버 PDF 미리보기 대기 중...',
+                                  style: const TextStyle(
+                                    color: Color(0xFF6E7E96),
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
                       ),
                     ),
                   ],
@@ -2942,6 +3256,10 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                         _questionFigureUrlsByPath[question.id] ??
                             const <String, String>{},
                     previewImageUrl: _questionPreviewUrls[question.id],
+                    previewStatus: _questionPreviewStatus[question.id] ?? '',
+                    previewErrorMessage:
+                        _questionPreviewError[question.id] ?? '',
+                    onRetryPreview: () => _retryQuestionPreview(question.id),
                     onSelectedChanged: (next) {
                       _toggleQuestionSelection(question.id, next);
                     },
@@ -2960,6 +3278,10 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                   figureUrlsByPath: _questionFigureUrlsByPath[question.id] ??
                       const <String, String>{},
                   previewImageUrl: _questionPreviewUrls[question.id],
+                  previewStatus: _questionPreviewStatus[question.id] ?? '',
+                  previewErrorMessage:
+                      _questionPreviewError[question.id] ?? '',
+                  onRetryPreview: () => _retryQuestionPreview(question.id),
                   onSelectedChanged: (_) {},
                   onModeSelected: null,
                 );

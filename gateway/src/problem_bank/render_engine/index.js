@@ -426,6 +426,9 @@ function buildHtmlLayout(renderConfig, baseLayout) {
     subjectTitleText,
   );
   const includeCoverPage = renderConfig?.includeCoverPage === true;
+  const hidePreviewHeader = renderConfig?.hidePreviewHeader === true
+    || renderConfig?.hideDocumentHeader === true;
+  const hideQuestionNumber = renderConfig?.hideQuestionNumber === true;
   const includeAcademyLogo = renderConfig?.includeAcademyLogo === true;
   const academyLogoDataUrl = includeAcademyLogo
     ? String(renderConfig?.academyLogoDataUrl || '').trim()
@@ -464,6 +467,8 @@ function buildHtmlLayout(renderConfig, baseLayout) {
     titlePageIndices,
     titlePageHeaders,
     includeCoverPage,
+    hidePreviewHeader,
+    hideQuestionNumber,
     includeAcademyLogo,
     academyLogoDataUrl,
     includeQuestionScore,

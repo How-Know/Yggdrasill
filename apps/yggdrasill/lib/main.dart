@@ -147,6 +147,45 @@ final Map<String, Map<DateTime, List<String>>> _preloadedSavedBySg =
 final Map<String, Map<DateTime, String>> _preloadedRangesBySg =
     <String, Map<DateTime, String>>{};
 
+String _preloadSgScopedKey(String sg, EducationLevel level) =>
+    '${level.index}|$sg';
+
+Map<DateTime, List<String>>? _preloadedSavedFor(
+  String sg,
+  EducationLevel level,
+) {
+  return _preloadedSavedBySg[_preloadSgScopedKey(sg, level)] ??
+      _preloadedSavedBySg[sg];
+}
+
+Map<DateTime, String>? _preloadedRangesFor(
+  String sg,
+  EducationLevel level,
+) {
+  return _preloadedRangesBySg[_preloadSgScopedKey(sg, level)] ??
+      _preloadedRangesBySg[sg];
+}
+
+void _setPreloadedFor(
+  String sg,
+  EducationLevel level, {
+  required Map<DateTime, List<String>> saved,
+  required Map<DateTime, String> ranges,
+}) {
+  final key = _preloadSgScopedKey(sg, level);
+  _preloadedSavedBySg[key] = saved;
+  _preloadedRangesBySg[key] = ranges;
+}
+
+void _removePreloadedFor(String sg, EducationLevel level) {
+  final key = _preloadSgScopedKey(sg, level);
+  _preloadedSavedBySg.remove(key);
+  _preloadedRangesBySg.remove(key);
+  // Legacy fallback key cleanup for old cache entries.
+  _preloadedSavedBySg.remove(sg);
+  _preloadedRangesBySg.remove(sg);
+}
+
 // 반복되는 시맨틱스 어설션 스팸을 1회로 제한하기 위한 플래그
 bool _printedFirstSemanticsDirty = false;
 
@@ -229,12 +268,16 @@ Future<void> _preloadOneSg(String sg, EducationLevel level) async {
   final copy = DataManager.instance
       .copyExamCachesForWizardIfReady(school, level, gradeNum);
   if (copy != null) {
-    _preloadedSavedBySg[sg] = Map<DateTime, List<String>>.fromEntries(
-      copy.titles.entries.map(
-        (e) => MapEntry(e.key, List<String>.from(e.value)),
+    _setPreloadedFor(
+      sg,
+      level,
+      saved: Map<DateTime, List<String>>.fromEntries(
+        copy.titles.entries.map(
+          (e) => MapEntry(e.key, List<String>.from(e.value)),
+        ),
       ),
+      ranges: Map<DateTime, String>.from(copy.ranges),
     );
-    _preloadedRangesBySg[sg] = Map<DateTime, String>.from(copy.ranges);
     return;
   }
   final res = await DataManager.instance.loadExamFor(school, level, gradeNum);
@@ -268,8 +311,7 @@ Future<void> _preloadOneSg(String sg, EducationLevel level) async {
     final text = (row['range_text'] as String?) ?? '';
     ranges[key] = text;
   }
-  _preloadedSavedBySg[sg] = saved;
-  _preloadedRangesBySg[sg] = ranges;
+  _setPreloadedFor(sg, level, saved: saved, ranges: ranges);
 }
 
 /// 다이얼로그를 다시 열 때: [DataManager] 메모리 캐시(저장 직후 갱신됨)를 프리로드 맵에 반영.
@@ -280,12 +322,16 @@ Future<void> _syncPreloadOneSgFromDm(String sg, EducationLevel level) async {
   final copy = DataManager.instance
       .copyExamCachesForWizardIfReady(school, level, gradeNum);
   if (copy != null) {
-    _preloadedSavedBySg[sg] = Map<DateTime, List<String>>.fromEntries(
-      copy.titles.entries.map(
-        (e) => MapEntry(e.key, List<String>.from(e.value)),
+    _setPreloadedFor(
+      sg,
+      level,
+      saved: Map<DateTime, List<String>>.fromEntries(
+        copy.titles.entries.map(
+          (e) => MapEntry(e.key, List<String>.from(e.value)),
+        ),
       ),
+      ranges: Map<DateTime, String>.from(copy.ranges),
     );
-    _preloadedRangesBySg[sg] = Map<DateTime, String>.from(copy.ranges);
     return;
   }
   await _preloadOneSg(sg, level);
@@ -331,7 +377,8 @@ Future<void> _preloadExamDialogData() async {
       .map((m) => '${m['school']} ${m['grade']}학년')
       .toList();
   if (middleAll.isEmpty && highAll.isEmpty) return;
-  // 매번 DataManager 캐시 → 프리로드 맵 동기화 (저장 후 재오픈 시 위저드와 전광판 불일치 방지)
+  // 매번 DataManager 캐시(최신 서버/로컬 반영) → 프리로드 맵 동기화.
+  // SG 키가 이미 있어도 stale 상태일 수 있으므로 항상 갱신한다.
   await Future.wait([
     ...middleAll.map((sg) => _syncPreloadOneSgFromDm(sg, EducationLevel.middle)),
     ...highAll.map((sg) => _syncPreloadOneSgFromDm(sg, EducationLevel.high)),
@@ -341,12 +388,10 @@ Future<void> _preloadExamDialogData() async {
 void _clearPreloadedForVisibleSchoolGrades(
     List<String> middle, List<String> high) {
   for (final sg in middle) {
-    _preloadedSavedBySg.remove(sg);
-    _preloadedRangesBySg.remove(sg);
+    _removePreloadedFor(sg, EducationLevel.middle);
   }
   for (final sg in high) {
-    _preloadedSavedBySg.remove(sg);
-    _preloadedRangesBySg.remove(sg);
+    _removePreloadedFor(sg, EducationLevel.high);
   }
 }
 
@@ -2028,43 +2073,47 @@ class _ExamFabCluster extends StatelessWidget {
             BoxShadow(color: Colors.black38, blurRadius: 10, spreadRadius: 2)
           ],
         ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _ExamActionButton(
-                icon: Icons.event_note,
-                label: '일정',
-                onPressed: () async {
-                  await showDialog(
-                    context: rootNavigatorKey.currentContext!,
-                    builder: (ctx) => const _ExamScheduleDialog(),
-                  );
-                }),
-            const SizedBox(width: 12),
-            _ExamActionButton(
-                icon: Icons.assignment_turned_in,
-                label: '기출',
-                onPressed: () async {
-                  final nav = rootNavigatorKey.currentState;
-                  if (nav == null) return;
-                  await showDialog<void>(
-                    context: nav.context,
-                    builder: (ctx) => const PastExamPapersDialog(),
-                  );
-                }),
-            const SizedBox(width: 12),
-            // 설정 버튼은 아이콘만
-            _ExamIconOnlyButton(
-                icon: Icons.settings,
-                onPressed: () async {
-                  await showDialog(
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _ExamActionButton(
+                  icon: Icons.event_note,
+                  label: '일정',
+                  onPressed: () async {
+                    await showDialog(
                       context: rootNavigatorKey.currentContext!,
-                      builder: (ctx) => const _ExamSettingsDialog());
-                }),
-            const SizedBox(width: 12),
-            // 전광판: 저장된 시험일정 순환 표시
-            _ExamTickerBoard(),
-          ],
+                      barrierDismissible: false,
+                      builder: (ctx) => const _ExamScheduleDialog(),
+                    );
+                  }),
+              const SizedBox(width: 12),
+              _ExamActionButton(
+                  icon: Icons.assignment_turned_in,
+                  label: '기출',
+                  onPressed: () async {
+                    final nav = rootNavigatorKey.currentState;
+                    if (nav == null) return;
+                    await showDialog<void>(
+                      context: nav.context,
+                      builder: (ctx) => const PastExamPapersDialog(),
+                    );
+                  }),
+              const SizedBox(width: 12),
+              // 설정 버튼은 아이콘만
+              _ExamIconOnlyButton(
+                  icon: Icons.settings,
+                  onPressed: () async {
+                    await showDialog(
+                        context: rootNavigatorKey.currentContext!,
+                        builder: (ctx) => const _ExamSettingsDialog());
+                  }),
+              const SizedBox(width: 12),
+              // 전광판: 저장된 시험일정 순환 표시
+              _ExamTickerBoard(),
+            ],
+          ),
         ),
       ),
     );
@@ -2079,7 +2128,8 @@ class _ExamTickerBoard extends StatefulWidget {
 class _ExamTickerBoardState extends State<_ExamTickerBoard> {
   List<Map<String, dynamic>> _items = [];
   int _index = 0;
-  Timer? _timer;
+  Timer? _rotateTimer;
+  Timer? _reloadTimer;
   final double _fixedWidth = 286; // 고정 너비 (기존 220 대비 ~30% 확대)
   int? _hoverIndex;
 
@@ -2087,12 +2137,12 @@ class _ExamTickerBoardState extends State<_ExamTickerBoard> {
   void initState() {
     super.initState();
     _load();
-    _timer = Timer.periodic(const Duration(seconds: 4), (_) {
+    _rotateTimer = Timer.periodic(const Duration(seconds: 4), (_) {
       if (!mounted || _items.isEmpty) return;
       setState(() => _index = (_index + 1) % _items.length);
     });
     // 주기적 리로드
-    Timer.periodic(const Duration(seconds: 20), (_) async {
+    _reloadTimer = Timer.periodic(const Duration(seconds: 20), (_) async {
       if (!mounted) return;
       await _load();
     });
@@ -2104,12 +2154,24 @@ class _ExamTickerBoardState extends State<_ExamTickerBoard> {
     final list = List<Map<String, dynamic>>.from(rows);
     list.sort((a, b) =>
         ((a['date'] as String?) ?? '').compareTo((b['date'] as String?) ?? ''));
-    setState(() => _items = list);
+    if (!mounted) return;
+    setState(() {
+      _items = list;
+      if (_items.isEmpty) {
+        _index = 0;
+      } else if (_index >= _items.length) {
+        _index = _items.length - 1;
+      }
+      if (_hoverIndex != null && _hoverIndex! >= _items.length) {
+        _hoverIndex = null;
+      }
+    });
   }
 
   @override
   void dispose() {
-    _timer?.cancel();
+    _rotateTimer?.cancel();
+    _reloadTimer?.cancel();
     super.dispose();
   }
 
@@ -2124,7 +2186,8 @@ class _ExamTickerBoardState extends State<_ExamTickerBoard> {
         ),
       );
     }
-    final it = _items[_index];
+    final safeIndex = _index < _items.length ? _index : 0;
+    final it = _items[safeIndex];
     final date = DateTime.tryParse(it['date'] as String? ?? '');
     String names = '';
     try {
@@ -2138,13 +2201,13 @@ class _ExamTickerBoardState extends State<_ExamTickerBoard> {
     final label =
         '${it['school']} ${it['grade']}학년 · ${date != null ? '${date.month}.${date.day}' : ''}${names.isNotEmpty ? ' · $names' : ''}';
     return MouseRegion(
-      onEnter: (_) => setState(() => _hoverIndex = _index),
+      onEnter: (_) => setState(() => _hoverIndex = safeIndex),
       onExit: (_) => setState(() => _hoverIndex = null),
       child: SizedBox(
         width: _fixedWidth,
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-          child: _hoverIndex == _index && names.isNotEmpty
+          child: _hoverIndex == safeIndex && names.isNotEmpty
               ? Text('범위: $names',
                   style: const TextStyle(color: Colors.white60),
                   maxLines: 1,
@@ -2935,6 +2998,7 @@ class _ExamScheduleDialogState extends State<_ExamScheduleDialog> {
       GlobalKey<_ExamScheduleWizardState>();
   static const String _kGradeFilterKey = 'exam_dialog_grade_filter';
   bool _seasonActionBusy = false;
+  bool _closeSaveBusy = false;
   int _examLevelTabIndex = 0;
   String? _overviewHighlightSg;
   Set<DateTime> _overviewHighlightDays = {};
@@ -3474,23 +3538,30 @@ class _ExamScheduleDialogState extends State<_ExamScheduleDialog> {
                       middleState: _middleKey.currentState,
                       highState: _highKey.currentState,
                       highlightDays: _overviewHighlightDays,
-                      onSchoolPeriodTap: (sg, day) {
-                        if (sg.isEmpty || day == null) {
+                      onSchoolPeriodTap: (sg, level, day) {
+                        if (sg.isEmpty) {
                           setState(() {
                             _overviewHighlightSg = null;
                             _overviewHighlightDays = {};
                           });
                           return;
                         }
-                        final dayKey = DateTime(day.year, day.month, day.day);
-                        final tapKey = '$sg|${dayKey.toIso8601String()}';
+                        final st = level == EducationLevel.high
+                            ? _highKey.currentState
+                            : _middleKey.currentState;
+                        final tapKey = '${level.index}|$sg';
+                        final period = _examPeriodHighlightDaysForSg(sg, level, st);
+                        final fallbackDay = day == null
+                            ? <DateTime>{}
+                            : {DateTime(day.year, day.month, day.day)};
                         setState(() {
                           if (_overviewHighlightSg == tapKey) {
                             _overviewHighlightSg = null;
                             _overviewHighlightDays = {};
                           } else {
                             _overviewHighlightSg = tapKey;
-                            _overviewHighlightDays = {dayKey};
+                            _overviewHighlightDays =
+                                period.isEmpty ? fallbackDay : period;
                           }
                         });
                       },
@@ -3535,110 +3606,227 @@ class _ExamScheduleDialogState extends State<_ExamScheduleDialog> {
       ),
       actions: [
         TextButton(
-          onPressed: () async {
-            // 1) 상태 스냅샷(복사) → 2) 즉시 닫기 → 3) 백그라운드 저장
-            Map<String, Map<DateTime, List<String>>> snapshotSaved(
-                _ExamScheduleWizardState? st) {
-              if (st == null) return const {};
-              return {
-                for (final e in st._savedBySchoolGrade.entries)
-                  e.key: {
-                    for (final e2 in e.value.entries)
-                      DateTime(e2.key.year, e2.key.month, e2.key.day):
-                          List<String>.from(e2.value)
+          onPressed: _closeSaveBusy
+              ? null
+              : () async {
+                  Map<String, Map<DateTime, List<String>>> snapshotSaved(
+                      _ExamScheduleWizardState? st) {
+                    if (st == null) return const {};
+                    return {
+                      for (final e in st._savedBySchoolGrade.entries)
+                        e.key: {
+                          for (final e2 in e.value.entries)
+                            DateTime(e2.key.year, e2.key.month, e2.key.day):
+                                List<String>.from(e2.value)
+                        }
+                    };
                   }
-              };
-            }
 
-            Map<String, Map<DateTime, String>> snapshotRanges(
-                _ExamScheduleWizardState? st) {
-              if (st == null) return const {};
-              return {
-                for (final e in st._rangesBySchoolGrade.entries)
-                  e.key: {
-                    for (final e2 in e.value.entries)
-                      DateTime(e2.key.year, e2.key.month, e2.key.day): e2.value
+                  Map<String, Map<DateTime, String>> snapshotRanges(
+                      _ExamScheduleWizardState? st) {
+                    if (st == null) return const {};
+                    return {
+                      for (final e in st._rangesBySchoolGrade.entries)
+                        e.key: {
+                          for (final e2 in e.value.entries)
+                            DateTime(e2.key.year, e2.key.month, e2.key.day): e2.value
+                        }
+                    };
                   }
-              };
-            }
 
-            Map<String, Set<DateTime>> snapshotDays(
-                _ExamScheduleWizardState? st) {
-              if (st == null) return const {};
-              return {
-                for (final e in st._selectedDaysBySchoolGrade.entries)
-                  e.key: e.value
-                      .map((d) => DateTime(d.year, d.month, d.day))
-                      .toSet()
-              };
-            }
+                  Map<String, Set<DateTime>> snapshotDays(
+                      _ExamScheduleWizardState? st) {
+                    if (st == null) return const {};
+                    return {
+                      for (final e in st._selectedDaysBySchoolGrade.entries)
+                        e.key: e.value
+                            .map((d) => DateTime(d.year, d.month, d.day))
+                            .toSet()
+                    };
+                  }
 
-            final midSaved = snapshotSaved(_middleKey.currentState);
-            final midRanges = snapshotRanges(_middleKey.currentState);
-            final midDays = snapshotDays(_middleKey.currentState);
-            final hiSaved = snapshotSaved(_highKey.currentState);
-            final hiRanges = snapshotRanges(_highKey.currentState);
-            final hiDays = snapshotDays(_highKey.currentState);
+                  DateTime norm(DateTime d) => DateTime(d.year, d.month, d.day);
+                  bool sameTitleList(List<String> a, List<String> b) {
+                    if (a.length != b.length) return false;
+                    for (int i = 0; i < a.length; i++) {
+                      if (a[i].trim() != b[i].trim()) return false;
+                    }
+                    return true;
+                  }
 
-            if (mounted) Navigator.of(context).pop();
+                  bool sameTitleMap(
+                    Map<DateTime, List<String>> a,
+                    Map<DateTime, List<String>> b,
+                  ) {
+                    if (a.length != b.length) return false;
+                    for (final e in a.entries) {
+                      final bv = b[e.key];
+                      if (bv == null) return false;
+                      if (!sameTitleList(e.value, bv)) return false;
+                    }
+                    return true;
+                  }
 
-            Future<void> saveFromSnapshot({
-              required Map<String, Map<DateTime, List<String>>> saved,
-              required Map<String, Map<DateTime, String>> ranges,
-              required Map<String, Set<DateTime>> days,
-              required EducationLevel level,
-            }) async {
-              DateTime? lastDate;
-              for (final sg in saved.keys) {
-                final idx = sg.lastIndexOf(' ');
-                final schoolName = idx > 0 ? sg.substring(0, idx) : sg;
-                final gradeText = idx > 0 ? sg.substring(idx + 1) : '';
-                final gradeNum =
-                    int.tryParse(gradeText.replaceAll('학년', '')) ?? 0;
-                final titles = saved[sg] ?? const <DateTime, List<String>>{};
-                final rng = ranges[sg] ?? const <DateTime, String>{};
-                await DataManager.instance
-                    .saveExamFor(schoolName, level, gradeNum, titles, rng);
-                final dset = days[sg] ?? <DateTime>{};
-                if (dset.isNotEmpty) {
-                  await DataManager.instance
-                      .saveExamDays(schoolName, level, gradeNum, dset);
-                  final maxDay = dset.reduce((a, b) => a.isAfter(b) ? a : b);
-                  if (lastDate == null || maxDay.isAfter(lastDate))
-                    lastDate = maxDay;
-                }
-              }
-              if (lastDate != null) {
-                final until = DateTime(
-                    lastDate!.year, lastDate!.month, lastDate!.day, 23, 59, 59);
-                await ExamModeService.instance.setUntil(until);
-                await ExamModeService.instance.setOn(true);
-              }
-            }
+                  bool sameRangeMap(
+                    Map<DateTime, String> a,
+                    Map<DateTime, String> b,
+                  ) {
+                    if (a.length != b.length) return false;
+                    for (final e in a.entries) {
+                      final bv = b[e.key];
+                      if (bv == null) return false;
+                      if (e.value.trim() != bv.trim()) return false;
+                    }
+                    return true;
+                  }
 
-            // 백그라운드 저장(에러는 콘솔에만 로그)
-            unawaited(Future(() async {
-              try {
-                await saveFromSnapshot(
-                    saved: midSaved,
-                    ranges: midRanges,
-                    days: midDays,
-                    level: EducationLevel.middle);
-              } catch (_) {}
-              try {
-                await saveFromSnapshot(
-                    saved: hiSaved,
-                    ranges: hiRanges,
-                    days: hiDays,
-                    level: EducationLevel.high);
-              } catch (_) {}
-            }));
-          },
+                  bool sameDaySet(Set<DateTime> a, Set<DateTime> b) {
+                    if (a.length != b.length) return false;
+                    for (final d in a) {
+                      if (!b.contains(norm(d))) return false;
+                    }
+                    return true;
+                  }
+
+                  final midSaved = snapshotSaved(_middleKey.currentState);
+                  final midRanges = snapshotRanges(_middleKey.currentState);
+                  final midDays = snapshotDays(_middleKey.currentState);
+                  final hiSaved = snapshotSaved(_highKey.currentState);
+                  final hiRanges = snapshotRanges(_highKey.currentState);
+                  final hiDays = snapshotDays(_highKey.currentState);
+
+                  DateTime? lastDateOverall;
+                  void captureLastDate(DateTime d) {
+                    if (lastDateOverall == null || d.isAfter(lastDateOverall!)) {
+                      lastDateOverall = d;
+                    }
+                  }
+
+                  Future<Set<String>> saveFromSnapshot({
+                    required Map<String, Map<DateTime, List<String>>> saved,
+                    required Map<String, Map<DateTime, String>> ranges,
+                    required Map<String, Set<DateTime>> days,
+                    required EducationLevel level,
+                  }) async {
+                    final touched = <String>{};
+                    final sgKeys = <String>{...saved.keys, ...ranges.keys, ...days.keys};
+                    for (final sg in sgKeys) {
+                      final idx = sg.lastIndexOf(' ');
+                      final schoolName = idx > 0 ? sg.substring(0, idx) : sg;
+                      final gradeText = idx > 0 ? sg.substring(idx + 1) : '';
+                      final gradeNum =
+                          int.tryParse(gradeText.replaceAll('학년', '')) ?? 0;
+
+                      final titles = <DateTime, List<String>>{
+                        for (final e in (saved[sg] ?? const <DateTime, List<String>>{}).entries)
+                          norm(e.key): List<String>.from(e.value),
+                      };
+                      final rng = <DateTime, String>{
+                        for (final e in (ranges[sg] ?? const <DateTime, String>{}).entries)
+                          norm(e.key): e.value,
+                      };
+                      final prevTitles = <DateTime, List<String>>{
+                        for (final e in (_preloadedSavedFor(sg, level) ??
+                                const <DateTime, List<String>>{})
+                            .entries)
+                          norm(e.key): List<String>.from(e.value),
+                      };
+                      final prevRanges = <DateTime, String>{
+                        for (final e in (_preloadedRangesFor(sg, level) ??
+                                const <DateTime, String>{})
+                            .entries)
+                          norm(e.key): e.value,
+                      };
+
+                      final dsetSession =
+                          (days[sg] ?? <DateTime>{}).map(norm).toSet();
+                      final dsetCurrent = DataManager.instance
+                          .getExamDaysForSchoolGrade(
+                            school: schoolName,
+                            level: level,
+                            grade: gradeNum,
+                          )
+                          .map(norm)
+                          .toSet();
+
+                      final examChanged =
+                          !sameTitleMap(titles, prevTitles) ||
+                              !sameRangeMap(rng, prevRanges);
+                      final dayChanged =
+                          dsetSession.isNotEmpty &&
+                              !sameDaySet(dsetSession, dsetCurrent);
+                      if (!examChanged && !dayChanged) continue;
+
+                      if (examChanged) {
+                        await DataManager.instance
+                            .saveExamFor(schoolName, level, gradeNum, titles, rng);
+                      }
+                      if (dayChanged) {
+                        await DataManager.instance
+                            .saveExamDays(schoolName, level, gradeNum, dsetSession);
+                      }
+                      touched.add(sg);
+
+                      for (final d in titles.keys) {
+                        captureLastDate(d);
+                      }
+                      for (final d in (dayChanged ? dsetSession : dsetCurrent)) {
+                        captureLastDate(d);
+                      }
+                    }
+                    return touched;
+                  }
+
+                  if (mounted) setState(() => _closeSaveBusy = true);
+                  try {
+                    final touchedMiddle = await saveFromSnapshot(
+                      saved: midSaved,
+                      ranges: midRanges,
+                      days: midDays,
+                      level: EducationLevel.middle,
+                    );
+                    final touchedHigh = await saveFromSnapshot(
+                      saved: hiSaved,
+                      ranges: hiRanges,
+                      days: hiDays,
+                      level: EducationLevel.high,
+                    );
+
+                    if (lastDateOverall != null) {
+                      final d = lastDateOverall!;
+                      final until = DateTime(d.year, d.month, d.day, 23, 59, 59);
+                      await ExamModeService.instance.setUntil(until);
+                      await ExamModeService.instance.setOn(true);
+                    }
+
+                    final syncJobs = <Future<void>>[];
+                    for (final sg in touchedMiddle) {
+                      syncJobs
+                          .add(_syncPreloadOneSgFromDm(sg, EducationLevel.middle));
+                    }
+                    for (final sg in touchedHigh) {
+                      syncJobs.add(_syncPreloadOneSgFromDm(sg, EducationLevel.high));
+                    }
+                    if (syncJobs.isNotEmpty) {
+                      await Future.wait(syncJobs);
+                    }
+
+                    if (!mounted) return;
+                    Navigator.of(context).pop();
+                  } catch (e, st) {
+                    _dlog('[EXAM_DIALOG][close_save_error] $e\n$st');
+                    rootScaffoldMessengerKey.currentState?.showSnackBar(
+                      SnackBar(content: Text('저장 중 오류가 발생했습니다: $e')),
+                    );
+                  } finally {
+                    if (mounted) setState(() => _closeSaveBusy = false);
+                  }
+                },
           style: TextButton.styleFrom(
             foregroundColor: kDlgTextSub,
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
           ),
-          child: const Text('닫기'),
+          child: Text(_closeSaveBusy ? '저장 중...' : '닫기'),
         )
       ],
     );
@@ -4101,13 +4289,14 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
   @override
   void initState() {
     super.initState();
+    final level = widget.level ?? EducationLevel.middle;
     // 프리로드 맵은 다이얼로그 오픈 전에 채워지므로 첫 프레임부터 데이터 반영(깜빡임 없음)
     for (final sg in widget.schoolGrade) {
-      final sav = _preloadedSavedBySg[sg];
+      final sav = _preloadedSavedFor(sg, level);
       if (sav != null) {
         _savedBySchoolGrade[sg] = Map<DateTime, List<String>>.from(sav);
       }
-      final rng = _preloadedRangesBySg[sg];
+      final rng = _preloadedRangesFor(sg, level);
       if (rng != null) {
         _rangesBySchoolGrade[sg] = Map<DateTime, String>.from(rng);
       }
@@ -4156,15 +4345,16 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
 
   void reloadFromPreloadMaps() {
     if (!mounted) return;
+    final level = widget.level ?? EducationLevel.middle;
     setState(() {
       _savedBySchoolGrade.clear();
       _rangesBySchoolGrade.clear();
       for (final sg in widget.schoolGrade) {
-        final sav = _preloadedSavedBySg[sg];
+        final sav = _preloadedSavedFor(sg, level);
         if (sav != null) {
           _savedBySchoolGrade[sg] = Map<DateTime, List<String>>.from(sav);
         }
-        final rng = _preloadedRangesBySg[sg];
+        final rng = _preloadedRangesFor(sg, level);
         if (rng != null) {
           _rangesBySchoolGrade[sg] = Map<DateTime, String>.from(rng);
         }
@@ -4449,8 +4639,7 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                                   setState(() {
                                     _savedBySchoolGrade.remove(item);
                                     _rangesBySchoolGrade.remove(item);
-                                    _preloadedSavedBySg.remove(item);
-                                    _preloadedRangesBySg.remove(item);
+                                    _removePreloadedFor(item, level);
                                     _selectedDaysBySchoolGrade.remove(item);
                                   });
                                   notifyExamScheduleChanged();
@@ -5385,15 +5574,20 @@ int _examSgGradeSortKey(String sg) {
   return int.tryParse(g.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
 }
 
-/// 중등(저학년 위) → 고등 순으로 시험 달력 스트라이프를 쌓기 위한 라벨 순서
-List<String> _examOrderedOverviewLabels(List<String> middle, List<String> high) {
+/// 중등(저학년 위) → 고등 순으로 시험 달력 스트라이프를 쌓기 위한 라벨 순서.
+/// 동일한 라벨(예: '대륜중 1학년')이 중/고에 함께 있어도 level로 구분한다.
+List<({String sg, EducationLevel level})> _examOrderedOverviewEntries(
+    List<String> middle, List<String> high) {
   final m = [...middle]
     ..sort((a, b) =>
         _examSgGradeSortKey(a).compareTo(_examSgGradeSortKey(b)));
   final h = [...high]
     ..sort((a, b) =>
         _examSgGradeSortKey(a).compareTo(_examSgGradeSortKey(b)));
-  return [...m, ...h];
+  return [
+    ...m.map((sg) => (sg: sg, level: EducationLevel.middle)),
+    ...h.map((sg) => (sg: sg, level: EducationLevel.high)),
+  ];
 }
 
 Set<DateTime> _allExamRelatedDatesForOverview(
@@ -5435,13 +5629,34 @@ Set<DateTime> _examOverviewDaysForSg(
   );
 }
 
+Set<DateTime> _examPeriodHighlightDaysForSg(
+  String sg,
+  EducationLevel level,
+  _ExamScheduleWizardState? st,
+) {
+  if (st != null) {
+    return _periodDaysForWizardRow(sg, level, st);
+  }
+  final idx = sg.lastIndexOf(' ');
+  final schoolName = idx > 0 ? sg.substring(0, idx) : sg;
+  final gradeText = idx > 0 ? sg.substring(idx + 1) : '';
+  final gradeNum = int.tryParse(gradeText.replaceAll('학년', '')) ?? 0;
+  return DataManager.instance.getExamDaysForSchoolGrade(
+    school: schoolName,
+    level: level,
+    grade: gradeNum,
+  );
+}
+
 List<String> _examOverviewSubjectLabelsForSgDate(
   String sg,
+  EducationLevel level,
   DateTime dayKey,
   _ExamScheduleWizardState? st,
 ) {
   final rawFromWizard = st?._savedBySchoolGrade[sg]?[dayKey] ?? const <String>[];
-  final rawFromPreload = _preloadedSavedBySg[sg]?[dayKey] ?? const <String>[];
+  final rawFromPreload =
+      _preloadedSavedFor(sg, level)?[dayKey] ?? const <String>[];
   final mergedRaw = rawFromWizard.isNotEmpty ? rawFromWizard : rawFromPreload;
 
   final out = <String>[];
@@ -5580,7 +5795,8 @@ class _ExamScheduleOverviewPanel extends StatelessWidget {
   final _ExamScheduleWizardState? middleState;
   final _ExamScheduleWizardState? highState;
   final Set<DateTime> highlightDays;
-  final void Function(String sg, DateTime? day) onSchoolPeriodTap;
+  final void Function(String sg, EducationLevel level, DateTime? day)
+      onSchoolPeriodTap;
 
   const _ExamScheduleOverviewPanel({
     required this.labelsMiddle,
@@ -5591,13 +5807,8 @@ class _ExamScheduleOverviewPanel extends StatelessWidget {
     required this.onSchoolPeriodTap,
   });
 
-  bool _isHighSg(String sg) => labelsHigh.contains(sg);
-
-  _ExamScheduleWizardState? _stateForSg(String sg) =>
-      _isHighSg(sg) ? highState : middleState;
-
-  EducationLevel _levelForSg(String sg) =>
-      _isHighSg(sg) ? EducationLevel.high : EducationLevel.middle;
+  _ExamScheduleWizardState? _stateForLevel(EducationLevel level) =>
+      level == EducationLevel.high ? highState : middleState;
 
   @override
   Widget build(BuildContext context) {
@@ -5614,13 +5825,11 @@ class _ExamScheduleOverviewPanel extends StatelessWidget {
         ),
       );
     }
-    final ordered =
-        _examOrderedOverviewLabels(labelsMiddle, labelsHigh);
+    final ordered = _examOrderedOverviewEntries(labelsMiddle, labelsHigh);
     final allDays = <DateTime>{};
-    for (final sg in ordered) {
-      final st = _stateForSg(sg);
-      allDays.addAll(
-          _examOverviewDaysForSg(sg, _levelForSg(sg), st));
+    for (final row in ordered) {
+      final st = _stateForLevel(row.level);
+      allDays.addAll(_examOverviewDaysForSg(row.sg, row.level, st));
     }
     if (allDays.isEmpty) {
       return Center(
@@ -5764,10 +5973,13 @@ class _ExamScheduleOverviewPanel extends StatelessWidget {
                         final textStyle = inWeek ? textStyleNorm : textStyleDim;
                         final stripes = <Widget>[];
                         if (inWeek) {
-                          for (final sg in ordered) {
-                            final rowSt = _stateForSg(sg);
+                          for (final row in ordered) {
+                            final sg = row.sg;
+                            final level = row.level;
+                            final rowSt = _stateForLevel(level);
                             final subjects = _examOverviewSubjectLabelsForSgDate(
                               sg,
+                              level,
                               key,
                               rowSt,
                             );
@@ -5781,8 +5993,8 @@ class _ExamScheduleOverviewPanel extends StatelessWidget {
                                 _ExamOverviewMathStripe(
                                   schoolGradeLine: schoolLine,
                                   subject: subject,
-                                  isHighSchool: _isHighSg(sg),
-                                  onTap: () => onSchoolPeriodTap(sg, key),
+                                  isHighSchool: level == EducationLevel.high,
+                                  onTap: () => onSchoolPeriodTap(sg, level, key),
                                 ),
                               );
                             }

@@ -16,6 +16,15 @@ import { buildTexSource, buildDocumentTexSource } from './template.js';
 
 const XELATEX_TIMEOUT_MS = 30_000;
 
+async function waitForFile(filePath, timeoutMs = 3000) {
+  const started = Date.now();
+  while (Date.now() - started <= timeoutMs) {
+    if (fs.existsSync(filePath)) return true;
+    await new Promise((resolve) => setTimeout(resolve, 80));
+  }
+  return fs.existsSync(filePath);
+}
+
 function runXeLatex(texPath, outDir) {
   const bin = getXeLatexBinary();
   const baseName = path.basename(texPath, '.tex');
@@ -91,7 +100,7 @@ export async function renderQuestionWithXeLatex({
     fs.writeFileSync(texPath, texSource, 'utf-8');
     await runXeLatex(texPath, workDir);
 
-    if (!fs.existsSync(pdfPath)) {
+    if (!(await waitForFile(pdfPath))) {
       throw new Error('XeLaTeX produced no PDF output.');
     }
 
@@ -138,8 +147,12 @@ export async function renderPdfWithXeLatex({
 
   const subjectTitle = renderConfig?.subjectTitleText || '수학 영역';
   const titlePageTopText = renderConfig?.titlePageTopText || '';
+  const hidePreviewHeader = renderConfig?.hidePreviewHeader === true
+    || renderConfig?.hideDocumentHeader === true;
+  const hideQuestionNumber = renderConfig?.hideQuestionNumber === true;
   const fontFamily = fontFamilyResolved || fontFamilyRequested || 'Malgun Gothic';
-  const cols = Number(layoutColumns || 1) >= 2 ? 2 : 1;
+  const isMockProfile = profile === 'mock' || profile === 'csat';
+  const cols = (Number(layoutColumns || 1) >= 2 || isMockProfile) ? 2 : 1;
 
   try {
     const texSource = buildDocumentTexSource(questions || [], {
@@ -152,12 +165,15 @@ export async function renderPdfWithXeLatex({
       subjectTitle,
       titlePageTopText,
       profile: profile || '',
+      maxQuestionsPerPage: maxQuestionsPerPage || 0,
+      hidePreviewHeader,
+      hideQuestionNumber,
     });
 
     fs.writeFileSync(texPath, texSource, 'utf-8');
     await runXeLatex(texPath, workDir);
 
-    if (!fs.existsSync(pdfPath)) {
+    if (!(await waitForFile(pdfPath))) {
       throw new Error('XeLaTeX produced no PDF output.');
     }
 

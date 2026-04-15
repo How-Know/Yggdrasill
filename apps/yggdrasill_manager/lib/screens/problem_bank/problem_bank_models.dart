@@ -272,6 +272,7 @@ class ProblemBankEquation {
 class ProblemBankQuestion {
   const ProblemBankQuestion({
     required this.id,
+    required this.questionUid,
     required this.academyId,
     required this.documentId,
     required this.extractJobId,
@@ -311,6 +312,7 @@ class ProblemBankQuestion {
   });
 
   final String id;
+  final String questionUid;
   final String academyId;
   final String documentId;
   final String extractJobId;
@@ -458,6 +460,7 @@ class ProblemBankQuestion {
   }) {
     return ProblemBankQuestion(
       id: id,
+      questionUid: questionUid,
       academyId: academyId,
       documentId: documentId,
       extractJobId: extractJobId,
@@ -543,8 +546,10 @@ class ProblemBankQuestion {
             : schoolPast
                 ? 'school_past'
                 : 'school_past';
+    final rawId = '${map['id'] ?? ''}';
     return ProblemBankQuestion(
-      id: '${map['id'] ?? ''}',
+      id: rawId,
+      questionUid: '${map['question_uid'] ?? map['questionUid'] ?? rawId}',
       academyId: '${map['academy_id'] ?? ''}',
       documentId: '${map['document_id'] ?? ''}',
       extractJobId: '${map['extract_job_id'] ?? ''}',
