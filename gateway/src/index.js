@@ -389,15 +389,49 @@ client.on('message', async (topic, payload) => {
         maybePublishAck(academy_id, idempotency_key, { ok: false, action, error: 'missing_group_id' });
         return;
       }
-      const from_phase = msg.from_phase ? Number(msg.from_phase) : null;
+      const from_phase = Number.isFinite(Number(msg.from_phase))
+        ? Number(msg.from_phase)
+        : null;
       const { data, error } = await supa.rpc('homework_group_bulk_transition', {
         p_group_id: group_id,
         p_academy_id: academy_id,
         p_from_phase: from_phase
       });
-      if (error) console.error('[gateway] group_transition rpc error', error);
-      maybePublishAck(academy_id, idempotency_key, { ok: !error, action, changed: data ?? 0 });
+      if (error) {
+        console.error('[gateway] group_transition rpc error', error);
+      }
+
+      // Non-v2(device scoped) transition path must also keep runtime in sync,
+      // otherwise m5_list_homework_groups may render stale phase from runtime.
+      let runtimeSyncError = null;
       if (!error) {
+        if (from_phase === 99) {
+          const { error: commitErr } = await supa.rpc('m5_group_commit_children_v3', {
+            p_academy_id: academy_id,
+            p_group_id: group_id
+          });
+          runtimeSyncError = commitErr ?? null;
+        } else {
+          const { error: runtimeErr } = await supa.rpc('m5_group_transition_state_v3', {
+            p_academy_id: academy_id,
+            p_group_id: group_id,
+            p_from_phase: from_phase
+          });
+          runtimeSyncError = runtimeErr ?? null;
+        }
+        if (runtimeSyncError) {
+          console.error('[gateway] group_transition runtime sync rpc error', runtimeSyncError);
+        }
+      }
+
+      const ok = !error && !runtimeSyncError;
+      maybePublishAck(academy_id, idempotency_key, {
+        ok,
+        action,
+        changed: data ?? 0,
+        error: runtimeSyncError?.message ?? error?.message
+      });
+      if (ok) {
         await publishHomeworksToBoundDevices(academy_id, student_id, 'group_transition');
       }
       return;

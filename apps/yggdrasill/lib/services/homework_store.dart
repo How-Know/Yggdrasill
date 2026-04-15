@@ -3032,11 +3032,6 @@ class HomeworkStore {
         'p_academy_id': academyId,
         'p_updated_by': updatedBy,
       });
-      await _syncGroupRuntimeForConfirmedItems(
-        academyId: academyId,
-        studentId: studentId,
-        itemIds: [id],
-      );
       unawaited(_reloadStudent(studentId));
       if (recordAssignmentCheck) {
         unawaited(
@@ -3099,11 +3094,6 @@ class HomeworkStore {
           }),
         ),
       );
-      await _syncGroupRuntimeForConfirmedItems(
-        academyId: academyId,
-        studentId: studentId,
-        itemIds: confirmedIds,
-      );
       unawaited(_reloadStudent(studentId));
       if (recordAssignmentCheck) {
         for (final id in confirmedIds) {
@@ -3119,57 +3109,6 @@ class HomeworkStore {
       // ignore: avoid_print
       print('[HW][confirmBatch][ERROR] ' + e.toString());
       unawaited(_reloadStudent(studentId));
-    }
-  }
-
-  Future<void> _syncGroupRuntimeForConfirmedItems({
-    required String academyId,
-    required String studentId,
-    required Iterable<String> itemIds,
-  }) async {
-    final groups = _groupsByStudentId[studentId];
-    if (groups == null || groups.isEmpty) return;
-
-    final groupById = <String, HomeworkGroup>{
-      for (final group in groups) group.id: group,
-    };
-
-    final targetGroupIds = <String>{};
-    for (final itemId in itemIds) {
-      final groupId = (_groupIdByItemId[itemId] ?? '').trim();
-      if (groupId.isNotEmpty) {
-        targetGroupIds.add(groupId);
-      }
-    }
-    if (targetGroupIds.isEmpty) return;
-
-    for (final groupId in targetGroupIds) {
-      final children = itemsInGroup(
-        studentId,
-        groupId,
-        includeCompleted: true,
-      )
-          .where((item) => item.status != HomeworkStatus.completed)
-          .toList(growable: false);
-      if (children.isEmpty) continue;
-
-      final hasSubmitted = children.any((item) => item.phase == 3);
-      final hasConfirmed = children.any((item) => item.phase == 4);
-      if (hasSubmitted || !hasConfirmed) continue;
-
-      final runtimePhase = groupById[groupId]?.runtimePhase ?? 0;
-      if (runtimePhase == 4) continue;
-
-      try {
-        await Supabase.instance.client.rpc(
-          'm5_group_transition_state_v3',
-          params: {
-            'p_academy_id': academyId,
-            'p_group_id': groupId,
-            'p_from_phase': 3,
-          },
-        );
-      } catch (_) {}
     }
   }
 

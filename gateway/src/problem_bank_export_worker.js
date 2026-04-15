@@ -49,7 +49,7 @@ const FONT_PATH_QNUM =
   process.env.PB_PDF_FONT_QNUM_PATH || '';
 const FONT_PATH_SUBJECT =
   process.env.PB_PDF_FONT_SUBJECT_PATH || '';
-const RENDER_CONFIG_VERSION = 'pb_render_v34_q9_math_match_fix';
+const RENDER_CONFIG_VERSION = 'pb_render_v35_xelatex_layout_boxes';
 const DEFAULT_TITLE_PAGE_TOP_TEXT = '2026학년도 대학수학능력시험 문제지';
 const FIGURE_REGEN_COOLDOWN_MIN = Math.max(
   2,

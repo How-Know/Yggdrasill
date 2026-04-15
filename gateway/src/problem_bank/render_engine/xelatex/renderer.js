@@ -151,6 +151,7 @@ export async function renderPdfWithXeLatex({
       columns: cols,
       subjectTitle,
       titlePageTopText,
+      profile: profile || '',
     });
 
     fs.writeFileSync(texPath, texSource, 'utf-8');
