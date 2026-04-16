@@ -238,6 +238,42 @@ class PrintRoutingService {
     }
   }
 
+  Future<bool> _waitForSpoolerJobIncrease({
+    required String printerName,
+    required int beforeJobCount,
+    required String debugSource,
+    required String reason,
+    Duration maxWait = const Duration(seconds: 6),
+  }) async {
+    if (!Platform.isWindows) return false;
+    final startedAt = DateTime.now();
+    var attempt = 0;
+    while (DateTime.now().difference(startedAt) < maxWait) {
+      attempt += 1;
+      await Future<void>.delayed(const Duration(milliseconds: 450));
+      final elapsed = DateTime.now().difference(startedAt);
+      final remaining = maxWait - elapsed;
+      if (remaining <= Duration.zero) break;
+      final pollTimeout = remaining > const Duration(seconds: 1)
+          ? const Duration(seconds: 1)
+          : remaining;
+      final afterJobCount = await _loadWindowsPrinterJobCount(printerName)
+          .timeout(pollTimeout, onTimeout: () => null);
+      if (afterJobCount != null && afterJobCount > beforeJobCount) {
+        _printLog(
+          debugSource,
+          'Spooler accepted ($reason) jobs: $beforeJobCount -> $afterJobCount attempt=$attempt elapsedMs=${elapsed.inMilliseconds}',
+        );
+        return true;
+      }
+    }
+    _printLog(
+      debugSource,
+      'Spooler poll timeout ($reason) maxWaitMs=${maxWait.inMilliseconds} baseline=$beforeJobCount',
+    );
+    return false;
+  }
+
   Future<PrintDuplexMode?> _loadWindowsPrinterDuplexMode(
       String printerName) async {
     if (!Platform.isWindows) return null;
@@ -384,8 +420,8 @@ class PrintRoutingService {
     }
 
     try {
-      final beforeJobCount =
-          await _loadWindowsPrinterJobCount(normalizedPrinter);
+      final beforeJobCount = await _loadWindowsPrinterJobCount(normalizedPrinter)
+          .timeout(const Duration(seconds: 2), onTimeout: () => null);
       final startedAt = DateTime.now();
       _printLog(
         debugSource,
@@ -411,9 +447,39 @@ class PrintRoutingService {
 
       final stdoutFuture = process.stdout.transform(utf8.decoder).join();
       final stderrFuture = process.stderr.transform(utf8.decoder).join();
-      final exitCode = await process.exitCode;
-      final out = (await stdoutFuture).trim();
-      final err = (await stderrFuture).trim();
+      const acrobatExitWait = Duration(seconds: 12);
+      late int exitCode;
+      late String out;
+      late String err;
+      try {
+        exitCode = await process.exitCode.timeout(acrobatExitWait);
+        out = (await stdoutFuture).trim();
+        err = (await stderrFuture).trim();
+      } on TimeoutException {
+        _printLog(
+          debugSource,
+          'Direct Acrobat /t exitCode wait exceeded ${acrobatExitWait.inSeconds}s; polling spooler.',
+        );
+        if (beforeJobCount != null) {
+          final accepted = await _waitForSpoolerJobIncrease(
+            printerName: normalizedPrinter,
+            beforeJobCount: beforeJobCount,
+            debugSource: debugSource,
+            reason: 'acrobat-timeout',
+            maxWait: const Duration(seconds: 5),
+          );
+          if (accepted) return true;
+        }
+        final elapsedMs = DateTime.now().difference(startedAt).inMilliseconds;
+        if (elapsedMs >= 5000) {
+          _printLog(
+            debugSource,
+            'Direct Acrobat /t timeout but elapsed=${elapsedMs}ms; assuming accepted to avoid duplicate dialog.',
+          );
+          return true;
+        }
+        return false;
+      }
       if (out.isNotEmpty) {
         _printLog(debugSource, 'Direct Acrobat /t stdout="${_compact(out)}"');
       }
@@ -428,19 +494,14 @@ class PrintRoutingService {
       if (exitCode == 0) return true;
 
       if (beforeJobCount != null) {
-        for (var attempt = 0; attempt < 24; attempt += 1) {
-          await Future<void>.delayed(const Duration(milliseconds: 500));
-          final afterJobCount = await _loadWindowsPrinterJobCount(
-            normalizedPrinter,
-          );
-          if (afterJobCount != null && afterJobCount > beforeJobCount) {
-            _printLog(
-              debugSource,
-              'Direct Acrobat /t accepted by spooler despite exit=$exitCode (jobs: $beforeJobCount -> $afterJobCount)',
-            );
-            return true;
-          }
-        }
+        final accepted = await _waitForSpoolerJobIncrease(
+          printerName: normalizedPrinter,
+          beforeJobCount: beforeJobCount,
+          debugSource: debugSource,
+          reason: 'acrobat-nonzero-exit-$exitCode',
+          maxWait: const Duration(seconds: 5),
+        );
+        if (accepted) return true;
       }
       if (out.isEmpty && err.isEmpty && elapsedMs >= 5000) {
         _printLog(
@@ -519,7 +580,17 @@ class PrintRoutingService {
       socket.add(utf8.encode('$uel@PJL EOJ\r\n$uel'));
 
       await socket.flush();
-      await socket.close();
+      try {
+        await socket.close().timeout(const Duration(seconds: 5));
+      } catch (e) {
+        _printLog(
+          debugSource,
+          'Raw TCP close timed out or failed (${_compact(e)}); destroying socket.',
+        );
+        try {
+          socket.destroy();
+        } catch (_) {}
+      }
       _printLog(
         debugSource,
         'Raw TCP print completed (${pdfBytes.length} bytes, duplex=$duplexLabel).',

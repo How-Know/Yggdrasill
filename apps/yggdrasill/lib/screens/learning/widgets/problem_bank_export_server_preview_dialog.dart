@@ -32,7 +32,7 @@ class ProblemBankPreviewRefreshRequest {
     required this.includeQuestionScore,
     required this.questionScoreByQuestionId,
     this.presetDisplayName = '',
-    this.mathEngine = 'mathjax-svg',
+    this.mathEngine = 'xelatex',
   });
 
   final String subjectTitleText;
@@ -96,7 +96,7 @@ class ProblemBankPreviewRefreshRequest {
 class ProblemBankPreviewRefreshResult {
   const ProblemBankPreviewRefreshResult({
     required this.pdfUrl,
-    this.mathEngine = 'mathjax-svg',
+    this.mathEngine = 'xelatex',
     this.titlePageTopText = '2026학년도 대학수학능력시험 문제지',
     this.timeLimitText = '',
     this.pageColumnQuestionCounts = const <Map<String, dynamic>>[],
@@ -163,7 +163,7 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
     this.initialIncludeAnswerSheet = true,
     this.initialIncludeExplanation = false,
     this.initialIncludeQuestionScore = false,
-    this.initialMathEngine = 'mathjax-svg',
+    this.initialMathEngine = 'xelatex',
     this.initialQuestionScoreByQuestionId = const <String, double>{},
     this.questionScoreEntries = const <ProblemBankPreviewQuestionScoreEntry>[],
     this.onRefreshRequested,
@@ -219,7 +219,7 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
     bool initialIncludeAnswerSheet = true,
     bool initialIncludeExplanation = false,
     bool initialIncludeQuestionScore = false,
-    String initialMathEngine = 'mathjax-svg',
+    String initialMathEngine = 'xelatex',
     Map<String, double> initialQuestionScoreByQuestionId =
         const <String, double>{},
     List<ProblemBankPreviewQuestionScoreEntry> questionScoreEntries =
@@ -324,7 +324,7 @@ class _ProblemBankExportServerPreviewDialogState
   bool _isRefreshing = false;
   bool _isGeneratingPdf = false;
   bool _isSavingSettings = false;
-  String _mathEngine = 'mathjax-svg';
+  String _mathEngine = 'xelatex';
   String? _previewFailureMessage;
   String _lastPresetDisplayName = '';
   late bool _includeAcademyLogo;
@@ -352,7 +352,7 @@ class _ProblemBankExportServerPreviewDialogState
     super.initState();
     _currentPdfUrl = widget.pdfUrl;
     final initialEngine = widget.initialMathEngine.trim().toLowerCase();
-    _mathEngine = initialEngine == 'xelatex' ? 'xelatex' : 'mathjax-svg';
+    _mathEngine = initialEngine == 'mathjax-svg' ? 'mathjax-svg' : 'xelatex';
     _previewFailureMessage = null;
     _subjectController =
         TextEditingController(text: widget.initialSubjectTitle);

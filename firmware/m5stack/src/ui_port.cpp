@@ -5,6 +5,7 @@
 #include <LittleFS.h>
 #include <cstring>
 #include <cctype>
+#include <ctime>
 #include "ota_update.h"
 #include "version.h"
 #include <esp_task_wdt.h>
@@ -114,6 +115,7 @@ static lv_coord_t s_drag_start_sheet_y = 240;
 struct HwCacheEntry {
   char id[64];
   int8_t phase;
+  int64_t run_start_epoch;
   int32_t accumulated;
   int32_t cycle_elapsed;
   int16_t check_count;
@@ -162,6 +164,11 @@ struct HwGroupData {
   int16_t time_limit_minutes;
   uint32_t color;
   int64_t run_start_epoch;
+  /** 서버 run_start 기준 1회 정렬 + lv_tick 모노토닉 표시용 (목록/상세 공통) */
+  bool display_anchor_valid;
+  int64_t display_anchor_run_start;
+  uint32_t display_anchor_tick;
+  int32_t display_segment0_sec;
   HwChildEntry children[8];
   uint8_t child_cnt;
 };
@@ -183,6 +190,26 @@ static uint32_t hw_group_children_fp(const HwGroupData& g) {
   }
   h = ((h << 5) + h) + (uint8_t)g.child_cnt;
   return h;
+}
+
+static inline bool hw_server_running_group(const HwGroupData& g) {
+  // Runtime phase=2 is the source of truth for "running".
+  // run_start can be transiently null in payload races; don't treat that as stopped.
+  return g.phase == 2;
+}
+
+static int hw_live_segment_sec(HwGroupData& g, uint32_t now_tick) {
+  if (!g.display_anchor_valid || !hw_server_running_group(g)) return 0;
+  if (g.display_anchor_run_start > 0 &&
+      g.run_start_epoch > 0 &&
+      g.display_anchor_run_start != g.run_start_epoch) {
+    return 0;
+  }
+  uint32_t dt = now_tick - g.display_anchor_tick;
+  int delta = (int)(dt / 1000);
+  int seg = g.display_segment0_sec + delta;
+  if (seg < 0) seg = 0;
+  return seg;
 }
 
 static HwGroupData s_groups[6];
@@ -221,7 +248,7 @@ static lv_timer_t* s_detail_timer = nullptr;
 static uint32_t s_detail_timer_epoch = 0;
 
 // Phase 2 실시간 시간 & Phase 4 깜빡임: 글로벌 단일 타이머로 관리
-struct Phase2Entry { lv_obj_t* lbl; uint32_t base_acc; uint32_t start_tick; };
+struct Phase2Entry { lv_obj_t* lbl; uint8_t group_idx; };
 static Phase2Entry s_p2_entries[8];
 static uint8_t s_p2_cnt = 0;
 
@@ -252,9 +279,14 @@ static void hw_global_timer_cb(lv_timer_t* timer) {
     sec_tick = 0;
     for (uint8_t i = 0; i < s_p2_cnt; i++) {
       if (!s_p2_entries[i].lbl || !lv_obj_is_valid(s_p2_entries[i].lbl)) continue;
-      uint32_t elapsed = (lv_tick_get() - s_p2_entries[i].start_tick) / 1000;
-      uint32_t total = s_p2_entries[i].base_acc + elapsed;
-      char buf[32]; fmt_time_static(total, buf, sizeof(buf));
+      uint8_t gi = s_p2_entries[i].group_idx;
+      if (gi >= s_group_cnt) continue;
+      HwGroupData& gg = s_groups[gi];
+      uint32_t tick = lv_tick_get();
+      int seg = hw_live_segment_sec(gg, tick);
+      int total = (int)gg.accumulated + seg;
+      if (total < 0) total = 0;
+      char buf[32]; fmt_time_static((uint32_t)total, buf, sizeof(buf));
       lv_label_set_text(s_p2_entries[i].lbl, buf);
     }
   }
@@ -3078,9 +3110,14 @@ static lv_obj_t* create_hw_card(lv_obj_t* parent, int group_idx) {
     lv_obj_set_style_text_color(time_lbl, lv_color_hex(srv_color), 0);
     lv_obj_align(time_lbl, LV_ALIGN_TOP_RIGHT, 0, status_y);
     lv_obj_add_flag(time_lbl, LV_OBJ_FLAG_EVENT_BUBBLE);
-    char tb[32]; fmt_time_static(g.accumulated, tb, sizeof(tb));
-    lv_label_set_text(time_lbl, tb);
-    if (s_p2_cnt < 8) { s_p2_entries[s_p2_cnt] = {time_lbl, (uint32_t)g.accumulated, lv_tick_get()}; s_p2_cnt++; }
+    {
+      int seg = hw_live_segment_sec(g, lv_tick_get());
+      int total = (int)g.accumulated + seg;
+      if (total < 0) total = 0;
+      char tb[32]; fmt_time_static((uint32_t)total, tb, sizeof(tb));
+      lv_label_set_text(time_lbl, tb);
+    }
+    if (s_p2_cnt < 8) { s_p2_entries[s_p2_cnt] = {time_lbl, (uint8_t)group_idx}; s_p2_cnt++; }
   } else if (phase == 3) {
     char chk_buf[32];
     int chk_n = g.check_count < 0 ? 0 : g.check_count;
@@ -3188,6 +3225,96 @@ static void restart_hw_timer() {
   }
 }
 
+struct HwDisplayAnchorSnap {
+  char group_id[40];
+  int64_t run_start_epoch;
+  bool anchor_valid;
+  uint32_t anchor_tick;
+  int32_t segment0_sec;
+};
+
+static void hw_snapshot_display_anchors(HwDisplayAnchorSnap* snaps, uint8_t* out_cnt) {
+  *out_cnt = 0;
+  for (uint8_t i = 0; i < s_group_cnt && *out_cnt < 6; i++) {
+    HwDisplayAnchorSnap& s = snaps[*out_cnt];
+    strncpy(s.group_id, s_groups[i].group_id, sizeof(s.group_id) - 1);
+    s.group_id[sizeof(s.group_id) - 1] = '\0';
+    s.run_start_epoch = s_groups[i].run_start_epoch;
+    s.anchor_valid = s_groups[i].display_anchor_valid;
+    s.anchor_tick = s_groups[i].display_anchor_tick;
+    s.segment0_sec = s_groups[i].display_segment0_sec;
+    (*out_cnt)++;
+  }
+}
+
+static void hw_apply_display_anchors_after_parse(const HwDisplayAnchorSnap* snaps, uint8_t snap_cnt) {
+  for (uint8_t i = 0; i < s_group_cnt; i++) {
+    HwGroupData& g = s_groups[i];
+    if (g.phase != 2) {
+      g.display_anchor_valid = false;
+      g.display_anchor_run_start = 0;
+      g.display_anchor_tick = 0;
+      g.display_segment0_sec = 0;
+      continue;
+    }
+
+    const bool has_server_start = g.run_start_epoch > 0;
+    bool restored = false;
+    const HwDisplayAnchorSnap* same_group_snap = nullptr;
+    for (uint8_t j = 0; j < snap_cnt; j++) {
+      const HwDisplayAnchorSnap& sn = snaps[j];
+      if (strcmp(sn.group_id, g.group_id) != 0 || !sn.anchor_valid) continue;
+
+      if (!same_group_snap) same_group_snap = &sn;
+
+      bool same_anchor_key = false;
+      if (has_server_start) {
+        same_anchor_key = (sn.run_start_epoch == g.run_start_epoch);
+      } else {
+        same_anchor_key = (sn.run_start_epoch <= 0);
+      }
+
+      if (same_anchor_key) {
+        g.display_anchor_valid = true;
+        g.display_anchor_run_start = g.run_start_epoch;
+        g.display_anchor_tick = sn.anchor_tick;
+        g.display_segment0_sec = sn.segment0_sec;
+        restored = true;
+        break;
+      }
+    }
+    if (!restored) {
+      g.display_anchor_valid = true;
+      g.display_anchor_run_start = g.run_start_epoch;
+      const uint32_t anchor_tick = lv_tick_get();
+      g.display_anchor_tick = anchor_tick;
+
+      int seg = 0;
+      if (has_server_start) {
+        time_t now_t = time(nullptr);
+        long long diff = (long long)now_t - (long long)g.run_start_epoch;
+        int server_seg = diff > 0 ? (int)diff : 0;
+
+        // If we were running without run_start (transient payload gap), avoid visual reset.
+        if (same_group_snap && same_group_snap->run_start_epoch <= 0) {
+          uint32_t dt = anchor_tick - same_group_snap->anchor_tick;
+          int prev_seg = same_group_snap->segment0_sec + (int)(dt / 1000);
+          if (prev_seg < 0) prev_seg = 0;
+          if (prev_seg > server_seg) server_seg = prev_seg;
+        }
+        seg = server_seg;
+      } else if (same_group_snap) {
+        // Keep monotonic local flow while waiting for run_start propagation.
+        uint32_t dt = anchor_tick - same_group_snap->anchor_tick;
+        seg = same_group_snap->segment0_sec + (int)(dt / 1000);
+        if (seg < 0) seg = 0;
+      }
+
+      g.display_segment0_sec = seg;
+    }
+  }
+}
+
 static void parse_groups_from_json(const JsonArray& groups) {
   s_group_cnt = 0;
   for (JsonObject grp : groups) {
@@ -3279,7 +3406,12 @@ void ui_port_update_homeworks(const JsonArray& groups) {
   if (!s_homeworks_mode) build_homeworks_ui_internal();
   if (!s_list || !lv_obj_is_valid(s_list)) { s_hw_updating = false; Serial.println("[HW] ERROR: s_list invalid"); return; }
 
+  HwDisplayAnchorSnap anchor_snaps[6];
+  uint8_t anchor_snap_cnt = 0;
+  hw_snapshot_display_anchors(anchor_snaps, &anchor_snap_cnt);
+
   parse_groups_from_json(groups);
+  hw_apply_display_anchors_after_parse(anchor_snaps, anchor_snap_cnt);
 
   HwCacheEntry new_cache[16];
   uint8_t new_cnt = 0;
@@ -3287,6 +3419,7 @@ void ui_port_update_homeworks(const JsonArray& groups) {
     HwCacheEntry& nc = new_cache[new_cnt];
     strncpy(nc.id, s_groups[i].group_id, 63); nc.id[63] = '\0';
     nc.phase = s_groups[i].phase;
+    nc.run_start_epoch = s_groups[i].run_start_epoch;
     nc.accumulated = s_groups[i].accumulated;
     nc.cycle_elapsed = s_groups[i].cycle_elapsed;
     nc.check_count = s_groups[i].check_count;
@@ -3312,6 +3445,7 @@ void ui_port_update_homeworks(const JsonArray& groups) {
       const HwCacheEntry& a = new_cache[i];
       const HwCacheEntry& b = s_hw_cache[i];
       if (strcmp(a.id, b.id) != 0 || a.phase != b.phase ||
+          a.run_start_epoch != b.run_start_epoch ||
           a.accumulated != b.accumulated || a.cycle_elapsed != b.cycle_elapsed ||
           a.check_count != b.check_count || a.total_count != b.total_count ||
           a.time_limit_minutes != b.time_limit_minutes ||
@@ -3393,7 +3527,7 @@ void ui_port_update_homeworks(const JsonArray& groups) {
       close_homework_detail_page();
     } else {
       HwGroupData& dg = s_groups[s_detail_group_idx];
-      bool server_running = (dg.phase == 2 && dg.run_start_epoch > 0);
+      bool server_running = hw_server_running_group(dg);
       bool has_manual_override = millis() < s_detail_manual_override_until_ms;
       if (!s_detail_cycle_running && server_running) {
         s_detail_local_run_start_tick = lv_tick_get();
@@ -3433,7 +3567,7 @@ void ui_port_update_homeworks(const JsonArray& groups) {
 
 static bool detail_test_effective_running(const HwGroupData& g) {
   if (!hw_is_test_group(g)) return false;
-  bool server_running = (g.phase == 2 && g.run_start_epoch > 0);
+  bool server_running = hw_server_running_group(g);
   bool effective_running = server_running || s_detail_playing;
   if (millis() < s_detail_manual_override_until_ms) {
     effective_running = s_detail_manual_override_playing;
@@ -3447,10 +3581,7 @@ static void detail_timer_cb(lv_timer_t* timer) {
   if (s_detail_group_idx < 0 || s_detail_group_idx >= s_group_cnt) return;
   HwGroupData& g = s_groups[s_detail_group_idx];
 
-  time_t now_epoch;
-  time(&now_epoch);
-
-  bool server_running = (g.phase == 2 && g.run_start_epoch > 0);
+  bool server_running = hw_server_running_group(g);
   bool effective_running = server_running || s_detail_playing;
   if (millis() < s_detail_manual_override_until_ms) {
     effective_running = s_detail_manual_override_playing;
@@ -3467,8 +3598,8 @@ static void detail_timer_cb(lv_timer_t* timer) {
 
   int segment_sec = 0;
   if (effective_running) {
-    if (server_running && now_epoch > g.run_start_epoch) {
-      segment_sec = (int)(now_epoch - g.run_start_epoch);
+    if (server_running) {
+      segment_sec = hw_live_segment_sec(g, lv_tick_get());
     } else {
       segment_sec = (int)((lv_tick_get() - s_detail_local_run_start_tick) / 1000);
     }
@@ -3704,7 +3835,7 @@ static void show_homework_detail_page(int group_idx) {
   close_homework_detail_page();
   s_detail_group_idx = group_idx;
   HwGroupData& g = s_groups[group_idx];
-  s_detail_playing = (g.phase == 2 && g.run_start_epoch > 0);
+  s_detail_playing = hw_server_running_group(g);
   s_detail_cycle_running = s_detail_playing;
   s_detail_cycle_base_acc = (int)(g.accumulated - g.cycle_elapsed);
   s_detail_local_run_start_tick = lv_tick_get();
@@ -3812,8 +3943,11 @@ static void show_homework_detail_page(int group_idx) {
   s_hw_detail_total_lbl = lv_label_create(time_row);
   lv_obj_set_style_text_font(s_hw_detail_total_lbl, &kakao_kr_16, 0);
   lv_obj_set_style_text_color(s_hw_detail_total_lbl, lv_color_hex(0x808080), 0);
-  char total_buf[32]; fmt_time_hms_fixed((int)g.accumulated, total_buf, sizeof(total_buf));
-  lv_label_set_text(s_hw_detail_total_lbl, total_buf);
+  {
+    int init_total = (int)g.accumulated + hw_live_segment_sec(g, lv_tick_get());
+    char total_buf[32]; fmt_time_hms_fixed(init_total, total_buf, sizeof(total_buf));
+    lv_label_set_text(s_hw_detail_total_lbl, total_buf);
+  }
   lv_obj_align(s_hw_detail_total_lbl, LV_ALIGN_RIGHT_MID, -10, 0);
 
   // -- 5열: 3개 버튼 --
@@ -3907,11 +4041,8 @@ static void show_homework_detail_page(int group_idx) {
         if (cycle_seed < 0) cycle_seed = 0;
         int live_cycle = cycle_seed;
         if (s_detail_cycle_running) {
-          if (grp.run_start_epoch > 0) {
-            time_t now_e; time(&now_e);
-            if (now_e > grp.run_start_epoch) {
-              live_cycle = cycle_seed + (int)(now_e - grp.run_start_epoch);
-            }
+          if (hw_server_running_group(grp)) {
+            live_cycle = cycle_seed + hw_live_segment_sec(grp, lv_tick_get());
           } else {
             live_cycle = cycle_seed + (int)((lv_tick_get() - s_detail_local_run_start_tick) / 1000);
           }

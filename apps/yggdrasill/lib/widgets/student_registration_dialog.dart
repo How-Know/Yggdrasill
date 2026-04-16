@@ -238,7 +238,21 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
     if (_nameController.text.isEmpty || _schoolController.text.isEmpty || _grade == null) {
       return;
     }
-    
+
+    if (schoolNameLikelyMiddleWhenHighLevel(
+        _schoolController.text, _educationLevel)) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              '고등 과정인데 학교명이 중학교 형태로 보입니다. 진학한 고등학교명을 수정한 뒤 다시 저장해 주세요.',
+            ),
+          ),
+        );
+      }
+      return;
+    }
+
     final studentId = widget.student?.id ?? const Uuid().v4();
     final student = Student(
       id: studentId,
@@ -366,9 +380,15 @@ class _StudentRegistrationDialogState extends State<StudentRegistrationDialog> {
                       items: _flattenGrades(),
                       itemLabelBuilder: _gradeLabel,
                       onChanged: (value) {
+                        final Grade? prev = _grade;
                         setState(() {
                           _grade = value;
                           _educationLevel = value.level;
+                          // 과정(초/중/고)이 바뀌면 학교명은 반드시 다시 맞춰야 함(진학 후 school 미갱신 방지)
+                          if (prev != null && prev.level != value.level) {
+                            _schoolController.clear();
+                            _isSchoolValid = false;
+                          }
                         });
                       },
                     ),

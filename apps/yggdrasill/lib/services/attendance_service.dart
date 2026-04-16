@@ -3493,11 +3493,35 @@ class AttendanceService {
     );
   }
 
+  /// 순수 planned(`is_planned`·미등원)만 삭제한다.
+  /// - [fromInclusiveLocal]이 null이면: 오늘 0시 ~ 오늘+[days]일(기존 동작).
+  /// - [fromInclusiveLocal]이 있으면: 해당 날 0시 이후 전부(상한 없음). 휴원 시작 이후 예정 끊기용.
   Future<void> deletePlannedAttendanceForStudent(String studentId,
-      {int days = 15}) async {
+      {int days = 15,
+      DateTime? fromInclusiveLocal,
+      DateTime? toInclusiveLocal}) async {
     final today = DateTime.now();
-    final anchor = DateTime(today.year, today.month, today.day);
-    final end = anchor.add(Duration(days: days));
+    final DateTime anchor;
+    final DateTime? end;
+    if (fromInclusiveLocal != null) {
+      anchor = DateTime(
+        fromInclusiveLocal.year,
+        fromInclusiveLocal.month,
+        fromInclusiveLocal.day,
+      );
+      end = toInclusiveLocal == null
+          ? null
+          : DateTime(
+              toInclusiveLocal.year,
+              toInclusiveLocal.month,
+              toInclusiveLocal.day,
+            ).add(const Duration(days: 1))
+              .subtract(const Duration(microseconds: 1));
+    } else {
+      anchor = DateTime(today.year, today.month, today.day);
+      end = anchor.add(Duration(days: days));
+    }
+
     final academyId = await TenantService.instance.getActiveAcademyId() ??
         await TenantService.instance.ensureActiveAcademy();
     if (_sideDebug) {
@@ -3510,8 +3534,8 @@ class AttendanceService {
         if (r.studentId != studentId) continue;
         if (r.isPlanned != true) continue;
         if (r.arrivalTime != null || r.isPresent) continue;
-        if (r.classDateTime.isBefore(anchor) || r.classDateTime.isAfter(end))
-          continue;
+        if (r.classDateTime.isBefore(anchor)) continue;
+        if (end != null && r.classDateTime.isAfter(end)) continue;
         willRemove++;
         final dt = r.classDateTime;
         if (minDt == null || dt.isBefore(minDt)) minDt = dt;
@@ -3519,12 +3543,15 @@ class AttendanceService {
         final dOnly = DateTime(dt.year, dt.month, dt.day);
         if (dOnly == anchor) touchesToday = true;
       }
+      final rangeStr = end == null
+          ? '${anchor.toIso8601String()}..∞'
+          : '${anchor.toIso8601String()}..${end.toIso8601String()}';
       print(
-        '[PLAN][delete-student-start] student=$studentId range=${anchor.toIso8601String()}..${end.toIso8601String()} localBefore=$before localWillRemove=$willRemove touchesToday=$touchesToday min=${minDt?.toIso8601String()} max=${maxDt?.toIso8601String()}',
+        '[PLAN][delete-student-start] student=$studentId range=$rangeStr localBefore=$before localWillRemove=$willRemove touchesToday=$touchesToday min=${minDt?.toIso8601String()} max=${maxDt?.toIso8601String()}',
       );
     }
     try {
-      await Supabase.instance.client
+      var del = Supabase.instance.client
           .from('attendance_records')
           .delete()
           .eq('academy_id', academyId)
@@ -3533,15 +3560,19 @@ class AttendanceService {
           // ⚠️ 순수 planned(출석/등원 기록 없는 것)만 삭제해야 실제 기록이 날아가지 않는다.
           .eq('is_present', false)
           .isFilter('arrival_time', null)
-          .gte('class_date_time', anchor.toUtc().toIso8601String())
-          .lte('class_date_time', end.toUtc().toIso8601String());
+          .gte('class_date_time', anchor.toUtc().toIso8601String());
+      if (end != null) {
+        del = del.lte('class_date_time', end.toUtc().toIso8601String());
+      }
+      await del;
       final beforeLocal = _attendanceRecords.length;
       _attendanceRecords.removeWhere((r) {
         if (r.studentId != studentId) return false;
         if (r.isPlanned != true) return false;
         if (r.arrivalTime != null || r.isPresent) return false;
-        return !r.classDateTime.isBefore(anchor) &&
-            !r.classDateTime.isAfter(end);
+        if (r.classDateTime.isBefore(anchor)) return false;
+        if (end != null && r.classDateTime.isAfter(end)) return false;
+        return true;
       });
       attendanceRecordsNotifier.value = List.unmodifiable(_attendanceRecords);
       if (_sideDebug) {
@@ -3553,6 +3584,32 @@ class AttendanceService {
       print(
           '[WARN] deletePlannedAttendanceForStudent 실패 student=$studentId: $e\n$st');
     }
+  }
+
+  /// 오늘 기준 휴원 중인 학생마다, 가장 이른 휴원 시작일 이후 순수 planned를 DB·로컬에서 제거한다.
+  Future<void> deletePlannedForAllCurrentlyPausedStudents(
+      List<StudentPausePeriod> periods) async {
+    final now = DateTime.now();
+    final todayOnly = DateTime(now.year, now.month, now.day);
+    final byStudent = <String, DateTime>{};
+    for (final p in periods) {
+      if (!p.isActiveOn(todayOnly)) continue;
+      final sid = p.studentId;
+      final existing = byStudent[sid];
+      if (existing == null || p.pausedFrom.isBefore(existing)) {
+        byStudent[sid] = p.pausedFrom;
+      }
+    }
+    if (byStudent.isEmpty) return;
+    for (final e in byStudent.entries) {
+      await deletePlannedAttendanceForStudent(
+        e.key,
+        fromInclusiveLocal: e.value,
+      );
+    }
+    try {
+      await loadAttendanceRecords();
+    } catch (_) {}
   }
 
   Future<void> _regeneratePlannedAttendanceForStudentSets({

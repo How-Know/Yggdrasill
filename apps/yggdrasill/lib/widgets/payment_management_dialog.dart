@@ -959,6 +959,7 @@ class _PaymentRecordAndScheduleDialogState
     for (DateTime day = start;
         day.isBefore(end);
         day = day.add(const Duration(days: 1))) {
+      if (DataManager.instance.isStudentPausedOn(studentId, day)) continue;
       final dayIndex = day.weekday - 1; // 0:월~6:일
       for (final b in blocks) {
         if (b.dayIndex != dayIndex) continue;

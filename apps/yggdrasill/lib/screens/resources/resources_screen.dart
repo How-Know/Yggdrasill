@@ -911,10 +911,10 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
       dialogContext = await dialogContextCompleter.future;
       await run(progressText);
     } finally {
-      progressText.dispose();
       if (dialogContext != null && dialogContext.mounted) {
         Navigator.of(dialogContext, rootNavigator: true).pop();
       }
+      progressText.dispose();
     }
   }
 

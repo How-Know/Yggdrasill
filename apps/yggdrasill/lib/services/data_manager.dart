@@ -3304,6 +3304,12 @@ class DataManager {
       studentPausePeriodsNotifier.value =
           List.unmodifiable(_studentPausePeriods);
       studentPausePeriodsRevision.value++;
+      try {
+        await AttendanceService.instance
+            .deletePlannedForAllCurrentlyPausedStudents(_studentPausePeriods);
+      } catch (e2, st2) {
+        print('[PAUSE][planned-cleanup-all][WARN] $e2\n$st2');
+      }
     } catch (e, st) {
       print('[PAUSE][load][WARN] $e\n$st');
       _studentPausePeriods = [];
@@ -3367,10 +3373,12 @@ class DataManager {
     });
     await loadStudentPausePeriods();
 
-    // 휴원 기간에는 예정수업이 없어야 하므로, 향후 planned를 정리한다(15일 범위 내 우선).
+    // 휴원 시작일 이후 순수 planned 전부 제거(상한 없음). loadStudentPausePeriods에서 휴원생 일괄 정리도 수행됨.
     try {
-      await AttendanceService.instance
-          .deletePlannedAttendanceForStudent(studentId, days: 15);
+      await AttendanceService.instance.deletePlannedAttendanceForStudent(
+        studentId,
+        fromInclusiveLocal: from,
+      );
     } catch (_) {}
     // 차감포인트 재계산(서버)
     try {

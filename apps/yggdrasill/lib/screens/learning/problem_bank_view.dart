@@ -76,6 +76,8 @@ class _ProblemBankViewState extends State<ProblemBankView> {
 
   List<LearningProblemQuestion> _questions = const <LearningProblemQuestion>[];
   final Set<String> _selectedQuestionIds = <String>{};
+  /// 장바구니(선택만 보기) 활성 시 그리드에 선택된 문항만 표시.
+  bool _showOnlySelectedQuestions = false;
   final Map<String, String> _selectedQuestionModes = <String, String>{};
   final ScrollController _questionGridScrollCtrl = ScrollController();
   Map<String, Map<String, String>> _questionFigureUrlsByPath =
@@ -88,7 +90,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
   int _figureLoadVersion = 0;
   LearningProblemExportSettings _exportSettings =
       LearningProblemExportSettings.initial();
-  String _previewMathEngine = 'mathjax-svg';
+  String _previewMathEngine = 'xelatex';
   LearningProblemExportJob? _activeExportJob;
   _QuestionOrderSaveRequest? _queuedQuestionOrderSave;
   bool _questionOrderSaveInFlight = false;
@@ -319,6 +321,12 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         } else {
           _selectedQuestionIds.removeWhere((id) => !aliveIds.contains(id));
         }
+        if (_showOnlySelectedQuestions) {
+          if (_selectedQuestionIds.isEmpty ||
+              !_questions.any((q) => _selectedQuestionIds.contains(q.id))) {
+            _showOnlySelectedQuestions = false;
+          }
+        }
       });
       _previewArtifactPollTimer?.cancel();
       _previewArtifactPollTimer = null;
@@ -467,286 +475,110 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     if (_academyId == null || _academyId!.isEmpty) return;
     if (questions.isEmpty) return;
     if (!_service.hasGateway) {
-      _markQuestionPreviewBatchFailed(
+      _markAllPreviewsFailed(
         questions,
-        message: '게이트웨이 연결이 없어 서버 미리보기를 불러올 수 없습니다.',
+        '게이트웨이 연결이 없어 서버 미리보기를 불러올 수 없습니다.',
       );
       return;
     }
-    final ordered = List<LearningProblemQuestion>.from(questions);
-    const visibleFirstBatchSize = 24;
-    final firstBatch = ordered.take(visibleFirstBatchSize).toList(growable: false);
-    final restBatch = ordered.skip(visibleFirstBatchSize).toList(growable: false);
 
-    await _fetchQuestionPdfArtifactsBatch(
-      firstBatch,
-      createJobs: true,
-    );
-    if (restBatch.isNotEmpty) {
-      unawaited(_fetchQuestionPdfArtifactsInChunks(restBatch));
+    if (mounted) {
+      setState(() {
+        for (final q in questions) {
+          _questionPreviewStatus = {
+            ..._questionPreviewStatus,
+            q.id: 'rendering',
+          };
+        }
+      });
     }
-  }
 
-  Map<String, dynamic> _buildPdfPreviewRenderConfig(
-    List<LearningProblemQuestion> questions,
-  ) {
-    final base = _buildRenderConfigForSelection(questions);
-    return <String, dynamic>{
-      ...base,
-      'mathEngine': 'xelatex',
-      'includeAnswerSheet': false,
-      'includeExplanation': false,
-      'includeQuestionScore': false,
-    };
-  }
+    final questionIds = questions
+        .map((q) => q.questionUid.trim().isNotEmpty ? q.questionUid.trim() : q.id.trim())
+        .where((id) => id.isNotEmpty)
+        .toList();
+    if (questionIds.isEmpty) return;
 
-  Future<void> _fetchQuestionPdfArtifactsInChunks(
-    List<LearningProblemQuestion> questions,
-  ) async {
-    const chunkSize = 18;
-    for (var i = 0; i < questions.length; i += chunkSize) {
-      if (!mounted) return;
-      final end = math.min(i + chunkSize, questions.length);
-      final chunk = questions.sublist(i, end);
-      await _fetchQuestionPdfArtifactsBatch(
-        chunk,
-        createJobs: true,
-      );
-      await Future<void>.delayed(const Duration(milliseconds: 120));
-    }
-  }
+    final documentId = _selectedDocumentId?.trim().isNotEmpty == true
+        ? _selectedDocumentId!.trim()
+        : questions.first.documentId.trim();
 
-  Future<void> _fetchQuestionPdfArtifactsBatch(
-    List<LearningProblemQuestion> batch, {
-    required bool createJobs,
-  }) async {
-    final academyId = _academyId;
-    if (academyId == null || academyId.isEmpty) return;
-    if (batch.isEmpty || !_service.hasGateway) return;
     try {
-      final questionIds = batch
-          .map((q) => q.questionUid.trim().isNotEmpty ? q.questionUid.trim() : q.id.trim())
-          .where((id) => id.isNotEmpty)
-          .toList();
-      if (questionIds.isEmpty) return;
-      final renderConfig = _buildPdfPreviewRenderConfig(batch);
-      final documentId = _selectedDocumentId?.trim().isNotEmpty == true
-          ? _selectedDocumentId!.trim()
-          : batch.first.documentId.trim();
-      final artifacts = await _service.fetchQuestionPdfPreviewArtifacts(
-        academyId: academyId,
-        documentId: documentId,
+      final urlMap = await _service.batchRenderThumbnails(
+        academyId: _academyId!,
         questionIds: questionIds,
-        renderConfig: renderConfig,
+        documentId: documentId,
         templateProfile: _exportSettings.templateProfile,
         paperSize: _exportSettings.paperLabel,
-        createJobs: createJobs,
+        questionModeByQuestionUid: _selectedModeMapForQuestions(questions),
       );
       if (!mounted) return;
-      if (artifacts.isEmpty) {
-        _markQuestionPreviewBatchFailed(
-          batch,
-          message: '서버 미리보기 응답이 비어 있습니다. 다시 시도해 주세요.',
-        );
-        return;
-      }
-      _applyQuestionPdfArtifacts(artifacts);
+
       final uidToId = <String, String>{};
-      for (final q in batch) {
+      for (final q in questions) {
         final id = q.id.trim();
         final uid = q.questionUid.trim();
         if (id.isNotEmpty) uidToId[id] = id;
         if (uid.isNotEmpty && uid != id) uidToId[uid] = id;
       }
-      final returnedIds = <String>{};
-      for (final key in artifacts.keys) {
-        final mapped = uidToId[key.trim()] ?? key.trim();
-        if (mapped.isNotEmpty) returnedIds.add(mapped);
+
+      final nextUrls = <String, String>{..._questionPreviewUrls};
+      final nextStatus = <String, String>{..._questionPreviewStatus};
+      final nextError = <String, String>{..._questionPreviewError};
+
+      for (final entry in urlMap.entries) {
+        final qid = uidToId[entry.key.trim()] ?? entry.key.trim();
+        if (qid.isEmpty) continue;
+        nextUrls[qid] = entry.value;
+        nextStatus[qid] = 'completed';
+        nextError.remove(qid);
       }
-      final missingIds = batch
-          .map((q) => q.id.trim())
-          .where((id) => id.isNotEmpty && !returnedIds.contains(id))
-          .toList(growable: false);
-      if (missingIds.isNotEmpty) {
-        _markQuestionPreviewIdsFailed(
-          missingIds,
-          message: '일부 문항의 서버 미리보기 응답이 누락되었습니다.',
-        );
+
+      for (final q in questions) {
+        final id = q.id.trim();
+        if (id.isNotEmpty && !nextUrls.containsKey(id)) {
+          nextStatus[id] = 'failed';
+          nextError[id] = '서버 미리보기 응답에서 누락되었습니다.';
+        }
       }
+
+      setState(() {
+        _questionPreviewUrls = nextUrls;
+        _questionPreviewStatus = nextStatus;
+        _questionPreviewError = nextError;
+        _pendingPreviewQuestionIds = <String>{};
+      });
     } catch (err) {
-      _markQuestionPreviewBatchFailed(
-        batch,
-        message: _normalizePreviewErrorMessage(err),
-      );
+      if (!mounted) return;
+      _markAllPreviewsFailed(questions, err.toString());
     }
   }
 
-  String _normalizePreviewErrorMessage(Object err) {
-    final raw = err.toString().trim();
-    if (raw.isEmpty) return '서버 미리보기 요청에 실패했습니다.';
-    if (raw.length <= 200) return raw;
-    return '${raw.substring(0, 200)}...';
-  }
-
-  void _markQuestionPreviewBatchFailed(
-    List<LearningProblemQuestion> batch, {
-    required String message,
-  }) {
-    _markQuestionPreviewIdsFailed(
-      batch.map((q) => q.id.trim()),
-      message: message,
-    );
-  }
-
-  void _markQuestionPreviewIdsFailed(
-    Iterable<String> questionIds, {
-    required String message,
-  }) {
+  void _markAllPreviewsFailed(
+    List<LearningProblemQuestion> questions,
+    String message,
+  ) {
     if (!mounted) return;
-    final safeIds = questionIds
-        .map((id) => id.trim())
-        .where((id) => id.isNotEmpty)
-        .toSet();
-    if (safeIds.isEmpty) return;
-    final safeMessage = message.trim().isNotEmpty
-        ? message.trim()
-        : '서버 미리보기에 실패했습니다.';
+    final safeMsg = message.trim().isNotEmpty ? message.trim() : '서버 미리보기에 실패했습니다.';
     setState(() {
       final nextStatus = <String, String>{..._questionPreviewStatus};
       final nextError = <String, String>{..._questionPreviewError};
-      final nextPending = <String>{..._pendingPreviewQuestionIds};
-      for (final id in safeIds) {
+      for (final q in questions) {
+        final id = q.id.trim();
+        if (id.isEmpty) continue;
         nextStatus[id] = 'failed';
-        nextError[id] = safeMessage;
-        nextPending.remove(id);
+        nextError[id] = safeMsg;
       }
       _questionPreviewStatus = nextStatus;
       _questionPreviewError = nextError;
-      _pendingPreviewQuestionIds = nextPending;
+      _pendingPreviewQuestionIds = <String>{};
     });
-    _ensurePreviewArtifactPolling();
-  }
-
-  void _applyQuestionPdfArtifacts(
-    Map<String, LearningProblemPdfPreviewArtifact> artifacts,
-  ) {
-    final uidToId = <String, String>{};
-    for (final q in _questions) {
-      final uid = q.questionUid.trim();
-      final id = q.id.trim();
-      if (id.isNotEmpty) uidToId[id] = id;
-      if (uid.isNotEmpty && uid != id) uidToId[uid] = id;
-    }
-
-    final nextPreviewUrls = <String, String>{..._questionPreviewUrls};
-    final nextPdfUrls = <String, String>{..._questionPreviewPdfUrls};
-    final nextStatus = <String, String>{..._questionPreviewStatus};
-    final nextError = <String, String>{..._questionPreviewError};
-    final nextPending = <String>{..._pendingPreviewQuestionIds};
-
-    for (final entry in artifacts.entries) {
-      final questionId = uidToId[entry.key.trim()] ?? entry.key.trim();
-      if (questionId.isEmpty) continue;
-      final artifact = entry.value;
-      final status = artifact.status.trim().toLowerCase();
-      if (status.isNotEmpty) {
-        nextStatus[questionId] = status;
-      }
-      if (artifact.thumbnailUrl.isNotEmpty) {
-        nextPreviewUrls[questionId] = artifact.thumbnailUrl;
-      }
-      if (artifact.pdfUrl.isNotEmpty) {
-        nextPdfUrls[questionId] = artifact.pdfUrl;
-      }
-      if (artifact.error.isNotEmpty) {
-        nextError[questionId] = artifact.error;
-      } else {
-        nextError.remove(questionId);
-      }
-
-      if (artifact.isPending) {
-        nextPending.add(questionId);
-      } else {
-        nextPending.remove(questionId);
-      }
-    }
-
-    if (!mounted) return;
-    setState(() {
-      _questionPreviewUrls = nextPreviewUrls;
-      _questionPreviewPdfUrls = nextPdfUrls;
-      _questionPreviewStatus = nextStatus;
-      _questionPreviewError = nextError;
-      _pendingPreviewQuestionIds = nextPending;
-    });
-    _ensurePreviewArtifactPolling();
-  }
-
-  void _ensurePreviewArtifactPolling() {
-    if (_pendingPreviewQuestionIds.isEmpty) {
-      _previewArtifactPollTimer?.cancel();
-      _previewArtifactPollTimer = null;
-      return;
-    }
-    if (_previewArtifactPollTimer != null) return;
-    _previewArtifactPollTimer =
-        Timer.periodic(const Duration(milliseconds: 1800), (_) {
-      unawaited(_pollQuestionPreviewArtifacts());
-    });
-    unawaited(_pollQuestionPreviewArtifacts());
-  }
-
-  Future<void> _pollQuestionPreviewArtifacts() async {
-    final academyId = _academyId;
-    if (academyId == null || academyId.isEmpty) return;
-    if (_pendingPreviewQuestionIds.isEmpty) {
-      _previewArtifactPollTimer?.cancel();
-      _previewArtifactPollTimer = null;
-      return;
-    }
-    final pending = _questions
-        .where((q) => _pendingPreviewQuestionIds.contains(q.id))
-        .toList(growable: false);
-    if (pending.isEmpty) {
-      _previewArtifactPollTimer?.cancel();
-      _previewArtifactPollTimer = null;
-      return;
-    }
-    await _fetchQuestionPdfArtifactsBatch(
-      pending,
-      createJobs: false,
-    );
   }
 
   void _retryQuestionPreview(String questionId) {
-    LearningProblemQuestion? target;
-    for (final question in _questions) {
-      if (question.id == questionId) {
-        target = question;
-        break;
-      }
-    }
-    if (target == null) return;
-    setState(() {
-      _questionPreviewStatus = {
-        ..._questionPreviewStatus,
-        questionId: 'queued',
-      };
-      _questionPreviewError = {
-        ..._questionPreviewError,
-      }..remove(questionId);
-      _pendingPreviewQuestionIds = {
-        ..._pendingPreviewQuestionIds,
-        questionId,
-      };
-    });
-    _ensurePreviewArtifactPolling();
-    unawaited(
-      _fetchQuestionPdfArtifactsBatch(
-        <LearningProblemQuestion>[target],
-        createJobs: true,
-      ),
-    );
+    final target = _questions.where((q) => q.id == questionId).toList();
+    if (target.isEmpty) return;
+    unawaited(_fetchQuestionPreviews(target));
   }
 
   Future<void> _onCurriculumChanged(String? value) async {
@@ -806,6 +638,9 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       } else {
         _selectedQuestionIds.remove(id);
       }
+      if (_showOnlySelectedQuestions && _selectedQuestionIds.isEmpty) {
+        _showOnlySelectedQuestions = false;
+      }
     });
   }
 
@@ -820,7 +655,29 @@ class _ProblemBankViewState extends State<ProblemBankView> {
   void _clearQuestionSelection() {
     setState(() {
       _selectedQuestionIds.clear();
+      if (_showOnlySelectedQuestions) {
+        _showOnlySelectedQuestions = false;
+      }
     });
+  }
+
+  void _onToggleShowOnlySelectedFilter() {
+    if (_showOnlySelectedQuestions) {
+      setState(() => _showOnlySelectedQuestions = false);
+      return;
+    }
+    if (_selectedQuestionIds.isEmpty) {
+      _showSnack('선택된 문항이 없습니다.');
+      return;
+    }
+    setState(() => _showOnlySelectedQuestions = true);
+  }
+
+  List<LearningProblemQuestion> get _visibleQuestions {
+    if (!_showOnlySelectedQuestions) return _questions;
+    return _questions
+        .where((q) => _selectedQuestionIds.contains(q.id))
+        .toList(growable: false);
   }
 
   void _commitQuestionReorder({
@@ -1172,7 +1029,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
 
       String normalizeMathEngineValue(dynamic raw) {
         final v = '$raw'.trim().toLowerCase();
-        return v == 'xelatex' ? 'xelatex' : 'mathjax-svg';
+        return v == 'mathjax-svg' ? 'mathjax-svg' : 'xelatex';
       }
 
       Map<String, dynamic> buildRenderPatch(
@@ -1248,9 +1105,17 @@ class _ProblemBankViewState extends State<ProblemBankView> {
               setState(() {
                 _exportSettings = presetSettings;
                 _previewMathEngine = presetMathEngine;
+                final userModes =
+                    Map<String, String>.of(_selectedQuestionModes);
                 _selectedQuestionModes
                   ..clear()
                   ..addAll(presetModeMap);
+                for (final entry in userModes.entries) {
+                  if (entry.value.trim().isNotEmpty) {
+                    _selectedQuestionModes
+                        .putIfAbsent(entry.key, () => entry.value);
+                  }
+                }
               });
             }
             final subjectTitle =
@@ -3140,9 +3005,11 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                   bottom: 16,
                   child: ProblemBankBottomFabBar(
                     selectedCount: _selectedQuestionIds.length,
+                    showOnlySelectedActive: _showOnlySelectedQuestions,
                     isBusy: exportBusy,
                     onSelectAll: _selectAllQuestions,
                     onClearSelection: _clearQuestionSelection,
+                    onToggleShowOnlySelected: _onToggleShowOnlySelectedFilter,
                     onPreview: _openExportLayoutPreviewDialog,
                     onCreatePlaceholder: _showCreatePlaceholder,
                   ),
@@ -3165,7 +3032,9 @@ class _ProblemBankViewState extends State<ProblemBankView> {
             children: [
               Expanded(
                 child: Text(
-                  '문항 ${_questions.length}개 · 선택 ${_selectedQuestionIds.length}개',
+                  _showOnlySelectedQuestions
+                      ? '선택 문항만 표시 · ${_visibleQuestions.length}개 (전체 ${_questions.length}개)'
+                      : '문항 ${_questions.length}개 · 선택 ${_selectedQuestionIds.length}개',
                   style: const TextStyle(
                     fontSize: 14,
                     color: _rsTextMuted,
@@ -3208,6 +3077,19 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         ),
       );
     }
+    if (_showOnlySelectedQuestions && _visibleQuestions.isEmpty) {
+      return const Center(
+        child: Text(
+          '표시할 선택 문항이 없습니다.\n아래 장바구니를 다시 눌러 전체 목록으로 돌아가 주세요.',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: _rsTextMuted,
+            fontWeight: FontWeight.w700,
+            height: 1.5,
+          ),
+        ),
+      );
+    }
     return LayoutBuilder(
       builder: (context, constraints) {
         const spacing = 8.0;
@@ -3233,7 +3115,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           child: SizedBox(
             width: availableWidth,
             child: AnimatedReorderableGrid<LearningProblemQuestion>(
-              items: _questions,
+              items: _visibleQuestions,
               itemId: (q) => q.id,
               cardWidth: cardWidth,
               cardHeight: cardHeight,
@@ -3242,6 +3124,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
               scrollController: _questionGridScrollCtrl,
               dragAnchorStrategy: pointerDragAnchorStrategy,
               scrollBottomPadding: 120,
+              enableReorder: !_showOnlySelectedQuestions,
               itemBuilder: (context, question) {
                 final selected = _selectedQuestionIds.contains(question.id);
                 return GestureDetector(

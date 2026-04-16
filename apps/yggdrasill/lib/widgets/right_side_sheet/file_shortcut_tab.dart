@@ -1650,10 +1650,10 @@ class _FileCardState extends State<_FileCard> {
       dialogContext = await dialogContextCompleter.future;
       await run(progressText);
     } finally {
-      progressText.dispose();
       if (dialogContext != null && dialogContext.mounted) {
         Navigator.of(dialogContext, rootNavigator: true).pop();
       }
+      progressText.dispose();
     }
   }
 

@@ -81,6 +81,10 @@ function normalizeMathSegment(mathContent) {
   out = out.replace(/\\left\s+\\([a-zA-Z]+)/g, '\\left\\\\$1');
   out = out.replace(/\\right\s+\\([a-zA-Z]+)/g, '\\right\\\\$1');
 
+  out = out.replace(/\\left\|/g, '\\left|\\,');
+  out = out.replace(/\\right\|/g, '\\,\\right|');
+  out = out.replace(/(?<!\\left|\\right)\|([^|]+)\|/g, '\\left|\\,$1\\,\\right|');
+
   return out;
 }
 
@@ -280,9 +284,9 @@ function renderDecoBoxLatex(lines, equations) {
     '  enhanced,',
     '  width=\\dimexpr\\linewidth-1em\\relax,',
     '  colback=white, colframe=black, boxrule=0.4pt,',
-    '  arc=0pt, left=8pt, right=8pt, top=4pt, bottom=4pt',
+    '  arc=0pt, left=8pt, right=8pt, top=10pt, bottom=10pt',
     ']',
-    '\\lineskiplimit=5pt\\lineskip=1.2em',
+    '\\lineskiplimit=3pt\\lineskip=0.86em',
     contentParts.join('\n'),
     '\\end{tcolorbox}',
   ].join('\n');
@@ -366,7 +370,7 @@ function renderChoicesLatex(choices, equations) {
     const text = typeof c === 'string' ? c : c?.text || c?.label || '';
     const label = CIRCLED_DIGITS[i] || String(i + 1);
     const content = smartTexLine(text, equations);
-    return `\\hangindent=2em\\hangafter=1\\noindent\\makebox[2em][l]{${label}}${content}`;
+    return `\\hangindent=1.5em\\hangafter=1\\noindent\\makebox[1.5em][l]{${label}}${content}`;
   });
   return [
     '{' + CHOICE_STRETCH,
@@ -426,8 +430,9 @@ function buildPreamble({
   paper, fontFamily, fontBold, fontRegularPath, fontSize,
   subjectTitle, profile,
   hidePreviewHeader = false,
+  geometryOverride = '',
 }) {
-  const geom = paperGeometry(paper);
+  const geom = geometryOverride || paperGeometry(paper);
   const mainFont = fontFamily || 'Malgun Gothic';
   const boldFont = fontBold || `${mainFont} Bold`;
   const size = fontSize || 11;
@@ -491,11 +496,12 @@ function buildPreamble({
 /*  Render one question                                                */
 /* ------------------------------------------------------------------ */
 
-function renderOneQuestion(question, { sectionLabel, showQuestionNumber = true } = {}) {
+function renderOneQuestion(question, { sectionLabel, showQuestionNumber = true, mode } = {}) {
   const qNum = question?.question_number || question?.questionNumber || '';
   const stem = question?.stem || '';
   const equations = question?.equations || [];
-  const choices = question?.choices || [];
+  const qMode = mode || question?.mode || question?.questionMode || 'objective';
+  const choices = qMode === 'objective' ? (question?.choices || []) : [];
 
   const parts = [];
 
@@ -533,16 +539,14 @@ function renderOneQuestion(question, { sectionLabel, showQuestionNumber = true }
     } else if (seg.type === 'bogi') {
       parts.push('\\vspace{4pt}');
       parts.push(renderBogiBoxLatex(seg.lines, equations));
-      parts.push('\\vspace{4pt}');
     } else if (seg.type === 'deco') {
       parts.push('\\vspace{4pt}');
       parts.push(renderDecoBoxLatex(seg.lines, equations));
-      parts.push('\\vspace{4pt}');
     }
   }
 
   if (choices.length > 0) {
-    parts.push('\\vspace{4pt}');
+    parts.push('\\vspace{6pt}');
     parts.push(renderChoicesLatex(choices, equations));
   }
 
@@ -642,7 +646,7 @@ function renderMockSlotColumnBody(
 
 function renderMockGridPageLatex(
   pageQuestions,
-  { leftSlots, rightSlots, showQuestionNumber = true },
+  { leftSlots, rightSlots, showQuestionNumber = true, isFirstPage = false },
 ) {
   const safeLeftSlots = Math.max(1, Number(leftSlots || 1));
   const safeRightSlots = Math.max(1, Number(rightSlots || 1));
@@ -652,10 +656,14 @@ function renderMockGridPageLatex(
   const leftGapExpr = safeLeftSlots > 1 ? `${safeLeftSlots - 1}\\mockSlotGap` : '0pt';
   const rightGapExpr = safeRightSlots > 1 ? `${safeRightSlots - 1}\\mockSlotGap` : '0pt';
 
+  const heightCalc = isFirstPage
+    ? '\\setlength{\\mockColumnHeight}{\\dimexpr\\pagegoal-\\pagetotal-4pt\\relax}'
+    : '\\setlength{\\mockColumnHeight}{\\textheight}';
+
   return [
     '\\begingroup',
     '\\setlength{\\mockSlotGap}{8pt}',
-    '\\setlength{\\mockColumnHeight}{\\dimexpr\\pagegoal-\\pagetotal-4pt\\relax}',
+    heightCalc,
     '\\ifdim\\mockColumnHeight<180pt\\setlength{\\mockColumnHeight}{180pt}\\fi',
     `\\setlength{\\mockLeftSlotHeight}{\\dimexpr(\\mockColumnHeight-${leftGapExpr})/${safeLeftSlots}\\relax}`,
     `\\setlength{\\mockRightSlotHeight}{\\dimexpr(\\mockColumnHeight-${rightGapExpr})/${safeRightSlots}\\relax}`,
@@ -676,6 +684,19 @@ function renderMockGridPageLatex(
   ].join('\n');
 }
 
+function parsePageColumnOverrides(raw) {
+  if (!Array.isArray(raw)) return {};
+  const out = {};
+  for (const entry of raw) {
+    const pageIdx = Number(entry?.pageIndex ?? entry?.page ?? entry?.pageNo ?? -1);
+    const left = Number(entry?.left ?? entry?.leftCount ?? entry?.col1 ?? -1);
+    const right = Number(entry?.right ?? entry?.rightCount ?? entry?.col2 ?? -1);
+    if (pageIdx < 1 || left < 0 || right < 0) continue;
+    out[pageIdx - 1] = { left: Math.max(1, left), right: Math.max(0, right) };
+  }
+  return out;
+}
+
 export function buildDocumentTexSource(questions, options = {}) {
   const {
     paper = 'B4',
@@ -690,12 +711,15 @@ export function buildDocumentTexSource(questions, options = {}) {
     maxQuestionsPerPage = 0,
     hidePreviewHeader = false,
     hideQuestionNumber = false,
+    geometryOverride = '',
+    pageColumnQuestionCounts = null,
   } = options;
 
   const preamble = buildPreamble({
     paper, fontFamily, fontBold, fontRegularPath, fontSize,
     subjectTitle, profile,
     hidePreviewHeader,
+    geometryOverride,
   });
 
   const parts = [preamble];
@@ -722,14 +746,36 @@ export function buildDocumentTexSource(questions, options = {}) {
       parts.push('\\hrule\\vspace{8pt}\n');
     }
 
-    const pages = chunkQuestionsForMockGrid(qList, qPerPage);
+    const overrides = parsePageColumnOverrides(pageColumnQuestionCounts);
+    const hasOverrides = Object.keys(overrides).length > 0;
+
+    let pages;
+    if (hasOverrides) {
+      pages = [];
+      let cursor = 0;
+      let pageNo = 0;
+      while (cursor < qList.length) {
+        const ov = overrides[pageNo];
+        const perPage = ov ? (ov.left + ov.right) : qPerPage;
+        pages.push(qList.slice(cursor, cursor + perPage));
+        cursor += perPage;
+        pageNo += 1;
+      }
+    } else {
+      pages = chunkQuestionsForMockGrid(qList, qPerPage);
+    }
+
     for (let i = 0; i < pages.length; i += 1) {
       if (i > 0) parts.push('\\newpage\n');
+      const ov = overrides[i];
+      const pageLeftSlots = ov ? ov.left : leftSlots;
+      const pageRightSlots = ov ? ov.right : rightSlots;
       parts.push(
         renderMockGridPageLatex(pages[i], {
-          leftSlots,
-          rightSlots,
+          leftSlots: pageLeftSlots,
+          rightSlots: pageRightSlots,
           showQuestionNumber: !hideQuestionNumber,
+          isFirstPage: i === 0,
         }),
       );
       parts.push('\n');
@@ -750,19 +796,28 @@ export function buildDocumentTexSource(questions, options = {}) {
       parts.push(`\\begin{multicols}{${columns}}\n`);
     }
 
+    const forcePagePerQuestion =
+      parsePositiveInt(maxQuestionsPerPage, 0) === 1 && columns < 2;
+
     for (let i = 0; i < qList.length; i++) {
-      if (i > 0) parts.push('\\vspace{10pt}\n');
+      if (i > 0) {
+        if (forcePagePerQuestion) {
+          parts.push('\\newpage\n');
+        } else {
+          parts.push('\\vspace{10pt}\n');
+        }
+      }
 
       const q = qList[i];
       let sectionLabel = null;
+      const qMode = q?.mode || q?.questionMode || 'objective';
 
       if (isMock) {
-        const mode = q?.mode || q?.questionMode || 'objective';
-        if (mode !== lastMode) {
-          if (mode === 'objective') sectionLabel = '5지선다형';
-          else if (mode === 'essay') sectionLabel = '서술형';
+        if (qMode !== lastMode) {
+          if (qMode === 'objective') sectionLabel = '5지선다형';
+          else if (qMode === 'essay') sectionLabel = '서술형';
           else sectionLabel = '단답형';
-          lastMode = mode;
+          lastMode = qMode;
         }
       }
 
@@ -770,6 +825,7 @@ export function buildDocumentTexSource(questions, options = {}) {
         renderOneQuestion(q, {
           sectionLabel,
           showQuestionNumber: !hideQuestionNumber,
+          mode: qMode,
         }),
       );
       parts.push('\n');

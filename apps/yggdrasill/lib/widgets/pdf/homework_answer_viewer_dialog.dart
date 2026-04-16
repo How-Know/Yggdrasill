@@ -155,8 +155,15 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
   static final Map<String, _ViewerCacheState> _viewCacheByKey =
       <String, _ViewerCacheState>{};
   static const bool _restoreDebugLog = true;
+  static const Duration _kDoubleTapWindow = Duration(milliseconds: 260);
+  static const Duration _kSwipeMaxDuration = Duration(milliseconds: 460);
+  static const double _kTapMoveThreshold = 12;
+  static const double _kDoubleTapDistanceThreshold = 28;
+  static const double _kSwipeDistanceThreshold = 84;
+  static const double _kSwipeOffAxisThreshold = 64;
 
   final PdfViewerController _viewerController = PdfViewerController();
+  final Set<int> _activePointerIds = <int>{};
   int _pageNumber = 1;
   int _lockedPageNumber = 1;
   int _pageCount = 0;
@@ -173,6 +180,16 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
   Offset? _cachedInitialPanRangeRatio;
   List<double>? _cachedInitialMatrixStorage;
   Size? _cachedInitialViewSize;
+  double? _baselineZoom;
+  bool _hasCachedViewState = false;
+  bool _chromeVisible = true;
+  int? _gesturePointerId;
+  Offset? _gestureStartPos;
+  DateTime? _gestureStartAt;
+  bool _gestureCancelled = false;
+  DateTime? _lastTapAt;
+  Offset? _lastTapPos;
+  Timer? _singleTapTimer;
   static const double _minUserZoom = 0.35;
   static const double _maxUserZoom = 10.0;
 
@@ -191,6 +208,18 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
 
   String get _cacheKey => (widget.cacheKey ?? '').trim();
 
+  bool get _useBaselineAsMinScale =>
+      !_hasCachedViewState &&
+      _baselineZoom != null &&
+      _baselineZoom!.isFinite;
+
+  double get _effectiveMinScale {
+    if (_useBaselineAsMinScale) {
+      return _baselineZoom!.clamp(_minUserZoom, _maxUserZoom).toDouble();
+    }
+    return _minUserZoom;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -201,6 +230,7 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
     if (key.isNotEmpty) {
       final cached = _viewCacheByKey[key];
       if (cached != null && cached.page > 0) {
+        _hasCachedViewState = true;
         _pageNumber = cached.page;
         _lockedPageNumber = cached.page;
         _sliderPage = cached.page.toDouble();
@@ -245,6 +275,9 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
 
   @override
   void dispose() {
+    _singleTapTimer?.cancel();
+    _singleTapTimer = null;
+    _activePointerIds.clear();
     super.dispose();
   }
 
@@ -306,6 +339,211 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
       'save key="$key" page=$pageNow zoom=${_fmtNum(zoom)} center=${_fmtOffset(center)} '
       'pageRatio=${_fmtOffset(pageCenterRatio)} panRatio=${_fmtOffset(panRangeRatio)} '
       'view=(${_fmtNum(viewSize?.width)}, ${_fmtNum(viewSize?.height)})',
+    );
+  }
+
+  double _zoomToleranceFor(double baselineZoom) {
+    return math.max(0.015, baselineZoom * 0.025);
+  }
+
+  bool _isNearBaselineZoom(double currentZoom) {
+    final baseline = _baselineZoom;
+    if (baseline == null || !baseline.isFinite) return false;
+    return (currentZoom - baseline).abs() <= _zoomToleranceFor(baseline);
+  }
+
+  Rect? _pageRectForNumber(int pageNumber) {
+    if (!_viewerController.isReady) return null;
+    final layouts = _viewerController.layout.pageLayouts;
+    if (layouts.isEmpty) return null;
+    final safePage = pageNumber.clamp(1, layouts.length).toInt();
+    final idx = (safePage - 1).clamp(0, layouts.length - 1).toInt();
+    if (idx < 0 || idx >= layouts.length) return null;
+    return layouts[idx];
+  }
+
+  Rect? _currentPageRect() {
+    final currentPage = (_viewerController.pageNumber ?? _lockedPageNumber)
+        .clamp(1, _pageCount <= 0 ? 1 : _pageCount)
+        .toInt();
+    return _pageRectForNumber(currentPage);
+  }
+
+  double _fitHeightZoomForPage(Rect pageRect, Size viewSize) {
+    if (pageRect.height <= 0 || viewSize.height <= 0) return _minUserZoom;
+    return (viewSize.height / pageRect.height)
+        .clamp(_minUserZoom, _maxUserZoom)
+        .toDouble();
+  }
+
+  double _fitWidthZoomForPage(Rect pageRect, Size viewSize) {
+    if (pageRect.width <= 0 || viewSize.width <= 0) return _minUserZoom;
+    return (viewSize.width / pageRect.width)
+        .clamp(_minUserZoom, _maxUserZoom)
+        .toDouble();
+  }
+
+  void _refreshBaselineZoomForPage(int pageNumber) {
+    final rect = _pageRectForNumber(pageNumber);
+    if (rect == null) return;
+    final next = _fitHeightZoomForPage(rect, _viewerController.viewSize);
+    final prev = _baselineZoom;
+    if (prev != null && (prev - next).abs() < 0.0005) return;
+    if (!mounted) {
+      _baselineZoom = next;
+      return;
+    }
+    setState(() => _baselineZoom = next);
+  }
+
+  void _toggleChromeVisibility() {
+    if (!mounted) return;
+    setState(() => _chromeVisible = !_chromeVisible);
+  }
+
+  bool _canSwipeTurnPage() {
+    if (!_showDocument || !_viewerController.isReady || _pageCount <= 1) {
+      return false;
+    }
+    return _isNearBaselineZoom(_viewerController.currentZoom);
+  }
+
+  void _cancelPendingSingleTap() {
+    _singleTapTimer?.cancel();
+    _singleTapTimer = null;
+  }
+
+  void _onViewerPointerDown(PointerDownEvent event) {
+    _activePointerIds.add(event.pointer);
+    if (_activePointerIds.length != 1) {
+      _gestureCancelled = true;
+      return;
+    }
+    _gesturePointerId = event.pointer;
+    _gestureStartPos = event.position;
+    _gestureStartAt = DateTime.now();
+    _gestureCancelled = false;
+  }
+
+  void _onViewerPointerMove(PointerMoveEvent event) {
+    if (event.pointer != _gesturePointerId) return;
+    if (_activePointerIds.length > 1) {
+      _gestureCancelled = true;
+    }
+  }
+
+  void _onViewerPointerCancel(PointerCancelEvent event) {
+    _activePointerIds.remove(event.pointer);
+    if (event.pointer != _gesturePointerId) return;
+    _gesturePointerId = null;
+    _gestureStartPos = null;
+    _gestureStartAt = null;
+    _gestureCancelled = false;
+  }
+
+  void _onViewerPointerUp(PointerUpEvent event) {
+    _activePointerIds.remove(event.pointer);
+    if (event.pointer != _gesturePointerId) return;
+    final startedAt = _gestureStartAt;
+    final startedPos = _gestureStartPos;
+    final cancelled = _gestureCancelled || _activePointerIds.isNotEmpty;
+    _gesturePointerId = null;
+    _gestureStartPos = null;
+    _gestureStartAt = null;
+    _gestureCancelled = false;
+    if (cancelled || startedAt == null || startedPos == null) return;
+
+    final now = DateTime.now();
+    final elapsed = now.difference(startedAt);
+    final delta = event.position - startedPos;
+    if (_canSwipeTurnPage() &&
+        elapsed <= _kSwipeMaxDuration &&
+        delta.dy.abs() <= _kSwipeOffAxisThreshold &&
+        delta.dx.abs() >= _kSwipeDistanceThreshold) {
+      _cancelPendingSingleTap();
+      _lastTapAt = null;
+      _lastTapPos = null;
+      if (delta.dx < 0) {
+        unawaited(_goNext());
+      } else {
+        unawaited(_goPrev());
+      }
+      return;
+    }
+
+    if (elapsed > const Duration(milliseconds: 320)) return;
+    if (delta.distance > _kTapMoveThreshold) return;
+    _handleTapCandidate(event.position, now);
+  }
+
+  void _handleTapCandidate(Offset position, DateTime now) {
+    final lastAt = _lastTapAt;
+    final lastPos = _lastTapPos;
+    final isDoubleTap = lastAt != null &&
+        lastPos != null &&
+        now.difference(lastAt) <= _kDoubleTapWindow &&
+        (position - lastPos).distance <= _kDoubleTapDistanceThreshold;
+    if (isDoubleTap) {
+      _cancelPendingSingleTap();
+      _lastTapAt = null;
+      _lastTapPos = null;
+      unawaited(_handleViewerDoubleTap());
+      return;
+    }
+
+    _lastTapAt = now;
+    _lastTapPos = position;
+    _cancelPendingSingleTap();
+    _singleTapTimer = Timer(_kDoubleTapWindow, () {
+      _lastTapAt = null;
+      _lastTapPos = null;
+      if (!mounted) return;
+      _toggleChromeVisibility();
+    });
+  }
+
+  Future<void> _handleViewerDoubleTap() async {
+    if (!_showDocument || !_viewerController.isReady) return;
+    final pageRect = _currentPageRect();
+    if (pageRect == null) return;
+
+    final baseline = (_baselineZoom ??
+            _fitHeightZoomForPage(pageRect, _viewerController.viewSize))
+        .clamp(_minUserZoom, _maxUserZoom)
+        .toDouble();
+    final prevBaseline = _baselineZoom;
+    if (prevBaseline == null || (prevBaseline - baseline).abs() >= 0.0005) {
+      if (mounted) {
+        setState(() => _baselineZoom = baseline);
+      } else {
+        _baselineZoom = baseline;
+      }
+    }
+    final fitWidthZoom = _fitWidthZoomForPage(
+      pageRect,
+      _viewerController.viewSize,
+    ).clamp(baseline, _maxUserZoom).toDouble();
+    final targetZoom =
+        _isNearBaselineZoom(_viewerController.currentZoom) ? fitWidthZoom : baseline;
+    final matrix = _viewerController.calcMatrixFor(
+      pageRect.center,
+      zoom: targetZoom,
+    );
+    await _viewerController.goTo(
+      matrix,
+      duration: const Duration(milliseconds: 140),
+    );
+    if (mounted) setState(() {});
+  }
+
+  Widget _buildGestureAwareViewer(Widget child) {
+    return Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: _onViewerPointerDown,
+      onPointerMove: _onViewerPointerMove,
+      onPointerUp: _onViewerPointerUp,
+      onPointerCancel: _onViewerPointerCancel,
+      child: child,
     );
   }
 
@@ -522,7 +760,7 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
       scaleEnabled: true,
       panAxis: PanAxis.free,
       maxScale: _maxUserZoom,
-      minScale: _minUserZoom,
+      minScale: _effectiveMinScale,
       useAlternativeFitScaleAsMinScale: false,
       scrollByMouseWheel: null,
       scrollHorizontallyByMouseWheel: false,
@@ -530,8 +768,12 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
       maxImageBytesCachedOnMemory: 220 * 1024 * 1024,
       calculateInitialZoom: (document, controller, fitZoom, coverZoom) {
         final cached = _cachedInitialZoom;
-        if (cached == null || !cached.isFinite) return fitZoom;
-        return cached.clamp(_minUserZoom, _maxUserZoom).toDouble();
+        if (cached == null || !cached.isFinite) {
+          final baseline = _baselineZoom;
+          if (baseline == null || !baseline.isFinite) return fitZoom;
+          return baseline.clamp(_effectiveMinScale, _maxUserZoom).toDouble();
+        }
+        return cached.clamp(_effectiveMinScale, _maxUserZoom).toDouble();
       },
       normalizeMatrix: (matrix, viewSize, layout, controller) {
         if (controller == null ||
@@ -539,11 +781,12 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
             layout.pageLayouts.isEmpty) {
           return matrix;
         }
+        final minScale = _effectiveMinScale;
         final int index =
             (_lockedPageNumber - 1).clamp(0, layout.pageLayouts.length - 1);
         final Rect pageRect = layout.pageLayouts[index];
         final double zoom =
-            matrix.zoom.clamp(_minUserZoom, _maxUserZoom).toDouble();
+            matrix.zoom.clamp(minScale, _maxUserZoom).toDouble();
         final Offset pos = matrix.calcPosition(viewSize);
         final double halfW = viewSize.width / 2 / zoom;
         final double halfH = viewSize.height / 2 / zoom;
@@ -598,6 +841,7 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
             anchor: PdfPageAnchor.center,
             duration: Duration.zero,
           );
+          _refreshBaselineZoomForPage(requested);
           bool matrixApplied = false;
           final cachedMatrixValues = _cachedInitialMatrixStorage;
           final cachedSize = _cachedInitialViewSize;
@@ -629,9 +873,12 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
           }
           Offset? center;
           final panRangeRatio = _cachedInitialPanRangeRatio;
+          final baseline = _baselineZoom;
           final double targetZoom =
-              (_cachedInitialZoom ?? controller.currentZoom)
-                  .clamp(_minUserZoom, _maxUserZoom)
+              (_hasCachedViewState
+                      ? (_cachedInitialZoom ?? controller.currentZoom)
+                      : (baseline ?? controller.currentZoom))
+                  .clamp(_effectiveMinScale, _maxUserZoom)
                   .toDouble();
           if (panRangeRatio != null &&
               requested >= 1 &&
@@ -668,6 +915,16 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
               );
             }
           }
+          if (center == null &&
+              !_hasCachedViewState &&
+              requested >= 1 &&
+              requested <= controller.layout.pageLayouts.length) {
+            final rect = controller.layout.pageLayouts[requested - 1];
+            center = rect.center;
+            _logRestore(
+              'use baselineCenter center=${_fmtOffset(center)} targetZoom=${_fmtNum(targetZoom)}',
+            );
+          }
           if (center != null) {
             final matrix = controller.calcMatrixFor(center, zoom: targetZoom);
             await controller.goTo(matrix, duration: Duration.zero);
@@ -698,6 +955,7 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
             _sliderPage = page.toDouble();
           }
         });
+        _refreshBaselineZoomForPage(page);
         _logRestore(
           'pageChanged page=$page zoom=${_fmtNum(_viewerController.isReady ? _viewerController.currentZoom : null)} '
           'center=${_fmtOffset(_viewerController.isReady ? _viewerController.centerPosition : null)}',
@@ -746,18 +1004,22 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
           ),
         );
       }
-      return PdfViewer.uri(
-        uri,
+      return _buildGestureAwareViewer(
+        PdfViewer.uri(
+          uri,
+          controller: _viewerController,
+          params: _viewerParams(),
+          initialPageNumber: _pageNumber,
+        ),
+      );
+    }
+    return _buildGestureAwareViewer(
+      PdfViewer.file(
+        source,
         controller: _viewerController,
         params: _viewerParams(),
         initialPageNumber: _pageNumber,
-      );
-    }
-    return PdfViewer.file(
-      source,
-      controller: _viewerController,
-      params: _viewerParams(),
-      initialPageNumber: _pageNumber,
+      ),
     );
   }
 
@@ -786,7 +1048,8 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
                       _showDocument ? _buildViewer() : const SizedBox.shrink(),
                 ),
               ),
-              Positioned(
+              if (_chromeVisible)
+                Positioned(
                 left: 8,
                 top: 8,
                 right: 8,
@@ -817,14 +1080,16 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
                   ],
                 ),
               ),
-              if (_showDocument && widget.overlayEntries.isNotEmpty)
+              if (_chromeVisible &&
+                  _showDocument &&
+                  widget.overlayEntries.isNotEmpty)
                 Positioned(
                   left: 14,
                   top: 92,
                   right: showPageSlider ? 78 : 14,
                   child: _buildChildOverlayPanel(context),
                 ),
-              if (showPageSlider)
+              if (_chromeVisible && showPageSlider)
                 Positioned(
                   right: 8,
                   top: 84,
@@ -961,14 +1226,15 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
                     ),
                   ),
                 ),
-              if (_hasGradingPanel)
+              if (_chromeVisible && _hasGradingPanel)
                 Positioned(
                   right: controlsRightInset,
                   top: 92,
                   bottom: 100,
                   child: _buildGradingAnswerPanel(context),
                 ),
-              Positioned(
+              if (_chromeVisible)
+                Positioned(
                 right: controlsRightInset,
                 bottom: 16,
                 child: Row(

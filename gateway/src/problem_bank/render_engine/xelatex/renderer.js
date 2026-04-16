@@ -150,6 +150,7 @@ export async function renderPdfWithXeLatex({
   const hidePreviewHeader = renderConfig?.hidePreviewHeader === true
     || renderConfig?.hideDocumentHeader === true;
   const hideQuestionNumber = renderConfig?.hideQuestionNumber === true;
+  const geometryOverride = String(renderConfig?.geometryOverride || '').trim();
   const fontFamily = fontFamilyResolved || fontFamilyRequested || 'Malgun Gothic';
   const isMockProfile = profile === 'mock' || profile === 'csat';
   const cols = (Number(layoutColumns || 1) >= 2 || isMockProfile) ? 2 : 1;
@@ -168,6 +169,8 @@ export async function renderPdfWithXeLatex({
       maxQuestionsPerPage: maxQuestionsPerPage || 0,
       hidePreviewHeader,
       hideQuestionNumber,
+      geometryOverride,
+      pageColumnQuestionCounts: renderConfig?.pageColumnQuestionCounts || null,
     });
 
     fs.writeFileSync(texPath, texSource, 'utf-8');

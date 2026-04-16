@@ -830,7 +830,6 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     if (academyId == null || academyId.isEmpty || questions.isEmpty) return;
     if (!_service.hasGateway) return;
 
-    const visibleFirstBatchSize = 24;
     final ordered = questions
         .where((q) => q.id.trim().isNotEmpty)
         .toList(growable: false);
@@ -844,286 +843,82 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           _pendingPreviewQuestionIds.clear();
         });
       }
-      _previewPollTimer?.cancel();
-      _previewPollTimer = null;
       return;
     }
-    final validIds = ordered.map((q) => q.id.trim()).toSet();
+
     if (mounted) {
       setState(() {
-        _questionPreviewUrls.removeWhere((id, _) => !validIds.contains(id));
-        _questionPreviewPdfUrls.removeWhere((id, _) => !validIds.contains(id));
-        _questionPreviewStatus.removeWhere((id, _) => !validIds.contains(id));
-        _questionPreviewErrors.removeWhere((id, _) => !validIds.contains(id));
-        _pendingPreviewQuestionIds.removeWhere((id) => !validIds.contains(id));
+        for (final q in ordered) {
+          _questionPreviewStatus[q.id.trim()] = 'rendering';
+        }
       });
     }
-    final firstBatch =
-        ordered.take(visibleFirstBatchSize).toList(growable: false);
-    final restBatch =
-        ordered.skip(visibleFirstBatchSize).toList(growable: false);
 
-    await _fetchQuestionPdfPreviewArtifactsBatch(
-      firstBatch,
-      createJobs: true,
-    );
-    if (restBatch.isNotEmpty) {
-      unawaited(_fetchQuestionPreviewArtifactsInChunks(restBatch));
-    }
-  }
+    final questionIds = ordered
+        .map((q) => q.questionUid.trim().isNotEmpty ? q.questionUid.trim() : q.id.trim())
+        .where((id) => id.isNotEmpty)
+        .toList(growable: false);
+    if (questionIds.isEmpty) return;
 
-  Map<String, dynamic> _buildPdfPreviewRenderConfig(
-    List<ProblemBankQuestion> questions,
-  ) {
-    final questionModeByUid = <String, String>{};
-    for (final question in questions) {
-      final uid = question.questionUid.trim().isNotEmpty
-          ? question.questionUid.trim()
-          : question.id.trim();
-      if (uid.isEmpty) continue;
-      final type = question.questionType.trim();
-      if (type == '서술형') {
-        questionModeByUid[uid] = 'essay';
-      } else if (type == '객관식') {
-        questionModeByUid[uid] = 'objective';
-      } else if (type == '주관식') {
-        questionModeByUid[uid] = 'subjective';
-      } else {
-        questionModeByUid[uid] = 'original';
-      }
-    }
-    return <String, dynamic>{
-      'mathEngine': 'xelatex',
-      'layoutColumns': 1,
-      'maxQuestionsPerPage': 4,
-      'includeAnswerSheet': false,
-      'includeExplanation': false,
-      'includeQuestionScore': false,
-      'questionMode': 'original',
-      'questionModeByQuestionUid': questionModeByUid,
-    };
-  }
-
-  Future<void> _fetchQuestionPreviewArtifactsInChunks(
-    List<ProblemBankQuestion> questions,
-  ) async {
-    const chunkSize = 18;
-    for (var i = 0; i < questions.length; i += chunkSize) {
-      if (!mounted) return;
-      final end = math.min(i + chunkSize, questions.length);
-      final chunk = questions.sublist(i, end);
-      await _fetchQuestionPdfPreviewArtifactsBatch(
-        chunk,
-        createJobs: true,
-      );
-      await Future<void>.delayed(const Duration(milliseconds: 120));
-    }
-  }
-
-  Future<void> _fetchQuestionPdfPreviewArtifactsBatch(
-    List<ProblemBankQuestion> batch, {
-    required bool createJobs,
-  }) async {
-    final academyId = _academyId;
-    if (academyId == null || academyId.isEmpty || batch.isEmpty) return;
-    if (!_service.hasGateway) return;
     final activeDocument = _activeDocument;
     final documentId = activeDocument?.id.trim() ?? '';
-    if (documentId.isEmpty) return;
+    final profile = _templateToProfile(_selectedTemplate);
+    final paperSize = profile == 'csat' ? 'B4' : 'A4';
 
     try {
-      final ids = batch
-          .map((q) => q.questionUid.trim().isNotEmpty ? q.questionUid.trim() : q.id.trim())
-          .where((id) => id.isNotEmpty)
-          .toList(growable: false);
-      if (ids.isEmpty) return;
-
-      final profile = _templateToProfile(_selectedTemplate);
-      final paperSize = profile == 'csat' ? 'B4' : 'A4';
-      final artifacts = await _service.fetchQuestionPdfPreviewArtifacts(
+      final urlMap = await _service.batchRenderThumbnails(
         academyId: academyId,
+        questionIds: questionIds,
         documentId: documentId,
-        questionIds: ids,
-        renderConfig: _buildPdfPreviewRenderConfig(batch),
         templateProfile: profile,
         paperSize: paperSize,
-        createJobs: createJobs,
       );
       if (!mounted) return;
-      if (artifacts.isEmpty) {
-        _markQuestionPreviewBatchFailed(
-          batch,
-          message: '서버 미리보기 응답이 비어 있습니다. 다시 시도해 주세요.',
-        );
-        return;
-      }
-      _applyQuestionPdfPreviewArtifacts(artifacts);
+
       final uidToId = <String, String>{};
-      for (final q in batch) {
+      for (final q in ordered) {
         final id = q.id.trim();
         final uid = q.questionUid.trim();
         if (id.isNotEmpty) uidToId[id] = id;
         if (uid.isNotEmpty && uid != id) uidToId[uid] = id;
       }
-      final returnedIds = <String>{};
-      for (final key in artifacts.keys) {
-        final mapped = uidToId[key.trim()] ?? key.trim();
-        if (mapped.isNotEmpty) returnedIds.add(mapped);
-      }
-      final missingIds = batch
-          .map((q) => q.id.trim())
-          .where((id) => id.isNotEmpty && !returnedIds.contains(id))
-          .toList(growable: false);
-      if (missingIds.isNotEmpty) {
-        _markQuestionPreviewIdsFailed(
-          missingIds,
-          message: '일부 문항의 서버 미리보기 응답이 누락되었습니다.',
-        );
-      }
+
+      setState(() {
+        for (final entry in urlMap.entries) {
+          final qid = uidToId[entry.key.trim()] ?? entry.key.trim();
+          if (qid.isEmpty) continue;
+          _questionPreviewUrls[qid] = entry.value;
+          _questionPreviewStatus[qid] = 'completed';
+          _questionPreviewErrors.remove(qid);
+        }
+        for (final q in ordered) {
+          final id = q.id.trim();
+          if (id.isNotEmpty && !_questionPreviewUrls.containsKey(id)) {
+            _questionPreviewStatus[id] = 'failed';
+            _questionPreviewErrors[id] = '서버 미리보기 응답에서 누락되었습니다.';
+          }
+        }
+        _pendingPreviewQuestionIds.clear();
+      });
     } catch (err) {
-      _markQuestionPreviewBatchFailed(
-        batch,
-        message: _normalizePreviewErrorMessage(err),
-      );
-    }
-  }
-
-  String _normalizePreviewErrorMessage(Object err) {
-    final raw = err.toString().trim();
-    if (raw.isEmpty) return '서버 미리보기 요청에 실패했습니다.';
-    if (raw.length <= 200) return raw;
-    return '${raw.substring(0, 200)}...';
-  }
-
-  void _markQuestionPreviewBatchFailed(
-    List<ProblemBankQuestion> batch, {
-    required String message,
-  }) {
-    _markQuestionPreviewIdsFailed(
-      batch.map((q) => q.id.trim()),
-      message: message,
-    );
-  }
-
-  void _markQuestionPreviewIdsFailed(
-    Iterable<String> questionIds, {
-    required String message,
-  }) {
-    if (!mounted) return;
-    final safeIds = questionIds
-        .map((id) => id.trim())
-        .where((id) => id.isNotEmpty)
-        .toSet();
-    if (safeIds.isEmpty) return;
-    final safeMessage = message.trim().isNotEmpty
-        ? message.trim()
-        : '서버 미리보기에 실패했습니다.';
-    setState(() {
-      for (final id in safeIds) {
-        _questionPreviewStatus[id] = 'failed';
-        _questionPreviewErrors[id] = safeMessage;
-        _pendingPreviewQuestionIds.remove(id);
-      }
-    });
-    _ensurePreviewArtifactPolling();
-  }
-
-  void _applyQuestionPdfPreviewArtifacts(
-    Map<String, ProblemBankPdfPreviewArtifact> artifacts,
-  ) {
-    if (!mounted) return;
-    final uidToId = <String, String>{};
-    for (final q in _questions) {
-      final uid = q.questionUid.trim();
-      final id = q.id.trim();
-      if (id.isNotEmpty) uidToId[id] = id;
-      if (uid.isNotEmpty && uid != id) uidToId[uid] = id;
-    }
-    setState(() {
-      for (final entry in artifacts.entries) {
-        final questionId = uidToId[entry.key.trim()] ?? entry.key.trim();
-        if (questionId.isEmpty) continue;
-        final artifact = entry.value;
-        if (artifact.thumbnailUrl.isNotEmpty) {
-          _questionPreviewUrls[questionId] = artifact.thumbnailUrl;
+      if (!mounted) return;
+      final msg = err.toString().trim();
+      setState(() {
+        for (final q in ordered) {
+          final id = q.id.trim();
+          if (id.isEmpty) continue;
+          _questionPreviewStatus[id] = 'failed';
+          _questionPreviewErrors[id] = msg.isNotEmpty ? msg : '서버 미리보기에 실패했습니다.';
         }
-        if (artifact.pdfUrl.isNotEmpty) {
-          _questionPreviewPdfUrls[questionId] = artifact.pdfUrl;
-        }
-        if (artifact.status.isNotEmpty) {
-          _questionPreviewStatus[questionId] = artifact.status;
-        }
-        if (artifact.error.isNotEmpty) {
-          _questionPreviewErrors[questionId] = artifact.error;
-        } else {
-          _questionPreviewErrors.remove(questionId);
-        }
-        if (artifact.isPending) {
-          _pendingPreviewQuestionIds.add(questionId);
-        } else {
-          _pendingPreviewQuestionIds.remove(questionId);
-        }
-      }
-    });
-    _ensurePreviewArtifactPolling();
-  }
-
-  void _ensurePreviewArtifactPolling() {
-    if (_pendingPreviewQuestionIds.isEmpty) {
-      _previewPollTimer?.cancel();
-      _previewPollTimer = null;
-      return;
+        _pendingPreviewQuestionIds.clear();
+      });
     }
-    if (_previewPollTimer != null) return;
-    _previewPollTimer = Timer.periodic(const Duration(milliseconds: 1800), (_) {
-      unawaited(_pollQuestionPreviewArtifacts());
-    });
-    unawaited(_pollQuestionPreviewArtifacts());
-  }
-
-  Future<void> _pollQuestionPreviewArtifacts() async {
-    final academyId = _academyId;
-    if (academyId == null || academyId.isEmpty) return;
-    if (_pendingPreviewQuestionIds.isEmpty) {
-      _previewPollTimer?.cancel();
-      _previewPollTimer = null;
-      return;
-    }
-    final pending = _questions
-        .where((q) => _pendingPreviewQuestionIds.contains(q.id.trim()))
-        .toList(growable: false);
-    if (pending.isEmpty) {
-      _previewPollTimer?.cancel();
-      _previewPollTimer = null;
-      return;
-    }
-    await _fetchQuestionPdfPreviewArtifactsBatch(
-      pending,
-      createJobs: false,
-    );
   }
 
   void _retryQuestionPreview(String questionId) {
-    ProblemBankQuestion? target;
-    for (final q in _questions) {
-      if (q.id == questionId) {
-        target = q;
-        break;
-      }
-    }
-    if (target == null) return;
-    setState(() {
-      _questionPreviewStatus[questionId] = 'queued';
-      _questionPreviewErrors.remove(questionId);
-      _pendingPreviewQuestionIds.add(questionId);
-    });
-    _ensurePreviewArtifactPolling();
-    unawaited(
-      _fetchQuestionPdfPreviewArtifactsBatch(
-        <ProblemBankQuestion>[target],
-        createJobs: true,
-      ),
-    );
+    final targets = _questions.where((q) => q.id == questionId).toList();
+    if (targets.isEmpty) return;
+    unawaited(_prefetchQuestionPreviewUrls(targets));
   }
 
   Future<String?> _saveAndRefreshPreview(ProblemBankQuestion q) async {
@@ -1162,10 +957,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         meta: mergedMeta,
       );
       if (!mounted) return null;
-      await _fetchQuestionPdfPreviewArtifactsBatch(
-        <ProblemBankQuestion>[q],
-        createJobs: true,
-      );
+      await _prefetchQuestionPreviewUrls(<ProblemBankQuestion>[q]);
       final newUrl = (_questionPreviewUrls[qId] ?? '').trim();
       if (!mounted) return null;
       setState(() {
@@ -2462,12 +2254,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         final dirtyQuestions = _questions
             .where((q) => dirtyIds.contains(q.id.trim()))
             .toList(growable: false);
-        unawaited(
-          _fetchQuestionPdfPreviewArtifactsBatch(
-            dirtyQuestions,
-            createJobs: true,
-          ),
-        );
+        unawaited(_prefetchQuestionPreviewUrls(dirtyQuestions));
       }
       if (doc != null) {
         await _loadDocumentContext(doc.id);

@@ -210,7 +210,11 @@ int _sgGrade(String sg) {
 }
 
 /// 학교·학년 라벨에 대해 시험명 후보 목록(날짜 선택 다이얼로그·요약 달력과 동일 규칙)
-List<String> examNamesForSchoolGradeLabel(String? sgLabel) {
+/// [levelHint]: 시험 위저드 등에서 과정이 확실할 때 넘기면, 학교명만으로 학생을 착각 매칭하지 않는다.
+List<String> examNamesForSchoolGradeLabel(
+  String? sgLabel, {
+  EducationLevel? levelHint,
+}) {
   if (sgLabel == null || sgLabel.isEmpty) {
     return _examNames.value.isEmpty ? <String>['수학'] : [..._examNames.value];
   }
@@ -222,12 +226,14 @@ List<String> examNamesForSchoolGradeLabel(String? sgLabel) {
     schoolName = m.group(1)!.trim();
     grade = int.tryParse(m.group(2)!);
   }
-  EducationLevel? level;
-  for (final s in DataManager.instance.students) {
-    if (s.student.school.trim() == schoolName &&
-        (grade == null || s.student.grade == grade)) {
-      level = s.student.educationLevel;
-      break;
+  EducationLevel? level = levelHint;
+  if (level == null) {
+    for (final s in DataManager.instance.students) {
+      if (s.student.school.trim() == schoolName &&
+          (grade == null || s.student.grade == grade)) {
+        level = s.student.educationLevel;
+        break;
+      }
     }
   }
   if (level == null) {
@@ -254,10 +260,12 @@ List<String> examNamesForSchoolGradeLabel(String? sgLabel) {
   return list;
 }
 
-bool _titleIsMathExamForSchoolGrade(String title, String sg) {
+bool _titleIsMathExamForSchoolGrade(String title, String sg,
+    {EducationLevel? levelHint}) {
   final t = title.trim();
   if (t.isEmpty) return false;
-  final allowed = examNamesForSchoolGradeLabel(sg).toSet();
+  final allowed =
+      examNamesForSchoolGradeLabel(sg, levelHint: levelHint).toSet();
   if (!allowed.contains(t)) return false;
   return t == '수학' || t.startsWith('수학');
 }
@@ -426,47 +434,217 @@ List<({String school, EducationLevel level, int grade})>
 // ===== 과목/배정 영속화 =====
 const String _kExamNamesKey = 'exam_names_json';
 const String _kExamAssignKey = 'exam_assign_json';
+const String _kExamMetaUpdatedAtKey = 'exam_meta_updated_at_iso';
+const String _kExamMetaLocalFileName = 'exam_meta_local_v1.json';
+
+class _ExamMetaState {
+  final DateTime? updatedAt;
+  final List<String> names;
+  final Map<String, Map<String, Set<int>>> assignments;
+  const _ExamMetaState({
+    required this.updatedAt,
+    required this.names,
+    required this.assignments,
+  });
+  bool get hasData => names.isNotEmpty || assignments.isNotEmpty;
+}
+
+Map<String, dynamic> _encodeExamAssignments() {
+  return <String, dynamic>{
+    for (final entry in _examAssignmentByName.entries)
+      entry.key: {
+        for (final e in entry.value.entries) e.key: e.value.toList()
+      }
+  };
+}
+
+Map<String, Map<String, Set<int>>> _decodeExamAssignments(dynamic raw) {
+  final out = <String, Map<String, Set<int>>>{};
+  if (raw is! Map) return out;
+  raw.forEach((name, m) {
+    final inner = <String, Set<int>>{};
+    if (m is Map) {
+      m.forEach((k, v) {
+        if (v is List) {
+          inner[k.toString()] = v.map((e) => (e as num).toInt()).toSet();
+        }
+      });
+    }
+    out[name.toString()] = inner;
+  });
+  return out;
+}
+
+void _applyExamMetaState(_ExamMetaState st) {
+  _examAssignmentByName
+    ..clear()
+    ..addAll(st.assignments);
+  final merged = <String>{...st.names, ..._examAssignmentByName.keys}.toList()
+    ..sort();
+  _examNames.value = List<String>.from(merged);
+}
+
+bool _isNewerExamMeta(DateTime? lhs, DateTime? rhs) {
+  final l = lhs?.millisecondsSinceEpoch ?? 0;
+  final r = rhs?.millisecondsSinceEpoch ?? 0;
+  return l > r;
+}
+
+Future<File> _examMetaLocalFile() async {
+  final dir = await getApplicationSupportDirectory();
+  return File('${dir.path}${Platform.pathSeparator}$_kExamMetaLocalFileName');
+}
+
+Future<_ExamMetaState> _readExamMetaFromPrefs(SharedPreferences prefs) async {
+  List<String> names = const <String>[];
+  final namesJson = prefs.getString(_kExamNamesKey);
+  if (namesJson != null && namesJson.isNotEmpty) {
+    try {
+      names = (jsonDecode(namesJson) as List).map((e) => e.toString()).toList();
+    } catch (_) {}
+  }
+
+  var assignments = <String, Map<String, Set<int>>>{};
+  final assignJson = prefs.getString(_kExamAssignKey);
+  if (assignJson != null && assignJson.isNotEmpty) {
+    try {
+      assignments = _decodeExamAssignments(jsonDecode(assignJson));
+    } catch (_) {}
+  }
+
+  final updatedAt =
+      DateTime.tryParse(prefs.getString(_kExamMetaUpdatedAtKey) ?? '');
+  return _ExamMetaState(
+    updatedAt: updatedAt,
+    names: List<String>.from(names),
+    assignments: assignments,
+  );
+}
+
+Future<_ExamMetaState?> _readExamMetaFromLocalFile() async {
+  try {
+    final file = await _examMetaLocalFile();
+    if (!await file.exists()) return null;
+    final raw = jsonDecode(await file.readAsString());
+    if (raw is! Map) return null;
+    final namesRaw = raw['names'];
+    final names = namesRaw is List
+        ? namesRaw.map((e) => e.toString()).toList()
+        : <String>[];
+    final assignments = _decodeExamAssignments(raw['assignments']);
+    final updatedAt = DateTime.tryParse('${raw['updated_at'] ?? ''}');
+    return _ExamMetaState(
+      updatedAt: updatedAt,
+      names: names,
+      assignments: assignments,
+    );
+  } catch (_) {
+    return null;
+  }
+}
+
+/// 동시에 `_saveExamMetaPrefs`가 여러 번 호출되면 마지막 저장이 이전 메모리 상태를
+/// 덮어써 시험명이 사라지는 현상이 생길 수 있어 직렬화한다.
+Future<void> _examMetaPrefsSaveChain = Future<void>.value();
 
 Future<void> _loadExamMetaPrefs() async {
   final prefs = await SharedPreferences.getInstance();
-  try {
-    final namesJson = prefs.getString(_kExamNamesKey);
-    if (namesJson != null && namesJson.isNotEmpty) {
-      final list =
-          (jsonDecode(namesJson) as List).map((e) => e.toString()).toList();
-      _examNames.value = List<String>.from(list);
+  final prefsState = await _readExamMetaFromPrefs(prefs);
+  final fileState = await _readExamMetaFromLocalFile();
+
+  _ExamMetaState chosen = prefsState;
+  if (fileState != null) {
+    final filePreferred = !prefsState.hasData ||
+        _isNewerExamMeta(fileState.updatedAt, prefsState.updatedAt);
+    if (filePreferred) {
+      chosen = fileState;
+      // 파일 쪽이 최신이면 prefs도 동기화해 다음 부팅에서 경로가 달라도 일관성 유지.
+      _applyExamMetaState(chosen);
+      await _persistExamMetaToPrefs(
+        prefs,
+        updatedAt: chosen.updatedAt ?? DateTime.now(),
+      );
+      return;
     }
-  } catch (_) {}
-  try {
-    final assignJson = prefs.getString(_kExamAssignKey);
-    if (assignJson != null && assignJson.isNotEmpty) {
-      final raw = jsonDecode(assignJson) as Map<String, dynamic>;
-      _examAssignmentByName.clear();
-      raw.forEach((name, m) {
-        final inner = <String, Set<int>>{};
-        (m as Map<String, dynamic>).forEach((k, v) {
-          inner[k] = (v as List).map((e) => (e as num).toInt()).toSet();
-        });
-        _examAssignmentByName[name] = inner;
-      });
-    }
-  } catch (_) {}
+  }
+
+  _applyExamMetaState(chosen);
+  // prefs 쪽이 최신이면 로컬 파일 백업도 갱신.
+  if (chosen.hasData &&
+      (fileState == null ||
+          _isNewerExamMeta(chosen.updatedAt, fileState.updatedAt))) {
+    await _persistExamMetaToLocalFile(
+      updatedAt: chosen.updatedAt ?? DateTime.now(),
+    );
+  }
 }
 
-Future<void> _saveExamMetaPrefs() async {
+Future<void> _saveExamMetaPrefs() {
+  _examMetaPrefsSaveChain = _examMetaPrefsSaveChain.then((_) async {
+    try {
+      await _saveExamMetaPrefsImpl();
+    } catch (_) {}
+  });
+  return _examMetaPrefsSaveChain;
+}
+
+Future<void> _saveExamMetaPrefsImpl() async {
   final prefs = await SharedPreferences.getInstance();
+  final now = DateTime.now();
+  final okPrefs = await _persistExamMetaToPrefs(prefs, updatedAt: now);
+  final okFile = await _persistExamMetaToLocalFile(updatedAt: now);
+  if (!(okPrefs || okFile)) {
+    rootScaffoldMessengerKey.currentState?.showSnackBar(
+      const SnackBar(
+        content: Text('시험 과목 설정 저장에 실패했습니다. 다시 시도해 주세요.'),
+      ),
+    );
+  }
+}
+
+Future<bool> _persistExamMetaToPrefs(
+  SharedPreferences prefs, {
+  required DateTime updatedAt,
+}) async {
+  var ok = true;
   try {
-    await prefs.setString(_kExamNamesKey, jsonEncode(_examNames.value));
-  } catch (_) {}
+    final r1 =
+        await prefs.setString(_kExamNamesKey, jsonEncode(_examNames.value));
+    ok = ok && r1;
+  } catch (_) {
+    ok = false;
+  }
   try {
-    final Map<String, dynamic> map = {
-      for (final entry in _examAssignmentByName.entries)
-        entry.key: {
-          for (final e in entry.value.entries) e.key: e.value.toList()
-        }
+    final r2 =
+        await prefs.setString(_kExamAssignKey, jsonEncode(_encodeExamAssignments()));
+    ok = ok && r2;
+  } catch (_) {
+    ok = false;
+  }
+  try {
+    final r3 =
+        await prefs.setString(_kExamMetaUpdatedAtKey, updatedAt.toIso8601String());
+    ok = ok && r3;
+  } catch (_) {
+    ok = false;
+  }
+  return ok;
+}
+
+Future<bool> _persistExamMetaToLocalFile({required DateTime updatedAt}) async {
+  try {
+    final file = await _examMetaLocalFile();
+    await file.parent.create(recursive: true);
+    final payload = <String, dynamic>{
+      'updated_at': updatedAt.toIso8601String(),
+      'names': _examNames.value,
+      'assignments': _encodeExamAssignments(),
     };
-    await prefs.setString(_kExamAssignKey, jsonEncode(map));
-  } catch (_) {}
+    await file.writeAsString(jsonEncode(payload), flush: true);
+    return true;
+  } catch (_) {
+    return false;
+  }
 }
 
 void main() async {
@@ -1521,13 +1699,15 @@ class _GlobalMemoOverlayState extends State<_GlobalMemoOverlay> {
 // 날짜 선택 다이얼로그(저장 가능, 이름 입력 다이얼로그에서 복귀)
 Future<Map<DateTime, List<String>>?> _openDateSelectAndSaveDialog(
     BuildContext context, List<DateTime> days,
-    {String? schoolGradeLabel}) async {
+    {String? schoolGradeLabel, EducationLevel? schoolGradeLevel}) async {
   final List<DateTime> sorted = [...days]..sort();
   final Map<DateTime, List<String>> localTitles = {};
   Map<DateTime, List<String>>? result;
 
-  final List<String> candidateNames =
-      examNamesForSchoolGradeLabel(schoolGradeLabel);
+  final List<String> candidateNames = examNamesForSchoolGradeLabel(
+    schoolGradeLabel,
+    levelHint: schoolGradeLevel,
+  );
   await showDialog<void>(
     context: context,
     barrierDismissible: true,
@@ -2038,13 +2218,14 @@ class _GlobalExamOverlayState extends State<_GlobalExamOverlay>
                         },
                       ),
                     ),
-                    // 하단 중앙 FAB 클러스터: 문제은행 탭 등에서 로컬 FAB와 겹치면 숨김
+                    // 하단 FAB 클러스터(레일 기준 왼쪽 정렬, 레일과 48 간격)
                     if (!suppressFabCluster)
                       Positioned(
-                        left: 0,
-                        right: 0,
-                        bottom: 30, // 필요 시 더 낮추려면 값 감소 (예: 48/40)
-                        child: Center(child: _ExamFabCluster()),
+                        left: (NavigationRailTheme.of(context).minWidth ??
+                                84.0) +
+                            48,
+                        bottom: 30,
+                        child: _ExamFabCluster(),
                       ),
                   ],
                 );
@@ -2078,37 +2259,70 @@ class _ExamFabCluster extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              _ExamActionButton(
-                  icon: Icons.event_note,
-                  label: '일정',
-                  onPressed: () async {
-                    await showDialog(
-                      context: rootNavigatorKey.currentContext!,
-                      barrierDismissible: false,
-                      builder: (ctx) => const _ExamScheduleDialog(),
-                    );
-                  }),
-              const SizedBox(width: 12),
-              _ExamActionButton(
-                  icon: Icons.assignment_turned_in,
-                  label: '기출',
-                  onPressed: () async {
-                    final nav = rootNavigatorKey.currentState;
-                    if (nav == null) return;
-                    await showDialog<void>(
-                      context: nav.context,
-                      builder: (ctx) => const PastExamPapersDialog(),
-                    );
-                  }),
-              const SizedBox(width: 12),
-              // 설정 버튼은 아이콘만
-              _ExamIconOnlyButton(
-                  icon: Icons.settings,
-                  onPressed: () async {
-                    await showDialog(
-                        context: rootNavigatorKey.currentContext!,
-                        builder: (ctx) => const _ExamSettingsDialog());
-                  }),
+              ValueListenableBuilder<bool>(
+                valueListenable:
+                    ExamModeService.instance.examScheduleDialogOpen,
+                builder: (context, scheduleDlgOpen, _) {
+                  return Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _ExamActionButton(
+                        icon: Icons.event_note,
+                        label: '일정',
+                        onPressed: scheduleDlgOpen
+                            ? null
+                            : () async {
+                                final navCtx = rootNavigatorKey.currentContext;
+                                if (navCtx == null) return;
+                                final openFlag =
+                                    ExamModeService.instance.examScheduleDialogOpen;
+                                if (openFlag.value) return;
+                                openFlag.value = true;
+                                try {
+                                  await showDialog(
+                                    context: navCtx,
+                                    barrierDismissible: false,
+                                    builder: (ctx) =>
+                                        const _ExamScheduleDialog(),
+                                  );
+                                } finally {
+                                  if (openFlag.value) {
+                                    openFlag.value = false;
+                                  }
+                                }
+                              },
+                      ),
+                      const SizedBox(width: 12),
+                      _ExamActionButton(
+                          icon: Icons.assignment_turned_in,
+                          label: '기출',
+                          onPressed: scheduleDlgOpen
+                              ? null
+                              : () async {
+                                  final nav = rootNavigatorKey.currentState;
+                                  if (nav == null) return;
+                                  await showDialog<void>(
+                                    context: nav.context,
+                                    builder: (ctx) =>
+                                        const PastExamPapersDialog(),
+                                  );
+                                }),
+                      const SizedBox(width: 12),
+                      // 설정 버튼은 아이콘만
+                      _ExamIconOnlyButton(
+                          icon: Icons.settings,
+                          onPressed: scheduleDlgOpen
+                              ? null
+                              : () async {
+                                  await showDialog(
+                                      context: rootNavigatorKey.currentContext!,
+                                      builder: (ctx) =>
+                                          const _ExamSettingsDialog());
+                                }),
+                    ],
+                  );
+                },
+              ),
               const SizedBox(width: 12),
               // 전광판: 저장된 시험일정 순환 표시
               _ExamTickerBoard(),
@@ -2225,48 +2439,55 @@ class _ExamTickerBoardState extends State<_ExamTickerBoard> {
 class _ExamActionButton extends StatelessWidget {
   final IconData icon;
   final String label;
-  final VoidCallback onPressed;
+  final VoidCallback? onPressed;
   const _ExamActionButton(
       {required this.icon, required this.label, required this.onPressed});
   @override
   Widget build(BuildContext context) {
+    final enabled = onPressed != null;
     return SizedBox(
       height: 49, // 10% 감소
-      child: Container(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(24),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.2),
-              spreadRadius: 1,
-              blurRadius: 4,
-              offset: const Offset(0, 2),
-            ),
-          ],
-        ),
-        child: Material(
-          color: Colors.transparent,
-          child: InkWell(
+      child: AnimatedOpacity(
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOut,
+        opacity: enabled ? 1.0 : 0.45,
+        child: Container(
+          decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(24),
-            onTap: onPressed,
-            child: Ink(
-              decoration: const ShapeDecoration(
-                color: Color(0xFF1B6B63),
-                shape: StadiumBorder(
-                    side: BorderSide(color: Colors.transparent, width: 0)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.2),
+                spreadRadius: 1,
+                blurRadius: 4,
+                offset: const Offset(0, 2),
               ),
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(icon, color: Colors.white, size: 22),
-                  const SizedBox(width: 9),
-                  Text(label,
-                      style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 15,
-                          fontWeight: FontWeight.w700)),
-                ],
+            ],
+          ),
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(24),
+              onTap: onPressed,
+              child: Ink(
+                decoration: const ShapeDecoration(
+                  color: Color(0xFF1B6B63),
+                  shape: StadiumBorder(
+                      side: BorderSide(color: Colors.transparent, width: 0)),
+                ),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(icon, color: Colors.white, size: 22),
+                    const SizedBox(width: 9),
+                    Text(label,
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700)),
+                  ],
+                ),
               ),
             ),
           ),
@@ -2278,38 +2499,44 @@ class _ExamActionButton extends StatelessWidget {
 
 class _ExamIconOnlyButton extends StatelessWidget {
   final IconData icon;
-  final VoidCallback onPressed;
+  final VoidCallback? onPressed;
   const _ExamIconOnlyButton({required this.icon, required this.onPressed});
   @override
   Widget build(BuildContext context) {
+    final enabled = onPressed != null;
     return SizedBox(
       height: 49, // 10% 감소
       width: 49,
-      child: Container(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(24),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.2),
-              spreadRadius: 1,
-              blurRadius: 4,
-              offset: const Offset(0, 2),
-            ),
-          ],
-        ),
-        child: Material(
-          color: Colors.transparent,
-          child: InkWell(
+      child: AnimatedOpacity(
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOut,
+        opacity: enabled ? 1.0 : 0.45,
+        child: Container(
+          decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(24),
-            onTap: onPressed,
-            child: Ink(
-              decoration: const ShapeDecoration(
-                color: Color(0xFF1B6B63),
-                shape: StadiumBorder(
-                    side: BorderSide(color: Colors.transparent, width: 0)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.2),
+                spreadRadius: 1,
+                blurRadius: 4,
+                offset: const Offset(0, 2),
               ),
-              child: const Center(
-                  child: Icon(Icons.settings, color: Colors.white, size: 22)),
+            ],
+          ),
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(24),
+              onTap: onPressed,
+              child: Ink(
+                decoration: const ShapeDecoration(
+                  color: Color(0xFF1B6B63),
+                  shape: StadiumBorder(
+                      side: BorderSide(color: Colors.transparent, width: 0)),
+                ),
+                child: Center(
+                    child: Icon(icon, color: Colors.white, size: 22)),
+              ),
             ),
           ),
         ),
@@ -3300,6 +3527,11 @@ class _ExamScheduleDialogState extends State<_ExamScheduleDialog> {
     _runInitialLoad();
   }
 
+  @override
+  void dispose() {
+    super.dispose();
+  }
+
   Future<void> _runInitialLoad() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -3495,32 +3727,24 @@ class _ExamScheduleDialogState extends State<_ExamScheduleDialog> {
                           child: Stack(
                             fit: StackFit.expand,
                             children: [
-                              // IndexedStack 비가시 자식에서 GlobalKey.currentState가
-                              // null로 남는 환경을 피하기 위해 둘 다 레이아웃·State 유지.
-                              IgnorePointer(
-                                ignoring: _examLevelTabIndex != 0,
-                                child: Opacity(
-                                  opacity:
-                                      _examLevelTabIndex == 0 ? 1.0 : 0.0,
-                                  child: _ExamScheduleWizard(
-                                    key: _middleKey,
-                                    schoolGrade: schoolGradeMiddle,
-                                    level: EducationLevel.middle,
-                                    onExamDataChanged: _onWizardExamDataChanged,
-                                  ),
+                              // 비활성 탭은 Offstage로 그리지 않음(Opacity만 쓰면 투명 레이어가
+                              // 겹쳐 보이거나 리스트가 섞여 보일 수 있음). State·GlobalKey는 유지.
+                              Offstage(
+                                offstage: _examLevelTabIndex != 0,
+                                child: _ExamScheduleWizard(
+                                  key: _middleKey,
+                                  schoolGrade: schoolGradeMiddle,
+                                  level: EducationLevel.middle,
+                                  onExamDataChanged: _onWizardExamDataChanged,
                                 ),
                               ),
-                              IgnorePointer(
-                                ignoring: _examLevelTabIndex != 1,
-                                child: Opacity(
-                                  opacity:
-                                      _examLevelTabIndex == 1 ? 1.0 : 0.0,
-                                  child: _ExamScheduleWizard(
-                                    key: _highKey,
-                                    schoolGrade: schoolGradeHigh,
-                                    level: EducationLevel.high,
-                                    onExamDataChanged: _onWizardExamDataChanged,
-                                  ),
+                              Offstage(
+                                offstage: _examLevelTabIndex != 1,
+                                child: _ExamScheduleWizard(
+                                  key: _highKey,
+                                  schoolGrade: schoolGradeHigh,
+                                  level: EducationLevel.high,
+                                  onExamDataChanged: _onWizardExamDataChanged,
                                 ),
                               ),
                             ],
@@ -3873,6 +4097,7 @@ Future<void> _openSubjectListDialog(BuildContext context) async {
                           list.add(trimmed);
                           _examNames.value = list;
                           await _saveExamMetaPrefs();
+                          if (ctxSB.mounted) setSB(() {});
                         }
                       }
                     },
@@ -3946,14 +4171,13 @@ Future<void> _openSubjectListDialog(BuildContext context) async {
                             const SizedBox(width: 8),
                             IconButton(
                               tooltip: '삭제',
-                              onPressed: () {
-                                setSB(() {
-                                  final list = [..._examNames.value]
-                                    ..remove(name);
-                                  _examNames.value = list;
-                                  _examAssignmentByName.remove(name);
-                                  _saveExamMetaPrefs();
-                                });
+                              onPressed: () async {
+                                final list = [..._examNames.value]..remove(name);
+                                _examNames.value = list;
+                                _examAssignmentByName.remove(name);
+                                if (ctxSB.mounted) setSB(() {});
+                                await _saveExamMetaPrefs();
+                                if (ctxSB.mounted) setSB(() {});
                               },
                               icon: const Icon(Icons.delete_outline,
                                   color: Colors.redAccent),
@@ -4561,109 +4785,143 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                           ConstrainedBox(
                             constraints: const BoxConstraints(
                                 minWidth: 90, maxWidth: 120),
-                            child: InkWell(
-                              borderRadius: BorderRadius.circular(8),
-                              onTap: () async {
-                                // 확인 다이얼로그
-                                final confirmed = await showDialog<bool>(
-                                  context: context,
-                                  builder: (ctx) {
-                                    return AlertDialog(
-                                      backgroundColor: kDlgBg,
-                                      shape: _examDlgShape(),
-                                      titlePadding: const EdgeInsets.fromLTRB(
-                                          24, 24, 24, 8),
-                                      contentPadding: const EdgeInsets.fromLTRB(
-                                          24, 8, 24, 8),
-                                      actionsPadding: const EdgeInsets.fromLTRB(
-                                          24, 0, 24, 20),
-                                      title: const Text('삭제 확인',
-                                          style: TextStyle(
-                                              color: kDlgText,
-                                              fontSize: 20,
-                                              fontWeight: FontWeight.w900)),
-                                      content: Text(
-                                          '$schoolName $gradeText 데이터를 삭제할까요?',
-                                          style: const TextStyle(
-                                              color: kDlgTextSub,
-                                              fontWeight: FontWeight.w600,
-                                              height: 1.35)),
-                                      actions: [
-                                        TextButton(
-                                            onPressed: () =>
-                                                Navigator.of(ctx).pop(false),
-                                            style: TextButton.styleFrom(
-                                                foregroundColor: kDlgTextSub,
-                                                padding:
-                                                    const EdgeInsets.symmetric(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                InkWell(
+                                  borderRadius: BorderRadius.circular(8),
+                                  onTap: () async {
+                                    // 확인 다이얼로그
+                                    final confirmed = await showDialog<bool>(
+                                      context: context,
+                                      builder: (ctx) {
+                                        return AlertDialog(
+                                          backgroundColor: kDlgBg,
+                                          shape: _examDlgShape(),
+                                          titlePadding:
+                                              const EdgeInsets.fromLTRB(
+                                                  24, 24, 24, 8),
+                                          contentPadding:
+                                              const EdgeInsets.fromLTRB(
+                                                  24, 8, 24, 8),
+                                          actionsPadding:
+                                              const EdgeInsets.fromLTRB(
+                                                  24, 0, 24, 20),
+                                          title: const Text('삭제 확인',
+                                              style: TextStyle(
+                                                  color: kDlgText,
+                                                  fontSize: 20,
+                                                  fontWeight: FontWeight.w900)),
+                                          content: Text(
+                                              '$schoolName $gradeText 데이터를 삭제할까요?',
+                                              style: const TextStyle(
+                                                  color: kDlgTextSub,
+                                                  fontWeight: FontWeight.w600,
+                                                  height: 1.35)),
+                                          actions: [
+                                            TextButton(
+                                                onPressed: () =>
+                                                    Navigator.of(ctx)
+                                                        .pop(false),
+                                                style: TextButton.styleFrom(
+                                                    foregroundColor:
+                                                        kDlgTextSub,
+                                                    padding: const EdgeInsets
+                                                        .symmetric(
                                                         horizontal: 20,
                                                         vertical: 14)),
-                                            child: const Text('취소')),
-                                        FilledButton(
-                                            onPressed: () =>
-                                                Navigator.of(ctx).pop(true),
-                                            style: FilledButton.styleFrom(
-                                                backgroundColor:
-                                                    const Color(0xFFD32F2F),
-                                                padding:
-                                                    const EdgeInsets.symmetric(
+                                                child: const Text('취소')),
+                                            FilledButton(
+                                                onPressed: () =>
+                                                    Navigator.of(ctx).pop(true),
+                                                style: FilledButton.styleFrom(
+                                                    backgroundColor:
+                                                        const Color(0xFFD32F2F),
+                                                    padding:
+                                                        const EdgeInsets
+                                                            .symmetric(
                                                         horizontal: 24,
                                                         vertical: 14),
-                                                shape: RoundedRectangleBorder(
-                                                    borderRadius:
-                                                        BorderRadius.circular(
-                                                            10))),
-                                            child: const Text('삭제',
-                                                style: TextStyle(
-                                                    color: Colors.white,
-                                                    fontWeight:
-                                                        FontWeight.w900))),
-                                      ],
+                                                    shape:
+                                                        RoundedRectangleBorder(
+                                                            borderRadius:
+                                                                BorderRadius
+                                                                    .circular(
+                                                                        10))),
+                                                child: const Text('삭제',
+                                                    style: TextStyle(
+                                                        color: Colors.white,
+                                                        fontWeight:
+                                                            FontWeight.w900))),
+                                          ],
+                                        );
+                                      },
                                     );
+                                    if (confirmed == true) {
+                                      final idx = item.lastIndexOf(' ');
+                                      final sch = idx > 0
+                                          ? item.substring(0, idx)
+                                          : item;
+                                      final gtext = idx > 0
+                                          ? item.substring(idx + 1)
+                                          : '';
+                                      final gnum = int.tryParse(gtext
+                                              .replaceAll('학년', '')) ??
+                                          0;
+                                      final level = widget.level ??
+                                          EducationLevel.middle;
+                                      await DataManager.instance.deleteExamData(
+                                          sch, level, gnum);
+                                      // 로컬 위저드 상태 및 프리로드 데이터 비우기
+                                      setState(() {
+                                        _savedBySchoolGrade.remove(item);
+                                        _rangesBySchoolGrade.remove(item);
+                                        _removePreloadedFor(item, level);
+                                        _selectedDaysBySchoolGrade
+                                            .remove(item);
+                                      });
+                                      notifyExamScheduleChanged();
+                                    }
                                   },
-                                );
-                                if (confirmed == true) {
-                                  final idx = item.lastIndexOf(' ');
-                                  final sch =
-                                      idx > 0 ? item.substring(0, idx) : item;
-                                  final gtext =
-                                      idx > 0 ? item.substring(idx + 1) : '';
-                                  final gnum = int.tryParse(
-                                          gtext.replaceAll('학년', '')) ??
-                                      0;
-                                  final level =
-                                      widget.level ?? EducationLevel.middle;
-                                  await DataManager.instance
-                                      .deleteExamData(sch, level, gnum);
-                                  // 로컬 위저드 상태 및 프리로드 데이터 비우기
-                                  setState(() {
-                                    _savedBySchoolGrade.remove(item);
-                                    _rangesBySchoolGrade.remove(item);
-                                    _removePreloadedFor(item, level);
-                                    _selectedDaysBySchoolGrade.remove(item);
-                                  });
-                                  notifyExamScheduleChanged();
-                                }
-                              },
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 10, vertical: 6),
-                                decoration: BoxDecoration(
-                                  color: Colors.transparent,
-                                  borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(color: Colors.transparent),
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 10, vertical: 6),
+                                    decoration: BoxDecoration(
+                                      color: Colors.transparent,
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(
+                                          color: Colors.transparent),
+                                    ),
+                                    child: Text(
+                                      schoolName,
+                                      style: TextStyle(
+                                          color: isSelectedSchool
+                                              ? kDlgText
+                                              : kDlgTextSub,
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.w700),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
                                 ),
-                                child: Text(
-                                  schoolName,
-                                  style: TextStyle(
-                                      color: isSelectedSchool
-                                          ? kDlgText
-                                          : kDlgTextSub,
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w700),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
+                                if (schoolNameLikelyMiddleWhenHighLevel(
+                                    schoolName,
+                                    widget.level ??
+                                        EducationLevel.middle))
+                                  Padding(
+                                    padding: const EdgeInsets.only(top: 4),
+                                    child: Text(
+                                      '고등인데 학교명이 중학교 형태입니다. 학생 정보에서 학교명을 수정해 주세요.',
+                                      style: TextStyle(
+                                        color: const Color(0xFFFFB74D),
+                                        fontSize: 10.5,
+                                        fontWeight: FontWeight.w600,
+                                        height: 1.25,
+                                      ),
+                                    ),
+                                  ),
+                              ],
                             ),
                           ),
                           const SizedBox(width: 8),
@@ -4752,7 +5010,9 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                                         final edited =
                                             await _openDateSelectAndSaveDialog(
                                                 context, [dateKey],
-                                                schoolGradeLabel: sg);
+                                                schoolGradeLabel: sg,
+                                                schoolGradeLevel: widget.level ??
+                                                    EducationLevel.middle);
                                         if (edited != null &&
                                             edited.isNotEmpty) {
                                           setState(() {
@@ -4772,7 +5032,9 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                                         final edited =
                                             await _openDateSelectAndSaveDialog(
                                                 context, [dateKey],
-                                                schoolGradeLabel: sg);
+                                                schoolGradeLabel: sg,
+                                                schoolGradeLevel: widget.level ??
+                                                    EducationLevel.middle);
                                         if (edited != null &&
                                             edited.isNotEmpty) {
                                           setState(() {
@@ -5134,7 +5396,9 @@ class _ExamScheduleWizardState extends State<_ExamScheduleWizard> {
                       final list = _selectedDays.toList()..sort();
                       final Map<DateTime, List<String>>? added =
                           await _openDateSelectAndSaveDialog(context, list,
-                              schoolGradeLabel: _selectedSchoolGrade);
+                              schoolGradeLabel: _selectedSchoolGrade,
+                              schoolGradeLevel: widget.level ??
+                                  EducationLevel.middle);
                       if (added != null) {
                         setState(() {
                           // 현재 선택한 학교-학년의 저장 정보에 합치기

@@ -5593,7 +5593,9 @@ Future<void> _showHomeworkChipDetailDialog(
   int assignmentCount,
 ) async {
   final bool isRunning =
-      HomeworkStore.instance.runningOf(studentId)?.id == hw.id || hw.phase == 2;
+      HomeworkStore.instance.runningOf(studentId)?.id == hw.id ||
+          hw.phase == 2 ||
+          hw.runStart != null;
   final int runningMs = hw.runStart != null
       ? DateTime.now().difference(hw.runStart!).inMilliseconds
       : 0;
@@ -7435,7 +7437,7 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
     bool hasConfirmed = false;
     int maxPhase = 1;
     int groupCycleBaseMs = 0;
-    int groupCycleProgressMs = 0;
+    int groupCycleProgressBaseMs = 0;
     int groupCheckCount = 0;
     int totalCount = 0;
     DateTime? latestUpdated;
@@ -7451,10 +7453,6 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
       if (child.phase == 3) hasSubmitted = true;
       if (child.phase == 4) hasConfirmed = true;
       if (child.phase > maxPhase) maxPhase = child.phase;
-      final int childRunningMs = child.runStart != null
-          ? DateTime.now().difference(child.runStart!).inMilliseconds
-          : 0;
-      final int childTotalMs = child.accumulatedMs + childRunningMs;
       int rawChildCycleBaseMs = child.cycleBaseAccumulatedMs;
       if (rawChildCycleBaseMs <= 0 &&
           child.phase == 1 &&
@@ -7469,10 +7467,10 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
             rawChildCycleBaseMs > 0 ? rawChildCycleBaseMs : child.accumulatedMs,
       );
       groupCycleBaseMs += childCycleBaseMs;
-      final int childCycleProgressMs =
-          math.max(0, childTotalMs - childCycleBaseMs);
-      if (childCycleProgressMs > groupCycleProgressMs) {
-        groupCycleProgressMs = childCycleProgressMs;
+      final int childCycleProgressBaseMs =
+          math.max(0, child.accumulatedMs - childCycleBaseMs);
+      if (childCycleProgressBaseMs > groupCycleProgressBaseMs) {
+        groupCycleProgressBaseMs = childCycleProgressBaseMs;
       }
       if (child.checkCount > groupCheckCount) {
         groupCheckCount = child.checkCount;
@@ -7541,13 +7539,19 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
         runtimeFirstStartedAt ??
         runtimeRunStart ??
         runningChild?.runStart;
-    final int groupTotalMs = (runtimePhase >= 1 && runtimePhase <= 4)
-        ? (runtimeAccumulatedMs +
-            ((phase == 2 && runtimeRunStart != null)
-                ? math.max(0,
-                    DateTime.now().difference(runtimeRunStart).inMilliseconds)
-                : 0))
-        : (groupCycleBaseMs + groupCycleProgressMs);
+    final bool hasRuntimeSnapshot = runtimePhase >= 1 && runtimePhase <= 4;
+    // 표시 계약 통일:
+    // - accumulatedMs: "러닝 delta 제외" 누적값(base)
+    // - runStart: 러닝 시작 시각(있으면 렌더 단계에서 1회 delta 가산)
+    // 이렇게 유지해야 그룹 요약 카드에서 시간이 2배로 증가하지 않는다.
+    final int groupAccumulatedBaseMs = hasRuntimeSnapshot
+        ? runtimeAccumulatedMs
+        : (groupCycleBaseMs + groupCycleProgressBaseMs);
+    final DateTime? groupRunStart = phase == 2
+        ? (hasRuntimeSnapshot
+            ? (runtimeRunStart ?? runningChild?.runStart)
+            : runningChild?.runStart)
+        : null;
     final HomeworkItem assignmentCodeSource = () {
       for (final child in children) {
         if (_formatHomeworkAssignmentCode(child.assignmentCode, fallback: '')
@@ -7583,10 +7587,9 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
       updatedAt: latestUpdated ?? first.updatedAt,
       status: HomeworkStatus.inProgress,
       phase: phase,
-      accumulatedMs: groupTotalMs,
+      accumulatedMs: groupAccumulatedBaseMs,
       cycleBaseAccumulatedMs: groupCycleBaseMs,
-      // baseline(합산) + 이번 사이클 진행(delta 1회) 형태로 그룹 타이머를 표현한다.
-      runStart: phase == 2 ? (runtimeRunStart ?? runningChild?.runStart) : null,
+      runStart: groupRunStart,
       completedAt: null,
       firstStartedAt: groupCycleStartedAt,
       submittedAt: latestSubmitted,
@@ -10401,7 +10404,9 @@ Widget _buildHomeworkChipVisual(
   Future<void> Function(HomeworkItem dragged)? onGroupChildDropToEnd,
 }) {
   final bool isRunning =
-      HomeworkStore.instance.runningOf(studentId)?.id == hw.id;
+      HomeworkStore.instance.runningOf(studentId)?.id == hw.id ||
+          hw.phase == 2 ||
+          hw.runStart != null;
   final int phase = hw.phase;
   final bool visualRunning = isReservation ? false : isRunning;
   final int visualPhase = isReservation ? 1 : phase;
@@ -12107,7 +12112,10 @@ class _AttendingButton extends StatelessWidget {
                           final bool hasAny = items.isNotEmpty;
                           final bool hasRunning =
                               HomeworkStore.instance.runningOf(studentId) !=
-                                  null;
+                                      null ||
+                                  items.any(
+                                    (e) => e.phase == 2 || e.runStart != null,
+                                  );
                           final bool isResting =
                               hasAny && !hasRunning; // 모든 칩 정지 → 휴식 상태
 

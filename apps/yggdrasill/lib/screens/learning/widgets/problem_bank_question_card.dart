@@ -98,7 +98,7 @@ class ProblemBankQuestionCard extends StatelessWidget {
       return SizedBox.expand(
         child: Image.network(
           previewImageUrl!,
-          fit: BoxFit.cover,
+          fit: BoxFit.fitWidth,
           alignment: Alignment.topCenter,
           loadingBuilder: (context, child, progress) {
             if (progress == null) return child;

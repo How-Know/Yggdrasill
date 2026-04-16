@@ -1913,6 +1913,49 @@ class ProblemBankService {
     }
   }
 
+  Future<Map<String, String>> batchRenderThumbnails({
+    required String academyId,
+    required List<String> questionIds,
+    String documentId = '',
+    Map<String, dynamic>? renderConfig,
+    String templateProfile = '',
+    String paperSize = '',
+  }) async {
+    if (!hasGateway || questionIds.isEmpty) return {};
+    try {
+      final body = <String, dynamic>{
+        'academyId': academyId,
+        'questionIds': questionIds,
+        'mathEngine': 'xelatex',
+      };
+      if (documentId.trim().isNotEmpty) body['documentId'] = documentId.trim();
+      if (templateProfile.trim().isNotEmpty) {
+        body['templateProfile'] = templateProfile.trim();
+      }
+      if (paperSize.trim().isNotEmpty) body['paperSize'] = paperSize.trim();
+      if (renderConfig != null && renderConfig.isNotEmpty) {
+        body['renderConfig'] = renderConfig;
+      }
+
+      final result = await _gatewayPost('/pb/preview/batch-render', body: body);
+      final thumbnails = result['thumbnails'];
+      if (thumbnails is! Map) return {};
+
+      final out = <String, String>{};
+      for (final entry in thumbnails.entries) {
+        final qid = '${entry.key}'.trim();
+        final value = entry.value;
+        if (value is Map) {
+          final url = '${value['url'] ?? ''}'.trim();
+          if (qid.isNotEmpty && url.isNotEmpty) out[qid] = url;
+        }
+      }
+      return out;
+    } catch (_) {
+      return {};
+    }
+  }
+
   Future<Map<String, ProblemBankPdfPreviewArtifact>>
       fetchQuestionPdfPreviewArtifacts({
     required String academyId,

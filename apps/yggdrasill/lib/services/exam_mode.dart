@@ -13,6 +13,10 @@ class ExamModeService {
   final ValueNotifier<bool> suppressExamActionCluster =
       ValueNotifier<bool>(false);
 
+  /// 시험 일정 다이얼로그가 열려 있는 동안 '일정' FAB 중복 오픈 방지.
+  final ValueNotifier<bool> examScheduleDialogOpen =
+      ValueNotifier<bool>(false);
+
   /// 인디케이터 커스텀 값
   final ValueNotifier<Color> indicatorColor = ValueNotifier<Color>(const Color(0xFFE53935));
   final ValueNotifier<double> speed = ValueNotifier<double>(1.0); // 1.0 = 기본 속도

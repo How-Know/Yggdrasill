@@ -1,8 +1,38 @@
 import 'dotenv/config';
 import http from 'node:http';
-import { createHash } from 'node:crypto';
-import { URL } from 'node:url';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import { createHash, randomUUID } from 'node:crypto';
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
+import { URL, fileURLToPath } from 'node:url';
 import { createClient } from '@supabase/supabase-js';
+import sharp from 'sharp';
+import { renderPdfWithXeLatex } from './problem_bank/render_engine/xelatex/renderer.js';
+
+const __api_dirname = path.dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = path.resolve(__api_dirname, '..', '..');
+
+function resolveBatchPreviewFont() {
+  const kopubPath = path.resolve(
+    REPO_ROOT, 'apps', 'yggdrasill', 'assets', 'fonts', 'kopub',
+    'KoPubWorldBatangProLight.otf',
+  );
+  if (fs.existsSync(kopubPath)) {
+    return { family: 'KoPubWorldBatangPro', path: kopubPath };
+  }
+  const hcrPath = path.resolve(
+    REPO_ROOT, 'apps', 'yggdrasill', 'assets', 'fonts', 'hancom',
+    'HCRBatang.ttf',
+  );
+  if (fs.existsSync(hcrPath)) {
+    return { family: 'HCRBatang', path: hcrPath };
+  }
+  return { family: 'Malgun Gothic', path: '' };
+}
+
+const execFileAsync = promisify(execFileCb);
 import {
   generateQuestionPreviews,
   getStoredPreviewUrls,
@@ -3219,6 +3249,207 @@ async function previewPdfArtifacts(res, req) {
   });
 }
 
+const BATCH_THUMB_BUCKET = process.env.PB_PREVIEW_THUMB_BUCKET || 'problem-previews';
+const BATCH_THUMB_WIDTH_PX = 820;
+const BATCH_THUMB_EXPIRES_SEC = 60 * 60 * 24 * 7;
+
+async function batchRenderThumbnails(res, req) {
+  console.log('[pb-api] POST /pb/preview/batch-render');
+  let body;
+  try { body = await readJson(req); } catch (_) {
+    sendJson(res, 400, { ok: false, error: 'invalid_json' }); return;
+  }
+
+  const academyId = String(body?.academyId || '').trim();
+  const rawQuestionIds = Array.isArray(body?.questionIds)
+    ? body.questionIds.map((v) => String(v || '').trim())
+    : [];
+  const questionIds = normalizeUuidListOrdered(rawQuestionIds);
+  const requestedDocumentId = String(body?.documentId || '').trim();
+
+  if (!isUuid(academyId) || questionIds.length === 0) {
+    sendJson(res, 400, { ok: false, error: 'academyId(uuid) and questionIds(uuid[]) required' });
+    return;
+  }
+
+  const { data: questionRowsById } = await supa
+    .from('pb_questions')
+    .select('id,question_uid,document_id,question_type,stem,choices,allow_objective,allow_subjective,objective_choices,objective_answer_key,subjective_answer,objective_generated,figure_refs,equations,confidence,flags,reviewer_notes,source_page,source_order,meta,question_number')
+    .eq('academy_id', academyId)
+    .in('id', questionIds);
+  let questionRows = questionRowsById || [];
+  const foundById = new Set(questionRows.map((r) => String(r?.id || '').trim()));
+  const missingByIdIds = questionIds.filter((id) => !foundById.has(id));
+  if (missingByIdIds.length > 0) {
+    const { data: byUidRows } = await supa
+      .from('pb_questions')
+      .select('id,question_uid,document_id,question_type,stem,choices,allow_objective,allow_subjective,objective_choices,objective_answer_key,subjective_answer,objective_generated,figure_refs,equations,confidence,flags,reviewer_notes,source_page,source_order,meta,question_number')
+      .eq('academy_id', academyId)
+      .in('question_uid', missingByIdIds);
+    if (byUidRows?.length) questionRows = [...questionRows, ...byUidRows];
+  }
+
+  const rowById = new Map();
+  for (const row of questionRows) {
+    const id = String(row?.id || '').trim();
+    const uid = String(row?.question_uid || '').trim();
+    if (id) rowById.set(id, row);
+    if (uid && uid !== id) rowById.set(uid, row);
+  }
+
+  const clientModeMap = body?.questionModeByQuestionUid || {};
+  const orderedQuestions = [];
+  const qidOrder = [];
+  for (const qid of questionIds) {
+    const row = rowById.get(qid);
+    if (!row) continue;
+    const uid = String(row?.question_uid || row?.id || '').trim();
+    const clientMode = clientModeMap[qid] || clientModeMap[uid] || '';
+    const mode = (clientMode === 'subjective' || clientMode === 'essay')
+      ? clientMode
+      : inferQuestionModeFromRow(row);
+    orderedQuestions.push({ ...row, mode, questionMode: mode });
+    qidOrder.push(qid);
+  }
+
+  if (orderedQuestions.length === 0) {
+    sendJson(res, 200, { ok: true, thumbnails: {} });
+    return;
+  }
+
+  const baseOptions = {
+    ...normalizeJsonObject(body?.options, {}),
+    ...normalizeJsonObject(body?.renderConfig, {}),
+  };
+  const templateProfile = normalizeTemplateProfile(
+    body?.templateProfile || body?.profile || baseOptions.templateProfile || 'csat',
+  );
+  const paperSize = normalizePaper(
+    body?.paperSize || body?.paper || baseOptions.paperSize || 'A4',
+  );
+
+  const PREVIEW_PAGE_WIDTH_MM = 115;
+  const PREVIEW_PAGE_HEIGHT_MM = 800;
+  const previewGeometry = `paperwidth=${PREVIEW_PAGE_WIDTH_MM}mm,paperheight=${PREVIEW_PAGE_HEIGHT_MM}mm,left=5mm,right=5mm,top=5mm,bottom=5mm`;
+  const batchFont = resolveBatchPreviewFont();
+
+  try {
+    const rendered = await renderPdfWithXeLatex({
+      questions: orderedQuestions,
+      renderConfig: {
+        hidePreviewHeader: true,
+        hideQuestionNumber: true,
+        mathEngine: 'xelatex',
+        ...baseOptions,
+        geometryOverride: previewGeometry,
+      },
+      profile: templateProfile,
+      paper: paperSize,
+      modeByQuestionId: Object.fromEntries(
+        orderedQuestions.map((q) => [String(q.question_uid || q.id), q.mode]),
+      ),
+      questionMode: 'objective',
+      layoutColumns: 1,
+      maxQuestionsPerPage: 1,
+      renderConfigVersion: EXPORT_RENDER_CONFIG_VERSION,
+      fontFamilyRequested: batchFont.family,
+      fontFamilyResolved: batchFont.family,
+      fontRegularPath: batchFont.path,
+      fontBoldPath: '',
+      fontSize: 11,
+    });
+
+    const pdfBytes = rendered.bytes;
+    const pageCount = rendered.pageCount || 0;
+
+    const tmpDir = path.join(os.tmpdir(), `pb-batch-${randomUUID()}`);
+    fs.mkdirSync(tmpDir, { recursive: true });
+    const tmpPdf = path.join(tmpDir, 'doc.pdf');
+    fs.writeFileSync(tmpPdf, pdfBytes);
+
+    try {
+      const dpi = Math.max(150, Math.round((BATCH_THUMB_WIDTH_PX / PREVIEW_PAGE_WIDTH_MM) * 25.4));
+      const pngBase = path.join(tmpDir, 'page');
+      await execFileAsync(
+        'pdftoppm',
+        ['-png', '-r', String(dpi), tmpPdf, pngBase],
+        { timeout: 120_000 },
+      );
+
+      const allFiles = fs.readdirSync(tmpDir)
+        .filter((f) => /^page-\d+\.png$/.test(f))
+        .sort();
+      let pngFiles = allFiles.map((f) => path.join(tmpDir, f));
+
+      if (pngFiles.length === 0) {
+        const singlePath = `${pngBase}.png`;
+        pngFiles = fs.existsSync(singlePath) ? [singlePath] : [];
+      }
+
+      const thumbnails = {};
+      const uploadPromises = [];
+
+      for (let i = 0; i < Math.min(pngFiles.length, qidOrder.length); i++) {
+        const qid = qidOrder[i];
+        const pngPath = pngFiles[i];
+        if (!fs.existsSync(pngPath)) continue;
+
+        uploadPromises.push(
+          (async () => {
+            const raw = fs.readFileSync(pngPath);
+            const meta = await sharp(raw).metadata();
+            const origW = meta.width || 1;
+            const origH = meta.height || 1;
+
+            let contentBottom = origH;
+            try {
+              const trimResult = await sharp(raw)
+                .trim({ background: { r: 255, g: 255, b: 255, alpha: 1 }, threshold: 10 })
+                .toBuffer({ resolveWithObject: true });
+              const tTop = Number(trimResult.info.trimOffsetTop) || 0;
+              const tH = Number(trimResult.info.height) || origH;
+              const padding = Math.max(100, Math.round(origH * 0.03));
+              contentBottom = Math.min(origH, tTop + tH + padding);
+            } catch (_) { /* keep full height */ }
+
+            const minH = Math.max(80, Math.round(origH * 0.05));
+            const cropH = Math.max(minH, contentBottom);
+            const cropped = await sharp(raw)
+              .extract({ left: 0, top: 0, width: origW, height: cropH })
+              .resize({ width: BATCH_THUMB_WIDTH_PX })
+              .png({ compressionLevel: 9 })
+              .toBuffer();
+
+            const storagePath = `${academyId}/batch-preview/${qid}.png`;
+            const { error: upErr } = await supa.storage
+              .from(BATCH_THUMB_BUCKET)
+              .upload(storagePath, cropped, { contentType: 'image/png', upsert: true });
+            if (upErr) {
+              thumbnails[qid] = { error: upErr.message };
+              return;
+            }
+            const { data: signedData } = await supa.storage
+              .from(BATCH_THUMB_BUCKET)
+              .createSignedUrl(storagePath, BATCH_THUMB_EXPIRES_SEC);
+            thumbnails[qid] = {
+              url: signedData?.signedUrl || '',
+              width: BATCH_THUMB_WIDTH_PX,
+              storagePath,
+            };
+          })(),
+        );
+      }
+
+      await Promise.all(uploadPromises);
+      sendJson(res, 200, { ok: true, thumbnails, pageCount, questionCount: qidOrder.length });
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  } catch (err) {
+    sendJson(res, 500, { ok: false, error: `render_failed: ${compact(err?.message || err)}` });
+  }
+}
+
 async function handler(req, res) {
   if (req.method === 'OPTIONS') {
     sendJson(res, 200, { ok: true });
@@ -3372,6 +3603,11 @@ async function handler(req, res) {
 
     if (method === 'POST' && url.pathname === '/pb/preview/pdf-artifacts') {
       await previewPdfArtifacts(res, req);
+      return;
+    }
+
+    if (method === 'POST' && url.pathname === '/pb/preview/batch-render') {
+      await batchRenderThumbnails(res, req);
       return;
     }
 
