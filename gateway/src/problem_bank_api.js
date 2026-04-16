@@ -3357,6 +3357,7 @@ async function batchRenderThumbnails(res, req) {
       fontRegularPath: batchFont.path,
       fontBoldPath: '',
       fontSize: 11,
+      supabaseClient: supa,
     });
 
     const pdfBytes = rendered.bytes;

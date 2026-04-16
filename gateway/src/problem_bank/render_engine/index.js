@@ -566,6 +566,7 @@ export async function renderPdfWithHtmlEngine({
       fontRegularPath,
       fontBoldPath,
       fontSize,
+      supabaseClient,
     });
   }
 

@@ -15,6 +15,7 @@
 
 const PARAGRAPH_MARKER_RE = /\[문단\]/g;
 const BOGI_MARKER_RE = /\[박스시작\]|\[박스끝\]/g;
+const FIGURE_MARKER_RE = /\[(?:그림|도형|도표)\]/g;
 
 const BOX_START_RE = /\[박스시작\]/;
 const BOX_END_RE = /\[박스끝\]/;
@@ -70,6 +71,12 @@ function applyEquationLookup(mathContent, lookup) {
 function normalizeMathSegment(mathContent) {
   let out = String(mathContent || '');
 
+  out = out.replace(/×/g, '\\times');
+  out = out.replace(/÷/g, '\\div');
+
+  out = out.replace(/(?<!\\)box\{([^}]*)\}/g, '\\boxed{$1}');
+  out = out.replace(/box\{~~\}/g, '\\boxed{\\phantom{x}}');
+
   out = out.replace(/\\left\s*\{/g, '\\left\\{');
   out = out.replace(/\\left\s*\}/g, '\\left\\}');
   out = out.replace(/\\right\s*\{/g, '\\right\\{');
@@ -94,24 +101,32 @@ function smartTexLine(text, equations) {
 
   const lookup = buildEquationLookup(equations);
 
+  const subQMatch = clean.match(/^\((\d+)\)\s+/);
+  let prefix = '';
+  let body = clean;
+  if (subQMatch) {
+    prefix = `\\text{(${subQMatch[1]})}\\;`;
+    body = clean.substring(subQMatch[0].length);
+  }
+
   const parts = [];
   let lastEnd = 0;
 
-  for (const m of clean.matchAll(KOREAN_SEG_RE)) {
+  for (const m of body.matchAll(KOREAN_SEG_RE)) {
     if (m.index > lastEnd) {
-      parts.push({ type: 'math', value: clean.substring(lastEnd, m.index) });
+      parts.push({ type: 'math', value: body.substring(lastEnd, m.index) });
     }
     parts.push({ type: 'text', value: m[0] });
     lastEnd = m.index + m[0].length;
   }
-  if (lastEnd < clean.length) {
-    parts.push({ type: 'math', value: clean.substring(lastEnd) });
+  if (lastEnd < body.length) {
+    parts.push({ type: 'math', value: body.substring(lastEnd) });
   }
   if (parts.length === 0) {
-    parts.push({ type: 'math', value: clean });
+    parts.push({ type: 'math', value: body });
   }
 
-  return parts
+  const result = parts
     .map((seg) => {
       if (seg.type === 'text') return escapeLatexText(seg.value);
 
@@ -125,6 +140,11 @@ function smartTexLine(text, equations) {
       return `${leadSp}$\\displaystyle ${math}$${trailSp}`;
     })
     .join('');
+
+  if (prefix) {
+    return `$\\displaystyle ${prefix}$${result}`;
+  }
+  return result;
 }
 
 /* ------------------------------------------------------------------ */
@@ -147,8 +167,13 @@ function parseStemSegments(stem) {
 
   function flushBox() {
     if (boxLines.length === 0) return;
-    const hasBogi = boxLines.some((l) => BOGI_RE.test(l));
-    segments.push({ type: hasBogi ? 'bogi' : 'deco', lines: [...boxLines] });
+    const hasTable = boxLines.some((l) => /^\[표행\]$/.test(l.trim()));
+    if (hasTable) {
+      segments.push({ type: 'table', lines: [...boxLines] });
+    } else {
+      const hasBogi = boxLines.some((l) => BOGI_RE.test(l));
+      segments.push({ type: hasBogi ? 'bogi' : 'deco', lines: [...boxLines] });
+    }
     boxLines = [];
   }
 
@@ -188,8 +213,13 @@ function parseStemSegments(stem) {
   }
 
   if (inBox && boxLines.length > 0) {
-    const hasBogi = boxLines.some((l) => BOGI_RE.test(l));
-    segments.push({ type: hasBogi ? 'bogi' : 'deco', lines: [...boxLines] });
+    const hasTable = boxLines.some((l) => /^\[표행\]$/.test(l.trim()));
+    if (hasTable) {
+      segments.push({ type: 'table', lines: [...boxLines] });
+    } else {
+      const hasBogi = boxLines.some((l) => BOGI_RE.test(l));
+      segments.push({ type: hasBogi ? 'bogi' : 'deco', lines: [...boxLines] });
+    }
   }
   flushText();
   return segments;
@@ -258,6 +288,16 @@ function renderDecoLine(text, equations) {
     const content = smartTexLine(rest, equations);
     return `\\hangindent=2em\\hangafter=1\\noindent\\makebox[2em][l]{${escapeLatexText(labelTex)}}${content}`;
   }
+
+  const colonIdx = text.indexOf(' : ');
+  if (colonIdx > 0 && colonIdx < 20) {
+    const label = text.substring(0, colonIdx + 3);
+    const rest = text.substring(colonIdx + 3);
+    const labelTex = smartTexLine(label, equations);
+    const contentTex = smartTexLine(rest, equations);
+    return `{\\setbox0=\\hbox{${labelTex}}\\hangindent=\\wd0\\hangafter=1\\noindent\\unhbox0${contentTex}}`;
+  }
+
   return smartTexLine(text, equations);
 }
 
@@ -289,6 +329,71 @@ function renderDecoBoxLatex(lines, equations) {
     '\\lineskiplimit=3pt\\lineskip=0.86em',
     contentParts.join('\n'),
     '\\end{tcolorbox}',
+  ].join('\n');
+}
+
+/* ------------------------------------------------------------------ */
+/*  Table rendering: [표행]/[표셀] → LaTeX tabular                     */
+/* ------------------------------------------------------------------ */
+
+function parseTableLines(lines) {
+  const rows = [];
+  let currentRow = null;
+  let currentCell = null;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed === '[표행]') {
+      if (currentRow) rows.push(currentRow);
+      currentRow = [];
+      currentCell = null;
+    } else if (trimmed === '[표셀]') {
+      if (currentRow) {
+        currentCell = [];
+        currentRow.push(currentCell);
+      }
+    } else if (currentCell !== null && trimmed) {
+      currentCell.push(trimmed);
+    }
+  }
+  if (currentRow) rows.push(currentRow);
+  return rows;
+}
+
+function renderTableLatex(lines, equations) {
+  const rows = parseTableLines(lines);
+  if (rows.length === 0) return '';
+  const maxCols = Math.max(...rows.map((r) => r.length));
+  if (maxCols === 0) return '';
+
+  const colSpec = '|' + Array(maxCols).fill('>{\\ \\centering\\arraybackslash}m{\\tblcellwd}|').join('');
+
+  const latexRows = rows.map((row) => {
+    const cells = [];
+    for (let i = 0; i < maxCols; i++) {
+      const cellLines = row[i] || [''];
+      const content = cellLines.length > 0
+        ? cellLines.map((l) => smartTexLine(l, equations)).join(' ')
+        : '';
+      cells.push(content);
+    }
+    return cells.join(' & ') + ' \\\\';
+  });
+
+  const tableWidthFrac = maxCols <= 3 ? 0.5 : maxCols <= 5 ? 0.7 : 0.9;
+
+  return [
+    '\\vspace{6pt}',
+    `{\\newlength{\\tblcellwd}%`,
+    `\\setlength{\\tblcellwd}{\\dimexpr ${tableWidthFrac}\\linewidth/${maxCols} - 2\\tabcolsep - 1.2pt\\relax}%`,
+    '\\begin{center}',
+    '\\renewcommand{\\arraystretch}{1.4}',
+    '\\begin{tabular}{' + colSpec + '}',
+    '\\hline',
+    latexRows.join('\n\\hline\n'),
+    '\\hline',
+    '\\end{tabular}',
+    '\\end{center}}',
+    '\\vspace{6pt}',
   ].join('\n');
 }
 
@@ -445,6 +550,7 @@ function buildPreamble({
   lines.push(`\\usepackage[${geom}]{geometry}`);
   lines.push('\\usepackage{fontspec}');
   lines.push('\\usepackage{amsmath,amssymb}');
+  lines.push('\\usepackage{array}');
   lines.push('\\usepackage{kotex}');
   lines.push('\\usepackage{graphicx}');
   lines.push('\\usepackage{xcolor}');
@@ -502,6 +608,17 @@ function renderOneQuestion(question, { sectionLabel, showQuestionNumber = true, 
   const equations = question?.equations || [];
   const qMode = mode || question?.mode || question?.questionMode || 'objective';
   const choices = qMode === 'objective' ? (question?.choices || []) : [];
+  const figurePaths = question?.figure_local_paths || [];
+  let figIdx = 0;
+
+  function replaceFigureMarkers(text) {
+    return text.replace(FIGURE_MARKER_RE, () => {
+      const p = figurePaths[figIdx++];
+      if (!p) return '';
+      const normalized = p.replace(/\\/g, '/');
+      return `\n\\begin{center}\n\\includegraphics[width=0.85\\linewidth]{${normalized}}\n\\end{center}\n`;
+    });
+  }
 
   const parts = [];
 
@@ -520,8 +637,9 @@ function renderOneQuestion(question, { sectionLabel, showQuestionNumber = true, 
 
   for (const seg of segments) {
     if (seg.type === 'text') {
-      for (const line of seg.lines) {
-        const trimmed = line.trim();
+      for (const rawLine of seg.lines) {
+        const withFigs = replaceFigureMarkers(rawLine);
+        const trimmed = withFigs.trim();
         if (!trimmed) {
           parts.push('\\par');
           continue;
@@ -531,8 +649,12 @@ function renderOneQuestion(question, { sectionLabel, showQuestionNumber = true, 
           if (i > 0) parts.push('\\par');
           const sub = subLines[i].trim();
           if (sub) {
-            const rendered = smartTexLine(sub, equations);
-            if (rendered.trim()) parts.push(rendered);
+            if (/\\includegraphics/.test(sub)) {
+              parts.push(sub);
+            } else {
+              const rendered = smartTexLine(sub, equations);
+              if (rendered.trim()) parts.push(rendered);
+            }
           }
         }
       }
@@ -542,6 +664,15 @@ function renderOneQuestion(question, { sectionLabel, showQuestionNumber = true, 
     } else if (seg.type === 'deco') {
       parts.push('\\vspace{4pt}');
       parts.push(renderDecoBoxLatex(seg.lines, equations));
+    } else if (seg.type === 'table') {
+      parts.push(renderTableLatex(seg.lines, equations));
+    }
+  }
+
+  if (figurePaths.length > figIdx) {
+    for (let i = figIdx; i < figurePaths.length; i++) {
+      const p = figurePaths[i].replace(/\\/g, '/');
+      parts.push(`\n\\begin{center}\n\\includegraphics[width=0.85\\linewidth]{${p}}\n\\end{center}`);
     }
   }
 
@@ -569,6 +700,7 @@ export function buildTexSource(question, options = {}) {
     '\\documentclass[12pt,varwidth=16cm]{standalone}',
     '\\usepackage{fontspec}',
     '\\usepackage{amsmath,amssymb}',
+    '\\usepackage{array}',
     '\\usepackage{kotex}',
     '\\usepackage{graphicx}',
     '\\usepackage{xcolor}',

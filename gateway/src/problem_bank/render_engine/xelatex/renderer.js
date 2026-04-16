@@ -58,6 +58,54 @@ function runXeLatex(texPath, outDir) {
   });
 }
 
+/**
+ * Download figure assets from Supabase Storage into the XeLaTeX work
+ * directory so that \includegraphics can reference them as local files.
+ * Populates question.figure_local_paths = string[] on each question.
+ */
+export async function hydrateFiguresForXeLatex(questions, supabaseClient, workDir) {
+  if (!supabaseClient || !workDir) return { appliedCount: 0 };
+  let appliedCount = 0;
+  for (const q of questions) {
+    q.figure_local_paths = [];
+    const meta = q.meta && typeof q.meta === 'object' ? q.meta : {};
+    const assets = Array.isArray(meta.figure_assets) ? meta.figure_assets : [];
+    if (assets.length === 0) continue;
+
+    const seen = new Set();
+    const deduped = [];
+    for (const a of assets) {
+      const key = `${a.figure_index || 0}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      deduped.push(a);
+    }
+    deduped.sort((a, b) => (a.figure_index || 0) - (b.figure_index || 0));
+
+    for (const asset of deduped) {
+      const bucket = String(asset?.bucket || '').trim();
+      const storagePath = String(asset?.path || '').trim();
+      if (!bucket || !storagePath) continue;
+      try {
+        const { data, error } = await supabaseClient.storage
+          .from(bucket)
+          .download(storagePath);
+        if (error || !data) continue;
+        const ext = (asset.mime_type || 'image/png').split('/').pop() || 'png';
+        const qid = q.id || q.question_uid || randomUUID();
+        const filename = `fig-${qid}-${asset.figure_index || 0}.${ext}`;
+        const filePath = path.join(workDir, filename);
+        fs.writeFileSync(filePath, Buffer.from(await data.arrayBuffer()));
+        q.figure_local_paths.push(filePath);
+        appliedCount += 1;
+      } catch (_) {
+        /* skip failed downloads */
+      }
+    }
+  }
+  return { appliedCount };
+}
+
 function ensureInstalled() {
   return checkXeLatexInstallation().then((status) => {
     if (!status.installed) {
@@ -136,6 +184,7 @@ export async function renderPdfWithXeLatex({
   fontRegularPath,
   fontBoldPath,
   fontSize,
+  supabaseClient,
 }) {
   await ensureInstalled();
 
@@ -156,6 +205,8 @@ export async function renderPdfWithXeLatex({
   const cols = (Number(layoutColumns || 1) >= 2 || isMockProfile) ? 2 : 1;
 
   try {
+    await hydrateFiguresForXeLatex(questions || [], supabaseClient, workDir);
+
     const texSource = buildDocumentTexSource(questions || [], {
       paper: paper || 'B4',
       fontFamily,

@@ -193,9 +193,7 @@ static uint32_t hw_group_children_fp(const HwGroupData& g) {
 }
 
 static inline bool hw_server_running_group(const HwGroupData& g) {
-  // Runtime phase=2 is the source of truth for "running".
-  // run_start can be transiently null in payload races; don't treat that as stopped.
-  return g.phase == 2;
+  return g.phase == 2 && g.run_start_epoch > 0;
 }
 
 static int hw_live_segment_sec(HwGroupData& g, uint32_t now_tick) {
@@ -3227,6 +3225,8 @@ static void restart_hw_timer() {
 
 struct HwDisplayAnchorSnap {
   char group_id[40];
+  int8_t phase;
+  int32_t cycle_elapsed;
   int64_t run_start_epoch;
   bool anchor_valid;
   uint32_t anchor_tick;
@@ -3239,6 +3239,8 @@ static void hw_snapshot_display_anchors(HwDisplayAnchorSnap* snaps, uint8_t* out
     HwDisplayAnchorSnap& s = snaps[*out_cnt];
     strncpy(s.group_id, s_groups[i].group_id, sizeof(s.group_id) - 1);
     s.group_id[sizeof(s.group_id) - 1] = '\0';
+    s.phase = s_groups[i].phase;
+    s.cycle_elapsed = s_groups[i].cycle_elapsed;
     s.run_start_epoch = s_groups[i].run_start_epoch;
     s.anchor_valid = s_groups[i].display_anchor_valid;
     s.anchor_tick = s_groups[i].display_anchor_tick;
@@ -3258,60 +3260,50 @@ static void hw_apply_display_anchors_after_parse(const HwDisplayAnchorSnap* snap
       continue;
     }
 
+    // m5_list_homework_groups payload accumulated/cycle_elapsed are already
+    // server-live values. Local segment must represent only "since payload arrived".
+    const uint32_t now_tick = lv_tick_get();
     const bool has_server_start = g.run_start_epoch > 0;
-    bool restored = false;
     const HwDisplayAnchorSnap* same_group_snap = nullptr;
+    bool same_anchor_key = false;
     for (uint8_t j = 0; j < snap_cnt; j++) {
       const HwDisplayAnchorSnap& sn = snaps[j];
-      if (strcmp(sn.group_id, g.group_id) != 0 || !sn.anchor_valid) continue;
+      if (strcmp(sn.group_id, g.group_id) != 0) continue;
 
       if (!same_group_snap) same_group_snap = &sn;
+      if (!sn.anchor_valid) continue;
 
-      bool same_anchor_key = false;
       if (has_server_start) {
         same_anchor_key = (sn.run_start_epoch == g.run_start_epoch);
       } else {
         same_anchor_key = (sn.run_start_epoch <= 0);
       }
-
-      if (same_anchor_key) {
-        g.display_anchor_valid = true;
-        g.display_anchor_run_start = g.run_start_epoch;
-        g.display_anchor_tick = sn.anchor_tick;
-        g.display_segment0_sec = sn.segment0_sec;
-        restored = true;
-        break;
-      }
+      if (same_anchor_key) break;
     }
-    if (!restored) {
-      g.display_anchor_valid = true;
-      g.display_anchor_run_start = g.run_start_epoch;
-      const uint32_t anchor_tick = lv_tick_get();
-      g.display_anchor_tick = anchor_tick;
 
-      int seg = 0;
-      if (has_server_start) {
-        time_t now_t = time(nullptr);
-        long long diff = (long long)now_t - (long long)g.run_start_epoch;
-        int server_seg = diff > 0 ? (int)diff : 0;
+    g.display_anchor_valid = true;
+    g.display_anchor_run_start = g.run_start_epoch;
+    g.display_anchor_tick = now_tick;
 
-        // If we were running without run_start (transient payload gap), avoid visual reset.
-        if (same_group_snap && same_group_snap->run_start_epoch <= 0) {
-          uint32_t dt = anchor_tick - same_group_snap->anchor_tick;
-          int prev_seg = same_group_snap->segment0_sec + (int)(dt / 1000);
-          if (prev_seg < 0) prev_seg = 0;
-          if (prev_seg > server_seg) server_seg = prev_seg;
-        }
-        seg = server_seg;
-      } else if (same_group_snap) {
-        // Keep monotonic local flow while waiting for run_start propagation.
-        uint32_t dt = anchor_tick - same_group_snap->anchor_tick;
-        seg = same_group_snap->segment0_sec + (int)(dt / 1000);
-        if (seg < 0) seg = 0;
-      }
-
-      g.display_segment0_sec = seg;
+    int seg0 = 0;
+    if (!same_anchor_key && !has_server_start && same_group_snap) {
+      // transient gap(run_start missing) during phase=2: keep local monotonic flow
+      uint32_t dt = now_tick - same_group_snap->anchor_tick;
+      seg0 = same_group_snap->segment0_sec + (int)(dt / 1000);
+      if (seg0 < 0) seg0 = 0;
     }
+    g.display_segment0_sec = seg0;
+
+    // Cycle elapsed must not reset on pause/resume.
+    // Reset is allowed only when entering submit phase(phase=3).
+    if (g.phase == 3) {
+      g.cycle_elapsed = 0;
+    } else if (same_group_snap &&
+               same_group_snap->phase != 3 &&
+               g.cycle_elapsed < same_group_snap->cycle_elapsed) {
+      g.cycle_elapsed = same_group_snap->cycle_elapsed;
+    }
+    if (g.cycle_elapsed < 0) g.cycle_elapsed = 0;
   }
 }
 

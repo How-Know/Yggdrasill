@@ -347,6 +347,41 @@ async function queueHomeworksToBoundDevices(academy_id, student_id, source = 'un
   });
 }
 
+async function syncPauseAllRuntimeState(academy_id, student_id) {
+  const { data: runtimeRows, error: listErr } = await supa
+    .from('homework_group_runtime')
+    .select('group_id,phase,run_start')
+    .eq('academy_id', academy_id)
+    .eq('student_id', student_id)
+    .limit(24);
+
+  if (listErr) {
+    console.error('[gateway] pause_all runtime list error', { academy_id, student_id, error: listErr });
+    return listErr;
+  }
+
+  const runningRows = (runtimeRows || []).filter((row) => {
+    const phase = Number(row?.phase ?? 0);
+    return phase === 2 || row?.run_start != null;
+  });
+
+  for (const row of runningRows) {
+    const group_id = row?.group_id;
+    if (!group_id) continue;
+    const { error: syncErr } = await supa.rpc('m5_group_transition_state_v3', {
+      p_academy_id: academy_id,
+      p_group_id: group_id,
+      p_from_phase: 4
+    });
+    if (syncErr) {
+      console.error('[gateway] pause_all runtime sync error', { academy_id, student_id, group_id, error: syncErr });
+      return syncErr;
+    }
+  }
+
+  return null;
+}
+
 client.on('message', async (topic, payload) => {
   gatewayState.lastMessageTs = nowMs();
   gatewayState.lastInboundTopic = topic;
@@ -444,10 +479,21 @@ client.on('message', async (topic, payload) => {
     if (action === 'start') params.p_student_id = student_id;
     if (action === 'pause_all') params = { p_student_id: student_id, p_academy_id: academy_id, p_updated_by: updated_by };
     const { error } = await supa.rpc(rpc, params);
-    if (error) console.error('[gateway] rpc error', error);
+    let runtimeSyncError = null;
+    if (!error && action === 'pause_all') {
+      runtimeSyncError = await syncPauseAllRuntimeState(academy_id, student_id);
+    }
+    if (error || runtimeSyncError) {
+      console.error('[gateway] rpc error', runtimeSyncError ?? error);
+    }
 
-    maybePublishAck(academy_id, idempotency_key, { ok: !error, action });
-    if (!error) {
+    const ok = !error && !runtimeSyncError;
+    maybePublishAck(academy_id, idempotency_key, {
+      ok,
+      action,
+      error: runtimeSyncError?.message ?? error?.message
+    });
+    if (ok) {
       await publishHomeworksToBoundDevices(academy_id, student_id, action);
     }
     return;
