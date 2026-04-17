@@ -346,6 +346,27 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         ? naesinRaw.map((k, dynamic v) => MapEntry('$k', v))
         : const <String, dynamic>{};
 
+    // draft 문서(status != 'ready')는 분류 정보가 아직 비어 있을 수 있다.
+    // 모델 fromMap 이 curriculum_code/source_type_code 빈값에 기본치를 채워주므로
+    // 실제 사용자 입력 필드(school_name, grade_label, publisher_name, material_name)
+    // 또는 meta.source_classification 쪽에 실질 값이 있는지로 draft 여부를 판정한다.
+    // draft 로 판정되면 상단 입력 폼의 현재 사용자 입력을 그대로 보존한다.
+    final docStatus = (doc?.status ?? '').trim();
+    final isReady = docStatus == 'ready';
+    final userEnteredFields = doc != null &&
+        ((doc.schoolName).trim().isNotEmpty ||
+            (doc.gradeLabel).trim().isNotEmpty ||
+            (doc.publisherName).trim().isNotEmpty ||
+            (doc.materialName).trim().isNotEmpty ||
+            (doc.courseLabel).trim().isNotEmpty ||
+            doc.examYear != null);
+    final metaHasClassification = source.isNotEmpty &&
+        (source.values.any((v) => v == true) || naesin.isNotEmpty);
+    if (!isReady && !userEnteredFields && !metaHasClassification) {
+      _dirtyDocumentMeta = false;
+      return;
+    }
+
     final fallbackSourceType = source['private_material'] == true
         ? 'market_book'
         : source['mock_past_exam'] == true
@@ -2119,8 +2140,16 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       _showSnack('업로드할 변경사항이 없습니다.');
       return;
     }
-    if (_dirtyDocumentMeta && _isSchoolPastSource && _sourceExamTerm.isEmpty) {
+    if (_isSchoolPastSource && _sourceExamTerm.isEmpty) {
       _showSnack('내신 기출은 중간/기말 중 하나를 선택해주세요.', error: true);
+      return;
+    }
+    if (_sourceSchoolCtrl.text.trim().isEmpty && _isSchoolPastSource) {
+      _showSnack('학교명을 입력해주세요.', error: true);
+      return;
+    }
+    if (_sourceGradeCtrl.text.trim().isEmpty) {
+      _showSnack('학년을 입력해주세요.', error: true);
       return;
     }
     final dirtyIds = _dirtyQuestionIds.toList(growable: false);
@@ -2184,49 +2213,48 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         );
       }
       if (doc != null) {
-        final mergedDocMeta = _dirtyDocumentMeta
-            ? <String, dynamic>{
-                ...doc.meta,
-                'source_classification': _buildSourceClassificationMeta(),
-              }
-            : doc.meta;
+        // 추출 단계는 draft 이므로 분류 정보를 DB 에 저장하지 않는다.
+        // 따라서 '업로드(확정)' 버튼 시점에는 사용자가 상단에 입력한 분류를
+        // 변경 여부(_dirtyDocumentMeta) 와 무관하게 항상 함께 저장해야
+        // pb_documents.status='ready' 트리거 가드를 통과할 수 있다.
+        final mergedDocMeta = <String, dynamic>{
+          ...doc.meta,
+          'source_classification': _buildSourceClassificationMeta(),
+        };
         await _service.updateDocumentMeta(
           documentId: doc.id,
           meta: mergedDocMeta,
           status: 'ready',
-          curriculumCode: _dirtyDocumentMeta ? curriculumCode : null,
-          sourceTypeCode: _dirtyDocumentMeta ? sourceTypeCode : null,
-          courseLabel: _dirtyDocumentMeta ? courseLabel : null,
-          gradeLabel: _dirtyDocumentMeta ? gradeLabel : null,
-          examYear: _dirtyDocumentMeta ? examYear : null,
-          semesterLabel: _dirtyDocumentMeta ? semesterLabel : null,
-          examTermLabel: _dirtyDocumentMeta ? examTermLabel : null,
-          schoolName: _dirtyDocumentMeta ? schoolName : null,
-          publisherName: _dirtyDocumentMeta ? publisherName : null,
-          materialName: _dirtyDocumentMeta ? materialName : null,
-          classificationDetail:
-              _dirtyDocumentMeta ? classificationDetail : null,
+          curriculumCode: curriculumCode,
+          sourceTypeCode: sourceTypeCode,
+          courseLabel: courseLabel,
+          gradeLabel: gradeLabel,
+          examYear: examYear,
+          semesterLabel: semesterLabel,
+          examTermLabel: examTermLabel,
+          schoolName: schoolName,
+          publisherName: publisherName,
+          materialName: materialName,
+          classificationDetail: classificationDetail,
         );
-        if (_dirtyDocumentMeta) {
-          if (academyId == null || academyId.isEmpty) {
-            throw Exception('academy_id를 찾을 수 없습니다.');
-          }
-          await _service.updateQuestionsClassificationForDocument(
-            academyId: academyId,
-            documentId: doc.id,
-            curriculumCode: curriculumCode,
-            sourceTypeCode: sourceTypeCode,
-            courseLabel: courseLabel,
-            gradeLabel: gradeLabel,
-            examYear: examYear,
-            semesterLabel: semesterLabel,
-            examTermLabel: examTermLabel,
-            schoolName: schoolName,
-            publisherName: publisherName,
-            materialName: materialName,
-            classificationDetail: classificationDetail,
-          );
+        if (academyId == null || academyId.isEmpty) {
+          throw Exception('academy_id를 찾을 수 없습니다.');
         }
+        await _service.updateQuestionsClassificationForDocument(
+          academyId: academyId,
+          documentId: doc.id,
+          curriculumCode: curriculumCode,
+          sourceTypeCode: sourceTypeCode,
+          courseLabel: courseLabel,
+          gradeLabel: gradeLabel,
+          examYear: examYear,
+          semesterLabel: semesterLabel,
+          examTermLabel: examTermLabel,
+          schoolName: schoolName,
+          publisherName: publisherName,
+          materialName: materialName,
+          classificationDetail: classificationDetail,
+        );
       }
       if (!mounted) return;
       setState(() {

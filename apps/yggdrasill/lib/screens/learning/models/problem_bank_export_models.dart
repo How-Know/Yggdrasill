@@ -684,18 +684,27 @@ String originalQuestionModeOf(LearningProblemQuestion question) {
   return kLearningQuestionModeSubjective;
 }
 
+// 학생 앱에서 선택 가능한 출제 모드를 산출한다.
+//
+// allow_objective / allow_subjective / allow_essay 는 관리자가 "이 문항을 이 형식으로
+// 출제하는 것을 허용할지"를 명시적으로 지정한 플래그다.
+// DB 기본값이 (true, true, false) 이고, 관리자 앱의 저장 로직에서
+// "(allow_objective, allow_subjective) 중 최소 하나는 true" 를 강제하고 있으므로
+// 이 플래그들만을 단독 게이트로 써도 빈 리스트가 되지 않는다.
+//
+// 과거 로직은 "allow_* 가 false 라도 original_type 이 해당 모드이면 노출" 하는 OR 결합이었다.
+// 그 결과, 관리자가 "자동 추출된 객관식 보기가 부적절하다" 라고 판단해 '객관식 출제 허용' 을
+// 해제해도, 학생 앱에는 그대로 객관식 탭이 노출되어 관리자 의도가 무시되는 문제가 있었다.
+// 이제는 allow_* 가 명시적 차단 의미를 갖도록 AND 기반으로 바꾼다.
+// original_type 은 선택 리스트가 비었을 때의 최후 fallback 으로만 사용한다.
 List<String> selectableQuestionModesOf(LearningProblemQuestion question) {
-  final original = originalQuestionModeOf(question);
   final out = <String>[
-    if (question.allowObjective || original == kLearningQuestionModeObjective)
-      kLearningQuestionModeObjective,
-    if (question.allowSubjective || original == kLearningQuestionModeSubjective)
-      kLearningQuestionModeSubjective,
-    if (allowEssayOf(question) || original == kLearningQuestionModeEssay)
-      kLearningQuestionModeEssay,
+    if (question.allowObjective) kLearningQuestionModeObjective,
+    if (question.allowSubjective) kLearningQuestionModeSubjective,
+    if (allowEssayOf(question)) kLearningQuestionModeEssay,
   ];
   if (out.isEmpty) {
-    out.add(original);
+    out.add(originalQuestionModeOf(question));
   }
   return out.toSet().toList(growable: false);
 }

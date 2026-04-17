@@ -28,11 +28,11 @@ const double _kGradingSectionGapTop = 22.0;
 const double _kGradingSectionGapBottom = 18.0;
 const EdgeInsets _kGradingPagePadding = EdgeInsets.fromLTRB(24, 0, 24, 24);
 
-/// 채점 카드 하단: 과제 코드(ABCD-1234) 우선, 없으면 순번(orderIndex+1).
+/// 채점 카드 하단: 과제 코드(ABCD1234) 우선, 없으면 순번(orderIndex+1).
 String _gradingCardAssignmentNumberLabel(HomeworkItem hw) {
   final raw = (hw.assignmentCode ?? '').trim().toUpperCase();
   if (RegExp(r'^[A-Z]{4}[0-9]{4}$').hasMatch(raw)) {
-    return '${raw.substring(0, 4)}-${raw.substring(4)}';
+    return raw;
   }
   return '과제 ${hw.orderIndex + 1}';
 }
@@ -891,7 +891,6 @@ class _SubmittedHomeworkCard extends StatelessWidget {
     final bookStr = _extractBookName(hw).isEmpty ? '-' : _extractBookName(hw);
     final courseStr =
         _extractCourseName(hw).isEmpty ? '-' : _extractCourseName(hw);
-    final countStr = hw.count == null ? '-' : hw.count.toString();
     final assignmentNumText = _gradingCardAssignmentNumberLabel(hw);
     final scale =
         (cardHeight / _kGradingBaseCardHeight).clamp(0.5, 1.15).toDouble();
@@ -939,6 +938,7 @@ class _SubmittedHomeworkCard extends StatelessWidget {
                         scale,
                         line4: line4,
                         pageLines: pageLines,
+                        childCountText: childCountText,
                       ),
                     ),
                     Expanded(
@@ -950,9 +950,7 @@ class _SubmittedHomeworkCard extends StatelessWidget {
                           contentPadBottom,
                         ),
                         child: LayoutBuilder(
-                          builder: (context, boxConstraints) {
-                            final showChildCountMeta =
-                                boxConstraints.maxWidth >= 178;
+                          builder: (context, _) {
                             final metaScale =
                                 (metaHeight / _kGradingBaseCardMetaHeight)
                                     .clamp(0.5, 1.2)
@@ -1008,20 +1006,9 @@ class _SubmittedHomeworkCard extends StatelessWidget {
                                   ),
                                   Row(
                                     children: [
-                                      if (showChildCountMeta) ...[
-                                        Expanded(
-                                          child: Text(
-                                            childCountText,
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: cellStyle3,
-                                          ),
-                                        ),
-                                        const SizedBox(width: 8),
-                                      ],
                                       Expanded(
                                         child: Text(
-                                          '$assignmentNumText · ${countStr}문항',
+                                          assignmentNumText,
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
                                           textAlign: TextAlign.right,
@@ -1082,6 +1069,7 @@ class _SubmittedHomeworkCard extends StatelessWidget {
     double scale, {
     required String line4,
     required List<String> pageLines,
+    required String childCountText,
   }) {
     return FutureBuilder<String?>(
       future: coverPathFuture,
@@ -1215,6 +1203,31 @@ class _SubmittedHomeworkCard extends StatelessWidget {
                 ),
               ),
             ),
+            IgnorePointer(
+              child: Align(
+                alignment: Alignment.bottomLeft,
+                child: Padding(
+                  padding: EdgeInsets.fromLTRB(
+                    overlayHorizontalPad,
+                    0,
+                    overlayHorizontalPad,
+                    (8.0 * scale).clamp(4.0, 10.0).toDouble(),
+                  ),
+                  child: Text(
+                    childCountText,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.left,
+                    style: TextStyle(
+                      color: overlayNameColor,
+                      fontSize: overlayTimeSize.toDouble(),
+                      fontWeight: FontWeight.w700,
+                      shadows: overlayTextShadows,
+                    ),
+                  ),
+                ),
+              ),
+            ),
           ],
         );
       },
@@ -1234,27 +1247,27 @@ class _SubmittedHomeworkCard extends StatelessWidget {
   }
 
   List<String> _buildOverlayPageLines(_GradingGroupEntry entry) {
-    final pages = <int>{};
-    final nonEmptyRaws = <String>[];
-    final seenRaw = <String>{};
+    final lines = <String>[];
+    final seenLine = <String>{};
     for (final child in entry.children) {
       final raw = (child.page ?? '').trim();
       if (raw.isEmpty) continue;
-      pages.addAll(parseHomeworkPageNumbers(raw));
-      if (seenRaw.add(raw)) {
-        nonEmptyRaws.add(raw);
+      var normalized = raw;
+      final parsed = parseHomeworkPageNumbers(raw);
+      if (parsed.isNotEmpty) {
+        final compressed = compressHomeworkPageNumbers(parsed);
+        if (compressed.isNotEmpty) {
+          normalized = compressed;
+        }
+      }
+      final line = 'p.$normalized';
+      if (seenLine.add(line)) {
+        lines.add(line);
       }
     }
-    if (pages.isNotEmpty) {
-      final compressed = compressHomeworkPageNumbers(pages);
-      if (compressed.isNotEmpty) {
-        return <String>['p.$compressed'];
-      }
-    }
-    if (nonEmptyRaws.isNotEmpty) {
-      final out = nonEmptyRaws.map((r) => 'p.$r').toList(growable: false);
-      if (out.length <= 4) return out;
-      return <String>[...out.take(4), '...'];
+    if (lines.isNotEmpty) {
+      if (lines.length <= 4) return lines;
+      return <String>[...lines.take(4), '...'];
     }
     final fallback = (entry.summary.page ?? '').trim();
     if (fallback.isEmpty) return const <String>[];

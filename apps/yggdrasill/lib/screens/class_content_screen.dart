@@ -531,6 +531,16 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                               runSpacing: 12,
                               children: [
                                 _buildHeaderPillIconButton(
+                                  icon: Icons.link_rounded,
+                                  tooltip: 'M5 바인딩 이력',
+                                  iconColor: const Color(0xFFD0DDDD),
+                                  onTap: () => unawaited(
+                                    _showM5BindingHistoryDialog(
+                                      context: context,
+                                    ),
+                                  ),
+                                ),
+                                _buildHeaderPillIconButton(
                                   icon: Icons.print,
                                   tooltip: '인쇄',
                                   iconColor: _printPickMode
@@ -2334,8 +2344,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                                             final e = entries[index];
                                             final isOvEx =
                                                 expandedHomeworkOverviewItemIds
-                                                    .contains(
-                                                        e.homeworkItemId);
+                                                    .contains(e.homeworkItemId);
                                             return _buildHomeworkOverviewCard(
                                               e,
                                               isExpanded: isOvEx,
@@ -4682,8 +4691,7 @@ Widget _detailRow(String label, String value) {
   required DateTime assignedAt,
 }) {
   final hw = HomeworkStore.instance.getById(studentId, itemId);
-  final overviewLine1Left =
-      hw != null ? _homeworkBookCourseLabel(hw) : '-';
+  final overviewLine1Left = hw != null ? _homeworkBookCourseLabel(hw) : '-';
   final page = (hw?.page ?? '').trim();
   final expandLine4Left = page.isEmpty ? '-' : 'p.$page';
   final count = hw?.count ?? 0;
@@ -8087,8 +8095,8 @@ void _drawHomeworkPrintOverlayOnFirstPage({
   required sf.PdfFont line1Font,
   required sf.PdfFont line2Font,
   required sf.PdfFont assignmentCodeFont,
-  double topInsetOverride = 5,
-  double bottomInsetOverride = 1,
+  double topInsetOverride = 12,
+  double bottomInsetOverride = 10,
   sf.PdfGraphics? graphicsOverride,
   bool bottomLeftLayout = false,
 }) {
@@ -8127,12 +8135,16 @@ void _drawHomeworkPrintOverlayOnFirstPage({
       alignment: sf.PdfTextAlignment.left,
       lineAlignment: sf.PdfVerticalAlignment.top,
     );
-    g.drawString(line1, line1Font,
+    g.drawString(
+      line1,
+      line1Font,
       brush: textBrush,
       bounds: Rect.fromLTWH(leftInset, infoTop, 180, lineH),
       format: leftFormat,
     );
-    g.drawString(line2, line2Font,
+    g.drawString(
+      line2,
+      line2Font,
       brush: textBrush,
       bounds: Rect.fromLTWH(leftInset, infoTop + lineH, 180, lineH),
       format: leftFormat,
@@ -8155,7 +8167,9 @@ void _drawHomeworkPrintOverlayOnFirstPage({
       alignment: sf.PdfTextAlignment.right,
       lineAlignment: sf.PdfVerticalAlignment.top,
     );
-    g.drawString(assignmentCodeText, assignmentCodeFont,
+    g.drawString(
+      assignmentCodeText,
+      assignmentCodeFont,
       brush: textBrush,
       bounds: Rect.fromLTWH(codeLeft, codeTop, codeW, lineH),
       format: rightFormat,
@@ -8893,7 +8907,8 @@ Future<String?> _buildPdfForPrintRange({
           bottomLeftLayout: true,
         );
         final outBytes = await normalizedDoc.save();
-        print('[OVERLAY] layer: ${outBytes.length} bytes (normalized=${normalizedBytes.length})');
+        print(
+            '[OVERLAY] layer: ${outBytes.length} bytes (normalized=${normalizedBytes.length})');
         final dir = await getTemporaryDirectory();
         print('[OVERLAY] temp dir: ${dir.path}');
         final outPath = p.join(
@@ -8938,15 +8953,13 @@ Future<String?> _buildPdfForPrintRange({
         }
         continue;
       }
-      // 프린터 여백 영향을 줄이기 위해 약간 확대해서 출력한다.
-      const double overscan = 1.02;
-      final scale = math.max(tw / sw, th / sh) * overscan;
-      final w = sw * scale;
-      final h = sh * scale;
-      final dx = (tw - w) / 2.0;
-      final dy = (th - h) / 2.0;
+      // 왜곡 채움(stretch): 가로/세로를 독립 스케일로 늘려 페이지를 꽉 채운다.
+      final scaleX = tw / sw;
+      final scaleY = th / sh;
+      final w = sw * scaleX;
+      final h = sh * scaleY;
       try {
-        newPage.graphics.drawPdfTemplate(tmpl, Offset(dx, dy), Size(w, h));
+        newPage.graphics.drawPdfTemplate(tmpl, const Offset(0, 0), Size(w, h));
       } catch (_) {
         newPage.graphics.drawPdfTemplate(tmpl, const Offset(0, 0));
       }
@@ -11501,6 +11514,287 @@ class _GradingHistoryEntry {
     required this.eventAt,
     required this.itemIds,
   });
+}
+
+class _M5BindingHistoryEntry {
+  final String id;
+  final String studentId;
+  final String studentName;
+  final String deviceId;
+  final bool active;
+  final DateTime boundAt;
+  final DateTime? unboundAt;
+  final DateTime updatedAt;
+
+  const _M5BindingHistoryEntry({
+    required this.id,
+    required this.studentId,
+    required this.studentName,
+    required this.deviceId,
+    required this.active,
+    required this.boundAt,
+    required this.unboundAt,
+    required this.updatedAt,
+  });
+}
+
+DateTime? _tryParseM5BindingDateTime(Object? raw) {
+  final text = (raw ?? '').toString().trim();
+  if (text.isEmpty || text.toLowerCase() == 'null') return null;
+  return DateTime.tryParse(text);
+}
+
+String _compactM5DeviceLabel(String raw) {
+  final trimmed = raw.trim();
+  if (trimmed.isEmpty) return '-';
+  final compact =
+      trimmed.replaceFirst(RegExp(r'^m5-device-', caseSensitive: false), '');
+  return compact.isEmpty ? trimmed : compact;
+}
+
+DateTime _toKstDateTime(DateTime value) {
+  return value.toUtc().add(const Duration(hours: 9));
+}
+
+String _formatM5BindingDateTimeKst(DateTime value) {
+  return _formatDateTime(_toKstDateTime(value));
+}
+
+Future<List<_M5BindingHistoryEntry>> _loadM5BindingHistoryEntries() async {
+  final academyId = await TenantService.instance.getActiveAcademyId() ??
+      await TenantService.instance.ensureActiveAcademy();
+  final rows = await Supabase.instance.client
+      .from('m5_device_bindings')
+      .select(
+          'id, student_id, device_id, active, bound_at, unbound_at, updated_at, created_at')
+      .eq('academy_id', academyId)
+      .order('bound_at', ascending: false)
+      .limit(240);
+  final studentNameById = <String, String>{
+    for (final row in DataManager.instance.students)
+      row.student.id: row.student.name.trim().isEmpty ? '학생' : row.student.name
+  };
+  final entries = <_M5BindingHistoryEntry>[];
+  for (final raw in (rows as List<dynamic>)) {
+    if (raw is! Map<String, dynamic>) continue;
+    final id = (raw['id'] ?? '').toString().trim();
+    final studentId = (raw['student_id'] ?? '').toString().trim();
+    final deviceId = (raw['device_id'] ?? '').toString().trim();
+    if (id.isEmpty || studentId.isEmpty || deviceId.isEmpty) continue;
+    final boundAt = _tryParseM5BindingDateTime(raw['bound_at']) ??
+        _tryParseM5BindingDateTime(raw['created_at']) ??
+        _tryParseM5BindingDateTime(raw['updated_at']) ??
+        DateTime.now();
+    final unboundAt = _tryParseM5BindingDateTime(raw['unbound_at']);
+    final updatedAt = _tryParseM5BindingDateTime(raw['updated_at']) ?? boundAt;
+    final studentName = (studentNameById[studentId] ?? '').trim();
+    entries.add(
+      _M5BindingHistoryEntry(
+        id: id,
+        studentId: studentId,
+        studentName: studentName.isEmpty ? '학생' : studentName,
+        deviceId: deviceId,
+        active: raw['active'] == true,
+        boundAt: boundAt,
+        unboundAt: unboundAt,
+        updatedAt: updatedAt,
+      ),
+    );
+  }
+  entries.sort((a, b) {
+    final timeCmp = b.boundAt.compareTo(a.boundAt);
+    if (timeCmp != 0) return timeCmp;
+    final nameCmp = a.studentName.compareTo(b.studentName);
+    if (nameCmp != 0) return nameCmp;
+    return a.id.compareTo(b.id);
+  });
+  return entries;
+}
+
+Future<void> _showM5BindingHistoryDialog({
+  required BuildContext context,
+}) async {
+  await showDialog<void>(
+    context: context,
+    builder: (dialogContext) {
+      return AlertDialog(
+        backgroundColor: kDlgBg,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text(
+          'M5 바인딩 히스토리',
+          style: TextStyle(
+            color: kDlgText,
+            fontSize: 18,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+        content: SizedBox(
+          width: 760,
+          child: FutureBuilder<List<_M5BindingHistoryEntry>>(
+            future: _loadM5BindingHistoryEntries(),
+            builder: (context, snapshot) {
+              if (snapshot.connectionState != ConnectionState.done) {
+                return const SizedBox(
+                  height: 180,
+                  child: Center(
+                    child: SizedBox(
+                      width: 22,
+                      height: 22,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2.4,
+                        valueColor: AlwaysStoppedAnimation<Color>(kDlgAccent),
+                      ),
+                    ),
+                  ),
+                );
+              }
+              if (snapshot.hasError) {
+                return const SizedBox(
+                  height: 180,
+                  child: Center(
+                    child: Text(
+                      'M5 바인딩 이력을 불러오지 못했습니다.',
+                      style: TextStyle(
+                        color: kDlgTextSub,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                );
+              }
+              final entries = snapshot.data ?? const <_M5BindingHistoryEntry>[];
+              if (entries.isEmpty) {
+                return const SizedBox(
+                  height: 180,
+                  child: Center(
+                    child: Text(
+                      '최근 M5 바인딩 이력이 없습니다.',
+                      style: TextStyle(
+                        color: kDlgTextSub,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                );
+              }
+              final listHeight = math.min(
+                MediaQuery.of(dialogContext).size.height * 0.62,
+                620.0,
+              );
+              return SizedBox(
+                height: listHeight,
+                child: ListView.separated(
+                  itemCount: entries.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 10),
+                  itemBuilder: (context, index) {
+                    final entry = entries[index];
+                    final releasedAt = entry.unboundAt ??
+                        (entry.active ? null : entry.updatedAt);
+                    final statusLabel = entry.active ? '활성' : '해제';
+                    final statusBorder = entry.active
+                        ? const Color(0xFF4DBD7A)
+                        : const Color(0xFF4E6166);
+                    final statusFg = entry.active
+                        ? const Color(0xFFE4F8EC)
+                        : const Color(0xFFC2CCCD);
+                    final statusBg = entry.active
+                        ? const Color(0x224DBD7A)
+                        : const Color(0x2236494D);
+                    return Container(
+                      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                      decoration: BoxDecoration(
+                        color: const Color(0x221D2B2C),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: const Color(0xFF31464C)),
+                      ),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  '${entry.studentName} · 기기 ${_compactM5DeviceLabel(entry.deviceId)}',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    color: kDlgText,
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  '바인딩 ${_formatM5BindingDateTimeKst(entry.boundAt)}'
+                                  '${releasedAt == null ? '' : ' · 해제 ${_formatM5BindingDateTimeKst(releasedAt)}'}',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    color: kDlgTextSub,
+                                    fontSize: 13.2,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                                const SizedBox(height: 3),
+                                Text(
+                                  '원본 ID ${entry.deviceId}',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    color: Color(0xFF7F8C8C),
+                                    fontSize: 12.3,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 6,
+                            ),
+                            decoration: BoxDecoration(
+                              color: statusBg,
+                              borderRadius: BorderRadius.circular(999),
+                              border: Border.all(color: statusBorder),
+                            ),
+                            child: Text(
+                              statusLabel,
+                              style: TextStyle(
+                                color: statusFg,
+                                fontSize: 12.5,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text(
+              '닫기',
+              style: TextStyle(
+                color: kDlgTextSub,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
+      );
+    },
+  );
 }
 
 List<_GradingHistoryEntry> _collectGradingHistoryEntries({

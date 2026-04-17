@@ -203,6 +203,26 @@ class ProblemBankService {
     };
   }
 
+  /// 추출 단계(draft)에서 pb_documents에 저장할 분류 컬럼.
+  /// 분류는 아직 확정되지 않았으므로 모든 필드를 비워 둔다.
+  /// 실제 분류는 검수 후 `_saveQuestionsToServer`가 `updateDocumentMeta`로
+  /// status='ready' 전환과 함께 채워 넣는다.
+  Map<String, dynamic> _buildDraftClassificationColumns() {
+    return <String, dynamic>{
+      'curriculum_code': '',
+      'source_type_code': '',
+      'course_label': '',
+      'grade_label': '',
+      'exam_year': null,
+      'semester_label': '',
+      'exam_term_label': '',
+      'school_name': '',
+      'publisher_name': '',
+      'material_name': '',
+      'classification_detail': <String, dynamic>{},
+    };
+  }
+
   Uri _gatewayUri(String path, [Map<String, String>? query]) {
     final base = _gatewayBaseUrl.endsWith('/')
         ? _gatewayBaseUrl.substring(0, _gatewayBaseUrl.length - 1)
@@ -442,6 +462,8 @@ class ProblemBankService {
           ...uploadMeta,
         }..remove('extraction');
 
+        // 추출 단계에서는 분류 정보를 DB에 저장하지 않는다.
+        // 기존 draft가 남아있을 수 있으므로 분류는 빈 값으로 초기화한다.
         final row = await _client
             .from('pb_documents')
             .update({
@@ -450,19 +472,7 @@ class ProblemBankService {
               'source_storage_path': objectPath,
               'source_size_bytes': bytes.length,
               'status': 'uploaded',
-              ..._buildClassificationColumns(
-                curriculumCode: curriculumCode,
-                sourceTypeCode: sourceTypeCode,
-                courseLabel: courseLabel,
-                gradeLabel: gradeLabel,
-                examYear: examYear,
-                semesterLabel: semesterLabel,
-                examTermLabel: examTermLabel,
-                schoolName: schoolName,
-                publisherName: publisherName,
-                materialName: materialName,
-                classificationDetail: classificationDetail,
-              ),
+              ..._buildDraftClassificationColumns(),
               'meta': mergedMeta,
               'updated_at': nowIso,
             })
@@ -487,6 +497,7 @@ class ProblemBankService {
         );
       }
 
+      // 추출 단계(draft) insert에는 분류 정보를 넣지 않는다.
       final row = await _client
           .from('pb_documents')
           .insert({
@@ -497,19 +508,7 @@ class ProblemBankService {
             'source_storage_path': objectPath,
             'source_size_bytes': bytes.length,
             'status': 'uploaded',
-            ..._buildClassificationColumns(
-              curriculumCode: curriculumCode,
-              sourceTypeCode: sourceTypeCode,
-              courseLabel: courseLabel,
-              gradeLabel: gradeLabel,
-              examYear: examYear,
-              semesterLabel: semesterLabel,
-              examTermLabel: examTermLabel,
-              schoolName: schoolName,
-              publisherName: publisherName,
-              materialName: materialName,
-              classificationDetail: classificationDetail,
-            ),
+            ..._buildDraftClassificationColumns(),
             'meta': uploadMeta,
           })
           .select('*')
@@ -577,6 +576,7 @@ class ProblemBankService {
           ),
         );
 
+    // 수동 붙여넣기 입력도 draft로 저장하며 분류는 확정 업로드 단계에서 채워진다.
     final docRow = await _client
         .from('pb_documents')
         .insert({
@@ -587,19 +587,7 @@ class ProblemBankService {
           'source_storage_path': objectPath,
           'source_size_bytes': bytes.length,
           'status': 'uploaded',
-          ..._buildClassificationColumns(
-            curriculumCode: curriculumCode,
-            sourceTypeCode: sourceTypeCode,
-            courseLabel: courseLabel,
-            gradeLabel: gradeLabel,
-            examYear: examYear,
-            semesterLabel: semesterLabel,
-            examTermLabel: examTermLabel,
-            schoolName: schoolName,
-            publisherName: publisherName,
-            materialName: materialName,
-            classificationDetail: classificationDetail,
-          ),
+          ..._buildDraftClassificationColumns(),
           'meta': <String, dynamic>{
             'uploaded_from': 'manager_manual_paste',
             'uploaded_at': nowIso,
@@ -668,17 +656,7 @@ class ProblemBankService {
         'objective_answer_key': '',
         'subjective_answer': '',
         'objective_generated': false,
-        'curriculum_code': _normalizeCurriculumCode(curriculumCode),
-        'source_type_code': _normalizeSourceTypeCode(sourceTypeCode),
-        'course_label': courseLabel.trim(),
-        'grade_label': gradeLabel.trim(),
-        'exam_year': _normalizeExamYear(examYear),
-        'semester_label': _normalizeSemesterLabel(semesterLabel),
-        'exam_term_label': _normalizeExamTermLabel(examTermLabel),
-        'school_name': schoolName.trim(),
-        'publisher_name': publisherName.trim(),
-        'material_name': materialName.trim(),
-        'classification_detail': classificationDetail,
+        ..._buildDraftClassificationColumns(),
         'figure_refs': const <String>[],
         'equations': const <Map<String, dynamic>>[],
         'source_anchors': <String, dynamic>{
@@ -703,22 +681,11 @@ class ProblemBankService {
       await _client.from('pb_questions').insert(questionRows);
     }
 
+    // draft 상태에서는 분류 정보를 저장하지 않는다. 확정 업로드 단계에서 채워진다.
     await _client.from('pb_documents').update({
       'status':
           lowConfidenceCount > 0 ? 'draft_review_required' : 'draft_ready',
-      ..._buildClassificationColumns(
-        curriculumCode: curriculumCode,
-        sourceTypeCode: sourceTypeCode,
-        courseLabel: courseLabel,
-        gradeLabel: gradeLabel,
-        examYear: examYear,
-        semesterLabel: semesterLabel,
-        examTermLabel: examTermLabel,
-        schoolName: schoolName,
-        publisherName: publisherName,
-        materialName: materialName,
-        classificationDetail: classificationDetail,
-      ),
+      ..._buildDraftClassificationColumns(),
       'meta': <String, dynamic>{
         ...document.meta,
         'extraction': <String, dynamic>{

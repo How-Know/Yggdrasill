@@ -155,6 +155,7 @@ class HomeworkQuickAddProxyDialogState
   static const double _kNaesinGridSchoolLabelWidth = 120;
   static const double _kNaesinGridCellSize = 58;
   static const double _kNaesinGridCellGap = 12;
+
   /// 라벨 열(학교/년도)과 첫 셀 열 사이.
   static const double _kNaesinGridLabelToCellsGap = 12;
   static const Color _kNaesinLinkedActiveCellColor = Color(0xFF282828);
@@ -1450,6 +1451,15 @@ class HomeworkQuickAddProxyDialogState
     }
     chunks.add(start == prev ? '$start' : '$start-$prev');
     return chunks.join(', ');
+  }
+
+  String _normalizePageTextCompact(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) return '';
+    final parsed = _pagesFromRawPageText(trimmed);
+    if (parsed.isEmpty) return trimmed;
+    final compact = _pagesToCompactText(parsed);
+    return compact.isEmpty ? trimmed : compact;
   }
 
   Set<int> _smallPages(_SmallUnitSelectionNode small) {
@@ -3404,7 +3414,8 @@ class HomeworkQuickAddProxyDialogState
         useRangeDraft ? _buildMergedRangeTask(selectedBook) : null;
     final title = useRangeDraft ? _rangeTitle.text.trim() : _title.text.trim();
     if (title.isEmpty) return null;
-    final page = useRangeDraft ? _rangeAutoPage.trim() : _page.text.trim();
+    final rawPage = useRangeDraft ? _rangeAutoPage.trim() : _page.text.trim();
+    final page = _normalizePageTextCompact(rawPage);
     final count = useRangeDraft ? _rangeAutoCount.trim() : _count.text.trim();
     final timeLimitMinutes = _isCurrentHomeworkTypeTest()
         ? _parsePositiveIntText(_timeLimitMinutes.text)
@@ -3487,6 +3498,7 @@ class HomeworkQuickAddProxyDialogState
               page: normalizedPage,
               count: item.count,
               content: item.content,
+              timeLimitMinutes: item.timeLimitMinutes,
             ),
           );
         }
@@ -3750,7 +3762,7 @@ class HomeworkQuickAddProxyDialogState
         _showDialogSnackBar('과제명을 입력하세요.');
         return;
       }
-      final page = pageController.text.trim();
+      final page = _normalizePageTextCompact(pageController.text);
       final count = countController.text.trim();
       final timeLimitMinutes = _parsePositiveIntText(timeLimitController.text);
       final memo = memoController.text.trim();
@@ -4771,6 +4783,19 @@ class HomeworkQuickAddProxyDialogState
     if (_draftGroupItems.isNotEmpty) {
       final groupTitle =
           _groupTitle.text.trim().isEmpty ? '그룹 과제' : _groupTitle.text.trim();
+      final normalizedDraftItems = _draftGroupItems.map((item) {
+        final compactPage = _normalizePageTextCompact(item.page);
+        if (compactPage == item.page) return item;
+        return item.copyWith(
+          page: compactPage,
+          body: _composeBodyValues(
+            page: compactPage,
+            count: item.count,
+            content: item.content,
+            timeLimitMinutes: item.timeLimitMinutes,
+          ),
+        );
+      }).toList(growable: false);
       Navigator.pop(context, {
         'studentId': widget.studentId,
         'groupMode': true,
@@ -4779,7 +4804,7 @@ class HomeworkQuickAddProxyDialogState
         'flowId': _flowId,
         'action': resolvedAction,
         'items':
-            _draftGroupItems.map((e) => e.toJson()).toList(growable: false),
+            normalizedDraftItems.map((e) => e.toJson()).toList(growable: false),
       });
       return;
     }

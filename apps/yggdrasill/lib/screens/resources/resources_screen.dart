@@ -799,15 +799,13 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
           }
           continue;
         }
-        // 채우기(cover) 느낌: 약간 확대해서 여백을 최소화
-        const double overscan = 1.02;
-        final scale = math.max(tw / sw, th / sh) * overscan;
-        final w = sw * scale;
-        final h = sh * scale;
-        final dx = (tw - w) / 2.0;
-        final dy = (th - h) / 2.0;
+        // 왜곡 채움(stretch): 가로/세로를 독립 스케일로 늘려 페이지를 꽉 채움
+        final scaleX = tw / sw;
+        final scaleY = th / sh;
+        final w = sw * scaleX;
+        final h = sh * scaleY;
         try {
-          newPage.graphics.drawPdfTemplate(tmpl, Offset(dx, dy), Size(w, h));
+          newPage.graphics.drawPdfTemplate(tmpl, const Offset(0, 0), Size(w, h));
         } catch (_) {
           newPage.graphics.drawPdfTemplate(tmpl, const Offset(0, 0));
         }

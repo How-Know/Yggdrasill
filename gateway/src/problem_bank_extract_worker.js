@@ -427,27 +427,31 @@ function normalizeExamYear(raw) {
 }
 
 function buildClassificationFromDocument(doc) {
+  // draft 문서는 분류 컬럼이 빈 문자열(또는 null)로 저장되어 있다.
+  // 추출 단계에서는 빈값을 그대로 유지하여 pb_questions 에 복사한다.
+  // 분류 확정은 매니저 '업로드(확정)' 버튼에서
+  // `updateQuestionsClassificationForDocument` 가 일괄 처리한다.
   const meta = doc?.meta && typeof doc.meta === 'object' ? doc.meta : {};
   const sourceRaw =
     meta.source_classification && typeof meta.source_classification === 'object'
       ? meta.source_classification
       : {};
   const naesinRaw = sourceRaw.naesin && typeof sourceRaw.naesin === 'object' ? sourceRaw.naesin : {};
-  const legacySourceType = toBoolean(sourceRaw.private_material)
-    ? 'market_book'
-    : toBoolean(sourceRaw.mock_past_exam)
-      ? 'mock_past'
-      : toBoolean(sourceRaw.school_past_exam)
-        ? 'school_past'
-        : 'school_past';
+
+  const rawCurriculum = normalizeWhitespace(doc?.curriculum_code || '');
+  const rawSourceType = normalizeWhitespace(doc?.source_type_code || '');
   const semesterCandidate = normalizeWhitespace(naesinRaw.semester);
   const examTermCandidate = normalizeWhitespace(naesinRaw.exam_term);
+
   return {
-    curriculum_code: normalizeCurriculumCode(doc?.curriculum_code, 'rev_2022'),
-    source_type_code: normalizeSourceTypeCode(
-      doc?.source_type_code,
-      legacySourceType,
-    ),
+    // draft 의 빈값은 빈값 그대로 유지한다. 값이 있지만 허용되지 않는 값이면
+    // 기본 치환(rev_2022 / school_past) 으로 복구한다.
+    curriculum_code: rawCurriculum === ''
+      ? ''
+      : normalizeCurriculumCode(rawCurriculum, 'rev_2022'),
+    source_type_code: rawSourceType === ''
+      ? ''
+      : normalizeSourceTypeCode(rawSourceType, 'school_past'),
     course_label: normalizeWhitespace(doc?.course_label || ''),
     grade_label: normalizeWhitespace(
       doc?.grade_label || naesinRaw.grade || '',
@@ -652,6 +656,25 @@ function looksLikeQuestionTerminalLine(line) {
   return /(구하시오|고르시오|쓰시오|적으시오|서술하시오|값은|넓이는|옳은 것은|것은|것을)\.?\s*\)?$/.test(
     input,
   );
+}
+
+// 세트형(하위문항 (1), (2) ...)임을 암시하는 시그니처가 현재 stem에 이미 존재하는지 검사한다.
+// - 직전 stem 라인에 "(1)", "(2)" 등의 소문항 번호 라벨이 보이거나
+// - 리드 문장이 "다음을 구하시오/서술하시오/답하시오/차례로 답하시오" 같은 세트형 리드 프롬프트이면 true.
+// 이 경우 score_only([N.00점]) 라인은 새 문항 경계가 아니라 같은 문항의
+// 소문항 배점 메타데이터로 취급해야 한다.
+function hasSetQuestionSignature(stemLines) {
+  if (!Array.isArray(stemLines) || stemLines.length === 0) return false;
+  const SUB_LABEL_REGEX = /^\s*[\(（]\s*[1-9]\s*[\)）]/;
+  const LEAD_PROMPT_REGEX =
+    /(다음을\s*(서술|구하|답하|풀|쓰|계산|적)|다음\s*물음에\s*답하|차례로\s*답하|각각\s*(구하|답하|서술|풀)|아래의?\s*물음에\s*답하)/;
+  for (const raw of stemLines) {
+    const line = normalizeWhitespace(String(raw || ''));
+    if (!line) continue;
+    if (SUB_LABEL_REGEX.test(line)) return true;
+    if (LEAD_PROMPT_REGEX.test(line)) return true;
+  }
+  return false;
 }
 
 function parseChoiceLine(line) {
@@ -1076,6 +1099,23 @@ function extractEndNoteAnswerHints(xmlText, equations = []) {
       answer = parseAnswerLine(candidate) || parseAnswerLineLoose(candidate);
       if (answer) break;
     }
+    // <hp:t> 만으로 뽑힌 후보는 endnote 내부 equation(수식) 토큰이 빠져 있어
+    // "," 같은 구분자만 남아 실제 답으로 쓸 수 없는 경우가 있다.
+    // 이때는 bodyPlain(equation 토큰 포함)을 재사용해 답을 다시 만든다.
+    const isDegenerateAnswer = (() => {
+      if (!answer) return false;
+      const compact = String(answer).replace(/[\s,，、·]/g, '');
+      if (compact.length === 0) return true;
+      // 토큰/수식 없이 쉼표/빈 값만 있으면 비정상으로 판단한다.
+      return (
+        !/[0-9A-Za-z가-힣]/.test(compact) && !/\[\[PB_EQ_/.test(String(answer))
+      );
+    })();
+    if (!answer || isDegenerateAnswer) {
+      const refreshed =
+        parseAnswerLine(bodyPlain) || parseAnswerLineLoose(bodyPlain);
+      if (refreshed) answer = refreshed;
+    }
     if (!answer) continue;
     const rendered = renderAnswerEquationTokens(answer, equationTokenMap);
     if (!rendered || /^[\[\]]+$/.test(rendered)) continue;
@@ -1272,8 +1312,15 @@ function transformXmlToLines(xmlText, sectionIndex, { alignResolver = null } = {
   );
   const answerHints = extractEndNoteAnswerHints(replacedXml, equations);
   // 문단 내부/외부에 섞여 있는 미주/각주 본문은 문제 텍스트 추출에서 제외한다.
+  // 단, 미주가 있었던 위치는 텍스트 마커([미주])로 남겨둬서 파서가 "어느 문항의 끝"인지
+  // 판별할 수 있도록 한다. 세트형 문항에서 연이어 나오는 [N점] 배점 헤더를
+  // 같은 문항의 부분 배점으로 병합할지, 새 문항 경계로 분리할지 결정할 때
+  // 이 위치 정보가 결정적으로 사용된다.
   let purifiedXml = replacedXml
-    .replace(/<hp:endNote[\s\S]*?<\/hp:endNote>/gi, ' ')
+    .replace(
+      /<hp:endNote[\s\S]*?<\/hp:endNote>/gi,
+      '<hp:t>[미주]</hp:t>',
+    )
     .replace(/<hp:footNote[\s\S]*?<\/hp:footNote>/gi, ' ')
     .replace(/<hp:note[\s\S]*?<\/hp:note>/gi, ' ');
 
@@ -2525,6 +2572,11 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
   const questions = [];
   let current = null;
   let splitAfterScoreAnnotation = false;
+  // "[미주]" 마커가 나타난 이후로 아직 score_only([N.00점])를 하나도 보지 못한 상태인지.
+  // HWPX에서 미주(endnote)는 각 문항 본문 끝에 anchor되므로, 미주 이후 처음 나오는
+  // score_only는 거의 항상 새 문항의 시작이다. 반면 미주 없이 연속되는 score_only는
+  // 같은 세트형 문항의 부분 배점(예: (1) 4점 / (2) 7점)일 가능성이 매우 높다.
+  let sawEndnoteSinceLastScore = false;
   const stats = {
     circledChoices: 0,
     viewBlocks: 0,
@@ -2679,6 +2731,33 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
 
   const flushCurrent = () => {
     if (!current) return;
+    // stem/choices/equations/figures/score 모두 비어있는 implicit seed는 drop한다.
+    // (예: [미주] 마커 이후 새 seed를 열었으나, 곧바로 다른 경로에서 새 문항이 열려
+    //      원래 seed에 아무 내용도 쌓이지 않는 경우.)
+    const hasAnyStemLine = (current.stemLines || []).some((raw) => {
+      const c = normalizeWhitespace(String(raw || ''));
+      if (!c) return false;
+      if (/^\[(문단|박스시작|박스끝|그림|도형|표행|표셀)\]$/.test(c)) return false;
+      return true;
+    });
+    const isImplicitSeed = (current.sourcePatterns || []).some((p) =>
+      /^implicit_/.test(String(p || '')),
+    );
+    const isEmptySeed =
+      isImplicitSeed &&
+      !hasAnyStemLine &&
+      (current.choices || []).length === 0 &&
+      (current.equations || []).length === 0 &&
+      (current.figure_refs || []).length === 0 &&
+      !current.score_point &&
+      !current.answer_key;
+    if (isEmptySeed) {
+      if (current.question_number) {
+        usedQuestionNumbers.delete(String(current.question_number));
+      }
+      current = null;
+      return;
+    }
     rebalanceConsonantChoicesIntoViewBlock(current);
     current.stem = normalizeWhitespace(current.stemLines.join('\n'));
     const stemLineAligns = Array.isArray(current.stemLineAligns)
@@ -2720,7 +2799,7 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
   };
 
   for (const row of allLines) {
-    const line = row.text;
+    let line = row.text;
     if (!line) continue;
 
     if (/모의고사|학력평가|전국연합/.test(line)) {
@@ -2730,36 +2809,129 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
       stats.csatMarkers += 1;
     }
 
+    // 미주([미주]) 마커가 포함된 라인은 "이 문항 본문 종료 지점"을 가리킨다.
+    // stem에 남겨도 본문에 도움이 되지 않으므로 텍스트에서 제거하고 상태 플래그만 올린다.
+    //
+    // HWPX에서는 endnote anchor가 "다음 문항의 시작 paragraph"에 섞여 들어가는 경우가 많다.
+    // (예: 같은 hp:p 안에 "<endnote/> 다음 문항 stem 첫 줄" 형태.)
+    // 이 경우 [미주]를 제거한 나머지 텍스트는 "이전 문항이 아닌 새 문항의 stem"이므로
+    // 현재 문항을 flush하고 다음 문항이 자연스럽게 시작되도록 상태를 정리한다.
+    // HWPX에서 endnote anchor는 대부분 "다음 문항의 시작 paragraph"에 섞여 들어간다.
+    // (예: 같은 hp:p 안에 "<endNote/> 다음 문항 stem 첫 줄" 형태.)
+    // 이때 [미주]를 제거한 나머지 텍스트는 "이전 문항이 아닌 새 문항의 stem"이므로
+    // 현재 문항을 flush해 경계를 명확히 하고, 라인 자체는 아래의 일반 stem 처리 경로를 통해
+    // 새 문항(또는 곧 이어질 score_only가 여는 새 문항)의 첫 stem 라인으로 흡수되도록 한다.
+    if (/\[미주\]/.test(line)) {
+      sawEndnoteSinceLastScore = true;
+      const stripped = normalizeWhitespace(line.replace(/\[미주\]/g, ' '));
+      if (!stripped) continue;
+      row.text = stripped;
+      line = stripped;
+      // [미주] 뒤에 의미있는 본문(한글/영문/숫자/수식 토큰)이 남아있으면
+      // 현재 문항을 flush하고 이어지는 stem을 담을 새 seed를 연다.
+      // 이때 번호는 곧 이어질 score_only가 채워넣는 배점까지 붙은 뒤 결정되도록
+      // 'pending' 상태로 둔다(숫자 reserve를 지연). flushCurrent에서 빈 seed는 drop된다.
+      const hasMeaningfulContent =
+        /[가-힣A-Za-z0-9]/.test(stripped) || /\[\[PB_EQ_/.test(stripped);
+      if (
+        hasMeaningfulContent &&
+        current &&
+        (current.stemLines.length > 0 || (current.choices || []).length > 0)
+      ) {
+        flushCurrent();
+        const implicitNumber = reserveQuestionNumber('', { allowFallback: true });
+        if (implicitNumber) {
+          current = createQuestionSeed({
+            questionNumber: implicitNumber,
+            row,
+            stemLines: [],
+            stemLineAligns: [],
+            sourcePatterns: ['implicit_after_endnote'],
+          });
+          sawEndnoteSinceLastScore = false;
+          // 직전 문항에서 [배점] 흡수 후 설정되었을 splitAfterScoreAnnotation 플래그는
+          // 새 문항 seed가 열린 시점에 이미 경계가 명시되었으므로 초기화한다.
+          // 초기화하지 않으면 이 라인이 narrativeLead로 분류되어 Q17 empty + Q18 중복 생성되는
+          // 오분할을 유발한다.
+          splitAfterScoreAnnotation = false;
+        }
+      }
+    }
+
     const start = parseQuestionStart(line);
     if (start) {
       splitAfterScoreAnnotation = false;
-      // score_only ("[3.00점]") 라인이 이미 stem이 있는 현재 문항 바로 뒤에 나오면
-      // 새 문항이 아니라 현재 문항의 배점 메타데이터로 취급한다.
-      // 번호 없는 문서에서 stem → [배점] → 선택지 순서를 올바르게 처리하기 위함.
+      // score_only ("[3.00점]") 라인이 현재 문항 stem 바로 뒤에 나올 때의 처리.
+      // 1) 세트형(하위문항 (1), (2) ...)이라면 선택지 유무와 무관하게
+      //    같은 문항의 소문항 배점 메타데이터로 흡수한다(새 문항으로 분할하지 않음).
+      // 2) 그 외엔 기존처럼 stem→[배점]→선택지 순서 처리를 유지한다.
       if (
         start.style === 'score_only' &&
         current &&
-        current.stemLines.length > 0 &&
-        current.choices.length === 0
+        current.stemLines.length > 0
       ) {
-        current.score_point = start.scorePoint ?? current.score_point;
-        current.sourcePatterns.push('score_annotation');
-        const lastNonStructuralStem = (() => {
-          for (let si = current.stemLines.length - 1; si >= 0; si--) {
+        const setSigPresent = hasSetQuestionSignature(current.stemLines);
+        // 세트형(하위문항) 흡수는 미주 경계를 넘어가면 금지한다.
+        // HWPX에서 endnote는 해당 문항 말미에 anchor되므로, 미주 이후 첫 score_only는
+        // 세트형 sub-score가 아닌 "다음 문항의 시작"이다.
+        const allowSetAbsorb = setSigPresent && !sawEndnoteSinceLastScore;
+        // 단문항 stem-only 흡수(choices === 0)는 stem→[배점]→선택지 순서를 한 문항에 묶기 위해 필요하다.
+        // 다만 아래 두 경우는 미주 경계 이후에도 흡수를 허용한다:
+        //   1) 현재 stem이 "프롬프트 한 줄" 수준으로 매우 짧음 (의미있는 글자 < 25)
+        //      → HWPX 상단 특수 레이아웃에서 이전 문항의 "[정답] …" endnote가 우연히 먼저 보이는 경우.
+        //   2) 현재 stem이 이미 종결형 문장("...구하시오/고르시오/...?")으로 끝남
+        //      → 이어지는 score_only는 같은 문항의 [배점]이고, 이후에 따라오는 prompt-like 라인은
+        //        splitAfterScoreAnnotation 경로에서 새 문항으로 올바르게 분기된다.
+        const meaningfulCurrentStemLen = (() => {
+          let len = 0;
+          for (const raw of current.stemLines || []) {
+            const c = normalizeWhitespace(String(raw || ''));
+            if (!c) continue;
+            if (/^\[(문단|박스시작|박스끝|그림|도형|표행|표셀)\]$/.test(c)) continue;
+            len += c.length;
+            if (len >= 25) break;
+          }
+          return len;
+        })();
+        const lastNonStructuralStemLine = (() => {
+          for (let si = (current.stemLines || []).length - 1; si >= 0; si -= 1) {
             const c = normalizeWhitespace(current.stemLines[si]);
             if (c && !/^\[(문단|박스시작|박스끝|그림|도형|표행|표셀)\]$/.test(c)) return c;
           }
           return '';
         })();
-        if (looksLikeQuestionTerminalLine(lastNonStructuralStem)) {
-          splitAfterScoreAnnotation = true;
+        const stemOnlyEndnoteBypass =
+          meaningfulCurrentStemLen < 25 ||
+          looksLikeQuestionTerminalLine(lastNonStructuralStemLine);
+        const allowStemOnlyAbsorb =
+          current.choices.length === 0 &&
+          (!sawEndnoteSinceLastScore || stemOnlyEndnoteBypass) &&
+          !setSigPresent;
+        const canAbsorbAsScoreAnnotation = allowSetAbsorb || allowStemOnlyAbsorb;
+        if (canAbsorbAsScoreAnnotation) {
+          if (!current.score_point) {
+            current.score_point = start.scorePoint ?? current.score_point;
+          }
+          current.sourcePatterns.push(
+            allowSetAbsorb ? 'set_question_sub_score' : 'score_annotation',
+          );
+          if (allowSetAbsorb) {
+            // 세트형 내부(미주 없이 연속된 [N점])에서는 새 문항으로 분리하지 않는다.
+            splitAfterScoreAnnotation = false;
+          } else {
+            if (looksLikeQuestionTerminalLine(lastNonStructuralStemLine)) {
+              splitAfterScoreAnnotation = true;
+            }
+          }
+          if (start.style === 'score_only') sawEndnoteSinceLastScore = false;
+          continue;
         }
-        continue;
       }
       const questionNumber = reserveQuestionNumber(start.number, {
         allowFallback: start.style === 'score_only',
       });
       if (!questionNumber) {
+        if (start.style === 'score_only') sawEndnoteSinceLastScore = false;
         continue;
       }
       flushCurrent();
@@ -2771,6 +2943,7 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
         sourcePatterns: [start.style],
         scorePoint: start.scorePoint ?? null,
       });
+      if (start.style === 'score_only') sawEndnoteSinceLastScore = false;
       continue;
     }
 
@@ -2925,9 +3098,12 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
     const canSplitAfterTerminal =
       looksLikePromptLineForImplicitSplit(cleanedLine) &&
       looksLikeQuestionTerminalLine(previousStemLine);
+    // 세트형 문항에서는 (1)/(2) 소문항의 "... 서술하시오" → 다음 (2) 줄이
+    // 새 문항 경계로 오인되지 않도록 암시 분할을 억제한다.
+    const insideSetQuestion = hasSetQuestionSignature(current.stemLines);
     if (
-      canSplitAfterChoices ||
-      canSplitAfterTerminal
+      !insideSetQuestion &&
+      (canSplitAfterChoices || canSplitAfterTerminal)
     ) {
       const implicitQuestionNumber = reserveQuestionNumber('', {
         allowFallback: true,
@@ -3002,6 +3178,16 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
         current.sourcePatterns.push('view_item');
         continue;
       }
+      // 세트형(하위문항 (1), (2) ...) 문항에서는 (1) / (2) / (3) 라인이 소문항 본문이므로
+      // numeric 스타일 choice로 오인식되면 안 된다. stem 라인으로 유지한다.
+      if (
+        choice.style === 'numeric' &&
+        hasSetQuestionSignature(current.stemLines)
+      ) {
+        appendStemLine(current, cleanedLine, row.align);
+        current.sourcePatterns.push('set_question_sub_item');
+        continue;
+      }
       if (choice.style === 'circled') {
         stats.circledChoices += 1;
       }
@@ -3035,6 +3221,114 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
   }
 
   flushCurrent();
+
+  // endnote(미주) 개수 기반 상한 병합:
+  // HWPX 미주 개수는 "정답 힌트가 있는 문항 수"와 동일하므로 실제 문항 수의 상한이 된다.
+  // 파서가 [N점] 같은 score_only를 새 문항으로 오분할한 "거의 빈 꼬리 문항"이
+  // 남으면 뒤에서부터 가까운 앞 문항에 병합하여 실제 문항 수에 맞춘다.
+  //
+  // 과도 병합을 막기 위해 아래 조건을 모두 만족할 때만 병합 대상으로 본다.
+  //  - sourcePatterns 가 score_only/score_annotation/implicit_after_* 로만 구성
+  //  - 선택지가 없고, 의미있는 stem 길이가 매우 짧음 (< 30자)
+  //  - equation/figure_refs 도 실질 없음
+  const endnoteCap = answerHintMap.size;
+  if (endnoteCap > 0 && questions.length > endnoteCap) {
+    const MERGE_SAFE_PATTERNS = new Set([
+      'score_only',
+      'score_annotation',
+      'set_question_sub_score',
+      'set_question_sub_item',
+      'implicit_after_score_terminal',
+      'implicit_after_block',
+      'merged_score_tail',
+    ]);
+    const meaningfulStemLength = (q) => {
+      const lines = Array.isArray(q?.stemLines) ? q.stemLines : [];
+      const joined = lines
+        .map((l) => normalizeWhitespace(String(l || '')))
+        .filter(
+          (l) =>
+            l &&
+            !/^\[(문단|박스시작|박스끝|그림|도형|표행|표셀)\]$/.test(l),
+        )
+        .join(' ');
+      return joined.length;
+    };
+    const isMergeSafe = (q) => {
+      const patterns = Array.isArray(q?.sourcePatterns) ? q.sourcePatterns : [];
+      if (patterns.length === 0) return false;
+      if (!patterns.every((p) => MERGE_SAFE_PATTERNS.has(String(p)))) return false;
+      if (Array.isArray(q.choices) && q.choices.length > 0) return false;
+      if (Array.isArray(q.equations) && q.equations.length > 0) return false;
+      if (Array.isArray(q.figure_refs) && q.figure_refs.length > 0) return false;
+      if (meaningfulStemLength(q) >= 30) return false;
+      return true;
+    };
+    const mergeQuestionIntoPrev = (prev, tail) => {
+      if (!prev || !tail) return;
+      const prevLines = Array.isArray(prev.stemLines) ? prev.stemLines : [];
+      const tailLines = Array.isArray(tail.stemLines) ? tail.stemLines : [];
+      const prevAligns = Array.isArray(prev.stemLineAligns) ? prev.stemLineAligns : [];
+      const tailAligns = Array.isArray(tail.stemLineAligns) ? tail.stemLineAligns : [];
+      prev.stemLines = [...prevLines, ...tailLines];
+      prev.stemLineAligns = [
+        ...prevAligns,
+        ...(tailAligns.length === tailLines.length
+          ? tailAligns
+          : tailLines.map(() => 'left')),
+      ];
+      prev.stem = normalizeWhitespace(prev.stemLines.join('\n'));
+      prev.equations = Array.from(
+        new Map(
+          [...(prev.equations || []), ...(tail.equations || [])].map((e) => [
+            JSON.stringify([e?.raw || '', e?.latex || '']),
+            e,
+          ]),
+        ).values(),
+      );
+      prev.figure_refs = Array.from(
+        new Set([...(prev.figure_refs || []), ...(tail.figure_refs || [])]),
+      );
+      prev.flags = Array.from(new Set([...(prev.flags || []), ...(tail.flags || [])]));
+      prev.sourcePatterns = [
+        ...(prev.sourcePatterns || []),
+        'merged_score_tail',
+        ...(tail.sourcePatterns || []),
+      ];
+      if (!prev.score_point && tail.score_point) {
+        prev.score_point = tail.score_point;
+      }
+      if (tail.source_anchors && prev.source_anchors) {
+        prev.source_anchors.line_end = Math.max(
+          Number(prev.source_anchors.line_end || 0),
+          Number(tail.source_anchors.line_end || 0),
+        );
+      }
+      prev.meta = {
+        ...(prev.meta || {}),
+        source_patterns: prev.sourcePatterns,
+        contains_figure: (prev.figure_refs || []).length > 0,
+        contains_equation: (prev.equations || []).length > 0,
+      };
+    };
+    while (questions.length > endnoteCap) {
+      let mergedAny = false;
+      for (let i = questions.length - 1; i >= 1; i -= 1) {
+        const tail = questions[i];
+        if (!isMergeSafe(tail)) continue;
+        const prev = questions[i - 1];
+        mergeQuestionIntoPrev(prev, tail);
+        questions.splice(i, 1);
+        mergedAny = true;
+        break;
+      }
+      if (!mergedAny) break;
+    }
+    for (const [idx, q] of questions.entries()) {
+      q.source_order = idx;
+    }
+  }
+
   const dedupedQuestions = dedupeQuestionsByNumber(questions);
   questions.length = 0;
   questions.push(...dedupedQuestions);
@@ -3611,9 +3905,23 @@ async function processOneJob(job) {
         if (fetchInsertedErr) {
           throw new Error(`figure_seed_fetch_failed:${fetchInsertedErr.message}`);
         }
+        // figure job은 "실제 그림/도형"(<hp:pic> 등)이 있는 문항에만 큐잉한다.
+        // 표([표행]/[표셀])만 있는 문항까지 Gemini 이미지를 생성하면
+        // 존재하지 않는 그림이 추론되어 엉뚱한 문항에 붙는 문제를 유발했다.
+        const REAL_FIGURE_MARKERS = ['[그림]', '[도형]'];
+        const hasRealFigureMarker = (refs) => {
+          if (!Array.isArray(refs)) return false;
+          return refs.some((ref) => {
+            const text = normalizeWhitespace(String(ref || ''));
+            return REAL_FIGURE_MARKERS.some((marker) => text.includes(marker));
+          });
+        };
         const figureJobRows = (insertedQuestions || [])
           .filter(
-            (row) => Array.isArray(row.figure_refs) && row.figure_refs.length > 0,
+            (row) =>
+              Array.isArray(row.figure_refs) &&
+              row.figure_refs.length > 0 &&
+              hasRealFigureMarker(row.figure_refs),
           )
           .map((row) => ({
             academy_id: job.academy_id,
