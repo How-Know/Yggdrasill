@@ -85,7 +85,7 @@ function replacePlaceholdersWithImages(html, dataUrls, layoutItems, figureLayout
   }
 
   const rendered = new Set();
-  return html.replace(/\{\{FIG_(\d+)\}\}/g, (_, numStr) => {
+  const replaced = html.replace(/\{\{FIG_(\d+)\}\}/g, (_, numStr) => {
     const idx = parseInt(numStr, 10);
     if (rendered.has(idx)) return '';
     rendered.add(idx);
@@ -101,6 +101,31 @@ function replacePlaceholdersWithImages(html, dataUrls, layoutItems, figureLayout
     if (!url) return '';
     const item = layoutItems ? layoutItems[idx] : null;
     return buildSingleFigureHtml(url, item);
+  });
+
+  // HTML 스펙상 <span>(inline) 안에 <div>(block)가 들어가면 브라우저가 파싱
+  // 단계에서 <div>를 <span> 바깥으로 끌어올린다(tag hoisting). 그 결과
+  // <div class="bogi-content"> 안의 `<span class="lc-line">...<div class="figure-inline-block">...</div>...</span>`
+  // 구조가 풀리면서 figure가 박스(.bogi-box) 바깥으로 튀어나와 보이는 문제가 있다.
+  // 사전에 "span 안에 단독 figure block만 있는 경우"를 감지해 span 래퍼를 벗겨내고,
+  // 대신 `<div class="lc-figure-line">`로 감싸 박스 내부 블록으로 유지한다.
+  return liftFigureOutOfInlineSpan(replaced);
+}
+
+function liftFigureOutOfInlineSpan(html) {
+  // <span class="lc-line ..."> (figure 단독 또는 [공백/whitespace 포함]) </span>
+  // 패턴에서 figure만 남기고 span 래퍼 제거 → 블록 컨테이너로 대체.
+  // 다른 inline 컨텐츠(수식/텍스트)와 섞여 있으면 건드리지 않는다.
+  const spanRe =
+    /<span class="lc-line(?:\s[^"]*)?" data-lc-profile="[^"]*">([\s\S]*?)<\/span>/g;
+  return html.replace(spanRe, (match, inner) => {
+    const trimmed = String(inner || '').trim();
+    if (!trimmed) return match;
+    // figure block만 포함하고 다른 inline 텍스트가 없는지 검사
+    const figureOnlyRe =
+      /^(?:<div class="figure-(?:inline-block|container|group-horizontal)[\s\S]*?<\/div>)+$/;
+    if (!figureOnlyRe.test(trimmed)) return match;
+    return `<div class="lc-figure-line">${trimmed}</div>`;
   });
 }
 

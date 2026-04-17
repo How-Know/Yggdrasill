@@ -454,7 +454,12 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   Map<String, dynamic>? _latestFigureAssetOf(ProblemBankQuestion q) {
     final assets = _figureAssetsOf(q);
     if (assets.isEmpty) return null;
+    // approved=true 우선, 그다음 created_at 내림차순.
+    // 이유는 _orderedFigureAssetsOf 의 주석 참고.
     assets.sort((a, b) {
+      final aApproved = a['approved'] == true ? 1 : 0;
+      final bApproved = b['approved'] == true ? 1 : 0;
+      if (aApproved != bApproved) return bApproved - aApproved;
       final aa = '${a['created_at'] ?? ''}';
       final bb = '${b['created_at'] ?? ''}';
       return bb.compareTo(aa);
@@ -465,11 +470,22 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   List<Map<String, dynamic>> _orderedFigureAssetsOf(ProblemBankQuestion q) {
     final assets = _figureAssetsOf(q);
     if (assets.isEmpty) return assets;
-    assets.sort((a, b) {
+    // 같은 figure_index 에 여러 asset 이 쌓여 있는 경우(예: AI 자동 생성본 + 사용자 수동 교체본)
+    // 다음 우선순위로 "대표" asset 을 고른다:
+    //   1) approved=true 인 것을 우선 (사용자가 검수/교체한 것이 최우선)
+    //   2) 동률이면 created_at 이 더 최신인 것
+    // 단순히 최신 순으로만 정렬하면 approved=false 인 AI 재생성본이 수동 교체본을
+    // 덮어버리는 문제가 생긴다 (Q10 표 수동 교체 후 figure job 이 돌면 이 현상 발생).
+    int assetPriority(Map<String, dynamic> a, Map<String, dynamic> b) {
+      final aApproved = a['approved'] == true ? 1 : 0;
+      final bApproved = b['approved'] == true ? 1 : 0;
+      if (aApproved != bApproved) return bApproved - aApproved;
       final aa = '${a['created_at'] ?? ''}';
       final bb = '${b['created_at'] ?? ''}';
       return bb.compareTo(aa);
-    });
+    }
+
+    assets.sort(assetPriority);
     final byIndex = <int, Map<String, dynamic>>{};
     for (final asset in assets) {
       final index = int.tryParse('${asset['figure_index'] ?? ''}');
@@ -937,14 +953,43 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     if (qId.isEmpty) return null;
     try {
       final mergedMeta = Map<String, dynamic>.from(q.meta);
-      final parsedScore = _parseScoreDraft(_scoreDraftFor(q));
-      if (parsedScore == null) {
-        mergedMeta.remove('score_point');
+      // 세트형 문항(= score_parts 가 있음)은 총점이 score_parts 의 합으로 완전히 결정된다.
+      // 일반 인풋(_scoreDrafts)을 무시하고 합계로 score_point 를 강제 동기화한다.
+      final scoreParts = q.scoreParts;
+      if (scoreParts != null && scoreParts.isNotEmpty) {
+        final total = sumScoreParts(scoreParts);
+        if (total > 0) {
+          mergedMeta['score_point'] = total == total.roundToDouble()
+              ? total.toInt()
+              : total;
+        } else {
+          mergedMeta.remove('score_point');
+        }
       } else {
-        final rounded = parsedScore.roundToDouble();
-        mergedMeta['score_point'] =
-            rounded == parsedScore ? rounded.toInt() : parsedScore;
+        final parsedScore = _parseScoreDraft(_scoreDraftFor(q));
+        if (parsedScore == null) {
+          mergedMeta.remove('score_point');
+        } else {
+          final rounded = parsedScore.roundToDouble();
+          mergedMeta['score_point'] =
+              rounded == parsedScore ? rounded.toInt() : parsedScore;
+        }
       }
+      // allow_objective 가 false 이면 "이 문항은 객관식으로 출제하지 않는다"는 명시적 결정이므로,
+      // DB에 남아 있던 객관식 보기/정답/플래그를 모두 0/빈 값으로 강제 동기화한다.
+      // (update 페이로드는 null 을 "변경 없음"으로 취급하므로, null 대신 빈 배열/빈 문자열을 넣어야
+      //  기존 값이 실제로 지워진다.)
+      final saveObjectiveChoices =
+          q.allowObjective ? q.objectiveChoices : const <ProblemBankChoice>[];
+      final trimmedObjectiveKey = q.objectiveAnswerKey.trim();
+      final saveObjectiveAnswerKey = !q.allowObjective
+          ? ''
+          : (trimmedObjectiveKey.isEmpty ? null : trimmedObjectiveKey);
+      if (!q.allowObjective) {
+        mergedMeta['objective_answer_key'] = '';
+        mergedMeta.remove('objective_generated');
+      }
+
       await _service.updateQuestionReview(
         questionId: qId,
         isChecked: q.isChecked,
@@ -954,14 +999,12 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         choices: q.choices,
         allowObjective: q.allowObjective,
         allowSubjective: q.allowSubjective,
-        objectiveChoices: q.objectiveChoices,
-        objectiveAnswerKey: q.objectiveAnswerKey.trim().isEmpty
-            ? null
-            : q.objectiveAnswerKey.trim(),
+        objectiveChoices: saveObjectiveChoices,
+        objectiveAnswerKey: saveObjectiveAnswerKey,
         subjectiveAnswer: q.subjectiveAnswer.trim().isEmpty
             ? null
             : q.subjectiveAnswer.trim(),
-        objectiveGenerated: q.objectiveGenerated,
+        objectiveGenerated: q.allowObjective ? q.objectiveGenerated : false,
         equations: q.equations,
         meta: mergedMeta,
       );
@@ -2460,20 +2503,46 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     if (!mounted) return;
     setState(() {
       _questions = _questions
-          .map(
-            (e) => e.id == q.id
-                ? e.copyWith(
-                    allowObjective: nextObjective,
-                    allowSubjective: nextSubjective,
-                    meta: <String, dynamic>{
-                      ...e.meta,
-                      'allow_objective': nextObjective,
-                      'allow_subjective': nextSubjective,
-                      'allow_essay': nextEssay,
-                    },
-                  )
-                : e,
-          )
+          .map((e) {
+            if (e.id != q.id) return e;
+
+            // allow_objective 가 false 로 바뀌는 순간,
+            // "자동 생성된(또는 과거에 저장된) 객관식 보기/정답"은 의미가 없어진다.
+            // 이 문항을 다시 객관식으로 전환할 때는 사용자가 명시적으로 보기/정답을
+            // 재입력하도록 비워서 저장한다. (재추출 시점에도 재생성되지 않는다 —
+            // 재추출은 별도 버튼이라 사용자 의도로만 일어난다.)
+            //
+            // 단, 문항 원본 보기(`choices`)는 HWPX 에서 추출된 원본이므로 건드리지 않는다.
+            // 건드리는 건 "객관식 출제용 보기/정답" 쌍뿐이다.
+            final willDropObjectiveAssets =
+                e.allowObjective && !nextObjective;
+            final clearedObjectiveChoices = willDropObjectiveAssets
+                ? const <ProblemBankChoice>[]
+                : e.objectiveChoices;
+            final clearedObjectiveAnswer =
+                willDropObjectiveAssets ? '' : e.objectiveAnswerKey;
+
+            final nextMeta = <String, dynamic>{
+              ...e.meta,
+              'allow_objective': nextObjective,
+              'allow_subjective': nextSubjective,
+              'allow_essay': nextEssay,
+            };
+            if (willDropObjectiveAssets) {
+              nextMeta['objective_answer_key'] = '';
+              nextMeta.remove('objective_generated');
+            }
+
+            return e.copyWith(
+              allowObjective: nextObjective,
+              allowSubjective: nextSubjective,
+              objectiveChoices: clearedObjectiveChoices,
+              objectiveAnswerKey: clearedObjectiveAnswer,
+              objectiveGenerated:
+                  willDropObjectiveAssets ? false : e.objectiveGenerated,
+              meta: nextMeta,
+            );
+          })
           .toList(growable: false);
       _dirtyQuestionIds.add(q.id);
     });
@@ -4245,6 +4314,385 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     return parsed;
   }
 
+  /// 배점 입력 위젯.
+  /// - 일반 문항: 기존 인라인 숫자 인풋.
+  /// - 세트형 문항: "총점" 버튼 (클릭 시 하위문항별 배점 다이얼로그).
+  ///   저장된 `meta.score_parts` 가 있으면 그 합계를, 없으면 `meta.score_point` 를 총점으로 표시.
+  Widget _buildScoreField(ProblemBankQuestion q, String scoreDraft) {
+    final isSet = q.isSetQuestion ||
+        (q.answerParts?.isNotEmpty ?? false) ||
+        (q.scoreParts?.isNotEmpty ?? false);
+    if (isSet) {
+      return _buildSetScoreSummary(q);
+    }
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Text(
+          '배점',
+          style: TextStyle(
+            color: _textSub,
+            fontSize: 11.5,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        const SizedBox(width: 5),
+        SizedBox(
+          width: 64,
+          height: 28,
+          child: TextFormField(
+            key: ValueKey('score-${q.id}-${q.meta['score_point'] ?? ''}'),
+            initialValue: scoreDraft,
+            keyboardType:
+                const TextInputType.numberWithOptions(decimal: true),
+            inputFormatters: [
+              FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+            ],
+            onChanged: (value) {
+              setState(() {
+                _scoreDrafts[q.id] = value;
+                _dirtyQuestionIds.add(q.id);
+              });
+            },
+            textAlign: TextAlign.end,
+            style: const TextStyle(color: _text, fontSize: 12.4),
+            decoration: InputDecoration(
+              isDense: true,
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+              filled: true,
+              fillColor: const Color(0xFF11191D),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(6),
+                borderSide: const BorderSide(color: _border),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(6),
+                borderSide: const BorderSide(color: _accent),
+              ),
+              hintText: '점수',
+              hintStyle: const TextStyle(color: _textSub, fontSize: 11),
+            ),
+          ),
+        ),
+        const SizedBox(width: 4),
+        const Text('점', style: TextStyle(color: _textSub, fontSize: 11.5)),
+      ],
+    );
+  }
+
+  /// 세트형 문항 카드의 배점 요약 버튼.
+  /// 총점 표시 + 탭하면 [_openSetScoreDialog] 로 하위문항별 배점 편집.
+  Widget _buildSetScoreSummary(ProblemBankQuestion q) {
+    final parts = q.scoreParts ?? const <ScorePart>[];
+    final total = parts.isNotEmpty ? sumScoreParts(parts) : (_scorePointOf(q) ?? 0);
+    final hasAny = parts.isNotEmpty || total > 0;
+    final totalLabel = hasAny ? _scorePointInputText(total) : '-';
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Text(
+          '배점',
+          style: TextStyle(
+            color: _textSub,
+            fontSize: 11.5,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        const SizedBox(width: 5),
+        InkWell(
+          onTap: () => _openSetScoreDialog(q),
+          borderRadius: BorderRadius.circular(6),
+          child: Container(
+            height: 28,
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            decoration: BoxDecoration(
+              color: const Color(0xFF11191D),
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(
+                color: parts.isNotEmpty ? _accent : _border,
+              ),
+            ),
+            alignment: Alignment.center,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.tune,
+                  size: 12,
+                  color: parts.isNotEmpty ? _accent : _textSub,
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  '총 $totalLabel',
+                  style: TextStyle(
+                    color: hasAny ? _text : _textSub,
+                    fontSize: 12.2,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(width: 4),
+        const Text('점', style: TextStyle(color: _textSub, fontSize: 11.5)),
+      ],
+    );
+  }
+
+  /// 세트형 문항의 하위문항별 배점을 편집하는 다이얼로그.
+  /// 답안 편집 다이얼로그의 [_buildAnswerPartsEditor] 와 동일한 UX.
+  Future<void> _openSetScoreDialog(ProblemBankQuestion question) async {
+    // 1) 기존 저장된 score_parts 가 있으면 seed.
+    // 2) 없으면 answer_parts 의 sub 들을 seed 로 채우고 value 는 빈 값.
+    // 3) answer_parts 도 없으면 sub=1,2 기본.
+    final savedParts = question.scoreParts;
+    final answerSeeds = question.answerParts;
+    final entries = <_ScorePartEntry>[];
+    void seed(List<_ScorePartEntry> src) {
+      entries
+        ..clear()
+        ..addAll(src);
+    }
+
+    if (savedParts != null && savedParts.isNotEmpty) {
+      seed(savedParts
+          .map((p) => _ScorePartEntry(
+                sub: p.sub,
+                controller:
+                    TextEditingController(text: _scorePointInputText(p.value)),
+              ))
+          .toList(growable: true));
+    } else if (answerSeeds != null && answerSeeds.isNotEmpty) {
+      seed(answerSeeds
+          .map((p) => _ScorePartEntry(
+                sub: p.sub,
+                controller: TextEditingController(),
+              ))
+          .toList(growable: true));
+    } else {
+      seed(<_ScorePartEntry>[
+        _ScorePartEntry(sub: '1', controller: TextEditingController()),
+        _ScorePartEntry(sub: '2', controller: TextEditingController()),
+      ]);
+    }
+
+    await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setLocalState) {
+            double runningTotal = 0;
+            for (final e in entries) {
+              final v = double.tryParse(e.controller.text.trim());
+              if (v != null && v.isFinite && v > 0) runningTotal += v;
+            }
+            return AlertDialog(
+              backgroundColor: _panel,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
+                side: const BorderSide(color: _border),
+              ),
+              title: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '${question.questionNumber}번 세트형 배점',
+                      style: const TextStyle(color: _text, fontSize: 16),
+                    ),
+                  ),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: _accent.withOpacity(0.14),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: _accent),
+                    ),
+                    child: Text(
+                      '총 ${_scorePointInputText(runningTotal)}점',
+                      style: const TextStyle(
+                        color: _accent,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              content: SizedBox(
+                width: 420,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      '하위문항별 배점',
+                      style: TextStyle(color: _textSub, fontSize: 12),
+                    ),
+                    const SizedBox(height: 6),
+                    _buildScorePartsEditor(
+                      entries: entries,
+                      setLocalState: setLocalState,
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      '하위문항 번호와 해당 배점을 각각 입력하세요. 합계는 상단 뱃지에 표시됩니다.\n값을 비워둔 파트는 저장되지 않습니다.',
+                      style: TextStyle(color: _textSub, fontSize: 11),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(false),
+                  child: const Text('취소'),
+                ),
+                FilledButton(
+                  style: FilledButton.styleFrom(backgroundColor: _accent),
+                  onPressed: () async {
+                    final parts = <ScorePart>[];
+                    for (final e in entries) {
+                      final sub = e.sub.trim();
+                      final v = double.tryParse(e.controller.text.trim());
+                      if (sub.isEmpty || v == null || !v.isFinite || v <= 0) {
+                        continue;
+                      }
+                      parts.add(ScorePart(sub: sub, value: v));
+                    }
+                    final total = sumScoreParts(parts);
+                    final updatedMeta =
+                        Map<String, dynamic>.from(question.meta);
+                    if (parts.isEmpty) {
+                      updatedMeta.remove('score_parts');
+                    } else {
+                      updatedMeta['score_parts'] = scorePartsToMetaRaw(parts);
+                      // is_set_question 플래그도 명시.
+                      updatedMeta['is_set_question'] = true;
+                    }
+                    // score_point 는 총점으로 동기화 (파트가 비면 제거).
+                    if (total > 0) {
+                      updatedMeta['score_point'] = total == total.roundToDouble()
+                          ? total.toInt()
+                          : total;
+                    } else {
+                      updatedMeta.remove('score_point');
+                    }
+
+                    if (!mounted) return;
+                    final updatedQ = question.copyWith(meta: updatedMeta);
+                    setState(() {
+                      _questions = _questions
+                          .map(
+                              (q) => q.id == question.id ? updatedQ : q)
+                          .toList(growable: false);
+                      // score draft 도 총점으로 동기화(일반 인풋 표시 일관성용).
+                      _scoreDrafts[question.id] = total > 0
+                          ? _scorePointInputText(total)
+                          : '';
+                      _dirtyQuestionIds.add(question.id);
+                    });
+                    if (context.mounted) Navigator.of(context).pop(true);
+                    if (!mounted) return;
+                    await _saveAndRefreshPreview(updatedQ);
+                  },
+                  child: const Text('저장'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    for (final e in entries) {
+      e.controller.dispose();
+    }
+  }
+
+  /// 하위문항별 배점 편집기(답안 편집기의 배점 버전).
+  Widget _buildScorePartsEditor({
+    required List<_ScorePartEntry> entries,
+    required void Function(void Function()) setLocalState,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (var i = 0; i < entries.length; i += 1)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: Row(
+              children: [
+                SizedBox(
+                  width: 60,
+                  child: TextFormField(
+                    key: ValueKey('score-sub-${i}-${entries[i].sub}'),
+                    initialValue: entries[i].sub,
+                    style: const TextStyle(color: _text, fontSize: 13),
+                    decoration: _answerInputDecoration(hint: '예: 1'),
+                    onChanged: (v) => entries[i].sub = v,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                const Text('점',
+                    style: TextStyle(color: _textSub, fontSize: 12)),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: TextFormField(
+                    controller: entries[i].controller,
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    inputFormatters: [
+                      FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+                    ],
+                    style: const TextStyle(color: _text, fontSize: 13),
+                    decoration: _answerInputDecoration(hint: '예: 3'),
+                    onChanged: (_) => setLocalState(() {}),
+                  ),
+                ),
+                const SizedBox(width: 4),
+                IconButton(
+                  icon: const Icon(Icons.remove_circle_outline,
+                      color: _textSub, size: 18),
+                  tooltip: '이 하위문항 제거',
+                  onPressed: entries.length <= 1
+                      ? null
+                      : () {
+                          setLocalState(() {
+                            final removed = entries.removeAt(i);
+                            removed.controller.dispose();
+                          });
+                        },
+                ),
+              ],
+            ),
+          ),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton.icon(
+            onPressed: () {
+              setLocalState(() {
+                final nextSub = '${entries.length + 1}';
+                entries.add(
+                  _ScorePartEntry(
+                    sub: nextSub,
+                    controller: TextEditingController(),
+                  ),
+                );
+              });
+            },
+            icon: const Icon(Icons.add, size: 16, color: _accent),
+            label: const Text(
+              '하위문항 추가',
+              style: TextStyle(color: _accent, fontSize: 12),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
   bool _looksLikeBoxedStemLine(String line) {
     final input = _normalizePreviewLine(line);
     if (input.isEmpty) return false;
@@ -4454,6 +4902,13 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   }
 
   List<ProblemBankChoice> _previewChoicesOf(ProblemBankQuestion q) {
+    // allow_objective=false 인 문항은 "객관식으로 출제하지 않는다"는 명시적 결정.
+    // 카드 미리보기에서도 객관식 보기는 더 이상 렌더링하지 않는다.
+    // (원본 HWPX 에 보기가 있었더라도, 사용자가 "이건 객관식으로 만들기 부적절하다" 고 체크
+    //  해제한 것이므로 존중한다.)
+    if (!q.allowObjective) {
+      return const <ProblemBankChoice>[];
+    }
     final source =
         q.objectiveChoices.length >= 2 ? q.objectiveChoices : q.choices;
     final out = <ProblemBankChoice>[];
@@ -4516,6 +4971,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   }
 
   String _objectiveAnswerForPreview(ProblemBankQuestion q) {
+    // allow_objective=false 인 문항은 객관식 정답 자체가 의미 없음 → 빈 문자열.
+    if (!q.allowObjective) return '';
     final raw = _sanitizeAnswerText(
       q.objectiveAnswerKey.isNotEmpty
           ? q.objectiveAnswerKey
@@ -4525,6 +4982,23 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   }
 
   String _subjectiveAnswerForPreview(ProblemBankQuestion q) {
+    // 세트형 문항: meta.answer_parts 가 있으면 "(1) ...\n(2) ..." 로 줄바꿈 포맷.
+    // _sanitizeAnswerText 는 \s+ 를 단일 공백으로 합쳐 \n 을 지우므로,
+    // 파트별로 value 만 위생화하고 "(sub) value" 형태로 조립해 반환한다.
+    final parts = q.answerParts;
+    if (parts != null && parts.isNotEmpty) {
+      final rendered = parts
+          .map((p) {
+            final sub = p.sub.trim();
+            final value = _sanitizeAnswerText(p.value);
+            if (sub.isEmpty || value.isEmpty) return '';
+            return '($sub) $value';
+          })
+          .where((s) => s.isNotEmpty)
+          .join('\n');
+      if (rendered.isNotEmpty) return rendered;
+    }
+
     final choices = _previewChoicesOf(q);
     final shouldMapLegacyObjective =
         q.questionType.contains('객관식') || q.choices.length >= 2;
@@ -6892,155 +7366,353 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         TextEditingController(text: _objectiveAnswerForPreview(question));
     final subjectiveCtrl =
         TextEditingController(text: _subjectiveAnswerForPreview(question));
+
+    // 세트형 판정: meta 플래그 우선, 없으면 현재 저장된 답 문자열을 파싱해 본다.
+    // 저장된 메타에 이미 answer_parts 가 있으면 그것을, 아니면 현재 주관식 정답 문자열에서
+    // parseAnswerParts 로 복원 가능한지 본다.
+    final savedParts = question.answerParts;
+    final parsedFromSubjective =
+        parseAnswerParts(_subjectiveAnswerForPreview(question));
+    final initialParts =
+        savedParts ?? parsedFromSubjective ?? const <AnswerPart>[];
+    bool isSetMode = question.isSetQuestion || initialParts.isNotEmpty;
+
+    // 세트형 부분 답 controller 목록. 각 entry 는 sub 레이블과 그 값 컨트롤러.
+    final partEntries = <_AnswerPartEntry>[];
+    void seedPartEntries(List<AnswerPart> source) {
+      partEntries.clear();
+      if (source.isEmpty) {
+        partEntries.add(_AnswerPartEntry.blank('1'));
+        partEntries.add(_AnswerPartEntry.blank('2'));
+      } else {
+        for (final p in source) {
+          partEntries.add(
+            _AnswerPartEntry(
+              sub: p.sub,
+              controller: TextEditingController(text: p.value),
+            ),
+          );
+        }
+      }
+    }
+
+    seedPartEntries(initialParts);
+
     await showDialog<bool>(
       context: context,
       builder: (context) {
-        return AlertDialog(
-          backgroundColor: _panel,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(14),
-            side: const BorderSide(color: _border),
-          ),
-          title: Text(
-            '${question.questionNumber}번 정답 검수',
-            style: const TextStyle(color: _text, fontSize: 16),
-          ),
-          content: SizedBox(
-            width: 520,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
+        return StatefulBuilder(
+          builder: (context, setLocalState) {
+            return AlertDialog(
+              backgroundColor: _panel,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
+                side: const BorderSide(color: _border),
+              ),
+              title: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '${question.questionNumber}번 정답 검수',
+                      style: const TextStyle(color: _text, fontSize: 16),
+                    ),
+                  ),
+                  FilterChip(
+                    label: const Text('세트형 (하위문항별 답)'),
+                    labelStyle: TextStyle(
+                      color: isSetMode ? _accent : _textSub,
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w600,
+                    ),
+                    selected: isSetMode,
+                    showCheckmark: false,
+                    backgroundColor: _field,
+                    selectedColor: _accent.withOpacity(0.14),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      side: BorderSide(
+                        color: isSetMode ? _accent : _border,
+                      ),
+                    ),
+                    onSelected: (v) {
+                      setLocalState(() {
+                        isSetMode = v;
+                        if (v && partEntries.isEmpty) {
+                          seedPartEntries(const <AnswerPart>[]);
+                        }
+                        if (v) {
+                          final parsed =
+                              parseAnswerParts(subjectiveCtrl.text);
+                          if (parsed != null && parsed.isNotEmpty) {
+                            seedPartEntries(parsed);
+                          }
+                        }
+                      });
+                    },
+                  ),
+                ],
+              ),
+              content: SizedBox(
+                width: 560,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // allow_objective=false 인 문항은 객관식 정답 개념 자체가 없으므로
+                    // 이 입력란을 숨긴다. 카드 토글에서 다시 객관식을 허용하면 노출된다.
+                    if (question.allowObjective) ...[
+                      const Text(
+                        '객관식 정답',
+                        style: TextStyle(color: _textSub, fontSize: 12),
+                      ),
+                      const SizedBox(height: 6),
+                      TextField(
+                        controller: objectiveCtrl,
+                        maxLines: 2,
+                        style: const TextStyle(color: _text, fontSize: 14),
+                        decoration: _answerInputDecoration(hint: '예: ③ 또는 2'),
+                      ),
+                      const SizedBox(height: 10),
+                    ],
+                    Text(
+                      isSetMode ? '주관식 정답 (하위문항별)' : '주관식 정답',
+                      style:
+                          const TextStyle(color: _textSub, fontSize: 12),
+                    ),
+                    const SizedBox(height: 6),
+                    if (!isSetMode)
+                      TextField(
+                        controller: subjectiveCtrl,
+                        maxLines: 2,
+                        style:
+                            const TextStyle(color: _text, fontSize: 14),
+                        decoration:
+                            _answerInputDecoration(hint: '예: 2 또는 x=3'),
+                      )
+                    else
+                      _buildAnswerPartsEditor(
+                        partEntries: partEntries,
+                        setLocalState: setLocalState,
+                      ),
+                    const SizedBox(height: 8),
+                    Text(
+                      isSetMode
+                          ? '하위문항 번호와 해당 답을 각각 입력하세요. 저장 시 "(1) 값 (2) 값" 형태로 합쳐서도 기록됩니다.'
+                          : '비워두고 저장하면 해당 정답 값을 비웁니다.',
+                      style: const TextStyle(color: _textSub, fontSize: 11),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(false),
+                  child: const Text('취소'),
+                ),
+                FilledButton(
+                  style: FilledButton.styleFrom(backgroundColor: _accent),
+                  onPressed: () async {
+                    try {
+                      // 객관식 비허용 문항은 입력란이 숨겨져 있지만, 혹시 이전 값이
+                      // 컨트롤러에 남아있어도 저장 경로로 흘러가지 않도록 여기서 차단.
+                      final objectiveAnswer = question.allowObjective
+                          ? _sanitizeAnswerText(objectiveCtrl.text)
+                          : '';
+                      final String subjectiveAnswer;
+                      final List<AnswerPart>? nextParts;
+                      if (isSetMode) {
+                        final parts = <AnswerPart>[];
+                        for (final entry in partEntries) {
+                          final sub = entry.sub.trim();
+                          final value =
+                              _sanitizeAnswerText(entry.controller.text);
+                          if (sub.isEmpty || value.isEmpty) continue;
+                          parts.add(AnswerPart(sub: sub, value: value));
+                        }
+                        nextParts =
+                            parts.length >= 2 ? parts : null;
+                        subjectiveAnswer = parts.isEmpty
+                            ? ''
+                            : formatAnswerPartsDisplay(parts);
+                      } else {
+                        nextParts = null;
+                        subjectiveAnswer =
+                            _sanitizeAnswerText(subjectiveCtrl.text);
+                      }
+
+                      final updatedMeta =
+                          Map<String, dynamic>.from(question.meta);
+                      if (objectiveAnswer.isEmpty) {
+                        updatedMeta.remove('objective_answer_key');
+                      } else {
+                        updatedMeta['objective_answer_key'] =
+                            objectiveAnswer;
+                      }
+                      if (subjectiveAnswer.isEmpty) {
+                        updatedMeta.remove('subjective_answer');
+                      } else {
+                        updatedMeta['subjective_answer'] = subjectiveAnswer;
+                      }
+                      final legacyAnswer = objectiveAnswer.isNotEmpty
+                          ? objectiveAnswer
+                          : subjectiveAnswer;
+                      if (legacyAnswer.isEmpty) {
+                        updatedMeta.remove('answer_key');
+                      } else {
+                        updatedMeta['answer_key'] = legacyAnswer;
+                      }
+                      if (nextParts != null && nextParts.isNotEmpty) {
+                        updatedMeta['answer_parts'] =
+                            answerPartsToMetaRaw(nextParts);
+                        updatedMeta['is_set_question'] = true;
+                      } else {
+                        updatedMeta.remove('answer_parts');
+                        if (!isSetMode) {
+                          // 사용자가 세트형 모드를 해제한 경우 플래그도 정리한다.
+                          // (세트형 모드였으나 답이 1개 이하라 parts가 null인 경우는
+                          //  여전히 세트형 시그니처가 stem 에 있을 수 있으니 플래그는 그대로 둔다.)
+                          updatedMeta.remove('is_set_question');
+                        }
+                      }
+
+                      if (!mounted) return;
+                      final updatedQ = question.copyWith(
+                        meta: updatedMeta,
+                        objectiveAnswerKey: objectiveAnswer,
+                        subjectiveAnswer: subjectiveAnswer,
+                      );
+                      setState(() {
+                        _questions = _questions
+                            .map(
+                              (q) => q.id == question.id ? updatedQ : q,
+                            )
+                            .toList(growable: false);
+                      });
+                      if (context.mounted) {
+                        Navigator.of(context).pop(true);
+                      }
+                      if (!mounted) return;
+                      final previewUrl =
+                          await _saveAndRefreshPreview(updatedQ);
+                      if (!mounted) return;
+                      if (previewUrl != null && previewUrl.isNotEmpty) {
+                        _showSnack('저장했고 정답 미리보기를 갱신했습니다.');
+                      } else {
+                        _showSnack(
+                          '정답은 저장했습니다. 미리보기가 아직 없으면 잠시 후 다시 시도하거나 상단 `업로드`를 이용하세요.',
+                        );
+                      }
+                    } catch (e) {
+                      _showSnack('정답 편집 실패: $e', error: true);
+                    }
+                  },
+                  child: const Text('저장'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+    for (final entry in partEntries) {
+      entry.controller.dispose();
+    }
+    objectiveCtrl.dispose();
+    subjectiveCtrl.dispose();
+  }
+
+  InputDecoration _answerInputDecoration({required String hint}) {
+    return InputDecoration(
+      hintText: hint,
+      hintStyle: const TextStyle(color: _textSub, fontSize: 12),
+      filled: true,
+      fillColor: _field,
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(8),
+        borderSide: const BorderSide(color: _border),
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(8),
+        borderSide: const BorderSide(color: _border),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(8),
+        borderSide: const BorderSide(color: _accent),
+      ),
+    );
+  }
+
+  Widget _buildAnswerPartsEditor({
+    required List<_AnswerPartEntry> partEntries,
+    required void Function(void Function()) setLocalState,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (var i = 0; i < partEntries.length; i += 1)
+          Padding(
+            padding: EdgeInsets.only(
+              bottom: i == partEntries.length - 1 ? 0 : 8,
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                const Text(
-                  '객관식 정답',
-                  style: TextStyle(color: _textSub, fontSize: 12),
-                ),
-                const SizedBox(height: 6),
-                TextField(
-                  controller: objectiveCtrl,
-                  maxLines: 2,
-                  style: const TextStyle(color: _text, fontSize: 14),
-                  decoration: InputDecoration(
-                    hintText: '예: ③ 또는 2',
-                    hintStyle: const TextStyle(color: _textSub, fontSize: 12),
-                    filled: true,
-                    fillColor: _field,
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      borderSide: const BorderSide(color: _border),
-                    ),
-                    enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      borderSide: const BorderSide(color: _border),
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      borderSide: const BorderSide(color: _accent),
-                    ),
+                SizedBox(
+                  width: 52,
+                  child: TextFormField(
+                    initialValue: partEntries[i].sub,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: _text, fontSize: 13.5),
+                    decoration: _answerInputDecoration(hint: '1'),
+                    onChanged: (v) {
+                      partEntries[i].sub = v.trim();
+                    },
                   ),
                 ),
-                const SizedBox(height: 10),
-                const Text(
-                  '주관식 정답',
-                  style: TextStyle(color: _textSub, fontSize: 12),
-                ),
-                const SizedBox(height: 6),
-                TextField(
-                  controller: subjectiveCtrl,
-                  maxLines: 2,
-                  style: const TextStyle(color: _text, fontSize: 14),
-                  decoration: InputDecoration(
-                    hintText: '예: 2 또는 x=3',
-                    hintStyle: const TextStyle(color: _textSub, fontSize: 12),
-                    filled: true,
-                    fillColor: _field,
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      borderSide: const BorderSide(color: _border),
-                    ),
-                    enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      borderSide: const BorderSide(color: _border),
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      borderSide: const BorderSide(color: _accent),
-                    ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: TextField(
+                    controller: partEntries[i].controller,
+                    maxLines: 2,
+                    style: const TextStyle(color: _text, fontSize: 14),
+                    decoration:
+                        _answerInputDecoration(hint: '예: 12 / x=3 / ㄱ, ㄷ'),
                   ),
                 ),
-                const SizedBox(height: 8),
-                const Text(
-                  '비워두고 저장하면 해당 정답 값을 비웁니다.',
-                  style: TextStyle(color: _textSub, fontSize: 11),
+                const SizedBox(width: 6),
+                IconButton(
+                  tooltip: '이 하위문항 삭제',
+                  icon: const Icon(
+                    Icons.close,
+                    size: 16,
+                    color: _textSub,
+                  ),
+                  onPressed: partEntries.length <= 1
+                      ? null
+                      : () {
+                          setLocalState(() {
+                            final removed = partEntries.removeAt(i);
+                            removed.controller.dispose();
+                          });
+                        },
                 ),
               ],
             ),
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('취소'),
-            ),
-            FilledButton(
-              style: FilledButton.styleFrom(backgroundColor: _accent),
-              onPressed: () async {
-                try {
-                  final objectiveAnswer =
-                      _sanitizeAnswerText(objectiveCtrl.text);
-                  final subjectiveAnswer =
-                      _sanitizeAnswerText(subjectiveCtrl.text);
-                  final updatedMeta = Map<String, dynamic>.from(question.meta);
-                  if (objectiveAnswer.isEmpty) {
-                    updatedMeta.remove('objective_answer_key');
-                  } else {
-                    updatedMeta['objective_answer_key'] = objectiveAnswer;
-                  }
-                  if (subjectiveAnswer.isEmpty) {
-                    updatedMeta.remove('subjective_answer');
-                  } else {
-                    updatedMeta['subjective_answer'] = subjectiveAnswer;
-                  }
-                  final legacyAnswer = objectiveAnswer.isNotEmpty
-                      ? objectiveAnswer
-                      : subjectiveAnswer;
-                  if (legacyAnswer.isEmpty) {
-                    updatedMeta.remove('answer_key');
-                  } else {
-                    updatedMeta['answer_key'] = legacyAnswer;
-                  }
-                  if (!mounted) return;
-                  final updatedQ = question.copyWith(
-                    meta: updatedMeta,
-                    objectiveAnswerKey: objectiveAnswer,
-                    subjectiveAnswer: subjectiveAnswer,
-                  );
-                  setState(() {
-                    _questions = _questions
-                        .map(
-                          (q) => q.id == question.id ? updatedQ : q,
-                        )
-                        .toList(growable: false);
-                  });
-                  if (context.mounted) Navigator.of(context).pop(true);
-                  if (!mounted) return;
-                  final previewUrl = await _saveAndRefreshPreview(updatedQ);
-                  if (!mounted) return;
-                  if (previewUrl != null && previewUrl.isNotEmpty) {
-                    _showSnack('저장했고 정답 미리보기를 갱신했습니다.');
-                  } else {
-                    _showSnack(
-                      '정답은 저장했습니다. 미리보기가 아직 없으면 잠시 후 다시 시도하거나 상단 `업로드`를 이용하세요.',
-                    );
-                  }
-                } catch (e) {
-                  _showSnack('정답 편집 실패: $e', error: true);
-                }
-              },
-              child: const Text('저장'),
-            ),
-          ],
-        );
-      },
+        const SizedBox(height: 4),
+        TextButton.icon(
+          style: TextButton.styleFrom(foregroundColor: _accent),
+          icon: const Icon(Icons.add, size: 16),
+          label: const Text('하위문항 추가'),
+          onPressed: () {
+            setLocalState(() {
+              final nextSub =
+                  (partEntries.length + 1).toString();
+              partEntries.add(_AnswerPartEntry.blank(nextSub));
+            });
+          },
+        ),
+      ],
     );
   }
 
@@ -7052,6 +7724,12 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
             : const Color(0xFFDE6A73));
     final typeText = q.questionType.trim().isEmpty ? '미분류' : q.questionType;
     final isViewBlock = _isViewBlockQuestion(q);
+    // 세트형 배지 표시 조건:
+    //   (1) 워커가 meta.is_set_question = true 로 표시했거나
+    //   (2) 답이 구조화(meta.answer_parts)되어 있으면 세트형으로 본다.
+    // 두 번째 조건은 사용자가 편집기에서 세트형 모드로 답을 나눠 저장했지만
+    // stem 상 시그니처가 약해서 meta 플래그가 없는 경우에도 배지를 유지하기 위함이다.
+    final isSetQuestion = q.isSetQuestion || (q.answerParts?.isNotEmpty ?? false);
     final latestFigureAsset = _latestFigureAssetOf(q);
     final figureApproved = _isFigureAssetApproved(latestFigureAsset);
     final figureGenerating = _figureGenerating.contains(q.id);
@@ -7146,6 +7824,26 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                     '<보기>형',
                     style: TextStyle(
                       color: Color(0xFF9CC5E8),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
+              if (isSetQuestion) ...[
+                const SizedBox(width: 6),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF3A2747),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: const Color(0xFF7A4F94)),
+                  ),
+                  child: const Text(
+                    '세트형',
+                    style: TextStyle(
+                      color: Color(0xFFD6B8EE),
                       fontSize: 11,
                       fontWeight: FontWeight.w700,
                     ),
@@ -7259,65 +7957,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                   ],
                 ),
               ),
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Text(
-                    '배점',
-                    style: TextStyle(
-                      color: _textSub,
-                      fontSize: 11.5,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(width: 5),
-                  SizedBox(
-                    width: 64,
-                    height: 28,
-                    child: TextFormField(
-                      key: ValueKey(
-                          'score-${q.id}-${q.meta['score_point'] ?? ''}'),
-                      initialValue: scoreDraft,
-                      keyboardType: const TextInputType.numberWithOptions(
-                          decimal: true),
-                      inputFormatters: [
-                        FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
-                      ],
-                      onChanged: (value) {
-                        setState(() {
-                          _scoreDrafts[q.id] = value;
-                          _dirtyQuestionIds.add(q.id);
-                        });
-                      },
-                      textAlign: TextAlign.end,
-                      style: const TextStyle(color: _text, fontSize: 12.4),
-                      decoration: InputDecoration(
-                        isDense: true,
-                        contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 6, vertical: 6),
-                        filled: true,
-                        fillColor: const Color(0xFF11191D),
-                        enabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(6),
-                          borderSide: const BorderSide(color: _border),
-                        ),
-                        focusedBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(6),
-                          borderSide: const BorderSide(color: _accent),
-                        ),
-                        hintText: '점수',
-                        hintStyle:
-                            const TextStyle(color: _textSub, fontSize: 11),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 4),
-                  const Text(
-                    '점',
-                    style: TextStyle(color: _textSub, fontSize: 11.5),
-                  ),
-                ],
-              ),
+              _buildScoreField(q, scoreDraft),
             ],
           ),
           const SizedBox(height: 5),
@@ -8413,4 +9053,24 @@ class _PasteImportPayload {
 
   final String rawText;
   final String sourceName;
+}
+
+/// 정답 검수 다이얼로그의 세트형 부분 답 입력 엔트리.
+/// sub(하위문항 번호)와 controller(값 컨트롤러)를 쌍으로 들고 다닌다.
+class _AnswerPartEntry {
+  _AnswerPartEntry({required this.sub, required this.controller});
+
+  factory _AnswerPartEntry.blank(String sub) =>
+      _AnswerPartEntry(sub: sub, controller: TextEditingController());
+
+  String sub;
+  final TextEditingController controller;
+}
+
+/// 세트형 배점 다이얼로그의 하위문항별 배점 입력 엔트리.
+class _ScorePartEntry {
+  _ScorePartEntry({required this.sub, required this.controller});
+
+  String sub;
+  final TextEditingController controller;
 }

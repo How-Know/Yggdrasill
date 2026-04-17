@@ -859,3 +859,184 @@ String _tokenToNumeric(String token) {
     return '';
   });
 }
+
+/// 세트형 답 파서.
+///
+/// 답 문자열(예: "(1) 12 (2) ㄱ, ㄷ")을 [{sub, value}] 리스트로 쪼갠다.
+/// 단일 답(부분 번호가 0~1개)이거나 선두에 답 외 본문이 섞여 있으면 `null`을 반환한다.
+///
+/// 매칭 규칙은 gateway 쪽 `parseAnswerParts`와 동일하게 유지한다:
+///   - 라벨 패턴: `(N)`, `（N）`, `N)`, `N.`, `①~⑩`
+///   - 라벨 뒤에는 공백 또는 문자열 끝이 와야 한다
+///     (숫자만 있는 답이 `1)`로 오인되는 것을 막기 위함)
+List<AnswerPart>? parseAnswerParts(String? answer) {
+  // 워커가 단락 구분용으로 넣어둔 `[문단]` 마커는 파싱 전에 공백으로 치환한다.
+  final cleaned = _normalizeAnswerKey(
+    (answer ?? '').replaceAll('[문단]', ' '),
+  );
+  if (cleaned.isEmpty) return null;
+  final labelRegex = RegExp(
+    r'(?:[(（]\s*(\d{1,2})\s*[)）]|(\d{1,2})\s*[)．.]|([①②③④⑤⑥⑦⑧⑨⑩]))(?=\s|$)',
+  );
+  final matches = labelRegex.allMatches(cleaned).toList(growable: false);
+  if (matches.length < 2) return null;
+  final lead = cleaned.substring(0, matches.first.start).trim();
+  if (lead.isNotEmpty) return null;
+
+  final parts = <AnswerPart>[];
+  for (var i = 0; i < matches.length; i += 1) {
+    final cur = matches[i];
+    final subRaw = cur.group(1) ?? cur.group(2) ?? cur.group(3) ?? '';
+    if (subRaw.isEmpty) continue;
+    final sub = RegExp(r'[①②③④⑤⑥⑦⑧⑨⑩]').hasMatch(subRaw)
+        ? _tokenToNumeric(subRaw)
+        : subRaw;
+    if (sub.isEmpty) continue;
+    final end = i + 1 < matches.length ? matches[i + 1].start : cleaned.length;
+    var value = cleaned.substring(cur.end, end).trim();
+    value = value
+        .replaceFirst(RegExp(r'^[,、]\s*'), '')
+        .replaceFirst(RegExp(r'[,、]\s*$'), '')
+        .trim();
+    if (value.isEmpty) continue;
+    parts.add(AnswerPart(sub: sub, value: value));
+  }
+  if (parts.length < 2) return null;
+  return parts;
+}
+
+/// `[{sub, value}]` 를 `"(1) 12 (2) ㄱ, ㄷ"` 형식 display 문자열로 포맷.
+String formatAnswerPartsDisplay(List<AnswerPart>? parts) {
+  if (parts == null || parts.isEmpty) return '';
+  return parts
+      .map((p) {
+        final sub = p.sub.trim();
+        final value = p.value.trim();
+        if (sub.isEmpty || value.isEmpty) return '';
+        return '($sub) $value';
+      })
+      .where((s) => s.isNotEmpty)
+      .join(' ');
+}
+
+/// `meta['answer_parts']` JSON 배열을 [AnswerPart] 리스트로 변환한다.
+/// 형식이 잘못되었거나 비어 있으면 `null`.
+List<AnswerPart>? answerPartsFromMetaRaw(dynamic raw) {
+  if (raw is! List) return null;
+  final out = <AnswerPart>[];
+  for (final item in raw) {
+    if (item is! Map) continue;
+    final sub = '${item['sub'] ?? ''}'.trim();
+    final value = '${item['value'] ?? ''}'.trim();
+    if (sub.isEmpty || value.isEmpty) continue;
+    out.add(AnswerPart(sub: sub, value: value));
+  }
+  return out.isEmpty ? null : out;
+}
+
+/// [AnswerPart] 리스트를 DB 저장용 JSON 배열로 변환한다.
+List<Map<String, String>> answerPartsToMetaRaw(List<AnswerPart> parts) {
+  return parts
+      .map((p) => <String, String>{'sub': p.sub, 'value': p.value})
+      .toList(growable: false);
+}
+
+/// 세트형 문항의 부분 답 하나.
+class AnswerPart {
+  const AnswerPart({required this.sub, required this.value});
+
+  /// 하위 문항 번호. 원 번호(①)는 숫자 문자열("1")로 정규화해서 들어간다.
+  final String sub;
+
+  /// 해당 하위 문항의 답 값.
+  final String value;
+
+  AnswerPart copyWith({String? sub, String? value}) {
+    return AnswerPart(sub: sub ?? this.sub, value: value ?? this.value);
+  }
+
+  @override
+  String toString() => '($sub) $value';
+}
+
+/// [ProblemBankQuestion] 편의 확장. `meta`에 저장된 세트형 관련 정보를 바로 읽는다.
+extension ProblemBankQuestionSetExtension on ProblemBankQuestion {
+  /// 워커가 추출 단계에서 세트형으로 판정했는지 (`meta['is_set_question'] == true`).
+  /// 모델 직접 저장 필드로 승격하지 않은 이유는 과거 데이터 호환이다.
+  bool get isSetQuestion => meta['is_set_question'] == true;
+
+  /// `meta['answer_parts']` 의 구조화된 답. 세트형이 아니거나 미저장이면 `null`.
+  List<AnswerPart>? get answerParts => answerPartsFromMetaRaw(meta['answer_parts']);
+
+  /// `meta['score_parts']` 의 하위문항별 배점. 세트형이 아니거나 미저장이면 `null`.
+  /// 있을 경우, 카드의 배점 표시는 이들의 합(=총점)을 보여주고,
+  /// 편집은 답안 편집과 동일한 하위문항별 다이얼로그로 한다.
+  List<ScorePart>? get scoreParts => scorePartsFromMetaRaw(meta['score_parts']);
+}
+
+/// 세트형 문항의 하위문항별 배점 하나.
+class ScorePart {
+  const ScorePart({required this.sub, required this.value});
+
+  /// 하위 문항 번호 ("1", "2" …). 원번호나 (1) 표기는 모두 숫자 문자열로 정규화.
+  final String sub;
+
+  /// 해당 하위 문항의 배점. 소수도 허용(예: 2.5점).
+  final double value;
+
+  ScorePart copyWith({String? sub, double? value}) {
+    return ScorePart(sub: sub ?? this.sub, value: value ?? this.value);
+  }
+
+  @override
+  String toString() => '($sub) $value';
+}
+
+/// `meta['score_parts']` 에 저장된 raw 배열을 파싱.
+/// - 원소는 `{sub: "1", value: 4}` 혹은 `{sub: "1", value: "4"}` 형태.
+/// - 값이 숫자가 아니거나 0 이하이면 해당 원소는 무시한다.
+/// - 유효 원소가 하나도 없으면 `null` 을 반환한다.
+List<ScorePart>? scorePartsFromMetaRaw(dynamic raw) {
+  if (raw is! List) return null;
+  final out = <ScorePart>[];
+  for (final e in raw) {
+    if (e is! Map) continue;
+    final sub = '${e['sub'] ?? ''}'.trim();
+    final rawValue = e['value'];
+    double? parsed;
+    if (rawValue is num) {
+      parsed = rawValue.toDouble();
+    } else {
+      parsed = double.tryParse('$rawValue');
+    }
+    if (sub.isEmpty || parsed == null || !parsed.isFinite || parsed <= 0) {
+      continue;
+    }
+    out.add(ScorePart(sub: sub, value: parsed));
+  }
+  if (out.isEmpty) return null;
+  return out;
+}
+
+/// `meta['score_parts']` 에 저장할 raw 배열로 변환.
+List<Map<String, dynamic>> scorePartsToMetaRaw(List<ScorePart> parts) {
+  return parts
+      .map(
+        (p) => <String, dynamic>{
+          'sub': p.sub,
+          // 정수이면 int, 아니면 double 로 저장해 JSON 표현을 깔끔하게.
+          'value':
+              p.value == p.value.roundToDouble() ? p.value.toInt() : p.value,
+        },
+      )
+      .toList(growable: false);
+}
+
+/// 하위 배점들의 합(=세트형 총점). 파트가 비어있으면 0.
+double sumScoreParts(List<ScorePart> parts) {
+  double total = 0;
+  for (final p in parts) {
+    total += p.value;
+  }
+  return total;
+}

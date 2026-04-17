@@ -405,6 +405,7 @@ function buildStyles({
     .figure-inline-block.figure-group-horizontal { display: flex; flex-wrap: wrap; justify-content: center; align-items: flex-start; }
     .figure-inline-block.figure-group-horizontal .figure-layout-item { flex-shrink: 0; }
     .figure-inline-block.figure-group-horizontal .figure-layout-item .figure-img { width: 100%; }
+    .lc-figure-line { display: block; text-align: center; text-indent: 0; margin: 2pt 0; }
     .figure-placeholder {
       margin: 6pt 0;
       padding: 8pt;

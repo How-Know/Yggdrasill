@@ -725,6 +725,65 @@ function parseAnswerLineLoose(line) {
   return parseAnswerLine(input.slice(marker));
 }
 
+// 세트형 문항의 답 문자열을 부분별로 쪼갠다.
+// 지원 형식:
+//   "(1) 12 (2) ㄱ, ㄷ (3) 5"    → [{sub:"1", value:"12"}, ...]
+//   "① 12 ② ㄱ, ㄷ"             → [{sub:"1", value:"12"}, {sub:"2", value:"ㄱ, ㄷ"}]
+//   "1) 12, 2) ㄱ"              → [{sub:"1", value:"12"}, {sub:"2", value:"ㄱ"}]
+// 단일 답("12", "①" 등)이거나 부분 번호가 1개뿐이면 null 반환(구조화 불필요).
+// 동일한 sub가 중복되거나 번호가 (1)→(3)으로 건너뛰어도 등장 순서대로 그대로 반환한다.
+function parseAnswerParts(answer) {
+  // 답 문자열에는 워커가 단락 구분용으로 넣은 `[문단]` 마커가 섞여 있을 수 있다.
+  // 구조화에서는 무의미하므로 사전에 제거하고, 앞뒤 공백도 정리한다.
+  const cleaned = normalizeWhitespace(
+    String(answer || '').replace(/\[문단\]/g, ' '),
+  );
+  if (!cleaned) return null;
+  // 번호 라벨 매처: (1), （1）, 1), 1., ①~⑩
+  //  - 라벨 뒤에는 공백 또는 문자열 끝이 와야 한다 (숫자만 있는 답의 오분할 방지).
+  const labelRegex =
+    /(?:[(（]\s*(\d{1,2})\s*[)）]|(\d{1,2})\s*[)．.]|([①②③④⑤⑥⑦⑧⑨⑩]))(?=\s|$)/g;
+  const matches = [];
+  let m;
+  while ((m = labelRegex.exec(cleaned)) !== null) {
+    const subRaw = m[1] || m[2] || m[3] || '';
+    const sub = /[①②③④⑤⑥⑦⑧⑨⑩]/.test(subRaw) ? circledToNumeric(subRaw) : subRaw;
+    if (!sub) continue;
+    matches.push({ start: m.index, end: labelRegex.lastIndex, sub });
+  }
+  if (matches.length < 2) return null;
+  // 첫 매치 앞에 공백이 아닌 의미 있는 텍스트가 있으면 "답 전체가 세트형"이라 보기 어렵다.
+  // 예: "풀이 (1) x=3 (2) y=5" 같이 답이 아닌 본문이 섞인 경우 구조화를 포기한다.
+  const lead = cleaned.slice(0, matches[0].start).trim();
+  if (lead) return null;
+  const parts = [];
+  for (let i = 0; i < matches.length; i += 1) {
+    const cur = matches[i];
+    const next = matches[i + 1];
+    const sliceEnd = next ? next.start : cleaned.length;
+    let value = cleaned.slice(cur.end, sliceEnd).trim();
+    value = value.replace(/^[,、]\s*/, '').replace(/[,、]\s*$/, '').trim();
+    if (!value) continue;
+    parts.push({ sub: String(cur.sub), value });
+  }
+  if (parts.length < 2) return null;
+  return parts;
+}
+
+// answer_parts 배열을 "(1) 12 (2) ㄱ, ㄷ" 형식의 display 문자열로 포맷한다.
+function formatAnswerPartsDisplay(parts) {
+  if (!Array.isArray(parts) || parts.length === 0) return '';
+  return parts
+    .map((p) => {
+      const sub = normalizeWhitespace(String(p?.sub || ''));
+      const value = normalizeWhitespace(String(p?.value || ''));
+      if (!sub || !value) return '';
+      return `(${sub}) ${value}`;
+    })
+    .filter(Boolean)
+    .join(' ');
+}
+
 function toCircledNumber(value) {
   const n = Number.parseInt(String(value || '').trim(), 10);
   if (!Number.isFinite(n) || n < 1 || n > 10) return String(value || '').trim();
@@ -2487,14 +2546,31 @@ async function enrichQuestionsWithDualMode({
   }
 
   for (const q of out) {
+    const rawAnswerKey = normalizeWhitespace(
+      String(q?.answer_key || q?.meta?.answer_key || ''),
+    );
+    const rawSubjective = normalizeWhitespace(String(q.subjective_answer || ''));
+    // 세트형(하위문항 (1),(2),...) 문항이면 답 문자열을 sub/value 배열로 구조화한다.
+    // 채점/렌더링/편집이 답에 어떤 문자(슬래시, 문단 등)가 들어와도 안전하게 동작할 수 있도록,
+    // 문자열 answer_key 는 display 용으로 그대로 두고 구조화는 meta.answer_parts 에 둔다.
+    // 세트형 시그니처가 stem 에 없거나 parseAnswerParts 가 null 을 내면(단일 답) 필드는 생략한다.
+    const stemLines = Array.isArray(q.stem_lines)
+      ? q.stem_lines
+      : String(q.stem || '').split(/\r?\n/);
+    const isSetShape = hasSetQuestionSignature(stemLines);
+    const partsSource = rawSubjective || rawAnswerKey;
+    const parts = isSetShape ? parseAnswerParts(partsSource) : null;
+
     q.meta = {
       ...(q.meta || {}),
-      answer_key: normalizeWhitespace(String(q?.answer_key || q?.meta?.answer_key || '')),
+      answer_key: rawAnswerKey,
       allow_objective: q.allow_objective !== false,
       allow_subjective: q.allow_subjective !== false,
       objective_answer_key: normalizeWhitespace(String(q.objective_answer_key || '')),
-      subjective_answer: normalizeWhitespace(String(q.subjective_answer || '')),
+      subjective_answer: rawSubjective,
       objective_generated: q.objective_generated === true,
+      is_set_question: isSetShape === true,
+      ...(parts ? { answer_parts: parts } : {}),
     };
   }
 
@@ -3784,7 +3860,11 @@ async function processOneJob(job) {
 
   const { data: existingRows, error: existingErr } = await supa
     .from('pb_questions')
-    .select('id,question_number,question_uid,source_order')
+    .select(
+      'id,question_number,question_uid,source_order,' +
+        'allow_objective,allow_subjective,objective_choices,' +
+        'objective_answer_key,objective_generated,meta',
+    )
     .eq('academy_id', job.academy_id)
     .eq('document_id', job.document_id)
     .order('source_order', { ascending: true });
@@ -3847,6 +3927,29 @@ async function processOneJob(job) {
       if (Number(parsed?.confidence || 0) < REVIEW_CONFIDENCE_THRESHOLD) {
         partialLowConfidenceCount += 1;
       }
+
+      // 부분 재추출: 사용자가 매니저에서 `allow_objective=false` 로 설정해둔 문항은
+      //  - 자동으로 생성된 5지선다 보기/정답을 다시 만들지 않고
+      //  - 기존에 비워둔 상태를 그대로 유지한다
+      // 이렇게 하지 않으면 재추출할 때마다 AI가 다시 객관식 보기를 만들어내서 사용자 의도를 덮어쓴다.
+      if (current.allow_objective === false) {
+        parsed.allow_objective = false;
+        parsed.objective_choices = [];
+        parsed.objective_answer_key = '';
+        parsed.objective_generated = false;
+        if (parsed.meta && typeof parsed.meta === 'object') {
+          parsed.meta.allow_objective = false;
+          parsed.meta.objective_answer_key = '';
+          delete parsed.meta.objective_generated;
+        }
+      }
+      if (current.allow_subjective === false) {
+        parsed.allow_subjective = false;
+        if (parsed.meta && typeof parsed.meta === 'object') {
+          parsed.meta.allow_subjective = false;
+        }
+      }
+
       updateRows.push({
         id: targetId,
         ...buildQuestionWritePayload({

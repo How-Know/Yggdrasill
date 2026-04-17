@@ -183,15 +183,36 @@ class LearningProblemQuestion {
   List<Map<String, dynamic>> get orderedFigureAssets {
     final assets = figureAssets.toList(growable: true);
     if (assets.isEmpty) return const <Map<String, dynamic>>[];
+    // figure_index 오름차순, 같은 index 안에서는 approved=true > created_at 최신 우선.
+    // 같은 index 에 승인된 asset 이 하나라도 있으면 그것만 남기고 미승인본은 제거한다.
+    // (수동 교체본이 AI 재생성본에 가려지는 사고를 방지.)
     assets.sort((a, b) {
       final ai = _intOrNull(a['figure_index']) ?? 1 << 20;
       final bi = _intOrNull(b['figure_index']) ?? 1 << 20;
       if (ai != bi) return ai.compareTo(bi);
+      final aApproved = a['approved'] == true ? 1 : 0;
+      final bApproved = b['approved'] == true ? 1 : 0;
+      if (aApproved != bApproved) return bApproved - aApproved;
       final ad = '${a['created_at'] ?? ''}';
       final bd = '${b['created_at'] ?? ''}';
       return bd.compareTo(ad);
     });
-    return assets;
+    final byIndex = <int, Map<String, dynamic>>{};
+    final orphanOrder = <Map<String, dynamic>>[];
+    for (final asset in assets) {
+      final idx = _intOrNull(asset['figure_index']);
+      if (idx == null || idx <= 0) {
+        orphanOrder.add(asset);
+        continue;
+      }
+      byIndex.putIfAbsent(idx, () => asset);
+    }
+    final keys = byIndex.keys.toList()..sort();
+    final out = <Map<String, dynamic>>[
+      for (final k in keys) byIndex[k]!,
+      ...orphanOrder,
+    ];
+    return out;
   }
 
   String get renderedStem => _renderTextWithEquation(stem, equations);
@@ -2532,4 +2553,85 @@ double _doubleOrZero(dynamic value) {
   if (value is double) return value;
   if (value is num) return value.toDouble();
   return double.tryParse('$value') ?? 0;
+}
+
+/// 세트형 문항의 부분 답 하나.
+class LearningAnswerPart {
+  const LearningAnswerPart({required this.sub, required this.value});
+
+  final String sub;
+  final String value;
+}
+
+/// `meta['answer_parts']` JSON 배열을 [LearningAnswerPart] 리스트로 변환.
+List<LearningAnswerPart>? learningAnswerPartsFromMetaRaw(dynamic raw) {
+  if (raw is! List) return null;
+  final out = <LearningAnswerPart>[];
+  for (final item in raw) {
+    if (item is! Map) continue;
+    final sub = '${item['sub'] ?? ''}'.trim();
+    final value = '${item['value'] ?? ''}'.trim();
+    if (sub.isEmpty || value.isEmpty) continue;
+    out.add(LearningAnswerPart(sub: sub, value: value));
+  }
+  return out.isEmpty ? null : out;
+}
+
+/// 세트형 문항의 하위문항별 배점 하나.
+class LearningScorePart {
+  const LearningScorePart({required this.sub, required this.value});
+
+  final String sub;
+  final double value;
+}
+
+/// `meta['score_parts']` JSON 배열을 [LearningScorePart] 리스트로 변환.
+List<LearningScorePart>? learningScorePartsFromMetaRaw(dynamic raw) {
+  if (raw is! List) return null;
+  final out = <LearningScorePart>[];
+  for (final item in raw) {
+    if (item is! Map) continue;
+    final sub = '${item['sub'] ?? ''}'.trim();
+    final rawValue = item['value'];
+    double? parsed;
+    if (rawValue is num) {
+      parsed = rawValue.toDouble();
+    } else {
+      parsed = double.tryParse('$rawValue');
+    }
+    if (sub.isEmpty || parsed == null || !parsed.isFinite || parsed <= 0) {
+      continue;
+    }
+    out.add(LearningScorePart(sub: sub, value: parsed));
+  }
+  return out.isEmpty ? null : out;
+}
+
+/// [LearningProblemQuestion] 용 세트형 편의 extension.
+extension LearningProblemQuestionSetExtension on LearningProblemQuestion {
+  bool get isSetQuestion => meta['is_set_question'] == true;
+
+  List<LearningAnswerPart>? get answerParts =>
+      learningAnswerPartsFromMetaRaw(meta['answer_parts']);
+
+  List<LearningScorePart>? get scoreParts =>
+      learningScorePartsFromMetaRaw(meta['score_parts']);
+
+  /// 세트형 문항의 총점(= score_parts 합).
+  /// 파트가 없으면 meta['score_point'] 숫자값을 fallback 으로 사용.
+  double? get totalScorePoint {
+    final parts = scoreParts;
+    if (parts != null && parts.isNotEmpty) {
+      double sum = 0;
+      for (final p in parts) {
+        sum += p.value;
+      }
+      return sum > 0 ? sum : null;
+    }
+    final raw = meta['score_point'];
+    if (raw is num && raw > 0) return raw.toDouble();
+    final parsed = double.tryParse('$raw');
+    if (parsed != null && parsed.isFinite && parsed > 0) return parsed;
+    return null;
+  }
 }

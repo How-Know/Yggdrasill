@@ -956,6 +956,25 @@ String objectiveAnswerForPreview(LearningProblemQuestion question) {
 }
 
 String subjectiveAnswerForPreview(LearningProblemQuestion question) {
+  // 세트형 문항: meta.answer_parts 가 저장되어 있으면
+  // "(1) 12\n(2) ㄱ, ㄷ" 형태로 줄바꿈을 살려 반환한다.
+  // _sanitizeAnswerText 는 모든 공백을 단일 공백으로 합치므로
+  // 파트별 join 결과를 거기에 통과시키면 줄바꿈이 사라진다. 그래서 여기서는
+  // 각 파트 value 만 위생화한 뒤 "(sub) value" 로 조립해 바로 반환한다.
+  final parts = question.answerParts;
+  if (parts != null && parts.isNotEmpty) {
+    final rendered = parts
+        .map((p) {
+          final sub = p.sub.trim();
+          final value = _sanitizeAnswerText(p.value);
+          if (sub.isEmpty || value.isEmpty) return '';
+          return '($sub) $value';
+        })
+        .where((s) => s.isNotEmpty)
+        .join('\n');
+    if (rendered.isNotEmpty) return rendered;
+  }
+
   final direct = _sanitizeAnswerText(
     question.subjectiveAnswer.isNotEmpty
         ? question.subjectiveAnswer

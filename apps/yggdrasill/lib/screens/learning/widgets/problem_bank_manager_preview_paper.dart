@@ -708,7 +708,11 @@ class ProblemBankManagerPreviewPaper extends StatelessWidget {
   Map<String, dynamic>? _latestFigureAssetOf(LearningProblemQuestion q) {
     final assets = q.figureAssets.toList(growable: true);
     if (assets.isEmpty) return null;
+    // approved=true 우선, 그다음 created_at 내림차순.
     assets.sort((a, b) {
+      final aApproved = a['approved'] == true ? 1 : 0;
+      final bApproved = b['approved'] == true ? 1 : 0;
+      if (aApproved != bApproved) return bApproved - aApproved;
       final aa = '${a['created_at'] ?? ''}';
       final bb = '${b['created_at'] ?? ''}';
       return bb.compareTo(aa);
