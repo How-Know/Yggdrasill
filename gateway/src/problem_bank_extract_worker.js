@@ -1191,8 +1191,27 @@ function flattenTableXmlToRows(tableXml, { alignResolver = null } = {}) {
   return rows;
 }
 
+function shouldEmitTableMarkers(tableXml) {
+  const xml = String(tableXml || '');
+  if (!xml) return false;
+
+  const rowMatches = xml.match(/<hp:tr\b/gi) || [];
+  if (rowMatches.length === 0) return false;
+
+  const cellMatches = xml.match(/<hp:tc\b/gi) || [];
+  // 1x1 표는 조건제시 박스로 간주한다.
+  if (rowMatches.length <= 1 && cellMatches.length <= 1) return false;
+
+  const plainText = htmlDecode(xml.replace(/<[^>]+>/g, ' '));
+  // <보기>가 들어간 표는 기존 보기박스로 처리한다.
+  if (/<\s*보\s*기\s*>/.test(plainText)) return false;
+
+  return true;
+}
+
 function flattenBoxXmlToRows(match, { table = false, alignResolver = null } = {}) {
-  if (table) {
+  const shouldUseTableMarkers = table && shouldEmitTableMarkers(match);
+  if (shouldUseTableMarkers) {
     const tableRows = flattenTableXmlToRows(match, { alignResolver });
     if (tableRows.length > 0) return tableRows;
   }
@@ -3278,7 +3297,6 @@ async function processOneJob(job) {
         'source_storage_bucket',
         'source_storage_path',
         'source_filename',
-        'exam_profile',
         'meta',
         'curriculum_code',
         'source_type_code',
@@ -3370,7 +3388,7 @@ async function processOneJob(job) {
     geminiTried = true;
     try {
       const sourceText = buildGeminiSourceText(parsed);
-      const examProfileHint = doc.exam_profile || built.stats.examProfile || '';
+      const examProfileHint = built.stats.examProfile || '';
       let drafts = [];
       try {
         drafts = await callGeminiQuestionExtractor({
@@ -3454,7 +3472,7 @@ async function processOneJob(job) {
 
   const dualModeResult = await enrichQuestionsWithDualMode({
     questions: built.questions || [],
-    examProfileHint: doc.exam_profile || built?.stats?.examProfile || '',
+    examProfileHint: built?.stats?.examProfile || '',
   });
   built.questions = dualModeResult.questions;
 
@@ -3776,7 +3794,6 @@ async function processOneJob(job) {
     .from('pb_documents')
     .update({
       status: docStatus,
-      exam_profile: stats.examProfile,
       curriculum_code: classification.curriculum_code,
       source_type_code: classification.source_type_code,
       course_label: classification.course_label,

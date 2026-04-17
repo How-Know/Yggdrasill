@@ -120,7 +120,8 @@
         ],
         "equationCountMin": 10,
         "hasBoxContent": true,
-        "stemLineAlignsLength": 18
+        "stemNotContains": "[표행]",
+        "stemLineAlignsLength": 14
       },
       "9": {
         "choiceCount": 5,
@@ -146,7 +147,8 @@
         ],
         "equationCountMin": 1,
         "hasBoxContent": true,
-        "stemLineAlignsLength": 41,
+        "stemNotContains": "[표행]",
+        "stemLineAlignsLength": 23,
         "stemContains": "ㄱ."
       },
       "11": {
@@ -184,7 +186,8 @@
         ],
         "equationCountMin": 10,
         "hasBoxContent": true,
-        "stemLineAlignsLength": 17
+        "stemNotContains": "[표행]",
+        "stemLineAlignsLength": 13
       },
       "14": {
         "choiceCount": 5,
@@ -209,7 +212,8 @@
         ],
         "equationCountMin": 15,
         "hasBoxContent": true,
-        "stemLineAlignsLength": 19
+        "stemNotContains": "[표행]",
+        "stemLineAlignsLength": 15
       },
       "16": {
         "choiceCount": 0,
@@ -230,7 +234,8 @@
         "choiceCount": 0,
         "equationCountMin": 14,
         "hasBoxContent": true,
-        "stemLineAlignsLength": 17
+        "stemNotContains": "[표행]",
+        "stemLineAlignsLength": 13
       }
     }
   }

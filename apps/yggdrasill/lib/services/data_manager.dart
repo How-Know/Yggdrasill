@@ -36,6 +36,7 @@ import 'resource_service.dart';
 import 'answer_key_service.dart';
 import 'attendance_service.dart';
 import 'homework_score_service.dart';
+import 'realtime_reconciler.dart';
 import 'package:supabase_flutter/supabase_flutter.dart'
     show
         RealtimeChannel,
@@ -1344,8 +1345,16 @@ class DataManager {
             sessionOverridesNotifier.value =
                 List.unmodifiable(_sessionOverrides);
           },
-        )
-        ..subscribe();
+        );
+      RealtimeReconciler.instance.attachResubscribe(
+        chan,
+        key: 'session_overrides:$academyId',
+        onResync: () async {
+          try {
+            await loadSessionOverrides();
+          } catch (_) {}
+        },
+      );
     } catch (_) {}
   }
 
@@ -3919,7 +3928,8 @@ class DataManager {
     try {
       final academyId = await TenantService.instance.getActiveAcademyId() ??
           await TenantService.instance.ensureActiveAcademy();
-      _rtStudentTimeBlocks ??= Supabase.instance.client
+      if (_rtStudentTimeBlocks != null) return;
+      final chan = Supabase.instance.client
           .channel('public:student_time_blocks:$academyId')
         ..onPostgresChanges(
           event: PostgresChangeEvent.insert,
@@ -3956,8 +3966,17 @@ class DataManager {
           callback: (payload) async {
             _applyStudentTimeBlocksRealtimePayload(payload);
           },
-        )
-        ..subscribe();
+        );
+      _rtStudentTimeBlocks = chan;
+      RealtimeReconciler.instance.attachResubscribe(
+        chan,
+        key: 'student_time_blocks:$academyId',
+        onResync: () async {
+          try {
+            await loadStudentTimeBlocks();
+          } catch (_) {}
+        },
+      );
     } catch (_) {}
   }
 
@@ -4017,8 +4036,16 @@ class DataManager {
                 studentsRevision.value++;
                 _debouncedReload(loadStudents);
               },
-            )
-            ..subscribe();
+            );
+      RealtimeReconciler.instance.attachResubscribe(
+        chan,
+        key: 'students:$academyId',
+        onResync: () async {
+          try {
+            await loadStudents();
+          } catch (_) {}
+        },
+      );
     } catch (_) {}
   }
 
@@ -4066,8 +4093,16 @@ class DataManager {
             studentBasicInfoRevision.value++;
             _debouncedReload(loadStudents);
           },
-        )
-        ..subscribe();
+        );
+      RealtimeReconciler.instance.attachResubscribe(
+        chan,
+        key: 'student_basic_info:$academyId',
+        onResync: () async {
+          try {
+            await loadStudents();
+          } catch (_) {}
+        },
+      );
     } catch (_) {}
   }
 
@@ -4115,8 +4150,16 @@ class DataManager {
             studentPaymentInfoRevision.value++;
             _debouncedReload(loadStudentPaymentInfos);
           },
-        )
-        ..subscribe();
+        );
+      RealtimeReconciler.instance.attachResubscribe(
+        chan,
+        key: 'student_payment_info:$academyId',
+        onResync: () async {
+          try {
+            await loadStudentPaymentInfos();
+          } catch (_) {}
+        },
+      );
     } catch (_) {}
   }
 
@@ -7092,8 +7135,16 @@ class DataManager {
               await loadPaymentRecords();
             } catch (_) {}
           },
-        )
-        ..subscribe();
+        );
+      RealtimeReconciler.instance.attachResubscribe(
+        chan,
+        key: 'payment_records:$academyId',
+        onResync: () async {
+          try {
+            await loadPaymentRecords();
+          } catch (_) {}
+        },
+      );
     } catch (_) {}
   }
 
@@ -7149,8 +7200,16 @@ class DataManager {
               await loadDeviceBindings();
             } catch (_) {}
           },
-        )
-        ..subscribe();
+        );
+      RealtimeReconciler.instance.attachResubscribe(
+        chan,
+        key: 'm5_device_bindings:$academyId',
+        onResync: () async {
+          try {
+            await loadDeviceBindings();
+          } catch (_) {}
+        },
+      );
     } catch (_) {}
   }
 

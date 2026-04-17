@@ -4,6 +4,7 @@ import 'runtime_flags.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' show RealtimeChannel, PostgresChangeEvent, PostgresChangeFilter, PostgresChangeFilterType;
 import 'tenant_service.dart';
+import 'realtime_reconciler.dart';
 import 'package:uuid/uuid.dart';
 
 class TagEvent {
@@ -224,8 +225,16 @@ class TagStore {
             list.removeWhere((e) => e.tagName == m['tag_name'] && e.timestamp.toIso8601String() == (m['occurred_at'] as String?));
             _bump();
           },
-        )
-        ..subscribe();
+        );
+      RealtimeReconciler.instance.attachResubscribe(
+        _rt!,
+        key: 'tag_events:$academyId',
+        onResync: () async {
+          try {
+            await loadAllFromDb();
+          } catch (_) {}
+        },
+      );
     } catch (_) {}
   }
 }

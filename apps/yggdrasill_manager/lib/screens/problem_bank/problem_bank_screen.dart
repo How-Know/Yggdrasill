@@ -11,6 +11,7 @@ import 'problem_bank_models.dart';
 import 'widgets/figure_compare_dialog.dart';
 import 'widgets/problem_bank_classification_filter_panel.dart';
 import 'widgets/problem_bank_mode_tab_bar.dart';
+import 'widgets/problem_bank_synced_list_dialog.dart';
 
 class ProblemBankScreen extends StatefulWidget {
   const ProblemBankScreen({super.key});
@@ -33,10 +34,6 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   // 분수는 명령(\dfrac) 승격으로 키우고, 식 전체 스케일은 일반 수식과 동일하게 유지한다.
   static const double _previewFractionMathScale = _previewMathScale;
 
-  static const List<String> _templateOptions = <String>[
-    '내신형',
-    '모의고사형',
-  ];
   static const Map<String, String> _curriculumLabels = <String, String>{
     'legacy_1to6': '옛날 교육과정(1~6차)',
     'k7_1997': '7차 교육과정(1997)',
@@ -88,7 +85,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   String _statusText = '초기화 중...';
 
   String? _academyId;
-  String _selectedTemplate = _templateOptions.first;
+  // '목록' 다이얼로그에서 가장 최근에 사용한 레벨/세부 과정 (기본 '전체').
+  final String _syncedListSchoolLevel = '전체';
+  final String _syncedListDetailedCourse = '전체';
 
   List<ProblemBankDocument> _documents = <ProblemBankDocument>[];
   ProblemBankDocument? _activeDocument;
@@ -249,17 +248,6 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     _classificationGradeFilterCtrl.dispose();
     _classificationSchoolFilterCtrl.dispose();
     super.dispose();
-  }
-
-  String _templateToProfile(String template) {
-    switch (template) {
-      case '수능형':
-      case '모의고사형':
-        return 'csat';
-      case '내신형':
-      default:
-        return 'naesin';
-    }
   }
 
   bool get _isSchoolPastSource => _selectedSourceTypeCode == 'school_past';
@@ -862,8 +850,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
 
     final activeDocument = _activeDocument;
     final documentId = activeDocument?.id.trim() ?? '';
-    final profile = _templateToProfile(_selectedTemplate);
-    final paperSize = profile == 'csat' ? 'B4' : 'A4';
+    const profile = 'naesin';
+    const paperSize = 'A4';
 
     try {
       final urlMap = await _service.batchRenderThumbnails(
@@ -1425,7 +1413,6 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         academyId: academyId,
         bytes: bytes,
         originalName: fileName,
-        examProfile: _templateToProfile(_selectedTemplate),
         curriculumCode: _selectedCurriculumCode,
         sourceTypeCode: _selectedSourceTypeCode,
         courseLabel: _selectedCourseLabel,
@@ -1858,7 +1845,6 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         sourceName: payload.sourceName.trim().isEmpty
             ? 'manual_paste.txt'
             : payload.sourceName.trim(),
-        examProfile: _templateToProfile(_selectedTemplate),
         curriculumCode: _selectedCurriculumCode,
         sourceTypeCode: _selectedSourceTypeCode,
         courseLabel: _selectedCourseLabel,
@@ -2973,6 +2959,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
               value: hasItems ? selectedId : null,
               dropdownColor: _panel,
               isExpanded: true,
+              itemHeight: null,
+              menuMaxHeight: 420,
               hint: const Text(
                 '업로드 문서를 선택하세요',
                 style: TextStyle(color: _textSub, fontSize: 12),
@@ -2982,14 +2970,27 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                 fontSize: 12,
                 fontWeight: FontWeight.w600,
               ),
+              selectedItemBuilder: (context) => _documents
+                  .map(
+                    (d) => Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        d.sourceFilename,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: _text,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  )
+                  .toList(growable: false),
               items: _documents
                   .map(
                     (d) => DropdownMenuItem<String>(
                       value: d.id,
-                      child: Text(
-                        d.sourceFilename,
-                        overflow: TextOverflow.ellipsis,
-                      ),
+                      child: _buildRecentDocumentMenuItem(d),
                     ),
                   )
                   .toList(),
@@ -3013,6 +3014,86 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         ),
       ],
     );
+  }
+
+  /// 최근 문서 드롭다운 아이템: hover 시 전체 파일명 툴팁 + 우측 X 하드삭제.
+  Widget _buildRecentDocumentMenuItem(ProblemBankDocument doc) {
+    return Tooltip(
+      message: doc.sourceFilename,
+      waitDuration: const Duration(milliseconds: 350),
+      preferBelow: false,
+      child: Row(
+        mainAxisSize: MainAxisSize.max,
+        children: [
+          Expanded(
+            child: Text(
+              doc.sourceFilename,
+              overflow: TextOverflow.ellipsis,
+              maxLines: 1,
+              style: const TextStyle(
+                color: _text,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          InkWell(
+            borderRadius: BorderRadius.circular(999),
+            onTap: () => unawaited(_handleRecentDocumentHardDelete(doc)),
+            child: const Padding(
+              padding: EdgeInsets.all(4),
+              child: Icon(
+                Icons.close,
+                size: 14,
+                color: Color(0xFFDE6A73),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _handleRecentDocumentHardDelete(
+    ProblemBankDocument doc,
+  ) async {
+    // 드롭다운 메뉴 닫기.
+    if (mounted) {
+      Navigator.of(context, rootNavigator: true).maybePop();
+    }
+    if (!mounted) return;
+    final confirmed = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            backgroundColor: _panel,
+            title: const Text(
+              '문서 하드삭제',
+              style: TextStyle(color: _text, fontWeight: FontWeight.w800),
+            ),
+            content: Text(
+              '"${doc.sourceFilename}" 문서와 연결된 문항/미리보기가 완전히 삭제됩니다.',
+              style: const TextStyle(color: _textSub, height: 1.45),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(false),
+                child: const Text('취소'),
+              ),
+              FilledButton(
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFFDE6A73),
+                  foregroundColor: Colors.white,
+                ),
+                onPressed: () => Navigator.of(ctx).pop(true),
+                child: const Text('삭제'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+    if (!confirmed) return;
+    await _hardDeleteSyncedDocument(doc);
   }
 
   Widget _buildPipelineMarquee() {
@@ -3153,16 +3234,6 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           _buildSectionTitle(
             '1) HWPX 업로드',
             subtitle: '업로드 직후 자동으로 추출하고, 검수 후 업로드로 확정합니다.',
-          ),
-          const SizedBox(height: 10),
-          SizedBox(
-            width: 200,
-            child: _buildDropdownField(
-              label: '시험 프로파일',
-              value: _selectedTemplate,
-              values: _templateOptions,
-              onChanged: (v) => setState(() => _selectedTemplate = v),
-            ),
           ),
           const SizedBox(height: 12),
           _buildDocumentSelector(),
@@ -7776,6 +7847,69 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     await _loadDocumentContext(doc.id);
   }
 
+  Future<void> _openSyncedListDialog() async {
+    final academyId = _academyId;
+    if (academyId == null || academyId.trim().isEmpty) {
+      _showSnack('아카데미 정보를 불러오지 못했습니다.', error: true);
+      return;
+    }
+    if (!mounted) return;
+    final selectedId = await showDialog<String>(
+      context: context,
+      barrierDismissible: true,
+      builder: (_) => ProblemBankSyncedListDialog(
+        academyId: academyId,
+        service: _service,
+        curriculumLabels: _curriculumLabels,
+        sourceTypeLabels: _sourceTypeLabels,
+        initialCurriculumCode: _selectedCurriculumCode,
+        initialSchoolLevel: _syncedListSchoolLevel,
+        initialDetailedCourse: _syncedListDetailedCourse,
+        initialSourceTypeCode: _selectedSourceTypeCode,
+        initialSearchText: '',
+        initialSelectedDocumentId: _activeDocument?.id,
+        onDeleteDocument: _hardDeleteSyncedDocument,
+      ),
+    );
+    if (!mounted) return;
+    if (selectedId == null || selectedId.trim().isEmpty) return;
+    await _loadDocumentContext(selectedId);
+  }
+
+  Future<bool> _hardDeleteSyncedDocument(ProblemBankDocument doc) async {
+    final academyId = _academyId;
+    if (academyId == null || academyId.trim().isEmpty) {
+      _showSnack('아카데미 정보를 불러오지 못했습니다.', error: true);
+      return false;
+    }
+    try {
+      await _service.deleteDocument(academyId: academyId, document: doc);
+      if (!mounted) return true;
+      final wasActive = _activeDocument?.id == doc.id;
+      setState(() {
+        _documents = _documents
+            .where((d) => d.id != doc.id)
+            .toList(growable: false);
+        if (wasActive) {
+          _activeDocument = null;
+          _questions = <ProblemBankQuestion>[];
+          _dirtyQuestionIds.clear();
+          _questionPreviewUrls.clear();
+          _scoreDrafts.clear();
+          _hasExtracted = false;
+          _needsPublish = false;
+        }
+      });
+      unawaited(_refreshDocuments());
+      unawaited(_runClassificationSearch());
+      _showSnack('"${doc.sourceFilename}" 문서를 삭제했습니다.');
+      return true;
+    } catch (e) {
+      _showSnack('문서 삭제 실패: $e', error: true);
+      return false;
+    }
+  }
+
   Future<void> _deleteActiveDocumentInClassification() async {
     if (_isDeletingClassificationDocument) return;
     final academyId = _academyId;
@@ -8155,18 +8289,15 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                     ),
                     const Spacer(),
                     FilledButton.icon(
-                      onPressed: (_isResetting ||
-                              _isUploading ||
-                              _isExtracting ||
-                              !canUpload)
+                      onPressed: (_isResetting || _academyId == null)
                           ? null
-                          : _pickAndUploadHwpx,
+                          : () => unawaited(_openSyncedListDialog()),
                       style: FilledButton.styleFrom(
                         backgroundColor: _accent,
                         foregroundColor: Colors.white,
                       ),
-                      icon: const Icon(Icons.cloud_upload_outlined, size: 18),
-                      label: const Text('HWPX 업로드'),
+                      icon: const Icon(Icons.list_alt_outlined, size: 18),
+                      label: const Text('목록'),
                     ),
                     const SizedBox(width: 8),
                     OutlinedButton.icon(

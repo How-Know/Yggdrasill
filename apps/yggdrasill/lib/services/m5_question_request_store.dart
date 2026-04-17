@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'realtime_reconciler.dart';
+
 /// M5 질문 버튼 → Supabase `m5_student_question_requests` 미확인 행 (홈 칩용).
 class M5QuestionRequestEntry {
   final String id;
@@ -69,8 +71,16 @@ class M5QuestionRequestStore {
           callback: (_) {
             unawaited(reload());
           },
-        )
-        ..subscribe();
+        );
+      RealtimeReconciler.instance.attachResubscribe(
+        _channel!,
+        key: 'm5_student_question_requests:$aid',
+        onResync: () async {
+          try {
+            await reload();
+          } catch (_) {}
+        },
+      );
     } catch (e, st) {
       debugPrint('[M5_Q][rt] subscribe failed: $e\n$st');
     }

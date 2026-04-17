@@ -859,7 +859,6 @@ async function ensureDocumentBelongs(academyId, documentId) {
         'id',
         'academy_id',
         'status',
-        'exam_profile',
         'source_filename',
         'source_storage_bucket',
         'source_storage_path',
@@ -2323,7 +2322,7 @@ async function saveSettingsAsDocument(body, res) {
       ),
     );
     const templateProfile = normalizeTemplateProfile(
-      body.templateProfile || rawRenderConfig.templateProfile || sourceDoc.exam_profile,
+      body.templateProfile || rawRenderConfig.templateProfile,
     );
     const paperSize = normalizePaper(
       body.paperSize || rawRenderConfig.paperSize || 'A4',

@@ -6,6 +6,7 @@ import 'package:uuid/uuid.dart';
 import 'tenant_service.dart';
 import 'homework_store.dart';
 import 'learning_problem_bank_service.dart';
+import 'realtime_reconciler.dart';
 
 class HomeworkAssignmentDetail {
   final String id;
@@ -405,8 +406,15 @@ class HomeworkAssignmentStore {
             value: academyId,
           ),
           callback: (_) => _bump(),
-        )
-        ..subscribe();
+        );
+      RealtimeReconciler.instance.attachResubscribe(
+        _rtAssignments!,
+        key: 'homework_assignments:$academyId',
+        onResync: () async {
+          clearActiveAssignmentsCache();
+          _bump();
+        },
+      );
       _rtChecks ??= Supabase.instance.client
           .channel('public:homework_assignment_checks:$academyId')
         ..onPostgresChanges(
@@ -441,8 +449,15 @@ class HomeworkAssignmentStore {
             value: academyId,
           ),
           callback: (_) => _bump(),
-        )
-        ..subscribe();
+        );
+      RealtimeReconciler.instance.attachResubscribe(
+        _rtChecks!,
+        key: 'homework_assignment_checks:$academyId',
+        onResync: () async {
+          clearActiveAssignmentsCache();
+          _bump();
+        },
+      );
       _rtAcademyId = academyId;
     } catch (e, st) {
       debugPrint('[HW_ASSIGN][realtime][ERROR] $e\n$st');

@@ -6,7 +6,6 @@ class ProblemBankDocument {
     required this.sourceStorageBucket,
     required this.sourceStoragePath,
     required this.status,
-    required this.examProfile,
     required this.createdAt,
     required this.updatedAt,
     required this.curriculumCode,
@@ -29,7 +28,6 @@ class ProblemBankDocument {
   final String sourceStorageBucket;
   final String sourceStoragePath;
   final String status;
-  final String examProfile;
   final DateTime? createdAt;
   final DateTime? updatedAt;
   final String curriculumCode;
@@ -66,7 +64,6 @@ class ProblemBankDocument {
       sourceStorageBucket: '${map['source_storage_bucket'] ?? ''}',
       sourceStoragePath: '${map['source_storage_path'] ?? ''}',
       status: '${map['status'] ?? ''}',
-      examProfile: '${map['exam_profile'] ?? ''}',
       createdAt: _dateTimeOrNull(map['created_at']),
       updatedAt: _dateTimeOrNull(map['updated_at']),
       curriculumCode: '${map['curriculum_code'] ?? 'rev_2022'}'.trim().isEmpty

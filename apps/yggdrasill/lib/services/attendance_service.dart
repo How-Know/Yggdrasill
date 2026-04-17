@@ -16,6 +16,7 @@ import '../models/student_time_block.dart';
 import 'package:uuid/uuid.dart';
 import '../models/academy_settings.dart';
 import 'tenant_service.dart';
+import 'realtime_reconciler.dart';
 
 // 하루/세트 단위로 블록을 집계하기 위한 구조체 (가장 빠른 시작/가장 늦은 종료)
 class _PlannedDailyAgg {
@@ -1619,8 +1620,16 @@ class AttendanceService {
                   List.unmodifiable(_attendanceRecords);
             } catch (_) {}
           },
-        )
-        ..subscribe();
+        );
+      RealtimeReconciler.instance.attachResubscribe(
+        chan,
+        key: 'attendance_records:$academyId',
+        onResync: () async {
+          try {
+            await loadAttendanceRecords();
+          } catch (_) {}
+        },
+      );
     } catch (_) {}
   }
 

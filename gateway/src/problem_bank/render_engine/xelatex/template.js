@@ -61,9 +61,12 @@ function applyEquationLookup(mathContent, lookup) {
   if (lookup.length === 0) return mathContent;
   let result = mathContent;
   for (const { raw, latex } of lookup) {
-    if (raw !== latex && result.includes(raw)) {
-      result = result.replaceAll(raw, latex);
-    }
+    if (raw === latex) continue;
+    if (!result.includes(raw)) continue;
+    if (latex === `\\${raw}` && result.includes(latex)) continue;
+    const escaped = raw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(`(?<!\\\\)${escaped}`, 'g');
+    result = result.replace(re, latex);
   }
   return result;
 }
@@ -383,8 +386,7 @@ function renderTableLatex(lines, equations) {
 
   return [
     '\\vspace{6pt}',
-    `{\\newlength{\\tblcellwd}%`,
-    `\\setlength{\\tblcellwd}{\\dimexpr ${tableWidthFrac}\\linewidth/${maxCols} - 2\\tabcolsep - 1.2pt\\relax}%`,
+    `\\setlength{\\tblcellwd}{\\dimexpr ${tableWidthFrac}\\linewidth/${maxCols} - 2\\tabcolsep - 1.2pt\\relax}`,
     '\\begin{center}',
     '\\renewcommand{\\arraystretch}{1.4}',
     '\\begin{tabular}{' + colSpec + '}',
@@ -392,7 +394,7 @@ function renderTableLatex(lines, equations) {
     latexRows.join('\n\\hline\n'),
     '\\hline',
     '\\end{tabular}',
-    '\\end{center}}',
+    '\\end{center}',
     '\\vspace{6pt}',
   ].join('\n');
 }
@@ -556,6 +558,7 @@ function buildPreamble({
   lines.push('\\usepackage{xcolor}');
   lines.push('\\usepackage{enumitem}');
   lines.push('\\usepackage{multicol}');
+  lines.push('\\newlength{\\tblcellwd}');
   lines.push('\\usepackage{fancyhdr}');
   lines.push('\\usepackage{setspace}');
   lines.push('\\usepackage[most]{tcolorbox}');
@@ -707,6 +710,7 @@ export function buildTexSource(question, options = {}) {
     '\\usepackage{enumitem}',
     '\\usepackage{setspace}',
     '\\usepackage[most]{tcolorbox}',
+    '\\newlength{\\tblcellwd}',
     '',
     `\\setmainfont{${fontFamily}}[`,
     `  BoldFont = ${fontBold},`,

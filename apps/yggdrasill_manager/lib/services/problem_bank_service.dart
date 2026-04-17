@@ -376,7 +376,6 @@ class ProblemBankService {
   Future<ProblemBankDocument> uploadDocument({
     required Uint8List bytes,
     required String originalName,
-    String examProfile = 'naesin',
     String curriculumCode = 'rev_2022',
     String sourceTypeCode = 'school_past',
     String courseLabel = '',
@@ -451,7 +450,6 @@ class ProblemBankService {
               'source_storage_path': objectPath,
               'source_size_bytes': bytes.length,
               'status': 'uploaded',
-              'exam_profile': examProfile,
               ..._buildClassificationColumns(
                 curriculumCode: curriculumCode,
                 sourceTypeCode: sourceTypeCode,
@@ -499,7 +497,6 @@ class ProblemBankService {
             'source_storage_path': objectPath,
             'source_size_bytes': bytes.length,
             'status': 'uploaded',
-            'exam_profile': examProfile,
             ..._buildClassificationColumns(
               curriculumCode: curriculumCode,
               sourceTypeCode: sourceTypeCode,
@@ -534,7 +531,6 @@ class ProblemBankService {
     required String academyId,
     required String rawText,
     String sourceName = 'manual_paste.txt',
-    String examProfile = 'naesin',
     String curriculumCode = 'rev_2022',
     String sourceTypeCode = 'school_past',
     String courseLabel = '',
@@ -591,7 +587,6 @@ class ProblemBankService {
           'source_storage_path': objectPath,
           'source_size_bytes': bytes.length,
           'status': 'uploaded',
-          'exam_profile': examProfile,
           ..._buildClassificationColumns(
             curriculumCode: curriculumCode,
             sourceTypeCode: sourceTypeCode,
@@ -711,7 +706,6 @@ class ProblemBankService {
     await _client.from('pb_documents').update({
       'status':
           lowConfidenceCount > 0 ? 'draft_review_required' : 'draft_ready',
-      'exam_profile': examProfile,
       ..._buildClassificationColumns(
         curriculumCode: curriculumCode,
         sourceTypeCode: sourceTypeCode,
@@ -799,6 +793,52 @@ class ProblemBankService {
               Map<String, dynamic>.from(e as Map<dynamic, dynamic>),
             ))
         .toList(growable: false);
+  }
+
+  /// 학습앱의 `listReadyDocuments`와 동일 규칙으로 문서를 조회한다.
+  ///
+  /// 필터: academy + curriculum + source_type(학습앱 UI 매핑) + status=ready +
+  /// 레벨(`초/중/고`)과 세부 과정(`전체` 포함) 매칭 + `meta.saved_settings*` 제외.
+  Future<List<ProblemBankDocument>> listSyncedReadyDocuments({
+    required String academyId,
+    required String curriculumCode,
+    required String schoolLevel,
+    required String detailedCourse,
+    required String sourceTypeCode,
+    int limit = 2000,
+  }) async {
+    final aid = academyId.trim();
+    if (aid.isEmpty) return const <ProblemBankDocument>[];
+    final dbCodes = _syncedSourceTypeCodesForUi(sourceTypeCode);
+    if (dbCodes.isEmpty) return const <ProblemBankDocument>[];
+    final safeLimit = limit.clamp(1, 4000);
+    final rows = await _client
+        .from('pb_documents')
+        .select('*')
+        .eq('academy_id', aid)
+        .eq('curriculum_code', curriculumCode)
+        .inFilter('source_type_code', dbCodes)
+        .eq('status', 'ready')
+        .order('updated_at', ascending: false)
+        .limit(safeLimit);
+
+    final out = <ProblemBankDocument>[];
+    for (final item in (rows as List<dynamic>)) {
+      final map = Map<String, dynamic>.from(item as Map<dynamic, dynamic>);
+      if (_isSyncedSavedSettingsRow(map)) continue;
+      final courseLabel = '${map['course_label'] ?? ''}'.trim();
+      final gradeLabel = '${map['grade_label'] ?? ''}'.trim();
+      if (!_syncedMatchesLevel(schoolLevel, courseLabel, gradeLabel)) continue;
+      if (!_syncedMatchesDetailedCourse(
+        detailedCourse,
+        courseLabel,
+        gradeLabel,
+      )) {
+        continue;
+      }
+      out.add(ProblemBankDocument.fromMap(map));
+    }
+    return out;
   }
 
   Future<ProblemBankResetResult> resetPipelineData({
@@ -2100,6 +2140,93 @@ class ProblemBankService {
     } catch (_) {
       return {};
     }
+  }
+}
+
+/// 학습앱 `pbSourceTypeCodesForLearningUi`와 동일한 매핑.
+List<String> _syncedSourceTypeCodesForUi(String uiSourceTypeCode) {
+  switch (uiSourceTypeCode.trim()) {
+    case 'private_material':
+      return const <String>['market_book', 'lecture_book', 'ebs_book'];
+    case 'self_made':
+      return const <String>['original_item'];
+    case '':
+      return const <String>[];
+    default:
+      return <String>[uiSourceTypeCode.trim()];
+  }
+}
+
+bool _syncedMatchesLevel(String level, String courseLabel, String gradeLabel) {
+  final safeLevel = level.trim();
+  if (safeLevel.isEmpty || safeLevel == '전체') return true;
+  final merged = '$courseLabel $gradeLabel'.replaceAll(' ', '');
+  if (merged.isEmpty) return true;
+  final hasExplicitLevel =
+      merged.contains('초') || merged.contains('중') || merged.contains('고');
+  if (!hasExplicitLevel) return true;
+  if (safeLevel == '초') return merged.contains('초');
+  if (safeLevel == '중') return merged.contains('중');
+  if (safeLevel == '고') return merged.contains('고');
+  return true;
+}
+
+bool _syncedMatchesDetailedCourse(
+  String detailedCourse,
+  String courseLabel,
+  String gradeLabel,
+) {
+  final selected = detailedCourse.trim();
+  if (selected.isEmpty || selected == '전체') return true;
+  final merged = '$courseLabel $gradeLabel';
+  if (merged.contains(selected)) return true;
+  final compactMerged = merged.replaceAll(' ', '');
+  final compactSelected = selected.replaceAll(' ', '');
+  if (compactMerged.contains(compactSelected)) return true;
+  final normalizedSelected =
+      compactSelected.replaceAll(RegExp(r'^(초|중|고)'), '');
+  if (normalizedSelected.isNotEmpty &&
+      compactMerged.contains(normalizedSelected)) {
+    return true;
+  }
+  return false;
+}
+
+bool _isSyncedSavedSettingsRow(Map<String, dynamic> row) {
+  final raw = row['meta'];
+  if (raw is! Map) return false;
+  if (raw.isEmpty) return false;
+  return raw.containsKey('saved_settings') ||
+      raw.containsKey('savedSettings');
+}
+
+/// 초/중/고 단계와 학년 숫자를 혼합한 정렬 rank (학습앱 `pbDocumentGradeSortRank`와 동일).
+int pbManagerDocumentGradeSortRank(String gradeLabel, String courseLabel) {
+  final merged = '$gradeLabel$courseLabel'.replaceAll(RegExp(r'\s'), '');
+  var levelBase = 500;
+  if (merged.contains('초')) {
+    levelBase = 0;
+  } else if (merged.contains('중')) {
+    levelBase = 100;
+  } else if (merged.contains('고')) {
+    levelBase = 200;
+  }
+  final m = RegExp(r'(\d+)').firstMatch(merged);
+  final n = m != null ? int.tryParse(m.group(1) ?? '') ?? 50 : 50;
+  return levelBase + n;
+}
+
+/// 매니저 내부 커리큘럼 키(legacy_1_6 등)를 학습앱 키(legacy_1to6 등)로 맞춤.
+String normalizePbCurriculumCodeForSync(String code) {
+  final safe = code.trim();
+  if (safe.isEmpty) return safe;
+  switch (safe) {
+    case 'legacy_1_6':
+      return 'legacy_1to6';
+    case 'curr_7th_1997':
+      return 'k7_1997';
+    default:
+      return safe;
   }
 }
 

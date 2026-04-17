@@ -7,6 +7,7 @@ import 'tenant_service.dart';
 import 'homework_assignment_store.dart';
 import 'learning_problem_bank_service.dart';
 import 'attendance_service.dart';
+import 'realtime_reconciler.dart';
 
 enum HomeworkStatus { inProgress, completed, homework }
 
@@ -1747,9 +1748,16 @@ class HomeworkStore {
             _scheduleRealtimeReload(sid);
           },
         )
-        ..subscribe((status, [error]) {
-          debugPrint('[HW][rt] status=$status error=$error');
-        });
+        ;
+      RealtimeReconciler.instance.attachResubscribe(
+        _rt!,
+        key: 'homework_items:$targetAcademyId',
+        onResync: () async {
+          try {
+            await loadAll();
+          } catch (_) {}
+        },
+      );
       _rtAcademyId = targetAcademyId;
       debugPrint('[HW][rt] subscribed: $channelName');
     } catch (e, st) {

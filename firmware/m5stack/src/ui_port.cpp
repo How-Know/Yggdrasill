@@ -229,8 +229,13 @@ struct ChildCheckCtx {
 
 // 상세 페이지
 static lv_obj_t* s_hw_detail_screen = nullptr;
-static lv_obj_t* s_hw_detail_session_lbl = nullptr;
-static lv_obj_t* s_hw_detail_total_lbl = nullptr;
+// Monospaced per-glyph slots for the cycle/total time so digit-width
+// differences (e.g. "1" vs "5" in kakao_kr_16) cannot shift neighbors.
+// Layout: HH:MM:SS  → 10 slots (8 digits + 2 colons).
+static lv_obj_t* s_hw_detail_session_slots[10] = {0};
+static lv_obj_t* s_hw_detail_total_slots[10] = {0};
+static lv_obj_t* s_hw_detail_session_lbl = nullptr; // = session_slots[0]
+static lv_obj_t* s_hw_detail_total_lbl = nullptr;   // = total_slots[0]
 static lv_obj_t* s_hw_detail_play_img = nullptr;
 static lv_obj_t* s_hw_detail_play_btn = nullptr;
 static lv_obj_t* s_hw_list_screen = nullptr;
@@ -240,6 +245,15 @@ static bool s_detail_cycle_running = false;
 static int32_t s_detail_cycle_base_acc = 0;
 static uint32_t s_detail_local_run_start_tick = 0;
 static int32_t s_detail_cycle_frozen_sec = 0;
+static int32_t s_detail_total_frozen_sec = 0;
+// Local-watch baselines: cycle/total seconds at the last pause or at page open.
+// While running, live value = baseline + (lv_tick_get() - run_start_tick)/1000.
+// Only phase=3 (submit) resets cycle baseline; total baseline never resets
+// within a single detail-page session.
+static int32_t s_detail_cycle_baseline_sec = 0;
+static int32_t s_detail_total_baseline_sec = 0;
+static uint32_t s_detail_run_start_tick = 0;
+static int8_t s_detail_last_phase_seen = -1;
 static uint32_t s_detail_manual_override_until_ms = 0;
 static bool s_detail_manual_override_playing = false;
 static lv_timer_t* s_detail_timer = nullptr;
@@ -3524,10 +3538,10 @@ void ui_port_update_homeworks(const JsonArray& groups) {
       if (!s_detail_cycle_running && server_running) {
         s_detail_local_run_start_tick = lv_tick_get();
       }
-      if (!has_manual_override) {
-        s_detail_cycle_frozen_sec = dg.cycle_elapsed;
-        if (s_detail_cycle_frozen_sec < 0) s_detail_cycle_frozen_sec = 0;
-      }
+      // Note: cycle display is driven by local watch (detail_timer_cb).
+      // We intentionally do NOT seed s_detail_cycle_frozen_sec from the
+      // server payload here so that pause/resume on the server cannot
+      // rewind the cycle value before submit-phase transition.
 
       if (server_running == s_detail_manual_override_playing) {
         s_detail_manual_override_until_ms = 0;
@@ -3557,6 +3571,37 @@ void ui_port_update_homeworks(const JsonArray& groups) {
 
 // ========== 수행 상세 페이지 (음악 앱 스타일) ==========
 
+// Paints HH:MM:SS into 10 per-glyph slots with always-two-digit hours.
+//   slots[0..1] = hours, slots[2] = ':', slots[3..4] = minutes,
+//   slots[5] = ':', slots[6..7] = seconds, slots[8..9] unused.
+static void hw_detail_paint_time(lv_obj_t* const* slots, int secs,
+                                 bool /*unused*/, int /*unused*/) {
+  if (secs < 0) secs = 0;
+  int h = secs / 3600;
+  int m = (secs % 3600) / 60;
+  int s = secs % 60;
+  char digits[6];
+  digits[0] = (char)('0' + (h / 10) % 10);
+  digits[1] = (char)('0' + h % 10);
+  digits[2] = (char)('0' + (m / 10) % 10);
+  digits[3] = (char)('0' + m % 10);
+  digits[4] = (char)('0' + (s / 10) % 10);
+  digits[5] = (char)('0' + s % 10);
+  const int digit_slot_map[6] = {0, 1, 3, 4, 6, 7};
+  for (int i = 0; i < 6; i++) {
+    lv_obj_t* s_obj = slots[digit_slot_map[i]];
+    if (!s_obj || !lv_obj_is_valid(s_obj)) continue;
+    char buf[2];
+    buf[0] = digits[i];
+    buf[1] = '\0';
+    lv_label_set_text(s_obj, buf);
+  }
+  if (slots[2] && lv_obj_is_valid(slots[2])) lv_label_set_text(slots[2], ":");
+  if (slots[5] && lv_obj_is_valid(slots[5])) lv_label_set_text(slots[5], ":");
+  if (slots[8] && lv_obj_is_valid(slots[8])) lv_label_set_text(slots[8], "");
+  if (slots[9] && lv_obj_is_valid(slots[9])) lv_label_set_text(slots[9], "");
+}
+
 static bool detail_test_effective_running(const HwGroupData& g) {
   if (!hw_is_test_group(g)) return false;
   bool server_running = hw_server_running_group(g);
@@ -3573,52 +3618,74 @@ static void detail_timer_cb(lv_timer_t* timer) {
   if (s_detail_group_idx < 0 || s_detail_group_idx >= s_group_cnt) return;
   HwGroupData& g = s_groups[s_detail_group_idx];
 
+  // Detect submit-phase transition: only place the cycle baseline resets.
+  if (s_detail_last_phase_seen != 3 && g.phase == 3) {
+    s_detail_cycle_baseline_sec = 0;
+  }
+  s_detail_last_phase_seen = g.phase;
+
   bool server_running = hw_server_running_group(g);
   bool effective_running = server_running || s_detail_playing;
   if (millis() < s_detail_manual_override_until_ms) {
     effective_running = s_detail_manual_override_playing;
   }
+
+  // Edge: not-running -> running. Anchor a new local run_start.
   if (!s_detail_cycle_running && effective_running) {
-    s_detail_local_run_start_tick = lv_tick_get();
+    s_detail_run_start_tick = lv_tick_get();
+    s_detail_local_run_start_tick = s_detail_run_start_tick;
+  }
+  // Edge: running -> not-running. Freeze baselines at the last shown values.
+  if (s_detail_cycle_running && !effective_running) {
+    s_detail_cycle_baseline_sec = s_detail_cycle_frozen_sec;
+    s_detail_total_baseline_sec = s_detail_total_frozen_sec;
   }
   s_detail_cycle_running = effective_running;
 
-  int cycle_seed = (millis() < s_detail_manual_override_until_ms)
-      ? s_detail_cycle_frozen_sec
-      : (int)g.cycle_elapsed;
-  if (cycle_seed < 0) cycle_seed = 0;
-
   int segment_sec = 0;
   if (effective_running) {
-    if (server_running) {
-      segment_sec = hw_live_segment_sec(g, lv_tick_get());
-    } else {
-      segment_sec = (int)((lv_tick_get() - s_detail_local_run_start_tick) / 1000);
-    }
+    segment_sec = (int)((lv_tick_get() - s_detail_run_start_tick) / 1000);
     if (segment_sec < 0) segment_sec = 0;
   }
-  int cycle_sec = cycle_seed + segment_sec;
-  int total_sec = (int)g.accumulated + segment_sec;
+
+  int cycle_sec = s_detail_cycle_baseline_sec + segment_sec;
+  int total_sec = s_detail_total_baseline_sec + segment_sec;
+  if (cycle_sec < 0) cycle_sec = 0;
+  if (total_sec < 0) total_sec = 0;
+
+  // Reconcile with server values. Only allow forward jumps so local watch
+  // never rewinds, but follow the server when it has a larger authoritative
+  // value (e.g. this group accumulated time while we were viewing another
+  // detail page, or we came back to an existing detail page).
+  int server_total = (int)g.accumulated + hw_live_segment_sec(g, lv_tick_get());
+  if (server_total > total_sec) {
+    int delta = server_total - total_sec;
+    s_detail_total_baseline_sec += delta;
+    total_sec = server_total;
+  }
+  int server_cycle = (int)g.cycle_elapsed;
+  if (server_cycle > cycle_sec) {
+    int delta = server_cycle - cycle_sec;
+    s_detail_cycle_baseline_sec += delta;
+    cycle_sec = server_cycle;
+  }
+
   s_detail_cycle_frozen_sec = cycle_sec;
+  s_detail_total_frozen_sec = total_sec;
 
   int tlim_sec = (g.time_limit_minutes > 0) ? ((int)g.time_limit_minutes * 60) : 0;
   bool test_countdown = hw_is_test_group(g) && tlim_sec > 0 && effective_running;
 
-  if (s_hw_detail_session_lbl && lv_obj_is_valid(s_hw_detail_session_lbl)) {
-    char buf[40];
+  if (s_hw_detail_session_slots[0] && lv_obj_is_valid(s_hw_detail_session_slots[0])) {
+    int show_sec = cycle_sec;
     if (test_countdown) {
-      int left = tlim_sec - cycle_sec;
-      if (left < 0) left = 0;
-      fmt_time_cycle_clock(left, buf, sizeof(buf));
-      lv_label_set_text(s_hw_detail_session_lbl, buf);
-    } else {
-      fmt_time_cycle_clock(cycle_sec, buf, sizeof(buf));
-      lv_label_set_text(s_hw_detail_session_lbl, buf);
+      show_sec = tlim_sec - cycle_sec;
+      if (show_sec < 0) show_sec = 0;
     }
+    hw_detail_paint_time(s_hw_detail_session_slots, show_sec, false, 0);
   }
-  if (s_hw_detail_total_lbl && lv_obj_is_valid(s_hw_detail_total_lbl)) {
-    char buf[32]; fmt_time_hms_fixed(total_sec, buf, sizeof(buf));
-    lv_label_set_text(s_hw_detail_total_lbl, buf);
+  if (s_hw_detail_total_slots[0] && lv_obj_is_valid(s_hw_detail_total_slots[0])) {
+    hw_detail_paint_time(s_hw_detail_total_slots, total_sec, false, 0);
   }
 }
 
@@ -3809,13 +3876,22 @@ static void close_homework_detail_page(void) {
   s_hw_detail_screen = nullptr;
   s_hw_detail_session_lbl = nullptr;
   s_hw_detail_total_lbl = nullptr;
+  for (int i = 0; i < 10; i++) {
+    s_hw_detail_session_slots[i] = nullptr;
+    s_hw_detail_total_slots[i] = nullptr;
+  }
   s_hw_detail_play_img = nullptr;
   s_hw_detail_play_btn = nullptr;
   s_detail_group_idx = -1;
   s_detail_cycle_running = false;
   s_detail_cycle_base_acc = 0;
   s_detail_local_run_start_tick = 0;
+  s_detail_run_start_tick = 0;
   s_detail_cycle_frozen_sec = 0;
+  s_detail_total_frozen_sec = 0;
+  s_detail_cycle_baseline_sec = 0;
+  s_detail_total_baseline_sec = 0;
+  s_detail_last_phase_seen = -1;
   s_detail_manual_override_until_ms = 0;
 }
 
@@ -3830,9 +3906,18 @@ static void show_homework_detail_page(int group_idx) {
   s_detail_playing = hw_server_running_group(g);
   s_detail_cycle_running = s_detail_playing;
   s_detail_cycle_base_acc = (int)(g.accumulated - g.cycle_elapsed);
-  s_detail_local_run_start_tick = lv_tick_get();
-  s_detail_cycle_frozen_sec = g.cycle_elapsed;
-  if (s_detail_cycle_frozen_sec < 0) s_detail_cycle_frozen_sec = 0;
+  uint32_t now_tick = lv_tick_get();
+  s_detail_local_run_start_tick = now_tick;
+  s_detail_run_start_tick = now_tick;
+  int32_t seed_cycle = g.cycle_elapsed;
+  if (seed_cycle < 0) seed_cycle = 0;
+  int32_t seed_total = (int)g.accumulated + hw_live_segment_sec(g, now_tick);
+  if (seed_total < 0) seed_total = 0;
+  s_detail_cycle_frozen_sec = seed_cycle;
+  s_detail_total_frozen_sec = seed_total;
+  s_detail_cycle_baseline_sec = seed_cycle;
+  s_detail_total_baseline_sec = seed_total;
+  s_detail_last_phase_seen = g.phase;
   s_detail_manual_override_until_ms = 0;
 
   s_hw_detail_screen = lv_obj_create(s_stage);
@@ -3918,31 +4003,129 @@ static void show_homework_detail_page(int group_idx) {
   }
 
   // -- 4열: 현재 진행시간 / 총 진행시간 --
+  // Layout strategy:
+  //   - Outer "time_row" is sized to fully contain the 22px glyph slots
+  //     plus top/bottom spacing so the next flex sibling (btn_row) starts
+  //     *below* the digits. This removes the visual clipping where the
+  //     button row used to overlap the bottom of the time digits.
+  //   - "time_row" spans the full parent width (320) so session and total
+  //     blocks can be placed with symmetric left/right margins measured
+  //     from the screen edges.
+  //   - Each digit lives in its own fixed-width slot (monospaced) so
+  //     digit-width variation in kakao_kr_16 (e.g. "1" vs "5") cannot
+  //     shift neighboring characters. Session block aligns each digit to
+  //     the left edge of its slot; total block to the right edge.
+  // time_row band is 33px; slots sit at y=16 so they hang 5px past the
+  // band (overflow is visible). The btn_row below uses a pad_top of 1
+  // and has bg_opa=TRANSP, so the overflow region is empty and the
+  // digits cannot be clipped. The absolute Y of the circular buttons is
+  // unchanged (flex: time_row_h + btn_row.pad_top = 33 + 1 = 34).
+  const lv_coord_t time_row_h = 33;
+  const lv_coord_t time_row_top_pad = 16;   // was 11; +5 extra drop (visual only)
+  // Horizontal offsets. Session keeps its left edge at 15.
+  // Total is pulled an additional 5px to the right (negative inset so it
+  // extends past the right edge in absolute terms, which keeps the
+  // rendered digits flush with the screen's right margin).
+  const lv_coord_t side_margin_left = 19;   // was 15; +4 nudge session right
+  const lv_coord_t side_margin_right = -5;  // total block right-edge inset
   lv_obj_t* time_row = lv_obj_create(s_hw_detail_screen);
-  lv_obj_set_size(time_row, 300, 28);
+  lv_obj_set_size(time_row, 320, time_row_h);
   lv_obj_set_style_bg_opa(time_row, LV_OPA_TRANSP, 0);
   lv_obj_set_style_border_width(time_row, 0, 0);
+  lv_obj_set_style_shadow_width(time_row, 0, 0);
+  lv_obj_set_style_outline_width(time_row, 0, 0);
+  lv_obj_set_style_radius(time_row, 0, 0);
   lv_obj_set_style_pad_all(time_row, 0, 0);
   lv_obj_clear_flag(time_row, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_set_style_pad_top(time_row, 13, 0);
+  lv_obj_add_flag(time_row, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
 
-  s_hw_detail_session_lbl = lv_label_create(time_row);
-  lv_obj_set_style_text_font(s_hw_detail_session_lbl, &kakao_kr_16, 0);
-  lv_obj_set_style_text_color(s_hw_detail_session_lbl, lv_color_hex(0x33A373), 0);
-  lv_label_set_text(s_hw_detail_session_lbl, "0:00:00");
-  lv_obj_align(s_hw_detail_session_lbl, LV_ALIGN_LEFT_MID, 10, 0);
+  auto clear_container_visuals = [](lv_obj_t* c) {
+    lv_obj_set_style_bg_opa(c, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_bg_opa(c, LV_OPA_TRANSP, LV_STATE_FOCUSED);
+    lv_obj_set_style_bg_opa(c, LV_OPA_TRANSP, LV_STATE_PRESSED);
+    lv_obj_set_style_border_width(c, 0, 0);
+    lv_obj_set_style_border_width(c, 0, LV_STATE_FOCUSED);
+    lv_obj_set_style_shadow_width(c, 0, 0);
+    lv_obj_set_style_shadow_spread(c, 0, 0);
+    lv_obj_set_style_shadow_opa(c, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_outline_width(c, 0, 0);
+    lv_obj_set_style_outline_opa(c, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_radius(c, 0, 0);
+    lv_obj_set_style_pad_all(c, 0, 0);
+    lv_obj_clear_flag(c, LV_OBJ_FLAG_SCROLLABLE);
+  };
 
-  s_hw_detail_total_lbl = lv_label_create(time_row);
-  lv_obj_set_style_text_font(s_hw_detail_total_lbl, &kakao_kr_16, 0);
-  lv_obj_set_style_text_color(s_hw_detail_total_lbl, lv_color_hex(0x808080), 0);
+  // Monospaced time block:
+  //   layout HH:MM:SS inside a fixed container using per-glyph slots.
+  //   digit_w/colon_w are chosen to match kakao_kr_16 advance metrics so
+  //   the block looks natural while keeping columns identical.
+  const lv_coord_t digit_w = 11;
+  const lv_coord_t colon_w = 6;
+  const lv_coord_t slot_h = 22;
+  // Width: 8 digits + 2 colons (HH:MM:SS form)
+  const lv_coord_t block_w = digit_w * 8 + colon_w * 2; // 100
+  // Character layout offsets inside the block (HH : MM : SS).
+  const lv_coord_t slot_offsets[10] = {
+    0,
+    digit_w,
+    digit_w * 2,
+    digit_w * 2 + colon_w,
+    digit_w * 3 + colon_w,
+    digit_w * 4 + colon_w,
+    digit_w * 4 + colon_w * 2,
+    digit_w * 5 + colon_w * 2,
+    digit_w * 6 + colon_w * 2,
+    digit_w * 7 + colon_w * 2
+  };
+
+  auto make_time_block = [&](lv_obj_t* parent, uint32_t color_hex,
+                             lv_coord_t x_left, lv_text_align_t slot_align,
+                             lv_obj_t** out_slots) {
+    lv_obj_t* block = lv_obj_create(parent);
+    lv_obj_set_size(block, block_w, slot_h);
+    lv_obj_set_pos(block, x_left, time_row_top_pad);
+    clear_container_visuals(block);
+    for (int i = 0; i < 10; i++) {
+      lv_obj_t* ch = lv_label_create(block);
+      lv_obj_set_style_text_font(ch, &kakao_kr_16, 0);
+      lv_obj_set_style_text_color(ch, lv_color_hex(color_hex), 0);
+      lv_obj_set_style_bg_opa(ch, LV_OPA_TRANSP, 0);
+      lv_obj_set_style_pad_all(ch, 0, 0);
+      lv_obj_set_style_border_width(ch, 0, 0);
+      lv_obj_set_style_shadow_width(ch, 0, 0);
+      bool is_colon = (i == 2 || i == 5);
+      lv_coord_t w = is_colon ? colon_w : digit_w;
+      lv_obj_set_size(ch, w, slot_h);
+      lv_label_set_long_mode(ch, LV_LABEL_LONG_CLIP);
+      // Colons stay centered so they sit visually between paired digits;
+      // digit slots follow the caller-specified alignment (session → LEFT,
+      // total → RIGHT) so the whole block hugs its respective screen edge.
+      lv_obj_set_style_text_align(ch, is_colon ? LV_TEXT_ALIGN_CENTER : slot_align, 0);
+      lv_label_set_text(ch, is_colon ? ":" : "0");
+      lv_obj_set_pos(ch, slot_offsets[i], 0);
+      out_slots[i] = ch;
+    }
+    return block;
+  };
+
+  // Both blocks are offset +5px rightwards from a fully-symmetric layout.
+  make_time_block(time_row, 0x33A373, side_margin_left, LV_TEXT_ALIGN_LEFT,
+                  s_hw_detail_session_slots);
+  s_hw_detail_session_lbl = s_hw_detail_session_slots[0]; // back-compat sentinel
+
+  make_time_block(time_row, 0x808080, 320 - side_margin_right - block_w,
+                  LV_TEXT_ALIGN_RIGHT, s_hw_detail_total_slots);
+  s_hw_detail_total_lbl = s_hw_detail_total_slots[0]; // back-compat sentinel
+
   {
     int init_total = (int)g.accumulated + hw_live_segment_sec(g, lv_tick_get());
-    char total_buf[32]; fmt_time_hms_fixed(init_total, total_buf, sizeof(total_buf));
-    lv_label_set_text(s_hw_detail_total_lbl, total_buf);
+    hw_detail_paint_time(s_hw_detail_total_slots, init_total, false, 0);
+    hw_detail_paint_time(s_hw_detail_session_slots, 0, false, 0);
   }
-  lv_obj_align(s_hw_detail_total_lbl, LV_ALIGN_RIGHT_MID, -10, 0);
 
   // -- 5열: 3개 버튼 --
+  // pad_top is 1 (was 6) so the buttons stay at the same absolute Y after
+  // we grew time_row by 5px above. Net flex offset for buttons: unchanged.
   lv_obj_t* btn_row = lv_obj_create(s_hw_detail_screen);
   lv_obj_set_size(btn_row, 300, 88);
   lv_obj_set_style_bg_opa(btn_row, LV_OPA_TRANSP, 0);
@@ -3950,7 +4133,7 @@ static void show_homework_detail_page(int group_idx) {
   lv_obj_set_style_pad_all(btn_row, 0, 0);
   lv_obj_clear_flag(btn_row, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_add_flag(btn_row, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
-  lv_obj_set_style_pad_top(btn_row, 6, 0);
+  lv_obj_set_style_pad_top(btn_row, 1, 0);
 
   auto make_circle_btn = [&](lv_obj_t* parent, const lv_img_dsc_t* icon_src, uint16_t icon_zoom, uint32_t icon_color, lv_coord_t x, lv_coord_t y, uint32_t bg_color, lv_coord_t size) -> lv_obj_t* {
     lv_obj_t* btn = lv_btn_create(parent);
@@ -4027,20 +4210,10 @@ static void show_homework_detail_page(int group_idx) {
           show_test_abort_confirm_popup();
           return;
         }
-        int cycle_seed = (millis() < s_detail_manual_override_until_ms)
-            ? s_detail_cycle_frozen_sec
-            : (int)grp.cycle_elapsed;
-        if (cycle_seed < 0) cycle_seed = 0;
-        int live_cycle = cycle_seed;
-        if (s_detail_cycle_running) {
-          if (hw_server_running_group(grp)) {
-            live_cycle = cycle_seed + hw_live_segment_sec(grp, lv_tick_get());
-          } else {
-            live_cycle = cycle_seed + (int)((lv_tick_get() - s_detail_local_run_start_tick) / 1000);
-          }
-        }
-        if (live_cycle < 0) live_cycle = 0;
-        s_detail_cycle_frozen_sec = live_cycle;
+        // Freeze baselines at the last displayed values so the next resume
+        // continues from here (local-watch monotonic, no server rewind).
+        s_detail_cycle_baseline_sec = s_detail_cycle_frozen_sec;
+        s_detail_total_baseline_sec = s_detail_total_frozen_sec;
         s_detail_playing = false;
         s_detail_cycle_running = false;
         s_detail_manual_override_playing = false;
@@ -4052,11 +4225,9 @@ static void show_homework_detail_page(int group_idx) {
           update_detail_play_button_visual();
           return;
         }
-        if (s_detail_cycle_frozen_sec < 0) {
-          s_detail_cycle_frozen_sec = (int)grp.cycle_elapsed;
-          if (s_detail_cycle_frozen_sec < 0) s_detail_cycle_frozen_sec = 0;
-        }
-        s_detail_local_run_start_tick = lv_tick_get();
+        uint32_t now_tick = lv_tick_get();
+        s_detail_local_run_start_tick = now_tick;
+        s_detail_run_start_tick = now_tick;
         s_detail_cycle_running = true;
         s_detail_playing = true;
         s_detail_manual_override_playing = true;
@@ -4087,6 +4258,12 @@ static void show_homework_detail_page(int group_idx) {
       if (lv_event_get_code(e) == LV_EVENT_DELETE) { void* ud = lv_event_get_user_data(e); if (ud) free(ud); }
     }, LV_EVENT_DELETE, dctx);
   }
+
+  // Note: do NOT move_foreground(time_row) here. The parent uses a flex
+  // column layout where child order == vertical layout order; moving
+  // time_row to the foreground would shift it visually *below* btn_row.
+  // Instead we keep the slots fully inside the 28px band so btn_row can
+  // never clip the digits.
 
   // 슬라이드 인 애니메이션
   lv_obj_set_x(s_hw_detail_screen, 320);

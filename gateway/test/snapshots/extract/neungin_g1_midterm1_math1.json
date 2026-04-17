@@ -29,6 +29,18 @@
       "23"
     ],
     "questions": {
+      "3": {
+        "hasBoxContent": true,
+        "stemContains": "<보 기>",
+        "stemNotContains": "[표행]",
+        "stemLineAlignsLength": 19
+      },
+      "5": {
+        "hasBoxContent": true,
+        "stemContains": "<보 기>",
+        "stemNotContains": "[표행]",
+        "stemLineAlignsLength": 15
+      },
       "6": {
         "choiceCount": 5,
         "choiceLabels": [
@@ -40,7 +52,8 @@
         ],
         "hasBoxContent": true,
         "stemContains": "동생 :누나와 나는 모두 10대",
-        "stemLineAlignsLength": 17
+        "stemNotContains": "[표행]",
+        "stemLineAlignsLength": 13
       },
       "7": {
         "choiceCount": 5,
@@ -52,9 +65,13 @@
           "⑤"
         ],
         "hasBoxContent": true,
-        "stemNotContains": "cdot",
+        "stemNotContains": "[표행]",
         "stemContains": "세 학생의 대화 내용을 모두 만족시키는 수는 <보기> 중 몇 개인가?",
-        "stemLineAlignsLength": 45
+        "stemContainsAll": [
+          "순자 :이 수는 정수는 아니야",
+          "<보 기>"
+        ],
+        "stemLineAlignsLength": 23
       },
       "10": {
         "choiceCount": 5,
