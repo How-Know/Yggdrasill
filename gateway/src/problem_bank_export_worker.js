@@ -2672,6 +2672,9 @@ function applyQuestionModeForQuestion(question, selectedMode, fallbackMode = 'or
       mode,
       question: {
         ...out,
+        mode,
+        questionMode: mode,
+        export_mode: mode,
         question_type: '\uAC1D\uAD00\uC2DD',
         choices: objectiveChoices,
         export_answer: objectiveAnswer,
@@ -2686,6 +2689,9 @@ function applyQuestionModeForQuestion(question, selectedMode, fallbackMode = 'or
       mode,
       question: {
         ...out,
+        mode,
+        questionMode: mode,
+        export_mode: mode,
         question_type:
           mode === 'essay'
             ? '\uC11C\uC220\uD615'
@@ -2697,13 +2703,16 @@ function applyQuestionModeForQuestion(question, selectedMode, fallbackMode = 'or
   }
   const originalChoices = normalizeChoiceRows(question.choices);
   const originalLooksObjective = looksObjectiveInOriginal(question, originalChoices);
+  const resolvedMode = originalLooksObjective ? 'objective' : 'subjective';
   return {
-    mode: originalLooksObjective ? 'objective' : 'subjective',
+    mode: resolvedMode,
     question: {
       ...out,
+      mode: resolvedMode,
+      questionMode: resolvedMode,
       choices: originalLooksObjective ? originalChoices : [],
       export_answer: originalLooksObjective ? objectiveAnswer : subjectiveAnswer,
-      export_mode: originalLooksObjective ? 'objective' : 'subjective',
+      export_mode: resolvedMode,
       question_type: originalLooksObjective ? '\uAC1D\uAD00\uC2DD' : '\uC8FC\uAD00\uC2DD',
     },
   };

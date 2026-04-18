@@ -677,6 +677,61 @@ function hasSetQuestionSignature(stemLines) {
   return false;
 }
 
+// 세트형 stem 의 소문항 라인 앞에 [소문항N] 마커를 주입한다.
+//
+// 동작:
+//  - 라인 시작이 "(1)", "(2)", "（1）" 같은 형태인 라인만 소문항 라벨로 인정.
+//    (본문 중간의 "(1)을 이용하여" 같은 인용은 영향 없음.)
+//  - 라벨 라인이 2개 이상이고 번호가 단조 증가(중복/역순 없음)일 때만 세트형으로 확신 → 마커 주입.
+//  - 원본 라벨 "(N) " 는 그대로 남겨 둔다(렌더러/파서 호환성 유지).
+//    렌더러가 추후 마커를 실제로 소비하게 되면 그때 중복 라벨 처리를 정한다.
+//  - 이미 [소문항N] 마커가 있는 라인은 건드리지 않는다(idempotent).
+//  - 마커는 독립된 라인으로 주입한다 ([문단]/[박스끝] 같은 기존 마커와 같은 스타일).
+//
+// 반환: { stem: patchedStemString, injected: N }
+function injectSubQuestionMarkers(stem) {
+  const text = String(stem || '');
+  if (!text) return { stem: text, injected: 0 };
+  const lines = text.split(/\r?\n/);
+  const SUB_LABEL_LINE_REGEX = /^\s*[\(（]\s*([1-9])\s*[\)）]\s*(.*)$/;
+  const EXISTING_MARKER_REGEX = /^\s*\[소문항\s*\d+\]\s*$/;
+
+  // 1) 전수 스캔: 후보 라인들의 (index, num) 수집.
+  const candidates = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (typeof line !== 'string') continue;
+    const m = line.match(SUB_LABEL_LINE_REGEX);
+    if (!m) continue;
+    const num = Number.parseInt(m[1], 10);
+    if (!Number.isFinite(num) || num < 1) continue;
+    candidates.push({ index: i, num });
+  }
+  if (candidates.length < 2) return { stem: text, injected: 0 };
+
+  // 2) 번호가 단조 증가하는지 검사. (1)(2)(1) 같은 본문 인용 패턴은 제외.
+  //    (1)(3) 처럼 건너뛰는 경우는 허용(parseAnswerParts 도 허용).
+  for (let i = 1; i < candidates.length; i += 1) {
+    if (candidates[i].num <= candidates[i - 1].num) {
+      return { stem: text, injected: 0 };
+    }
+  }
+
+  // 3) 이미 바로 앞 라인에 [소문항N] 마커가 있으면 해당 후보는 스킵.
+  let injected = 0;
+  // 뒤에서부터 삽입하면 인덱스 밀림 없음.
+  for (let ci = candidates.length - 1; ci >= 0; ci -= 1) {
+    const { index, num } = candidates[ci];
+    const prev = index > 0 ? String(lines[index - 1] || '') : '';
+    if (EXISTING_MARKER_REGEX.test(prev)) continue;
+    lines.splice(index, 0, `[소문항${num}]`);
+    injected += 1;
+  }
+
+  if (injected === 0) return { stem: text, injected: 0 };
+  return { stem: lines.join('\n'), injected };
+}
+
 function parseChoiceLine(line) {
   const input = line.trim();
   const circled = input.match(/^([①②③④⑤⑥⑦⑧⑨⑩])\s*(.+)?$/);
@@ -2561,6 +2616,18 @@ async function enrichQuestionsWithDualMode({
     const partsSource = rawSubjective || rawAnswerKey;
     const parts = isSetShape ? parseAnswerParts(partsSource) : null;
 
+    // 세트형으로 확정된 문항은 stem 에 [소문항N] 마커를 주입해
+    // 렌더러/편집 UI 가 소문항 경계를 명시적으로 인식할 수 있도록 한다.
+    // (본문 중간의 "(1)을 이용하여" 같은 인용은 마커가 붙지 않아 영향 없음.)
+    let subMarkerCount = 0;
+    if (isSetShape) {
+      const patched = injectSubQuestionMarkers(q.stem);
+      if (patched.injected > 0) {
+        q.stem = patched.stem;
+        subMarkerCount = patched.injected;
+      }
+    }
+
     q.meta = {
       ...(q.meta || {}),
       answer_key: rawAnswerKey,
@@ -2571,6 +2638,7 @@ async function enrichQuestionsWithDualMode({
       objective_generated: q.objective_generated === true,
       is_set_question: isSetShape === true,
       ...(parts ? { answer_parts: parts } : {}),
+      ...(subMarkerCount > 0 ? { sub_question_marker_count: subMarkerCount } : {}),
     };
   }
 
@@ -4381,4 +4449,5 @@ export {
   normalizeEquationRaw as _normalizeEquationRaw,
   transformXmlToLines as _transformXmlToLines,
   extractEndNoteAnswerHints as _extractEndNoteAnswerHints,
+  injectSubQuestionMarkers,
 };

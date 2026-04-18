@@ -1105,17 +1105,19 @@ class _ProblemBankViewState extends State<ProblemBankView> {
               setState(() {
                 _exportSettings = presetSettings;
                 _previewMathEngine = presetMathEngine;
+                // 사용자가 카드에서 수동으로 선택한 모드가 항상 우선.
+                // 프리셋 모드는 사용자가 아직 지정하지 않은 문항에 대해서만 적용한다.
                 final userModes =
                     Map<String, String>.of(_selectedQuestionModes);
-                _selectedQuestionModes
-                  ..clear()
-                  ..addAll(presetModeMap);
+                final merged = <String, String>{...presetModeMap};
                 for (final entry in userModes.entries) {
                   if (entry.value.trim().isNotEmpty) {
-                    _selectedQuestionModes
-                        .putIfAbsent(entry.key, () => entry.value);
+                    merged[entry.key] = entry.value;
                   }
                 }
+                _selectedQuestionModes
+                  ..clear()
+                  ..addAll(merged);
               });
             }
             final subjectTitle =
