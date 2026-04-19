@@ -20,6 +20,11 @@ class ProblemBankDocument {
     this.examYear,
     this.classificationDetail = const <String, dynamic>{},
     this.meta = const <String, dynamic>{},
+    this.sourcePdfStorageBucket = '',
+    this.sourcePdfStoragePath = '',
+    this.sourcePdfFilename = '',
+    this.sourcePdfSha256 = '',
+    this.sourcePdfSizeBytes = 0,
   });
 
   final String id;
@@ -42,6 +47,14 @@ class ProblemBankDocument {
   final String materialName;
   final Map<String, dynamic> classificationDetail;
   final Map<String, dynamic> meta;
+  final String sourcePdfStorageBucket;
+  final String sourcePdfStoragePath;
+  final String sourcePdfFilename;
+  final String sourcePdfSha256;
+  final int sourcePdfSizeBytes;
+
+  bool get hasHwpxSource => sourceStoragePath.trim().isNotEmpty;
+  bool get hasPdfSource => sourcePdfStoragePath.trim().isNotEmpty;
 
   factory ProblemBankDocument.fromMap(Map<String, dynamic> map) {
     final meta = _mapOrEmpty(map['meta']);
@@ -85,6 +98,12 @@ class ProblemBankDocument {
       materialName: '${map['material_name'] ?? ''}'.trim(),
       classificationDetail: _mapOrEmpty(map['classification_detail']),
       meta: meta,
+      sourcePdfStorageBucket:
+          '${map['source_pdf_storage_bucket'] ?? ''}'.trim(),
+      sourcePdfStoragePath: '${map['source_pdf_storage_path'] ?? ''}'.trim(),
+      sourcePdfFilename: '${map['source_pdf_filename'] ?? ''}'.trim(),
+      sourcePdfSha256: '${map['source_pdf_sha256'] ?? ''}'.trim(),
+      sourcePdfSizeBytes: _intOrNull(map['source_pdf_size_bytes']) ?? 0,
     );
   }
 }
@@ -127,6 +146,26 @@ class ProblemBankExtractJob {
       status == 'review_required' ||
       status == 'failed' ||
       status == 'cancelled';
+
+  /// 추출 엔진 식별자. 'vlm' | 'hwpx' (이전 데이터에는 없을 수 있어 빈 문자열 가능).
+  String get engine {
+    final v = resultSummary['engine'];
+    if (v is String) return v.trim();
+    return '';
+  }
+
+  /// 엔진 라벨 (매니저 UI 배지용). 'vlm' → 'VLM (PDF)', 'hwpx' → 'HWPX (XML)'.
+  /// 이전 버전에서 저장된 잡은 engine 필드가 비어 있으므로 빈 문자열로 돌려준다.
+  String get engineLabel {
+    switch (engine) {
+      case 'vlm':
+        return 'VLM (PDF)';
+      case 'hwpx':
+        return 'HWPX (XML)';
+      default:
+        return '';
+    }
+  }
 
   factory ProblemBankExtractJob.fromMap(Map<String, dynamic> map) {
     return ProblemBankExtractJob(
@@ -1039,4 +1078,112 @@ double sumScoreParts(List<ScorePart> parts) {
     total += p.value;
   }
   return total;
+}
+
+// ---------------------------------------------------------------------------
+// 문항 수정 이력(학습 데이터 적립) — pb_question_revisions
+// ---------------------------------------------------------------------------
+//
+// `pb_questions` 에 UPDATE 가 가해지면 DB trigger 가 자동으로 before/after
+// 스냅샷과 diff 를 `pb_question_revisions` 에 한 줄 적립한다. 매니저는 저장
+// 직후 가장 최근 revision 행에 `reason_tags` / `reason_note` 를 붙여 넣어
+// "왜 고쳤는가" 라벨을 추가한다. 라벨이 없어도 diff 자체는 항상 보존된다.
+
+/// 검수자가 수정 의도를 표시할 때 고르는 태그.
+/// 신규 태그는 DB 차원 constraint 가 없으므로 여기에서 추가하면 즉시 쓸 수 있으나,
+/// 통계 분석의 어휘가 되기 때문에 신중히 늘린다.
+enum ProblemBankRevisionReasonTag {
+  stemText('stem_text', '본문 텍스트/오타'),
+  stemMath('stem_math', '본문 수식'),
+  stemParagraph('stem_paragraph', '본문 단락/줄바꿈'),
+  choices('choices', '선택지 내용'),
+  answerObjective('answer_objective', '객관식 정답'),
+  answerSubjective('answer_subjective', '주관식 정답'),
+  autoObjectiveGenerated('auto_objective_generated', '자동 객관식 생성 품질'),
+  figureMapping('figure_mapping', '그림↔문항 매핑'),
+  figureLayout('figure_layout', '그림 배치/크기'),
+  tableStructure('table_structure', '표 구조'),
+  boxType('box_type', '박스 종류'),
+  setQuestion('set_question', '세트형 분리'),
+  metadataClassification('metadata_classification', '과목/단원/출처'),
+  metadataScore('metadata_score', '배점'),
+  other('other', '기타 (메모 필수)');
+
+  const ProblemBankRevisionReasonTag(this.key, this.label);
+
+  final String key;
+  final String label;
+
+  static ProblemBankRevisionReasonTag? fromKey(String? key) {
+    if (key == null) return null;
+    for (final t in values) {
+      if (t.key == key) return t;
+    }
+    return null;
+  }
+}
+
+/// pb_question_revisions 한 행의 매니저 측 표현. UI/서비스 계층 공용.
+class ProblemBankQuestionRevision {
+  const ProblemBankQuestionRevision({
+    required this.id,
+    required this.academyId,
+    required this.documentId,
+    required this.questionId,
+    required this.engine,
+    required this.engineModel,
+    required this.revisedAt,
+    required this.editedFields,
+    required this.reasonTags,
+    required this.reasonNote,
+    required this.diff,
+  });
+
+  final String id;
+  final String academyId;
+  final String documentId;
+  final String questionId;
+  final String engine; // 'vlm' | 'hwpx' | 'unknown'
+  final String engineModel;
+  final DateTime revisedAt;
+  final List<String> editedFields;
+  final List<ProblemBankRevisionReasonTag> reasonTags;
+  final String reasonNote;
+  final Map<String, dynamic> diff;
+
+  factory ProblemBankQuestionRevision.fromMap(Map<String, dynamic> map) {
+    final rawTags = map['reason_tags'];
+    final tags = <ProblemBankRevisionReasonTag>[];
+    if (rawTags is List) {
+      for (final r in rawTags) {
+        final t = ProblemBankRevisionReasonTag.fromKey(r?.toString());
+        if (t != null) tags.add(t);
+      }
+    }
+    final rawEdited = map['edited_fields'];
+    final edited = <String>[];
+    if (rawEdited is List) {
+      for (final r in rawEdited) {
+        final s = r?.toString() ?? '';
+        if (s.isNotEmpty) edited.add(s);
+      }
+    }
+    return ProblemBankQuestionRevision(
+      id: (map['id'] ?? '').toString(),
+      academyId: (map['academy_id'] ?? '').toString(),
+      documentId: (map['document_id'] ?? '').toString(),
+      questionId: (map['question_id'] ?? '').toString(),
+      engine: (map['engine'] ?? 'unknown').toString(),
+      engineModel: (map['engine_model'] ?? '').toString(),
+      revisedAt:
+          DateTime.tryParse((map['revised_at'] ?? '').toString())?.toLocal() ??
+              DateTime.now(),
+      editedFields: edited,
+      reasonTags: tags,
+      reasonNote: (map['reason_note'] ?? '').toString(),
+      diff: map['diff'] is Map<String, dynamic>
+          ? Map<String, dynamic>.from(map['diff'] as Map<String, dynamic>)
+          : <String, dynamic>{},
+    );
+  }
 }

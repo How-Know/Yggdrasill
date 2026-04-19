@@ -1,0 +1,391 @@
+{
+  "document_meta": {
+    "total_questions": 17,
+    "page_count": 5,
+    "confidence": "high"
+  },
+  "questions": [
+    {
+      "question_number": "1",
+      "source_page": 1,
+      "stem": "다음 설명 중 옳은 것은?",
+      "question_type": "객관식",
+      "is_set_question": false,
+      "sub_questions": [],
+      "choices": [
+        {
+          "label": "①",
+          "text": "모든 소수는 홀수이다."
+        },
+        {
+          "label": "②",
+          "text": "가장 작은 소수는 \\(2\\)이다."
+        },
+        {
+          "label": "③",
+          "text": "소수와 합성수는 항상 서로소이다."
+        },
+        {
+          "label": "④",
+          "text": "소수의 약수는 항상 \\(2\\)개보다 많다."
+        },
+        {
+          "label": "⑤",
+          "text": "소수가 아닌 모든 자연수는 합성수이다."
+        }
+      ],
+      "answer": {
+        "objective_key": "②",
+        "subjective": "",
+        "parts": []
+      },
+      "score": 4.0,
+      "figures": [],
+      "tables": [],
+      "flags": [],
+      "uncertain_fields": []
+    },
+    {
+      "question_number": "2",
+      "source_page": 1,
+      "stem": "다음 중 옳은 것만을 <보기>에서 고른 것은?\n[보기시작]\nㄱ. \\(2 \\times 3 = 3^2\\)\nㄴ. \\(2 \\times 2 \\times 3 = 2 \\times 3^2\\)\nㄷ. \\(7 \\times 7 \\times 7 \\times 7 = 7^4\\)\nㄹ. \\(3 \\times 3 \\times 5 \\times 5 \\times 5 = 3^2 \\times 5^3\\)\nㅁ. \\(2 \\times 2 \\times 2 \\times 3 \\times 5 \\times 5 = 2^3 \\times 3 \\times 5^2\\)\n[보기끝]",
+      "question_type": "객관식",
+      "is_set_question": false,
+      "sub_questions": [],
+      "choices": [
+        {
+          "label": "①",
+          "text": "ㄱ, ㄴ, ㄷ"
+        },
+        {
+          "label": "②",
+          "text": "ㄱ, ㄴ, ㅁ"
+        },
+        {
+          "label": "③",
+          "text": "ㄱ, ㄹ, ㅁ"
+        },
+        {
+          "label": "④",
+          "text": "ㄴ, ㄷ, ㄹ"
+        },
+        {
+          "label": "⑤",
+          "text": "ㄷ, ㄹ, ㅁ"
+        }
+      ],
+      "answer": {
+        "objective_key": "⑤",
+        "subjective": "",
+        "parts": []
+      },
+      "score": 4.0,
+      "figures": [],
+      "tables": [],
+      "flags": [
+        "contains_view_block"
+      ],
+      "uncertain_fields": []
+    },
+    {
+      "question_number": "3",
+      "source_page": 1,
+      "stem": "\\(\\frac{108}{\\square}\\) 이 자연수가 될 때, \\(\\square\\) 안에 알맞은 자연수의 개수는?",
+      "question_type": "객관식",
+      "is_set_question": false,
+      "sub_questions": [],
+      "choices": [
+        {
+          "label": "①",
+          "text": "\\(8\\)개"
+        },
+        {
+          "label": "②",
+          "text": "\\(10\\)개"
+        },
+        {
+          "label": "③",
+          "text": "\\(11\\)개"
+        },
+        {
+          "label": "④",
+          "text": "\\(12\\)개"
+        },
+        {
+          "label": "⑤",
+          "text": "\\(13\\)개"
+        }
+      ],
+      "answer": {
+        "objective_key": "④",
+        "subjective": "",
+        "parts": []
+      },
+      "score": 4.0,
+      "figures": [],
+      "tables": [],
+      "flags": [],
+      "uncertain_fields": []
+    },
+    {
+      "question_number": "4",
+      "source_page": 1,
+      "stem": "\\(3\\)장의 카드 중 \\(2\\)장을 골라 카드에 적힌 두 수의 최대공약수를 구할 때, 두 수의 최대공약수 중 가장 작은 것은?",
+      "question_type": "객관식",
+      "is_set_question": false,
+      "sub_questions": [],
+      "choices": [
+        {
+          "label": "①",
+          "text": "\\(2\\)"
+        },
+        {
+          "label": "②",
+          "text": "\\(4\\)"
+        },
+        {
+          "label": "③",
+          "text": "\\(6\\)"
+        },
+        {
+          "label": "④",
+          "text": "\\(8\\)"
+        },
+        {
+          "label": "⑤",
+          "text": "\\(10\\)"
+        }
+      ],
+      "answer": {
+        "objective_key": "③",
+        "subjective": "",
+        "parts": []
+      },
+      "score": 4.0,
+      "figures": [
+        {
+          "placement": "below_stem",
+          "description": "세 장의 카드에 각각 2^3 x 3^2 x 7, 2^3 x 3 x 5, 2 x 3 x 7^2 이 적혀 있음"
+        }
+      ],
+      "tables": [],
+      "flags": [
+        "contains_figure"
+      ],
+      "uncertain_fields": []
+    },
+    {
+      "question_number": "5",
+      "source_page": 1,
+      "stem": "다음 표는 어떤 수를 보고 자연수, 정수, 유리수에 해당하는 것은 ○표, 해당하지 않는 것은 ×표를 하여 만든 것이다. <보기>에서 ㉠에 들어갈 알맞은 수를 모두 더한 값은?\n[보기시작]\n\\(-0.7\\), \\(-\\frac{6}{3}\\), \\(0\\), \\(+\\frac{1}{4}\\), \\(-5\\), \\(\\frac{1}{5}\\)\n[보기끝]",
+      "question_type": "객관식",
+      "is_set_question": false,
+      "sub_questions": [],
+      "choices": [
+        {
+          "label": "①",
+          "text": "\\(-\\frac{3}{4}\\)"
+        },
+        {
+          "label": "②",
+          "text": "\\(-\\frac{1}{4}\\)"
+        },
+        {
+          "label": "③",
+          "text": "\\(\\frac{1}{4}\\)"
+        },
+        {
+          "label": "④",
+          "text": "\\(\\frac{3}{4}\\)"
+        },
+        {
+          "label": "⑤",
+          "text": "\\(\\frac{5}{4}\\)"
+        }
+      ],
+      "answer": {
+        "objective_key": "②",
+        "subjective": "",
+        "parts": []
+      },
+      "score": 4.0,
+      "figures": [],
+      "tables": [
+        {
+          "placement": "below_stem",
+          "rows": 4,
+          "cols": 4,
+          "has_diagonal_cell": true,
+          "description": "수의 분류에 따른 자연수, 정수, 유리수 판별 표"
+        }
+      ],
+      "flags": [
+        "contains_table",
+        "contains_view_block"
+      ],
+      "uncertain_fields": []
+    },
+    {
+      "question_number": "6",
+      "source_page": 1,
+      "stem": "\\(93 - 36 \\times \\left[ -\\frac{1}{4} + \\left\\{ -\\frac{1}{3} \\div \\left( -\\frac{1}{2} \\right)^3 \\right\\} \\right]\\) 의 값은?",
+      "question_type": "객관식",
+      "is_set_question": false,
+      "sub_questions": [],
+      "choices": [
+        {
+          "label": "①",
+          "text": "\\(-6\\)"
+        },
+        {
+          "label": "②",
+          "text": "\\(-3\\)"
+        },
+        {
+          "label": "③",
+          "text": "\\(0\\)"
+        },
+        {
+          "label": "④",
+          "text": "\\(3\\)"
+        },
+        {
+          "label": "⑤",
+          "text": "\\(6\\)"
+        }
+      ],
+      "answer": {
+        "objective_key": "⑤",
+        "subjective": "",
+        "parts": []
+      },
+      "score": 4.0,
+      "figures": [],
+      "tables": [],
+      "flags": [],
+      "uncertain_fields": []
+    },
+    {
+      "question_number": "7",
+      "source_page": 2,
+      "stem": "\\(-3\\), \\(-2\\), \\(-1\\), \\(0\\), \\(2\\)가 적힌 \\(5\\)장의 카드에서 차례로 \\(3\\)장을 선택하여 처음 뽑힌 카드의 숫자를 \\(a\\), 두 번째 카드의 숫자를 \\(b\\), 세 번째 카드의 숫자를 \\(c\\)라 하자. 다음 조건을 만족하는 \\(a\\), \\(b\\), \\(c\\)에 대하여 \\(a+b+c\\)의 값은?\n[박스시작]\n• \\(bc = 0\\)이고, \\(ab < 0\\)이다.\n• \\(a - c < 0\\)\n• \\(|a| > |b|\\)\n[박스끝]",
+      "question_type": "객관식",
+      "is_set_question": false,
+      "sub_questions": [],
+      "choices": [
+        {
+          "label": "①",
+          "text": "\\(-3\\)"
+        },
+        {
+          "label": "②",
+          "text": "\\(-2\\)"
+        },
+        {
+          "label": "③",
+          "text": "\\(-1\\)"
+        },
+        {
+          "label": "④",
+          "text": "\\(0\\)"
+        },
+        {
+          "label": "⑤",
+          "text": "\\(1\\)"
+        }
+      ],
+      "answer": {
+        "objective_key": "③",
+        "subjective": "",
+        "parts": []
+      },
+      "score": 4.0,
+      "figures": [],
+      "tables": [],
+      "flags": [
+        "contains_box"
+      ],
+      "uncertain_fields": []
+    },
+    {
+      "question_number": "8",
+      "source_page": 2,
+      "stem": "다음 조건을 모두 만족시키는 서로 다른 세 정수 \\(a\\), \\(b\\), \\(c\\)에 대하여 \\(a+b-c\\)의 값은?\n[박스시작]\n• \\(abc = -40\\)\n• \\(a+b+c = 1\\)\n• \\(|a| < |b| < |c|\\)\n[박스끝]",
+      "question_type": "객관식",
+      "is_set_question": false,
+      "sub_questions": [],
+      "choices": [
+        {
+          "label": "①",
+          "text": "\\(-7\\)"
+        },
+        {
+          "label": "②",
+          "text": "\\(-3\\)"
+        },
+        {
+          "label": "③",
+          "text": "\\(3\\)"
+        },
+        {
+          "label": "④",
+          "text": "\\(11\\)"
+        },
+        {
+          "label": "⑤",
+          "text": "\\(15\\)"
+        }
+      ],
+      "answer": {
+        "objective_key": "④",
+        "subjective": "",
+        "parts": []
+      },
+      "score": 4.0,
+      "figures": [],
+      "tables": [],
+      "flags": [
+        "contains_box"
+      ],
+      "uncertain_fields": []
+    },
+    {
+      "question_number": "9",
+      "source_page": 2,
+      "stem": "다음 표에서 가로, 세로, 대각선에 있는 세 수의 합이 모두 같을 때, \\(a+b+c+d+e\\) 의 값은?",
+      "question_type": "객관식",
+      "is_set_question": false,
+      "sub_questions": [],
+      "choices": [
+        {
+          "label": "①",
+          "text": "\\(-11\\)"
+        },
+        {
+          "label": "②",
+          "text": "\\(-9\\)"
+        },
+        {
+          "label": "③",
+          "text": "\\(-7\\)"
+        },
+        {
+          "label": "④",
+          "text": "\\(-5\\)"
+        },
+        {
+          "label": "⑤",
+          "text": "\\(-3\\)"
+        }
+      ],
+      "answer": {
+        "objective_key": "①",
+        "subjective": "",
+        "parts": []
+      },
+      "score": 4.0,
+      "figures": [],
+      "tables": [
+        {
+          "placement": "below_stem",
+          "rows": 3,

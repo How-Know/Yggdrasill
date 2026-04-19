@@ -1,0 +1,34 @@
+{
+  "candidates": [
+    {
+      "content": {
+        "parts": [
+          {
+            "text": "{\n  \"candidates\": [\n    {\n      \"label\": \"C1\",\n      \"question_number\": \"9\",\n      \"slot_index\": 1,\n      \"confidence\": \"high\",\n      \"reason\": \"Q9의 표 이미지\"\n    },\n    {\n      \"label\": \"C2\",\n      \"question_number\": \"10\",\n      \"slot_index\": 1,\n      \"confidence\": \"high\",\n      \"reason\": \"Q10의 첫 번째 그림 (32, 16 -\u003e 5)\"\n    },\n    {\n      \"label\": \"C3\",\n      \"question_number\": \"10\",\n      \"slot_index\": 2,\n      \"confidence\": \"high\",\n      \"reason\": \"Q10의 두 번째 그림 (54, 30 -\u003e 4)\"\n    },\n    {\n      \"label\": \"C4\",\n      \"question_number\": \"17\",\n      \"slot_index\": 1,\n      \"confidence\": \"high\",\n      \"reason\": \"Q17의 피라미드 형태 그림\"\n    },\n    {\n      \"label\": \"C5\",\n      \"question_number\": \"10\",\n      \"slot_index\": 1,\n      \"confidence\": \"low\",\n      \"reason\": \"중복 이미지 (C2와 동일)\"\n    },\n    {\n      \"label\": \"C6\",\n      \"question_number\": \"10\",\n      \"slot_index\": 1,\n      \"confidence\": \"low\",\n      \"reason\": \"중복 이미지 (C2와 동일)\"\n    },\n    {\n      \"label\": \"C7\",\n      \"question_number\": \"10\",\n      \"slot_index\": 1,\n      \"confidence\": \"low\",\n      \"reason\": \"중복 이미지 (C2와 동일)\"\n    },\n    {\n      \"label\": \"C8\",\n      \"question_number\": \"10\",\n      \"slot_index\": 3,\n      \"confidence\": \"high\",\n      \"reason\": \"Q10의 세 번째 그림 (35, 63 -\u003e 2 / 72, 108 -\u003e ㄱ)\"\n    },\n    {\n      \"label\": \"C9\",\n      \"question_number\": \"17\",\n      \"slot_index\": 1,\n      \"confidence\": \"low\",\n      \"reason\": \"중복 이미지 (C4와 동일)\"\n    },\n    {\n      \"label\": \"C10\",\n      \"question_number\": \"4\",\n      \"slot_index\": 1,\n      \"confidence\": \"high\",\n      \"reason\": \"Q4의 첫 번째 카드 (2^3 * 3^2 * 7)\"\n    },\n    {\n      \"label\": \"C11\",\n      \"question_number\": \"4\",\n      \"slot_index\": 2,\n      \"confidence\": \"high\",\n      \"reason\": \"Q4의 두 번째 카드 (2^3 * 3 * 5)\"\n    },\n    {\n      \"label\": \"C12\",\n      \"question_number\": \"4\",\n      \"slot_index\": 3,\n      \"confidence\": \"high\",\n      \"reason\": \"Q4의 세 번째 카드 (2 * 3 * 7^2)\"\n    },\n    {\n      \"label\": \"C13\",\n      \"question_number\": \"4\",\n      \"slot_index\": 1,\n      \"confidence\": \"low\",\n      \"reason\": \"중복 이미지 (C10과 동일)\"\n    },\n    {\n      \"label\": \"C14\",\n      \"question_number\": \"4\",\n      \"slot_index\": 2,\n      \"confidence\": \"low\",\n      \"reason\": \"중복 이미지 (C11과 동일)\"\n    }\n  ]\n}",
+            "thoughtSignature": "EjQKMgEMOdbHBP0CYUYRr44+Ul4edw/po7Qlb+0/EtTbBKK7/JIXNq50gOTZV5XLHh+qKXC9"
+          }
+        ],
+        "role": "model"
+      },
+      "finishReason": "STOP",
+      "index": 0
+    }
+  ],
+  "usageMetadata": {
+    "promptTokenCount": 19523,
+    "candidatesTokenCount": 902,
+    "totalTokenCount": 20425,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 1553
+      },
+      {
+        "modality": "IMAGE",
+        "tokenCount": 17970
+      }
+    ]
+  },
+  "modelVersion": "gemini-3.1-pro-preview",
+  "responseId": "f1zkadm7Jq_h1e8P6sC12QI"
+}

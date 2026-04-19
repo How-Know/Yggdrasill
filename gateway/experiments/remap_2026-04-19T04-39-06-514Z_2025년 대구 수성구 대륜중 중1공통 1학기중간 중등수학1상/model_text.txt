@@ -1,0 +1,102 @@
+{
+  "candidates": [
+    {
+      "label": "C1",
+      "question_number": "9",
+      "slot_index": 1,
+      "confidence": "high",
+      "reason": "Q9의 표 이미지"
+    },
+    {
+      "label": "C2",
+      "question_number": "10",
+      "slot_index": 1,
+      "confidence": "high",
+      "reason": "Q10의 첫 번째 그림 (32, 16 -> 5)"
+    },
+    {
+      "label": "C3",
+      "question_number": "10",
+      "slot_index": 2,
+      "confidence": "high",
+      "reason": "Q10의 두 번째 그림 (54, 30 -> 4)"
+    },
+    {
+      "label": "C4",
+      "question_number": "17",
+      "slot_index": 1,
+      "confidence": "high",
+      "reason": "Q17의 피라미드 형태 그림"
+    },
+    {
+      "label": "C5",
+      "question_number": "10",
+      "slot_index": 1,
+      "confidence": "low",
+      "reason": "중복 이미지 (C2와 동일)"
+    },
+    {
+      "label": "C6",
+      "question_number": "10",
+      "slot_index": 1,
+      "confidence": "low",
+      "reason": "중복 이미지 (C2와 동일)"
+    },
+    {
+      "label": "C7",
+      "question_number": "10",
+      "slot_index": 1,
+      "confidence": "low",
+      "reason": "중복 이미지 (C2와 동일)"
+    },
+    {
+      "label": "C8",
+      "question_number": "10",
+      "slot_index": 3,
+      "confidence": "high",
+      "reason": "Q10의 세 번째 그림 (35, 63 -> 2 / 72, 108 -> ㄱ)"
+    },
+    {
+      "label": "C9",
+      "question_number": "17",
+      "slot_index": 1,
+      "confidence": "low",
+      "reason": "중복 이미지 (C4와 동일)"
+    },
+    {
+      "label": "C10",
+      "question_number": "4",
+      "slot_index": 1,
+      "confidence": "high",
+      "reason": "Q4의 첫 번째 카드 (2^3 * 3^2 * 7)"
+    },
+    {
+      "label": "C11",
+      "question_number": "4",
+      "slot_index": 2,
+      "confidence": "high",
+      "reason": "Q4의 두 번째 카드 (2^3 * 3 * 5)"
+    },
+    {
+      "label": "C12",
+      "question_number": "4",
+      "slot_index": 3,
+      "confidence": "high",
+      "reason": "Q4의 세 번째 카드 (2 * 3 * 7^2)"
+    },
+    {
+      "label": "C13",
+      "question_number": "4",
+      "slot_index": 1,
+      "confidence": "low",
+      "reason": "중복 이미지 (C10과 동일)"
+    },
+    {
+      "label": "C14",
+      "question_number": "4",
+      "slot_index": 2,
+      "confidence": "low",
+      "reason": "중복 이미지 (C11과 동일)"
+    }
+  ]
+}

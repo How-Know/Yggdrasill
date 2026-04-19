@@ -1,0 +1,3578 @@
+{
+  "document_id": "1026558d-a6a6-4943-bae2-6eed11710288",
+  "saved_at": "2026-04-19T01:27:32.562Z",
+  "rows": [
+    {
+      "id": "82cfe36b-7672-4fdc-b7ad-f0714bf13eba",
+      "academy_id": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677",
+      "document_id": "1026558d-a6a6-4943-bae2-6eed11710288",
+      "extract_job_id": "9b7f64f8-14ec-4063-8b66-962ea6a59d5d",
+      "source_page": 2,
+      "source_order": 6,
+      "question_number": "6",
+      "question_type": "객관식",
+      "stem": "$93 - 36 \\times \\left[ -\\frac{1}{4} + \\left\\{ -\\frac{1}{3} \\div \\left( -\\frac{1}{2} \\right)^3 \\right\\} \\right]$ 의 값은?",
+      "choices": [
+        {
+          "text": "-6",
+          "label": "①"
+        },
+        {
+          "text": "-3",
+          "label": "②"
+        },
+        {
+          "text": "0",
+          "label": "③"
+        },
+        {
+          "text": "3",
+          "label": "④"
+        },
+        {
+          "text": "6",
+          "label": "⑤"
+        }
+      ],
+      "figure_refs": [],
+      "equations": [
+        {
+          "raw": "93-36 times left[-{1} over {4}+ left {-{1} over {3} div left(-{1} over {2} right)^{3} right } right]`",
+          "latex": "93-36 \\times \\left[-\\frac{1}{4}+ \\left {-\\frac{1}{3} \\div \\left(-\\frac{1}{2} \\right)^{3} \\right } \\right]",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "-6",
+          "latex": "-6",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "-3",
+          "latex": "-3",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "0",
+          "latex": "0",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "3",
+          "latex": "3",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "6",
+          "latex": "6",
+          "mathml": "",
+          "confidence": 0.82
+        }
+      ],
+      "source_anchors": {
+        "section": 0,
+        "line_end": 161,
+        "line_start": 154,
+        "page_weight": 1,
+        "page_capacity": 4,
+        "page_estimated": true
+      },
+      "confidence": 0.95,
+      "flags": [],
+      "is_checked": false,
+      "reviewed_by": null,
+      "reviewed_at": null,
+      "reviewer_notes": "",
+      "meta": {
+        "vlm": {
+          "flags": [],
+          "model": "gemini-3.1-pro-preview",
+          "confidence": "high",
+          "source_page": 1,
+          "overwritten_at": "2026-04-19T01:11:08.290Z",
+          "tables_described": [],
+          "uncertain_fields": [],
+          "figures_described": []
+        },
+        "answer_key": "⑤",
+        "score_point": 4,
+        "answer_parts": [],
+        "parse_version": "v1",
+        "stemLineAligns": [
+          "left",
+          "right",
+          "left",
+          "left",
+          "left"
+        ],
+        "allow_objective": true,
+        "contains_figure": false,
+        "is_set_question": false,
+        "source_patterns": [
+          "implicit_after_endnote",
+          "score_annotation",
+          "choice_inline_circled",
+          "choice_inline_circled",
+          "endnote_answer_hint"
+        ],
+        "allow_subjective": true,
+        "preview_enriched": true,
+        "stem_line_aligns": [
+          "left",
+          "right",
+          "left",
+          "left",
+          "left"
+        ],
+        "contains_equation": true,
+        "subjective_answer": "6",
+        "objective_generated": false,
+        "objective_answer_key": "⑤"
+      },
+      "created_at": "2026-04-18T16:19:02.022192+00:00",
+      "updated_at": "2026-04-19T01:11:09.50687+00:00",
+      "allow_objective": true,
+      "allow_subjective": false,
+      "objective_choices": [
+        {
+          "text": "$-6$",
+          "label": "①"
+        },
+        {
+          "text": "$-3$",
+          "label": "②"
+        },
+        {
+          "text": "$0$",
+          "label": "③"
+        },
+        {
+          "text": "$3$",
+          "label": "④"
+        },
+        {
+          "text": "$6$",
+          "label": "⑤"
+        }
+      ],
+      "objective_answer_key": "⑤",
+      "subjective_answer": "",
+      "objective_generated": false,
+      "curriculum_code": "",
+      "source_type_code": "",
+      "course_label": "",
+      "grade_label": "",
+      "exam_year": null,
+      "semester_label": "",
+      "exam_term_label": "",
+      "school_name": "",
+      "publisher_name": "",
+      "material_name": "",
+      "classification_detail": {
+        "extracted_by_worker": true
+      },
+      "question_uid": "9dc0beb9-5864-4520-ac16-b169934a80dc"
+    },
+    {
+      "id": "395cdfd7-6423-4e2b-bc01-5313242bac5b",
+      "academy_id": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677",
+      "document_id": "1026558d-a6a6-4943-bae2-6eed11710288",
+      "extract_job_id": "9b7f64f8-14ec-4063-8b66-962ea6a59d5d",
+      "source_page": 2,
+      "source_order": 7,
+      "question_number": "7",
+      "question_type": "객관식",
+      "stem": "$-3, -2, -1, 0, 2$가 적힌 $5$장의 카드에서 차례로 $3$장을 선택하여 처음 뽑힌 카드의 숫자를 $a$, 두 번째 카드의 숫자를 $b$, 세 번째 카드의 숫자를 $c$라 하자. 다음 조건을 만족하는 $a, b, c$에 대하여 $a+b+c$의 값은?\n[박스시작]\n• $bc = 0$이고, $ab < 0$이다.\n• $a - c < 0$\n• $|a| > |b|$\n[박스끝]",
+      "choices": [
+        {
+          "text": "-3",
+          "label": "①"
+        },
+        {
+          "text": "-2",
+          "label": "②"
+        },
+        {
+          "text": "-1",
+          "label": "③"
+        },
+        {
+          "text": "0",
+          "label": "④"
+        },
+        {
+          "text": "1",
+          "label": "⑤"
+        }
+      ],
+      "figure_refs": [],
+      "equations": [
+        {
+          "raw": "-3",
+          "latex": "-3",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "-2",
+          "latex": "-2",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "-1",
+          "latex": "-1",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "0",
+          "latex": "0",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "2`",
+          "latex": "2",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "5`",
+          "latex": "5",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "3`",
+          "latex": "3",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "a",
+          "latex": "a",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "b",
+          "latex": "b",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "c`",
+          "latex": "c",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "a+b+c`",
+          "latex": "a+b+c",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "bc=0`",
+          "latex": "bc=0",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "ab < 0`",
+          "latex": "ab < 0",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "a-c < 0",
+          "latex": "a-c < 0",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "left|` a`right| > left|` b`right|",
+          "latex": "\\left| a \\right| > \\left| b \\right|",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "1",
+          "latex": "1",
+          "mathml": "",
+          "confidence": 0.82
+        }
+      ],
+      "source_anchors": {
+        "section": 0,
+        "line_end": 179,
+        "line_start": 162,
+        "page_weight": 1,
+        "page_capacity": 4,
+        "page_estimated": true
+      },
+      "confidence": 0.95,
+      "flags": [
+        "contains_box"
+      ],
+      "is_checked": false,
+      "reviewed_by": null,
+      "reviewed_at": null,
+      "reviewer_notes": "",
+      "meta": {
+        "vlm": {
+          "flags": [
+            "contains_box"
+          ],
+          "model": "gemini-3.1-pro-preview",
+          "confidence": "high",
+          "source_page": 2,
+          "overwritten_at": "2026-04-19T01:11:08.290Z",
+          "tables_described": [],
+          "uncertain_fields": [],
+          "figures_described": []
+        },
+        "answer_key": "③",
+        "score_point": 4,
+        "answer_parts": [],
+        "parse_version": "v1",
+        "stemLineAligns": [
+          "left",
+          "right",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left"
+        ],
+        "allow_objective": true,
+        "contains_figure": false,
+        "is_set_question": false,
+        "source_patterns": [
+          "implicit_after_endnote",
+          "score_annotation",
+          "choice_inline_circled",
+          "choice_inline_circled",
+          "endnote_answer_hint"
+        ],
+        "allow_subjective": true,
+        "preview_enriched": true,
+        "stem_line_aligns": [
+          "left",
+          "right",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left"
+        ],
+        "contains_equation": true,
+        "subjective_answer": "-1",
+        "objective_generated": false,
+        "objective_answer_key": "③"
+      },
+      "created_at": "2026-04-18T16:19:02.022192+00:00",
+      "updated_at": "2026-04-19T01:11:09.55026+00:00",
+      "allow_objective": true,
+      "allow_subjective": false,
+      "objective_choices": [
+        {
+          "text": "$-3$",
+          "label": "①"
+        },
+        {
+          "text": "$-2$",
+          "label": "②"
+        },
+        {
+          "text": "$-1$",
+          "label": "③"
+        },
+        {
+          "text": "$0$",
+          "label": "④"
+        },
+        {
+          "text": "$1$",
+          "label": "⑤"
+        }
+      ],
+      "objective_answer_key": "③",
+      "subjective_answer": "",
+      "objective_generated": false,
+      "curriculum_code": "",
+      "source_type_code": "",
+      "course_label": "",
+      "grade_label": "",
+      "exam_year": null,
+      "semester_label": "",
+      "exam_term_label": "",
+      "school_name": "",
+      "publisher_name": "",
+      "material_name": "",
+      "classification_detail": {
+        "extracted_by_worker": true
+      },
+      "question_uid": "a198f8ab-9d45-4686-bffb-2e6acb762d26"
+    },
+    {
+      "id": "ef7fb2c5-0dd9-468b-94ac-3cdee4262b64",
+      "academy_id": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677",
+      "document_id": "1026558d-a6a6-4943-bae2-6eed11710288",
+      "extract_job_id": "9b7f64f8-14ec-4063-8b66-962ea6a59d5d",
+      "source_page": 2,
+      "source_order": 8,
+      "question_number": "8",
+      "question_type": "객관식",
+      "stem": "다음 조건을 모두 만족시키는 서로 다른 세 정수 $a, b, c$에 대하여 $a+b-c$의 값은?\n[박스시작]\n• $abc = -40$\n• $a+b+c = 1$\n• $|a| < |b| < |c|$\n[박스끝]",
+      "choices": [
+        {
+          "text": "-7",
+          "label": "①"
+        },
+        {
+          "text": "-3",
+          "label": "②"
+        },
+        {
+          "text": "3",
+          "label": "③"
+        },
+        {
+          "text": "11",
+          "label": "④"
+        },
+        {
+          "text": "15",
+          "label": "⑤"
+        }
+      ],
+      "figure_refs": [],
+      "equations": [
+        {
+          "raw": "a",
+          "latex": "a",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "b",
+          "latex": "b",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "c`",
+          "latex": "c",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "a+b-c`",
+          "latex": "a+b-c",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "abc=`-40",
+          "latex": "abc= -40",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "a+b+c=1",
+          "latex": "a+b+c=1",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "left|` a`right| < left|` b`right| < left|` c`right|",
+          "latex": "\\left| a \\right| < \\left| b \\right| < \\left| c \\right|",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "-7",
+          "latex": "-7",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "-3",
+          "latex": "-3",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "3",
+          "latex": "3",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "11",
+          "latex": "11",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "15",
+          "latex": "15",
+          "mathml": "",
+          "confidence": 0.82
+        }
+      ],
+      "source_anchors": {
+        "section": 0,
+        "line_end": 197,
+        "line_start": 180,
+        "page_weight": 1,
+        "page_capacity": 4,
+        "page_estimated": true
+      },
+      "confidence": 0.95,
+      "flags": [
+        "contains_box"
+      ],
+      "is_checked": false,
+      "reviewed_by": null,
+      "reviewed_at": null,
+      "reviewer_notes": "",
+      "meta": {
+        "vlm": {
+          "flags": [
+            "contains_box"
+          ],
+          "model": "gemini-3.1-pro-preview",
+          "confidence": "high",
+          "source_page": 2,
+          "overwritten_at": "2026-04-19T01:11:08.290Z",
+          "tables_described": [],
+          "uncertain_fields": [],
+          "figures_described": []
+        },
+        "answer_key": "④",
+        "score_point": 4,
+        "answer_parts": [],
+        "parse_version": "v1",
+        "stemLineAligns": [
+          "left",
+          "right",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left"
+        ],
+        "allow_objective": true,
+        "contains_figure": false,
+        "is_set_question": false,
+        "source_patterns": [
+          "implicit_after_endnote",
+          "score_annotation",
+          "choice_inline_circled",
+          "choice_inline_circled",
+          "endnote_answer_hint"
+        ],
+        "allow_subjective": true,
+        "preview_enriched": true,
+        "stem_line_aligns": [
+          "left",
+          "right",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left"
+        ],
+        "contains_equation": true,
+        "subjective_answer": "11",
+        "objective_generated": false,
+        "objective_answer_key": "④"
+      },
+      "created_at": "2026-04-18T16:19:02.022192+00:00",
+      "updated_at": "2026-04-19T01:11:09.588002+00:00",
+      "allow_objective": true,
+      "allow_subjective": false,
+      "objective_choices": [
+        {
+          "text": "$-7$",
+          "label": "①"
+        },
+        {
+          "text": "$-3$",
+          "label": "②"
+        },
+        {
+          "text": "$3$",
+          "label": "③"
+        },
+        {
+          "text": "$11$",
+          "label": "④"
+        },
+        {
+          "text": "$15$",
+          "label": "⑤"
+        }
+      ],
+      "objective_answer_key": "④",
+      "subjective_answer": "",
+      "objective_generated": false,
+      "curriculum_code": "",
+      "source_type_code": "",
+      "course_label": "",
+      "grade_label": "",
+      "exam_year": null,
+      "semester_label": "",
+      "exam_term_label": "",
+      "school_name": "",
+      "publisher_name": "",
+      "material_name": "",
+      "classification_detail": {
+        "extracted_by_worker": true
+      },
+      "question_uid": "f71fbffa-724a-4f94-96ff-b2e8cc63552a"
+    },
+    {
+      "id": "35607c21-83d6-4aec-832a-31e4dd254ba6",
+      "academy_id": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677",
+      "document_id": "1026558d-a6a6-4943-bae2-6eed11710288",
+      "extract_job_id": "9b7f64f8-14ec-4063-8b66-962ea6a59d5d",
+      "source_page": 6,
+      "source_order": 16,
+      "question_number": "16",
+      "question_type": "서술형",
+      "stem": "어떤 자연수 $x$에 대하여, $72$를 $x$로 나눈 나머지가 $8$, $85$를 $x$로 나눈 나머지가 $5$, $103$을 $x$로 나눈 나머지가 $7$일 때, $x$를 구하시오.",
+      "choices": [],
+      "figure_refs": [],
+      "equations": [
+        {
+          "raw": "x`",
+          "latex": "x",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "72`",
+          "latex": "72",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "8",
+          "latex": "8",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "85`",
+          "latex": "85",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "5",
+          "latex": "5",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "103`",
+          "latex": "103",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "7`",
+          "latex": "7",
+          "mathml": "",
+          "confidence": 0.82
+        }
+      ],
+      "source_anchors": {
+        "section": 0,
+        "line_end": 283,
+        "line_start": 280,
+        "page_weight": 1.8,
+        "page_capacity": 4,
+        "page_estimated": true
+      },
+      "confidence": 0.85,
+      "flags": [],
+      "is_checked": false,
+      "reviewed_by": null,
+      "reviewed_at": null,
+      "reviewer_notes": "",
+      "meta": {
+        "vlm": {
+          "flags": [],
+          "model": "gemini-3.1-pro-preview",
+          "confidence": "high",
+          "source_page": 3,
+          "overwritten_at": "2026-04-19T01:11:08.290Z",
+          "tables_described": [],
+          "uncertain_fields": [],
+          "figures_described": []
+        },
+        "answer_key": "16",
+        "score_point": 10,
+        "answer_parts": [],
+        "parse_version": "v1",
+        "stemLineAligns": [
+          "left",
+          "right",
+          "left"
+        ],
+        "allow_objective": true,
+        "contains_figure": false,
+        "is_set_question": false,
+        "source_patterns": [
+          "implicit_after_endnote",
+          "score_annotation",
+          "endnote_answer_hint"
+        ],
+        "allow_subjective": true,
+        "stem_line_aligns": [
+          "left",
+          "right",
+          "left"
+        ],
+        "contains_equation": true,
+        "subjective_answer": "16",
+        "objective_generated": true,
+        "objective_answer_key": "①"
+      },
+      "created_at": "2026-04-18T16:19:02.022192+00:00",
+      "updated_at": "2026-04-19T01:11:09.890153+00:00",
+      "allow_objective": false,
+      "allow_subjective": true,
+      "objective_choices": [],
+      "objective_answer_key": "",
+      "subjective_answer": "16",
+      "objective_generated": false,
+      "curriculum_code": "",
+      "source_type_code": "",
+      "course_label": "",
+      "grade_label": "",
+      "exam_year": null,
+      "semester_label": "",
+      "exam_term_label": "",
+      "school_name": "",
+      "publisher_name": "",
+      "material_name": "",
+      "classification_detail": {
+        "extracted_by_worker": true
+      },
+      "question_uid": "7b6db08f-a8bb-4216-8ec4-6f3d59e6e37a"
+    },
+    {
+      "id": "74e1ad40-4160-4b7f-9607-495632d6304b",
+      "academy_id": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677",
+      "document_id": "1026558d-a6a6-4943-bae2-6eed11710288",
+      "extract_job_id": "9b7f64f8-14ec-4063-8b66-962ea6a59d5d",
+      "source_page": 1,
+      "source_order": 1,
+      "question_number": "1",
+      "question_type": "객관식",
+      "stem": "다음 설명 중 옳은 것은?",
+      "choices": [
+        {
+          "text": "모든 소수는 홀수이다.",
+          "label": "①"
+        },
+        {
+          "text": "가장 작은 소수는 2이다.",
+          "label": "②"
+        },
+        {
+          "text": "소수와 합성수는 항상 서로소이다.",
+          "label": "③"
+        },
+        {
+          "text": "소수의 약수는 항상 2개보다 많다.",
+          "label": "④"
+        },
+        {
+          "text": "소수가 아닌 모든 자연수는 합성수이다.",
+          "label": "⑤"
+        }
+      ],
+      "figure_refs": [],
+      "equations": [
+        {
+          "raw": "2`",
+          "latex": "2",
+          "mathml": "",
+          "confidence": 0.82
+        }
+      ],
+      "source_anchors": {
+        "section": 0,
+        "line_end": 13,
+        "line_start": 0,
+        "page_weight": 1,
+        "page_capacity": 4,
+        "page_estimated": true
+      },
+      "confidence": 0.95,
+      "flags": [],
+      "is_checked": false,
+      "reviewed_by": null,
+      "reviewed_at": null,
+      "reviewer_notes": "",
+      "meta": {
+        "vlm": {
+          "flags": [],
+          "model": "gemini-3.1-pro-preview",
+          "confidence": "high",
+          "source_page": 1,
+          "overwritten_at": "2026-04-19T01:11:08.289Z",
+          "tables_described": [],
+          "uncertain_fields": [],
+          "figures_described": []
+        },
+        "answer_key": "②",
+        "score_point": 4,
+        "answer_parts": [],
+        "parse_version": "v1",
+        "stemLineAligns": [
+          "left",
+          "right",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left"
+        ],
+        "allow_objective": true,
+        "contains_figure": false,
+        "is_set_question": false,
+        "source_patterns": [
+          "implicit_first",
+          "score_annotation",
+          "choice_circled",
+          "choice_circled",
+          "choice_circled",
+          "choice_circled",
+          "choice_circled",
+          "endnote_answer_hint"
+        ],
+        "allow_subjective": true,
+        "preview_enriched": true,
+        "stem_line_aligns": [
+          "left",
+          "right",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left"
+        ],
+        "contains_equation": true,
+        "subjective_answer": "가장 작은 소수는 2이다.",
+        "objective_generated": false,
+        "objective_answer_key": "②"
+      },
+      "created_at": "2026-04-18T16:19:02.022192+00:00",
+      "updated_at": "2026-04-19T01:11:09.24547+00:00",
+      "allow_objective": true,
+      "allow_subjective": false,
+      "objective_choices": [
+        {
+          "text": "모든 소수는 홀수이다.",
+          "label": "①"
+        },
+        {
+          "text": "가장 작은 소수는 $2$이다.",
+          "label": "②"
+        },
+        {
+          "text": "소수와 합성수는 항상 서로소이다.",
+          "label": "③"
+        },
+        {
+          "text": "소수의 약수는 항상 $2$개보다 많다.",
+          "label": "④"
+        },
+        {
+          "text": "소수가 아닌 모든 자연수는 합성수이다.",
+          "label": "⑤"
+        }
+      ],
+      "objective_answer_key": "②",
+      "subjective_answer": "",
+      "objective_generated": false,
+      "curriculum_code": "",
+      "source_type_code": "",
+      "course_label": "",
+      "grade_label": "",
+      "exam_year": null,
+      "semester_label": "",
+      "exam_term_label": "",
+      "school_name": "",
+      "publisher_name": "",
+      "material_name": "",
+      "classification_detail": {
+        "extracted_by_worker": true
+      },
+      "question_uid": "c67f94a2-b093-42cf-8e16-81eb0d31437c"
+    },
+    {
+      "id": "2e911331-7f91-40ff-a416-5777e1f8d96c",
+      "academy_id": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677",
+      "document_id": "1026558d-a6a6-4943-bae2-6eed11710288",
+      "extract_job_id": "9b7f64f8-14ec-4063-8b66-962ea6a59d5d",
+      "source_page": 1,
+      "source_order": 2,
+      "question_number": "2",
+      "question_type": "객관식",
+      "stem": "다음 중 옳은 것만을 <보기>에서 고른 것은?\n[보기시작]\nㄱ. $2 \\times 3 = 3^2$\nㄴ. $2 \\times 2 \\times 3 = 2 \\times 3^2$\nㄷ. $7 \\times 7 \\times 7 \\times 7 = 7^4$\nㄹ. $3 \\times 3 \\times 5 \\times 5 \\times 5 = 3^2 \\times 5^3$\nㅁ. $2 \\times 2 \\times 2 \\times 3 \\times 5 \\times 5 = 2^3 \\times 3 \\times 5^2$\n[보기끝]",
+      "choices": [
+        {
+          "text": "ㄱ, ㄴ, ㄷ",
+          "label": "①"
+        },
+        {
+          "text": "ㄱ, ㄴ, ㅁ",
+          "label": "②"
+        },
+        {
+          "text": "ㄱ, ㄹ, ㅁ",
+          "label": "③"
+        },
+        {
+          "text": "ㄴ, ㄷ, ㄹ",
+          "label": "④"
+        },
+        {
+          "text": "ㄷ, ㄹ, ㅁ",
+          "label": "⑤"
+        }
+      ],
+      "figure_refs": [],
+      "equations": [
+        {
+          "raw": "left.2 times 3=3^{2} right.",
+          "latex": "\\left.2 \\times 3=3^{2} \\right.",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "2 times 2 times 3=2 times 3^{2}",
+          "latex": "2 \\times 2 \\times 3=2 \\times 3^{2}",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "7 times 7 times 7 times 7=7^{4}",
+          "latex": "7 \\times 7 \\times 7 \\times 7=7^{4}",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "3 times 3 times 5 times 5 times 5=3^{2} times 5^{3}",
+          "latex": "3 \\times 3 \\times 5 \\times 5 \\times 5=3^{2} \\times 5^{3}",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "2 times 2 times 2 times 3 times 5 times 5=2^{3} times 3 times 5^{2}",
+          "latex": "2 \\times 2 \\times 2 \\times 3 \\times 5 \\times 5=2^{3} \\times 3 \\times 5^{2}",
+          "mathml": "",
+          "confidence": 0.82
+        }
+      ],
+      "source_anchors": {
+        "section": 0,
+        "line_end": 37,
+        "line_start": 14,
+        "page_weight": 1,
+        "page_capacity": 4,
+        "page_estimated": true
+      },
+      "confidence": 0.95,
+      "flags": [
+        "contains_view_block"
+      ],
+      "is_checked": false,
+      "reviewed_by": null,
+      "reviewed_at": null,
+      "reviewer_notes": "",
+      "meta": {
+        "vlm": {
+          "flags": [
+            "contains_view_block"
+          ],
+          "model": "gemini-3.1-pro-preview",
+          "confidence": "high",
+          "source_page": 1,
+          "overwritten_at": "2026-04-19T01:11:08.289Z",
+          "tables_described": [],
+          "uncertain_fields": [],
+          "figures_described": []
+        },
+        "answer_key": "⑤",
+        "score_point": 4,
+        "answer_parts": [],
+        "parse_version": "v1",
+        "stemLineAligns": [
+          "left",
+          "right",
+          "left",
+          "left",
+          "center",
+          "center",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left"
+        ],
+        "allow_objective": true,
+        "contains_figure": false,
+        "is_set_question": false,
+        "source_patterns": [
+          "implicit_after_endnote",
+          "view_block",
+          "score_annotation",
+          "view_item",
+          "view_item",
+          "view_item",
+          "view_item",
+          "view_item",
+          "choice_inline_circled",
+          "choice_inline_circled",
+          "endnote_answer_hint"
+        ],
+        "allow_subjective": true,
+        "preview_enriched": true,
+        "stem_line_aligns": [
+          "left",
+          "right",
+          "left",
+          "left",
+          "center",
+          "center",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left"
+        ],
+        "contains_equation": true,
+        "subjective_answer": "ㄷ, ㄹ, ㅁ",
+        "objective_generated": false,
+        "objective_answer_key": "⑤"
+      },
+      "created_at": "2026-04-18T16:19:02.022192+00:00",
+      "updated_at": "2026-04-19T01:11:09.346791+00:00",
+      "allow_objective": true,
+      "allow_subjective": false,
+      "objective_choices": [
+        {
+          "text": "ㄱ, ㄴ, ㄷ",
+          "label": "①"
+        },
+        {
+          "text": "ㄱ, ㄴ, ㅁ",
+          "label": "②"
+        },
+        {
+          "text": "ㄱ, ㄹ, ㅁ",
+          "label": "③"
+        },
+        {
+          "text": "ㄴ, ㄷ, ㄹ",
+          "label": "④"
+        },
+        {
+          "text": "ㄷ, ㄹ, ㅁ",
+          "label": "⑤"
+        }
+      ],
+      "objective_answer_key": "⑤",
+      "subjective_answer": "",
+      "objective_generated": false,
+      "curriculum_code": "",
+      "source_type_code": "",
+      "course_label": "",
+      "grade_label": "",
+      "exam_year": null,
+      "semester_label": "",
+      "exam_term_label": "",
+      "school_name": "",
+      "publisher_name": "",
+      "material_name": "",
+      "classification_detail": {
+        "extracted_by_worker": true
+      },
+      "question_uid": "c6641f50-9544-4a86-9d57-c69800766427"
+    },
+    {
+      "id": "83ce1e09-f2be-45ae-a12b-7d07f0f6c203",
+      "academy_id": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677",
+      "document_id": "1026558d-a6a6-4943-bae2-6eed11710288",
+      "extract_job_id": "9b7f64f8-14ec-4063-8b66-962ea6a59d5d",
+      "source_page": 1,
+      "source_order": 3,
+      "question_number": "3",
+      "question_type": "객관식",
+      "stem": "$\\frac{108}{\\square}$ 이 자연수가 될 때, $\\square$ 안에 알맞은 자연수의 개수는?",
+      "choices": [
+        {
+          "text": "8개",
+          "label": "①"
+        },
+        {
+          "text": "10개",
+          "label": "②"
+        },
+        {
+          "text": "11개",
+          "label": "③"
+        },
+        {
+          "text": "12개",
+          "label": "④"
+        },
+        {
+          "text": "13개",
+          "label": "⑤"
+        }
+      ],
+      "figure_refs": [],
+      "equations": [
+        {
+          "raw": "{108} over {`` box{~~}``}`",
+          "latex": "{108} \\over { box{~~} }",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "box{~~}",
+          "latex": "box{~~}",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "8`",
+          "latex": "8",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "10`",
+          "latex": "10",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "11`",
+          "latex": "11",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "12`",
+          "latex": "12",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "13`",
+          "latex": "13",
+          "mathml": "",
+          "confidence": 0.82
+        }
+      ],
+      "source_anchors": {
+        "section": 0,
+        "line_end": 45,
+        "line_start": 38,
+        "page_weight": 1,
+        "page_capacity": 4,
+        "page_estimated": true
+      },
+      "confidence": 0.95,
+      "flags": [],
+      "is_checked": false,
+      "reviewed_by": null,
+      "reviewed_at": null,
+      "reviewer_notes": "",
+      "meta": {
+        "vlm": {
+          "flags": [],
+          "model": "gemini-3.1-pro-preview",
+          "confidence": "high",
+          "source_page": 1,
+          "overwritten_at": "2026-04-19T01:11:08.290Z",
+          "tables_described": [],
+          "uncertain_fields": [],
+          "figures_described": []
+        },
+        "answer_key": "④",
+        "score_point": 4,
+        "answer_parts": [],
+        "parse_version": "v1",
+        "stemLineAligns": [
+          "left",
+          "right",
+          "left",
+          "left",
+          "left"
+        ],
+        "allow_objective": true,
+        "contains_figure": false,
+        "is_set_question": false,
+        "source_patterns": [
+          "implicit_after_endnote",
+          "score_annotation",
+          "choice_inline_circled",
+          "choice_inline_circled",
+          "endnote_answer_hint"
+        ],
+        "allow_subjective": true,
+        "preview_enriched": true,
+        "stem_line_aligns": [
+          "left",
+          "right",
+          "left",
+          "left",
+          "left"
+        ],
+        "contains_equation": true,
+        "subjective_answer": "12개",
+        "objective_generated": false,
+        "objective_answer_key": "④"
+      },
+      "created_at": "2026-04-18T16:19:02.022192+00:00",
+      "updated_at": "2026-04-19T01:11:09.387187+00:00",
+      "allow_objective": true,
+      "allow_subjective": false,
+      "objective_choices": [
+        {
+          "text": "$8$개",
+          "label": "①"
+        },
+        {
+          "text": "$10$개",
+          "label": "②"
+        },
+        {
+          "text": "$11$개",
+          "label": "③"
+        },
+        {
+          "text": "$12$개",
+          "label": "④"
+        },
+        {
+          "text": "$13$개",
+          "label": "⑤"
+        }
+      ],
+      "objective_answer_key": "④",
+      "subjective_answer": "",
+      "objective_generated": false,
+      "curriculum_code": "",
+      "source_type_code": "",
+      "course_label": "",
+      "grade_label": "",
+      "exam_year": null,
+      "semester_label": "",
+      "exam_term_label": "",
+      "school_name": "",
+      "publisher_name": "",
+      "material_name": "",
+      "classification_detail": {
+        "extracted_by_worker": true
+      },
+      "question_uid": "803cbfd5-0319-478b-b80e-8a8530a7da64"
+    },
+    {
+      "id": "44960fc1-64aa-4c08-8bd6-39729a7cc691",
+      "academy_id": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677",
+      "document_id": "1026558d-a6a6-4943-bae2-6eed11710288",
+      "extract_job_id": "9b7f64f8-14ec-4063-8b66-962ea6a59d5d",
+      "source_page": 2,
+      "source_order": 5,
+      "question_number": "5",
+      "question_type": "객관식",
+      "stem": "다음 표는 어떤 수를 보고 자연수, 정수, 유리수에 해당하는 것은 ○표, 해당하지 않는 것은 ×표를 하여 만든 것이다. <보기>에서 ㉠에 들어갈 알맞은 수를 모두 더한 값은?\n[보기시작]\n$-0.7, -\\frac{6}{3}, 0, +\\frac{1}{4}, -5, \\frac{1}{5}$\n[보기끝]",
+      "choices": [
+        {
+          "text": "-\\frac{3}{4}",
+          "label": "①"
+        },
+        {
+          "text": "-\\frac{1}{4}",
+          "label": "②"
+        },
+        {
+          "text": "\\frac{1}{4}",
+          "label": "③"
+        },
+        {
+          "text": "\\frac{3}{4}",
+          "label": "④"
+        },
+        {
+          "text": "\\frac{5}{4}",
+          "label": "⑤"
+        }
+      ],
+      "figure_refs": [
+        "다음 표는 어떤 수를 보고 자연수, 정수, 유리수에 해당하는 것은 bigcirc표, 해당하지 않는 것은 \\times표를 하여 만든 것이다. <보기>에서 ㉠에 들어갈 알맞은 수를 모두 더한 값은?",
+        "[표행]",
+        "[표셀]",
+        "[표셀]",
+        "[표셀]",
+        "[표셀]",
+        "[표행]",
+        "[표셀]",
+        "[표행]",
+        "[표셀]",
+        "[표셀]",
+        "[표셀]",
+        "[표셀]",
+        "[표행]",
+        "[표셀]",
+        "[표셀]",
+        "[표셀]",
+        "[표셀]",
+        "[표행]",
+        "[표셀]",
+        "[표셀]",
+        "[표셀]",
+        "[표셀]"
+      ],
+      "equations": [
+        {
+          "raw": "bigcirc",
+          "latex": "bigcirc",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "times",
+          "latex": "\\times",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "3",
+          "latex": "3",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "-3",
+          "latex": "-3",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "-0.7",
+          "latex": "-0.7",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "-{6} over {3}",
+          "latex": "-\\frac{6}{3}",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "0",
+          "latex": "0",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "+{1} over {4}",
+          "latex": "+\\frac{1}{4}",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "-5",
+          "latex": "-5",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "{1} over {5}",
+          "latex": "\\frac{1}{5}",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "-{3} over {4}",
+          "latex": "-\\frac{3}{4}",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "-{1} over {4}",
+          "latex": "-\\frac{1}{4}",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "{1} over {4}",
+          "latex": "\\frac{1}{4}",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "{3} over {4}",
+          "latex": "\\frac{3}{4}",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "{5} over {4}",
+          "latex": "\\frac{5}{4}",
+          "mathml": "",
+          "confidence": 0.82
+        }
+      ],
+      "source_anchors": {
+        "section": 0,
+        "line_end": 153,
+        "line_start": 56,
+        "page_weight": 1,
+        "page_capacity": 4,
+        "page_estimated": true
+      },
+      "confidence": 1,
+      "flags": [
+        "contains_table",
+        "contains_view_block"
+      ],
+      "is_checked": false,
+      "reviewed_by": null,
+      "reviewed_at": null,
+      "reviewer_notes": "",
+      "meta": {
+        "vlm": {
+          "flags": [
+            "contains_table",
+            "contains_view_block"
+          ],
+          "model": "gemini-3.1-pro-preview",
+          "confidence": "high",
+          "source_page": 1,
+          "overwritten_at": "2026-04-19T01:11:08.290Z",
+          "tables_described": [
+            {
+              "cols": 4,
+              "rows": 4,
+              "placement": "below_stem",
+              "description": "수의 분류에 따른 O, X 표",
+              "has_diagonal_cell": true
+            }
+          ],
+          "uncertain_fields": [],
+          "figures_described": []
+        },
+        "answer_key": "②",
+        "score_point": 4,
+        "answer_parts": [],
+        "parse_version": "v1",
+        "stemLineAligns": [
+          "left",
+          "right",
+          "center",
+          "center",
+          "left",
+          "left",
+          "left",
+          "left",
+          "right",
+          "right",
+          "left",
+          "left",
+          "center",
+          "center",
+          "left",
+          "left",
+          "center",
+          "center",
+          "left",
+          "left",
+          "center",
+          "center",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "center",
+          "center",
+          "left",
+          "left",
+          "center",
+          "center",
+          "left",
+          "left",
+          "center",
+          "center",
+          "left",
+          "left",
+          "center",
+          "center",
+          "left",
+          "left",
+          "left",
+          "left",
+          "center",
+          "left",
+          "left",
+          "center",
+          "center",
+          "left",
+          "left",
+          "center",
+          "center",
+          "left",
+          "left",
+          "center",
+          "center",
+          "left",
+          "left",
+          "left",
+          "left",
+          "center",
+          "left",
+          "left",
+          "center",
+          "center",
+          "left",
+          "left",
+          "center",
+          "center",
+          "left",
+          "left",
+          "center",
+          "center",
+          "left",
+          "left",
+          "left",
+          "left",
+          "center",
+          "center",
+          "center",
+          "center",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left"
+        ],
+        "allow_objective": true,
+        "contains_figure": true,
+        "is_set_question": false,
+        "source_patterns": [
+          "implicit_after_endnote",
+          "view_block",
+          "figure_line",
+          "score_annotation",
+          "figure_line",
+          "figure_line",
+          "figure_line",
+          "figure_line",
+          "figure_line",
+          "figure_line",
+          "figure_line",
+          "figure_line",
+          "figure_line",
+          "figure_line",
+          "figure_line",
+          "figure_line",
+          "figure_line",
+          "figure_line",
+          "watermark_line",
+          "figure_line",
+          "figure_line",
+          "figure_line",
+          "figure_line",
+          "figure_line",
+          "watermark_line",
+          "figure_line",
+          "figure_line",
+          "figure_line",
+          "choice_inline_circled",
+          "choice_inline_circled",
+          "endnote_answer_hint"
+        ],
+        "allow_subjective": true,
+        "preview_enriched": true,
+        "stem_line_aligns": [
+          "left",
+          "right",
+          "center",
+          "center",
+          "left",
+          "left",
+          "left",
+          "left",
+          "right",
+          "right",
+          "left",
+          "left",
+          "center",
+          "center",
+          "left",
+          "left",
+          "center",
+          "center",
+          "left",
+          "left",
+          "center",
+          "center",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left",
+          "center",
+          "center",
+          "left",
+          "left",
+          "center",
+          "center",
+          "left",
+          "left",
+          "center",
+          "center",
+          "left",
+          "left",
+          "center",
+          "center",
+          "left",
+          "left",
+          "left",
+          "left",
+          "center",
+          "left",
+          "left",
+          "center",
+          "center",
+          "left",
+          "left",
+          "center",
+          "center",
+          "left",
+          "left",
+          "center",
+          "center",
+          "left",
+          "left",
+          "left",
+          "left",
+          "center",
+          "left",
+          "left",
+          "center",
+          "center",
+          "left",
+          "left",
+          "center",
+          "center",
+          "left",
+          "left",
+          "center",
+          "center",
+          "left",
+          "left",
+          "left",
+          "left",
+          "center",
+          "center",
+          "center",
+          "center",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left"
+        ],
+        "contains_equation": true,
+        "subjective_answer": "-\\frac{1}{4}",
+        "objective_generated": false,
+        "objective_answer_key": "②"
+      },
+      "created_at": "2026-04-18T16:19:02.022192+00:00",
+      "updated_at": "2026-04-19T01:11:09.464543+00:00",
+      "allow_objective": true,
+      "allow_subjective": false,
+      "objective_choices": [
+        {
+          "text": "$-\\frac{3}{4}$",
+          "label": "①"
+        },
+        {
+          "text": "$-\\frac{1}{4}$",
+          "label": "②"
+        },
+        {
+          "text": "$\\frac{1}{4}$",
+          "label": "③"
+        },
+        {
+          "text": "$\\frac{3}{4}$",
+          "label": "④"
+        },
+        {
+          "text": "$\\frac{5}{4}$",
+          "label": "⑤"
+        }
+      ],
+      "objective_answer_key": "②",
+      "subjective_answer": "",
+      "objective_generated": false,
+      "curriculum_code": "",
+      "source_type_code": "",
+      "course_label": "",
+      "grade_label": "",
+      "exam_year": null,
+      "semester_label": "",
+      "exam_term_label": "",
+      "school_name": "",
+      "publisher_name": "",
+      "material_name": "",
+      "classification_detail": {
+        "extracted_by_worker": true
+      },
+      "question_uid": "e367bbf4-3b51-428d-b55d-f858aa5c6b19"
+    },
+    {
+      "id": "d0856d81-2549-4fc8-80d0-f8828e03c786",
+      "academy_id": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677",
+      "document_id": "1026558d-a6a6-4943-bae2-6eed11710288",
+      "extract_job_id": "9b7f64f8-14ec-4063-8b66-962ea6a59d5d",
+      "source_page": 3,
+      "source_order": 11,
+      "question_number": "11",
+      "question_type": "객관식",
+      "stem": "$221$과 서로소이며 $221$ 이하인 자연수의 개수는?",
+      "choices": [
+        {
+          "text": "185",
+          "label": "①"
+        },
+        {
+          "text": "186",
+          "label": "②"
+        },
+        {
+          "text": "190",
+          "label": "③"
+        },
+        {
+          "text": "191",
+          "label": "④"
+        },
+        {
+          "text": "192",
+          "label": "⑤"
+        }
+      ],
+      "figure_refs": [],
+      "equations": [
+        {
+          "raw": "221`",
+          "latex": "221",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "221",
+          "latex": "221",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "185",
+          "latex": "185",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "186",
+          "latex": "186",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "190",
+          "latex": "190",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "191",
+          "latex": "191",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "192",
+          "latex": "192",
+          "mathml": "",
+          "confidence": 0.82
+        }
+      ],
+      "source_anchors": {
+        "section": 0,
+        "line_end": 247,
+        "line_start": 240,
+        "page_weight": 1.3,
+        "page_capacity": 4,
+        "page_estimated": true
+      },
+      "confidence": 0.95,
+      "flags": [],
+      "is_checked": false,
+      "reviewed_by": null,
+      "reviewed_at": null,
+      "reviewer_notes": "",
+      "meta": {
+        "vlm": {
+          "flags": [],
+          "model": "gemini-3.1-pro-preview",
+          "confidence": "high",
+          "source_page": 2,
+          "overwritten_at": "2026-04-19T01:11:08.290Z",
+          "tables_described": [],
+          "uncertain_fields": [],
+          "figures_described": []
+        },
+        "answer_key": "⑤",
+        "score_point": 5,
+        "answer_parts": [],
+        "parse_version": "v1",
+        "stemLineAligns": [
+          "left",
+          "right",
+          "left",
+          "left",
+          "left"
+        ],
+        "allow_objective": true,
+        "contains_figure": false,
+        "is_set_question": false,
+        "source_patterns": [
+          "implicit_after_endnote",
+          "score_annotation",
+          "choice_inline_circled",
+          "choice_inline_circled",
+          "endnote_answer_hint"
+        ],
+        "allow_subjective": true,
+        "stem_line_aligns": [
+          "left",
+          "right",
+          "left",
+          "left",
+          "left"
+        ],
+        "contains_equation": true,
+        "subjective_answer": "192",
+        "objective_generated": false,
+        "objective_answer_key": "⑤"
+      },
+      "created_at": "2026-04-18T16:19:02.022192+00:00",
+      "updated_at": "2026-04-19T01:11:09.704985+00:00",
+      "allow_objective": true,
+      "allow_subjective": false,
+      "objective_choices": [
+        {
+          "text": "$185$",
+          "label": "①"
+        },
+        {
+          "text": "$186$",
+          "label": "②"
+        },
+        {
+          "text": "$190$",
+          "label": "③"
+        },
+        {
+          "text": "$191$",
+          "label": "④"
+        },
+        {
+          "text": "$192$",
+          "label": "⑤"
+        }
+      ],
+      "objective_answer_key": "⑤",
+      "subjective_answer": "",
+      "objective_generated": false,
+      "curriculum_code": "",
+      "source_type_code": "",
+      "course_label": "",
+      "grade_label": "",
+      "exam_year": null,
+      "semester_label": "",
+      "exam_term_label": "",
+      "school_name": "",
+      "publisher_name": "",
+      "material_name": "",
+      "classification_detail": {
+        "extracted_by_worker": true
+      },
+      "question_uid": "706a61a5-7ed0-4ccc-9089-d28eb2c27119"
+    },
+    {
+      "id": "cad667ca-bd33-44b4-845f-8c5d76ce6765",
+      "academy_id": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677",
+      "document_id": "1026558d-a6a6-4943-bae2-6eed11710288",
+      "extract_job_id": "9b7f64f8-14ec-4063-8b66-962ea6a59d5d",
+      "source_page": 4,
+      "source_order": 12,
+      "question_number": "12",
+      "question_type": "객관식",
+      "stem": "각 면에 $2, 3, 5, 6, 8, 9$가 각각 적혀 있는 정육면체 모양의 주사위를 굴렸을 때, 바닥과 닿지 않는 다섯 개의 면에 적혀 있는 숫자들의 곱을 $P$라고 하자. 이때, $P$를 항상 나누는 최대의 수는?",
+      "choices": [
+        {
+          "text": "12",
+          "label": "①"
+        },
+        {
+          "text": "24",
+          "label": "②"
+        },
+        {
+          "text": "36",
+          "label": "③"
+        },
+        {
+          "text": "48",
+          "label": "④"
+        },
+        {
+          "text": "54",
+          "label": "⑤"
+        }
+      ],
+      "figure_refs": [],
+      "equations": [
+        {
+          "raw": "2",
+          "latex": "2",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "3",
+          "latex": "3",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "5",
+          "latex": "5",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "6",
+          "latex": "6",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "8",
+          "latex": "8",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "9`",
+          "latex": "9",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "{it{P`}}it`",
+          "latex": "{it{P }}it",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "12",
+          "latex": "12",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "24",
+          "latex": "24",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "36",
+          "latex": "36",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "48",
+          "latex": "48",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "54",
+          "latex": "54",
+          "mathml": "",
+          "confidence": 0.82
+        }
+      ],
+      "source_anchors": {
+        "section": 0,
+        "line_end": 255,
+        "line_start": 248,
+        "page_weight": 1.3,
+        "page_capacity": 4,
+        "page_estimated": true
+      },
+      "confidence": 0.95,
+      "flags": [],
+      "is_checked": false,
+      "reviewed_by": null,
+      "reviewed_at": null,
+      "reviewer_notes": "",
+      "meta": {
+        "vlm": {
+          "flags": [],
+          "model": "gemini-3.1-pro-preview",
+          "confidence": "high",
+          "source_page": 3,
+          "overwritten_at": "2026-04-19T01:11:08.290Z",
+          "tables_described": [],
+          "uncertain_fields": [],
+          "figures_described": []
+        },
+        "answer_key": "③",
+        "score_point": 5,
+        "answer_parts": [],
+        "parse_version": "v1",
+        "stemLineAligns": [
+          "left",
+          "right",
+          "left",
+          "left",
+          "left"
+        ],
+        "allow_objective": true,
+        "contains_figure": false,
+        "is_set_question": false,
+        "source_patterns": [
+          "implicit_after_endnote",
+          "score_annotation",
+          "choice_inline_circled",
+          "choice_inline_circled",
+          "endnote_answer_hint"
+        ],
+        "allow_subjective": true,
+        "stem_line_aligns": [
+          "left",
+          "right",
+          "left",
+          "left",
+          "left"
+        ],
+        "contains_equation": true,
+        "subjective_answer": "36",
+        "objective_generated": false,
+        "objective_answer_key": "③"
+      },
+      "created_at": "2026-04-18T16:19:02.022192+00:00",
+      "updated_at": "2026-04-19T01:11:09.742531+00:00",
+      "allow_objective": true,
+      "allow_subjective": false,
+      "objective_choices": [
+        {
+          "text": "$12$",
+          "label": "①"
+        },
+        {
+          "text": "$24$",
+          "label": "②"
+        },
+        {
+          "text": "$36$",
+          "label": "③"
+        },
+        {
+          "text": "$48$",
+          "label": "④"
+        },
+        {
+          "text": "$54$",
+          "label": "⑤"
+        }
+      ],
+      "objective_answer_key": "③",
+      "subjective_answer": "",
+      "objective_generated": false,
+      "curriculum_code": "",
+      "source_type_code": "",
+      "course_label": "",
+      "grade_label": "",
+      "exam_year": null,
+      "semester_label": "",
+      "exam_term_label": "",
+      "school_name": "",
+      "publisher_name": "",
+      "material_name": "",
+      "classification_detail": {
+        "extracted_by_worker": true
+      },
+      "question_uid": "c4dfe790-4cca-4b00-8e39-e7f4727c53b8"
+    },
+    {
+      "id": "af242b82-d8a0-487f-944f-ffe944dc4c97",
+      "academy_id": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677",
+      "document_id": "1026558d-a6a6-4943-bae2-6eed11710288",
+      "extract_job_id": "9b7f64f8-14ec-4063-8b66-962ea6a59d5d",
+      "source_page": 4,
+      "source_order": 13,
+      "question_number": "13",
+      "question_type": "주관식",
+      "stem": "물음에 답하시오.\n[문단]\n[소문항1] (1) $24, 54, 90$을 소인수분해 하시오.\n[문단]\n[소문항2] (2) $24, 54, 90$의 최대공약수와 최소공배수를 구하시오. (단, 반드시 (1)에서 소인수분해 한 결과를 이용하시오.)",
+      "choices": [],
+      "figure_refs": [],
+      "equations": [
+        {
+          "raw": "24",
+          "latex": "24",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "54",
+          "latex": "54",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "90`",
+          "latex": "90",
+          "mathml": "",
+          "confidence": 0.82
+        }
+      ],
+      "source_anchors": {
+        "section": 0,
+        "line_end": 265,
+        "line_start": 256,
+        "page_weight": 1.3,
+        "page_capacity": 4,
+        "page_estimated": true
+      },
+      "confidence": 0.85,
+      "flags": [],
+      "is_checked": false,
+      "reviewed_by": null,
+      "reviewed_at": null,
+      "reviewer_notes": "",
+      "meta": {
+        "vlm": {
+          "flags": [],
+          "model": "gemini-3.1-pro-preview",
+          "confidence": "medium",
+          "source_page": 3,
+          "overwritten_at": "2026-04-19T01:11:08.290Z",
+          "tables_described": [],
+          "uncertain_fields": [
+            "score"
+          ],
+          "figures_described": []
+        },
+        "answer_key": "(1) 24 = 2^3 x 3, 54 = 2 x 3^3, 90 = 2 x 3^2 x 5 (2) 6, 1080",
+        "score_point": 6,
+        "answer_parts": [
+          {
+            "sub": "1",
+            "value": "24 = 2^3 x 3, 54 = 2 x 3^3, 90 = 2 x 3^2 x 5"
+          },
+          {
+            "sub": "2",
+            "value": "6, 1080"
+          }
+        ],
+        "parse_version": "v1",
+        "stemLineAligns": [
+          "left",
+          "left",
+          "left",
+          "right",
+          "left",
+          "left",
+          "right",
+          "left"
+        ],
+        "allow_objective": true,
+        "contains_figure": false,
+        "is_set_question": true,
+        "source_patterns": [
+          "implicit_after_endnote",
+          "set_question_sub_item",
+          "set_question_sub_score",
+          "set_question_sub_item",
+          "set_question_sub_score",
+          "endnote_answer_hint"
+        ],
+        "allow_subjective": true,
+        "stem_line_aligns": [
+          "left",
+          "left",
+          "left",
+          "right",
+          "left",
+          "left",
+          "right",
+          "left"
+        ],
+        "contains_equation": true,
+        "subjective_answer": "(1) , , (2) ,",
+        "objective_generated": true,
+        "objective_answer_key": "④",
+        "sub_question_marker_count": 2
+      },
+      "created_at": "2026-04-18T16:19:02.022192+00:00",
+      "updated_at": "2026-04-19T01:11:09.779833+00:00",
+      "allow_objective": false,
+      "allow_subjective": true,
+      "objective_choices": [],
+      "objective_answer_key": "",
+      "subjective_answer": "(1) 24 = 2^3 x 3, 54 = 2 x 3^3, 90 = 2 x 3^2 x 5 (2) 6, 1080",
+      "objective_generated": false,
+      "curriculum_code": "",
+      "source_type_code": "",
+      "course_label": "",
+      "grade_label": "",
+      "exam_year": null,
+      "semester_label": "",
+      "exam_term_label": "",
+      "school_name": "",
+      "publisher_name": "",
+      "material_name": "",
+      "classification_detail": {
+        "extracted_by_worker": true
+      },
+      "question_uid": "82877223-926a-45e3-83f9-03295f9eff9c"
+    },
+    {
+      "id": "6989fa49-5b5b-460f-9200-0604835e5404",
+      "academy_id": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677",
+      "document_id": "1026558d-a6a6-4943-bae2-6eed11710288",
+      "extract_job_id": "9b7f64f8-14ec-4063-8b66-962ea6a59d5d",
+      "source_page": 5,
+      "source_order": 14,
+      "question_number": "14",
+      "question_type": "주관식",
+      "stem": "어떤 유리수 $a$를 $\\left( -\\frac{4}{3} \\right)^2$ 으로 나누어야 할 것을 잘못하여 곱하였더니 $\\frac{14}{9}$ 가 되었다. 다음 물음에 답하시오.\n[문단]\n[소문항1] (1) 어떤 유리수 $a$의 값을 구하시오.\n[문단]\n[소문항2] (2) 바르게 계산한 답을 구하시오.",
+      "choices": [],
+      "figure_refs": [],
+      "equations": [
+        {
+          "raw": "a`",
+          "latex": "a",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "left(-{4} over {3} right)^{2}`",
+          "latex": "\\left(-\\frac{4}{3} \\right)^{2}",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "{14} over {9}`",
+          "latex": "\\frac{14}{9}",
+          "mathml": "",
+          "confidence": 0.82
+        }
+      ],
+      "source_anchors": {
+        "section": 0,
+        "line_end": 275,
+        "line_start": 266,
+        "page_weight": 1.55,
+        "page_capacity": 4,
+        "page_estimated": true
+      },
+      "confidence": 0.85,
+      "flags": [],
+      "is_checked": false,
+      "reviewed_by": null,
+      "reviewed_at": null,
+      "reviewer_notes": "",
+      "meta": {
+        "vlm": {
+          "flags": [],
+          "model": "gemini-3.1-pro-preview",
+          "confidence": "medium",
+          "source_page": 3,
+          "overwritten_at": "2026-04-19T01:11:08.290Z",
+          "tables_described": [],
+          "uncertain_fields": [
+            "score"
+          ],
+          "figures_described": []
+        },
+        "answer_key": "(1) a = 7/8 (2) 63/128",
+        "score_point": 7,
+        "answer_parts": [
+          {
+            "sub": "1",
+            "value": "7/8"
+          },
+          {
+            "sub": "2",
+            "value": "63/128"
+          }
+        ],
+        "parse_version": "v1",
+        "stemLineAligns": [
+          "left",
+          "left",
+          "left",
+          "right",
+          "left",
+          "left",
+          "right",
+          "left"
+        ],
+        "allow_objective": true,
+        "contains_figure": false,
+        "is_set_question": true,
+        "source_patterns": [
+          "implicit_after_endnote",
+          "set_question_sub_item",
+          "set_question_sub_score",
+          "set_question_sub_item",
+          "set_question_sub_score",
+          "endnote_answer_hint"
+        ],
+        "allow_subjective": true,
+        "stem_line_aligns": [
+          "left",
+          "left",
+          "left",
+          "right",
+          "left",
+          "left",
+          "right",
+          "left"
+        ],
+        "contains_equation": true,
+        "subjective_answer": "(1) (2)",
+        "objective_generated": true,
+        "objective_answer_key": "④",
+        "sub_question_marker_count": 2
+      },
+      "created_at": "2026-04-18T16:19:02.022192+00:00",
+      "updated_at": "2026-04-19T01:11:09.818425+00:00",
+      "allow_objective": false,
+      "allow_subjective": true,
+      "objective_choices": [],
+      "objective_answer_key": "",
+      "subjective_answer": "(1) a = 7/8 (2) 63/128",
+      "objective_generated": false,
+      "curriculum_code": "",
+      "source_type_code": "",
+      "course_label": "",
+      "grade_label": "",
+      "exam_year": null,
+      "semester_label": "",
+      "exam_term_label": "",
+      "school_name": "",
+      "publisher_name": "",
+      "material_name": "",
+      "classification_detail": {
+        "extracted_by_worker": true
+      },
+      "question_uid": "e3f950d8-a6c7-4057-9044-91a971d6abb2"
+    },
+    {
+      "id": "80e1dda8-d36c-4233-9c24-175f1147fab9",
+      "academy_id": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677",
+      "document_id": "1026558d-a6a6-4943-bae2-6eed11710288",
+      "extract_job_id": "9b7f64f8-14ec-4063-8b66-962ea6a59d5d",
+      "source_page": 5,
+      "source_order": 15,
+      "question_number": "15",
+      "question_type": "서술형",
+      "stem": "두 분수 $\\frac{27}{14}, \\frac{63}{20}$ 의 어느 것에 곱해도 항상 자연수가 되게 하는 가장 작은 기약분수를 구하시오.",
+      "choices": [],
+      "figure_refs": [],
+      "equations": [
+        {
+          "raw": "{27} over {14}",
+          "latex": "\\frac{27}{14}",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "{63} over {20}`",
+          "latex": "\\frac{63}{20}",
+          "mathml": "",
+          "confidence": 0.82
+        }
+      ],
+      "source_anchors": {
+        "section": 0,
+        "line_end": 279,
+        "line_start": 276,
+        "page_weight": 1.8,
+        "page_capacity": 4,
+        "page_estimated": true
+      },
+      "confidence": 0.85,
+      "flags": [],
+      "is_checked": false,
+      "reviewed_by": null,
+      "reviewed_at": null,
+      "reviewer_notes": "",
+      "meta": {
+        "vlm": {
+          "flags": [],
+          "model": "gemini-3.1-pro-preview",
+          "confidence": "high",
+          "source_page": 3,
+          "overwritten_at": "2026-04-19T01:11:08.290Z",
+          "tables_described": [],
+          "uncertain_fields": [],
+          "figures_described": []
+        },
+        "answer_key": "\\frac{140}{9}",
+        "score_point": 10,
+        "answer_parts": [],
+        "parse_version": "v1",
+        "stemLineAligns": [
+          "left",
+          "right",
+          "left"
+        ],
+        "allow_objective": true,
+        "contains_figure": false,
+        "is_set_question": false,
+        "source_patterns": [
+          "implicit_after_endnote",
+          "score_annotation",
+          "endnote_answer_hint"
+        ],
+        "allow_subjective": true,
+        "stem_line_aligns": [
+          "left",
+          "right",
+          "left"
+        ],
+        "contains_equation": true,
+        "subjective_answer": "\\frac{140}{9}",
+        "objective_generated": true,
+        "objective_answer_key": "③"
+      },
+      "created_at": "2026-04-18T16:19:02.022192+00:00",
+      "updated_at": "2026-04-19T01:11:09.854689+00:00",
+      "allow_objective": false,
+      "allow_subjective": true,
+      "objective_choices": [],
+      "objective_answer_key": "",
+      "subjective_answer": "140/9",
+      "objective_generated": false,
+      "curriculum_code": "",
+      "source_type_code": "",
+      "course_label": "",
+      "grade_label": "",
+      "exam_year": null,
+      "semester_label": "",
+      "exam_term_label": "",
+      "school_name": "",
+      "publisher_name": "",
+      "material_name": "",
+      "classification_detail": {
+        "extracted_by_worker": true
+      },
+      "question_uid": "888168b3-cd82-4147-a53b-d7bf24254eb5"
+    },
+    {
+      "id": "77e2944f-f8e0-4acc-9e7f-06be19aa8b78",
+      "academy_id": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677",
+      "document_id": "1026558d-a6a6-4943-bae2-6eed11710288",
+      "extract_job_id": "9b7f64f8-14ec-4063-8b66-962ea6a59d5d",
+      "source_page": 6,
+      "source_order": 17,
+      "question_number": "17",
+      "question_type": "서술형",
+      "stem": "다음 그림에서 아래쪽의 수가 위쪽에 연결된 두 수의 곱일 때, $a \\times b - c$의 값을 구하시오.\n[문단]\n[그림]",
+      "choices": [],
+      "figure_refs": [
+        "다음 그림에서 아래쪽의 수가 위쪽에 연결된 두 수의 곱일 때, a \\times b-c의 값을 구하시오.",
+        "[그림]"
+      ],
+      "equations": [
+        {
+          "raw": "a times b-c`",
+          "latex": "a \\times b-c",
+          "mathml": "",
+          "confidence": 0.82
+        }
+      ],
+      "source_anchors": {
+        "section": 0,
+        "line_end": 289,
+        "line_start": 284,
+        "page_weight": 1.8,
+        "page_capacity": 4,
+        "page_estimated": true
+      },
+      "confidence": 0.9,
+      "flags": [
+        "contains_figure"
+      ],
+      "is_checked": false,
+      "reviewed_by": null,
+      "reviewed_at": null,
+      "reviewer_notes": "",
+      "meta": {
+        "vlm": {
+          "flags": [
+            "contains_figure"
+          ],
+          "model": "gemini-3.1-pro-preview",
+          "confidence": "high",
+          "source_page": 3,
+          "overwritten_at": "2026-04-19T01:11:08.290Z",
+          "tables_described": [],
+          "uncertain_fields": [],
+          "figures_described": [
+            {
+              "placement": "below_stem",
+              "description": "피라미드 형태의 블록 그림"
+            }
+          ]
+        },
+        "answer_key": "36",
+        "score_point": 10,
+        "answer_parts": [],
+        "figure_assets": [
+          {
+            "id": "61104e73-1634-4ec0-a5b1-eb0bcbd42d79",
+            "path": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/1026558d-a6a6-4943-bae2-6eed11710288/77e2944f-f8e0-4acc-9e7f-06be19aa8b78/61104e73-1634-4ec0-a5b1-eb0bcbd42d79.png",
+            "model": "gemini-2.5-flash-image",
+            "bucket": "problem-previews",
+            "source": "source_reference",
+            "status": "copied_from_source",
+            "approved": false,
+            "provider": "gemini",
+            "mime_type": "image/png",
+            "confidence": 0.98,
+            "created_at": "2026-04-18T16:19:11.786Z",
+            "figure_index": 1,
+            "reference_count": 1,
+            "reference_entry": "BinData/image5.png",
+            "review_required": true,
+            "requested_min_side_px": 3072
+          }
+        ],
+        "figure_layout": {
+          "items": [
+            {
+              "anchor": "center",
+              "widthEm": 20,
+              "assetKey": "idx:1",
+              "position": "below-stem",
+              "offsetXEm": 0,
+              "offsetYEm": 0
+            }
+          ],
+          "groups": [],
+          "version": 1
+        },
+        "parse_version": "v1",
+        "stemLineAligns": [
+          "left",
+          "right",
+          "center",
+          "center",
+          "left"
+        ],
+        "allow_objective": true,
+        "contains_figure": true,
+        "is_set_question": false,
+        "source_patterns": [
+          "implicit_after_endnote",
+          "figure_line",
+          "score_annotation",
+          "figure_line",
+          "endnote_answer_hint"
+        ],
+        "allow_subjective": true,
+        "stem_line_aligns": [
+          "left",
+          "right",
+          "center",
+          "center",
+          "left"
+        ],
+        "contains_equation": true,
+        "subjective_answer": "36",
+        "objective_generated": true,
+        "objective_answer_key": "④",
+        "figure_review_required": true,
+        "figure_last_generated_at": "2026-04-18T16:19:11.786Z"
+      },
+      "created_at": "2026-04-18T16:19:02.022192+00:00",
+      "updated_at": "2026-04-19T01:11:09.925446+00:00",
+      "allow_objective": false,
+      "allow_subjective": true,
+      "objective_choices": [],
+      "objective_answer_key": "",
+      "subjective_answer": "36",
+      "objective_generated": false,
+      "curriculum_code": "",
+      "source_type_code": "",
+      "course_label": "",
+      "grade_label": "",
+      "exam_year": null,
+      "semester_label": "",
+      "exam_term_label": "",
+      "school_name": "",
+      "publisher_name": "",
+      "material_name": "",
+      "classification_detail": {
+        "extracted_by_worker": true
+      },
+      "question_uid": "9bbb3e29-2a7d-4941-8969-1f41f3cd753c"
+    },
+    {
+      "id": "e9b66c59-9e4d-47cd-b1cc-d7e2c9190ead",
+      "academy_id": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677",
+      "document_id": "1026558d-a6a6-4943-bae2-6eed11710288",
+      "extract_job_id": "9b7f64f8-14ec-4063-8b66-962ea6a59d5d",
+      "source_page": 1,
+      "source_order": 4,
+      "question_number": "4",
+      "question_type": "객관식",
+      "stem": "$3$장의 카드 중 $2$장을 골라 카드에 적힌 두 수의 최대공약수를 구할 때, 두 수의 최대공약수 중 가장 작은 것은?\n[문단]\n[그림] [그림] [그림]",
+      "choices": [
+        {
+          "text": "2",
+          "label": "①"
+        },
+        {
+          "text": "4",
+          "label": "②"
+        },
+        {
+          "text": "6",
+          "label": "③"
+        },
+        {
+          "text": "8",
+          "label": "④"
+        },
+        {
+          "text": "10",
+          "label": "⑤"
+        }
+      ],
+      "figure_refs": [
+        "[그림] [그림] [그림]"
+      ],
+      "equations": [
+        {
+          "raw": "3`",
+          "latex": "3",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "2`",
+          "latex": "2",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "2",
+          "latex": "2",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "4",
+          "latex": "4",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "6",
+          "latex": "6",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "8",
+          "latex": "8",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "10",
+          "latex": "10",
+          "mathml": "",
+          "confidence": 0.82
+        }
+      ],
+      "source_anchors": {
+        "section": 0,
+        "line_end": 55,
+        "line_start": 46,
+        "page_weight": 1,
+        "page_capacity": 4,
+        "page_estimated": true
+      },
+      "confidence": 1,
+      "flags": [
+        "contains_figure"
+      ],
+      "is_checked": false,
+      "reviewed_by": null,
+      "reviewed_at": null,
+      "reviewer_notes": "",
+      "meta": {
+        "vlm": {
+          "flags": [
+            "contains_figure"
+          ],
+          "model": "gemini-3.1-pro-preview",
+          "confidence": "high",
+          "source_page": 1,
+          "overwritten_at": "2026-04-19T01:11:08.290Z",
+          "tables_described": [],
+          "uncertain_fields": [],
+          "figures_described": [
+            {
+              "placement": "below_stem",
+              "description": "세 장의 카드에 각각 2^3 x 3^2 x 7, 2^3 x 3 x 5, 2 x 3 x 7^2 이 적혀 있음"
+            }
+          ]
+        },
+        "answer_key": "③",
+        "score_point": 4,
+        "answer_parts": [],
+        "figure_assets": [
+          {
+            "id": "c22081ec-b9c3-42a7-8289-f8ec192eb34e:1",
+            "path": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/1026558d-a6a6-4943-bae2-6eed11710288/e9b66c59-9e4d-47cd-b1cc-d7e2c9190ead/c22081ec-b9c3-42a7-8289-f8ec192eb34e_1.png",
+            "model": "gemini-2.5-flash-image",
+            "bucket": "problem-previews",
+            "source": "source_reference",
+            "status": "copied_from_source",
+            "approved": false,
+            "provider": "gemini",
+            "mime_type": "image/png",
+            "confidence": 0.98,
+            "created_at": "2026-04-18T16:19:05.404Z",
+            "figure_index": 1,
+            "reference_count": 3,
+            "reference_entry": "BinData/image1.png",
+            "review_required": true,
+            "requested_min_side_px": 3072
+          },
+          {
+            "id": "c22081ec-b9c3-42a7-8289-f8ec192eb34e:2",
+            "path": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/1026558d-a6a6-4943-bae2-6eed11710288/e9b66c59-9e4d-47cd-b1cc-d7e2c9190ead/c22081ec-b9c3-42a7-8289-f8ec192eb34e_2.png",
+            "model": "gemini-2.5-flash-image",
+            "bucket": "problem-previews",
+            "source": "source_reference",
+            "status": "copied_from_source",
+            "approved": false,
+            "provider": "gemini",
+            "mime_type": "image/png",
+            "confidence": 0.98,
+            "created_at": "2026-04-18T16:19:05.404Z",
+            "figure_index": 2,
+            "reference_count": 3,
+            "reference_entry": "BinData/image2.png",
+            "review_required": true,
+            "requested_min_side_px": 3072
+          },
+          {
+            "id": "c22081ec-b9c3-42a7-8289-f8ec192eb34e:3",
+            "path": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/1026558d-a6a6-4943-bae2-6eed11710288/e9b66c59-9e4d-47cd-b1cc-d7e2c9190ead/c22081ec-b9c3-42a7-8289-f8ec192eb34e_3.png",
+            "model": "gemini-2.5-flash-image",
+            "bucket": "problem-previews",
+            "source": "source_reference",
+            "status": "copied_from_source",
+            "approved": false,
+            "provider": "gemini",
+            "mime_type": "image/png",
+            "confidence": 0.98,
+            "created_at": "2026-04-18T16:19:05.404Z",
+            "figure_index": 3,
+            "reference_count": 3,
+            "reference_entry": "BinData/image3.png",
+            "review_required": true,
+            "requested_min_side_px": 3072
+          }
+        ],
+        "figure_layout": {
+          "items": [
+            {
+              "anchor": "center",
+              "widthEm": 12,
+              "assetKey": "idx:1",
+              "position": "below-stem",
+              "offsetXEm": 0,
+              "offsetYEm": 0
+            },
+            {
+              "anchor": "center",
+              "widthEm": 12,
+              "assetKey": "idx:2",
+              "position": "below-stem",
+              "offsetXEm": 0,
+              "offsetYEm": 0
+            },
+            {
+              "anchor": "center",
+              "widthEm": 12,
+              "assetKey": "idx:3",
+              "position": "below-stem",
+              "offsetXEm": 0,
+              "offsetYEm": 0
+            }
+          ],
+          "groups": [],
+          "version": 1
+        },
+        "parse_version": "v1",
+        "stemLineAligns": [
+          "left",
+          "right",
+          "center",
+          "center",
+          "left",
+          "left",
+          "left"
+        ],
+        "allow_objective": true,
+        "contains_figure": true,
+        "is_set_question": false,
+        "source_patterns": [
+          "implicit_after_endnote",
+          "score_annotation",
+          "figure_line",
+          "choice_inline_circled",
+          "choice_inline_circled",
+          "endnote_answer_hint"
+        ],
+        "allow_subjective": true,
+        "preview_enriched": true,
+        "stem_line_aligns": [
+          "left",
+          "right",
+          "center",
+          "center",
+          "left",
+          "left",
+          "left"
+        ],
+        "contains_equation": true,
+        "subjective_answer": "6",
+        "objective_generated": false,
+        "objective_answer_key": "③",
+        "figure_review_required": true,
+        "figure_last_generated_at": "2026-04-18T16:19:05.404Z"
+      },
+      "created_at": "2026-04-18T16:19:02.022192+00:00",
+      "updated_at": "2026-04-19T01:11:09.423533+00:00",
+      "allow_objective": true,
+      "allow_subjective": false,
+      "objective_choices": [
+        {
+          "text": "$2$",
+          "label": "①"
+        },
+        {
+          "text": "$4$",
+          "label": "②"
+        },
+        {
+          "text": "$6$",
+          "label": "③"
+        },
+        {
+          "text": "$8$",
+          "label": "④"
+        },
+        {
+          "text": "$10$",
+          "label": "⑤"
+        }
+      ],
+      "objective_answer_key": "③",
+      "subjective_answer": "",
+      "objective_generated": false,
+      "curriculum_code": "",
+      "source_type_code": "",
+      "course_label": "",
+      "grade_label": "",
+      "exam_year": null,
+      "semester_label": "",
+      "exam_term_label": "",
+      "school_name": "",
+      "publisher_name": "",
+      "material_name": "",
+      "classification_detail": {
+        "extracted_by_worker": true
+      },
+      "question_uid": "c752489e-d935-4ac6-abfd-99126d6e1868"
+    },
+    {
+      "id": "15e080c6-ebe6-47f0-ae0c-93c9c16c0319",
+      "academy_id": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677",
+      "document_id": "1026558d-a6a6-4943-bae2-6eed11710288",
+      "extract_job_id": "9b7f64f8-14ec-4063-8b66-962ea6a59d5d",
+      "source_page": 3,
+      "source_order": 9,
+      "question_number": "9",
+      "question_type": "객관식",
+      "stem": "다음 표에서 가로, 세로, 대각선에 있는 세 수의 합이 모두 같을 때, $a+b+c+d+e$ 의 값은?\n[문단]\n[그림]",
+      "choices": [
+        {
+          "text": "-11",
+          "label": "①"
+        },
+        {
+          "text": "-9",
+          "label": "②"
+        },
+        {
+          "text": "-7",
+          "label": "③"
+        },
+        {
+          "text": "-5",
+          "label": "④"
+        },
+        {
+          "text": "-3",
+          "label": "⑤"
+        }
+      ],
+      "figure_refs": [
+        "다음 표에서 가로, 세로, 대각선에 있는 세 수의 합이 모두 같을 때, a+b+c+d+e의 값은?",
+        "[그림]"
+      ],
+      "equations": [
+        {
+          "raw": "a+b+c+d+e`",
+          "latex": "a+b+c+d+e",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "-11",
+          "latex": "-11",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "-9",
+          "latex": "-9",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "-7",
+          "latex": "-7",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "-5",
+          "latex": "-5",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "-3",
+          "latex": "-3",
+          "mathml": "",
+          "confidence": 0.82
+        }
+      ],
+      "source_anchors": {
+        "section": 0,
+        "line_end": 207,
+        "line_start": 198,
+        "page_weight": 1,
+        "page_capacity": 4,
+        "page_estimated": true
+      },
+      "confidence": 1,
+      "flags": [
+        "contains_table"
+      ],
+      "is_checked": false,
+      "reviewed_by": null,
+      "reviewed_at": null,
+      "reviewer_notes": "",
+      "meta": {
+        "vlm": {
+          "flags": [
+            "contains_table"
+          ],
+          "model": "gemini-3.1-pro-preview",
+          "confidence": "high",
+          "source_page": 2,
+          "overwritten_at": "2026-04-19T01:11:08.290Z",
+          "tables_described": [
+            {
+              "cols": 3,
+              "rows": 3,
+              "placement": "below_stem",
+              "description": "3x3 마방진 형태의 표",
+              "has_diagonal_cell": false
+            }
+          ],
+          "uncertain_fields": [],
+          "figures_described": []
+        },
+        "answer_key": "①",
+        "score_point": 4,
+        "answer_parts": [],
+        "figure_assets": [
+          {
+            "id": "6ce31d3c-cddd-409a-b36b-2cdeead0d1c4",
+            "path": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/1026558d-a6a6-4943-bae2-6eed11710288/15e080c6-ebe6-47f0-ae0c-93c9c16c0319/6ce31d3c-cddd-409a-b36b-2cdeead0d1c4.png",
+            "model": "gemini-2.5-flash-image",
+            "bucket": "problem-previews",
+            "source": "source_reference",
+            "status": "copied_from_source",
+            "approved": false,
+            "provider": "gemini",
+            "mime_type": "image/png",
+            "confidence": 0.98,
+            "created_at": "2026-04-18T16:19:05.779Z",
+            "figure_index": 1,
+            "reference_count": 1,
+            "reference_entry": "BinData/image5.png",
+            "review_required": true,
+            "requested_min_side_px": 3072
+          }
+        ],
+        "figure_layout": {
+          "items": [
+            {
+              "anchor": "center",
+              "widthEm": 20,
+              "assetKey": "idx:1",
+              "position": "below-stem",
+              "offsetXEm": 0,
+              "offsetYEm": 0
+            }
+          ],
+          "groups": [],
+          "version": 1
+        },
+        "parse_version": "v1",
+        "stemLineAligns": [
+          "left",
+          "right",
+          "center",
+          "center",
+          "left",
+          "left",
+          "left"
+        ],
+        "allow_objective": true,
+        "contains_figure": true,
+        "is_set_question": false,
+        "source_patterns": [
+          "implicit_after_endnote",
+          "figure_line",
+          "score_annotation",
+          "figure_line",
+          "choice_inline_circled",
+          "choice_inline_circled",
+          "endnote_answer_hint"
+        ],
+        "allow_subjective": true,
+        "preview_enriched": true,
+        "stem_line_aligns": [
+          "left",
+          "right",
+          "center",
+          "center",
+          "left",
+          "left",
+          "left"
+        ],
+        "contains_equation": true,
+        "subjective_answer": "-11",
+        "objective_generated": false,
+        "objective_answer_key": "①",
+        "figure_review_required": true,
+        "figure_last_generated_at": "2026-04-18T16:19:05.779Z"
+      },
+      "created_at": "2026-04-18T16:19:02.022192+00:00",
+      "updated_at": "2026-04-19T01:11:09.627908+00:00",
+      "allow_objective": true,
+      "allow_subjective": false,
+      "objective_choices": [
+        {
+          "text": "$-11$",
+          "label": "①"
+        },
+        {
+          "text": "$-9$",
+          "label": "②"
+        },
+        {
+          "text": "$-7$",
+          "label": "③"
+        },
+        {
+          "text": "$-5$",
+          "label": "④"
+        },
+        {
+          "text": "$-3$",
+          "label": "⑤"
+        }
+      ],
+      "objective_answer_key": "①",
+      "subjective_answer": "",
+      "objective_generated": false,
+      "curriculum_code": "",
+      "source_type_code": "",
+      "course_label": "",
+      "grade_label": "",
+      "exam_year": null,
+      "semester_label": "",
+      "exam_term_label": "",
+      "school_name": "",
+      "publisher_name": "",
+      "material_name": "",
+      "classification_detail": {
+        "extracted_by_worker": true
+      },
+      "question_uid": "e4882af6-15ac-44ee-80f8-6d47c83de00b"
+    },
+    {
+      "id": "d2371f62-12d4-4b95-818f-77600ff61208",
+      "academy_id": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677",
+      "document_id": "1026558d-a6a6-4943-bae2-6eed11710288",
+      "extract_job_id": "9b7f64f8-14ec-4063-8b66-962ea6a59d5d",
+      "source_page": 3,
+      "source_order": 10,
+      "question_number": "10",
+      "question_type": "객관식",
+      "stem": "[그림1]은 두 수를 넣으면 일정한 규칙에 따라 어떤 결과가 나오는 장치를 나타낸 것이다. [그림2]에서도 같은 규칙에 따라 결과가 나온다고 할 때, ㉠에 알맞은 수는?\n[문단]\n[그림] [그림]",
+      "choices": [
+        {
+          "text": "9",
+          "label": "①"
+        },
+        {
+          "text": "11",
+          "label": "②"
+        },
+        {
+          "text": "12",
+          "label": "③"
+        },
+        {
+          "text": "13",
+          "label": "④"
+        },
+        {
+          "text": "15",
+          "label": "⑤"
+        }
+      ],
+      "figure_refs": [
+        "[그림 1]은 두 수를 넣으면 일정한 규칙에 따라 어떤 결과가 나오는 장치를 나타낸 것이다. [그림 2]에서도 같은 규칙에 따라 결과가 나온다고 할 때, ㉠에 알맞은 수는?",
+        "[표행]",
+        "[표셀]",
+        "[그림] [그림]",
+        "[표셀]",
+        "[그림]",
+        "[표행]",
+        "[표셀]",
+        "[그림 1]",
+        "[표셀]",
+        "[그림 2]"
+      ],
+      "equations": [
+        {
+          "raw": "1",
+          "latex": "1",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "2",
+          "latex": "2",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "9",
+          "latex": "9",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "11",
+          "latex": "11",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "12",
+          "latex": "12",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "13",
+          "latex": "13",
+          "mathml": "",
+          "confidence": 0.82
+        },
+        {
+          "raw": "15",
+          "latex": "15",
+          "mathml": "",
+          "confidence": 0.82
+        }
+      ],
+      "source_anchors": {
+        "section": 0,
+        "line_end": 239,
+        "line_start": 208,
+        "page_weight": 1,
+        "page_capacity": 4,
+        "page_estimated": true
+      },
+      "confidence": 1,
+      "flags": [
+        "contains_figure"
+      ],
+      "is_checked": false,
+      "reviewed_by": null,
+      "reviewed_at": null,
+      "reviewer_notes": "",
+      "meta": {
+        "vlm": {
+          "flags": [
+            "contains_figure"
+          ],
+          "model": "gemini-3.1-pro-preview",
+          "confidence": "high",
+          "source_page": 2,
+          "overwritten_at": "2026-04-19T01:11:08.290Z",
+          "tables_described": [],
+          "uncertain_fields": [],
+          "figures_described": [
+            {
+              "placement": "below_stem",
+              "description": "두 수를 입력받아 하나의 결과를 출력하는 장치 그림"
+            }
+          ]
+        },
+        "answer_key": "①",
+        "score_point": 4,
+        "answer_parts": [],
+        "figure_assets": [
+          {
+            "id": "425670eb-d4f9-4e9a-8365-c9a08f592742:1",
+            "path": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/1026558d-a6a6-4943-bae2-6eed11710288/d2371f62-12d4-4b95-818f-77600ff61208/425670eb-d4f9-4e9a-8365-c9a08f592742_1.png",
+            "model": "gemini-2.5-flash-image",
+            "bucket": "problem-previews",
+            "source": "source_reference",
+            "status": "copied_from_source",
+            "approved": false,
+            "provider": "gemini",
+            "mime_type": "image/png",
+            "confidence": 0.98,
+            "created_at": "2026-04-18T16:19:11.381Z",
+            "figure_index": 1,
+            "reference_count": 2,
+            "reference_entry": "BinData/image6.png",
+            "review_required": true,
+            "requested_min_side_px": 3072
+          },
+          {
+            "id": "425670eb-d4f9-4e9a-8365-c9a08f592742:2",
+            "path": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/1026558d-a6a6-4943-bae2-6eed11710288/d2371f62-12d4-4b95-818f-77600ff61208/425670eb-d4f9-4e9a-8365-c9a08f592742_2.png",
+            "model": "gemini-2.5-flash-image",
+            "bucket": "problem-previews",
+            "source": "source_reference",
+            "status": "copied_from_source",
+            "approved": false,
+            "provider": "gemini",
+            "mime_type": "image/png",
+            "confidence": 0.98,
+            "created_at": "2026-04-18T16:19:11.381Z",
+            "figure_index": 2,
+            "reference_count": 2,
+            "reference_entry": "BinData/image7.png",
+            "review_required": true,
+            "requested_min_side_px": 3072
+          }
+        ],
+        "figure_layout": {
+          "items": [
+            {
+              "anchor": "center",
+              "widthEm": 12,
+              "assetKey": "idx:1",
+              "position": "below-stem",
+              "offsetXEm": 0,
+              "offsetYEm": 0
+            },
+            {
+              "anchor": "center",
+              "widthEm": 12,
+              "assetKey": "idx:2",
+              "position": "below-stem",
+              "offsetXEm": 0,
+              "offsetYEm": 0
+            }
+          ],
+          "groups": [
+            {
+              "gap": 0.5,
+              "type": "horizontal",
+              "members": [
+                "idx:1",
+                "idx:2"
+              ]
+            }
+          ],
+          "version": 1
+        },
+        "parse_version": "v1",
+        "stemLineAligns": [
+          "left",
+          "right",
+          "center",
+          "center",
+          "left",
+          "left",
+          "left",
+          "left",
+          "center",
+          "center",
+          "left",
+          "left",
+          "center",
+          "center",
+          "left",
+          "left",
+          "left",
+          "left",
+          "center",
+          "center",
+          "left",
+          "left",
+          "center",
+          "center",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left"
+        ],
+        "allow_objective": true,
+        "contains_figure": true,
+        "is_set_question": false,
+        "source_patterns": [
+          "implicit_after_endnote",
+          "figure_line",
+          "score_annotation",
+          "figure_line",
+          "figure_line",
+          "figure_line",
+          "figure_line",
+          "figure_line",
+          "figure_line",
+          "figure_line",
+          "figure_line",
+          "figure_line",
+          "figure_line",
+          "choice_inline_circled",
+          "choice_inline_circled",
+          "endnote_answer_hint"
+        ],
+        "allow_subjective": true,
+        "stem_line_aligns": [
+          "left",
+          "right",
+          "center",
+          "center",
+          "left",
+          "left",
+          "left",
+          "left",
+          "center",
+          "center",
+          "left",
+          "left",
+          "center",
+          "center",
+          "left",
+          "left",
+          "left",
+          "left",
+          "center",
+          "center",
+          "left",
+          "left",
+          "center",
+          "center",
+          "left",
+          "left",
+          "left",
+          "left",
+          "left"
+        ],
+        "contains_equation": true,
+        "subjective_answer": "9",
+        "objective_generated": false,
+        "objective_answer_key": "①",
+        "figure_review_required": true,
+        "figure_last_generated_at": "2026-04-18T16:19:11.381Z"
+      },
+      "created_at": "2026-04-18T16:19:02.022192+00:00",
+      "updated_at": "2026-04-19T01:11:09.666284+00:00",
+      "allow_objective": true,
+      "allow_subjective": false,
+      "objective_choices": [
+        {
+          "text": "$9$",
+          "label": "①"
+        },
+        {
+          "text": "$11$",
+          "label": "②"
+        },
+        {
+          "text": "$12$",
+          "label": "③"
+        },
+        {
+          "text": "$13$",
+          "label": "④"
+        },
+        {
+          "text": "$15$",
+          "label": "⑤"
+        }
+      ],
+      "objective_answer_key": "①",
+      "subjective_answer": "",
+      "objective_generated": false,
+      "curriculum_code": "",
+      "source_type_code": "",
+      "course_label": "",
+      "grade_label": "",
+      "exam_year": null,
+      "semester_label": "",
+      "exam_term_label": "",
+      "school_name": "",
+      "publisher_name": "",
+      "material_name": "",
+      "classification_detail": {
+        "extracted_by_worker": true
+      },
+      "question_uid": "ee42b8df-7de9-4472-a220-930d9836a588"
+    }
+  ]
+}

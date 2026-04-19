@@ -22,8 +22,86 @@ const BOGI_MARKER_RE = /\[박스시작\]|\[박스끝\]/g;
 const SUBQ_MARKER_LINE_RE = /^\s*\[\s*소문항\s*\d+\s*\]\s*$/;
 const FIGURE_MARKER_RE = /\[(?:그림|도형|도표)\]/g;
 
+// tabular 셀을 안전한 수식/텍스트 모드로 변환.
+//   - "\text{...}" 셀: 그대로 (LaTeX 가 tabular 바깥 mode 에서도 문제없이 처리)
+//   - "$...$"   셀: 그대로
+//   - LaTeX 백슬래시 명령( \times, \frac, \pm, \leq ... ) 이 들어있는 셀: "$...$" 로 감싼다
+//   - 한글이 포함된 셀: "\text{...}" 로 감싼다 (tabular bare 한글은 XeTeX 에서도 안전하지만
+//     Math-ISH 주변 셀과 시각 정렬을 맞추기 위해 동일 처리).
+//   - 빈 셀 / 단순 숫자·기호 셀: 그대로 둠.
+function autoWrapTabularCells(rawTexBlock) {
+  return rawTexBlock.replace(/\\begin\{tabular\}(\{[^}]*\})([\s\S]*?)\\end\{tabular\}/g, (_, colSpec, body) => {
+    const rows = body.split(/\\\\/); // 행 구분은 \\ (LaTeX)
+    const patchedRows = rows.map((row) => {
+      // tabular 맨 끝의 공백/개행 row 는 그대로.
+      if (!row.trim()) return row;
+      // \hline 같은 단독 행은 그대로.
+      if (/^\s*\\hline\s*$/.test(row)) return row;
+      const cells = splitTabularRowCells(row);
+      const patchedCells = cells.map((cellRaw) => {
+        // 셀 앞뒤 공백/개행은 보존.
+        const leading = cellRaw.match(/^\s*/)[0];
+        const trailing = cellRaw.match(/\s*$/)[0];
+        let inner = cellRaw.slice(leading.length, cellRaw.length - trailing.length);
+
+        // 행 처음 셀 앞에 \hline 이 붙어 있을 수 있음 → 분리 보존.
+        const hlineMatch = inner.match(/^((?:\\hline\s*)+)([\s\S]*)$/);
+        let hlinePrefix = '';
+        if (hlineMatch) {
+          hlinePrefix = hlineMatch[1];
+          inner = hlineMatch[2];
+        }
+
+        if (!inner.trim()) return leading + hlinePrefix + inner + trailing;
+
+        // 이미 $...$ 혹은 \text{...} 로 감싸진 셀: 그대로.
+        if (/^\s*\$[\s\S]*\$\s*$/.test(inner)) return leading + hlinePrefix + inner + trailing;
+        if (/^\s*\\text\{[\s\S]*\}\s*$/.test(inner)) return leading + hlinePrefix + inner + trailing;
+
+        const hasLatexCmd = /\\[a-zA-Z]+/.test(inner);
+        const hasHangul = /[\uAC00-\uD7A3]/.test(inner);
+        if (hasLatexCmd) return leading + hlinePrefix + `$${inner.trim()}$` + trailing;
+        if (hasHangul) return leading + hlinePrefix + `\\text{${inner.trim()}}` + trailing;
+        // 나머지(숫자/영문 알파벳/+,- 등 단순 기호) 도 수식 모드로 감싼다 → 서체 일관성.
+        return leading + hlinePrefix + `$${inner.trim()}$` + trailing;
+      });
+      return patchedCells.join('&');
+    });
+    return `\\begin{tabular}${colSpec}${patchedRows.join('\\\\')}\\end{tabular}`;
+  });
+}
+
+function splitTabularRowCells(row) {
+  // '&' 로 분리하되 중괄호 깊이를 추적해 \text{a & b} 같은 내부 & 는 분리하지 않는다.
+  const cells = [];
+  let depth = 0;
+  let buf = '';
+  for (let i = 0; i < row.length; i += 1) {
+    const ch = row[i];
+    if (ch === '{') depth += 1;
+    else if (ch === '}') depth = Math.max(0, depth - 1);
+    if (ch === '&' && depth === 0) {
+      cells.push(buf);
+      buf = '';
+    } else {
+      buf += ch;
+    }
+  }
+  cells.push(buf);
+  return cells;
+}
+
 const BOX_START_RE = /\[박스시작\]/;
 const BOX_END_RE = /\[박스끝\]/;
+// VLM 추출 경로에서 넣는 "보기" 박스 경계 마커. 기존 HWPX 파이프라인은 `<보기>` 기호가 있는
+// [박스시작]...[박스끝] 을 bogi 로 분류하지만, VLM 경로는 [보기시작]/[보기끝] 한 쌍으로
+// 내려보낸다. 전처리 단계에서 [박스시작]+<보기>/[박스끝] 로 정규화해 기존 분기를 재사용한다.
+const BOGI_MARKER_START_RE = /\[보기시작\]/g;
+const BOGI_MARKER_END_RE = /\[보기끝\]/g;
+// VLM 추출 경로에서 넣는 "이미 LaTeX tabular 로 재현된 표" 경계 마커.
+// parseStemSegments 가 이 마커를 만나면 사이 내용을 그대로 raw LaTeX 블록으로 내보낸다.
+const RAW_TABLE_START_RE = /\[표시작\]/;
+const RAW_TABLE_END_RE = /\[표끝\]/;
 const BOGI_RE = /<\s*보\s*기\s*>/;
 const BOGI_ITEM_SPLIT_RE =
   /(?=(?:[ㄱ-ㅎ]\.\s|(?:\(|（)\s*[가나다라마바사아자차카타파하]\s*(?:\)|）)\s))/;
@@ -34,6 +112,29 @@ function stripMarkers(text) {
   return String(text || '')
     .replace(PARAGRAPH_MARKER_RE, ' ')
     .replace(BOGI_MARKER_RE, '');
+}
+
+// 방어적 전처리: 외부에서 흘러들어온 MathJax 스타일 수식 구분자(\(...\), \[...\], $...$, $$...$$)
+// 를 모두 "구분자만 벗기고 내부 내용은 그대로" 남긴다.
+//
+// 배경: 이 렌더러의 smartTexLine 은 한국어가 아닌 모든 연속 구간을 자동으로
+//   $\displaystyle ...$ 로 감싼다. 그래서 stem/choice 본문에 이미 $...$ 나 \(...\)
+//   가 들어 있으면 이중 감싸기가 발생해 xelatex 에서 "Bad math environment" 로 실패한다.
+//   DB 에 들어오는 정상 경로(HWPX 추출기)는 구분자 없이 raw LaTeX 명령만 남기므로
+//   이 전처리는 "그 규약을 지키지 않은 입력을 한 번 정리" 하는 역할.
+function stripMathDelimiters(text) {
+  let s = String(text || '');
+  if (!s) return s;
+  // "\\(" → "\(" / "\\[" → "\[" (오탈자 방어)
+  s = s.replace(/\\\\\(/g, '\\(').replace(/\\\\\)/g, '\\)');
+  s = s.replace(/\\\\\[/g, '\\[').replace(/\\\\\]/g, '\\]');
+  // \[...\] → inner / \(...\) → inner
+  s = s.replace(/\\\[([\s\S]*?)\\\]/g, (_, inner) => inner);
+  s = s.replace(/\\\(([\s\S]*?)\\\)/g, (_, inner) => inner);
+  // $$...$$ → inner / $...$ → inner (개행 미포함, 너무 긴 매치 방지)
+  s = s.replace(/\$\$([\s\S]*?)\$\$/g, (_, inner) => inner);
+  s = s.replace(/\$([^$\n]+?)\$/g, (_, inner) => inner);
+  return s;
 }
 
 function escapeLatexText(text) {
@@ -120,6 +221,13 @@ function normalizeMathSegment(mathContent) {
   out = out.replace(/×/g, '\\times');
   out = out.replace(/÷/g, '\\div');
 
+  // 분수 크기 일관성: \frac 은 주변 math style(text/display) 에 따라 크기가 바뀐다.
+  //   본문은 $\displaystyle ...$ 로 감싸지만, 중첩 분수(분자/분모 안의 \frac)는
+  //   자동으로 \textstyle 로 축소되어 '큰 분수 안의 작은 분수' 가 생긴다.
+  //   → \dfrac 은 어느 컨텍스트에서도 강제 displaystyle 이므로 모든 \frac 을 \dfrac 로 통일.
+  //   이미 \dfrac 또는 \tfrac 로 명시된 경우는 건드리지 않는다.
+  out = out.replace(/\\frac(?![a-zA-Z])/g, '\\dfrac');
+
   // box{~~} (빈 박스) → 3:2 비율 직사각형 빈칸 네모.
   out = out.replace(/box\{~~\}/g, '\\mtemptybox{}');
   // DB 에 이미 들어가 있는 \boxed{\phantom{...}} 형태도 3:2 빈칸 네모로 치환.
@@ -146,7 +254,8 @@ function normalizeMathSegment(mathContent) {
 }
 
 function smartTexLine(text, equations) {
-  const clean = stripMarkers(text).trim();
+  // 외부 경로로 들어온 \(...\)/$...$ 이중 감싸기 방지를 위해 진입 시 한 번 벗긴다.
+  const clean = stripMathDelimiters(stripMarkers(text)).trim();
   if (!clean) return '';
 
   const lookup = buildEquationLookup(equations);
@@ -265,10 +374,19 @@ function renderStemTextLine(sub, equations) {
 /* ------------------------------------------------------------------ */
 
 function parseStemSegments(stem) {
-  const lines = stem.split('\n');
+  // VLM 이 보내는 [보기시작]/[보기끝] 을 기존 [박스시작]+<보기> 표기로 정규화.
+  //   [보기시작]          →  [박스시작]\n<보기>
+  //   [보기끝]            →  [박스끝]
+  // 이렇게 바꾸면 아래 기존 분기(BOGI_RE) 가 자연스럽게 bogi 세그먼트로 분류해 준다.
+  const normalizedStem = String(stem)
+    .replace(BOGI_MARKER_START_RE, '[박스시작]\n<보기>')
+    .replace(BOGI_MARKER_END_RE, '[박스끝]');
+  const lines = normalizedStem.split('\n');
   const segments = [];
   let inBox = false;
   let boxLines = [];
+  let inRawTable = false;
+  let rawTableLines = [];
   let textLines = [];
 
   function flushText() {
@@ -290,7 +408,44 @@ function parseStemSegments(stem) {
     boxLines = [];
   }
 
+  function flushRawTable() {
+    if (rawTableLines.length === 0) return;
+    segments.push({ type: 'raw_tabular', lines: [...rawTableLines] });
+    rawTableLines = [];
+  }
+
   for (const line of lines) {
+    // [표시작]/[표끝] 은 "VLM 이 이미 LaTeX tabular 를 써 둔" 구간. 그대로 통과시킨다.
+    if (!inRawTable && RAW_TABLE_START_RE.test(line)) {
+      flushText();
+      if (inBox) {
+        // 박스 내부에서 표 시작은 정상 경로가 아님 → 박스부터 닫는다.
+        inBox = false;
+        flushBox();
+      }
+      inRawTable = true;
+      const cleaned = line.replace(RAW_TABLE_START_RE, '').trim();
+      if (cleaned) rawTableLines.push(cleaned);
+      if (RAW_TABLE_END_RE.test(cleaned)) {
+        const idx = rawTableLines.length - 1;
+        if (idx >= 0) rawTableLines[idx] = rawTableLines[idx].replace(RAW_TABLE_END_RE, '').trim();
+        inRawTable = false;
+        flushRawTable();
+      }
+      continue;
+    }
+    if (inRawTable) {
+      if (RAW_TABLE_END_RE.test(line)) {
+        const cleaned = line.replace(RAW_TABLE_END_RE, '').trim();
+        if (cleaned) rawTableLines.push(cleaned);
+        inRawTable = false;
+        flushRawTable();
+      } else {
+        rawTableLines.push(line);
+      }
+      continue;
+    }
+
     const hasStart = BOX_START_RE.test(line);
     const hasEnd = BOX_END_RE.test(line);
 
@@ -325,6 +480,9 @@ function parseStemSegments(stem) {
     }
   }
 
+  if (inRawTable && rawTableLines.length > 0) {
+    segments.push({ type: 'raw_tabular', lines: [...rawTableLines] });
+  }
   if (inBox && boxLines.length > 0) {
     const hasTable = boxLines.some((l) => /^\[표행\]$/.test(l.trim()));
     if (hasTable) {
@@ -405,7 +563,15 @@ function renderBogiItems(lines, equations, replaceFigureMarkers = null) {
 }
 
 function renderBogiBoxLatex(lines, equations, replaceFigureMarkers = null) {
-  const content = renderBogiItems(lines, equations, replaceFigureMarkers);
+  let content = renderBogiItems(lines, equations, replaceFigureMarkers);
+  // 보기박스 본문에 "정렬 힌트가 될 글자" 가 전혀 없으면 가운데 정렬.
+  // (예: Q5 보기박스의 `-0.7, -\frac{6}{3}, 0, ...` 처럼 숫자/수식만 있는 케이스)
+  if (boxContentIsCenteredOnly(lines)) {
+    const cleaned = content
+      .replace(/\\noindent\s*/g, '')
+      .replace(/\\par\s*$/g, '');
+    content = `\\begin{center}${cleaned}\\end{center}`;
+  }
   return [
     '\\begin{tcolorbox}[',
     '  enhanced,',
@@ -486,30 +652,102 @@ function renderDecoLine(text, equations, replaceFigureMarkers = null) {
   return smartTexLine(withFigs, equations);
 }
 
+// 박스(보기/조건) 내용에 "정렬 힌트가 될 만한 글자" — 한글 낱자(문장부호 제외), ㄱㄴㄷ 라벨,
+// \bullet, (가)/(나) 라벨, ㄱ./ㄴ. 라벨 — 이 하나도 없으면 "가운데 정렬" 모드로 렌더.
+// 입력: 이미 flush 된 텍스트 라인(Array<string>). 마커(\[그림\] 등)는 무시하고 순수 본문만 본다.
+function boxContentIsCenteredOnly(lines) {
+  const joined = lines
+    .map((l) =>
+      String(l || '')
+        .replace(PARAGRAPH_MARKER_RE, ' ')
+        .replace(BOGI_RE, ''),
+    )
+    .join('\n')
+    .trim();
+  if (!joined) return false;
+  if (/[가-힣ㄱ-ㅎ]/.test(joined)) return false;
+  if (/\\bullet\b/.test(joined)) return false;
+  if (BOGI_ITEM_RE.test(joined)) return false;
+  return true;
+}
+
+// "\bullet" 로 시작하는 라인 여부. 앞쪽에 공백만 허용.
+const BULLET_LINE_RE = /^\s*\\bullet\b\s*/;
+
+// 한 줄짜리 \bullet 항목 → "bullet + 고정폭 공백 + 본문" 형태의 LaTeX 라인으로 렌더.
+//   - \wd0 = "\bullet\ " 의 폭으로 측정 → hangindent/첫줄 라벨 영역을 동일 폭으로 고정
+//   - 본문은 smartTexLine 을 거쳐 수식/텍스트 자동 처리
+//   - \ (backslash-space) 를 뒤에 붙여 bullet 뒤 1공백을 LaTeX 에서 절대 소멸하지 않도록 보장
+function renderBulletLine(rawLine, equations, replaceFigureMarkers = null) {
+  const stripped = rawLine.replace(BULLET_LINE_RE, '');
+  const withFigs = replaceFigureMarkers
+    ? replaceFigureMarkers(stripped)
+    : stripped;
+  const contentTex = smartTexLine(withFigs, equations);
+  const labelTex = `$\\bullet$\\ `;
+  return `{\\setbox0=\\hbox{${labelTex}}\\hangindent=\\wd0\\hangafter=1\\noindent\\makebox[\\wd0][l]{${labelTex}}${contentTex}\\par}`;
+}
+
 function renderDecoBoxLatex(lines, equations, replaceFigureMarkers = null) {
-  const contentParts = [];
+  // 1) 박스 내부의 "본문 라인" 목록을 평탄화해 한 번 미리 만들어둔다.
+  //    [문단] 마커로 쪼갠 뒤, 빈 라인은 빼고 순수 텍스트 라인만 남긴다.
+  const flatLines = [];
   for (const l of lines) {
-    const trimmed = l.trim();
-    if (!trimmed) {
-      contentParts.push('\\par');
-      continue;
-    }
+    const trimmed = String(l || '').trim();
+    if (!trimmed) continue;
     const subLines = trimmed.split(PARAGRAPH_MARKER_RE);
-    for (let i = 0; i < subLines.length; i++) {
-      if (i > 0) contentParts.push('\\par');
-      const sub = subLines[i].trim();
-      if (sub) {
-        const rendered = renderDecoLine(sub, equations, replaceFigureMarkers);
+    for (const sub of subLines) {
+      const s = sub.trim();
+      if (s) flatLines.push(s);
+    }
+  }
+
+  // 2) \bullet 로 시작하는 라인이 하나라도 있으면 "조건제시박스(bullet list) 모드":
+  //    - 각 bullet 라인은 renderBulletLine 으로 라벨+hangindent 적용 → 2행+ 들여쓰기 유지
+  //    - bullet 이 아닌 라인(예: 박스 상단 설명문)은 일반 renderDecoLine 처리
+  const hasBullet = flatLines.some((l) => BULLET_LINE_RE.test(l));
+  // 3) 가운데 정렬 여부: 한글/ㄱㄴㄷ/bullet/라벨 모두 없으면 가운데 정렬.
+  const centerMode = boxContentIsCenteredOnly(flatLines);
+
+  const contentParts = [];
+  if (hasBullet) {
+    for (const line of flatLines) {
+      if (BULLET_LINE_RE.test(line)) {
+        contentParts.push(
+          renderBulletLine(line, equations, replaceFigureMarkers),
+        );
+      } else {
+        const rendered = renderDecoLine(line, equations, replaceFigureMarkers);
         if (rendered.trim()) contentParts.push(rendered);
       }
     }
+  } else {
+    for (const line of flatLines) {
+      const rendered = renderDecoLine(line, equations, replaceFigureMarkers);
+      if (rendered.trim()) {
+        if (centerMode) {
+          // \noindent/hangindent 계열 prefix 가 있으면 가운데 정렬이 씹히므로 제거.
+          // 단 renderDecoLine 가 이미 \begin{center}... 를 넣은 경우는 손대지 않는다.
+          if (/\\begin\{center\}/.test(rendered)) {
+            contentParts.push(rendered);
+          } else {
+            const cleaned = rendered
+              .replace(/\\noindent\s*/g, '')
+              .replace(/\\par\s*$/g, '');
+            contentParts.push(`\\begin{center}${cleaned}\\end{center}`);
+          }
+        } else {
+          contentParts.push(rendered);
+        }
+      }
+    }
   }
+
   return [
     '\\begin{tcolorbox}[',
     '  enhanced,',
     '  width=\\dimexpr\\linewidth-1em\\relax,',
     '  colback=white, colframe=black, boxrule=0.4pt,',
-    // 내부 위/아래 여백을 12pt 로 확대.
     '  arc=0pt, left=8pt, right=8pt, top=12pt, bottom=12pt,',
     '  before skip=0pt, after skip=0pt',
     ']',
@@ -953,6 +1191,10 @@ function buildPreamble({
     lines.push('\\newlength{\\mockLayBoxY}');
 
     lines.push('\\AddToShipoutPictureFG{%');
+    // 빠른정답(또는 기타 overlay 비활성) 페이지는 overlay 초입에서 바로 탈출.
+    //   → 상단 가로선, 세로 단구분선, 페이지박스가 모두 그려지지 않는다.
+    //   \quickanswerpage 플래그는 기본 false, 빠른정답 페이지 콘텐츠에서 true 로 세팅.
+    lines.push('  \\ifquickanswerpage\\else');
     lines.push('  % 페이지마다 다시 계산: \\textheight, \\topmargin 등은 geometry 로 고정이지만');
     lines.push('  % \\AtBeginDocument 시점엔 일부 값이 확정 안 될 수 있어 매 페이지 갱신.');
     // 본문 영역 상단 y (north-west 기준 음수). geometry 에서 "top margin from paper edge" =
@@ -987,8 +1229,9 @@ function buildPreamble({
 
     lines.push('  \\begin{tikzpicture}[remember picture,overlay]%');
     // 상단 header rule 과 세로 단구분선이 '한 점' 에서 만나도록 공유 y 좌표 사용.
-    //   \mockLayRuleY = \mockLayTopY + 3pt (본문 상단선보다 3pt 위, 일반 페이지용).
-    lines.push('    \\pgfmathsetlengthmacro{\\mockLayRuleY}{\\mockLayTopY+3pt}%');
+    //   \mockLayRuleY = \mockLayTopY + 14pt (본문 상단선보다 14pt 위, 일반 페이지용).
+    //   → 가로선과 슬롯 첫 줄(= \mockLayTopY) 사이 간격 = 14pt.
+    lines.push('    \\pgfmathsetlengthmacro{\\mockLayRuleY}{\\mockLayTopY+14pt}%');
     // 상단 header rule + 세로 단구분선.
     //   - 일반 페이지  : 가로선 y = \mockLayRuleY        / 세로선 시작 y = \mockLayRuleY.
     //   - 제목페이지   : 가로선 y = \mockLayVRuleStartY  / 세로선 시작 y = \mockLayVRuleStartY.
@@ -1003,7 +1246,7 @@ function buildPreamble({
     lines.push('        ([shift={(\\mockLayCenterX,\\mockLayVRuleStartY)}]current page.north west) --%');
     lines.push('        ([shift={(\\mockLayCenterX,\\mockLayBotY)}]current page.north west);%');
     lines.push('    \\else%');
-    // 일반 페이지: 가로선 (본문 상단보다 3pt 위).
+    // 일반 페이지: 가로선 (본문 상단보다 14pt 위 = 슬롯 첫 줄과 14pt 간격).
     lines.push('      \\draw[line width=0.4pt]%');
     lines.push('        ([shift={(\\mockLayLeftX,\\mockLayRuleY)}]current page.north west) --%');
     lines.push('        ([shift={(\\mockLayRightX,\\mockLayRuleY)}]current page.north west);%');
@@ -1024,7 +1267,11 @@ function buildPreamble({
     lines.push('        {\\fontsize{\\mockPageBoxFont}{\\mockPageBoxLead}\\selectfont\\pageref{LastPage}};%');
     lines.push('    \\end{scope}%');
     lines.push('  \\end{tikzpicture}%');
+    lines.push('  \\fi'); // \ifquickanswerpage 닫기
     lines.push('}');
+    // 빠른정답 페이지 식별 플래그. 기본 false. 빠른정답 블록 진입 시 \global\quickanswerpagetrue.
+    lines.push('\\newif\\ifquickanswerpage');
+    lines.push('\\quickanswerpagefalse');
   }
   lines.push('\\newlength{\\mockColumnHeight}');
   lines.push('\\newlength{\\mockSlotGap}');
@@ -1246,7 +1493,8 @@ function renderOneQuestion(question, {
   const TOP_BIG_GAP = '\\par\\vspace{0.75\\baselineskip}';
   const BOTTOM_BIG_GAP = '\\par\\vspace{9pt}';
   // 표도 보기/조건제시/그림과 동일한 "블록" 으로 간주 → 위쪽은 TOP_BIG_GAP, 아래는 BOTTOM_BIG_GAP.
-  const isBigBlockType = (t) => t === 'bogi' || t === 'deco' || t === 'figure' || t === 'table';
+  const isBigBlockType = (t) =>
+    t === 'bogi' || t === 'deco' || t === 'figure' || t === 'table' || t === 'raw_tabular';
 
   for (let sIdx = 0; sIdx < segments.length; sIdx++) {
     const seg = segments[sIdx];
@@ -1364,6 +1612,13 @@ function renderOneQuestion(question, {
       parts.push(renderDecoBoxLatex(seg.lines, equations, replaceFigureMarkers));
     } else if (seg.type === 'table') {
       parts.push(renderTableLatex(seg.lines, equations));
+    } else if (seg.type === 'raw_tabular') {
+      // VLM 이 직접 작성한 tabular. tabular 바깥은 text mode 이므로
+      // 각 셀 안의 LaTeX 수식 명령이 에러("! Missing $ inserted.") 를 내지 않도록
+      // 셀을 자동으로 $...$ 로 감싸 준다. \text{...} 셀은 그대로 둔다.
+      const raw = seg.lines.join('\n');
+      const patched = autoWrapTabularCells(raw);
+      parts.push(`\\par\\noindent\\begin{center}\n${patched}\n\\end{center}\\par`);
     }
   }
 
@@ -1614,12 +1869,13 @@ function renderMockGridPageLatex(
   // 공통 좌/우 minipage 내용을 함수로 분리.
   //
   // 컬럼 폭 & 구분선 주변 여백:
-  //   - 좌/우 minipage 각 0.4775\linewidth → 합계 0.955\linewidth.
-  //   - 남은 0.045\linewidth 가 \hfill 2개 에 균등 분배(페이지 중앙 기준 대칭).
+  //   - 좌/우 minipage 각 (0.4775\linewidth - 4pt) → 합계 (0.955\linewidth - 8pt).
+  //   - 남은 (0.045\linewidth + 8pt) 가 \hfill 2개 에 균등 분배(페이지 중앙 기준 대칭).
+  //     → 세로선(페이지 중앙) 과 각 컬럼 사이 여백에 추가로 +4pt 씩 확보.
   //   - 세로 단구분선(vrule) 은 이 minipage 사이에 '흐름 기반' 으로 두지 않고,
   //     페이지 중앙 x = \paperwidth/2 에 shipout overlay 로 절대 배치한다.
   //     (페이지별 콘텐츠 양과 무관하게 항상 동일 좌표에 그려지도록.)
-  const MOCK_MINIPAGE_WIDTH = '0.4775\\linewidth';
+  const MOCK_MINIPAGE_WIDTH = '\\dimexpr 0.4775\\linewidth-4pt\\relax';
   const buildColumnsBlock = (heightMacro, leftHeightMacro, rightHeightMacro) => [
     '\\noindent',
     `\\begin{minipage}[t][${heightMacro}][t]{${MOCK_MINIPAGE_WIDTH}}`,
@@ -1646,8 +1902,15 @@ function renderMockGridPageLatex(
   // 좌/우 minipage 높이는 outer 안에서 남은 공간(= \textheight - 헤더 박스 \ht+\dp - 여유) 로 계산.
   if (titleHeader) {
     const headerBlock = renderMockTitlePageHeader(titleHeader);
-    // 제목페이지 슬롯을 일반 페이지 대비 '20pt 더 내림'. 헤더 아래 추가 여백 = 28pt (= 8pt + 20pt).
-    // 세로선은 헤더 박스 아래, 슬롯 첫 줄 시작 지점과 동일한 y 에서 시작.
+    // 제목페이지 슬롯 위치 = 헤더 바닥 + 32pt (= headerBlock 끝 \vspace{8pt} + 추가 \vspace*{24pt}).
+    //   세로선/가로선 시작 y (\mockLayVRuleStartY) = 헤더 바닥 + 28pt (overlay 쪽 -28pt 유지).
+    //   → 가로선 ↔ 슬롯 첫 baseline 수식 간격 = 32 - 28 = 4pt (설계값).
+    //
+    //   실측 기반 근본 보정:
+    //     - 일반 페이지 : 가로선 y = TopY+14pt, 슬롯 첫 baseline = TopY-\topskip(~10pt)
+    //                   → 가로선 ~ 첫 baseline ≈ 24pt.
+    //     - 제목 페이지 : 기존 \vspace*{31pt} 사용 시 ≈ 31.5pt 로 일반보다 +7pt.
+    //     - \vspace*{31pt} → \vspace*{24pt} 로 7pt 축소 → 일반과 동일한 ~24pt 간격.
     return [
       '\\begingroup',
       // 제목페이지 플래그는 buildDocumentTexSource 의 페이지 루프에서
@@ -1666,11 +1929,12 @@ function renderMockGridPageLatex(
       //   세팅되므로, 페이지 콘텐츠 안에서는 아직 0pt → 부정확한 값이 저장됨.
       //   → overlay 내부에서 \mockLayTopY 세팅 직후 \mockHeaderBoxHeight 를 사용해
       //     \mockLayVRuleStartY 를 계산하도록 위임.
-      // 본문 시작 전 추가 수직 공백 — 슬롯 시작 y 를 세로선 시작 y 와 일치시켜
-      //   세로선이 타이틀을 뚫고 지나가지 않도록. (headerBlock 끝의 \vspace{8pt} 와 합쳐 28pt.)
-      '\\vspace*{20pt}',
-      // 남은 컬럼 높이 = \textheight - (헤더 높이 + 28pt 여백).
-      '\\setlength{\\mockColumnHeight}{\\dimexpr\\textheight-\\mockHeaderBoxHeight-28pt\\relax}',
+      // 본문 시작 전 추가 수직 공백 — headerBlock 끝 \vspace{8pt} 와 합쳐
+      //   헤더 바닥 → 슬롯 첫 줄 = 32pt. overlay 가로/세로선 시작은 헤더 바닥+28pt.
+      //   실측 기반: 일반 페이지 가로선~첫 baseline 간격(~24pt) 과 동일하게 맞춤.
+      '\\vspace*{24pt}',
+      // 남은 컬럼 높이 = \textheight - (헤더 높이 + 32pt 여백).
+      '\\setlength{\\mockColumnHeight}{\\dimexpr\\textheight-\\mockHeaderBoxHeight-32pt\\relax}',
       '\\ifdim\\mockColumnHeight<180pt\\setlength{\\mockColumnHeight}{180pt}\\fi',
       `\\setlength{\\mockLeftSlotHeight}{\\dimexpr(\\mockColumnHeight-${leftGapExpr})/${safeLeftSlots}\\relax}`,
       `\\setlength{\\mockRightSlotHeight}{\\dimexpr(\\mockColumnHeight-${rightGapExpr})/${safeRightSlots}\\relax}`,
@@ -1832,7 +2096,10 @@ function renderQuickAnswerTableLatex(questions) {
     NEQ: '\\neq ',
   };
   function normalizeSpecialTokens(s) {
-    return s.replace(/\b(TIMES|DIV|PM|LEQ|GEQ|NEQ)\b/g, (m) => SPECIAL_TOKEN_MAP[m] || m);
+    let out = s.replace(/\b(TIMES|DIV|PM|LEQ|GEQ|NEQ)\b/g, (m) => SPECIAL_TOKEN_MAP[m] || m);
+    // 본문 normalizeMathSegment 와 동일 규칙: 모든 \frac → \dfrac (강제 displaystyle 분수).
+    out = out.replace(/\\frac(?![a-zA-Z])/g, '\\dfrac');
+    return out;
   }
 
   const isCJKCh = (ch) => {
@@ -1860,11 +2127,22 @@ function renderQuickAnswerTableLatex(questions) {
       buf = '';
       curCJK = null;
     };
+    // chunk 분리 규칙:
+    //   - CJK / 비CJK 기준으로 나눈다.
+    //   - 공백(\s)은 '현재 chunk' 에 합류시켜 CJK 단어 사이 띄어쓰기가 \text{} 안에 보존되게 한다.
+    //     (math mode 는 공백을 모두 무시하므로, 공백을 \text{...} 바깥으로 빼면 결과물에서 띄어쓰기가 사라진다.)
+    //   - chunk 가 아직 없고(curCJK==null) 공백으로 시작하면 직후 문자의 성격에 따라 결정되므로,
+    //     일단 buf 에만 쌓아두고 다음 '비공백' 문자가 오면 그 성격을 curCJK 로 확정.
     for (const ch of Array.from(raw)) {
-      const cjk = isCJKCh(ch);
+      const isSpace = /\s/.test(ch);
+      const cjk = isSpace ? null : isCJKCh(ch);
       if (curCJK === null) {
-        curCJK = cjk;
-        buf = ch;
+        // 아직 성격 미정: 공백/비공백 모두 buf 에 담아두고, 비공백이면 성격을 이 문자로 확정.
+        buf += ch;
+        if (!isSpace) curCJK = cjk;
+      } else if (isSpace) {
+        // 공백은 현재 chunk 에 그대로 흡수.
+        buf += ch;
       } else if (curCJK === cjk) {
         buf += ch;
       } else {
@@ -1874,9 +2152,14 @@ function renderQuickAnswerTableLatex(questions) {
       }
     }
     flush();
-    if (!chunks.some((c) => c.cjk)) return `$${raw}$`;
+    // 본문(smartTexLine) 의 수식은 전부 $\displaystyle ...$ 로 감싸므로,
+    //   빠른정답 셀도 동일하게 displaystyle 로 맞춰 분수 크기 등이 일관되게 보이도록 한다.
+    if (!chunks.some((c) => c.cjk)) return `$\\displaystyle ${raw}$`;
+    // CJK chunk 는 \text{...}, 비CJK chunk 는 math 그대로.
+    //   \text{} 와 math 사이 경계에 math 공백(\,) 을 넣어 한글 단어와 수식 기호 사이 간격 보존.
+    //   단, CJK chunk 내부(앞뒤) 에 이미 공백이 포함되어 있다면 별도 간격은 불필요.
     const parts = chunks.map((c) => (c.cjk ? `\\text{${escapeLatexText(c.text)}}` : c.text));
-    return `$${parts.join('')}$`;
+    return `$\\displaystyle ${parts.join('')}$`;
   }
 
   // 하위문제 라벨 `(N)` (N = 1~9) 이 하나 이상 들어있는 답을 처리한다.
@@ -1906,12 +2189,14 @@ function renderQuickAnswerTableLatex(questions) {
     for (let i = 0; i < matches.length; i += 1) {
       const { end, label } = matches[i];
       const nextIdx = i + 1 < matches.length ? matches[i + 1].idx : raw.length;
-      // 라벨 바로 뒤의 공백은 소비, 이후 텍스트만 남겨 세그먼트로 포매팅.
       const segment = raw.slice(end, nextIdx).replace(/^\s+/, '').replace(/\s+$/, '');
-      // 라벨 앞 공백: 첫 라벨은 없음, 이후 라벨은 두 칸(\ \ ).
-      if (i > 0) out.push('\\ \\ ');
+      // 라벨 간 간격: 두 번째 이후 라벨 앞에 "공백 3칸" 에 해당하는 수평 간격 삽입.
+      //   \ \ \  : 고정폭 공백 3개를 명시 → xelatex 에서 축약되지 않고 보장됨.
+      if (i > 0) out.push('\\ \\ \\ ');
       out.push(label); // '(1)', '(2)' 는 text 모드 그대로.
-      out.push('\\ '); // 라벨 뒤 한 칸.
+      // 라벨 뒤 공백: 단순 "\ " 는 후속 $...$ 의 경계에서 일부 조판기가 스왈로하는 사례가 있음.
+      //   → \hspace{0.33em} 로 폭을 물리적으로 고정해 "(1)" 과 수식 사이 1칸 간격을 보장한다.
+      out.push('\\hspace{0.33em}');
       if (segment) out.push(formatAnswerSegment(segment));
     }
     return out.join('');
@@ -1958,7 +2243,14 @@ function renderQuickAnswerTableLatex(questions) {
 
   return [
     '\\clearpage',
-    '\\thispagestyle{plain}',
+    // 빠른정답 페이지는 overlay(가로선/세로 단구분선/페이지박스)와 fancyhdr 페이지번호를
+    //   모두 제거한 '깨끗한' 페이지로 출력.
+    //   - \thispagestyle{empty} : fancyhdr/plain 기본 요소(페이지번호) 제거.
+    //   - \AtBeginShipoutNext{\global\quickanswerpagetrue} : 이 페이지의 shipout 타이밍에
+    //     overlay 초입의 \ifquickanswerpage 가 true 가 되어 overlay 를 전부 스킵.
+    //   - 또한 직전 페이지가 제목페이지였을 경우 \mocktitlepage 플래그도 false 로 리셋.
+    '\\thispagestyle{empty}',
+    '\\AtBeginShipoutNext{\\global\\quickanswerpagetrue\\global\\mocktitlepagefalse}',
     '\\begin{center}',
     '{\\Large\\bfseries 빠른정답}\\par',
     '\\vspace{12pt}',
@@ -2070,6 +2362,7 @@ export function buildDocumentTexSource(questions, options = {}) {
         titlePageHeaderMap.set(page, {
           title: String(row.title ?? row.subjectTitle ?? '').trim(),
           subtitle: String(row.subtitle ?? row.sub ?? '').trim(),
+          titleTop: String(row.titleTop ?? row.topTitle ?? '').trim(),
         });
       }
     }
@@ -2078,7 +2371,9 @@ export function buildDocumentTexSource(questions, options = {}) {
       const override = titlePageHeaderMap.get(pageNo) || {};
       const title = override.title || subjectTitle || '';
       const subtitle = override.subtitle || '';
-      const titleTop = pageNo === 1 ? (titlePageTopText || '') : '';
+      // titleTop 은 첫 제목페이지뿐 아니라 중간에 추가된 제목페이지에서도 동일하게 표시.
+      //   (override.titleTop 이 있으면 우선, 없으면 공용 titlePageTopText 폴백.)
+      const titleTop = (override.titleTop || titlePageTopText || '').trim();
       if (!title && !subtitle && !titleTop) return null;
       return { titleTop, title, subtitle };
     };

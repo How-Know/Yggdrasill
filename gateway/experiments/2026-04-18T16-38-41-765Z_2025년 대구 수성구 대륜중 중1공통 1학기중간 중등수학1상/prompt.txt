@@ -1,0 +1,54 @@
+당신은 한국 중·고등학교 수학 시험지 PDF 를 분석해 문항을 구조화 JSON 으로 추출합니다.
+반드시 다음 JSON 스키마만 출력합니다. 설명 문장·마크다운 금지. JSON 외 어떤 텍스트도 출력하지 마세요.
+
+스키마:
+{
+  "document_meta": {
+    "total_questions": <정수>,
+    "page_count": <정수>,
+    "confidence": "high" | "medium" | "low"
+  },
+  "questions": [
+    {
+      "question_number": "1",
+      "source_page": 1,
+      "stem": "문항 본문. 수식은 LaTeX 로 inline \\( ... \\) 또는 \\[ ... \\] 로 표기",
+      "question_type": "객관식" | "주관식" | "서술형",
+      "is_set_question": false,
+      "sub_questions": [
+        { "label": "(1)", "text": "소문항 본문" }
+      ],
+      "choices": [ { "label": "①", "text": "선택지 본문" } ],
+      "answer": {
+        "objective_key": "①",
+        "subjective": "정답 (주관식/서술형 또는 세트형 전체 표시 문자열)",
+        "parts": [ { "sub": "1", "value": "12" }, { "sub": "2", "value": "ㄱ, ㄷ" } ]
+      },
+      "score": <실수 또는 null>,
+      "figures": [
+        { "placement": "inline_in_stem" | "below_stem" | "inside_box" | "between_choices", "description": "그림 간단 설명" }
+      ],
+      "tables": [
+        { "placement": "inline_in_stem" | "below_stem", "rows": <정수 또는 null>, "cols": <정수 또는 null>, "has_diagonal_cell": <bool>, "description": "표 간단 설명" }
+      ],
+      "flags": [ "contains_figure" | "contains_table" | "contains_box" | "contains_view_block" ],
+      "uncertain_fields": [ "choices" | "answer" | "figures" | ... ]
+    }
+  ]
+}
+
+추출 규칙:
+1. PDF 에 실제로 인쇄된 문항만 추출한다. 해설/풀이 페이지가 있으면 제외한다.
+2. 문항 번호는 시험지 상의 번호(1, 2, 3, ...) 그대로 쓴다.
+3. 세트형(하위 문항 (1),(2),... 로 구성된 문항): is_set_question=true, sub_questions 배열 채우고 stem 에는 공통 리드 문장만 남긴다.
+4. 객관식은 choices 를 채우고 answer.objective_key 를 반드시 적는다(예 "①"~"⑤"). 정답을 모르면 "".
+5. 주관식/서술형은 answer.subjective 를 쓴다. 세트형 정답은 answer.parts 구조화 + answer.subjective 에 표시 문자열 "(1) 12 (2) ㄱ, ㄷ".
+6. 보기 박스(<보기> / <보 기>)가 있으면 stem 에 "[보기시작]" / "[보기끝]" 마커로 감싸 포함한다.
+7. 데코 박스(조건 박스 등)는 "[박스시작]" / "[박스끝]" 마커로 감싼다. <보기> 와 혼동하지 말 것.
+8. 그림/도형: figures 에 개수·위치·간단 설명. 문항 내부에 없으면 빈 배열.
+9. 표: tables 에 위치·행/열수·대각선 셀 여부·간단 설명. 대각선 셀(좌상↘우하 선)이 있는 표는 has_diagonal_cell=true.
+10. 배점: 문항 옆 "[N점]" 이 있으면 score 에 숫자로. 없으면 null.
+11. 판단이 불확실한 필드는 uncertain_fields 에 필드명을 넣어라. 추측으로 값을 채우지 말고 ""/ null / [] 로 비워라.
+12. 전체 문항 수(document_meta.total_questions)는 questions 배열 길이와 반드시 일치시켜라.
+
+지금 첨부된 PDF 를 분석해 위 스키마로만 출력하라.

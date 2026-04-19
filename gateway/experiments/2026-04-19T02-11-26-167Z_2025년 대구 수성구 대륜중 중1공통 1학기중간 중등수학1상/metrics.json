@@ -1,0 +1,163 @@
+{
+  "pdf": "C:\\Users\\harry\\OneDrive\\바탕 화면\\2025년 대구 수성구 대륜중 중1공통 1학기중간 중등수학1상.pdf",
+  "pdfSizeBytes": 157679,
+  "model": "gemini-3.1-pro-preview",
+  "elapsedMs": 44413,
+  "parsed": true,
+  "finishReason": "STOP",
+  "usage": {
+    "promptTokenCount": 4582,
+    "candidatesTokenCount": 5795,
+    "totalTokenCount": 10377,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 1922
+      },
+      {
+        "modality": "IMAGE",
+        "tokenCount": 2660
+      }
+    ]
+  },
+  "costUsdEstimate": {
+    "inputTokens": 4582,
+    "outputTokens": 5795,
+    "inputUsd": 0.009164,
+    "outputUsd": 0.04636,
+    "totalUsd": 0.055524,
+    "note": "러프 추정 (input=$2/1M, output=$8/1M). 모델: gemini-3.1-pro-preview"
+  },
+  "totals": {
+    "vlmQuestions": 17,
+    "metaTotalQuestions": 17,
+    "setQuestions": 2,
+    "objectiveQuestions": 12,
+    "subjectiveQuestions": 3,
+    "essayQuestions": 2,
+    "uncertainQuestions": 0
+  },
+  "diff": {
+    "rows": [
+      {
+        "q": "1",
+        "inA": true,
+        "inB": true,
+        "issues": []
+      },
+      {
+        "q": "2",
+        "inA": true,
+        "inB": true,
+        "issues": []
+      },
+      {
+        "q": "3",
+        "inA": true,
+        "inB": true,
+        "issues": []
+      },
+      {
+        "q": "4",
+        "inA": true,
+        "inB": true,
+        "issues": []
+      },
+      {
+        "q": "5",
+        "inA": true,
+        "inB": true,
+        "issues": []
+      },
+      {
+        "q": "6",
+        "inA": true,
+        "inB": true,
+        "issues": []
+      },
+      {
+        "q": "7",
+        "inA": true,
+        "inB": true,
+        "issues": []
+      },
+      {
+        "q": "8",
+        "inA": true,
+        "inB": true,
+        "issues": []
+      },
+      {
+        "q": "9",
+        "inA": true,
+        "inB": true,
+        "issues": []
+      },
+      {
+        "q": "10",
+        "inA": true,
+        "inB": true,
+        "issues": []
+      },
+      {
+        "q": "11",
+        "inA": true,
+        "inB": true,
+        "issues": []
+      },
+      {
+        "q": "12",
+        "inA": true,
+        "inB": true,
+        "issues": []
+      },
+      {
+        "q": "13",
+        "inA": true,
+        "inB": true,
+        "issues": [
+          "type:주관식_vs_서술형",
+          "sub_diff"
+        ]
+      },
+      {
+        "q": "14",
+        "inA": true,
+        "inB": true,
+        "issues": [
+          "type:주관식_vs_서술형",
+          "sub_diff"
+        ]
+      },
+      {
+        "q": "15",
+        "inA": true,
+        "inB": true,
+        "issues": [
+          "type:서술형_vs_주관식",
+          "sub_diff"
+        ]
+      },
+      {
+        "q": "16",
+        "inA": true,
+        "inB": true,
+        "issues": [
+          "type:서술형_vs_주관식"
+        ]
+      },
+      {
+        "q": "17",
+        "inA": true,
+        "inB": true,
+        "issues": [
+          "type:서술형_vs_주관식"
+        ]
+      }
+    ],
+    "agreeCount": 12,
+    "disagreeCount": 5,
+    "totalA": 17,
+    "totalB": 17
+  }
+}

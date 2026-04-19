@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
+import 'package:desktop_drop/desktop_drop.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -12,6 +13,7 @@ import 'widgets/figure_compare_dialog.dart';
 import 'widgets/problem_bank_classification_filter_panel.dart';
 import 'widgets/problem_bank_mode_tab_bar.dart';
 import 'widgets/problem_bank_synced_list_dialog.dart';
+import 'widgets/question_revision_reason_dialog.dart';
 
 class ProblemBankScreen extends StatefulWidget {
   const ProblemBankScreen({super.key});
@@ -76,6 +78,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   Timer? _previewPollTimer;
   bool _bootstrapLoading = true;
   bool _isUploading = false;
+  bool _isUploadingPdf = false;
+  bool _isHwpxDropHover = false;
+  bool _isPdfDropHover = false;
   bool _isExtracting = false;
   bool _isResetting = false;
   bool _hasExtracted = false;
@@ -1020,6 +1025,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           _questionPreviewUrls.remove(qId);
         }
       });
+      unawaited(_offerRevisionReasonTagging(academyId: academyId, questionId: qId));
       return newUrl.isNotEmpty ? newUrl : null;
     } catch (e) {
       if (mounted) {
@@ -1027,6 +1033,75 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       }
       _showSnack('문항 저장·미리보기 갱신 실패: $e', error: true);
       return null;
+    }
+  }
+
+  // 저장 후 가장 최근 revision (DB trigger 가 자동 기록) 에 "수정 의도 태그" 를
+  // 사용자에게 선택적으로 받아 붙이는 훅. 사용자가 아무것도 안 해도 diff 자체는
+  // 이미 적립돼 있으므로 데이터는 잃지 않는다.
+  Future<void> _offerRevisionReasonTagging({
+    required String academyId,
+    required String questionId,
+  }) async {
+    ProblemBankQuestionRevision? latest;
+    try {
+      latest = await _service.fetchLatestQuestionRevision(
+        academyId: academyId,
+        questionId: questionId,
+      );
+    } catch (_) {
+      // revision 조회 실패해도 저장 자체는 성공이라 조용히 무시.
+      return;
+    }
+    // 의미 있는 변경이 없어서 trigger 가 건너뛴 경우 (예: 토글만 변경) → 안 물어봄.
+    if (latest == null) return;
+    if (!mounted) return;
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    if (messenger == null) return;
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        duration: const Duration(seconds: 6),
+        backgroundColor: const Color(0xFF15171C),
+        content: Text(
+          '변경 이력을 기록했습니다 · ${latest.editedFields.length}개 필드 수정',
+          style: const TextStyle(color: Color(0xFFEAF2F2)),
+        ),
+        action: SnackBarAction(
+          label: '수정 이유 추가',
+          textColor: const Color(0xFF6AD29F),
+          onPressed: () => unawaited(
+            _openRevisionReasonDialog(revision: latest!),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openRevisionReasonDialog({
+    required ProblemBankQuestionRevision revision,
+  }) async {
+    if (!mounted) return;
+    final result = await QuestionRevisionReasonDialog.show(
+      context,
+      initialTags: revision.reasonTags,
+      initialNote: revision.reasonNote,
+      editedFields: revision.editedFields,
+    );
+    if (result == null) return;
+    try {
+      await _service.attachRevisionReason(
+        revisionId: revision.id,
+        tags: result.tags,
+        note: result.note,
+      );
+      if (mounted) {
+        _showSnack('수정 이유를 저장했습니다');
+      }
+    } catch (e) {
+      if (mounted) {
+        _showSnack('수정 이유 저장 실패: $e', error: true);
+      }
     }
   }
 
@@ -1310,6 +1385,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         _isFigurePolling = false;
         _hasExtracted = false;
         _isUploading = false;
+        _isUploadingPdf = false;
+        _isHwpxDropHover = false;
+        _isPdfDropHover = false;
         _isExtracting = false;
         _showLowConfidenceOnly = false;
         _needsPublish = false;
@@ -1426,7 +1504,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   }
 
   Future<void> _pickAndUploadHwpx() async {
-    if (_isResetting || _isUploading || _isExtracting) {
+    if (_isResetting || _isUploading || _isUploadingPdf || _isExtracting) {
       return;
     }
     if (_schemaMissing) {
@@ -1457,6 +1535,48 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     final bytes = file.bytes ?? await _readBytesFromPath(file.path);
     if (bytes == null || bytes.isEmpty) {
       _showSnack('파일 데이터를 읽지 못했습니다.', error: true);
+      return;
+    }
+    await _uploadHwpxBytes(bytes: bytes, fileName: fileName);
+  }
+
+  /// HWPX 를 드래그앤드롭으로 받았을 때의 진입점.
+  Future<void> _handleHwpxDropped(List<DropItem> files) async {
+    if (_isResetting || _isUploading || _isUploadingPdf || _isExtracting) {
+      return;
+    }
+    final pick = _firstItemWithExtension(files, const ['hwpx']);
+    if (pick == null) {
+      _showSnack('HWPX 파일만 업로드할 수 있습니다.', error: true);
+      return;
+    }
+    final bytes = await _readDropItemBytes(pick);
+    if (bytes == null || bytes.isEmpty) {
+      _showSnack('파일 데이터를 읽지 못했습니다.', error: true);
+      return;
+    }
+    final fileName =
+        _basenameFromPath(pick.path).isEmpty ? 'document.hwpx' : _basenameFromPath(pick.path);
+    await _uploadHwpxBytes(bytes: bytes, fileName: fileName);
+  }
+
+  Future<void> _uploadHwpxBytes({
+    required Uint8List bytes,
+    required String fileName,
+  }) async {
+    if (_schemaMissing) {
+      _showSnack(
+        'DB 마이그레이션이 먼저 필요합니다: 20260324193000_problem_bank_pipeline.sql',
+        error: true,
+      );
+      return;
+    }
+    final academyId = _academyId;
+    if (academyId == null || academyId.isEmpty) {
+      _showSnack(
+        'academy_id를 찾을 수 없습니다. memberships 소속 정보를 확인해주세요.',
+        error: true,
+      );
       return;
     }
     _appendPipelineLog(
@@ -1516,16 +1636,15 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         _isUploading = false;
         _isExtracting = false;
         _statusText = reusedDraft
-            ? '기존 작업본을 덮어썼습니다. 자동으로 추출을 시작합니다...'
-            : '업로드 완료. 자동으로 추출을 시작합니다...';
+            ? '기존 작업본을 덮어썼습니다. PDF 도 업로드한 뒤 추출을 시작하세요.'
+            : 'HWPX 업로드 완료. PDF 도 업로드한 뒤 추출을 시작하세요.';
       });
       _ensurePolling();
       _showSnack(
         reusedDraft
-            ? '같은 파일 작업본을 덮어썼습니다. 추출을 자동으로 시작합니다.'
-            : '업로드 완료. 추출을 자동으로 시작합니다.',
+            ? '같은 파일 작업본을 덮어썼습니다. PDF 도 업로드하면 추출이 가능해요.'
+            : 'HWPX 업로드 완료. PDF 도 업로드하면 추출이 가능해요.',
       );
-      await _startExtractForActiveDocument();
     } catch (e) {
       _appendPipelineLog('upload', '업로드 요청 실패: $e', error: true);
       if (!mounted) return;
@@ -1535,6 +1654,191 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         _statusText = '업로드 실패';
       });
       _showSnack('업로드 실패: $e', error: true);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // PDF (VLM 추출 입력) 업로드
+  // ---------------------------------------------------------------------------
+
+  Future<void> _pickAndUploadPdf() async {
+    if (_isResetting || _isUploading || _isUploadingPdf || _isExtracting) {
+      return;
+    }
+    final doc = _activeDocument;
+    if (doc == null) {
+      _showSnack('PDF 는 HWPX 를 먼저 업로드한 뒤에 올릴 수 있어요.', error: true);
+      return;
+    }
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowMultiple: false,
+      allowedExtensions: const ['pdf'],
+      withData: true,
+    );
+    if (result == null || result.files.isEmpty) return;
+    final file = result.files.single;
+    final fileName = file.name.trim().isEmpty ? 'document.pdf' : file.name;
+    final bytes = file.bytes ?? await _readBytesFromPath(file.path);
+    if (bytes == null || bytes.isEmpty) {
+      _showSnack('PDF 데이터를 읽지 못했습니다.', error: true);
+      return;
+    }
+    await _uploadPdfBytes(
+      documentId: doc.id,
+      bytes: bytes,
+      fileName: fileName,
+    );
+  }
+
+  Future<void> _handlePdfDropped(List<DropItem> files) async {
+    if (_isResetting || _isUploading || _isUploadingPdf || _isExtracting) {
+      return;
+    }
+    final doc = _activeDocument;
+    if (doc == null) {
+      _showSnack('PDF 는 HWPX 를 먼저 업로드한 뒤에 올릴 수 있어요.', error: true);
+      return;
+    }
+    final pick = _firstItemWithExtension(files, const ['pdf']);
+    if (pick == null) {
+      _showSnack('PDF 파일만 업로드할 수 있습니다.', error: true);
+      return;
+    }
+    final bytes = await _readDropItemBytes(pick);
+    if (bytes == null || bytes.isEmpty) {
+      _showSnack('PDF 데이터를 읽지 못했습니다.', error: true);
+      return;
+    }
+    final fileName = _basenameFromPath(pick.path).isEmpty
+        ? 'document.pdf'
+        : _basenameFromPath(pick.path);
+    await _uploadPdfBytes(
+      documentId: doc.id,
+      bytes: bytes,
+      fileName: fileName,
+    );
+  }
+
+  Future<void> _uploadPdfBytes({
+    required String documentId,
+    required Uint8List bytes,
+    required String fileName,
+  }) async {
+    final academyId = _academyId;
+    if (academyId == null || academyId.isEmpty) {
+      _showSnack(
+        'academy_id를 찾을 수 없습니다. memberships 소속 정보를 확인해주세요.',
+        error: true,
+      );
+      return;
+    }
+    _appendPipelineLog(
+      'upload_pdf',
+      'PDF 선택: $fileName (${bytes.length} bytes)',
+    );
+    setState(() {
+      _isUploadingPdf = true;
+      _statusText = 'PDF 업로드 중...';
+    });
+    try {
+      final updated = await _service.uploadPdfForDocument(
+        academyId: academyId,
+        documentId: documentId,
+        bytes: bytes,
+        originalName: fileName,
+      );
+      _appendPipelineLog(
+        'upload_pdf',
+        'PDF 업로드 완료: ${updated.sourcePdfFilename}',
+      );
+      await _refreshDocuments();
+      if (!mounted) return;
+      setState(() {
+        _activeDocument = updated;
+        _isUploadingPdf = false;
+        _statusText = 'PDF 업로드 완료. 추출 버튼을 눌러주세요.';
+      });
+      _showSnack('PDF 업로드 완료.');
+    } catch (e) {
+      _appendPipelineLog('upload_pdf', 'PDF 업로드 실패: $e', error: true);
+      if (!mounted) return;
+      setState(() {
+        _isUploadingPdf = false;
+        _statusText = 'PDF 업로드 실패';
+      });
+      _showSnack('PDF 업로드 실패: $e', error: true);
+    }
+  }
+
+  Future<void> _clearAttachedPdf() async {
+    final doc = _activeDocument;
+    if (doc == null || !doc.hasPdfSource) return;
+    if (_isResetting || _isUploading || _isUploadingPdf || _isExtracting) {
+      return;
+    }
+    final academyId = _academyId;
+    if (academyId == null || academyId.isEmpty) return;
+    setState(() {
+      _isUploadingPdf = true;
+      _statusText = 'PDF 삭제 중...';
+    });
+    try {
+      final updated = await _service.clearPdfForDocument(
+        academyId: academyId,
+        documentId: doc.id,
+      );
+      await _refreshDocuments();
+      if (!mounted) return;
+      setState(() {
+        _activeDocument = updated;
+        _isUploadingPdf = false;
+        _statusText = 'PDF 를 제거했습니다.';
+      });
+      _appendPipelineLog('upload_pdf', '첨부된 PDF 제거 완료: document=${doc.id}');
+    } catch (e) {
+      _appendPipelineLog('upload_pdf', 'PDF 제거 실패: $e', error: true);
+      if (!mounted) return;
+      setState(() {
+        _isUploadingPdf = false;
+      });
+      _showSnack('PDF 제거 실패: $e', error: true);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // 드롭 유틸
+  // ---------------------------------------------------------------------------
+
+  DropItem? _firstItemWithExtension(
+    List<DropItem> files,
+    List<String> allowed,
+  ) {
+    final lowerAllowed =
+        allowed.map((e) => e.toLowerCase().replaceAll('.', '')).toSet();
+    for (final f in files) {
+      final name = _basenameFromPath(f.path).toLowerCase();
+      final dot = name.lastIndexOf('.');
+      if (dot < 0 || dot >= name.length - 1) continue;
+      final ext = name.substring(dot + 1);
+      if (lowerAllowed.contains(ext)) return f;
+    }
+    return null;
+  }
+
+  String _basenameFromPath(String path) {
+    if (path.isEmpty) return '';
+    final norm = path.replaceAll('\\', '/');
+    final idx = norm.lastIndexOf('/');
+    return idx >= 0 ? norm.substring(idx + 1) : norm;
+  }
+
+  Future<Uint8List?> _readDropItemBytes(DropItem item) async {
+    try {
+      final bytes = await item.readAsBytes();
+      return Uint8List.fromList(bytes);
+    } catch (_) {
+      return _readBytesFromPath(item.path);
     }
   }
 
@@ -2082,16 +2386,18 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
               error: true,
             );
           }
+          final engineSuffix =
+              latest.engineLabel.isEmpty ? '' : ' · 엔진: ${latest.engineLabel}';
           if (figureJobsQueuedHint > 0) {
-            nextStatusText = '추출 완료 · AI 그림 생성 대기 중';
+            nextStatusText = '추출 완료 · AI 그림 생성 대기 중$engineSuffix';
           } else if (partialReextract) {
             nextStatusText = latest.status == 'review_required'
-                ? '선택 문항 재추출 완료 · 일부 저신뢰'
-                : '선택 문항 재추출 완료';
+                ? '선택 문항 재추출 완료 · 일부 저신뢰$engineSuffix'
+                : '선택 문항 재추출 완료$engineSuffix';
           } else {
             nextStatusText = latest.status == 'review_required'
-                ? '저신뢰 문항 추출 완료 · 검수/수정 후 업로드 대기'
-                : '추출 완료 · 업로드 대기';
+                ? '저신뢰 문항 추출 완료 · 검수/수정 후 업로드 대기$engineSuffix'
+                : '추출 완료 · 업로드 대기$engineSuffix';
           }
         }
       }
@@ -3317,7 +3623,20 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         ? '이전 작업 초기화 중...'
         : _isUploading
             ? 'HWPX 업로드 중...'
-            : (_isExtracting ? '한글/수식 추출 및 정규화 중...' : _statusText);
+            : _isUploadingPdf
+                ? 'PDF 업로드 중...'
+                : (_isExtracting ? '한글/수식 추출 및 정규화 중...' : _statusText);
+    final doc = _activeDocument;
+    final hasHwpx = doc != null && doc.hasHwpxSource;
+    final hasPdf = doc != null && doc.hasPdfSource;
+    final commonBlockers = _isUploading ||
+        _isUploadingPdf ||
+        _isResetting ||
+        _isExtracting ||
+        _schemaMissing ||
+        _academyMissing ||
+        _academyId == null ||
+        (_academyId?.isEmpty ?? true);
     return Container(
       decoration: BoxDecoration(
         color: _panel,
@@ -3329,54 +3648,35 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _buildSectionTitle(
-            '1) HWPX 업로드',
-            subtitle: '업로드 직후 자동으로 추출하고, 검수 후 업로드로 확정합니다.',
+            '1) HWPX · PDF 업로드',
+            subtitle: 'HWPX 와 PDF 를 모두 업로드한 뒤 아래 추출 버튼을 눌러주세요.',
           ),
           const SizedBox(height: 12),
           _buildDocumentSelector(),
           const SizedBox(height: 12),
-          SizedBox(
-            width: double.infinity,
-            child: FilledButton.icon(
-              onPressed: (_isUploading ||
-                      _isResetting ||
-                      _isExtracting ||
-                      _schemaMissing ||
-                      _academyMissing ||
-                      _academyId == null ||
-                      _academyId!.isEmpty)
-                  ? null
-                  : _pickAndUploadHwpx,
-              style: FilledButton.styleFrom(backgroundColor: _accent),
-              icon: _isUploading
-                  ? const SizedBox(
-                      width: 14,
-                      height: 14,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
-                      ),
-                    )
-                  : const Icon(Icons.upload_file_outlined, size: 17),
-              label: Text(_isUploading ? '업로드 중...' : 'HWPX 업로드 (자동 추출)'),
-            ),
-          ),
+          _buildHwpxUploadZone(commonBlockers: commonBlockers, hasHwpx: hasHwpx),
           const SizedBox(height: 8),
+          _buildPdfUploadZone(
+            commonBlockers: commonBlockers,
+            hasHwpx: hasHwpx,
+            hasPdf: hasPdf,
+            doc: doc,
+          ),
+          const SizedBox(height: 10),
           SizedBox(
             width: double.infinity,
             child: FilledButton.icon(
-              onPressed: (_isUploading ||
-                      _isResetting ||
-                      _isExtracting ||
-                      _schemaMissing ||
-                      _academyMissing ||
-                      _academyId == null ||
-                      _academyId!.isEmpty ||
+              onPressed: (commonBlockers ||
+                      !hasHwpx ||
+                      !hasPdf ||
                       _activeDocument == null)
                   ? null
                   : () => unawaited(_startExtractForActiveDocument()),
               style: FilledButton.styleFrom(
-                  backgroundColor: const Color(0xFF2C8C66)),
+                backgroundColor: const Color(0xFF2C8C66),
+                disabledBackgroundColor: const Color(0xFF1D2A25),
+                disabledForegroundColor: _textSub,
+              ),
               icon: _isExtracting
                   ? const SizedBox(
                       width: 14,
@@ -3386,34 +3686,51 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                         color: Colors.white,
                       ),
                     )
-                  : const Icon(Icons.play_arrow_rounded, size: 18),
+                  : const Icon(Icons.auto_awesome_outlined, size: 18),
               label: Text(
                 _isExtracting
                     ? '추출 중...'
-                    : (_hasExtracted ? '재추출 시작' : '추출 다시 시작'),
+                    : (hasHwpx && hasPdf
+                        ? '추출 시작'
+                        : 'HWPX + PDF 모두 업로드 시 활성화'),
               ),
             ),
           ),
           const SizedBox(height: 8),
-          SizedBox(
-            width: double.infinity,
-            child: OutlinedButton.icon(
-              onPressed: (_isUploading ||
-                      _isResetting ||
-                      _isExtracting ||
-                      _schemaMissing ||
-                      _academyMissing ||
-                      _academyId == null ||
-                      _academyId!.isEmpty)
-                  ? null
-                  : () => unawaited(_openPasteImportDialog()),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: _textSub,
-                side: const BorderSide(color: _border),
+          Row(
+            children: [
+              Expanded(
+                flex: 3,
+                child: OutlinedButton.icon(
+                  onPressed: commonBlockers
+                      ? null
+                      : () => unawaited(_openPasteImportDialog()),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: _textSub,
+                    side: const BorderSide(color: _border),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                  icon: const Icon(Icons.content_paste_outlined, size: 17),
+                  label: const Text('복사/붙여넣기 수동 추출'),
+                ),
               ),
-              icon: const Icon(Icons.content_paste_outlined, size: 17),
-              label: const Text('복사/붙여넣기 수동 추출'),
-            ),
+              const SizedBox(width: 8),
+              Expanded(
+                flex: 2,
+                child: OutlinedButton.icon(
+                  onPressed: (commonBlockers || _activeDocument == null)
+                      ? null
+                      : () => unawaited(_startExtractForActiveDocument()),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: _textSub,
+                    side: const BorderSide(color: _border),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                  icon: const Icon(Icons.refresh, size: 17),
+                  label: Text(_hasExtracted ? '재추출' : '추출 재시도'),
+                ),
+              ),
+            ],
           ),
           const SizedBox(height: 12),
           Row(
@@ -3478,6 +3795,87 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
             ),
           ],
         ],
+      ),
+    );
+  }
+
+  Widget _buildHwpxUploadZone({
+    required bool commonBlockers,
+    required bool hasHwpx,
+  }) {
+    final onTap = commonBlockers ? null : _pickAndUploadHwpx;
+    final doc = _activeDocument;
+    final fileLabel =
+        hasHwpx && doc != null && doc.sourceFilename.trim().isNotEmpty
+            ? doc.sourceFilename
+            : null;
+    return DropTarget(
+      enable: !commonBlockers,
+      onDragEntered: (_) => setState(() => _isHwpxDropHover = true),
+      onDragExited: (_) => setState(() => _isHwpxDropHover = false),
+      onDragDone: (details) async {
+        setState(() => _isHwpxDropHover = false);
+        await _handleHwpxDropped(details.files);
+      },
+      child: _UploadDropZone(
+        title: 'HWPX 업로드',
+        subtitle: '파일을 드래그하거나 눌러서 업로드하세요. (.hwpx)',
+        icon: Icons.upload_file_outlined,
+        accentColor: _accent,
+        textColor: _text,
+        subTextColor: _textSub,
+        borderColor: _border,
+        backgroundColor: _field,
+        isActive: _isHwpxDropHover,
+        isBusy: _isUploading,
+        isComplete: hasHwpx,
+        completedFilename: fileLabel,
+        onTap: onTap,
+        enabled: !commonBlockers,
+      ),
+    );
+  }
+
+  Widget _buildPdfUploadZone({
+    required bool commonBlockers,
+    required bool hasHwpx,
+    required bool hasPdf,
+    ProblemBankDocument? doc,
+  }) {
+    final enabled = !commonBlockers && hasHwpx;
+    final onTap = enabled ? _pickAndUploadPdf : null;
+    final fileLabel =
+        hasPdf && doc != null && doc.sourcePdfFilename.trim().isNotEmpty
+            ? doc.sourcePdfFilename
+            : null;
+    return DropTarget(
+      enable: enabled,
+      onDragEntered: (_) => setState(() => _isPdfDropHover = true),
+      onDragExited: (_) => setState(() => _isPdfDropHover = false),
+      onDragDone: (details) async {
+        setState(() => _isPdfDropHover = false);
+        await _handlePdfDropped(details.files);
+      },
+      child: _UploadDropZone(
+        title: 'PDF 업로드',
+        subtitle: enabled
+            ? '파일을 드래그하거나 눌러서 업로드하세요. (.pdf)'
+            : 'HWPX 를 먼저 업로드해야 PDF 를 올릴 수 있어요.',
+        icon: Icons.picture_as_pdf_outlined,
+        accentColor: const Color(0xFFE57373),
+        textColor: _text,
+        subTextColor: _textSub,
+        borderColor: _border,
+        backgroundColor: _field,
+        isActive: _isPdfDropHover,
+        isBusy: _isUploadingPdf,
+        isComplete: hasPdf,
+        completedFilename: fileLabel,
+        onTap: onTap,
+        onClear: hasPdf && !commonBlockers
+            ? () => unawaited(_clearAttachedPdf())
+            : null,
+        enabled: enabled,
       ),
     );
   }
@@ -9073,4 +9471,157 @@ class _ScorePartEntry {
 
   String sub;
   final TextEditingController controller;
+}
+
+/// 드래그앤드롭 + 클릭 업로드를 동시에 지원하는 공용 드롭존 위젯.
+///
+/// 업로드 진행 상태, 업로드 완료 상태(+파일명), 그리고 비활성 상태를
+/// 하나의 시각 언어로 표현하기 위해 별도 위젯으로 뽑았다.
+class _UploadDropZone extends StatelessWidget {
+  const _UploadDropZone({
+    required this.title,
+    required this.subtitle,
+    required this.icon,
+    required this.accentColor,
+    required this.textColor,
+    required this.subTextColor,
+    required this.borderColor,
+    required this.backgroundColor,
+    required this.isActive,
+    required this.isBusy,
+    required this.isComplete,
+    required this.enabled,
+    this.completedFilename,
+    this.onTap,
+    this.onClear,
+  });
+
+  final String title;
+  final String subtitle;
+  final IconData icon;
+  final Color accentColor;
+  final Color textColor;
+  final Color subTextColor;
+  final Color borderColor;
+  final Color backgroundColor;
+  final bool isActive;
+  final bool isBusy;
+  final bool isComplete;
+  final bool enabled;
+  final String? completedFilename;
+  final VoidCallback? onTap;
+  final VoidCallback? onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    final effectiveBorderColor = !enabled
+        ? borderColor.withValues(alpha: 0.4)
+        : isActive
+            ? accentColor
+            : isComplete
+                ? accentColor.withValues(alpha: 0.8)
+                : borderColor;
+    final effectiveBackground = isActive
+        ? accentColor.withValues(alpha: 0.12)
+        : isComplete
+            ? accentColor.withValues(alpha: 0.06)
+            : backgroundColor;
+    final cursor =
+        enabled && onTap != null ? SystemMouseCursors.click : SystemMouseCursors.basic;
+    return MouseRegion(
+      cursor: cursor,
+      child: GestureDetector(
+        onTap: enabled ? onTap : null,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 16),
+          decoration: BoxDecoration(
+            color: effectiveBackground,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: effectiveBorderColor,
+              width: isActive ? 2 : 1.2,
+              style: isComplete || isActive
+                  ? BorderStyle.solid
+                  : BorderStyle.solid,
+            ),
+          ),
+          child: Row(
+            children: [
+              SizedBox(
+                width: 36,
+                height: 36,
+                child: Center(
+                  child: isBusy
+                      ? SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: accentColor,
+                          ),
+                        )
+                      : Icon(
+                          isComplete ? Icons.check_circle : icon,
+                          size: 26,
+                          color: enabled
+                              ? (isComplete
+                                  ? accentColor
+                                  : accentColor.withValues(alpha: 0.9))
+                              : subTextColor.withValues(alpha: 0.6),
+                        ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      title,
+                      style: TextStyle(
+                        color: enabled
+                            ? textColor
+                            : textColor.withValues(alpha: 0.5),
+                        fontSize: 13.5,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      isComplete && (completedFilename ?? '').isNotEmpty
+                          ? completedFilename!
+                          : subtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: subTextColor,
+                        fontSize: 11.5,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (isComplete && onClear != null) ...[
+                const SizedBox(width: 8),
+                IconButton(
+                  tooltip: '업로드 취소/삭제',
+                  visualDensity: VisualDensity.compact,
+                  splashRadius: 18,
+                  onPressed: enabled ? onClear : null,
+                  icon: Icon(
+                    Icons.close_rounded,
+                    size: 18,
+                    color: subTextColor,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }

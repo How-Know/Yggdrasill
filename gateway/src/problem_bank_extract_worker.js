@@ -4,6 +4,7 @@ import { XMLParser } from 'fast-xml-parser';
 import hePkg from 'he';
 import { createClient } from '@supabase/supabase-js';
 import { generateQuestionPreviews } from './problem_bank_preview_service.js';
+import { runVlmExtraction } from './problem_bank/extract_engines/vlm/runner.js';
 
 const htmlDecode = hePkg.decode;
 
@@ -50,6 +51,19 @@ const GEMINI_ENABLED =
   (process.env.PB_GEMINI_ENABLED === '1' || GEMINI_KEY_CONFIGURED) &&
   GEMINI_MODEL.length > 0;
 const AUTO_QUEUE_FIGURE_JOBS = process.env.PB_AUTO_QUEUE_FIGURE_JOBS !== '0';
+
+// --- VLM (PDF-first) 엔진 설정 ---
+// PDF 가 붙어 있는 문서는 VLM 엔진으로 분기한다. HWPX 파이프라인은 "PDF 가 없는 문서" 에 한해
+// 계속 동작하며, VLM 품질이 충분히 정착되면 이 분기만 남기고 HWPX 쪽 코드를 제거하면 된다.
+const VLM_MODEL = String(
+  process.env.PB_VLM_MODEL || process.env.PB_GEMINI_MODEL || 'gemini-3.1-pro-preview',
+).trim();
+const VLM_TIMEOUT_MS = Math.max(
+  10_000,
+  Number.parseInt(process.env.PB_VLM_TIMEOUT_MS || '180000', 10),
+);
+// VLM 엔진은 PB_VLM_ENABLED 를 명시적으로 '0' 으로 두지 않으면 기본 on.
+const VLM_ENABLED = process.env.PB_VLM_ENABLED !== '0';
 
 const CURRICULUM_CODES = new Set([
   'legacy_1to6',
@@ -663,16 +677,28 @@ function looksLikeQuestionTerminalLine(line) {
 // - 리드 문장이 "다음을 구하시오/서술하시오/답하시오/차례로 답하시오" 같은 세트형 리드 프롬프트이면 true.
 // 이 경우 score_only([N.00점]) 라인은 새 문항 경계가 아니라 같은 문항의
 // 소문항 배점 메타데이터로 취급해야 한다.
-function hasSetQuestionSignature(stemLines) {
-  if (!Array.isArray(stemLines) || stemLines.length === 0) return false;
+function hasSetQuestionSignature(stemLines, { answerKey = '' } = {}) {
   const SUB_LABEL_REGEX = /^\s*[\(（]\s*[1-9]\s*[\)）]/;
+  // 세트형 리드 프롬프트. "다음 물음에 답하시오"에서 선행 "다음" 이 누락된 경우도
+  // 인정한다(HWPX에서 [정답]과 리드가 같은 paragraph로 합쳐져 "다음"이 잘려
+  // 들어오는 케이스가 있다).
   const LEAD_PROMPT_REGEX =
-    /(다음을\s*(서술|구하|답하|풀|쓰|계산|적)|다음\s*물음에\s*답하|차례로\s*답하|각각\s*(구하|답하|서술|풀)|아래의?\s*물음에\s*답하)/;
-  for (const raw of stemLines) {
+    /(다음을\s*(서술|구하|답하|풀|쓰|계산|적)|(?:다음\s*|아래의?\s*)?물음에\s*답하|차례로\s*답하|각각\s*(구하|답하|서술|풀))/;
+  const lines = Array.isArray(stemLines) ? stemLines : [];
+  for (const raw of lines) {
     const line = normalizeWhitespace(String(raw || ''));
     if (!line) continue;
     if (SUB_LABEL_REGEX.test(line)) return true;
     if (LEAD_PROMPT_REGEX.test(line)) return true;
+  }
+  // answer_key 가 "(1) x (2) y" 같이 세트형 정답 구조를 가지면 세트형으로 확정한다.
+  // (미주 anchor 가 리드 stem 과 합쳐져 들어와 리드 시그니처가 stem 에 아직 없더라도
+  //  정답 문자열 자체에서 세트 구조를 확인할 수 있다.)
+  const answer = normalizeWhitespace(String(answerKey || ''));
+  if (answer) {
+    const SET_ANSWER_REGEX =
+      /[\(（]\s*1\s*[\)）][^\(（]*[\(（]\s*2\s*[\)）]/;
+    if (SET_ANSWER_REGEX.test(answer)) return true;
   }
   return false;
 }
@@ -778,6 +804,43 @@ function parseAnswerLineLoose(line) {
   const marker = input.search(/\[?\s*정답\s*\]?/);
   if (marker < 0) return null;
   return parseAnswerLine(input.slice(marker));
+}
+
+// HWPX 에서 [정답] endnote 와 다음 문항의 리드 프롬프트가 같은 paragraph 로 합쳐져
+// "[정답] (1) 12 (2) 4 다음 물음에 답하시오." 처럼 한 라인에 들어오는 경우,
+// 정답과 stem 리드를 분리한다.
+//
+// answer 문자열은 parseAnswerLine 을 통해 얻은 "정답" 이후 텍스트.
+// 리드 프롬프트는 세트형 리드 패턴(물음에 답하시오 / 다음을 구하시오 …)이거나,
+// 새 문항의 시작 패턴("다음 ...를 구하시오?" 같은) 을 포괄한다.
+//
+// 반환: { answer, lead } (lead 가 없으면 '')
+function splitAnswerLineWithTrailingLead(rawAnswer) {
+  const answer = normalizeWhitespace(String(rawAnswer || ''));
+  if (!answer) return { answer: '', lead: '' };
+  // 세트형 정답 구조 "(1) X (2) Y ..." 가 확인되지 않으면 꼬리 리드 분리를 시도하지 않는다.
+  // (일반 단일 정답 "12 점을 더 구하시오" 같은 애매한 분리를 방지.)
+  const SET_ANSWER_REGEX = /[\(（]\s*1\s*[\)）][^\(（]*[\(（]\s*2\s*[\)）]/;
+  if (!SET_ANSWER_REGEX.test(answer)) return { answer, lead: '' };
+  // 리드 시작점을 찾는다. 리드 후보:
+  //   - "다음 물음에 답하시오" / "물음에 답하시오"
+  //   - "다음을 (구하|서술|답하|풀|쓰|계산|적)시오"
+  //   - "각각 (구하|서술|답하|풀)시오"
+  //   - "아래의? 물음에 답하시오"
+  //   - 일반적 새 문항 프롬프트: "다음 ... 구하시오?" 류는 이 분기에선 제외
+  //     (세트형 정답이 이미 이 문항의 정답이므로 리드는 곧 이 문항의 stem 리드).
+  const LEAD_REGEX =
+    /((?:다음\s*|아래의?\s*)?물음에\s*답하[시오]?\s*\.?)|(다음을\s*(?:서술|구하|답하|풀|쓰|계산|적)(?:하)?(?:시오)?\s*\.?)|(차례로\s*답하[시오]?\s*\.?)|(각각\s*(?:구하|답하|서술|풀)(?:하)?(?:시오)?\s*\.?)/;
+  const leadMatch = answer.match(LEAD_REGEX);
+  if (!leadMatch) return { answer, lead: '' };
+  const leadStart = leadMatch.index;
+  if (leadStart <= 0) return { answer, lead: '' };
+  const head = answer.slice(0, leadStart).trim();
+  const tail = answer.slice(leadStart).trim();
+  if (!head || !tail) return { answer, lead: '' };
+  // head 가 여전히 "(1)...(2)..." 를 포함하는지 확인 (단순히 "(1)" 만 남는 분리는 지양).
+  if (!SET_ANSWER_REGEX.test(head)) return { answer, lead: '' };
+  return { answer: head, lead: tail };
 }
 
 // 세트형 문항의 답 문자열을 부분별로 쪼갠다.
@@ -2612,7 +2675,9 @@ async function enrichQuestionsWithDualMode({
     const stemLines = Array.isArray(q.stem_lines)
       ? q.stem_lines
       : String(q.stem || '').split(/\r?\n/);
-    const isSetShape = hasSetQuestionSignature(stemLines);
+    const isSetShape = hasSetQuestionSignature(stemLines, {
+      answerKey: rawSubjective || rawAnswerKey,
+    });
     const partsSource = rawSubjective || rawAnswerKey;
     const parts = isSetShape ? parseAnswerParts(partsSource) : null;
 
@@ -3014,7 +3079,9 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
         current &&
         current.stemLines.length > 0
       ) {
-        const setSigPresent = hasSetQuestionSignature(current.stemLines);
+        const setSigPresent = hasSetQuestionSignature(current.stemLines, {
+          answerKey: current.answer_key || '',
+        });
         // 세트형(하위문항) 흡수는 미주 경계를 넘어가면 금지한다.
         // HWPX에서 endnote는 해당 문항 말미에 anchor되므로, 미주 이후 첫 score_only는
         // 세트형 sub-score가 아닌 "다음 문항의 시작"이다.
@@ -3244,7 +3311,9 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
       looksLikeQuestionTerminalLine(previousStemLine);
     // 세트형 문항에서는 (1)/(2) 소문항의 "... 서술하시오" → 다음 (2) 줄이
     // 새 문항 경계로 오인되지 않도록 암시 분할을 억제한다.
-    const insideSetQuestion = hasSetQuestionSignature(current.stemLines);
+    const insideSetQuestion = hasSetQuestionSignature(current.stemLines, {
+      answerKey: current.answer_key || '',
+    });
     if (
       !insideSetQuestion &&
       (canSplitAfterChoices || canSplitAfterTerminal)
@@ -3283,8 +3352,16 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
       continue;
     }
     if (parsedAnswerKey) {
-      current.answer_key = parsedAnswerKey;
+      // 세트형 정답 "(1) X (2) Y" 뒤에 리드 프롬프트("물음에 답하시오")가 같은
+      // paragraph 로 합쳐져 들어온 경우, 리드 꼬리는 이어지는 문항의 stem 으로 복원한다.
+      const { answer: splitAnswer, lead: splitLead } =
+        splitAnswerLineWithTrailingLead(parsedAnswerKey);
+      current.answer_key = splitAnswer || parsedAnswerKey;
       current.sourcePatterns.push('answer_key');
+      if (splitLead) {
+        appendStemLine(current, splitLead, row.align);
+        current.sourcePatterns.push('answer_trailing_lead');
+      }
       continue;
     }
 
@@ -3324,9 +3401,13 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
       }
       // 세트형(하위문항 (1), (2) ...) 문항에서는 (1) / (2) / (3) 라인이 소문항 본문이므로
       // numeric 스타일 choice로 오인식되면 안 된다. stem 라인으로 유지한다.
+      // 리드가 stem 에 있는 경우뿐 아니라 answer_key 에 (1)(2) 구조가 이미 포함된 경우에도
+      // 세트형으로 간주한다.
       if (
         choice.style === 'numeric' &&
-        hasSetQuestionSignature(current.stemLines)
+        hasSetQuestionSignature(current.stemLines, {
+          answerKey: current.answer_key || '',
+        })
       ) {
         appendStemLine(current, cleanedLine, row.align);
         current.sourcePatterns.push('set_question_sub_item');
@@ -3735,6 +3816,9 @@ async function processOneJob(job) {
         'source_storage_bucket',
         'source_storage_path',
         'source_filename',
+        'source_pdf_storage_bucket',
+        'source_pdf_storage_path',
+        'source_pdf_filename',
         'meta',
         'curriculum_code',
         'source_type_code',
@@ -3758,62 +3842,26 @@ async function processOneJob(job) {
   }
 
   const classification = buildClassificationFromDocument(doc);
-  const bucket = String(doc.source_storage_bucket || 'problem-documents').trim();
-  const path = String(doc.source_storage_path || '').trim();
-  if (!path) {
-    throw new Error('document_storage_path_empty');
-  }
 
-  const { data: fileData, error: dlErr } = await supa.storage
-    .from(bucket)
-    .download(path);
-  if (dlErr || !fileData) {
-    throw new Error(dlErr?.message || 'document_download_failed');
-  }
-  const buffer = await toBufferFromStorageData(fileData);
-  if (!buffer || buffer.length === 0) {
-    throw new Error('document_buffer_empty');
-  }
+  // PDF 가 첨부된 문서는 VLM 엔진으로 분기한다. HWPX 파싱·Gemini 보강 블록은 건너뛰고
+  // "built / parsed / parseMode / engineMeta" 만 세팅한 뒤 공통 후처리(문항 insert/update,
+  // figure job 큐잉, preview 스크린샷, 잡 상태 전이) 를 기존 HWPX 파이프라인과 공유한다.
+  const hasPdfSource =
+    VLM_ENABLED && compact(doc.source_pdf_storage_path).length > 0;
+  // HWPX 원본이 붙어 있으면 figure 이미지를 BinData/*.png 에서 패스스루로 끌어올 수 있다.
+  // VLM 경로에서도 HWPX 가 같이 업로드돼 있으면 이 경로를 타게 해서 Gemini 로 그림을 재생성하지
+  // 않고 원본을 그대로 사용한다 (품질·정확도 모두 원본이 우월).
+  const hasHwpxSource = compact(doc.source_storage_path).length > 0;
 
-  const parsed = parseHwpxBuffer(buffer);
-  const xmlBuilt = buildQuestionRows({
-    academyId: job.academy_id,
-    documentId: job.document_id,
-    extractJobId: job.id,
-    parsed: { sections: parsed.sections },
-    threshold: REVIEW_CONFIDENCE_THRESHOLD,
-  });
-  let built = xmlBuilt;
-  let parseMode = 'xml';
+  let built;
+  let parsed;
+  let parseMode;
   let previewBuilt = null;
   let previewStemPatched = 0;
   let previewChoicePatched = 0;
-  if (parsed.previewSection) {
-    previewBuilt = buildQuestionRows({
-      academyId: job.academy_id,
-      documentId: job.document_id,
-      extractJobId: job.id,
-      parsed: { sections: [parsed.previewSection] },
-      threshold: REVIEW_CONFIDENCE_THRESHOLD,
-    });
-    if (parseQualityScore(previewBuilt) > parseQualityScore(xmlBuilt)) {
-      built = previewBuilt;
-      parseMode = 'preview';
-    } else {
-      const enriched = enrichXmlQuestionsWithPreview(
-        xmlBuilt,
-        previewBuilt,
-        REVIEW_CONFIDENCE_THRESHOLD,
-      );
-      built = enriched.built;
-      previewStemPatched = enriched.stemPatched;
-      previewChoicePatched = enriched.choicePatched;
-      if (previewStemPatched > 0 || previewChoicePatched > 0) {
-        parseMode = 'xml_enriched';
-      }
-    }
-  }
 
+  // Gemini 보강 단계 결과 플래그들. VLM 분기에서는 사용하지 않지만 공통 후처리가
+  // resultSummary 에 넣을 수 있도록 미리 초기화한다.
   let geminiTried = false;
   let geminiUsed = false;
   let geminiError = '';
@@ -3822,96 +3870,183 @@ async function processOneJob(job) {
   let geminiEnrichedQuestions = 0;
   let geminiStemPatched = 0;
   let geminiChoicePatched = 0;
-  if (shouldAttemptGemini(parsed, built)) {
-    geminiTried = true;
-    try {
-      const sourceText = buildGeminiSourceText(parsed);
-      const examProfileHint = built.stats.examProfile || '';
-      let drafts = [];
-      try {
-        drafts = await callGeminiQuestionExtractor({
-          sourceText,
-          examProfileHint,
-        });
-      } catch (firstErr) {
-        const firstMsg = String(firstErr?.message || firstErr || '');
-        const retryable = /aborted|timeout|408|deadline/i.test(firstMsg);
-        if (!retryable || sourceText.length < 7000) {
-          throw firstErr;
+
+  // VLM 엔진 전용 메타 (HWPX 경로에서는 null).
+  let engineMeta = null;
+
+  if (hasPdfSource) {
+    const vlmResult = await runVlmExtraction({
+      job,
+      doc,
+      supa,
+      apiKey: GEMINI_API_KEY,
+      model: VLM_MODEL,
+      reviewConfidenceThreshold: REVIEW_CONFIDENCE_THRESHOLD,
+      timeoutMs: VLM_TIMEOUT_MS,
+      log: (event, payload) => {
+        try {
+          console.log(
+            `[pb-extract-worker] vlm_${event}`,
+            JSON.stringify({ ...payload }),
+          );
+        } catch (_) {
+          // logging 실패는 무시.
         }
-        // 타임아웃/abort 시 입력을 줄여 1회 재시도한다.
-        const retrySourceText = sourceText.slice(0, 9000);
-        drafts = await callGeminiQuestionExtractor({
-          sourceText: retrySourceText,
-          examProfileHint,
-        });
-      }
-      const geminiBuilt = buildGeminiQuestionRows({
+      },
+    });
+    built = vlmResult.built;
+    parsed = vlmResult.parsed;
+    parseMode = 'vlm';
+    engineMeta = vlmResult.meta || { engine: 'vlm' };
+  } else {
+    const bucket = String(doc.source_storage_bucket || 'problem-documents').trim();
+    const path = String(doc.source_storage_path || '').trim();
+    if (!path) {
+      throw new Error('document_storage_path_empty');
+    }
+
+    const { data: fileData, error: dlErr } = await supa.storage
+      .from(bucket)
+      .download(path);
+    if (dlErr || !fileData) {
+      throw new Error(dlErr?.message || 'document_download_failed');
+    }
+    const buffer = await toBufferFromStorageData(fileData);
+    if (!buffer || buffer.length === 0) {
+      throw new Error('document_buffer_empty');
+    }
+
+    parsed = parseHwpxBuffer(buffer);
+    const xmlBuilt = buildQuestionRows({
+      academyId: job.academy_id,
+      documentId: job.document_id,
+      extractJobId: job.id,
+      parsed: { sections: parsed.sections },
+      threshold: REVIEW_CONFIDENCE_THRESHOLD,
+    });
+    built = xmlBuilt;
+    parseMode = 'xml';
+    if (parsed.previewSection) {
+      previewBuilt = buildQuestionRows({
         academyId: job.academy_id,
         documentId: job.document_id,
         extractJobId: job.id,
-        drafts,
+        parsed: { sections: [parsed.previewSection] },
         threshold: REVIEW_CONFIDENCE_THRESHOLD,
       });
-      geminiCandidateQuestions = Number(geminiBuilt.questions.length || 0);
-      const betterThanCurrent = shouldAcceptGeminiResult(parsed, built, geminiBuilt);
-      const currentQuestionCount = built.questions.length;
-      if (betterThanCurrent && geminiBuilt.questions.length > 0) {
-        if (shouldAllowFullGeminiReplace(parsed, built, geminiBuilt)) {
-          built = geminiBuilt;
-          parseMode = 'gemini';
-          geminiUsed = true;
-        } else {
-          const enriched = enrichBuiltWithGemini(
-            built,
-            geminiBuilt,
-            REVIEW_CONFIDENCE_THRESHOLD,
-          );
-          built = enriched.built;
-          geminiEnrichedQuestions = enriched.touchedCount;
-          geminiStemPatched = enriched.stemPatched;
-          geminiChoicePatched = enriched.choicePatched;
-          if (geminiEnrichedQuestions > 0) {
-            parseMode = `${parseMode}_gemini_enriched`;
+      if (parseQualityScore(previewBuilt) > parseQualityScore(xmlBuilt)) {
+        built = previewBuilt;
+        parseMode = 'preview';
+      } else {
+        const enriched = enrichXmlQuestionsWithPreview(
+          xmlBuilt,
+          previewBuilt,
+          REVIEW_CONFIDENCE_THRESHOLD,
+        );
+        built = enriched.built;
+        previewStemPatched = enriched.stemPatched;
+        previewChoicePatched = enriched.choicePatched;
+        if (previewStemPatched > 0 || previewChoicePatched > 0) {
+          parseMode = 'xml_enriched';
+        }
+      }
+    }
+
+    if (shouldAttemptGemini(parsed, built)) {
+      geminiTried = true;
+      try {
+        const sourceText = buildGeminiSourceText(parsed);
+        const examProfileHint = built.stats.examProfile || '';
+        let drafts = [];
+        try {
+          drafts = await callGeminiQuestionExtractor({
+            sourceText,
+            examProfileHint,
+          });
+        } catch (firstErr) {
+          const firstMsg = String(firstErr?.message || firstErr || '');
+          const retryable = /aborted|timeout|408|deadline/i.test(firstMsg);
+          if (!retryable || sourceText.length < 7000) {
+            throw firstErr;
+          }
+          // 타임아웃/abort 시 입력을 줄여 1회 재시도한다.
+          const retrySourceText = sourceText.slice(0, 9000);
+          drafts = await callGeminiQuestionExtractor({
+            sourceText: retrySourceText,
+            examProfileHint,
+          });
+        }
+        const geminiBuilt = buildGeminiQuestionRows({
+          academyId: job.academy_id,
+          documentId: job.document_id,
+          extractJobId: job.id,
+          drafts,
+          threshold: REVIEW_CONFIDENCE_THRESHOLD,
+        });
+        geminiCandidateQuestions = Number(geminiBuilt.questions.length || 0);
+        const betterThanCurrent = shouldAcceptGeminiResult(parsed, built, geminiBuilt);
+        const currentQuestionCount = built.questions.length;
+        if (betterThanCurrent && geminiBuilt.questions.length > 0) {
+          if (shouldAllowFullGeminiReplace(parsed, built, geminiBuilt)) {
+            built = geminiBuilt;
+            parseMode = 'gemini';
             geminiUsed = true;
           } else {
-            geminiRejectedReason = 'replace_guard';
+            const enriched = enrichBuiltWithGemini(
+              built,
+              geminiBuilt,
+              REVIEW_CONFIDENCE_THRESHOLD,
+            );
+            built = enriched.built;
+            geminiEnrichedQuestions = enriched.touchedCount;
+            geminiStemPatched = enriched.stemPatched;
+            geminiChoicePatched = enriched.choicePatched;
+            if (geminiEnrichedQuestions > 0) {
+              parseMode = `${parseMode}_gemini_enriched`;
+              geminiUsed = true;
+            } else {
+              geminiRejectedReason = 'replace_guard';
+            }
           }
+        } else if (geminiBuilt.questions.length <= 0) {
+          geminiRejectedReason = 'empty_result';
+        } else {
+          geminiRejectedReason = 'quality_guard';
         }
-      } else if (geminiBuilt.questions.length <= 0) {
-        geminiRejectedReason = 'empty_result';
-      } else {
-        geminiRejectedReason = 'quality_guard';
+        console.log(
+          '[pb-extract-worker] gemini_probe',
+          JSON.stringify({
+            jobId: job.id,
+            currentQuestions: currentQuestionCount,
+            geminiQuestions: geminiBuilt.questions.length,
+            geminiUsed,
+            geminiPriority: GEMINI_PRIORITY,
+            geminiRejectedReason,
+            geminiEnrichedQuestions,
+          }),
+        );
+      } catch (err) {
+        geminiError = compact(err?.message || err);
+        console.error(
+          '[pb-extract-worker] gemini_fail',
+          JSON.stringify({
+            jobId: job.id,
+            message: geminiError,
+          }),
+        );
+        geminiRejectedReason = 'gemini_error';
       }
-      console.log(
-        '[pb-extract-worker] gemini_probe',
-        JSON.stringify({
-          jobId: job.id,
-          currentQuestions: currentQuestionCount,
-          geminiQuestions: geminiBuilt.questions.length,
-          geminiUsed,
-          geminiPriority: GEMINI_PRIORITY,
-          geminiRejectedReason,
-          geminiEnrichedQuestions,
-        }),
-      );
-    } catch (err) {
-      geminiError = compact(err?.message || err);
-      console.error(
-        '[pb-extract-worker] gemini_fail',
-        JSON.stringify({
-          jobId: job.id,
-          message: geminiError,
-        }),
-      );
-      geminiRejectedReason = 'gemini_error';
     }
   }
 
-  const dualModeResult = await enrichQuestionsWithDualMode({
-    questions: built.questions || [],
-    examProfileHint: built?.stats?.examProfile || '',
-  });
+  // VLM 경로는 문항 타입/보기/정답을 자체적으로 결정하므로 dualMode 변환을 건너뛴다.
+  // HWPX 경로는 기존대로 "주관식 보기 자동 생성" 보강 단계를 거친다.
+  const dualModeResult = hasPdfSource
+    ? { questions: built.questions || [], stats: {} }
+    : await enrichQuestionsWithDualMode({
+        questions: built.questions || [],
+        examProfileHint: built?.stats?.examProfile || '',
+      });
   built.questions = dualModeResult.questions;
 
   const { questions, stats } = built;
@@ -4065,7 +4200,15 @@ async function processOneJob(job) {
       }
     }
 
-    if (AUTO_QUEUE_FIGURE_JOBS && questions.length > 0) {
+    // Figure job 큐잉 조건: HWPX 원본이 있어야 한다 (BinData/*.png 를 꺼내 쓰기 위함).
+    //
+    //   - HWPX-only  : 기존과 동일. figure worker 가 BinData 를 읽고 PASSTHROUGH 로 원본 업로드.
+    //   - HWPX+PDF   : VLM 경로에서도 동일하게 큐잉. figure worker 는 HWPX 에서만 이미지를 가져오므로
+    //                  Gemini 가 그림을 상상으로 만드는 일 없이 원본 이미지가 그대로 문항에 매핑된다.
+    //                  VLM writeback 은 meta.figure_count 를 채워주므로 inferQuestionFigureCount 에서
+    //                  figure 매핑 정확도가 올라간다.
+    //   - PDF-only   : HWPX 원본이 없으므로 현재는 figure 생성 스킵 (향후 PDF 크롭 fallback 가능).
+    if (hasHwpxSource && AUTO_QUEUE_FIGURE_JOBS && questions.length > 0) {
       try {
         const { data: insertedQuestions, error: fetchInsertedErr } = await supa
           .from('pb_questions')
@@ -4202,6 +4345,17 @@ async function processOneJob(job) {
     : (reviewRequired ? 'draft_review_required' : 'draft_ready');
 
   const resultSummary = {
+    engine: hasPdfSource ? 'vlm' : 'hwpx',
+    engineModel: hasPdfSource ? VLM_MODEL : (GEMINI_ENABLED ? GEMINI_MODEL : ''),
+    vlm: engineMeta
+      ? {
+          model: engineMeta.model || VLM_MODEL,
+          elapsedMs: Number(engineMeta.elapsedMs || 0),
+          finishReason: String(engineMeta.finishReason || ''),
+          documentMeta: engineMeta.documentMeta || null,
+          usage: engineMeta.usage || null,
+        }
+      : null,
     totalQuestions: questions.length,
     lowConfidenceCount: stats.lowConfidenceCount,
     circledChoices: stats.circledChoices,
@@ -4246,10 +4400,15 @@ async function processOneJob(job) {
   const nextDocMeta = {
     ...(doc.meta || {}),
     extraction: {
-      parser: 'pb_extract_worker_v1',
+      parser: hasPdfSource
+        ? 'pb_extract_worker_vlm_v1'
+        : 'pb_extract_worker_v1',
       processed_at: nowIso,
       parse_mode: parseMode,
       file_name: doc.source_filename || '',
+      pdf_file_name: hasPdfSource
+        ? String(doc.source_pdf_filename || '').trim()
+        : '',
       ...resultSummary,
     },
   };

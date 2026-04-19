@@ -1,0 +1,173 @@
+{
+  "model": "gemini-3.1-pro-preview",
+  "candidates": [
+    {
+      "label": "C1",
+      "storagePath": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/1026558d-a6a6-4943-bae2-6eed11710288/15e080c6-ebe6-47f0-ae0c-93c9c16c0319/6ce31d3c-cddd-409a-b36b-2cdeead0d1c4.png",
+      "currentAssignment": "9"
+    },
+    {
+      "label": "C2",
+      "storagePath": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/1026558d-a6a6-4943-bae2-6eed11710288/5e2154b7-218f-4666-8836-b895f2944c61/6fed37f9-3f8b-4944-bde6-010a01a18914_1.png",
+      "currentAssignment": null
+    },
+    {
+      "label": "C3",
+      "storagePath": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/1026558d-a6a6-4943-bae2-6eed11710288/5e2154b7-218f-4666-8836-b895f2944c61/6fed37f9-3f8b-4944-bde6-010a01a18914_2.png",
+      "currentAssignment": null
+    },
+    {
+      "label": "C4",
+      "storagePath": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/1026558d-a6a6-4943-bae2-6eed11710288/77e2944f-f8e0-4acc-9e7f-06be19aa8b78/61104e73-1634-4ec0-a5b1-eb0bcbd42d79.png",
+      "currentAssignment": "17"
+    },
+    {
+      "label": "C5",
+      "storagePath": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/1026558d-a6a6-4943-bae2-6eed11710288/a4dffa10-2b60-4a40-b775-b5edd14e293b/330cdcbb-9809-4620-bf78-b8cd72d594c7.png",
+      "currentAssignment": null
+    },
+    {
+      "label": "C6",
+      "storagePath": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/1026558d-a6a6-4943-bae2-6eed11710288/b516c404-ec2c-402f-888b-50a9aca625b3/2c38a2c9-1ada-43a0-9ee1-5e6c742b18b1.png",
+      "currentAssignment": null
+    },
+    {
+      "label": "C7",
+      "storagePath": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/1026558d-a6a6-4943-bae2-6eed11710288/d2371f62-12d4-4b95-818f-77600ff61208/425670eb-d4f9-4e9a-8365-c9a08f592742_1.png",
+      "currentAssignment": "10"
+    },
+    {
+      "label": "C8",
+      "storagePath": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/1026558d-a6a6-4943-bae2-6eed11710288/d2371f62-12d4-4b95-818f-77600ff61208/425670eb-d4f9-4e9a-8365-c9a08f592742_2.png",
+      "currentAssignment": "10"
+    },
+    {
+      "label": "C9",
+      "storagePath": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/1026558d-a6a6-4943-bae2-6eed11710288/db47cbf9-6b6c-452f-92f5-81189c053c7c/c762b51c-d549-4450-8c19-eee6ed0f6eda_1.png",
+      "currentAssignment": null
+    },
+    {
+      "label": "C10",
+      "storagePath": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/1026558d-a6a6-4943-bae2-6eed11710288/db47cbf9-6b6c-452f-92f5-81189c053c7c/c762b51c-d549-4450-8c19-eee6ed0f6eda_2.png",
+      "currentAssignment": null
+    },
+    {
+      "label": "C11",
+      "storagePath": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/1026558d-a6a6-4943-bae2-6eed11710288/db47cbf9-6b6c-452f-92f5-81189c053c7c/c762b51c-d549-4450-8c19-eee6ed0f6eda_3.png",
+      "currentAssignment": null
+    },
+    {
+      "label": "C12",
+      "storagePath": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/1026558d-a6a6-4943-bae2-6eed11710288/e9b66c59-9e4d-47cd-b1cc-d7e2c9190ead/c22081ec-b9c3-42a7-8289-f8ec192eb34e_1.png",
+      "currentAssignment": "4"
+    },
+    {
+      "label": "C13",
+      "storagePath": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/1026558d-a6a6-4943-bae2-6eed11710288/e9b66c59-9e4d-47cd-b1cc-d7e2c9190ead/c22081ec-b9c3-42a7-8289-f8ec192eb34e_2.png",
+      "currentAssignment": "4"
+    },
+    {
+      "label": "C14",
+      "storagePath": "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/1026558d-a6a6-4943-bae2-6eed11710288/e9b66c59-9e4d-47cd-b1cc-d7e2c9190ead/c22081ec-b9c3-42a7-8289-f8ec192eb34e_3.png",
+      "currentAssignment": "4"
+    }
+  ],
+  "questions": [
+    {
+      "number": "1",
+      "slots": 0,
+      "currentAssets": []
+    },
+    {
+      "number": "10",
+      "slots": 3,
+      "currentAssets": [
+        "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/1026558d-a6a6-4943-bae2-6eed11710288/d2371f62-12d4-4b95-818f-77600ff61208/425670eb-d4f9-4e9a-8365-c9a08f592742_1.png",
+        "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/1026558d-a6a6-4943-bae2-6eed11710288/d2371f62-12d4-4b95-818f-77600ff61208/425670eb-d4f9-4e9a-8365-c9a08f592742_2.png"
+      ]
+    },
+    {
+      "number": "11",
+      "slots": 0,
+      "currentAssets": []
+    },
+    {
+      "number": "12",
+      "slots": 0,
+      "currentAssets": []
+    },
+    {
+      "number": "13",
+      "slots": 0,
+      "currentAssets": []
+    },
+    {
+      "number": "14",
+      "slots": 0,
+      "currentAssets": []
+    },
+    {
+      "number": "15",
+      "slots": 0,
+      "currentAssets": []
+    },
+    {
+      "number": "16",
+      "slots": 0,
+      "currentAssets": []
+    },
+    {
+      "number": "17",
+      "slots": 2,
+      "currentAssets": [
+        "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/1026558d-a6a6-4943-bae2-6eed11710288/77e2944f-f8e0-4acc-9e7f-06be19aa8b78/61104e73-1634-4ec0-a5b1-eb0bcbd42d79.png"
+      ]
+    },
+    {
+      "number": "2",
+      "slots": 0,
+      "currentAssets": []
+    },
+    {
+      "number": "3",
+      "slots": 0,
+      "currentAssets": []
+    },
+    {
+      "number": "4",
+      "slots": 4,
+      "currentAssets": [
+        "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/1026558d-a6a6-4943-bae2-6eed11710288/e9b66c59-9e4d-47cd-b1cc-d7e2c9190ead/c22081ec-b9c3-42a7-8289-f8ec192eb34e_1.png",
+        "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/1026558d-a6a6-4943-bae2-6eed11710288/e9b66c59-9e4d-47cd-b1cc-d7e2c9190ead/c22081ec-b9c3-42a7-8289-f8ec192eb34e_2.png",
+        "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/1026558d-a6a6-4943-bae2-6eed11710288/e9b66c59-9e4d-47cd-b1cc-d7e2c9190ead/c22081ec-b9c3-42a7-8289-f8ec192eb34e_3.png"
+      ]
+    },
+    {
+      "number": "5",
+      "slots": 0,
+      "currentAssets": []
+    },
+    {
+      "number": "6",
+      "slots": 0,
+      "currentAssets": []
+    },
+    {
+      "number": "7",
+      "slots": 0,
+      "currentAssets": []
+    },
+    {
+      "number": "8",
+      "slots": 0,
+      "currentAssets": []
+    },
+    {
+      "number": "9",
+      "slots": 1,
+      "currentAssets": [
+        "3ff51b8d-3cfb-4a36-a1a1-b63aebbde677/1026558d-a6a6-4943-bae2-6eed11710288/15e080c6-ebe6-47f0-ae0c-93c9c16c0319/6ce31d3c-cddd-409a-b36b-2cdeead0d1c4.png"
+      ]
+    }
+  ]
+}

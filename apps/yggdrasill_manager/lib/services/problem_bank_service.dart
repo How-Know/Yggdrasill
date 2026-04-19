@@ -526,6 +526,153 @@ class ProblemBankService {
     }
   }
 
+  /// 이미 생성된 pb_document 에 VLM 추출용 PDF 원본을 첨부/교체한다.
+  /// 같은 document 에 이전 PDF가 있다면 storage 에서 정리한다.
+  Future<ProblemBankDocument> uploadPdfForDocument({
+    required String documentId,
+    required Uint8List bytes,
+    required String originalName,
+    String? academyId,
+  }) async {
+    final aid = (academyId ?? await resolveAcademyId()).trim();
+    if (aid.isEmpty) {
+      throw Exception('academy_id가 없습니다.');
+    }
+    if (documentId.trim().isEmpty) {
+      throw Exception('documentId 가 필요합니다.');
+    }
+    if (bytes.isEmpty) {
+      throw Exception('PDF 바이트가 비어 있습니다.');
+    }
+
+    final now = DateTime.now().toUtc();
+    final nowIso = now.toIso8601String();
+    final sourceSha256 = sha256.convert(bytes).toString();
+    final safeName =
+        _safeFileNameWithExt(originalName, '.pdf', fallback: 'document');
+    final objectPath = '$aid/${now.millisecondsSinceEpoch}_$safeName';
+
+    // 기존 문서 PDF 경로를 읽어둔다 (교체 시 정리용).
+    final existing = await _client
+        .from('pb_documents')
+        .select(
+          'source_pdf_storage_bucket, source_pdf_storage_path',
+        )
+        .eq('academy_id', aid)
+        .eq('id', documentId)
+        .maybeSingle();
+    final existingMap = Map<String, dynamic>.from(
+      (existing as Map<dynamic, dynamic>?) ?? const <String, dynamic>{},
+    );
+    final oldBucket =
+        '${existingMap['source_pdf_storage_bucket'] ?? ''}'.trim();
+    final oldPath = '${existingMap['source_pdf_storage_path'] ?? ''}'.trim();
+
+    await _client.storage.from('problem-documents').uploadBinary(
+          objectPath,
+          bytes,
+          fileOptions: const FileOptions(
+            cacheControl: '3600',
+            contentType: 'application/pdf',
+            upsert: false,
+          ),
+        );
+
+    try {
+      final row = await _client
+          .from('pb_documents')
+          .update({
+            'source_pdf_storage_bucket': 'problem-documents',
+            'source_pdf_storage_path': objectPath,
+            'source_pdf_filename': originalName,
+            'source_pdf_sha256': sourceSha256,
+            'source_pdf_size_bytes': bytes.length,
+            'updated_at': nowIso,
+          })
+          .eq('academy_id', aid)
+          .eq('id', documentId)
+          .select('*')
+          .single();
+
+      if (oldBucket.isNotEmpty &&
+          oldPath.isNotEmpty &&
+          !(oldBucket == 'problem-documents' && oldPath == objectPath)) {
+        try {
+          await _client.storage.from(oldBucket).remove([oldPath]);
+        } catch (_) {
+          // 이전 PDF 정리 실패는 업로드 성공을 막지 않는다.
+        }
+      }
+
+      return ProblemBankDocument.fromMap(
+        Map<String, dynamic>.from(row as Map<dynamic, dynamic>),
+      );
+    } catch (e) {
+      try {
+        await _client.storage.from('problem-documents').remove([objectPath]);
+      } catch (_) {
+        // 업로드 실패 정리 중 스토리지 삭제 실패는 무시한다.
+      }
+      rethrow;
+    }
+  }
+
+  /// document 에 연결된 PDF 원본을 제거한다 (DB + Storage).
+  Future<ProblemBankDocument> clearPdfForDocument({
+    required String documentId,
+    String? academyId,
+  }) async {
+    final aid = (academyId ?? await resolveAcademyId()).trim();
+    if (aid.isEmpty) {
+      throw Exception('academy_id가 없습니다.');
+    }
+    if (documentId.trim().isEmpty) {
+      throw Exception('documentId 가 필요합니다.');
+    }
+    final nowIso = DateTime.now().toUtc().toIso8601String();
+    final existing = await _client
+        .from('pb_documents')
+        .select(
+          'source_pdf_storage_bucket, source_pdf_storage_path',
+        )
+        .eq('academy_id', aid)
+        .eq('id', documentId)
+        .maybeSingle();
+    final existingMap = Map<String, dynamic>.from(
+      (existing as Map<dynamic, dynamic>?) ?? const <String, dynamic>{},
+    );
+    final oldBucket =
+        '${existingMap['source_pdf_storage_bucket'] ?? ''}'.trim();
+    final oldPath = '${existingMap['source_pdf_storage_path'] ?? ''}'.trim();
+
+    final row = await _client
+        .from('pb_documents')
+        .update({
+          'source_pdf_storage_bucket': '',
+          'source_pdf_storage_path': '',
+          'source_pdf_filename': '',
+          'source_pdf_sha256': '',
+          'source_pdf_size_bytes': 0,
+          'updated_at': nowIso,
+        })
+        .eq('academy_id', aid)
+        .eq('id', documentId)
+        .select('*')
+        .single();
+
+    if (oldBucket.isNotEmpty && oldPath.isNotEmpty) {
+      try {
+        await _client.storage.from(oldBucket).remove([oldPath]);
+      } catch (_) {
+        // 이전 PDF 정리 실패는 무시한다.
+      }
+    }
+
+    return ProblemBankDocument.fromMap(
+      Map<String, dynamic>.from(row as Map<dynamic, dynamic>),
+    );
+  }
+
   Future<ProblemBankManualImportResult> importPastedText({
     required String academyId,
     required String rawText,
@@ -1474,6 +1621,50 @@ class ProblemBankService {
     await _client.from('pb_questions').update(payload).eq('id', questionId);
   }
 
+  /// 특정 문항에 대해 가장 최근 revision 한 건을 조회.
+  ///
+  /// `pb_questions` UPDATE 직후 DB trigger 가 revision 을 찍기 때문에, 저장 후
+  /// 바로 호출하면 방금 적립된 revision 이 반환된다. 의미 있는 필드 변경이 없는
+  /// UPDATE 였다면 (예: is_checked 토글만) trigger 가 적립을 건너뛰므로 null 이
+  /// 반환될 수 있다 — 호출 측은 null 케이스를 자연스레 허용하면 됨.
+  Future<ProblemBankQuestionRevision?> fetchLatestQuestionRevision({
+    required String academyId,
+    required String questionId,
+  }) async {
+    final rows = await _client
+        .from('pb_question_revisions')
+        .select(
+            'id,academy_id,document_id,question_id,engine,engine_model,'
+            'revised_at,edited_fields,reason_tags,reason_note,diff')
+        .eq('academy_id', academyId)
+        .eq('question_id', questionId)
+        .order('revised_at', ascending: false)
+        .limit(1);
+    if (rows.isEmpty) return null;
+    return ProblemBankQuestionRevision.fromMap(
+      Map<String, dynamic>.from(rows.first),
+    );
+  }
+
+  /// 이미 적립된 revision 에 수정 의도 태그와 메모를 덧붙인다.
+  ///
+  /// DB 의 immutable guard trigger 가 before/after 스냅샷·diff·엔진 정보는
+  /// 변경되지 않도록 보호하므로, 이 호출은 안전하게 `reason_tags` / `reason_note`
+  /// 두 필드만 업데이트한다.
+  Future<void> attachRevisionReason({
+    required String revisionId,
+    required List<ProblemBankRevisionReasonTag> tags,
+    String note = '',
+  }) async {
+    await _client
+        .from('pb_question_revisions')
+        .update({
+          'reason_tags': tags.map((t) => t.key).toList(growable: false),
+          'reason_note': note,
+        })
+        .eq('id', revisionId);
+  }
+
   Future<void> updateQuestionMeta({
     required String questionId,
     required Map<String, dynamic> meta,
@@ -1831,9 +2022,18 @@ class ProblemBankService {
   }
 
   String _safeFileName(String input) {
+    return _safeFileNameWithExt(input, '.hwpx', fallback: 'document');
+  }
+
+  String _safeFileNameWithExt(
+    String input,
+    String requiredExtension, {
+    String fallback = 'document',
+  }) {
+    final ext = requiredExtension.toLowerCase();
     var sanitized = input.trim();
     if (sanitized.isEmpty) {
-      return 'document.hwpx';
+      return '$fallback$ext';
     }
 
     // Supabase Storage object key는 안전한 ASCII 문자만 사용한다.
@@ -1845,10 +2045,10 @@ class ProblemBankService {
         .replaceAll(RegExp(r'^[._-]+'), '');
 
     if (sanitized.isEmpty) {
-      sanitized = 'document';
+      sanitized = fallback;
     }
-    if (!sanitized.toLowerCase().endsWith('.hwpx')) {
-      sanitized = '$sanitized.hwpx';
+    if (!sanitized.toLowerCase().endsWith(ext)) {
+      sanitized = '$sanitized$ext';
     }
     return sanitized;
   }
