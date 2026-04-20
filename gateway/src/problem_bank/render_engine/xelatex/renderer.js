@@ -220,11 +220,12 @@ export async function renderQuestionWithXeLatex({
   } finally {
     // 디버그 모드: PB_XELATEX_KEEP_WORKDIR=1 이면 workDir 을 삭제하지 않고 보존.
     //   .tex / .log 파일을 직접 열어볼 수 있도록 (프로덕션에서는 환경변수 설정 안 함).
-    if (!process.env.PB_XELATEX_KEEP_WORKDIR) {
-      fs.rmSync(workDir, { recursive: true, force: true });
-    } else {
+    // [임시 DEBUG] 원인 파악을 위해 항상 workDir 을 유지. 원인 확인 후 원복 예정.
+    // if (!process.env.PB_XELATEX_KEEP_WORKDIR) {
+    //   fs.rmSync(workDir, { recursive: true, force: true });
+    // } else {
       console.log('[pb-xelatex-doc] workDir kept for debug:', workDir);
-    }
+    // }
   }
 }
 
@@ -384,10 +385,11 @@ export async function renderPdfWithXeLatex({
   } finally {
     // 디버그 모드: PB_XELATEX_KEEP_WORKDIR=1 이면 workDir 을 삭제하지 않고 보존.
     //   .tex / .log 파일을 직접 열어볼 수 있도록 (프로덕션에서는 환경변수 설정 안 함).
-    if (!process.env.PB_XELATEX_KEEP_WORKDIR) {
-      fs.rmSync(workDir, { recursive: true, force: true });
-    } else {
+    // [임시 DEBUG] 원인 파악을 위해 항상 workDir 을 유지. 원인 확인 후 원복 예정.
+    // if (!process.env.PB_XELATEX_KEEP_WORKDIR) {
+    //   fs.rmSync(workDir, { recursive: true, force: true });
+    // } else {
       console.log('[pb-xelatex-doc] workDir kept for debug:', workDir);
-    }
+    // }
   }
 }

@@ -10,10 +10,12 @@ import '../../services/problem_bank_service.dart';
 import '../../widgets/latex_text_renderer.dart';
 import 'problem_bank_models.dart';
 import 'widgets/figure_compare_dialog.dart';
+import 'widgets/figure_horizontal_groups_editor.dart';
 import 'widgets/problem_bank_classification_filter_panel.dart';
 import 'widgets/problem_bank_mode_tab_bar.dart';
 import 'widgets/problem_bank_synced_list_dialog.dart';
 import 'widgets/question_revision_reason_dialog.dart';
+import 'widgets/table_scale_dialog.dart';
 
 class ProblemBankScreen extends StatefulWidget {
   const ProblemBankScreen({super.key});
@@ -676,16 +678,12 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     return _figureRenderScaleOf(q);
   }
 
-  String _figureRenderScaleLabel(ProblemBankQuestion q) {
-    final pct = (_figureRenderScaleOf(q) * 100).round();
-    return '$pct%';
-  }
-
   void _setFigureRenderScales(
     ProblemBankQuestion q,
     Map<String, double> widthEmMap, {
     Map<String, String>? positionMap,
     Set<String>? horizontalPairKeys,
+    List<List<String>>? horizontalGroups,
   }) {
     final updatedMeta = Map<String, dynamic>.from(q.meta);
 
@@ -705,17 +703,29 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       });
     }
 
-    final nextPairKeys = horizontalPairKeys ?? _figureHorizontalPairKeysOf(q);
-    final groups = <Map<String, dynamic>>[];
-    for (final pairKey in nextPairKeys) {
-      final parts = _figurePairParts(pairKey);
-      if (parts.length != 2) continue;
-      groups.add(<String, dynamic>{
-        'type': 'horizontal',
-        'members': parts,
-        'gap': 0.5,
-      });
+    // horizontalGroups(신규 N멤버 API) 가 제공되면 우선 사용. 없으면 레거시 pair 경로.
+    final List<List<String>> resolvedGroups;
+    if (horizontalGroups != null) {
+      resolvedGroups = <List<String>>[
+        for (final g in horizontalGroups)
+          if (g.length >= 2) List<String>.from(g),
+      ];
+    } else {
+      final nextPairKeys = horizontalPairKeys ?? _figureHorizontalPairKeysOf(q);
+      resolvedGroups = <List<String>>[
+        for (final pk in nextPairKeys)
+          if (_figurePairParts(pk).length == 2) _figurePairParts(pk),
+      ];
     }
+
+    final groups = <Map<String, dynamic>>[
+      for (final members in resolvedGroups)
+        <String, dynamic>{
+          'type': 'horizontal',
+          'members': members,
+          'gap': 0.5,
+        },
+    ];
 
     if (items.isNotEmpty) {
       updatedMeta['figure_layout'] = <String, dynamic>{
@@ -740,15 +750,16 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     } else {
       updatedMeta['figure_render_scales'] = legacyScaleMap;
     }
-    final cleanedPairPayload = nextPairKeys
-        .map((pairKey) => _figurePairParts(pairKey))
-        .where((parts) => parts.length == 2)
-        .map((parts) => <String, String>{'a': parts[0], 'b': parts[1]})
-        .toList(growable: false);
-    if (cleanedPairPayload.isEmpty) {
-      updatedMeta.remove('figure_horizontal_pairs');
+    // 레거시 figure_horizontal_pairs 는 "모든 그룹이 정확히 2명" 인 경우에만 같이 저장.
+    // 3명 이상 그룹이 하나라도 있으면 필드를 지워 이전 버전 파이프라인의 오해석을 막는다.
+    final allPairs = resolvedGroups.every((g) => g.length == 2);
+    if (allPairs && resolvedGroups.isNotEmpty) {
+      updatedMeta['figure_horizontal_pairs'] = <Map<String, String>>[
+        for (final g in resolvedGroups)
+          <String, String>{'a': g[0], 'b': g[1]},
+      ];
     } else {
-      updatedMeta['figure_horizontal_pairs'] = cleanedPairPayload;
+      updatedMeta.remove('figure_horizontal_pairs');
     }
     final avgScale = widthEmMap.isEmpty
         ? 1.0
@@ -772,11 +783,15 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           .toList(growable: false);
       _dirtyQuestionIds.add(q.id);
     });
-    final pairSuffix = cleanedPairPayload.isEmpty
+    final allPairsForSnack =
+        resolvedGroups.isNotEmpty && resolvedGroups.every((g) => g.length == 2);
+    final groupSuffix = resolvedGroups.isEmpty
         ? ''
-        : ' · 가로묶음 ${cleanedPairPayload.length}쌍';
+        : allPairsForSnack
+            ? ' · 가로묶음 ${resolvedGroups.length}쌍'
+            : ' · 가로묶음 ${resolvedGroups.length}개';
     _showSnack(
-      '${q.questionNumber}번 그림 설정을 저장했습니다.$pairSuffix 상단 `업로드` 버튼으로 반영하세요.',
+      '${q.questionNumber}번 그림 설정을 저장했습니다.$groupSuffix 상단 `업로드` 버튼으로 반영하세요.',
     );
   }
 
@@ -7005,25 +7020,35 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     return preferred.clamp(620.0, screenSize.width - 48).toDouble();
   }
 
-  double _previewDialogHeight(ProblemBankQuestion q, Size screenSize) {
-    final previewChoices = _previewChoicesOf(q);
-    final totalChars = _normalizePreviewLine(q.renderedStem).length +
-        previewChoices.fold<int>(
-            0,
-            (sum, c) =>
-                sum + _normalizePreviewLine(q.renderChoiceText(c)).length);
-    final preferred =
-        (420 + totalChars * 0.42).clamp(420.0, screenSize.height * 0.9);
-    return preferred.toDouble();
-  }
-
   Map<String, dynamic> _buildDraftMeta(
     ProblemBankQuestion q,
     Map<String, double> draftMap,
     Set<String> selectedPairKeys, {
     Map<String, String>? positionMap,
+    List<List<String>>? horizontalGroups,
+    Map<String, TableScaleValue>? tableScales,
+    TableScaleValue? tableScaleDefault,
   }) {
     final updatedMeta = Map<String, dynamic>.from(q.meta);
+    // 표 스케일: draft 값이 명시적으로 제공됐으면 그 값을, 아니면 기존 meta 값 유지.
+    if (tableScales != null) {
+      final payload = <String, Map<String, dynamic>>{};
+      tableScales.forEach((k, v) {
+        if (!v.isDefault) payload[k] = v.toJson();
+      });
+      if (payload.isEmpty) {
+        updatedMeta.remove('table_scales');
+      } else {
+        updatedMeta['table_scales'] = payload;
+      }
+    }
+    if (tableScaleDefault != null) {
+      if (tableScaleDefault.isDefault) {
+        updatedMeta.remove('table_scale_default');
+      } else {
+        updatedMeta['table_scale_default'] = tableScaleDefault.toJson();
+      }
+    }
 
     final items = <Map<String, dynamic>>[];
     for (final e in draftMap.entries) {
@@ -7040,16 +7065,27 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         'offsetYEm': 0,
       });
     }
-    final groups = <Map<String, dynamic>>[];
-    for (final pairKey in selectedPairKeys) {
-      final parts = _figurePairParts(pairKey);
-      if (parts.length != 2) continue;
-      groups.add(<String, dynamic>{
-        'type': 'horizontal',
-        'members': parts,
-        'gap': 0.5,
-      });
+    // horizontalGroups 우선. 없으면 selectedPairKeys 를 2멤버 그룹으로 변환.
+    final List<List<String>> resolvedGroups;
+    if (horizontalGroups != null) {
+      resolvedGroups = <List<String>>[
+        for (final g in horizontalGroups)
+          if (g.length >= 2) List<String>.from(g),
+      ];
+    } else {
+      resolvedGroups = <List<String>>[
+        for (final pk in selectedPairKeys)
+          if (_figurePairParts(pk).length == 2) _figurePairParts(pk),
+      ];
     }
+    final groups = <Map<String, dynamic>>[
+      for (final members in resolvedGroups)
+        <String, dynamic>{
+          'type': 'horizontal',
+          'members': members,
+          'gap': 0.5,
+        },
+    ];
     if (items.isNotEmpty) {
       updatedMeta['figure_layout'] = <String, dynamic>{
         'version': 1,
@@ -7073,15 +7109,15 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     } else {
       updatedMeta['figure_render_scales'] = legacyScaleMap;
     }
-    final cleanedPairPayload = selectedPairKeys
-        .map((pairKey) => _figurePairParts(pairKey))
-        .where((parts) => parts.length == 2)
-        .map((parts) => <String, String>{'a': parts[0], 'b': parts[1]})
-        .toList(growable: false);
-    if (cleanedPairPayload.isEmpty) {
-      updatedMeta.remove('figure_horizontal_pairs');
+    // 레거시 pairs 는 "모든 그룹이 2명" 일 때만 같이 저장.
+    final allPairs = resolvedGroups.every((g) => g.length == 2);
+    if (allPairs && resolvedGroups.isNotEmpty) {
+      updatedMeta['figure_horizontal_pairs'] = <Map<String, String>>[
+        for (final g in resolvedGroups)
+          <String, String>{'a': g[0], 'b': g[1]},
+      ];
     } else {
-      updatedMeta['figure_horizontal_pairs'] = cleanedPairPayload;
+      updatedMeta.remove('figure_horizontal_pairs');
     }
     final avgScale = draftMap.isEmpty
         ? 1.0
@@ -7103,18 +7139,39 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     if (!mounted) return;
     final screen = MediaQuery.sizeOf(context);
     final hasFigures = q.figureRefs.isNotEmpty;
-    final dialogWidth = _previewDialogWidth(q, screen);
-    final baseHeight = _previewDialogHeight(q, screen);
-    final dialogHeight =
-        hasFigures ? (baseHeight + 180).clamp(500.0, screen.height - 40) : baseHeight;
+    final tableEntries = _parseTableEntries(q);
+    final hasTables = tableEntries.isNotEmpty;
+    final hasSidebar = hasFigures || hasTables;
+
+    // 다이얼로그 사이즈:
+    // - 세로는 화면 높이의 최대 92% 까지 확보하되, 문항 세로 높이 필요에 따라 유연.
+    // - 가로는 문항 본 미리보기 최소폭 + 사이드바(360) 를 포함할 수 있게 충분히 확보.
+    const double sidebarWidth = 360;
+    final double baseContentWidth = _previewDialogWidth(q, screen);
+    final double dialogWidth = hasSidebar
+        ? math.min(screen.width - 40, baseContentWidth + sidebarWidth + 28)
+        : baseContentWidth;
+    // 높이는 "상한" 만 고정하고, 실제 높이는 좌측 콘텐츠(문항 미리보기) 높이를 따라
+    // 자연스럽게 줄어들게 한다. 콘텐츠가 상한을 넘으면 좌측은 내부 스크롤 처리.
+    final double dialogMaxHeight = (screen.height - 40).clamp(480.0, 1600.0);
 
     final figureData = hasFigures ? _prepareFigureScaleData(q) : null;
     final draftMap = figureData?.draftMap;
     final positionMap = figureData?.positionMap;
     final selectedPairKeys = figureData?.selectedPairKeys;
+    // 3개+ 그룹까지 지원하는 편집 상태. 초기값은 _prepareFigureScaleData 에서 해석한 그룹.
+    final selectedGroups = <List<String>>[
+      for (final g in figureData?.initialGroups ?? const <List<String>>[])
+        List<String>.from(g),
+    ];
+    // 표 스케일 편집 drafting 상태. 모든 표에 대해 (저장돼있지 않은 것은 기본값으로) 항목 준비.
+    final initialTableScales = _readTableScaleMap(q);
+    final tableScaleDrafts = <String, TableScaleValue>{
+      for (final t in tableEntries)
+        t.key: initialTableScales[t.key] ?? const TableScaleValue(),
+    };
     var refreshing = false;
-    final existingUrl =
-        (_questionPreviewUrls[q.id.trim()] ?? '').trim();
+    final existingUrl = (_questionPreviewUrls[q.id.trim()] ?? '').trim();
     String? serverPreviewUrl =
         existingUrl.isNotEmpty ? existingUrl : null;
 
@@ -7123,27 +7180,60 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       builder: (ctx) {
         return StatefulBuilder(
           builder: (dialogContext, setLocalState) {
-            final draftMeta = (hasFigures && draftMap != null && selectedPairKeys != null)
-                ? _buildDraftMeta(q, draftMap, selectedPairKeys,
-                    positionMap: positionMap)
+            final draftMeta = (hasFigures || hasTables)
+                ? _buildDraftMeta(
+                    q,
+                    draftMap ?? const <String, double>{},
+                    selectedPairKeys ?? const <String>{},
+                    positionMap: positionMap,
+                    horizontalGroups: selectedGroups,
+                    tableScales: hasTables ? tableScaleDrafts : null,
+                    tableScaleDefault: hasTables
+                        ? const TableScaleValue()
+                        : null,
+                  )
                 : q.meta;
-            final previewQ = hasFigures ? q.copyWith(meta: draftMeta) : q;
+            final previewQ =
+                (hasFigures || hasTables) ? q.copyWith(meta: draftMeta) : q;
 
-            void applyAndRefresh() {
-              if (draftMap == null || positionMap == null || selectedPairKeys == null) return;
+            // 그림 편집 변경사항을 _questions 에 반영한다. 표 편집 결과는 이어지는
+            // _applyTableScalesLocal 호출에서 같이 반영돼야 한다.
+            void persistFigureChanges() {
+              if (!hasFigures ||
+                  draftMap == null ||
+                  positionMap == null ||
+                  selectedPairKeys == null) {
+                return;
+              }
               _setFigureRenderScales(
                 q,
                 Map<String, double>.from(draftMap),
                 positionMap: Map<String, String>.from(positionMap),
-                horizontalPairKeys: selectedPairKeys,
+                horizontalGroups:
+                    selectedGroups.map((g) => List<String>.from(g)).toList(),
               );
+            }
+
+            // 표 편집 변경사항을 _questions 에 반영한다.
+            ProblemBankQuestion? persistTableChanges() {
+              if (!hasTables) return null;
+              return _applyTableScalesLocal(
+                q,
+                Map<String, TableScaleValue>.from(tableScaleDrafts),
+                const TableScaleValue(),
+              );
+            }
+
+            // 그림/표 편집 양쪽 모두 반영 후 서버 미리보기를 재발급한다.
+            void applyAndRefresh() {
+              persistFigureChanges();
+              persistTableChanges();
               setLocalState(() {
                 refreshing = true;
               });
               () async {
-                final updatedQ = _questions
-                    .where((item) => item.id == q.id)
-                    .firstOrNull;
+                final updatedQ =
+                    _questions.where((item) => item.id == q.id).firstOrNull;
                 if (updatedQ != null) {
                   final url = await _saveAndRefreshPreview(updatedQ);
                   if (url != null) {
@@ -7158,6 +7248,88 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
               }();
             }
 
+            // 좌측 본문(미리보기/정답/그림 썸네일). 자체 스크롤을 갖는다.
+            final leftScroll = SingleChildScrollView(
+              padding: const EdgeInsets.only(right: 6),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (serverPreviewUrl != null &&
+                      serverPreviewUrl!.isNotEmpty)
+                    _buildServerPdfPreviewThumbnail(
+                      previewQ,
+                      previewUrl: serverPreviewUrl!,
+                      expanded: true,
+                    )
+                  else
+                    _buildPreviewPlaceholder(
+                      expanded: true,
+                      message: refreshing
+                          ? '서버 미리보기 갱신 중...'
+                          : '서버 미리보기가 없습니다.\n오른쪽에서 그림/표 크기를 조정하면 자동 반영됩니다.',
+                      showSpinner: refreshing,
+                    ),
+                  const SizedBox(height: 10),
+                  _buildAnswerPreviewThumbnail(q, expanded: true),
+                  if (hasFigures) ...[
+                    const SizedBox(height: 10),
+                    _buildFigurePreviewThumbnail(previewQ, expanded: true),
+                  ],
+                ],
+              ),
+            );
+
+            // 우측 세팅 사이드바. 자체 스크롤을 갖는다.
+            final sidebarScroll = Container(
+              width: sidebarWidth,
+              padding: const EdgeInsets.only(left: 10),
+              decoration: const BoxDecoration(
+                border: Border(
+                  left: BorderSide(color: _border, width: 1),
+                ),
+              ),
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.only(left: 2, right: 4),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    if (hasFigures)
+                      _buildFigureEditSection(
+                        draftMap: draftMap!,
+                        positionMap: positionMap!,
+                        selectedPairKeys: selectedPairKeys!,
+                        selectedGroups: selectedGroups,
+                        figureData: figureData!,
+                        setLocalState: setLocalState,
+                        onSettingChanged: applyAndRefresh,
+                      ),
+                    if (hasFigures && hasTables) const SizedBox(height: 12),
+                    if (hasTables)
+                      _buildTableEditSection(
+                        entries: tableEntries,
+                        drafts: tableScaleDrafts,
+                        setLocalState: setLocalState,
+                        onSettingChanged: applyAndRefresh,
+                      ),
+                  ],
+                ),
+              ),
+            );
+
+            // 본문 높이는 "화면 높이 - 헤더 - padding" 이내에서 콘텐츠가 필요한 만큼만
+            // 차지하게 한다. 다만 Row + ScrollView 조합이 unbounded-height 경로로
+            // 떨어지면 layout assertion(RenderBox not laid out) 이 터지므로,
+            // bounded height 를 보장하기 위해 LayoutBuilder 로 감싸 maxHeight 를 잡아
+            // SizedBox 로 고정한다. 이 높이는 "상한" 이며 실제 콘텐츠가 더 짧으면
+            // ScrollView 안에서 공간은 자연스레 위쪽부터 채워진다(내용만큼만 보임).
+            //
+            // 주의: 스크린 전체를 쓰지 않으려면, dialogMaxHeight 상한에 더해
+            // 실제로 필요한 콘텐츠 높이를 우선 채택하도록 Dialog 를 Column.min 구조로
+            // 감싸지 말고, Dialog 자체 ConstrainedBox(maxHeight) + mainAxisSize.min
+            // 만으로 동적화한다. Row 내부는 bounded height 필요 → SizedBox(maxHeight).
+
             return Dialog(
               backgroundColor: _panel,
               insetPadding:
@@ -7165,13 +7337,13 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
               child: ConstrainedBox(
                 constraints: BoxConstraints(
                   maxWidth: dialogWidth,
-                  maxHeight: dialogHeight.toDouble(),
+                  maxHeight: dialogMaxHeight,
                   minWidth: 560,
-                  minHeight: 380,
                 ),
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
                   child: Column(
+                    mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Row(
@@ -7205,102 +7377,16 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                         ],
                       ),
                       const SizedBox(height: 6),
-                      Expanded(
-                        child: SingleChildScrollView(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              if (serverPreviewUrl != null &&
-                                  serverPreviewUrl!.isNotEmpty)
-                                _buildServerPdfPreviewThumbnail(
-                                  previewQ,
-                                  previewUrl: serverPreviewUrl!,
-                                  expanded: true,
-                                )
-                              else
-                                _buildPreviewPlaceholder(
-                                  expanded: true,
-                                  message: refreshing
-                                      ? '서버 미리보기 갱신 중...'
-                                      : '서버 미리보기가 없습니다.\n그림 크기를 조정하면 자동으로 반영됩니다.',
-                                  showSpinner: refreshing,
-                                ),
-                              const SizedBox(height: 10),
-                              _buildAnswerPreviewThumbnail(q, expanded: true),
-                              if (hasFigures) ...[
-                                const SizedBox(height: 10),
-                                _buildFigurePreviewThumbnail(previewQ, expanded: true),
-                                const SizedBox(height: 14),
-                                Container(
-                                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
-                                  decoration: BoxDecoration(
-                                    color: _field,
-                                    borderRadius: BorderRadius.circular(10),
-                                    border: Border.all(color: _border),
-                                  ),
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Row(
-                                        children: [
-                                          const Icon(Icons.tune, color: _textSub, size: 15),
-                                          const SizedBox(width: 6),
-                                          const Text(
-                                            '그림 크기 / 배치',
-                                            style: TextStyle(
-                                              color: _text,
-                                              fontSize: 12.6,
-                                              fontWeight: FontWeight.w800,
-                                            ),
-                                          ),
-                                          const Spacer(),
-                                          TextButton(
-                                            onPressed: () {
-                                              setLocalState(() {
-                                                for (final key in draftMap!.keys) {
-                                                  draftMap[key] = _figureWidthEmDefault;
-                                                }
-                                                if (positionMap != null) {
-                                                  for (final key in positionMap.keys) {
-                                                    positionMap[key] = 'below-stem';
-                                                  }
-                                                }
-                                                selectedPairKeys!.clear();
-                                              });
-                                              applyAndRefresh();
-                                            },
-                                            child: const Text(
-                                              '기본값',
-                                              style: TextStyle(fontSize: 11.4),
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                      const SizedBox(height: 6),
-                                      ..._buildFigureScaleSliders(
-                                        draftMap: draftMap!,
-                                        positionMap: positionMap!,
-                                        labels: figureData!.labels,
-                                        previewUrls: figureData.previewUrls,
-                                        setLocalState: setLocalState,
-                                        showPreviewImages: false,
-                                        onSettingChanged: applyAndRefresh,
-                                      ),
-                                      _buildHorizontalPairChips(
-                                        candidatePairKeys: figureData.candidatePairKeys,
-                                        candidatePairLabels:
-                                            figureData.candidatePairLabels,
-                                        selectedPairKeys: selectedPairKeys!,
-                                        setLocalState: setLocalState,
-                                        onSettingChanged: applyAndRefresh,
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                            ],
-                          ),
-                        ),
+                      Flexible(
+                        child: hasSidebar
+                            ? Row(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  Expanded(child: leftScroll),
+                                  sidebarScroll,
+                                ],
+                              )
+                            : leftScroll,
                       ),
                     ],
                   ),
@@ -7310,6 +7396,425 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           },
         );
       },
+    );
+  }
+
+  /// 확대 미리보기 다이얼로그용 "그림 크기/배치" 인라인 편집 섹션.
+  Widget _buildFigureEditSection({
+    required Map<String, double> draftMap,
+    required Map<String, String> positionMap,
+    required Set<String> selectedPairKeys,
+    required List<List<String>> selectedGroups,
+    required ({
+      Map<String, double> draftMap,
+      Map<String, String> positionMap,
+      Map<String, String> labels,
+      Map<String, String> previewUrls,
+      List<String> candidatePairKeys,
+      Map<String, String> candidatePairLabels,
+      Set<String> selectedPairKeys,
+      List<String> availableFigureKeys,
+      List<List<String>> initialGroups,
+    }) figureData,
+    required void Function(void Function()) setLocalState,
+    required VoidCallback onSettingChanged,
+  }) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
+      decoration: BoxDecoration(
+        color: _field,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: _border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.tune, color: _textSub, size: 15),
+              const SizedBox(width: 6),
+              const Text(
+                '그림 크기 / 배치',
+                style: TextStyle(
+                  color: _text,
+                  fontSize: 12.6,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const Spacer(),
+              TextButton(
+                onPressed: () {
+                  setLocalState(() {
+                    for (final key in draftMap.keys) {
+                      draftMap[key] = _figureWidthEmDefault;
+                    }
+                    for (final key in positionMap.keys) {
+                      positionMap[key] = 'below-stem';
+                    }
+                    selectedPairKeys.clear();
+                    selectedGroups.clear();
+                  });
+                  onSettingChanged();
+                },
+                child: const Text(
+                  '기본값',
+                  style: TextStyle(fontSize: 11.4),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          ..._buildFigureScaleSliders(
+            draftMap: draftMap,
+            positionMap: positionMap,
+            labels: figureData.labels,
+            previewUrls: figureData.previewUrls,
+            setLocalState: setLocalState,
+            showPreviewImages: false,
+            onSettingChanged: onSettingChanged,
+          ),
+          _buildHorizontalGroupsEditor(
+            availableKeys: figureData.availableFigureKeys,
+            labels: figureData.labels,
+            selectedGroups: selectedGroups,
+            setLocalState: setLocalState,
+            onSettingChanged: onSettingChanged,
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 확대 미리보기 다이얼로그용 "표 크기 조절" 인라인 편집 섹션.
+  Widget _buildTableEditSection({
+    required List<TableScaleEntry> entries,
+    required Map<String, TableScaleValue> drafts,
+    required void Function(void Function()) setLocalState,
+    required VoidCallback onSettingChanged,
+  }) {
+    // 표 스케일 조절 범위: 0.5 ~ 2.0 (0.05 step). 렌더러 clampTableScale 상한(2.5) 이내.
+    const double minS = 0.5;
+    const double maxS = 2.0;
+    // divisions = (max - min) / 0.05
+    const int divisions = 30;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      decoration: BoxDecoration(
+        color: _field,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: _border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.table_chart_outlined,
+                  color: _textSub, size: 15),
+              const SizedBox(width: 6),
+              const Text(
+                '표 크기 조절',
+                style: TextStyle(
+                  color: _text,
+                  fontSize: 12.6,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const Spacer(),
+              TextButton(
+                onPressed: () {
+                  setLocalState(() {
+                    for (final t in entries) {
+                      drafts[t.key] = const TableScaleValue();
+                    }
+                  });
+                  onSettingChanged();
+                },
+                child: const Text(
+                  '모두 100%',
+                  style: TextStyle(fontSize: 11.4),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          for (final t in entries) ...[
+            Container(
+              margin: const EdgeInsets.only(top: 6),
+              padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1F1F23),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: _border),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Text(
+                        t.label,
+                        style: const TextStyle(
+                          color: _text,
+                          fontSize: 12.2,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: (t.type == 'raw'
+                                  ? Colors.orangeAccent
+                                  : _accent)
+                              .withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          t.type == 'raw' ? 'raw tabular' : '구조화 표',
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                            color: t.type == 'raw'
+                                ? Colors.orangeAccent
+                                : _accent,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (t.type == 'raw')
+                    const Padding(
+                      padding: EdgeInsets.only(top: 2),
+                      child: Text(
+                        '* 글자 크기는 본문에 동기화됩니다.',
+                        style: TextStyle(
+                          color: _textSub,
+                          fontSize: 10.6,
+                          fontStyle: FontStyle.italic,
+                        ),
+                      ),
+                    ),
+                  const SizedBox(height: 4),
+                  _buildTableScaleSlider(
+                    title: '가로',
+                    value: (drafts[t.key] ?? const TableScaleValue())
+                        .widthScale,
+                    min: minS,
+                    max: maxS,
+                    divisions: divisions,
+                    onChanged: (v) {
+                      final cur =
+                          drafts[t.key] ?? const TableScaleValue();
+                      setLocalState(() {
+                        drafts[t.key] =
+                            cur.copyWith(widthScale: v);
+                      });
+                    },
+                    onChangeEnd: (_) => onSettingChanged(),
+                  ),
+                  _buildTableScaleSlider(
+                    title: '세로',
+                    value: (drafts[t.key] ?? const TableScaleValue())
+                        .heightScale,
+                    min: minS,
+                    max: maxS,
+                    divisions: divisions,
+                    onChanged: (v) {
+                      final cur =
+                          drafts[t.key] ?? const TableScaleValue();
+                      setLocalState(() {
+                        drafts[t.key] =
+                            cur.copyWith(heightScale: v);
+                      });
+                    },
+                    onChangeEnd: (_) => onSettingChanged(),
+                  ),
+                  if (t.maxCols >= 2)
+                    _buildColumnScalesRow(
+                      entry: t,
+                      draft: drafts[t.key] ?? const TableScaleValue(),
+                      minS: minS,
+                      maxS: maxS,
+                      divisions: divisions,
+                      setLocalState: setLocalState,
+                      onSettingChanged: onSettingChanged,
+                      drafts: drafts,
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  /// 컬럼별 상대 너비 섹션. struct 표에서 컬럼 수 >= 2 일 때만 사용.
+  /// 각 컬럼의 가중치 (0.3 ~ 2.5) 를 독립 슬라이더로 조절. 합은 자동 정규화되어
+  /// 컬럼 폭 비율로 적용된다. "균등" 버튼으로 초기화.
+  Widget _buildColumnScalesRow({
+    required TableScaleEntry entry,
+    required TableScaleValue draft,
+    required double minS,
+    required double maxS,
+    required int divisions,
+    required void Function(void Function()) setLocalState,
+    required VoidCallback onSettingChanged,
+    required Map<String, TableScaleValue> drafts,
+  }) {
+    final n = entry.maxCols;
+    // 현재 draft 의 columnScales 가 있으면 사용. 길이가 맞지 않으면 보정.
+    final current = draft.columnScales;
+    final values = <double>[
+      for (var i = 0; i < n; i += 1)
+        (current != null && i < current.length)
+            ? current[i].clamp(minS, maxS)
+            : 1.0,
+    ];
+    final isUniform = values.every((e) => (e - 1.0).abs() < 1e-3);
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Text(
+                '컬럼별 상대 너비',
+                style: TextStyle(
+                  color: _text,
+                  fontSize: 11.4,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                '($n개)',
+                style: const TextStyle(
+                  color: _textSub,
+                  fontSize: 10.4,
+                ),
+              ),
+              const Spacer(),
+              TextButton(
+                onPressed: isUniform
+                    ? null
+                    : () {
+                        setLocalState(() {
+                          drafts[entry.key] = draft.copyWith(
+                            clearColumnScales: true,
+                          );
+                        });
+                        onSettingChanged();
+                      },
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 6, vertical: 0),
+                  minimumSize: const Size(0, 24),
+                ),
+                child: const Text(
+                  '균등',
+                  style: TextStyle(fontSize: 10.6),
+                ),
+              ),
+            ],
+          ),
+          for (var i = 0; i < n; i += 1)
+            _buildTableScaleSlider(
+              title: '열 ${i + 1}',
+              value: values[i],
+              min: minS,
+              max: maxS,
+              divisions: divisions,
+              onChanged: (v) {
+                final cur =
+                    drafts[entry.key] ?? const TableScaleValue();
+                final curList = cur.columnScales != null &&
+                        cur.columnScales!.length == n
+                    ? List<double>.from(cur.columnScales!)
+                    : List<double>.filled(n, 1.0);
+                curList[i] = v;
+                setLocalState(() {
+                  drafts[entry.key] =
+                      cur.copyWith(columnScales: curList);
+                });
+              },
+              onChangeEnd: (_) => onSettingChanged(),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTableScaleSlider({
+    required String title,
+    required double value,
+    required double min,
+    required double max,
+    required int divisions,
+    required ValueChanged<double> onChanged,
+    required ValueChanged<double> onChangeEnd,
+  }) {
+    final clamped = value.clamp(min, max);
+    final pct = (clamped * 100).round();
+    return Padding(
+      padding: const EdgeInsets.only(top: 2),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 36,
+            child: Text(
+              title,
+              style: const TextStyle(
+                color: _text,
+                fontSize: 11.6,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          Expanded(
+            child: SliderTheme(
+              data: SliderTheme.of(context).copyWith(
+                trackHeight: 3,
+                thumbShape:
+                    const RoundSliderThumbShape(enabledThumbRadius: 7),
+                overlayShape:
+                    const RoundSliderOverlayShape(overlayRadius: 14),
+              ),
+              child: Slider(
+                value: clamped,
+                min: min,
+                max: max,
+                divisions: divisions,
+                activeColor: _accent,
+                inactiveColor: _border,
+                onChanged: (v) {
+                  // 0.05 단위 스냅.
+                  final rounded = (v * 20).roundToDouble() / 20.0;
+                  onChanged(rounded);
+                },
+                onChangeEnd: onChangeEnd,
+              ),
+            ),
+          ),
+          SizedBox(
+            width: 44,
+            child: Text(
+              '$pct%',
+              textAlign: TextAlign.end,
+              style: const TextStyle(
+                color: _text,
+                fontSize: 11.4,
+                fontWeight: FontWeight.w700,
+                fontFeatures: [FontFeature.tabularFigures()],
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -7370,6 +7875,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     List<String> candidatePairKeys,
     Map<String, String> candidatePairLabels,
     Set<String> selectedPairKeys,
+    List<String> availableFigureKeys,
+    List<List<String>> initialGroups,
   }) _prepareFigureScaleData(ProblemBankQuestion q) {
     final assets = _orderedFigureAssetsOf(q);
     final fallbackCount =
@@ -7432,6 +7939,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     }
 
     Set<String> selectedPairKeys;
+    final initialGroups = <List<String>>[];
     if (existingLayout != null) {
       final groups = (existingLayout['groups'] as List?)
               ?.cast<Map<String, dynamic>>() ??
@@ -7439,12 +7947,17 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       selectedPairKeys = <String>{};
       for (final g in groups) {
         if (g['type'] != 'horizontal') continue;
-        final members = (g['members'] as List?)?.cast<String>() ?? const <String>[];
-        for (var i = 0; i < members.length; i += 1) {
-          for (var j = i + 1; j < members.length; j += 1) {
-            final pk = _figurePairKey(members[i], members[j]);
-            if (pk.isNotEmpty) selectedPairKeys.add(pk);
-          }
+        final members = (g['members'] as List?)
+                ?.whereType<String>()
+                .where((k) => draftMap.containsKey(k))
+                .toList(growable: false) ??
+            const <String>[];
+        if (members.length < 2) continue;
+        initialGroups.add(members);
+        // 2명 그룹은 레거시 pair 호환을 위해 selectedPairKeys 에도 기록.
+        if (members.length == 2) {
+          final pk = _figurePairKey(members[0], members[1]);
+          if (pk.isNotEmpty) selectedPairKeys.add(pk);
         }
       }
     } else {
@@ -7454,6 +7967,10 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         return draftMap.containsKey(parts[0]) &&
             draftMap.containsKey(parts[1]);
       }).toSet();
+      for (final pk in selectedPairKeys) {
+        final parts = _figurePairParts(pk);
+        if (parts.length == 2) initialGroups.add(parts);
+      }
     }
 
     return (
@@ -7464,6 +7981,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       candidatePairKeys: candidatePairKeys,
       candidatePairLabels: candidatePairLabels,
       selectedPairKeys: selectedPairKeys,
+      availableFigureKeys: availableFigureKeys,
+      initialGroups: initialGroups,
     );
   }
 
@@ -7601,162 +8120,309 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     ];
   }
 
-  Widget _buildHorizontalPairChips({
-    required List<String> candidatePairKeys,
-    required Map<String, String> candidatePairLabels,
-    required Set<String> selectedPairKeys,
+  /// N 멤버 그림 가로 묶음 편집기. `selectedGroups` 는 이 위젯이 직접 수정하는 외부 state
+  /// (참조로 공유). 변경 이벤트는 `onChanged(groups)` 로 전달되며, 호출측이 setState/apply 처리.
+  Widget _buildHorizontalGroupsEditor({
+    required List<String> availableKeys,
+    required Map<String, String> labels,
+    required List<List<String>> selectedGroups,
     required void Function(void Function()) setLocalState,
     VoidCallback? onSettingChanged,
   }) {
-    if (candidatePairKeys.isEmpty) return const SizedBox.shrink();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const SizedBox(height: 10),
-        const Text(
-          '가로 묶음 (선택한 두 그림을 한 줄에 배치)',
-          style: TextStyle(
-            color: _textSub,
-            fontSize: 11.6,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
-        const SizedBox(height: 6),
-        Wrap(
-          spacing: 6,
-          runSpacing: 6,
-          children: [
-            for (final pairKey in candidatePairKeys)
-              FilterChip(
-                label: Text(
-                  candidatePairLabels[pairKey] ?? pairKey,
-                  style: const TextStyle(fontSize: 11),
-                ),
-                selected: selectedPairKeys.contains(pairKey),
-                onSelected: (selected) {
-                  setLocalState(() {
-                    final parts = _figurePairParts(pairKey);
-                    if (parts.length != 2) return;
-                    final a = parts[0];
-                    final b = parts[1];
-                    if (!selected) {
-                      selectedPairKeys.remove(pairKey);
-                    } else {
-                      selectedPairKeys.removeWhere((existing) {
-                        final p = _figurePairParts(existing);
-                        if (p.length != 2) return false;
-                        return p[0] == a ||
-                            p[0] == b ||
-                            p[1] == a ||
-                            p[1] == b;
-                      });
-                      selectedPairKeys.add(pairKey);
-                    }
-                  });
-                  onSettingChanged?.call();
-                },
-              ),
-          ],
-        ),
-      ],
+    if (availableKeys.length < 2) return const SizedBox.shrink();
+    return FigureHorizontalGroupsEditor(
+      availableKeys: availableKeys,
+      labels: labels,
+      initialGroups: selectedGroups,
+      accentColor: _accent,
+      textColor: _text,
+      mutedColor: _textSub,
+      borderColor: _border,
+      fieldColor: _field,
+      onChanged: (next) {
+        setLocalState(() {
+          selectedGroups
+            ..clear()
+            ..addAll(next.map((g) => List<String>.from(g)));
+        });
+        onSettingChanged?.call();
+      },
     );
   }
 
-  Future<void> _openFigureScaleDialog(ProblemBankQuestion q) async {
-    final data = _prepareFigureScaleData(q);
-    final draftMap = data.draftMap;
-    final positionMap = data.positionMap;
-    final selectedPairKeys = data.selectedPairKeys;
+  /// 문항 stem 에서 표 등장 순서를 분석해 `TableScaleEntry` 리스트로 반환.
+  ///  - 구조화 표: 연속된 `[표행]` 블록 = 표 1개 (`struct:N`).
+  ///  - raw 표   : `[표시작]...[표끝]` 쌍 = 표 1개 (`raw:N`).
+  /// 외부에는 등장 순서대로 `표 1 / 표 2 / ...` 라벨을 단다.
+  List<TableScaleEntry> _parseTableEntries(ProblemBankQuestion q) {
+    final stem = q.stem;
+    if (stem.isEmpty) return const <TableScaleEntry>[];
+    final lines = stem.split('\n');
+    final entries = <_PartialTableEntry>[];
+    var structIdx = 0;
+    var rawIdx = 0;
+    var inStructTable = false;
+    var inRawTable = false;
+    // struct 현재 행의 [표셀] 개수 누적. 각 [표행] 마다 리셋.
+    var currentRowCells = 0;
+    // 현재 struct 표의 최대 컬럼 수.
+    var currentStructMaxCols = 0;
+    // 현재 struct 표의 entries 내 index.
+    var currentStructEntryIdx = -1;
 
-    final result = await showDialog<Map<String, double>>(
-      context: context,
-      builder: (ctx) {
-        return StatefulBuilder(
-          builder: (context, setLocalState) {
-            return AlertDialog(
-              backgroundColor: _panel,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-                side: const BorderSide(color: _border),
-              ),
-              title: Text(
-                '${q.questionNumber}번 그림 크기 / 위치 조절',
-                style: const TextStyle(color: _text, fontSize: 15.5),
-              ),
-              content: SizedBox(
-                width: 520,
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxHeight: 440),
-                  child: SingleChildScrollView(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        ..._buildFigureScaleSliders(
-                          draftMap: draftMap,
-                          positionMap: positionMap,
-                          labels: data.labels,
-                          previewUrls: data.previewUrls,
-                          setLocalState: setLocalState,
-                        ),
-                        const SizedBox(height: 4),
-                        const Text(
-                          '너비(em)는 글자 크기 기준 상대값입니다. 글자 크기가 변해도 비율이 유지됩니다.',
-                          style: TextStyle(
-                            color: _textSub,
-                            fontSize: 11.2,
-                            height: 1.4,
-                          ),
-                        ),
-                        _buildHorizontalPairChips(
-                          candidatePairKeys: data.candidatePairKeys,
-                          candidatePairLabels: data.candidatePairLabels,
-                          selectedPairKeys: selectedPairKeys,
-                          setLocalState: setLocalState,
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(ctx).pop(),
-                  child: const Text('취소'),
-                ),
-                TextButton(
-                  onPressed: () {
-                    setLocalState(() {
-                      for (final key in draftMap.keys) {
-                        draftMap[key] = _figureWidthEmDefault;
-                      }
-                      for (final key in positionMap.keys) {
-                        positionMap[key] = 'below-stem';
-                      }
-                      selectedPairKeys.clear();
-                    });
-                  },
-                  child: const Text('기본값'),
-                ),
-                FilledButton(
-                  style: FilledButton.styleFrom(backgroundColor: _accent),
-                  onPressed: () =>
-                      Navigator.of(ctx).pop(Map<String, double>.from(draftMap)),
-                  child: const Text('적용'),
-                ),
-              ],
-            );
-          },
+    void closeStructIfOpen() {
+      if (!inStructTable) return;
+      if (currentStructEntryIdx >= 0) {
+        final e = entries[currentStructEntryIdx];
+        entries[currentStructEntryIdx] = _PartialTableEntry(
+          key: e.key,
+          type: e.type,
+          maxCols: currentStructMaxCols,
         );
-      },
-    );
-    if (result == null) return;
-    _setFigureRenderScales(
-      q,
-      result,
-      positionMap: Map<String, String>.from(positionMap),
-      horizontalPairKeys: selectedPairKeys,
-    );
+      }
+      inStructTable = false;
+      currentStructMaxCols = 0;
+      currentStructEntryIdx = -1;
+      currentRowCells = 0;
+    }
+
+    // raw tabular 의 본문을 수집해 \begin{tabular}{...} 의 컬럼 수를 알아내기 위한 누적.
+    final rawBodyBuf = StringBuffer();
+    var currentRawEntryIdx = -1;
+
+    void closeRawIfOpen() {
+      if (!inRawTable) return;
+      if (currentRawEntryIdx >= 0) {
+        final body = rawBodyBuf.toString();
+        final cols = _rawTabularMaxCols(body);
+        final e = entries[currentRawEntryIdx];
+        entries[currentRawEntryIdx] = _PartialTableEntry(
+          key: e.key,
+          type: e.type,
+          maxCols: cols,
+        );
+      }
+      inRawTable = false;
+      rawBodyBuf.clear();
+      currentRawEntryIdx = -1;
+    }
+
+    for (final rawLine in lines) {
+      final line = rawLine.trim();
+      if (!inRawTable && line.contains('[표시작]')) {
+        closeStructIfOpen();
+        inRawTable = true;
+        rawIdx += 1;
+        entries.add(_PartialTableEntry(
+          key: 'raw:$rawIdx',
+          type: 'raw',
+          maxCols: 0,
+        ));
+        currentRawEntryIdx = entries.length - 1;
+        rawBodyBuf.clear();
+        // [표시작] 뒤에 같은 줄에 이미 내용이 있을 수 있다.
+        final afterStart = line.split('[표시작]').skip(1).join('[표시작]');
+        if (afterStart.contains('[표끝]')) {
+          final body = afterStart.split('[표끝]').first;
+          rawBodyBuf.write(body);
+          closeRawIfOpen();
+        } else {
+          rawBodyBuf.write(afterStart);
+        }
+        continue;
+      }
+      if (inRawTable) {
+        if (line.contains('[표끝]')) {
+          // [표끝] 앞쪽 내용만 누적.
+          final beforeEnd = line.split('[표끝]').first;
+          if (beforeEnd.isNotEmpty) {
+            rawBodyBuf.writeln(beforeEnd);
+          }
+          closeRawIfOpen();
+        } else {
+          rawBodyBuf.writeln(rawLine);
+        }
+        continue;
+      }
+      if (line == '[표행]') {
+        if (!inStructTable) {
+          inStructTable = true;
+          structIdx += 1;
+          currentStructMaxCols = 0;
+          entries.add(_PartialTableEntry(
+            key: 'struct:$structIdx',
+            type: 'struct',
+            maxCols: 0,
+          ));
+          currentStructEntryIdx = entries.length - 1;
+        } else {
+          // 이전 행이 끝났으니 컬럼 카운트 반영.
+          if (currentRowCells > currentStructMaxCols) {
+            currentStructMaxCols = currentRowCells;
+          }
+        }
+        currentRowCells = 0;
+      } else if (line == '[표셀]') {
+        if (inStructTable) currentRowCells += 1;
+      } else if (line.isNotEmpty && inStructTable) {
+        // 셀 내용 라인. 행 닫힘 신호는 아님.
+        // 다음 [표행]/[표셀] 에서 계속 누적.
+      } else if (line.isEmpty && inStructTable) {
+        // 빈 줄만으로 표 종료로 판정하지는 않음 — 렌더러 parseTableLines 는
+        // 마지막 [표행] 까지 누적 후 비-표 콘텐츠가 등장해야 암묵 종료로 봄.
+        // 여기서도 비어있는 라인은 무시.
+      } else if (line.isNotEmpty && inStructTable == false) {
+        // struct 바깥의 다른 콘텐츠 라인. 이미 닫혀 있으면 무시.
+      }
+      // struct 표 암묵 종료: 마커가 아닌 콘텐츠 라인이 떠도 렌더러 parseTableLines 는
+      // 현재 셀에 계속 흡수한다. 하지만 매니저 측에서 "다음 [표행] 이 없이
+      // stem 이 끝나거나, 비-표 마커([그림]/[보기]/[조건제시] 등)가 나타나면"
+      // 표가 끝났다고 본다. 여기서는 간이로 struct 바깥 마커 등장 시 종료:
+      if (inStructTable && line != '[표행]' && line != '[표셀]') {
+        if (line.startsWith('[그림]') ||
+            line.startsWith('[보기]') ||
+            line.startsWith('[조건제시]') ||
+            line.startsWith('[보기끝]') ||
+            line.startsWith('[조건제시끝]') ||
+            line.startsWith('[표시작]') ||
+            line.startsWith('[소문항')) {
+          // 마지막 행의 셀 카운트 반영 후 종료.
+          if (currentRowCells > currentStructMaxCols) {
+            currentStructMaxCols = currentRowCells;
+          }
+          closeStructIfOpen();
+        }
+      }
+    }
+    // EOF 시점에도 마지막 행 셀 카운트 반영 후 닫음.
+    if (inStructTable) {
+      if (currentRowCells > currentStructMaxCols) {
+        currentStructMaxCols = currentRowCells;
+      }
+      closeStructIfOpen();
+    }
+    // raw 표가 [표끝] 없이 끝났다면 현재까지 누적된 본문으로 컬럼 수 계산.
+    if (inRawTable) {
+      closeRawIfOpen();
+    }
+
+    return <TableScaleEntry>[
+      for (var i = 0; i < entries.length; i += 1)
+        TableScaleEntry(
+          key: entries[i].key,
+          label: '표 ${i + 1}',
+          type: entries[i].type,
+          maxCols: entries[i].maxCols,
+        ),
+    ];
+  }
+
+  /// raw tabular 본문에서 최대 컬럼 수를 추정한다.
+  /// 1) `\begin{tabular}{SPEC}` 이 있으면 SPEC 의 l/c/r/p/X/... 개수.
+  /// 2) 없으면 첫 데이터 행의 `&` 개수 + 1.
+  int _rawTabularMaxCols(String body) {
+    final specMatch =
+        RegExp(r'\\begin\{tabular\}\{([^}]*)\}').firstMatch(body);
+    if (specMatch != null) {
+      final spec = specMatch.group(1) ?? '';
+      // `|`, 공백, `@{...}`, `!{...}` 제거 후 l/c/r/p/X/m/b 카운트.
+      // `p{...}`/`m{...}`/`b{...}` 의 중괄호 구간은 한 컬럼으로 취급.
+      var s = spec;
+      s = s.replaceAll(RegExp(r'\|'), '');
+      s = s.replaceAll(RegExp(r'\s+'), '');
+      // @{...} / !{...} 제거.
+      s = s.replaceAll(RegExp(r'@\{[^}]*\}'), '');
+      s = s.replaceAll(RegExp(r'!\{[^}]*\}'), '');
+      // p{...}, m{...}, b{...} → 컬럼 1개로 치환.
+      s = s.replaceAllMapped(
+        RegExp(r'[pmb]\{[^}]*\}'),
+        (_) => 'P',
+      );
+      // 남은 문자들 중 l/c/r/P/X 카운트.
+      var count = 0;
+      for (final ch in s.split('')) {
+        if ('lcrPX'.contains(ch)) count += 1;
+      }
+      if (count > 0) return count;
+    }
+    // fallback: 첫 데이터 행의 & 개수 + 1.
+    final bodyMatch = RegExp(r'\\begin\{tabular\}\{[^}]*\}([\s\S]*?)\\end\{tabular\}')
+        .firstMatch(body);
+    final inside = bodyMatch?.group(1) ?? body;
+    final rowsRaw = inside.split(r'\\');
+    for (final r in rowsRaw) {
+      final trimmed = r.trim();
+      if (trimmed.isEmpty) continue;
+      if (RegExp(r'^(?:\\hline\s*)+$').hasMatch(trimmed)) continue;
+      // & 개수 (중괄호 깊이 무시 — 대략치).
+      var amp = 0;
+      var depth = 0;
+      for (final ch in trimmed.split('')) {
+        if (ch == '{') {
+          depth += 1;
+        } else if (ch == '}') {
+          depth = depth > 0 ? depth - 1 : 0;
+        } else if (ch == '&' && depth == 0) {
+          amp += 1;
+        }
+      }
+      return amp + 1;
+    }
+    return 0;
+  }
+
+  Map<String, TableScaleValue> _readTableScaleMap(ProblemBankQuestion q) {
+    final raw = q.meta['table_scales'];
+    if (raw is! Map) return const <String, TableScaleValue>{};
+    final out = <String, TableScaleValue>{};
+    raw.forEach((k, v) {
+      out['$k'] = TableScaleValue.fromJson(v);
+    });
+    return out;
+  }
+
+  /// 표 스케일 값을 문항 meta 에 반영하고 `_questions` 를 갱신한다.
+  /// 반영된 최신 문항을 반환하여 호출측이 바로 `_saveAndRefreshPreview` 에
+  /// 넘길 수 있게 한다.
+  ProblemBankQuestion _applyTableScalesLocal(
+    ProblemBankQuestion q,
+    Map<String, TableScaleValue> scales,
+    TableScaleValue defaultScale,
+  ) {
+    final currentIdx = _questions.indexWhere((it) => it.id == q.id);
+    if (currentIdx < 0) return q;
+    final current = _questions[currentIdx];
+    final updatedMeta = Map<String, dynamic>.from(current.meta);
+
+    // 기본값(100%, 100%) 인 항목은 저장하지 않음 → meta 비대화 방지.
+    final scalesPayload = <String, Map<String, dynamic>>{};
+    scales.forEach((key, value) {
+      if (!value.isDefault) {
+        scalesPayload[key] = value.toJson();
+      }
+    });
+    if (scalesPayload.isEmpty) {
+      updatedMeta.remove('table_scales');
+    } else {
+      updatedMeta['table_scales'] = scalesPayload;
+    }
+    if (defaultScale.isDefault) {
+      updatedMeta.remove('table_scale_default');
+    } else {
+      updatedMeta['table_scale_default'] = defaultScale.toJson();
+    }
+
+    final updatedQ = current.copyWith(meta: updatedMeta);
+    if (mounted) {
+      setState(() {
+        _questions = <ProblemBankQuestion>[
+          for (var i = 0; i < _questions.length; i += 1)
+            i == currentIdx ? updatedQ : _questions[i],
+        ];
+        _dirtyQuestionIds.add(updatedQ.id);
+      });
+    }
+    return updatedQ;
   }
 
   Future<void> _openAnswerReviewDialog(ProblemBankQuestion question) async {
@@ -8131,10 +8797,6 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     final latestFigureAsset = _latestFigureAssetOf(q);
     final figureApproved = _isFigureAssetApproved(latestFigureAsset);
     final figureGenerating = _figureGenerating.contains(q.id);
-    final figureAssets = _orderedFigureAssetsOf(q);
-    final hasMultiFigure = figureAssets.length >= 2 || q.figureRefs.length >= 2;
-    final figureScaleButtonLabel =
-        hasMultiFigure ? '그림별 크기' : '크기 ${_figureRenderScaleLabel(q)}';
     final scoreDraft = _scoreDraftFor(q);
     final previewChoices = _previewChoicesOf(q);
     final objectiveChoiceCount = previewChoices.length;
@@ -8407,28 +9069,6 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                 const Text(
                   'AI 그림',
                   style: TextStyle(color: _textSub, fontSize: 11),
-                ),
-                const SizedBox(width: 6),
-                InkWell(
-                  onTap: () => unawaited(_openFigureScaleDialog(q)),
-                  borderRadius: BorderRadius.circular(4),
-                  child: Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF172028),
-                      borderRadius: BorderRadius.circular(4),
-                      border: Border.all(color: const Color(0xFF374553)),
-                    ),
-                    child: Text(
-                      figureScaleButtonLabel,
-                      style: const TextStyle(
-                        color: _textSub,
-                        fontSize: 10.4,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
                 ),
                 const SizedBox(width: 6),
                 if (latestFigureAsset != null) ...[
@@ -9463,6 +10103,20 @@ class _AnswerPartEntry {
 
   String sub;
   final TextEditingController controller;
+}
+
+/// 표 파싱 중간값. `_parseTableEntries` 내부에서만 사용.
+/// 파싱이 끝난 뒤 최종 `TableScaleEntry` 로 변환된다.
+class _PartialTableEntry {
+  const _PartialTableEntry({
+    required this.key,
+    required this.type,
+    required this.maxCols,
+  });
+
+  final String key;
+  final String type;
+  final int maxCols;
 }
 
 /// 세트형 배점 다이얼로그의 하위문항별 배점 입력 엔트리.

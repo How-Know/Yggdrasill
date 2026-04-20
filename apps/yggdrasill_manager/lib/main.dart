@@ -1,7 +1,11 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:window_manager/window_manager.dart';
-import 'dart:io';
+
 import 'services/auth_service.dart';
+import 'services/error_reporter.dart';
 import 'screens/auth/login_screen.dart';
 import 'screens/curriculum/curriculum_screen.dart';
 import 'screens/arithmetic/arithmetic_screen.dart';
@@ -12,64 +16,70 @@ import 'screens/textbook/textbook_screen.dart';
 import 'screens/management/management_screen.dart';
 import 'widgets/app_navigation_bar.dart';
 
-void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
+void main() {
+  // Zone 외부 비동기 에러(unawaited future, platform channel 등)까지 모두 잡기 위해
+  // 앱 전체를 runZonedGuarded 로 감싼다. mouse_tracker assertion 처럼 1프레임에
+  // 수백 번 튀는 에러는 ErrorReporter 내부에서 첫 1회만 풀 스택으로 덤프한다.
+  runZonedGuarded<Future<void>>(() async {
+    WidgetsFlutterBinding.ensureInitialized();
 
-  // 데스크톱 플랫폼 설정
-  if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
-    await windowManager.ensureInitialized();
+    await ErrorReporter.instance.install();
 
-    const windowOptions = WindowOptions(
-      size: Size(1400, 900),
-      minimumSize: Size(1200, 800),
-      center: true,
-      backgroundColor: Color(0xFF1F1F1F),
-      skipTaskbar: false,
-      title: 'Yggdrasill Manager',
-      titleBarStyle: TitleBarStyle.normal,
-    );
+    if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+      await windowManager.ensureInitialized();
 
-    await windowManager.waitUntilReadyToShow(windowOptions, () async {
-      await windowManager.show();
-      await windowManager.focus();
-    });
-  }
+      const windowOptions = WindowOptions(
+        size: Size(1400, 900),
+        minimumSize: Size(1200, 800),
+        center: true,
+        backgroundColor: Color(0xFF1F1F1F),
+        skipTaskbar: false,
+        title: 'Yggdrasill Manager',
+        titleBarStyle: TitleBarStyle.normal,
+      );
 
-  // Supabase 초기화
-  try {
-    await AuthService.initialize();
-  } catch (e) {
-    // 초기화 실패 시 에러 메시지 표시
-    runApp(MaterialApp(
-      debugShowCheckedModeBanner: false,
-      home: Scaffold(
-        backgroundColor: const Color(0xFF1F1F1F),
-        body: Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.error_outline, color: Colors.red, size: 48),
-              const SizedBox(height: 16),
-              Text(
-                '초기화 실패: $e',
-                style: const TextStyle(color: Colors.white),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 16),
-              const Text(
-                '환경 변수를 확인해주세요:\n--dart-define=SUPABASE_URL=... --dart-define=SUPABASE_ANON_KEY=...',
-                style: TextStyle(color: Colors.white70, fontSize: 12),
-                textAlign: TextAlign.center,
-              ),
-            ],
+      await windowManager.waitUntilReadyToShow(windowOptions, () async {
+        await windowManager.show();
+        await windowManager.focus();
+      });
+    }
+
+    try {
+      await AuthService.initialize();
+    } catch (e) {
+      runApp(MaterialApp(
+        debugShowCheckedModeBanner: false,
+        home: Scaffold(
+          backgroundColor: const Color(0xFF1F1F1F),
+          body: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.error_outline, color: Colors.red, size: 48),
+                const SizedBox(height: 16),
+                Text(
+                  '초기화 실패: $e',
+                  style: const TextStyle(color: Colors.white),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  '환경 변수를 확인해주세요:\n--dart-define=SUPABASE_URL=... --dart-define=SUPABASE_ANON_KEY=...',
+                  style: TextStyle(color: Colors.white70, fontSize: 12),
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            ),
           ),
         ),
-      ),
-    ));
-    return;
-  }
+      ));
+      return;
+    }
 
-  runApp(const YggdrasillManagerApp());
+    runApp(const YggdrasillManagerApp());
+  }, (Object error, StackTrace stack) {
+    ErrorReporter.instance.reportZoneError(error, stack);
+  });
 }
 
 class YggdrasillManagerApp extends StatelessWidget {

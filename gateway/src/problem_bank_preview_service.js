@@ -85,6 +85,8 @@ function questionContentHash(question, mathEngine) {
     meta_figure_render_scales: meta.figure_render_scales || null,
     meta_figure_horizontal_pairs: meta.figure_horizontal_pairs || null,
     meta_figure_render_scale: meta.figure_render_scale ?? null,
+    meta_table_scales: meta.table_scales || null,
+    meta_table_scale_default: meta.table_scale_default || null,
   });
   return createHash('sha256').update(payload).digest('hex').slice(0, 16);
 }

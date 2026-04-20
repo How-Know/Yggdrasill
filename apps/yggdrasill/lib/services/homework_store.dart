@@ -3480,57 +3480,161 @@ class HomeworkStore {
     }
   }
 
+  /// 주어진 아이템들에 대해 서버 원자 RPC로 "수행중 → 대기(phase=1)" 전이를
+  /// 수행한다. `homework_wait`가 `run_start` 정지·시간 축적·`waiting_at`·
+  /// phase_event까지 한 번에 처리하므로, 클라이언트 OCC 경합과 상관없이
+  /// 서버 상태가 먼저 일관되게 수렴된다.
+  ///
+  /// - 이미 phase==1이고 run_start가 없는 아이템은 스킵.
+  /// - 러닝 중(run_start != null)이거나 phase != 1인 경우만 RPC 호출.
+  Future<void> _applyWaitPhaseForItems(
+    String studentId,
+    Iterable<HomeworkItem> items,
+  ) async {
+    final targets = <HomeworkItem>[];
+    for (final it in items) {
+      if (it.status == HomeworkStatus.completed) continue;
+      final needs = it.runStart != null || it.phase != 1;
+      if (!needs) continue;
+      targets.add(it);
+    }
+    if (targets.isEmpty) return;
+    try {
+      final String academyId =
+          (await TenantService.instance.getActiveAcademyId()) ??
+              await TenantService.instance.ensureActiveAcademy();
+      final String? updatedBy =
+          Supabase.instance.client.auth.currentUser?.id;
+      final supa = Supabase.instance.client;
+      // 러닝 상태가 하나라도 있으면 학생 단위 pause_all로 일괄 정지(빠르고 안전).
+      final bool hasRunning = targets.any((e) => e.runStart != null);
+      if (hasRunning) {
+        try {
+          await supa.rpc('homework_pause_all', params: {
+            'p_student_id': studentId,
+            'p_academy_id': academyId,
+            'p_updated_by': updatedBy,
+          });
+        } catch (e) {
+          // ignore: avoid_print
+          print('[HW][pause_all][ERROR] ' + e.toString());
+        }
+      }
+      for (final it in targets) {
+        try {
+          await supa.rpc('homework_wait', params: {
+            'p_item_id': it.id,
+            'p_academy_id': academyId,
+            'p_updated_by': updatedBy,
+          });
+        } catch (e) {
+          // ignore: avoid_print
+          print('[HW][wait][ERROR] id=' + it.id + ' ' + e.toString());
+        }
+      }
+    } catch (e) {
+      // ignore: avoid_print
+      print('[HW][applyWaitPhaseForItems][ERROR] ' + e.toString());
+    }
+  }
+
+  /// `status` 컬럼만 서버에 반영한다. run_start/phase/accumulated_ms 등
+  /// 타이머 관련 컬럼은 건드리지 않아, RPC와 충돌 없이 OCC UPDATE를 쓸 수 있다.
+  /// 실패 시(버전 충돌 등) 학생 단위 reload로 수렴을 시도한다.
+  Future<void> _updateItemStatusOnly(
+    String studentId,
+    String itemId,
+    HomeworkStatus status, {
+    int retry = 1,
+  }) async {
+    try {
+      final String academyId =
+          (await TenantService.instance.getActiveAcademyId()) ??
+              await TenantService.instance.ensureActiveAcademy();
+      final supa = Supabase.instance.client;
+      HomeworkItem? it = getById(studentId, itemId);
+      int attempts = 0;
+      while (attempts <= retry) {
+        attempts++;
+        if (it == null) return;
+        final rows = await supa
+            .from('homework_items')
+            .update({
+              'status': status.index,
+              'updated_at': DateTime.now().toUtc().toIso8601String(),
+            })
+            .eq('id', itemId)
+            .eq('academy_id', academyId)
+            .eq('version', it.version)
+            .select('version');
+        final list = (rows as List<dynamic>).cast<Map<String, dynamic>>();
+        if (list.isNotEmpty) {
+          it.status = status;
+          it.version = (list.first['version'] as num?)?.toInt() ?? it.version;
+          return;
+        }
+        // 버전 충돌: 최신 행 재조회 후 재시도
+        try {
+          final row = await supa
+              .from('homework_items')
+              .select('version')
+              .eq('id', itemId)
+              .eq('academy_id', academyId)
+              .maybeSingle();
+          if (row != null) {
+            final v = (row['version'] as num?)?.toInt();
+            if (v != null) {
+              it.version = v;
+            }
+          }
+        } catch (_) {}
+      }
+      // 재시도 후에도 실패 → 리로드로 수렴
+      unawaited(_reloadStudent(studentId));
+    } catch (e) {
+      // ignore: avoid_print
+      print('[HW][status-only][ERROR] ' + e.toString());
+    }
+  }
+
   // 하원 시 미완료 과제들을 숙제로 표시
   void markIncompleteAsHomework(String studentId) {
     final list = _byStudentId[studentId];
     if (list == null) return;
-    bool changed = false;
-    final now = DateTime.now();
     final List<HomeworkItem> toAssign = [];
     for (final e in list) {
       if (e.status != HomeworkStatus.completed) {
-        bool updated = false;
-        if (e.runStart != null) {
-          // 진행 중이면 일시정지 후 숙제로 전환
-          e.accumulatedMs += now.difference(e.runStart!).inMilliseconds;
-          e.runStart = null;
-          updated = true;
-        }
-        if (e.phase != 1) {
-          e.phase = 1;
-          e.waitingAt = now;
-          e.submittedAt = null;
-          e.confirmedAt = null;
-          updated = true;
-        }
         if (e.status != HomeworkStatus.homework) {
-          e.status = HomeworkStatus.homework;
-          updated = true;
           toAssign.add(e);
         }
-        if (updated) changed = true;
       }
     }
-    if (changed) {
-      _bump();
-      for (final e in list.where((e) => e.status == HomeworkStatus.homework)) {
-        unawaited(_upsertItem(studentId, e));
-      }
-      if (toAssign.isNotEmpty) {
-        final splitPartsByItem = <String, int>{
-          for (final item in toAssign)
-            item.id: item.defaultSplitParts.clamp(1, 4).toInt(),
-        };
-        final groupMetaByItem =
-            _buildAssignmentGroupMetaByItem(studentId, toAssign);
-        unawaited(_recordAssignmentsWithLiveRelease(
-          studentId: studentId,
-          items: toAssign,
-          splitPartsByItem: splitPartsByItem,
-          groupMetaByItemId: groupMetaByItem,
-        ));
-      }
+    if (toAssign.isEmpty) return;
+    // 낙관적 UI: 상태만 선반영(러닝/phase 컬럼은 건드리지 않음).
+    for (final e in toAssign) {
+      e.status = HomeworkStatus.homework;
     }
+    _bump();
+    // 서버 반영: pause/wait RPC 후 status-only UPDATE. 마지막에 한 번 reload.
+    unawaited(() async {
+      await _applyWaitPhaseForItems(studentId, toAssign);
+      for (final e in toAssign) {
+        await _updateItemStatusOnly(studentId, e.id, HomeworkStatus.homework);
+      }
+      await _reloadStudent(studentId);
+    }());
+    final splitPartsByItem = <String, int>{
+      for (final item in toAssign)
+        item.id: item.defaultSplitParts.clamp(1, 4).toInt(),
+    };
+    final groupMetaByItem =
+        _buildAssignmentGroupMetaByItem(studentId, toAssign);
+    unawaited(_recordAssignmentsWithLiveRelease(
+      studentId: studentId,
+      items: toAssign,
+      splitPartsByItem: splitPartsByItem,
+      groupMetaByItemId: groupMetaByItem,
+    ));
   }
 
   // 선택된 과제들을 숙제로 표시
@@ -3548,16 +3652,14 @@ class HomeworkStore {
     final Map<String, HomeworkItem> byId = <String, HomeworkItem>{
       for (final item in list) item.id: item,
     };
-    bool changed = false;
-    final now = DateTime.now();
     final List<HomeworkItem> toAssign = [];
     final Map<String, int> splitPartsByItem = <String, int>{};
-    final Map<String, HomeworkItem> toUpsert = {};
     for (final id in idSet) {
       HomeworkItem? e = byId[id];
       if (e == null) continue;
       if (e.status == HomeworkStatus.completed) {
         if (!cloneCompletedItems) continue;
+        // 완료본 복제는 신규 아이템을 생성(내부에서 upsert). 이후 동일 처리.
         e = continueAdd(
           studentId,
           e.id,
@@ -3572,51 +3674,37 @@ class HomeworkStore {
         );
         byId[e.id] = e;
       }
-      bool updated = false;
-      if (e.runStart != null) {
-        e.accumulatedMs += now.difference(e.runStart!).inMilliseconds;
-        e.runStart = null;
-        updated = true;
-      }
-      if (e.phase != 1) {
-        e.phase = 1;
-        e.waitingAt = now;
-        e.submittedAt = null;
-        e.confirmedAt = null;
-        updated = true;
-      }
-      if (e.status != HomeworkStatus.homework) {
-        e.status = HomeworkStatus.homework;
-        updated = true;
-      }
       toAssign.add(e);
       final int itemSplitParts = splitParts > 1
           ? splitParts.clamp(1, 4).toInt()
           : e.defaultSplitParts.clamp(1, 4).toInt();
       splitPartsByItem[e.id] = itemSplitParts;
-      if (updated) {
-        changed = true;
-        toUpsert[e.id] = e;
+    }
+    if (toAssign.isEmpty) return;
+    // 낙관적 UI: 상태만 선반영.
+    for (final e in toAssign) {
+      if (e.status != HomeworkStatus.homework) {
+        e.status = HomeworkStatus.homework;
       }
     }
-    if (changed) {
-      _bump();
-      for (final e in toUpsert.values) {
-        unawaited(_upsertItem(studentId, e));
+    _bump();
+    unawaited(() async {
+      await _applyWaitPhaseForItems(studentId, toAssign);
+      for (final e in toAssign) {
+        await _updateItemStatusOnly(studentId, e.id, HomeworkStatus.homework);
       }
-    }
-    if (toAssign.isNotEmpty) {
-      final groupMetaByItem =
-          _buildAssignmentGroupMetaByItem(studentId, toAssign);
-      unawaited(_recordAssignmentsWithLiveRelease(
-        studentId: studentId,
-        items: toAssign,
-        dueDate: dueDate,
-        splitParts: splitParts,
-        splitPartsByItem: splitPartsByItem,
-        groupMetaByItemId: groupMetaByItem,
-      ));
-    }
+      await _reloadStudent(studentId);
+    }());
+    final groupMetaByItem =
+        _buildAssignmentGroupMetaByItem(studentId, toAssign);
+    unawaited(_recordAssignmentsWithLiveRelease(
+      studentId: studentId,
+      items: toAssign,
+      dueDate: dueDate,
+      splitParts: splitParts,
+      splitPartsByItem: splitPartsByItem,
+      groupMetaByItemId: groupMetaByItem,
+    ));
   }
 
   // 하원 시 선택하지 않은 과제를 즉시 "대기(진행중)"로 복귀시키고
@@ -3644,45 +3732,74 @@ class HomeworkStore {
         _autoCompleteOnNextWaiting.remove(id);
       }
     }
-    bool changed = false;
-    final now = DateTime.now();
-    final Map<String, HomeworkItem> toUpsert = {};
+
+    final List<HomeworkItem> targets = [];
     for (final e in list) {
       if (!idSet.contains(e.id)) continue;
       if (!includeCompleted && e.status == HomeworkStatus.completed) continue;
-      bool updated = false;
-      if (e.runStart != null) {
-        e.accumulatedMs += now.difference(e.runStart!).inMilliseconds;
-        e.runStart = null;
-        updated = true;
-      }
-      if (e.phase != 1) {
-        e.phase = 1;
-        e.waitingAt = now;
-        e.submittedAt = null;
-        e.confirmedAt = null;
-        e.completedAt = null;
-        updated = true;
-      }
-      if (e.completedAt != null) {
-        e.completedAt = null;
-        updated = true;
-      }
-      if (e.status != HomeworkStatus.inProgress) {
-        e.status = HomeworkStatus.inProgress;
-        updated = true;
-      }
-      if (updated) {
-        changed = true;
-        toUpsert[e.id] = e;
-      }
+      targets.add(e);
     }
 
-    if (changed) {
-      _bump();
-      for (final e in toUpsert.values) {
-        unawaited(_upsertItem(studentId, e));
+    if (targets.isNotEmpty) {
+      // 낙관적 UI: status만 선반영. 타이머 컬럼은 RPC로 서버가 권위 처리.
+      for (final e in targets) {
+        if (e.status != HomeworkStatus.inProgress) {
+          e.status = HomeworkStatus.inProgress;
+        }
       }
+      _bump();
+      unawaited(() async {
+        try {
+          final String academyId =
+              (await TenantService.instance.getActiveAcademyId()) ??
+                  await TenantService.instance.ensureActiveAcademy();
+          final String? updatedBy =
+              Supabase.instance.client.auth.currentUser?.id;
+          final supa = Supabase.instance.client;
+          // 러닝 중이면 먼저 학생 단위 pause_all로 정지(축적/이벤트 기록 포함).
+          final bool hasRunning = targets.any((e) => e.runStart != null);
+          if (hasRunning) {
+            try {
+              await supa.rpc('homework_pause_all', params: {
+                'p_student_id': studentId,
+                'p_academy_id': academyId,
+                'p_updated_by': updatedBy,
+              });
+            } catch (e) {
+              // ignore: avoid_print
+              print('[HW][restore][pause_all][ERROR] ' + e.toString());
+            }
+          }
+          for (final it in targets) {
+            try {
+              if (it.status == HomeworkStatus.completed || it.completedAt != null) {
+                // 완료 행은 homework_wait이 배제하므로 reopen RPC 사용.
+                await supa.rpc('homework_reopen_completed_to_waiting',
+                    params: {
+                      'p_item_id': it.id,
+                      'p_academy_id': academyId,
+                      'p_updated_by': updatedBy,
+                    });
+              } else {
+                await supa.rpc('homework_wait', params: {
+                  'p_item_id': it.id,
+                  'p_academy_id': academyId,
+                  'p_updated_by': updatedBy,
+                });
+              }
+            } catch (e) {
+              // ignore: avoid_print
+              print('[HW][restore][wait][ERROR] id=' + it.id + ' ' + e.toString());
+            }
+            // status는 RPC가 바꾸지 않으므로(= 0/inProgress 유지 또는 reopen이 0으로 복원),
+            // 완료였던 행이 아닌 경우에만 status-only 보정은 생략한다(이미 inProgress).
+          }
+          await _reloadStudent(studentId);
+        } catch (e) {
+          // ignore: avoid_print
+          print('[HW][restoreItemsToWaiting][ERROR] ' + e.toString());
+        }
+      }());
     }
 
     unawaited(

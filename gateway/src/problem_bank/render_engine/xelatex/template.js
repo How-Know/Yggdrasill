@@ -519,7 +519,56 @@ function parseStemSegments(stem) {
     }
   }
   flushText();
-  return segments;
+
+  // ─── 후처리: text 세그먼트 안에 섞여 있는 [그림] 마커를 별도 'figure' segment 로 승격 ───
+  //   목적: 표/박스와 동일하게 블록 전환 gap 로직(isBigBlockType / gapForBlock)이
+  //         그림에도 그대로 적용되도록 한다. 그림 앞쪽 gap 이 0.40em (outerPendingEmpty)
+  //         로 들어가고 뒤쪽이 6pt (BLOCK_GAP) 로 끝나던 문제 해결.
+  //   규칙:
+  //     - seg.lines 를 순회하며 각 라인을 [그림] 마커 경계로 split.
+  //     - 마커가 있으면 그 앞 텍스트 조각 → text seg flush, 마커 자체 → figure seg,
+  //       마커 뒤 조각 → 다음 text seg 에 이어붙임.
+  //     - 원래 [그림] 마커는 한 개씩 다시 방출(여러 개 그림은 각각 별도 figure seg) →
+  //       replaceFigureMarkers 가 기존대로 figIdx 를 순차 소비.
+  //     - 마커가 없는 라인은 그대로 현재 text seg 에 누적.
+  const FIGURE_SPLIT_RE = /(\[(?:그림|도형|도표)\])/g;
+  const out = [];
+  for (const seg of segments) {
+    if (seg.type !== 'text') { out.push(seg); continue; }
+    let bufLines = [];
+    const flushTextBuf = () => {
+      // 공백/[문단] 만 남은 버퍼는 무시. 그렇지 않으면 그대로 text seg 로 방출.
+      const hasContent = bufLines.some((l) => {
+        const s = String(l || '').replace(PARAGRAPH_MARKER_RE, '').trim();
+        return s.length > 0;
+      });
+      if (hasContent) out.push({ type: 'text', lines: bufLines.slice() });
+      bufLines = [];
+    };
+    for (const rawLine of seg.lines) {
+      const line = String(rawLine || '');
+      // 해당 라인에 [그림] 마커가 없으면 그대로 누적.
+      if (!/\[(?:그림|도형|도표)\]/.test(line)) {
+        bufLines.push(line);
+        continue;
+      }
+      // 마커 경계로 분리. split 결과 홀수 인덱스(1,3,...)가 마커, 짝수 인덱스가 텍스트.
+      const pieces = line.split(FIGURE_SPLIT_RE);
+      for (let i = 0; i < pieces.length; i += 1) {
+        const piece = pieces[i];
+        if (!piece) continue;
+        if (/^\[(?:그림|도형|도표)\]$/.test(piece)) {
+          // 그림 마커 직전까지의 text 를 flush.
+          flushTextBuf();
+          out.push({ type: 'figure', lines: [piece] });
+        } else {
+          bufLines.push(piece);
+        }
+      }
+    }
+    flushTextBuf();
+  }
+  return out;
 }
 
 /* ------------------------------------------------------------------ */
@@ -785,38 +834,122 @@ function parseTableLines(lines) {
   return rows;
 }
 
-function renderTableLatex(lines, equations) {
-  const rows = parseTableLines(lines);
-  if (rows.length === 0) return '';
+// raw tabular block (\begin{tabular}{...} ... \end{tabular}) 을
+// struct 와 같은 rows 구조(List<List<string[]>>) 로 해체한다.
+// - 셀 자동 감싸기(autoWrapTabularCells) 는 호출 전에 이미 수행됐다고 가정.
+// - `\\\\` 로 행 구분, `&` 로 셀 구분(중괄호 깊이 추적), `\hline` 은 무시.
+// - 반환: rows[][cells][lines] 형태로 parseTableLines 결과와 호환.
+function parseRawTabularToRows(rawTexBlock) {
+  const match = String(rawTexBlock).match(/\\begin\{tabular\}\{[^}]*\}([\s\S]*?)\\end\{tabular\}/);
+  if (!match) return [];
+  const body = match[1];
+  // 행 구분. \\ 두 개가 연속일 때 행 경계. 정규식은 \\\\\\\\ (JS 문자열) = \\\\ (실제 문자열).
+  const rawRows = body.split(/\\\\/);
+  const rows = [];
+  for (const rowSrc of rawRows) {
+    // 라인 끝에 공백/개행만 있는 빈 row 는 스킵.
+    const trimmed = rowSrc.trim();
+    if (!trimmed) continue;
+    // \hline 만 있는 row 도 스킵 (구분자만을 가진 행).
+    if (/^\s*(?:\\hline\s*)+$/.test(trimmed)) continue;
+    // 셀 분리.
+    const cells = splitTabularRowCells(rowSrc);
+    // 각 셀 앞의 \hline 제거(뒤따르는 실제 내용만 취함).
+    const cleanedCells = cells.map((raw) => {
+      let s = raw;
+      // 선행 \hline 들을 모두 제거.
+      s = s.replace(/^\s*(?:\\hline\s*)+/, '');
+      return [s.trim()];
+    });
+    rows.push(cleanedCells);
+  }
+  return rows;
+}
+
+// tableScale: { widthScale, heightScale, columnScales? } — 사용자 지정 크기 배율.
+//   widthScale      : 표 전체 폭 (× \linewidth).
+//   heightScale     : 셀 고정 높이 (2.2em × 배수). 폰트 크기는 본문 그대로.
+//   columnScales[i] : 컬럼별 상대 가중치. 합으로 정규화되어 각 컬럼 폭 비율을 정한다.
+//
+// rows 는 parseTableLines 결과 또는 parseRawTabularToRows 결과. 둘 다 동일한
+// `rows[][cells][lines]` 구조이므로 이 함수 내부에서는 구분 없이 처리.
+function renderTableLatex(rows, equations, tableScale = null) {
+  if (!Array.isArray(rows) || rows.length === 0) return '';
   const maxCols = Math.max(...rows.map((r) => r.length));
   if (maxCols === 0) return '';
 
-  // 각 셀을 고정 높이 \parbox[c][h][c]{w}{\centering ...} 로 감싸 세로/가로 모두
-  // 정확히 중앙에 배치한다. column type 은 c (baseline 정렬) — parbox[c] 가 세로 중심을 baseline 에 맞춘다.
+  const widthScale = clampTableScale(tableScale?.widthScale);
+  const heightScale = clampTableScale(tableScale?.heightScale);
+  const baseWidthFrac = maxCols <= 3 ? 0.5 : maxCols <= 5 ? 0.7 : 0.9;
+  // 표 전체 폭 분수. 1.0(=\linewidth) 이 상한.
+  const effWidthFrac = Math.max(0.05, Math.min(1.0, baseWidthFrac * widthScale));
+  const cellHeightEm = (2.2 * heightScale).toFixed(2);
+
+  // 컬럼별 상대 가중치. meta.table_scales[...].columnScales 가 있으면 그것을,
+  // 없거나 길이가 다르면 전부 1.0 (균등) 으로.
+  const rawColScales = Array.isArray(tableScale?.columnScales)
+    ? tableScale.columnScales
+    : null;
+  const colWeights = [];
+  for (let i = 0; i < maxCols; i += 1) {
+    const w = rawColScales && rawColScales.length === maxCols
+      ? clampTableScale(rawColScales[i])
+      : 1.0;
+    colWeights.push(w);
+  }
+  const weightSum = colWeights.reduce((a, b) => a + b, 0) || maxCols;
+  // 각 컬럼 폭 분수 (0~1). 모두 합하면 effWidthFrac.
+  const colFracs = colWeights.map((w) => (w / weightSum) * effWidthFrac);
+
+  // 컬럼 스펙은 `c` 유지 — 각 셀을 \parbox 로 고정 폭 감싸므로 실제 컬럼 폭은 \parbox 폭.
   const colSpec = '|' + Array(maxCols).fill('c|').join('');
+
+  // 컬럼별 개별 폭 레지스터 이름 \tblcelwdA..\tblcelwdZ.
+  const colWidthVar = (i) => `\\tblcelwd${String.fromCharCode(0x41 + i)}`;
 
   const latexRows = rows.map((row) => {
     const cells = [];
     for (let i = 0; i < maxCols; i++) {
       const cellLines = row[i] || [''];
+      // raw tabular 해체 경로에서는 셀이 이미 $...$ / \text{...} 로 감싸져 있을 수 있다.
+      // struct 경로에서는 평문 셀이므로 smartTexLine 을 적용. 두 경로 모두 안전하도록
+      // "이미 수식 구분자로 감싸진 셀은 smartTexLine 을 건너뛴다" 로직이 필요하지만
+      // smartTexLine 은 이중 감싸기를 방어하므로 그대로 통과시켜도 동작함.
       const content = cellLines.length > 0
-        ? cellLines.map((l) => smartTexLine(l, equations)).join(' ')
+        ? cellLines
+          .map((l) => renderCellContent(l, equations))
+          .filter((s) => s && s.trim())
+          .join(' ')
         : '';
-      // \vphantom{X\textsuperscript{2}} 로 모든 셀이 동일한 상한/하한을 갖도록 고정 →
-      // 위첨자/일반 문자 셀 간 세로 위치가 완전히 일치.
+      // 세로·가로 정가운데 배치 (LaTeX 관용구):
+      //   - \parbox[c][h][c]{w} : 외부 baseline c, 고정 높이 h, 내부 수직 정렬 c
+      //   - \vspace*{\fill} 위아래 : 남는 세로 공간을 균등 분배 → 한 줄/여러 줄 모두 정확히 중앙
+      //       (* 는 페이지 끝에서도 공간 흡수되지 않게 강제)
+      //   - \centering : paragraph-level 가로 중앙 (content 가 길어 줄바꿈 돼도 중앙)
+      //   - vphantom 사용 X : baseline 에 붙은 phantom 이 시각적 하향 쏠림 유발.
       cells.push(
-        `\\parbox[c][\\tblcellht][c]{\\tblcellwd}{\\centering\\vphantom{X\\textsuperscript{2}g}${content}\\vphantom{X\\textsuperscript{2}g}}`,
+        `\\parbox[c][\\tblcellht][c]{${colWidthVar(i)}}{\\vspace*{\\fill}\\centering ${content}\\par\\vspace*{\\fill}}`,
       );
     }
     return cells.join(' & ') + ' \\\\';
   });
 
-  const tableWidthFrac = maxCols <= 3 ? 0.5 : maxCols <= 5 ? 0.7 : 0.9;
+  // 컬럼 폭 레지스터 선언 + 할당.
+  // 각 컬럼 폭 = (colFrac_i × \linewidth) - 2\tabcolsep - 1.2pt (보더/여백 보정).
+  const lengthDefs = [];
+  for (let i = 0; i < maxCols; i += 1) {
+    const name = colWidthVar(i);
+    lengthDefs.push(
+      `\\makeatletter\\@ifundefined{${name.slice(1)}}{\\newlength{${name}}}{}\\makeatother`,
+    );
+    lengthDefs.push(
+      `\\setlength{${name}}{\\dimexpr ${colFracs[i].toFixed(6)}\\linewidth - 2\\tabcolsep - 1.2pt\\relax}`,
+    );
+  }
 
   return [
-    `\\setlength{\\tblcellwd}{\\dimexpr ${tableWidthFrac}\\linewidth/${maxCols} - 2\\tabcolsep - 1.2pt\\relax}`,
-    // 모든 셀의 높이를 2.2em 으로 고정 → \parbox 의 [c] 옵션이 내용을 세로 중앙에 배치.
-    '\\setlength{\\tblcellht}{2.2em}',
+    ...lengthDefs,
+    `\\setlength{\\tblcellht}{${cellHeightEm}em}`,
     '\\par\\noindent{\\hfill\\renewcommand{\\arraystretch}{1}%',
     '\\begin{tabular}{' + colSpec + '}',
     '\\hline',
@@ -824,6 +957,80 @@ function renderTableLatex(lines, equations) {
     '\\hline',
     '\\end{tabular}\\hfill\\null}\\par',
   ].join('\n');
+}
+
+// 셀 내용 1 줄을 렌더 가능한 LaTeX 텍스트로 변환.
+// - 이미 $...$ 또는 \text{...} 로 감싸진 경우: 그대로 둔다 (raw tabular 해체 경로).
+// - 그 외: smartTexLine 으로 한국어/수식 분리 처리.
+function renderCellContent(line, equations) {
+  const s = String(line || '').trim();
+  if (!s) return '';
+  // $...$ 로 시작해서 $...$ 로 끝나면서 내부에 $가 한 쌍만 있는 단순 수식 셀.
+  if (/^\$[\s\S]*\$$/.test(s)) {
+    // 안쪽에 중첩된 $가 있으면 이상한 셀 → 그대로 smartTexLine 에 맡긴다.
+    const inner = s.slice(1, -1);
+    if (!/\$/.test(inner)) return s;
+  }
+  // \text{...} 로 완전히 감싸진 셀.
+  if (/^\\text\{[\s\S]*\}$/.test(s)) return s;
+  // 그 외는 struct 경로처럼 smartTexLine.
+  return smartTexLine(s, equations);
+}
+
+// 표 스케일 값 정규화. 0.3 ~ 2.5 사이로 clamp. 비정상 값은 1.0.
+// struct 표는 cellwd/cellht 에, raw 표는 \tabcolsep/\arraystretch 에 반영된다.
+function clampTableScale(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n <= 0) return 1.0;
+  return Math.max(0.3, Math.min(2.5, n));
+}
+
+// meta.table_scales 에서 특정 표(type: 'struct' | 'raw', index: 1-based)의
+// 스케일 { widthScale, heightScale, columnScales? } 을 찾아 반환.
+// 없으면 table_scale_default, 그것도 없으면 { widthScale: 1, heightScale: 1 }.
+// columnScales 는 struct 표에서만 의미가 있고, 길이는 renderTableLatex 에서 maxCols 와 비교해 검증.
+function resolveTableScale(question, type, index) {
+  const meta = question?.meta && typeof question.meta === 'object' ? question.meta : {};
+  const scales = meta.table_scales && typeof meta.table_scales === 'object'
+    ? meta.table_scales
+    : {};
+  const def = meta.table_scale_default && typeof meta.table_scale_default === 'object'
+    ? meta.table_scale_default
+    : null;
+  // 탐색 우선순위:
+  //   1) 타입별 키: struct:1 / raw:1
+  //   2) 통합 키   : table:1 (struct+raw 를 하나로 세는 외부 네임스페이스 사용 케이스)
+  const keys = [`${type}:${index}`];
+  const lookup = (k) => (scales[k] && typeof scales[k] === 'object' ? scales[k] : null);
+
+  const toColumnScales = (raw) => {
+    if (!Array.isArray(raw)) return null;
+    const out = [];
+    for (const v of raw) {
+      const n = Number(v);
+      if (Number.isFinite(n) && n > 0) {
+        out.push(clampTableScale(n));
+      } else {
+        out.push(1.0);
+      }
+    }
+    return out.length ? out : null;
+  };
+
+  for (const k of keys) {
+    const hit = lookup(k);
+    if (hit) return {
+      widthScale: clampTableScale(hit.widthScale ?? hit.w ?? 1),
+      heightScale: clampTableScale(hit.heightScale ?? hit.h ?? 1),
+      columnScales: toColumnScales(hit.columnScales ?? hit.cols ?? null),
+    };
+  }
+  if (def) return {
+    widthScale: clampTableScale(def.widthScale ?? def.w ?? 1),
+    heightScale: clampTableScale(def.heightScale ?? def.h ?? 1),
+    columnScales: toColumnScales(def.columnScales ?? def.cols ?? null),
+  };
+  return { widthScale: 1.0, heightScale: 1.0, columnScales: null };
 }
 
 /* ------------------------------------------------------------------ */
@@ -1384,11 +1591,105 @@ function renderOneQuestion(question, {
     : [];
   const figureLayout = resolveFigureLayout(question, stemSizePt);
   const layoutItems = Array.isArray(figureLayout?.items) ? figureLayout.items : [];
+  const figureGroups = Array.isArray(figureLayout?.groups) ? figureLayout.groups : [];
+  // [DEBUG] 렌더 진입 시점의 layout/scale 관찰 로그. 표/그림 설정이 실제 DB → 렌더러로
+  //        전달됐는지를 한눈에 확인하기 위함. 진단 후 필요 시 제거 가능.
+  if (process.env.PB_RENDER_DEBUG === '1'
+      || (question?.meta && (question.meta.figure_layout || question.meta.table_scales))) {
+    try {
+      const metaSnap = question?.meta && typeof question.meta === 'object'
+        ? question.meta : {};
+      const flSummary = metaSnap.figure_layout && typeof metaSnap.figure_layout === 'object'
+        ? {
+            items: Array.isArray(metaSnap.figure_layout.items)
+              ? metaSnap.figure_layout.items.length : 0,
+            groups: Array.isArray(metaSnap.figure_layout.groups)
+              ? metaSnap.figure_layout.groups.map((g) => ({
+                  type: g?.type,
+                  n: Array.isArray(g?.members) ? g.members.length : 0,
+                  members: Array.isArray(g?.members) ? g.members : [],
+                }))
+              : [],
+          }
+        : null;
+      const resolvedGroupsSummary = figureGroups.map((g) => ({
+        type: g.type,
+        members: g.members,
+      }));
+      console.log(
+        `[xelatex:render] q=${question?.question_number || question?.id || '?'} `
+        + `metaFigLayout=${JSON.stringify(flSummary)} `
+        + `resolvedGroups=${JSON.stringify(resolvedGroupsSummary)} `
+        + `tableScales=${JSON.stringify(metaSnap.table_scales || null)} `
+        + `tableScaleDefault=${JSON.stringify(metaSnap.table_scale_default || null)}`,
+      );
+    } catch (e) {
+      console.warn('[xelatex:render] debug log failed:', e?.message || e);
+    }
+  }
   const layoutByAssetKey = new Map();
   for (const it of layoutItems) {
     if (it?.assetKey) layoutByAssetKey.set(String(it.assetKey), it);
   }
   let figIdx = 0;
+
+  // figIdx → assetKey 시퀀스를 미리 계산해 두어 그룹 매칭에 사용한다.
+  //  - figure_local_infos 가 있으면 그쪽 assetKey 를 우선 사용
+  //  - 없으면 ord:N (N = 1-based) 로 폴백
+  const figureTotalCount = Math.max(
+    figurePaths.length,
+    figureInfos.length,
+    layoutItems.length,
+  );
+  const seqAssetKeys = [];
+  for (let i = 0; i < figureTotalCount; i += 1) {
+    const info = figureInfos[i];
+    if (info?.assetKey) {
+      seqAssetKeys.push(String(info.assetKey));
+    } else if (info?.figureIndex) {
+      seqAssetKeys.push(`idx:${info.figureIndex}`);
+    } else {
+      seqAssetKeys.push(`ord:${i + 1}`);
+    }
+  }
+
+  // 그룹 시작 figIdx → { members: [figIdx...], gap: em } 맵. "연속된 figIdx 들의 assetKey 집합"
+  // 이 group.members 집합과 정확히 일치하는 경우만 그룹 방출 후보로 등록한다.
+  // (group.members 순서는 UI 저장 시 정렬될 수 있어 순서 비교 대신 집합 비교.)
+  const groupByStartFigIdx = new Map();
+  if (figureGroups.length > 0 && seqAssetKeys.length >= 2) {
+    const keyToSeqIdx = new Map();
+    seqAssetKeys.forEach((k, idx) => {
+      if (!keyToSeqIdx.has(k)) keyToSeqIdx.set(k, idx);
+    });
+    for (const g of figureGroups) {
+      if (!g || g.type !== 'horizontal') continue;
+      const members = Array.isArray(g.members) ? g.members : [];
+      if (members.length < 2) continue;
+      const memberIdxs = members
+        .map((m) => keyToSeqIdx.get(String(m)))
+        .filter((n) => Number.isInteger(n));
+      if (memberIdxs.length !== members.length) continue;
+      const sorted = [...memberIdxs].sort((a, b) => a - b);
+      // 연속성 검사: sorted[k] === sorted[0] + k
+      let contiguous = true;
+      for (let k = 1; k < sorted.length; k += 1) {
+        if (sorted[k] !== sorted[0] + k) { contiguous = false; break; }
+      }
+      if (!contiguous) continue;
+      const start = sorted[0];
+      groupByStartFigIdx.set(start, {
+        members: sorted,
+        gap: Number.isFinite(g.gap) ? g.gap : 0.5,
+      });
+    }
+  }
+  // 이미 그룹으로 방출 "예약" 된 figIdx (그룹 첫 멤버 외의 멤버들). 해당 figIdx 의 마커를
+  // 만나면 빈 문자열로 치환해 중복 출력 방지.
+  const figIdxConsumedByGroup = new Set();
+  for (const g of groupByStartFigIdx.values()) {
+    for (let k = 1; k < g.members.length; k += 1) figIdxConsumedByGroup.add(g.members[k]);
+  }
 
   function layoutForIndex(i) {
     const info = figureInfos[i];
@@ -1404,46 +1705,73 @@ function renderOneQuestion(question, {
     return null;
   }
 
-  function renderFigureLatex(i) {
+  function figureIncludeExpr(i) {
     const p = figurePaths[i];
-    if (!p) return '';
+    if (!p) return null;
     const normalized = String(p).replace(/\\/g, '/');
     const layout = layoutForIndex(i) || {};
-    // widthEm은 figure_layout.js에서 clamp(2..50)로 정규화되어 저장됨.
-    // em 단위는 tcolorbox 안/밖 모두 현재 폰트 크기 기준으로 안정적.
     const widthEmRaw = Number.isFinite(layout.widthEm) ? Number(layout.widthEm) : 20;
     const widthEm = Math.max(2, Math.min(50, widthEmRaw));
+    const widthExpr = `${widthEm.toFixed(2)}em`;
+    return {
+      widthEm,
+      widthExpr,
+      include: `\\includegraphics[width=${widthExpr}]{${normalized}}`,
+    };
+  }
+
+  function renderFigureLatex(i) {
+    const expr = figureIncludeExpr(i);
+    if (!expr) return '';
+    const layout = layoutForIndex(i) || {};
     const anchor = String(layout.anchor || 'center').toLowerCase();
     const offsetX = Number.isFinite(layout.offsetXEm) ? Number(layout.offsetXEm) : 0;
     const offsetY = Number.isFinite(layout.offsetYEm) ? Number(layout.offsetYEm) : 0;
-
-    // graphicx 기본 키만 사용한다. (adjustbox의 'max width'는 프리앰블에 없어 keyval 오류가 난다.)
-    // widthEm은 figure_layout 에서 2..50 으로 clamp 되며 사용자가 저장한 값이므로 그대로 신뢰한다.
-    const widthExpr = `${widthEm.toFixed(2)}em`;
-    const img = `\\includegraphics[width=${widthExpr}]{${normalized}}`;
-
     const hOffset = Math.abs(offsetX) > 1e-3 ? `\\hspace*{${offsetX.toFixed(2)}em}` : '';
     const vOffsetPre = offsetY > 1e-3 ? `\\vspace*{${offsetY.toFixed(2)}em}` : '';
     const vOffsetPost = offsetY < -1e-3 ? `\\vspace*{${offsetY.toFixed(2)}em}` : '';
-
     let body;
     if (anchor === 'left') {
-      body = `\\par\\noindent ${hOffset}${img}\\par`;
+      body = `\\par\\noindent ${hOffset}${expr.include}\\par`;
     } else if (anchor === 'right') {
-      body = `\\par\\noindent\\hfill${img}${hOffset}\\par`;
+      body = `\\par\\noindent\\hfill${expr.include}${hOffset}\\par`;
     } else {
-      // center / top: 수평 중앙 정렬. offsetX는 중앙 기준 좌우 밀림.
-      // \begin{center} 대신 \hfill 조합: trivlist의 \topsep+\partopsep 간격 제거.
-      body = `\\par\\noindent{\\hfill${hOffset}${img}\\hfill\\null}\\par`;
+      body = `\\par\\noindent{\\hfill${hOffset}${expr.include}\\hfill\\null}\\par`;
     }
     const pre = vOffsetPre ? `\n${vOffsetPre}` : '';
     const post = vOffsetPost ? `\n${vOffsetPost}` : '';
     return `${pre}\n${body}${post}\n`;
   }
 
+  // 그룹(가로 배치) 전체를 한 줄 minipage 묶음으로 방출.
+  // 각 멤버의 widthEm 을 그대로 존중해서 서로 다른 크기도 한 줄에 배치 가능.
+  function renderFigureGroupLatex(group) {
+    const gap = Number.isFinite(group?.gap) ? group.gap : 0.5;
+    const pieces = [];
+    for (let k = 0; k < group.members.length; k += 1) {
+      const i = group.members[k];
+      const expr = figureIncludeExpr(i);
+      if (!expr) continue;
+      if (pieces.length > 0) {
+        pieces.push(`\\hspace{${gap.toFixed(2)}em}`);
+      }
+      pieces.push(
+        `\\begin{minipage}[c]{${expr.widthExpr}}\\centering ${expr.include}\\end{minipage}`,
+      );
+    }
+    if (pieces.length === 0) return '';
+    // 한 줄 \hbox 안에서 hfill 로 수평 중앙 정렬.
+    return `\\par\\noindent\\hbox to \\linewidth{\\hfill${pieces.join('%\n')}\\hfill\\null}\\par\n`;
+  }
+
   function replaceFigureMarkers(text) {
     return text.replace(FIGURE_MARKER_RE, () => {
-      const i = figIdx++;
+      const i = figIdx;
+      figIdx += 1;
+      // 이미 그룹의 첫 멤버가 묶어 방출한 경우 → 현재 마커는 빈 치환으로 소비.
+      if (figIdxConsumedByGroup.has(i)) return '';
+      const group = groupByStartFigIdx.get(i);
+      if (group) return renderFigureGroupLatex(group);
       return renderFigureLatex(i);
     });
   }
@@ -1481,35 +1809,108 @@ function renderOneQuestion(question, {
 
   const segments = parseStemSegments(stem);
 
+  // 문항 내 표 등장 순서 카운터 (meta.table_scales 키: struct:N / raw:N 와 대응).
+  let structTableIdx = 0;
+  let rawTableIdx = 0;
+
   // 콘텐츠 블록 전환 간격.
   // - BLOCK_GAP (6pt): 표 ↔ text, 그리고 5지선다 앞.
-  // - TOP_BIG_GAP (그림/보기/조건제시박스 "위"): "줄과 줄 사이 간격"의 180%.
+  // - BOX_GAP (보기/조건/데코 박스 위·아래 공통): 0.75\baselineskip.
   //     한글 본문은 \setstretch{1.7} 이므로 한 줄 공간 안에서 "실제 여백(leading)"은 약 0.7\baselineskip.
-  //     그 180% ≈ 1.26\baselineskip — 그러나 시각적으로 과도하므로 0.75\baselineskip (=여백만의 약 110%)
-  //     정도에서 잘라 박스 전/후 여백이 본문 한 줄 분 정도가 되도록 설정.
-  // - BOTTOM_BIG_GAP (9pt): 그림/보기/조건제시박스 "아래" (기존 유지).
+  //     180% 규칙을 그대로 적용하면 시각적으로 과도 → 0.75\baselineskip 에서 잘라 블록 위아래 여백이
+  //     본문 한 줄 분 정도가 되도록 설정. "박스는 위아래 여백 일치" 원칙 적용.
+  // - FIG_TABLE_GAP (그림/표 위·아래 공통): 0.78\baselineskip.
+  //     이전 0.975\baselineskip 에서 사용자 요청으로 20% 감소(0.975 × 0.8 = 0.78).
+  //     위/아래 동일한 gap 을 사용해 시각적으로 그림·표 위아래 여백이 대칭이 되도록 한다.
   // \par 를 앞에 두어 현재 paragraph 를 강제 종료 → vspace 가 vertical mode 에서 동작.
   const BLOCK_GAP = '\\par\\vspace{6pt}';
-  const TOP_BIG_GAP = '\\par\\vspace{0.75\\baselineskip}';
-  const BOTTOM_BIG_GAP = '\\par\\vspace{9pt}';
-  // 표도 보기/조건제시/그림과 동일한 "블록" 으로 간주 → 위쪽은 TOP_BIG_GAP, 아래는 BOTTOM_BIG_GAP.
-  const isBigBlockType = (t) =>
-    t === 'bogi' || t === 'deco' || t === 'figure' || t === 'table' || t === 'raw_tabular';
+  const BOX_GAP = '\\par\\vspace{0.75\\baselineskip}';
+  const TABLE_GAP = '\\par\\vspace{0.78\\baselineskip}';
+  // DEBUG: 그림 전용 gap 을 0 으로 강제 (위/아래 공통).
+  // 이로써 문서에 남은 여백이 \vspace 때문인지, 그림 paragraph 자체의 height/depth 때문인지 구별 가능.
+  const FIG_GAP = '\\par\\vspace{0pt}';
+  const FIG_TABLE_GAP = TABLE_GAP; // backward-compat
+  const isBoxType = (t) => t === 'bogi' || t === 'deco';
+  const isFigureType = (t) => t === 'figure';
+  const isTableType = (t) => t === 'table' || t === 'raw_tabular';
+  const isFigOrTableType = (t) => isFigureType(t) || isTableType(t);
+  const isBigBlockType = (t) => isBoxType(t) || isFigOrTableType(t);
+  const gapForBlock = (t) => {
+    if (isFigureType(t)) return FIG_GAP;
+    if (isTableType(t)) return TABLE_GAP;
+    return BOX_GAP;
+  };
+  const gapRank = (g) => {
+    if (g === TABLE_GAP) return 3;
+    if (g === BOX_GAP) return 2;
+    if (g === FIG_GAP) return 1; // 0pt 라도 "big block" 으로 취급
+    return 0;
+  };
+  const maxGap = (a, b) => (gapRank(a) >= gapRank(b) ? a : b);
+
+  // figure segment 가 실제로 본체를 방출할지 사전 판단.
+  //   - figIdxConsumedByGroup: 그룹의 2번째 이후 멤버는 본체 렌더 생략 → gap 도 생략해야 함.
+  //   - segmentWillEmit: sIdx 기준 해당 seg 가 무언가 push 하게 될지 예측.
+  //   이 시점에서 figIdx 는 "지금까지 소비한 마커 수". figure seg 하나 = 마커 하나 소비.
+  //   앞 segment 들이 지금까지 소비할 마커 수를 누적 카운트해 정확히 어떤 figIdx 에 닿는지 계산.
+  const figMarkerCountUpTo = (upto) => {
+    let n = 0;
+    for (let i = 0; i < upto; i += 1) {
+      const s = segments[i];
+      if (!s) continue;
+      if (s.type === 'figure') {
+        n += 1;
+      } else if (s.type === 'text' || s.type === 'bogi' || s.type === 'deco') {
+        // 텍스트/박스 내부에도 [그림] 이 남아있을 수 있음 — parseStemSegments 는 text 만
+        // 승격하므로 text 안에는 사실상 [그림] 이 더 없지만(분할됐음), bogi/deco 는 남아있다.
+        const joined = (s.lines || []).join('\n');
+        const m = joined.match(/\[(?:그림|도형|도표)\]/g);
+        if (m) n += m.length;
+      }
+    }
+    return n;
+  };
+  // 현재 seg 가 renderFigureLatex/Group 을 실제로 방출할지 판정.
+  //   - consumed by group 의 2번째+ 멤버: 방출 안 함.
+  //   - figurePaths 에 대응 이미지가 없는 "고아 마커"(stem 에 [그림] 이 figurePaths 개수보다
+  //     많이 들어간 케이스, e.g. HWPX 원본에서 [그림] 중복/누락): 방출 안 함.
+  //   - 그 외 figure seg: 방출 함.
+  const figureSegWillEmit = (sIdx) => {
+    const s = segments[sIdx];
+    if (!s || s.type !== 'figure') return false;
+    const thisFigIdx = figMarkerCountUpTo(sIdx);
+    if (figIdxConsumedByGroup.has(thisFigIdx)) return false;
+    if (thisFigIdx >= figurePaths.length) return false;
+    return true;
+  };
 
   for (let sIdx = 0; sIdx < segments.length; sIdx++) {
     const seg = segments[sIdx];
     const prev = segments[sIdx - 1];
     const needsGap = prev && (prev.type !== 'text' || seg.type !== 'text');
-    if (needsGap) {
-      if (isBigBlockType(seg.type)) {
-        // 박스/그림이 "지금" 시작됨 → 그 "위" 에 180% 간격.
-        parts.push(TOP_BIG_GAP);
-      } else if (isBigBlockType(prev.type)) {
-        // 박스/그림 바로 "다음" → "아래" 간격 (기존 9pt).
-        parts.push(BOTTOM_BIG_GAP);
+    // figure seg 가 실제 렌더 생략될 예정이면, 앞쪽 gap 도 생략.
+    const segEmits = seg.type === 'figure' ? figureSegWillEmit(sIdx) : true;
+    parts.push(`% DBG seg#${sIdx} type=${seg.type} prev=${prev ? prev.type : 'NONE'} needsGap=${needsGap} segEmits=${segEmits} figIdx=${figIdx}`);
+    if (needsGap && segEmits) {
+      // 블록 전환 gap 선택 규칙:
+      //   - 양쪽 모두 Big block 이면 "prev 의 아래 gap" 과 "seg 의 위 gap" 중 더 큰 쪽.
+      //     예) 표(FIG_TABLE_GAP=0.78) ↔ 보기박스(BOX_GAP=0.75) → 0.78 (표 기준).
+      //   - 한쪽만 Big block 이면 그 쪽의 gap.
+      //   - 양쪽 다 Big block 이 아니면 BLOCK_GAP.
+      const prevIsBig = isBigBlockType(prev.type);
+      const segIsBig = isBigBlockType(seg.type);
+      let chosen;
+      if (prevIsBig && segIsBig) {
+        chosen = maxGap(gapForBlock(prev.type), gapForBlock(seg.type));
+      } else if (segIsBig) {
+        chosen = gapForBlock(seg.type);
+      } else if (prevIsBig) {
+        chosen = gapForBlock(prev.type);
       } else {
-        parts.push(BLOCK_GAP);
+        chosen = BLOCK_GAP;
       }
+      parts.push(`% DBG  → chosen=${chosen.replace(/\\/g, '\\\\')}`);
+      parts.push(chosen);
     }
 
     if (seg.type === 'text') {
@@ -1611,26 +2012,68 @@ function renderOneQuestion(question, {
     } else if (seg.type === 'deco') {
       parts.push(renderDecoBoxLatex(seg.lines, equations, replaceFigureMarkers));
     } else if (seg.type === 'table') {
-      parts.push(renderTableLatex(seg.lines, equations));
+      structTableIdx += 1;
+      const scale = resolveTableScale(question, 'struct', structTableIdx);
+      const rows = parseTableLines(seg.lines);
+      parts.push(renderTableLatex(rows, equations, scale));
     } else if (seg.type === 'raw_tabular') {
-      // VLM 이 직접 작성한 tabular. tabular 바깥은 text mode 이므로
-      // 각 셀 안의 LaTeX 수식 명령이 에러("! Missing $ inserted.") 를 내지 않도록
-      // 셀을 자동으로 $...$ 로 감싸 준다. \text{...} 셀은 그대로 둔다.
+      // VLM 이 작성한 \begin{tabular}{...}...\end{tabular} 블록.
+      // 1) autoWrapTabularCells 로 각 셀을 수식/텍스트 모드로 감싸고
+      // 2) parseRawTabularToRows 로 struct 와 같은 rows 구조로 해체한 뒤
+      // 3) renderTableLatex 에 넘겨 struct 와 동일한 그리드 렌더 경로로 통일한다.
+      //
+      // 이렇게 하면 가로 스케일, 세로 스케일, 컬럼별 독립 너비, 셀 정가운데 정렬,
+      // 폰트 크기 불변성 모두가 한 가지 메커니즘으로 일관되게 동작한다.
+      rawTableIdx += 1;
       const raw = seg.lines.join('\n');
       const patched = autoWrapTabularCells(raw);
-      parts.push(`\\par\\noindent\\begin{center}\n${patched}\n\\end{center}\\par`);
+      const rows = parseRawTabularToRows(patched);
+      const scale = resolveTableScale(question, 'raw', rawTableIdx);
+      if (rows.length === 0) {
+        // 해체 실패 — 원본을 그대로 중앙 정렬 출력 (fallback).
+        parts.push(`\\par\\noindent\\begin{center}\n${patched}\n\\end{center}\\par`);
+      } else {
+        parts.push(renderTableLatex(rows, equations, scale));
+      }
+    } else if (seg.type === 'figure') {
+      // parseStemSegments 후처리에서 본문 중간의 [그림] 마커를 별도 figure 세그먼트로 승격시킨다.
+      // seg.lines 는 ["[그림]"] 한 줄. replaceFigureMarkers 가 figIdx 를 순차 소비하면서
+      // renderFigureLatex / renderFigureGroupLatex 의 출력으로 치환한다.
+      //   - figIdxConsumedByGroup 에 포함된 마커(그룹의 2번째 이후 멤버)는 replaceFigureMarkers
+      //     가 빈 문자열을 반환 → 이 경우 현재 seg 에서는 아무것도 push 하지 않는다
+      //     (그룹 대표 figure seg 가 이미 본체를 방출했기 때문).
+      const rendered = replaceFigureMarkers(seg.lines[0] || '[그림]');
+      if (rendered && rendered.trim()) {
+        parts.push(rendered);
+      }
     }
   }
 
-  let trailingIsBig = segments.length > 0 && isBigBlockType(segments[segments.length - 1].type);
+  // 마지막으로 방출된 "Big block" 의 타입을 기억해두면, 뒤이어 오는 선택지/5지선다 앞 간격을
+  // 그 블록 타입에 맞는 gap (박스/그림·표) 으로 통일할 수 있다.
+  let trailingBigType =
+    segments.length > 0 && isBigBlockType(segments[segments.length - 1].type)
+      ? segments[segments.length - 1].type
+      : null;
+  parts.push(`% DBG after-stem: figIdx=${figIdx}/${figurePaths.length} trailingBigType=${trailingBigType}`);
   if (figurePaths.length > figIdx) {
-    for (let i = figIdx; i < figurePaths.length; i++) {
-      const rendered = renderFigureLatex(i);
-      if (rendered.trim()) {
-        // 그림 "위" 간격: 180% (= TOP_BIG_GAP).
-        parts.push(TOP_BIG_GAP);
+    let i = figIdx;
+    while (i < figurePaths.length) {
+      if (figIdxConsumedByGroup.has(i)) { i += 1; continue; }
+      const group = groupByStartFigIdx.get(i);
+      let rendered;
+      if (group) {
+        rendered = renderFigureGroupLatex(group);
+        i = group.members[group.members.length - 1] + 1;
+      } else {
+        rendered = renderFigureLatex(i);
+        i += 1;
+      }
+      if (rendered && rendered.trim()) {
+        parts.push('% DBG trailing-fig push');
+        parts.push(FIG_GAP);
         parts.push(rendered);
-        trailingIsBig = true;
+        trailingBigType = 'figure';
       }
     }
   }
@@ -1670,8 +2113,10 @@ function renderOneQuestion(question, {
   }
 
   if (choices.length > 0) {
-    // 5지선다 바로 위 블록이 그림/보기/조건제시박스면 박스 "아래" 간격을 적용.
-    parts.push(trailingIsBig ? BOTTOM_BIG_GAP : BLOCK_GAP);
+    // 5지선다 바로 위 블록이 그림/표/박스면 해당 블록 타입의 "아래" 여백(위 여백과 동일값) 적용.
+    const choiceGap = trailingBigType ? gapForBlock(trailingBigType) : BLOCK_GAP;
+    parts.push(`% DBG choices-gap: trailingBigType=${trailingBigType} gap=${choiceGap.replace(/\\/g, '\\\\')}`);
+    parts.push(choiceGap);
     parts.push(renderChoicesLatex(choices, equations));
   }
 

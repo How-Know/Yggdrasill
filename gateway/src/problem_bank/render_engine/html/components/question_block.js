@@ -7,6 +7,16 @@ import {
 } from '../../utils/text.js';
 import { resolveFigureLayout } from '../../utils/figure_layout.js';
 
+// TODO(html-table): HTML 렌더러는 `[표행]/[표셀]` (구조화 표) 및 `[표시작]/[표끝]` (raw
+// tabular) 마커를 아직 처리하지 않는다. XeLaTeX 엔진에는 meta.table_scales /
+// meta.table_scale_default 기반의 가로·세로 독립 스케일이 구현돼 있으며, HTML 렌더러도
+// 동일한 기능을 붙여야 매니저 HTML 프리뷰에서 표 크기가 반영된다. 추후 턴에서
+//   1) stem 세그먼트 파싱에 표 경계 감지 추가
+//   2) 구조화 표는 <table> + style 로, raw tabular 는 대응 HTML 렌더 (혹은 KaTeX 의
+//      \begin{array} 경로 활용) 로 변환
+//   3) 스케일은 CSS transform: scale(Sw, Sh) 또는 width/height 비율로 적용
+// 순서로 확장한다. 현재는 XeLaTeX 전용 기능.
+
 const STRUCTURAL_STRIP = /\[(문단)\]/g;
 const BOX_START = /\[박스시작\]/;
 const BOX_END = /\[박스끝\]/;
