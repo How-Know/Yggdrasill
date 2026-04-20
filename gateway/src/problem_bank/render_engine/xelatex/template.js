@@ -521,7 +521,7 @@ function parseStemSegments(stem) {
   flushText();
 
   // ─── 후처리: text 세그먼트 안에 섞여 있는 [그림] 마커를 별도 'figure' segment 로 승격 ───
-  //   목적: 표/박스와 동일하게 블록 전환 gap 로직(isBigBlockType / gapForBlock)이
+  //   목적: 표/박스와 동일하게 블록 전환 gap 로직(isBigBlockType / gapBefore·gapAfter)이
   //         그림에도 그대로 적용되도록 한다. 그림 앞쪽 gap 이 0.40em (outerPendingEmpty)
   //         로 들어가고 뒤쪽이 6pt (BLOCK_GAP) 로 끝나던 문제 해결.
   //   규칙:
@@ -1487,6 +1487,13 @@ function buildPreamble({
   // 제목 페이지 상단 헤더(타이틀/부제/hrule) 를 담는 box. 헤더 높이를 측정해
   // 본문 가용 높이(\mockColumnHeight) 계산 시 차감하는 용도.
   lines.push('\\newsavebox{\\mockHeaderBox}');
+  // ─── 짝슬롯(row-pair) 문항번호 첫 줄 / 라벨 라인 높이 동기화 ───
+  // 방식: 각 slot 첫줄 앞에 \vphantom{<좌 content><우 content>} 를 삽입.
+  //       \vphantom 은 인자를 invisible 로 typeset 해 ht/dp 만큼의 strut 을 만들어 주므로,
+  //       좌/우 slot 에 같은 argument 를 주면 두 slot 의 첫줄 top/bottom 이 정확히 일치.
+  // content 는 페이지별 prelude 에서 \gdef\pair@content@<prefix>@<row>@<L|R> 로 미리 저장.
+  // (직전의 \xdef + \rule 방식은 XeLaTeX 환경에서 skip/dimen 토큰 유출로 허상 문자열을
+  //  페이지에 찍는 문제가 있어 폐기.)
   // 제목페이지 타이틀/서브타이틀 폰트 크기. \AtBeginDocument 에서 \paperwidth 에 비례해 설정.
   if (isMock) {
     lines.push('\\newlength{\\mockTitleFontSize}');
@@ -1567,6 +1574,47 @@ function resolveSetSubScores(question) {
   return out.size > 0 ? out : null;
 }
 
+// ─── 짝슬롯 동기화용 "첫 줄 probe" LaTeX 생성 ───
+// 슬롯 첫 줄(= 문항번호 라인) 의 최대 height/depth 를 좌/우 slot 사이에 동기화하기 위해,
+// 해당 줄 content 를 \sbox 로 측정할 수 있도록 LaTeX 조각을 만들어준다.
+//
+// 반환 문자열은 한 \hbox 안에 넣을 수 있는 inline content 이며, 줄바꿈·단락 제어문을
+// 포함하지 않는다. (호출부가 \sbox 로 감싸 측정한다.)
+//
+// "stem 의 첫 줄" 을 엄밀히 추출하는 것은 불가능하지만(실제 wrap 위치는 \linewidth 에 의존),
+// 분수 등 라인 높이를 키우는 요소는 stem 전체에 퍼져있지 않고 "첫 paragraph 의 앞부분" 에
+// 집중되는 경향이 있으므로, "문항번호 + stem 첫 text paragraph 전체" 를 한 \hbox 에 담는
+// 것으로 충분한 근사가 된다. \hbox 는 overflow 해도 ht/dp 는 content 의 max 로 계산된다.
+function getFirstLineProbeLatex(question, { showQuestionNumber = true } = {}) {
+  const qNum = question?.question_number || question?.questionNumber || '';
+  const stem = question?.stem || '';
+  const equations = question?.equations || [];
+  // stem 첫 text paragraph 의 첫 source line 만 추출.
+  //   - `[문단]` 같은 마커 줄은 skip.
+  //   - `[보기]`, `[표...]`, `[그림]` 마커는 첫 줄에 오지 않도록 skip (probe 측정에 부적합).
+  //   - 첫 text line 이 없으면 빈 문자열.
+  let firstText = '';
+  const lines = String(stem).split(/\n/);
+  for (const raw of lines) {
+    const s = raw.trim();
+    if (!s) continue;
+    if (/^\[(문단|소문항\d+|보기|조건|표|표행|표셀|그림|도형|도표)/.test(s)) continue;
+    if (/^\[표\]/.test(s)) continue;
+    firstText = s;
+    break;
+  }
+  const parts = [];
+  if (showQuestionNumber && qNum) {
+    parts.push(`\\textbf{${escapeLatexText(String(qNum))}.}\\enspace`);
+  }
+  if (firstText) {
+    parts.push(smartTexLine(firstText, equations));
+  }
+  // 최소한 strut 역할을 할 수 있도록 "가" (한글) 한 글자라도 보장.
+  if (parts.length === 0) parts.push('\\strut');
+  return parts.join('');
+}
+
 function renderOneQuestion(question, {
   sectionLabel,
   showQuestionNumber = true,
@@ -1574,6 +1622,15 @@ function renderOneQuestion(question, {
   stemSizePt = 11,
   includeQuestionScore = false,
   questionScoreByQuestionId = null,
+  // 짝슬롯(row-pair) 동기화용 LaTeX **스니펫** (문자열). 예:
+  //   '\\vphantom{\\csname pair@content@A@0@L\\endcsname\\csname pair@content@A@0@R\\endcsname}'
+  //   이 스니펫은 row 의 좌/우 슬롯 content 를 invisible 로 typeset 해 ht/dp 를 확보하므로
+  //   좌우 두 슬롯의 "첫 줄 top edge + bottom edge" 가 동일 수직 좌표로 정렬된다.
+  //   문항번호 라인 시작부에 그대로 연결(concat)해 삽입.
+  pairStrutMacro = null,
+  // 짝슬롯의 라벨 라인 높이 동기화용 \vphantom 스니펫. sectionLabel 이 없는 슬롯에도 주입되어
+  //   한 쪽만 라벨을 가진 경우 빈 공간으로 라벨 라인 영역을 예약.
+  pairLabelStrutMacro = null,
 } = {}) {
   const qNum = question?.question_number || question?.questionNumber || '';
   const stem = question?.stem || '';
@@ -1778,8 +1835,6 @@ function renderOneQuestion(question, {
 
   const parts = [];
 
-  // sectionLabel box will be implemented later with the labeling feature
-
   parts.push('\\begingroup');
   // minipage/multicols 내부에서도 자간이 늘어나지 않도록 raggedright 의 파라미터를 명시.
   parts.push('\\rightskip=0pt plus 1fil\\relax');
@@ -1788,10 +1843,48 @@ function renderOneQuestion(question, {
   parts.push('\\tolerance=9999\\emergencystretch=0pt');
   parts.push(showQuestionNumber ? '\\leftskip=1em' : '\\leftskip=0pt');
 
-  if (showQuestionNumber && qNum) {
+  // ─── sectionLabel 라인 ───
+  // 문항 mode 가 직전 문항과 달라질 때만 표시 (호출부 lastMode 로직). "5지선다형 / 단답형 / 서술형".
+  // 스타일: 얇지 않은 테두리 박스 + 글자 사이 thin space(\,) 로 자간 효과.
+  //
+  // 위치 규칙:
+  //   - 라벨 라인에는 \hspace{-1em} 을 **적용하지 않는다**. 라벨 박스는 본문(leftskip=1em) 기준
+  //     들여쓰기 위치에 찍는다. (-1em 바깥으로 빼면 minipage 경계 밖으로 clip 되어 시각적으로 깨짐.)
+  //   - 짝슬롯 동기화를 위해 라벨 라인 시작부에 pairLabelStrut 매크로 삽입.
+  // 새 동기화 규칙:
+  //   - sectionLabel 이 있으면 label 박스가 "첫 표시 라인" 이 되고,
+  //     문항번호 라인은 그 아래에 배치된다. (라벨 있는 slot 은 총 2줄)
+  //   - sectionLabel 이 없으면 문항번호 라인이 바로 "첫 표시 라인". (라벨 없는 slot 은 1줄로 시작)
+  //   - 좌/우 slot 의 "첫 표시 라인" 을 \vphantom 스니펫(pairStrutMacro) 으로 동기화
+  //     → label 있는 slot 의 라벨 박스 ↔ label 없는 slot 의 문항번호 라인 이 수평.
+  //   - pairLabelStrutMacro 파라미터는 더 이상 사용하지 않음 (호환을 위해 시그니처 유지).
+  const firstLineStrut = pairStrutMacro || '';
+  if (sectionLabel) {
+    const spaced = Array.from(String(sectionLabel)).map((c) => escapeLatexText(c)).join('\\,');
+    // 10% 확대: 폰트 13.2pt(약 \large 의 1.1배), fboxsep 4.4pt, 좌우 \hspace 13.2pt, fboxrule 0.55pt.
+    // \hspace{-1em} 으로 leftskip 바깥으로 빼서 slot minipage 왼쪽 경계에 딱 붙임.
+    // 상단 5pt / 하단 10pt 의 추가 세로 간격.
+    const labelBox = '{\\setlength{\\fboxrule}{0.55pt}\\setlength{\\fboxsep}{4.4pt}'
+      + '\\fbox{\\hspace{13.2pt}\\fontsize{13.2pt}{15.84pt}\\selectfont\\bfseries '
+      + spaced
+      + '\\hspace{13.2pt}}}';
     parts.push(
-      `\\noindent\\hspace{-1em}\\textbf{${escapeLatexText(String(qNum))}.}\\enspace`,
+      '\\vspace*{5pt}\\par',
+      `\\noindent\\hspace{-1em}${firstLineStrut}${labelBox}\\par`,
+      '\\vspace{10pt}',
     );
+  }
+
+  if (showQuestionNumber && qNum) {
+    // 라벨이 있으면 문항번호 라인은 "두 번째 라인" → 이미 firstLineStrut 은 라벨 라인에서 소비됨.
+    // 라벨이 없으면 문항번호 라인이 "첫 표시 라인" → firstLineStrut 을 여기서 소비.
+    const strut = sectionLabel ? '' : firstLineStrut;
+    parts.push(
+      `\\noindent\\hspace{-1em}${strut}\\textbf{${escapeLatexText(String(qNum))}.}\\enspace`,
+    );
+  } else if (!sectionLabel && firstLineStrut) {
+    // 문항번호 비표시 모드 & 라벨 없을 때만 첫줄 strut 을 자체적으로 소비.
+    parts.push(`\\noindent${firstLineStrut}`);
   }
 
   // 점수 표기는 더 이상 문항번호 뒤에 두지 않고 "stem 의 마지막 라인 끝" 에 붙인다.
@@ -1819,31 +1912,44 @@ function renderOneQuestion(question, {
   //     한글 본문은 \setstretch{1.7} 이므로 한 줄 공간 안에서 "실제 여백(leading)"은 약 0.7\baselineskip.
   //     180% 규칙을 그대로 적용하면 시각적으로 과도 → 0.75\baselineskip 에서 잘라 블록 위아래 여백이
   //     본문 한 줄 분 정도가 되도록 설정. "박스는 위아래 여백 일치" 원칙 적용.
-  // - FIG_TABLE_GAP (그림/표 위·아래 공통): 0.78\baselineskip.
-  //     이전 0.975\baselineskip 에서 사용자 요청으로 20% 감소(0.975 × 0.8 = 0.78).
-  //     위/아래 동일한 gap 을 사용해 시각적으로 그림·표 위아래 여백이 대칭이 되도록 한다.
+  // - TABLE_GAP_TOP / FIG_GAP_TOP : 블록 위쪽 여백. 본문 descender 가 작아 명시적 보강 필요.
+  // - TABLE_GAP_BOTTOM / FIG_GAP_BOTTOM : 0pt. 5지선다 첫 줄 ascender 가 자연 여백 제공.
   // \par 를 앞에 두어 현재 paragraph 를 강제 종료 → vspace 가 vertical mode 에서 동작.
   const BLOCK_GAP = '\\par\\vspace{6pt}';
   const BOX_GAP = '\\par\\vspace{0.75\\baselineskip}';
-  const TABLE_GAP = '\\par\\vspace{0.78\\baselineskip}';
-  // DEBUG: 그림 전용 gap 을 0 으로 강제 (위/아래 공통).
-  // 이로써 문서에 남은 여백이 \vspace 때문인지, 그림 paragraph 자체의 height/depth 때문인지 구별 가능.
-  const FIG_GAP = '\\par\\vspace{0pt}';
-  const FIG_TABLE_GAP = TABLE_GAP; // backward-compat
+  // 그림·표 모두 위/아래 비대칭.
+  // - "위" (본문 → 블록): 본문 descender 가 작아 자연 여백이 거의 없음 → 0.5\baselineskip 보강.
+  // - "아래" (블록 → 5지선다): 5지선다(\setstretch{1.7}) 첫 줄의 자연 ascender 가 이미
+  //   충분한 여백을 제공함 → 0pt.
+  const TABLE_GAP_TOP = '\\par\\vspace{0.78\\baselineskip}';
+  // 표 아래는 \hline 이 paragraph 의 물리적 바닥 → 그림 bitmap 의 여분 공간이 없음.
+  // 시각적으로 그림과 비슷한 여백이 되도록 5pt 보정.
+  const TABLE_GAP_BOTTOM = '\\par\\vspace{10pt}';
+  const FIG_GAP_TOP = '\\par\\vspace{0.5\\baselineskip}';
+  // 그림 아래는 5지선다 ascender 덕분에 자연 여백이 있지만, 시각 보강으로 3pt 추가.
+  const FIG_GAP_BOTTOM = '\\par\\vspace{3pt}';
   const isBoxType = (t) => t === 'bogi' || t === 'deco';
   const isFigureType = (t) => t === 'figure';
   const isTableType = (t) => t === 'table' || t === 'raw_tabular';
   const isFigOrTableType = (t) => isFigureType(t) || isTableType(t);
   const isBigBlockType = (t) => isBoxType(t) || isFigOrTableType(t);
-  const gapForBlock = (t) => {
-    if (isFigureType(t)) return FIG_GAP;
-    if (isTableType(t)) return TABLE_GAP;
+  // 블록의 "앞" (= 해당 블록 앞에 붙이는 여백) 과 "뒤" (= 해당 블록 뒤에 붙이는 여백) 분리.
+  const gapBefore = (t) => {
+    if (isFigureType(t)) return FIG_GAP_TOP;
+    if (isTableType(t)) return TABLE_GAP_TOP;
+    return BOX_GAP;
+  };
+  const gapAfter = (t) => {
+    if (isFigureType(t)) return FIG_GAP_BOTTOM;
+    if (isTableType(t)) return TABLE_GAP_BOTTOM;
     return BOX_GAP;
   };
   const gapRank = (g) => {
-    if (g === TABLE_GAP) return 3;
-    if (g === BOX_GAP) return 2;
-    if (g === FIG_GAP) return 1; // 0pt 라도 "big block" 으로 취급
+    if (g === TABLE_GAP_TOP) return 5;
+    if (g === BOX_GAP) return 4;
+    if (g === FIG_GAP_TOP) return 3;
+    if (g === TABLE_GAP_BOTTOM) return 2;
+    if (g === FIG_GAP_BOTTOM) return 1;
     return 0;
   };
   const maxGap = (a, b) => (gapRank(a) >= gapRank(b) ? a : b);
@@ -1894,18 +2000,18 @@ function renderOneQuestion(question, {
     if (needsGap && segEmits) {
       // 블록 전환 gap 선택 규칙:
       //   - 양쪽 모두 Big block 이면 "prev 의 아래 gap" 과 "seg 의 위 gap" 중 더 큰 쪽.
-      //     예) 표(FIG_TABLE_GAP=0.78) ↔ 보기박스(BOX_GAP=0.75) → 0.78 (표 기준).
+      //     예) 표(TABLE_GAP_TOP=0.78) ↔ 보기박스(BOX_GAP=0.75) → 0.78 (표 기준).
       //   - 한쪽만 Big block 이면 그 쪽의 gap.
       //   - 양쪽 다 Big block 이 아니면 BLOCK_GAP.
       const prevIsBig = isBigBlockType(prev.type);
       const segIsBig = isBigBlockType(seg.type);
       let chosen;
       if (prevIsBig && segIsBig) {
-        chosen = maxGap(gapForBlock(prev.type), gapForBlock(seg.type));
+        chosen = maxGap(gapAfter(prev.type), gapBefore(seg.type));
       } else if (segIsBig) {
-        chosen = gapForBlock(seg.type);
+        chosen = gapBefore(seg.type);
       } else if (prevIsBig) {
-        chosen = gapForBlock(prev.type);
+        chosen = gapAfter(prev.type);
       } else {
         chosen = BLOCK_GAP;
       }
@@ -2071,7 +2177,7 @@ function renderOneQuestion(question, {
       }
       if (rendered && rendered.trim()) {
         parts.push('% DBG trailing-fig push');
-        parts.push(FIG_GAP);
+        parts.push(FIG_GAP_TOP);
         parts.push(rendered);
         trailingBigType = 'figure';
       }
@@ -2114,7 +2220,7 @@ function renderOneQuestion(question, {
 
   if (choices.length > 0) {
     // 5지선다 바로 위 블록이 그림/표/박스면 해당 블록 타입의 "아래" 여백(위 여백과 동일값) 적용.
-    const choiceGap = trailingBigType ? gapForBlock(trailingBigType) : BLOCK_GAP;
+    const choiceGap = trailingBigType ? gapAfter(trailingBigType) : BLOCK_GAP;
     parts.push(`% DBG choices-gap: trailingBigType=${trailingBigType} gap=${choiceGap.replace(/\\/g, '\\\\')}`);
     parts.push(choiceGap);
     parts.push(renderChoicesLatex(choices, equations));
@@ -2212,6 +2318,10 @@ function renderMockSlotColumnBody(
     stemSizePt = 11,
     includeQuestionScore = false,
     questionScoreByQuestionId = null,
+    // 짝슬롯(row-pair) 동기화 파생 데이터. 길이는 slotCount 와 동일해야 한다.
+    sectionLabels = [],            // string | null — 이 slot 이 라벨을 표시해야 하는지
+    pairStrutMacros = [],          // LaTeX 매크로 이름 (예: '\\pairStrutRowA') — 문항번호 첫줄 strut
+    pairLabelStrutMacros = [],     // LaTeX 매크로 이름 (예: '\\pairLabelStrutRowA') — 라벨 라인 strut
   } = {},
 ) {
   const lines = [];
@@ -2227,6 +2337,9 @@ function renderMockSlotColumnBody(
         stemSizePt,
         includeQuestionScore,
         questionScoreByQuestionId,
+        sectionLabel: sectionLabels[i] || null,
+        pairStrutMacro: pairStrutMacros[i] || null,
+        pairLabelStrutMacro: pairLabelStrutMacros[i] || null,
       }));
     } else {
       lines.push('\\vspace*{0.6\\baselineskip}');
@@ -2301,6 +2414,10 @@ function renderMockGridPageLatex(
     includeQuestionScore = false,
     questionScoreByQuestionId = null,
     titleHeader = null, // { titleTop, title, subtitle } (null = 일반 페이지)
+    // 페이지 내 문항별 sectionLabel. 길이 = pageQuestions.length. 각 원소는 string | null.
+    sectionLabels = [],
+    // 페이지 고유 prefix — 여러 페이지에서 중복되지 않는 LaTeX 매크로 이름을 만들기 위해.
+    pageMacroPrefix = 'A',
   },
 ) {
   const safeLeftSlots = Math.max(1, Number(leftSlots || 1));
@@ -2310,6 +2427,64 @@ function renderMockGridPageLatex(
   const rightQuestions = list.slice(safeLeftSlots, safeLeftSlots + safeRightSlots);
   const leftGapExpr = safeLeftSlots > 1 ? `${safeLeftSlots - 1}\\mockSlotGap` : '0pt';
   const rightGapExpr = safeRightSlots > 1 ? `${safeRightSlots - 1}\\mockSlotGap` : '0pt';
+
+  // ─── 짝슬롯(row-pair) 동기화 준비 ───
+  // row i (0..max(leftSlots,rightSlots)-1) 마다:
+  //   - 좌 slot i 의 문항번호 라인 probe LaTeX
+  // 짝슬롯 동기화 — "첫 표시 라인" 기준.
+  //   slot 의 첫 표시 라인:
+  //     - 라벨이 있으면: 라벨 박스
+  //     - 없으면:        문항번호+stem 첫줄
+  //   좌/우 slot 의 "첫 표시 라인" content 를 \gdef 로 macro 에 저장하고,
+  //   각 slot 의 첫 표시 라인 앞에 \vphantom{\csname...L\endcsname\csname...R\endcsname} 삽입.
+  //   → 라벨 박스 ↔ 반대편 문항번호 라인 이 수평으로 정렬됨.
+  const maxRows = Math.max(safeLeftSlots, safeRightSlots);
+  const labelsList = Array.isArray(sectionLabels) ? sectionLabels : [];
+  const leftLabels = labelsList.slice(0, safeLeftSlots);
+  const rightLabels = labelsList.slice(safeLeftSlots, safeLeftSlots + safeRightSlots);
+  const leftStrutMacros = [];
+  const rightStrutMacros = [];
+  // 라벨 strut 은 더 이상 별도로 사용하지 않는다(첫 표시 라인 하나로 통합).
+  // 기존 renderMockSlotColumnBody 시그니처 유지를 위해 null 배열만 전달.
+  const leftLabelStrutMacros = [];
+  const rightLabelStrutMacros = [];
+  const pairProbePrelude = [];
+  // 라벨 박스 probe 는 실제 렌더 스타일(10% 확대 버전)과 동일해야 한다.
+  const buildLabelProbe = (txt) => {
+    if (!txt) return '';
+    const spaced = Array.from(String(txt)).map((c) => escapeLatexText(c)).join('\\,');
+    return '{\\setlength{\\fboxrule}{0.55pt}\\setlength{\\fboxsep}{4.4pt}'
+      + '\\fbox{\\hspace{13.2pt}\\fontsize{13.2pt}{15.84pt}\\selectfont\\bfseries '
+      + spaced
+      + '\\hspace{13.2pt}}}';
+  };
+  for (let r = 0; r < maxRows; r += 1) {
+    const csName = (side) => `pair@first@${pageMacroPrefix}@${r}@${side}`;
+    const cs = (name) => `\\csname ${name}\\endcsname`;
+    const qL = leftQuestions[r];
+    const qR = rightQuestions[r];
+    const labelL = leftLabels[r] || '';
+    const labelR = rightLabels[r] || '';
+    // "첫 표시 라인" content 결정.
+    const firstL = labelL
+      ? buildLabelProbe(labelL)
+      : (qL ? getFirstLineProbeLatex(qL, { showQuestionNumber }) : '\\strut');
+    const firstR = labelR
+      ? buildLabelProbe(labelR)
+      : (qR ? getFirstLineProbeLatex(qR, { showQuestionNumber }) : '\\strut');
+    const nameL = csName('L');
+    const nameR = csName('R');
+    pairProbePrelude.push(
+      `% --- pair first-line probe row ${r} (page ${pageMacroPrefix}) ---`,
+      `\\expandafter\\gdef\\csname ${nameL}\\endcsname{${firstL}}%`,
+      `\\expandafter\\gdef\\csname ${nameR}\\endcsname{${firstR}}%`,
+    );
+    const strutSnippet = `\\vphantom{${cs(nameL)}${cs(nameR)}}`;
+    leftStrutMacros.push(strutSnippet);
+    rightStrutMacros.push(strutSnippet);
+    leftLabelStrutMacros.push(null);
+    rightLabelStrutMacros.push(null);
+  }
 
   // 공통 좌/우 minipage 내용을 함수로 분리.
   //
@@ -2322,6 +2497,8 @@ function renderMockGridPageLatex(
   //     (페이지별 콘텐츠 양과 무관하게 항상 동일 좌표에 그려지도록.)
   const MOCK_MINIPAGE_WIDTH = '\\dimexpr 0.4775\\linewidth-4pt\\relax';
   const buildColumnsBlock = (heightMacro, leftHeightMacro, rightHeightMacro) => [
+    // row-pair strut 매크로 선언 (페이지 내에서 반드시 컬럼 minipage 전에 실행되어야 함).
+    pairProbePrelude.join('\n'),
     '\\noindent',
     `\\begin{minipage}[t][${heightMacro}][t]{${MOCK_MINIPAGE_WIDTH}}`,
     renderMockSlotColumnBody(leftQuestions, safeLeftSlots, leftHeightMacro, {
@@ -2329,6 +2506,9 @@ function renderMockGridPageLatex(
       stemSizePt,
       includeQuestionScore,
       questionScoreByQuestionId,
+      sectionLabels: leftLabels,
+      pairStrutMacros: leftStrutMacros,
+      pairLabelStrutMacros: leftLabelStrutMacros,
     }),
     '\\end{minipage}',
     '\\hfill',
@@ -2338,6 +2518,9 @@ function renderMockGridPageLatex(
       stemSizePt,
       includeQuestionScore,
       questionScoreByQuestionId,
+      sectionLabels: rightLabels,
+      pairStrutMacros: rightStrutMacros,
+      pairLabelStrutMacros: rightLabelStrutMacros,
     }),
     '\\end{minipage}',
   ].join('\n');
@@ -2842,6 +3025,20 @@ export function buildDocumentTexSource(questions, options = {}) {
       pages = chunkQuestionsForMockGrid(qList, qPerPage);
     }
 
+    // mock 경로 전체에 걸쳐 sectionLabel 결정을 위한 "직전 문항 mode".
+    //   페이지 경계를 넘어도 유지되어야, 같은 mode 가 이어지는 경우 중복 라벨을 찍지 않음.
+    let lastModeMock = null;
+    // 페이지별로 중복되지 않는 macro prefix (알파벳 A, B, C, ... → row 수 늘려야 하면 AA, AB).
+    const toPageMacroPrefix = (idx) => {
+      // 숫자 → 알파벳 (0 = A, 1 = B, ..., 25 = Z, 26 = AA).
+      let n = idx;
+      let s = '';
+      do {
+        s = String.fromCharCode(65 + (n % 26)) + s;
+        n = Math.floor(n / 26) - 1;
+      } while (n >= 0);
+      return s;
+    };
     for (let i = 0; i < pages.length; i += 1) {
       const pageNo = i + 1;
       const titleHeader = hidePreviewHeader ? null : buildTitleHeaderForPage(pageNo);
@@ -2867,6 +3064,20 @@ export function buildDocumentTexSource(questions, options = {}) {
       const ov = overrides[i];
       const pageLeftSlots = ov ? ov.left : leftSlots;
       const pageRightSlots = ov ? ov.right : rightSlots;
+      // 페이지 문항들의 sectionLabel 결정. 문항 mode 가 직전 mode 와 다를 때만 라벨 부여.
+      const pageQs = pages[i];
+      const pageLabels = pageQs.map((q) => {
+        const qMode = q?.mode
+          || q?.questionMode
+          || q?.export_mode
+          || q?.exportMode
+          || 'objective';
+        if (qMode === lastModeMock) return null;
+        lastModeMock = qMode;
+        if (qMode === 'objective') return '5지선다형';
+        if (qMode === 'essay') return '서술형';
+        return '단답형';
+      });
       parts.push(
         renderMockGridPageLatex(pages[i], {
           leftSlots: pageLeftSlots,
@@ -2877,6 +3088,8 @@ export function buildDocumentTexSource(questions, options = {}) {
           includeQuestionScore,
           questionScoreByQuestionId,
           titleHeader,
+          sectionLabels: pageLabels,
+          pageMacroPrefix: toPageMacroPrefix(i),
         }),
       );
       parts.push('\n');

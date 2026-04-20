@@ -54,3 +54,17 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 apps/yggdrasill/dist/Yggdrasill_portable_*.zip
+
+# Apple signing / push credentials (절대 커밋 금지)
+*.p8
+*.p12
+*.mobileprovision
+*.cer
+*.certSigningRequest
+AuthKey_*.p8
+
+# Xcode 빌드 산출물
+**/xcuserdata/
+**/DerivedData/
+**/*.xcworkspace/xcshareddata/WorkspaceSettings.xcsettings
+**/Pods/
