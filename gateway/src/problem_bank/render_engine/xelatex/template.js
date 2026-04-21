@@ -639,7 +639,9 @@ function renderBogiBoxLatex(lines, equations, replaceFigureMarkers = null) {
     '  left=8pt, right=8pt, top=12pt, bottom=12pt',
     ']',
     '\\setlength{\\parskip}{0pt}',
-    '\\lineskiplimit=5pt\\lineskip=1.2em',
+    // lineskip/lineskiplimit 을 em 기반으로 지정해 폰트 크기에 비례 확장되도록 한다.
+    //   \dfrac 포함 줄의 추가 수직 간격은 \lineskip 에 의해 결정되며, 폰트가 클수록 간격도 커진다.
+    '\\lineskiplimit=0.4em\\lineskip=1.2em',
     // 〈보 기〉 타이틀이 윗변에 걸쳐 있으므로, 첫 항목과의 수직 간격을 미세하게 더 확보.
     '\\vspace*{2pt}',
     content,
@@ -801,7 +803,8 @@ function renderDecoBoxLatex(lines, equations, replaceFigureMarkers = null) {
     '  before skip=0pt, after skip=0pt',
     ']',
     '\\setlength{\\parskip}{0pt}',
-    '\\lineskiplimit=3pt\\lineskip=0.86em',
+    // lineskip/lineskiplimit 을 em 기반으로 지정 (폰트 크기에 비례).
+    '\\lineskiplimit=0.27em\\lineskip=0.86em',
     contentParts.join('\n'),
     '\\end{tcolorbox}',
   ].join('\n');
@@ -1081,7 +1084,8 @@ function renderChoicesLatex(choices, equations) {
 
   // 본문(setstretch 1.7) 과 동일 줄 간격을 사용해 분수/위첨자 포함 줄의
   // 베이스라인 간격이 두 영역에서 동일하게 맞추도록 한다.
-  const CHOICE_STRETCH = '\\setstretch{1.7}\\parskip=0pt\\lineskiplimit=5pt\\lineskip=1.2em';
+  // lineskip / lineskiplimit 을 em 기반으로 → 폰트 크기에 비례해 분수 포함 줄의 여유 간격도 스케일.
+  const CHOICE_STRETCH = '\\setstretch{1.7}\\parskip=0pt\\lineskiplimit=0.4em\\lineskip=1.2em';
 
   if (layout === 'row1') {
     const cells = choices.map((c, i) => renderItem(c, i));
@@ -1128,11 +1132,17 @@ function renderChoicesLatex(choices, equations) {
 
 function paperGeometry(paper) {
   const p = String(paper || 'B4').toUpperCase();
-  // 좌/우 여백은 사용자 요청으로 30% 축소 (20mm * 0.7 = 14mm). 상/하 여백은 20mm 유지.
-  //   - hmargin : 좌우 공통, vmargin : 상하 공통.
-  if (p === 'A4') return 'a4paper,hmargin=14mm,vmargin=20mm';
-  if (p === 'A3') return 'a3paper,hmargin=14mm,vmargin=20mm';
-  return 'b4paper,hmargin=14mm,vmargin=20mm';
+  // 좌/우 여백은 사용자 요청으로 30% 축소 (20mm * 0.7 = 14mm).
+  // 상단 여백(top) : 기본 20mm → 28mm 으로 확장 (사용자 요청: 일반 페이지 상단 가로선 위쪽 영역 50% 증가).
+  //   - geometry 에서 `headheight/headsep` 만 키워도 body top(="text top") 은 top 값에 고정되어 이동하지 않으므로,
+  //     실제로 "가로선 위쪽 영역"(= 0 ~ 가로선) 을 늘리려면 top 자체를 증가시켜야 한다.
+  //   - top 을 28mm 로 하면 body top 이 8mm(≈22.7pt) 아래로 내려가며, 가로선(=body top - 14pt) 도 함께 내려가
+  //     "페이지 top ~ 가로선" 거리가 약 50% 증가한다.
+  //   - 하단 여백(bottom)은 20mm 유지 → \mockLayBotY / 세로선 끝 / 페이지박스 위치 **불변**.
+  const vmargins = 'top=28mm,bottom=20mm';
+  if (p === 'A4') return `a4paper,hmargin=14mm,${vmargins}`;
+  if (p === 'A3') return `a3paper,hmargin=14mm,${vmargins}`;
+  return `b4paper,hmargin=14mm,${vmargins}`;
 }
 
 function fontSpecDirective(fontPath, fontFamily, fontBold) {
@@ -1192,6 +1202,19 @@ function buildPreamble({
   lines.push(`\\usepackage[${geom}]{geometry}`);
   lines.push('\\usepackage{fontspec}');
   lines.push('\\usepackage{amsmath,amssymb}');
+  // ─── \dfrac 재정의: ht/dp 를 대칭화하여 "분수 때문에 늘어난 수직 여유" 를 위·아래 반반씩 분배 ───
+  //   기본 \dfrac 는 분자 쪽 ht (≈10pt) 이 분모 쪽 dp (≈5pt) 보다 커서 비대칭.
+  //   → TeX 의 baselineskip 규칙상 위쪽 line 과의 간격이 크게 늘어나고 아래쪽은 덜 늘어남.
+  //   재정의: \raisebox 의 `[height][depth]` 옵션으로 content 는 제자리(raise=0) 에 두고
+  //     box 가 "대외적으로 주장하는" ht/dp 만 (natural_ht + natural_dp)/2 로 균등화.
+  //     → 위·아래 여유가 같은 양씩 확보되어 시각적 수직 대칭이 성립.
+  //     raisebox 안 `\height`, `\depth` 는 content 측정값을 참조하므로 재귀/동적 크기에 안전.
+  lines.push('\\let\\origdfrac\\dfrac');
+  lines.push('\\renewcommand{\\dfrac}[2]{\\mathchoice'
+    + '{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\displaystyle\\origdfrac{#1}{#2}$}}'
+    + '{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\textstyle\\origdfrac{#1}{#2}$}}'
+    + '{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\scriptstyle\\origdfrac{#1}{#2}$}}'
+    + '{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\scriptscriptstyle\\origdfrac{#1}{#2}$}}}');
   lines.push('\\usepackage{array}');
   lines.push('\\usepackage{kotex}');
   // 어절 중간에서 줄바꿈 금지: kotex 가 기본 설정한 ICU 한국어 줄바꿈 로케일을
@@ -1310,7 +1333,8 @@ function buildPreamble({
 
   lines.push('');
   lines.push('\\setstretch{1.7}');
-  lines.push('\\lineskiplimit=5pt');
+  // 폰트 크기에 비례해 스케일되도록 em 기반으로 지정 (분수 등 큰 수식 포함 줄의 간격도 폰트 크기에 비례).
+  lines.push('\\lineskiplimit=0.4em');
   lines.push('\\lineskip=1.2em');
   lines.push('\\spaceskip=1.2\\fontdimen2\\font plus 1.2\\fontdimen3\\font minus 1.2\\fontdimen4\\font');
   lines.push('\\setlength{\\parindent}{0pt}');
@@ -1443,29 +1467,35 @@ function buildPreamble({
     //   - 일반 페이지  : 가로선 y = \mockLayRuleY        / 세로선 시작 y = \mockLayRuleY.
     //   - 제목페이지   : 가로선 y = \mockLayVRuleStartY  / 세로선 시작 y = \mockLayVRuleStartY.
     //                   → 제목페이지에선 가로선도 헤더 아래로 내려 세로선 상단과 정확히 교차.
+    // 세로선이 페이지박스 위에서 끝나는 y 좌표 (본문 하단 + 5pt). 기존엔 본문 하단(\mockLayBotY)까지
+    //   그렸으나 사용자 요청으로 세로선 종료 지점을 5pt 위로 올린다.
+    lines.push('    \\pgfmathsetlengthmacro{\\mockLayVRuleEndY}{\\mockLayBotY+5pt}%');
+    // 굵기 정책(사용자 요청):
+    //   - 가로선 / 페이지박스 : 0.6pt (기존과 동일).
+    //   - 세로 단구분선       : 0.8pt (가로선보다 약간 더 두껍게 — "단 구분선만 조금 더 두껍게").
     lines.push('    \\ifmocktitlepage%');
     // 제목페이지: 가로선 (헤더 아래로 내림).
-    lines.push('      \\draw[line width=0.4pt]%');
+    lines.push('      \\draw[line width=0.6pt]%');
     lines.push('        ([shift={(\\mockLayLeftX,\\mockLayVRuleStartY)}]current page.north west) --%');
     lines.push('        ([shift={(\\mockLayRightX,\\mockLayVRuleStartY)}]current page.north west);%');
-    // 제목페이지: 세로선 (헤더 아래 ~ 본문 하단).
-    lines.push('      \\draw[line width=0.4pt]%');
+    // 제목페이지: 세로선 (헤더 아래 ~ 본문 하단 + 5pt).
+    lines.push('      \\draw[line width=0.8pt]%');
     lines.push('        ([shift={(\\mockLayCenterX,\\mockLayVRuleStartY)}]current page.north west) --%');
-    lines.push('        ([shift={(\\mockLayCenterX,\\mockLayBotY)}]current page.north west);%');
+    lines.push('        ([shift={(\\mockLayCenterX,\\mockLayVRuleEndY)}]current page.north west);%');
     lines.push('    \\else%');
     // 일반 페이지: 가로선 (본문 상단보다 14pt 위 = 슬롯 첫 줄과 14pt 간격).
-    lines.push('      \\draw[line width=0.4pt]%');
+    lines.push('      \\draw[line width=0.6pt]%');
     lines.push('        ([shift={(\\mockLayLeftX,\\mockLayRuleY)}]current page.north west) --%');
     lines.push('        ([shift={(\\mockLayRightX,\\mockLayRuleY)}]current page.north west);%');
-    // 일반 페이지: 세로선 (가로선 y ~ 본문 하단).
-    lines.push('      \\draw[line width=0.4pt]%');
+    // 일반 페이지: 세로선 (가로선 y ~ 본문 하단 + 5pt).
+    lines.push('      \\draw[line width=0.8pt]%');
     lines.push('        ([shift={(\\mockLayCenterX,\\mockLayRuleY)}]current page.north west) --%');
-    lines.push('        ([shift={(\\mockLayCenterX,\\mockLayBotY)}]current page.north west);%');
+    lines.push('        ([shift={(\\mockLayCenterX,\\mockLayVRuleEndY)}]current page.north west);%');
     lines.push('    \\fi%');
     // 페이지박스 (scope 원점 = 박스 좌하단).
     lines.push('    \\begin{scope}[shift={([shift={(\\mockLayBoxX,\\mockLayBoxY)}]current page.north west)}]%');
-    lines.push('      \\draw[line width=0.4pt] (0,0) rectangle (\\mockPageBoxW,\\mockPageBoxH);%');
-    lines.push('      \\draw[line width=0.4pt] (0,0) -- (\\mockPageBoxW,\\mockPageBoxH);%');
+    lines.push('      \\draw[line width=0.6pt] (0,0) rectangle (\\mockPageBoxW,\\mockPageBoxH);%');
+    lines.push('      \\draw[line width=0.6pt] (0,0) -- (\\mockPageBoxW,\\mockPageBoxH);%');
     lines.push('      \\pgfmathsetlengthmacro{\\mockPageBoxFont}{0.46*\\mockPageBoxH}%');
     lines.push('      \\pgfmathsetlengthmacro{\\mockPageBoxLead}{0.55*\\mockPageBoxH}%');
     lines.push('      \\node[anchor=center, inner sep=0pt] at (0.18\\mockPageBoxW,0.65\\mockPageBoxH)%');
@@ -1622,15 +1652,17 @@ function renderOneQuestion(question, {
   stemSizePt = 11,
   includeQuestionScore = false,
   questionScoreByQuestionId = null,
-  // 짝슬롯(row-pair) 동기화용 LaTeX **스니펫** (문자열). 예:
-  //   '\\vphantom{\\csname pair@content@A@0@L\\endcsname\\csname pair@content@A@0@R\\endcsname}'
-  //   이 스니펫은 row 의 좌/우 슬롯 content 를 invisible 로 typeset 해 ht/dp 를 확보하므로
-  //   좌우 두 슬롯의 "첫 줄 top edge + bottom edge" 가 동일 수직 좌표로 정렬된다.
-  //   문항번호 라인 시작부에 그대로 연결(concat)해 삽입.
+  // 짝슬롯(row-pair) 동기화용 \vphantom 스니펫. 라벨이 없는 slot 에서 "첫 hbox" 의 ht/dp 를
+  // 짝 slot 의 첫 hbox 와 동일하게 맞추기 위해 주입된다.
+  //   - 라벨 있는 slot : 라벨박스 자체가 첫 hbox → strut 불필요 (호출부가 빈 문자열 전달).
+  //   - 라벨 없는 slot (짝에 라벨 있음) : \vphantom{<labelbox probe>}
+  //   - 라벨 없는 slot (짝도 라벨 없음 & 분수 등 ht 편차) : \vphantom{<L stem 첫줄><R stem 첫줄>}
   pairStrutMacro = null,
-  // 짝슬롯의 라벨 라인 높이 동기화용 \vphantom 스니펫. sectionLabel 이 없는 슬롯에도 주입되어
-  //   한 쪽만 라벨을 가진 경우 빈 공간으로 라벨 라인 영역을 예약.
+  // (deprecated) 과거 라벨 라인 전용 strut. 현재는 사용하지 않음(시그니처 호환).
   pairLabelStrutMacro = null,
+  // 짝슬롯 공통 상단 vertical padding (pt). row 에 라벨이 하나라도 있으면 양쪽 slot 모두
+  // 같은 값을 받아 "첫 hbox 전 공통 간격" 을 대칭으로 확보 → [t] baseline 정렬 유지.
+  topPadPt = 0,
 } = {}) {
   const qNum = question?.question_number || question?.questionNumber || '';
   const stem = question?.stem || '';
@@ -1843,47 +1875,69 @@ function renderOneQuestion(question, {
   parts.push('\\tolerance=9999\\emergencystretch=0pt');
   parts.push(showQuestionNumber ? '\\leftskip=1em' : '\\leftskip=0pt');
 
-  // ─── sectionLabel 라인 ───
-  // 문항 mode 가 직전 문항과 달라질 때만 표시 (호출부 lastMode 로직). "5지선다형 / 단답형 / 서술형".
-  // 스타일: 얇지 않은 테두리 박스 + 글자 사이 thin space(\,) 로 자간 효과.
+  // ─── (주의) 라벨 상단 padding 을 `\vspace*{Npt}` 로 구현하는 것은 불가 ───
+  // 실측 결과: minipage[t][h][t] 의 vlist 첫 item 으로 `\vspace*` 를 넣으면
+  //   \vspace* 명령 존재 자체(값이 0pt 이든 5pt 이든 무관)가 vtop baseline 재계산을
+  //   트리거해 약 15pt 의 **상수** 수직 이동을 유발한다.
+  //   - \vspace*{0pt} → labelbox yMin +15.4pt
+  //   - \vspace*{5pt} → labelbox yMin +20.4pt  ( = 상수 15.4pt + 선형 5pt )
+  // 따라서 "정확히 Npt 만 추가" 하는 수단으로 사용할 수 없어 기능을 제거한다.
+  // 상단 여백을 조정하려면 overlay 의 제목페이지 VRuleStartY 오프셋(현재 28pt) 을 조정하거나
+  // `\headheight` / `\headsep` 을 바꾸는 방식(간격 1:1 선형)이 권장된다.
+  if (topPadPt > 0) {
+    // 현재는 noop. 호출부 호환성을 위해 인자는 보존하되 아무 LaTeX 도 내지 않는다.
+  }
+
+  // ─── sectionLabel 라인 & 짝슬롯 첫-표시-라인 동기화 ───
   //
-  // 위치 규칙:
-  //   - 라벨 라인에는 \hspace{-1em} 을 **적용하지 않는다**. 라벨 박스는 본문(leftskip=1em) 기준
-  //     들여쓰기 위치에 찍는다. (-1em 바깥으로 빼면 minipage 경계 밖으로 clip 되어 시각적으로 깨짐.)
-  //   - 짝슬롯 동기화를 위해 라벨 라인 시작부에 pairLabelStrut 매크로 삽입.
-  // 새 동기화 규칙:
-  //   - sectionLabel 이 있으면 label 박스가 "첫 표시 라인" 이 되고,
-  //     문항번호 라인은 그 아래에 배치된다. (라벨 있는 slot 은 총 2줄)
-  //   - sectionLabel 이 없으면 문항번호 라인이 바로 "첫 표시 라인". (라벨 없는 slot 은 1줄로 시작)
-  //   - 좌/우 slot 의 "첫 표시 라인" 을 \vphantom 스니펫(pairStrutMacro) 으로 동기화
-  //     → label 있는 slot 의 라벨 박스 ↔ label 없는 slot 의 문항번호 라인 이 수평.
-  //   - pairLabelStrutMacro 파라미터는 더 이상 사용하지 않음 (호환을 위해 시그니처 유지).
+  // 목표:
+  //   - 라벨이 있는 slot 의 "라벨 박스" 가 라벨이 없는 짝 slot 의 "문항번호 라인" 과
+  //     수직 좌표상 정확히 같은 줄에 놓이게 한다.
+  //
+  // 구조:
+  //   - 양쪽 slot 모두 minipage [t] 에서 시작. [t] 는 "첫 hbox 의 baseline" 을 외부 baseline
+  //     과 일치시키므로, 첫 hbox 의 ht/dp 가 같으면 top edge 도 같아진다.
+  //   - label 있는 slot : 첫 hbox = 라벨 박스 (fbox + 내부 컨텐츠)
+  //     label 없는 slot : 첫 hbox = \vphantom{<라벨박스>} + \textbf{N.}... 
+  //       → \vphantom 이 라벨 박스의 ht/dp 를 인자로부터 복사해 첫 줄의 ht/dp 를 라벨박스와
+  //         동일하게 만든다.
+  //
+  // 중요(회피한 함정):
+  //   - 과거 `\vspace*{5pt}\par` 를 라벨 앞에 넣으면 [t] minipage 의 "첫 줄 baseline = 외부
+  //     baseline" 규칙이 깨져 좌측 slot 이 통째로 아래로 밀렸다 (측정 ~19pt). 따라서 상단
+  //     vspace 는 제거. 상단 여백은 페이지 헤더 아래 공통 vspace 로 이미 확보됨.
+  //   - \vphantom 인자는 "라벨 박스" 단독으로 둔다. 긴 stem 본문까지 포함시키면 hbox 내
+  //     overfull 경고가 발생하고 일부 xetex 패턴에서 ht 전달이 불안정할 수 있다.
+  //   - 라벨 박스 뒤에는 라벨-번호 시각적 간격을 위해 \vspace{10pt} 유지 (번호 라인만 내려감,
+  //     라벨 자체의 top edge 는 그대로).
   const firstLineStrut = pairStrutMacro || '';
   if (sectionLabel) {
     const spaced = Array.from(String(sectionLabel)).map((c) => escapeLatexText(c)).join('\\,');
     // 10% 확대: 폰트 13.2pt(약 \large 의 1.1배), fboxsep 4.4pt, 좌우 \hspace 13.2pt, fboxrule 0.55pt.
     // \hspace{-1em} 으로 leftskip 바깥으로 빼서 slot minipage 왼쪽 경계에 딱 붙임.
-    // 상단 5pt / 하단 10pt 의 추가 세로 간격.
-    const labelBox = '{\\setlength{\\fboxrule}{0.55pt}\\setlength{\\fboxsep}{4.4pt}'
+    const labelBoxInner = '{\\setlength{\\fboxrule}{0.55pt}\\setlength{\\fboxsep}{4.4pt}'
       + '\\fbox{\\hspace{13.2pt}\\fontsize{13.2pt}{15.84pt}\\selectfont\\bfseries '
       + spaced
       + '\\hspace{13.2pt}}}';
+    // labelBox 를 \raisebox 로 감싸 output ht 만 +5pt. content 는 제자리(raise=0) 이므로
+    //   ink 는 움직이지 않고 "box 상단의 가상 여백 5pt" 만 확보 → slot top 이 ink 위 5pt 에 위치.
+    //   짝 slot 의 \vphantom strut 도 동일한 +5pt 트릭을 적용해 두 slot 의 slot top 이 정렬.
+    const labelBox = `\\raisebox{0pt}[\\dimexpr\\height+5pt\\relax][\\depth]{${labelBoxInner}}`;
     parts.push(
-      '\\vspace*{5pt}\\par',
-      `\\noindent\\hspace{-1em}${firstLineStrut}${labelBox}\\par`,
+      `\\noindent\\hspace{-1em}${labelBox}\\par`,
       '\\vspace{10pt}',
     );
   }
 
   if (showQuestionNumber && qNum) {
-    // 라벨이 있으면 문항번호 라인은 "두 번째 라인" → 이미 firstLineStrut 은 라벨 라인에서 소비됨.
-    // 라벨이 없으면 문항번호 라인이 "첫 표시 라인" → firstLineStrut 을 여기서 소비.
+    // 라벨이 있으면 문항번호는 "두 번째 라인" → 이미 라벨 박스가 라인 ht 결정.
+    // 라벨이 없으면 문항번호 라인이 "첫 표시 라인" → firstLineStrut(짝 slot 라벨박스 \vphantom)
+    // 을 여기서 소비해 라벨박스와 동일 ht 를 가지도록 한다.
     const strut = sectionLabel ? '' : firstLineStrut;
     parts.push(
       `\\noindent\\hspace{-1em}${strut}\\textbf{${escapeLatexText(String(qNum))}.}\\enspace`,
     );
   } else if (!sectionLabel && firstLineStrut) {
-    // 문항번호 비표시 모드 & 라벨 없을 때만 첫줄 strut 을 자체적으로 소비.
     parts.push(`\\noindent${firstLineStrut}`);
   }
 
@@ -2200,7 +2254,18 @@ function renderOneQuestion(question, {
       if (typeof cur !== 'string' || cur.length === 0) return;
       // "\ [N점]" : \ = 고정폭 공백(hbox 내에서도 유지). \enspace 는 단락 종료 전에는 줄바꿈 허용이라
       // 한 줄 끝에서 점수가 다음 줄로 내려가 보일 수 있음 → \ 를 사용해 마지막 어절과 밀착.
-      parts[partIdx] = `${cur}\\ {\\small [${escapeLatexText(scoreText)}점]}`;
+      const suffix = `\\ {\\small [${escapeLatexText(scoreText)}점]}`;
+      // 세트형 소문항은 "(N) ..." 을 `{\setbox0=\hbox{...} ... \par}` 한 그룹으로 감싸 렌더한다.
+      // 이 경우 `\par}` 바깥에 suffix 를 붙이면 그룹이 이미 paragraph 를 종료한 뒤라
+      // 점수가 새 paragraph 로 떨어져 "줄바꿈된 상태"로 보이게 된다.
+      // → `\par}` 으로 끝나는 파트는 `\par` 직전(그룹 내부 본문 끝)에 suffix 를 삽입해
+      //   본문 마지막 어절과 같은 paragraph 에 포함시킨다.
+      const hangingParClose = /\\par\}\s*$/;
+      if (hangingParClose.test(cur)) {
+        parts[partIdx] = cur.replace(hangingParClose, `${suffix}\\par}`);
+      } else {
+        parts[partIdx] = `${cur}${suffix}`;
+      }
     };
     if (setSubScores) {
       // 세트형: 각 소문항별 점수 부착.
@@ -2275,7 +2340,8 @@ export function buildTexSource(question, options = {}) {
     '',
     '\\pagestyle{empty}',
     '\\setstretch{1.7}',
-    '\\lineskiplimit=5pt',
+    // em 기반 → 폰트 크기에 비례 스케일 (분수/큰 수식 포함 줄의 여유 간격도 비례).
+    '\\lineskiplimit=0.4em',
     '\\lineskip=1.2em',
     '\\spaceskip=1.2\\fontdimen2\\font plus 1.2\\fontdimen3\\font minus 1.2\\fontdimen4\\font',
     '\\setlength{\\parindent}{0pt}',
@@ -2283,7 +2349,7 @@ export function buildTexSource(question, options = {}) {
     '',
     '\\begin{document}',
     '\\raggedright',
-    '\\lineskiplimit=5pt\\lineskip=1.2em',
+    '\\lineskiplimit=0.4em\\lineskip=1.2em',
   ];
 
   return lines.join('\n') + '\n' + renderOneQuestion(question, { stemSizePt }) + '\n\\end{document}\n';
@@ -2320,8 +2386,12 @@ function renderMockSlotColumnBody(
     questionScoreByQuestionId = null,
     // 짝슬롯(row-pair) 동기화 파생 데이터. 길이는 slotCount 와 동일해야 한다.
     sectionLabels = [],            // string | null — 이 slot 이 라벨을 표시해야 하는지
-    pairStrutMacros = [],          // LaTeX 매크로 이름 (예: '\\pairStrutRowA') — 문항번호 첫줄 strut
-    pairLabelStrutMacros = [],     // LaTeX 매크로 이름 (예: '\\pairLabelStrutRowA') — 라벨 라인 strut
+    pairStrutMacros = [],          // \vphantom 스니펫 — 라벨 없는 slot 의 첫 hbox ht 동기화
+    pairLabelStrutMacros = [],     // (deprecated) 과거 라벨 전용 strut
+    topPadsPt = [],                // row 별 공통 상단 padding (pt). 짝 slot 과 동일 값이어야 함.
+    // 슬롯 개별 높이 표현식(LaTeX dimen 식 또는 길이 매크로). 길이는 slotCount 와 동일.
+    // 지정되지 않은(또는 falsy) 원소는 slotHeightMacro 로 폴백.
+    perSlotHeightExprs = [],
   } = {},
 ) {
   const lines = [];
@@ -2329,7 +2399,8 @@ function renderMockSlotColumnBody(
   const qList = Array.isArray(columnQuestions) ? columnQuestions : [];
 
   for (let i = 0; i < safeSlots; i += 1) {
-    lines.push(`\\begin{minipage}[t][${slotHeightMacro}][t]{\\linewidth}`);
+    const slotHeight = perSlotHeightExprs[i] || slotHeightMacro;
+    lines.push(`\\begin{minipage}[t][${slotHeight}][t]{\\linewidth}`);
     const question = qList[i];
     if (question) {
       lines.push(renderOneQuestion(question, {
@@ -2340,6 +2411,7 @@ function renderMockSlotColumnBody(
         sectionLabel: sectionLabels[i] || null,
         pairStrutMacro: pairStrutMacros[i] || null,
         pairLabelStrutMacro: pairLabelStrutMacros[i] || null,
+        topPadPt: Number(topPadsPt[i] || 0),
       }));
     } else {
       lines.push('\\vspace*{0.6\\baselineskip}');
@@ -2350,6 +2422,43 @@ function renderMockSlotColumnBody(
     }
   }
   return lines.join('\n');
+}
+
+/**
+ * 슬롯별 높이 표현식을 계산한다.
+ *
+ * 규칙 (사용자 요청):
+ *   - 슬롯이 1 개면 : 전체 높이를 그대로 사용 (차등 없음).
+ *   - 슬롯이 2 개 이상이면 : "아래쪽 절반" 슬롯이 위쪽 슬롯보다 10% 더 높게.
+ *     시각적 균형을 위해 하단 슬롯에 더 많은 공간을 할당.
+ *     전체 합은 (colHeight - gaps) 로 유지.
+ *
+ * 슬롯 비율:
+ *   - n=1 : [1.0]
+ *   - n=2 : [1.0, 1.1]
+ *   - n=3 : [1.0, 1.0, 1.1]
+ *   - n=4 : [1.0, 1.0, 1.1, 1.1]  (아래 절반 = floor(n/2) .. n-1)
+ *
+ * 반환:
+ *   - Array<string> : 각 슬롯의 `\dimexpr` 기반 height 표현식. minipage [t][H][t] 에 그대로 주입 가능.
+ *   - colHeightMacro : 컬럼 전체 높이 LaTeX 매크로 (예: '\\mockLeftSlotHeight*n' 아닌 'mockColumnHeight' 자체).
+ *   - gapExpr        : 슬롯 간 간격 합 표현식 (예: `(n-1)\\mockSlotGap`).
+ */
+function computePerSlotHeightExprs(slotCount, colHeightMacro, gapExpr) {
+  const n = Math.max(1, Number(slotCount || 1));
+  if (n === 1) {
+    return [`\\dimexpr${colHeightMacro}-${gapExpr}\\relax`];
+  }
+  const lowerStart = Math.floor(n / 2);
+  const ratios = Array.from({ length: n }, (_, i) => (i >= lowerStart ? 1.1 : 1.0));
+  // 정수 스케일: 0.1 단위를 정수화(×10) → 분모 10*sum, 분자 ratio*10.
+  const numerators = ratios.map((r) => Math.round(r * 10));
+  const sumNumerator = numerators.reduce((a, b) => a + b, 0);
+  // 각 slot 높이 = (\colHeight - gaps) × numerator / sumNumerator.
+  // LaTeX 의 \dimexpr 는 "dimen * int / int" 순서 연산을 지원한다.
+  return numerators.map((num) => (
+    `\\dimexpr(${colHeightMacro}-${gapExpr})*${num}/${sumNumerator}\\relax`
+  ));
 }
 
 /**
@@ -2429,27 +2538,36 @@ function renderMockGridPageLatex(
   const rightGapExpr = safeRightSlots > 1 ? `${safeRightSlots - 1}\\mockSlotGap` : '0pt';
 
   // ─── 짝슬롯(row-pair) 동기화 준비 ───
-  // row i (0..max(leftSlots,rightSlots)-1) 마다:
-  //   - 좌 slot i 의 문항번호 라인 probe LaTeX
-  // 짝슬롯 동기화 — "첫 표시 라인" 기준.
-  //   slot 의 첫 표시 라인:
-  //     - 라벨이 있으면: 라벨 박스
-  //     - 없으면:        문항번호+stem 첫줄
-  //   좌/우 slot 의 "첫 표시 라인" content 를 \gdef 로 macro 에 저장하고,
-  //   각 slot 의 첫 표시 라인 앞에 \vphantom{\csname...L\endcsname\csname...R\endcsname} 삽입.
-  //   → 라벨 박스 ↔ 반대편 문항번호 라인 이 수평으로 정렬됨.
+  //
+  // 규칙:
+  //   - 같은 row (상단/하단) 의 좌·우 slot 두 개가 "짝".
+  //   - 라벨이 하나라도 있는 row 에서는, 라벨 없는 쪽 slot 의 문항번호 라인이
+  //     라벨 있는 쪽의 라벨 박스와 **수평 정렬** 되어야 한다.
+  //   - 라벨이 둘 다 없는 row 는 아무 strut 도 필요 없음.
+  //
+  // 구현:
+  //   - row 마다 "이 row 에 나타난 라벨 박스 LaTeX" 를 \gdef 로 macro 에 저장.
+  //   - 라벨 **없는** slot 의 문항번호 라인 앞에 \vphantom{<라벨박스macro>} 삽입하여
+  //     해당 라인의 ht/dp 를 라벨 박스의 ht/dp 와 동일하게 만든다.
+  //   - 라벨 있는 slot 은 그 자체가 라벨박스를 출력 → 별도 strut 필요 없음(빈 문자열).
+  //
+  // 과거와의 차이:
+  //   - 과거에는 \vphantom 인자에 (라벨박스 + 긴 stem 본문) 을 함께 넣었는데, xetex 환경에서
+  //     ht 전달이 흐려지는 현상이 관찰되었고, 또 \vspace*{5pt}\par 를 라벨 위에 넣어 [t]
+  //     minipage 첫 baseline 기준이 어긋나 좌측 slot 이 통째로 밀렸다(측정 ~19pt).
+  //     본 구현은 이 두 요인을 제거한다.
   const maxRows = Math.max(safeLeftSlots, safeRightSlots);
   const labelsList = Array.isArray(sectionLabels) ? sectionLabels : [];
   const leftLabels = labelsList.slice(0, safeLeftSlots);
   const rightLabels = labelsList.slice(safeLeftSlots, safeLeftSlots + safeRightSlots);
   const leftStrutMacros = [];
   const rightStrutMacros = [];
-  // 라벨 strut 은 더 이상 별도로 사용하지 않는다(첫 표시 라인 하나로 통합).
-  // 기존 renderMockSlotColumnBody 시그니처 유지를 위해 null 배열만 전달.
   const leftLabelStrutMacros = [];
   const rightLabelStrutMacros = [];
+  const leftTopPadsPt = [];
+  const rightTopPadsPt = [];
   const pairProbePrelude = [];
-  // 라벨 박스 probe 는 실제 렌더 스타일(10% 확대 버전)과 동일해야 한다.
+  // 라벨 박스 probe — 실제 렌더 스타일과 1:1 동일해야 ht/dp 가 맞는다.
   const buildLabelProbe = (txt) => {
     if (!txt) return '';
     const spaced = Array.from(String(txt)).map((c) => escapeLatexText(c)).join('\\,');
@@ -2458,32 +2576,65 @@ function renderMockGridPageLatex(
       + spaced
       + '\\hspace{13.2pt}}}';
   };
+  // 라벨이 있는 row 는 공통 상단 padding.
+  //   (주의) `\vspace*{Npt}` 방식은 minipage[t][h][t] vlist 첫 item 에 삽입 시
+  //   약 15pt 의 상수 오프셋이 발생해 "정확히 Npt" 제어가 불가하다.
+  //   → 현재는 0pt 로 두고, 상단 여백 조정이 필요하면 overlay 의 VRule offset 또는
+  //     `\headsep` 을 조정하는 방식(선형 1:1)으로 처리한다.
+  const LABEL_ROW_TOP_PAD_PT = 0;
   for (let r = 0; r < maxRows; r += 1) {
-    const csName = (side) => `pair@first@${pageMacroPrefix}@${r}@${side}`;
-    const cs = (name) => `\\csname ${name}\\endcsname`;
-    const qL = leftQuestions[r];
-    const qR = rightQuestions[r];
     const labelL = leftLabels[r] || '';
     const labelR = rightLabels[r] || '';
-    // "첫 표시 라인" content 결정.
-    const firstL = labelL
-      ? buildLabelProbe(labelL)
-      : (qL ? getFirstLineProbeLatex(qL, { showQuestionNumber }) : '\\strut');
-    const firstR = labelR
-      ? buildLabelProbe(labelR)
-      : (qR ? getFirstLineProbeLatex(qR, { showQuestionNumber }) : '\\strut');
-    const nameL = csName('L');
-    const nameR = csName('R');
+    const qL = leftQuestions[r];
+    const qR = rightQuestions[r];
+
+    // --- case 1: row 에 라벨이 하나라도 있음 → 라벨박스 ht 를 기준으로 동기화 ---
+    if (labelL || labelR) {
+      const probeText = labelL || labelR;
+      const macroName = `pair@labelprobe@${pageMacroPrefix}@${r}`;
+      pairProbePrelude.push(
+        `% --- pair label probe row ${r} (page ${pageMacroPrefix}) ---`,
+        `\\expandafter\\gdef\\csname ${macroName}\\endcsname{${buildLabelProbe(probeText)}}%`,
+      );
+      // 짝슬롯 strut 은 \raisebox 로 output ht 를 "라벨박스 ht + 5pt" 로 인위적으로 부풀린다.
+      //   - content(\vphantom) 는 제자리(raise=0). 실제 ink 는 없으므로 위아래 overlap 없음.
+      //   - output ht = \height + 5pt  → line ht 가 라벨박스보다 5pt 더 크게 잡힘.
+      //   - 짝 slot first hbox ht = line ht → minipage[t] 의 "slot top = first hbox top" 규칙에 따라
+      //     slot top 이 ink 위 5pt 에 위치. 라벨 있는 slot 에서도 labelBox 에 동일한 트릭을 적용하면
+      //     두 slot 모두 "slot top 과 ink top 사이 5pt 여백" 이 공통으로 확보된다.
+      const strutSnippet = `\\raisebox{0pt}[\\dimexpr\\height+5pt\\relax][\\depth]{\\vphantom{\\csname ${macroName}\\endcsname}}`;
+      // 라벨 있는 slot : 라벨박스 자체가 첫 hbox → strut 불필요.
+      // 라벨 없는 slot : 문항번호 라인 앞에 strut 주입 → 라벨박스와 동일 ht 확보.
+      leftStrutMacros.push(labelL ? '' : strutSnippet);
+      rightStrutMacros.push(labelR ? '' : strutSnippet);
+      leftLabelStrutMacros.push(null);
+      rightLabelStrutMacros.push(null);
+      // 공통 상단 pad : 라벨 없는 쪽도 5pt 만큼 내려가야 수평.
+      leftTopPadsPt.push(LABEL_ROW_TOP_PAD_PT);
+      rightTopPadsPt.push(LABEL_ROW_TOP_PAD_PT);
+      continue;
+    }
+
+    // --- case 2: row 에 라벨 없음 → 양쪽 stem 첫 줄 ht 의 max 로 동기화 ---
+    //   분수(\dfrac), 위·아래첨자 등으로 한쪽 첫 줄 ht 가 커질 경우, 짝 slot 에도 동일 ht 가 주입되어
+    //   "첫 hbox top edge" 가 수평으로 맞춰진다. \vphantom 은 width=0 이라 가시적 영향은 없다.
+    const probeL = qL ? getFirstLineProbeLatex(qL, { showQuestionNumber }) : '\\strut';
+    const probeR = qR ? getFirstLineProbeLatex(qR, { showQuestionNumber }) : '\\strut';
+    const macroL = `pair@content@${pageMacroPrefix}@${r}@L`;
+    const macroR = `pair@content@${pageMacroPrefix}@${r}@R`;
     pairProbePrelude.push(
-      `% --- pair first-line probe row ${r} (page ${pageMacroPrefix}) ---`,
-      `\\expandafter\\gdef\\csname ${nameL}\\endcsname{${firstL}}%`,
-      `\\expandafter\\gdef\\csname ${nameR}\\endcsname{${firstR}}%`,
+      `% --- pair content probe row ${r} (page ${pageMacroPrefix}) ---`,
+      `\\expandafter\\gdef\\csname ${macroL}\\endcsname{${probeL}}%`,
+      `\\expandafter\\gdef\\csname ${macroR}\\endcsname{${probeR}}%`,
     );
-    const strutSnippet = `\\vphantom{${cs(nameL)}${cs(nameR)}}`;
+    const strutSnippet = `\\vphantom{\\csname ${macroL}\\endcsname\\csname ${macroR}\\endcsname}`;
     leftStrutMacros.push(strutSnippet);
     rightStrutMacros.push(strutSnippet);
     leftLabelStrutMacros.push(null);
     rightLabelStrutMacros.push(null);
+    // 라벨 없는 row : 추가 상단 padding 불필요.
+    leftTopPadsPt.push(0);
+    rightTopPadsPt.push(0);
   }
 
   // 공통 좌/우 minipage 내용을 함수로 분리.
@@ -2496,6 +2647,11 @@ function renderMockGridPageLatex(
   //     페이지 중앙 x = \paperwidth/2 에 shipout overlay 로 절대 배치한다.
   //     (페이지별 콘텐츠 양과 무관하게 항상 동일 좌표에 그려지도록.)
   const MOCK_MINIPAGE_WIDTH = '\\dimexpr 0.4775\\linewidth-4pt\\relax';
+  // 사용자 요청: 슬롯 ≥2 개이면 "아래쪽 절반" 슬롯 높이를 10% 더 크게 (1개면 차등 없음).
+  //   - 좌/우 컬럼 각각 독립적으로 계산 (좌/우 슬롯 수가 다를 수 있음).
+  //   - 전체 합은 (mockColumnHeight - gaps) 로 유지 → 페이지 전체 높이 불변.
+  const leftPerSlotHeights = computePerSlotHeightExprs(safeLeftSlots, '\\mockColumnHeight', leftGapExpr);
+  const rightPerSlotHeights = computePerSlotHeightExprs(safeRightSlots, '\\mockColumnHeight', rightGapExpr);
   const buildColumnsBlock = (heightMacro, leftHeightMacro, rightHeightMacro) => [
     // row-pair strut 매크로 선언 (페이지 내에서 반드시 컬럼 minipage 전에 실행되어야 함).
     pairProbePrelude.join('\n'),
@@ -2509,6 +2665,8 @@ function renderMockGridPageLatex(
       sectionLabels: leftLabels,
       pairStrutMacros: leftStrutMacros,
       pairLabelStrutMacros: leftLabelStrutMacros,
+      topPadsPt: leftTopPadsPt,
+      perSlotHeightExprs: leftPerSlotHeights,
     }),
     '\\end{minipage}',
     '\\hfill',
@@ -2521,6 +2679,8 @@ function renderMockGridPageLatex(
       sectionLabels: rightLabels,
       pairStrutMacros: rightStrutMacros,
       pairLabelStrutMacros: rightLabelStrutMacros,
+      topPadsPt: rightTopPadsPt,
+      perSlotHeightExprs: rightPerSlotHeights,
     }),
     '\\end{minipage}',
   ].join('\n');
@@ -2948,7 +3108,7 @@ export function buildDocumentTexSource(questions, options = {}) {
   const parts = [preamble];
   parts.push('\\begin{document}');
   parts.push('\\raggedright');
-  parts.push('\\lineskiplimit=5pt\\lineskip=1.2em\n');
+  parts.push('\\lineskiplimit=0.4em\\lineskip=1.2em\n');
 
   const qList = Array.isArray(questions) ? questions : [];
   const isMock = profile === 'mock' || profile === 'csat';

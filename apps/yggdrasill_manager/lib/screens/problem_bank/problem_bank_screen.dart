@@ -15,6 +15,7 @@ import 'widgets/problem_bank_classification_filter_panel.dart';
 import 'widgets/problem_bank_mode_tab_bar.dart';
 import 'widgets/problem_bank_synced_list_dialog.dart';
 import 'widgets/question_revision_reason_dialog.dart';
+import 'widgets/objective_choices_edit_dialog.dart';
 import 'widgets/table_scale_dialog.dart';
 
 class ProblemBankScreen extends StatefulWidget {
@@ -1010,6 +1011,20 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         mergedMeta.remove('objective_generated');
       }
 
+      // allow_subjective 가 false 이면 "이 문항은 주관식으로 출제하지 않는다" 는 명시적 결정.
+      // DB 에 남아 있는 subjective_answer / meta.subjective_answer / meta.answer_parts 를
+      // 빈 값으로 강제 덮어써서 객관식 전용 문항에 주관식 답이 유령처럼 남지 않게 한다.
+      // (update 페이로드는 null 을 "변경 없음" 으로 취급하므로 빈 문자열을 명시.)
+      final saveSubjectiveAnswer = !q.allowSubjective
+          ? ''
+          : (q.subjectiveAnswer.trim().isEmpty
+              ? null
+              : q.subjectiveAnswer.trim());
+      if (!q.allowSubjective) {
+        mergedMeta.remove('subjective_answer');
+        mergedMeta.remove('answer_parts');
+      }
+
       await _service.updateQuestionReview(
         questionId: qId,
         isChecked: q.isChecked,
@@ -1021,9 +1036,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         allowSubjective: q.allowSubjective,
         objectiveChoices: saveObjectiveChoices,
         objectiveAnswerKey: saveObjectiveAnswerKey,
-        subjectiveAnswer: q.subjectiveAnswer.trim().isEmpty
-            ? null
-            : q.subjectiveAnswer.trim(),
+        subjectiveAnswer: saveSubjectiveAnswer,
         objectiveGenerated: q.allowObjective ? q.objectiveGenerated : false,
         equations: q.equations,
         meta: mergedMeta,
@@ -2822,6 +2835,11 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       return;
     }
     if (!mounted) return;
+    // "객관식 허용 off→on" 토글은 AI 자동 생성 파이프라인 진입 신호.
+    // setState 안에서는 async 호출을 할 수 없으므로 플래그만 남겨 두고,
+    // setState 후에 비동기 생성을 트리거한다.
+    final shouldKickOffObjectiveGeneration =
+        !q.allowObjective && nextObjective;
     setState(() {
       _questions = _questions
           .map((e) {
@@ -2843,6 +2861,13 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
             final clearedObjectiveAnswer =
                 willDropObjectiveAssets ? '' : e.objectiveAnswerKey;
 
+            // allow_subjective 가 true → false 로 바뀔 때 객관식 쪽과 대칭으로
+            // 저장된 주관식 정답/세트형 answer_parts 를 모두 비운다.
+            // "객관식에만 체크" 케이스에서 이전에 적재됐던 주관식 답이
+            // DB 에 그대로 남아 있던 버그를 막는다.
+            final willDropSubjectiveAssets =
+                e.allowSubjective && !nextSubjective;
+
             final nextMeta = <String, dynamic>{
               ...e.meta,
               'allow_objective': nextObjective,
@@ -2853,6 +2878,12 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
               nextMeta['objective_answer_key'] = '';
               nextMeta.remove('objective_generated');
             }
+            if (willDropSubjectiveAssets) {
+              // meta 쪽 복제본(레거시 경로에서 meta 에도 저장됨) 과
+              // 세트형 구조(answer_parts) 모두 정리.
+              nextMeta.remove('subjective_answer');
+              nextMeta.remove('answer_parts');
+            }
 
             return e.copyWith(
               allowObjective: nextObjective,
@@ -2861,12 +2892,215 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
               objectiveAnswerKey: clearedObjectiveAnswer,
               objectiveGenerated:
                   willDropObjectiveAssets ? false : e.objectiveGenerated,
+              subjectiveAnswer: willDropSubjectiveAssets
+                  ? ''
+                  : e.subjectiveAnswer,
               meta: nextMeta,
             );
           })
           .toList(growable: false);
       _dirtyQuestionIds.add(q.id);
     });
+
+    // "객관식 허용" 이 새로 켜졌고, 아직 쓸만한 보기가 없다면 AI 에게 5지선다 자동 생성을 요청.
+    // 이미 저장된 보기(>=2 개)와 정답 라벨이 있으면 서버가 스스로 skip 해 주므로
+    // 클라이언트에서도 굳이 호출하지 않아 불필요한 네트워크/토큰 소비를 막는다.
+    if (shouldKickOffObjectiveGeneration) {
+      final existingUsable =
+          q.objectiveChoices.where((c) => c.text.trim().isNotEmpty).length >= 2 &&
+              q.objectiveAnswerKey.trim().isNotEmpty;
+      if (!existingUsable) {
+        unawaited(_autoGenerateObjectiveChoices(q.id, force: false));
+      }
+    }
+  }
+
+  // 현재 진행 중인 "AI 객관식 생성" 호출을 문항 id 단위로 추적해
+  // 중복 토글 시 동시 요청이 튀지 않게 하고, 로딩 인디케이터 표시 여부도 결정한다.
+  final Set<String> _objectiveGenerationInFlight = <String>{};
+
+  Future<void> _autoGenerateObjectiveChoices(
+    String questionId, {
+    required bool force,
+  }) async {
+    if (_objectiveGenerationInFlight.contains(questionId)) return;
+    _objectiveGenerationInFlight.add(questionId);
+    if (mounted) setState(() {});
+    try {
+      if (!_service.hasGateway) {
+        _showSnack(
+          '게이트웨이가 설정되어 있지 않아 AI 객관식 보기 생성을 사용할 수 없습니다.',
+          error: true,
+        );
+        return;
+      }
+      _showSnack('AI 로 객관식 보기를 생성하는 중입니다...');
+      final result = await _service.generateObjectiveChoices(
+        questionId: questionId,
+        force: force,
+      );
+      if (!mounted) return;
+      if (result.skipped) {
+        _applyObjectiveGenerationResult(questionId, result, persist: false);
+        _showSnack('기존 보기를 유지합니다. "객관식 보기 수정" 으로 직접 조정할 수 있어요.');
+        return;
+      }
+      if (!result.success || result.choices.isEmpty) {
+        _showSnack(
+          'AI 가 보기를 충분히 만들지 못했어요. "객관식 보기 수정" 으로 직접 입력해 주세요.',
+          error: true,
+        );
+        return;
+      }
+      _applyObjectiveGenerationResult(questionId, result, persist: true);
+      _showSnack(result.usedFallback
+          ? 'AI 응답이 짧아 일부 오답을 보정했어요. 필요하면 "객관식 보기 수정"에서 다듬어주세요.'
+          : 'AI 로 5지선다 보기와 정답을 저장했습니다.');
+    } catch (e) {
+      if (mounted) {
+        _showSnack('AI 객관식 보기 생성 실패: $e', error: true);
+      }
+    } finally {
+      _objectiveGenerationInFlight.remove(questionId);
+      if (mounted) setState(() {});
+    }
+  }
+
+  void _applyObjectiveGenerationResult(
+    String questionId,
+    ProblemBankObjectiveGenerationResult result, {
+    required bool persist,
+  }) {
+    if (!mounted) return;
+    setState(() {
+      _questions = _questions.map((e) {
+        if (e.id != questionId) return e;
+        final nextMeta = <String, dynamic>{
+          ...e.meta,
+          'allow_objective': true,
+          'objective_answer_key': result.answerKey,
+          'objective_generated': result.objectiveGenerated,
+        };
+        return e.copyWith(
+          allowObjective: true,
+          objectiveChoices: result.choices,
+          objectiveAnswerKey: result.answerKey,
+          objectiveGenerated: result.objectiveGenerated,
+          meta: nextMeta,
+        );
+      }).toList(growable: false);
+      // 서버가 이미 저장까지 마친 상태라면 dirty 로 남길 필요가 없다.
+      // 반대로 로컬에서 반영만 끝낸 skip 케이스는 굳이 다시 저장할 것도 없어서 동일.
+      _dirtyQuestionIds.remove(questionId);
+    });
+  }
+
+  Future<void> _openObjectiveChoicesEditor(ProblemBankQuestion q) async {
+    final result = await ObjectiveChoicesEditDialog.show(
+      context,
+      initialChoices: q.objectiveChoices,
+      initialAnswerKey: q.objectiveAnswerKey,
+      title: '${q.questionNumber}번 객관식 보기 수정',
+      onRegenerate: _service.hasGateway
+          ? () async {
+              try {
+                final r = await _service.generateObjectiveChoices(
+                  questionId: q.id,
+                  force: true,
+                );
+                if (!mounted) return null;
+                if (!r.success || r.choices.isEmpty) {
+                  _showSnack(
+                    'AI 가 보기를 충분히 만들지 못했어요. 직접 입력해 주세요.',
+                    error: true,
+                  );
+                  return null;
+                }
+                // 서버가 이미 저장까지 마쳤으므로 로컬 상태도 즉시 동기화.
+                _applyObjectiveGenerationResult(q.id, r, persist: true);
+                return ObjectiveChoicesRegenerateResult(
+                  choices: r.choices,
+                  answerKey: r.answerKey,
+                );
+              } catch (e) {
+                if (mounted) {
+                  _showSnack('AI 재생성 실패: $e', error: true);
+                }
+                return null;
+              }
+            }
+          : null,
+    );
+    if (result == null || !mounted) return;
+
+    // 로컬 상태를 먼저 갱신 → 저장 실패 시 롤백할 수 있도록 이전 값을 백업.
+    final prev = _questions.firstWhere((e) => e.id == q.id, orElse: () => q);
+    setState(() {
+      _questions = _questions.map((e) {
+        if (e.id != q.id) return e;
+        final nextMeta = <String, dynamic>{
+          ...e.meta,
+          'allow_objective': true,
+          'objective_answer_key': result.answerKey,
+        };
+        return e.copyWith(
+          allowObjective: true,
+          objectiveChoices: result.choices,
+          objectiveAnswerKey: result.answerKey,
+          meta: nextMeta,
+        );
+      }).toList(growable: false);
+    });
+
+    try {
+      await _service.updateQuestionReview(
+        questionId: q.id,
+        isChecked: prev.isChecked,
+        reviewerNotes: prev.reviewerNotes,
+        questionType: prev.questionType,
+        stem: prev.stem,
+        choices: prev.choices,
+        allowObjective: true,
+        allowSubjective: prev.allowSubjective,
+        objectiveChoices: result.choices,
+        objectiveAnswerKey: result.answerKey,
+        subjectiveAnswer: prev.allowSubjective
+            ? (prev.subjectiveAnswer.trim().isEmpty
+                ? null
+                : prev.subjectiveAnswer.trim())
+            : '',
+        // 사용자가 직접 편집했으므로 "AI 생성본" 꼬리표는 떼고 저장.
+        objectiveGenerated: false,
+        equations: prev.equations,
+        meta: <String, dynamic>{
+          ...prev.meta,
+          'allow_objective': true,
+          'objective_answer_key': result.answerKey,
+          'objective_generated': false,
+        },
+      );
+      if (!mounted) return;
+      setState(() {
+        _questions = _questions.map((e) {
+          if (e.id != q.id) return e;
+          return e.copyWith(objectiveGenerated: false);
+        }).toList(growable: false);
+        _dirtyQuestionIds.remove(q.id);
+      });
+      await _prefetchQuestionPreviewUrls(
+        _questions.where((e) => e.id == q.id).toList(),
+      );
+      if (!mounted) return;
+      _showSnack('객관식 보기 수정을 저장했어요.');
+    } catch (e) {
+      if (!mounted) return;
+      // 실패 시 이전 값으로 롤백.
+      setState(() {
+        _questions =
+            _questions.map((e0) => e0.id == q.id ? prev : e0).toList(growable: false);
+      });
+      _showSnack('객관식 보기 저장 실패: $e', error: true);
+    }
   }
 
   bool _isLowConfidence(ProblemBankQuestion q) {
@@ -5395,6 +5629,12 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   }
 
   String _subjectiveAnswerForPreview(ProblemBankQuestion q) {
+    // 주관식 출제 허용이 꺼져 있는 문항은 미리보기에서도 주관식 정답을
+    // 아예 노출하지 않는다. (저장 시점에는 _saveAndRefreshPreview 가
+    // DB/meta 양쪽에서 비우지만, 사용자가 토글만 하고 저장 직전 상태에서도
+    // 즉시 UI 에 반영되도록 안전벨트.)
+    if (!q.allowSubjective) return '';
+
     // 세트형 문항: meta.answer_parts 가 있으면 "(1) ...\n(2) ..." 로 줄바꿈 포맷.
     // _sanitizeAnswerText 는 \s+ 를 단일 공백으로 합쳐 \n 을 지우므로,
     // 파트별로 value 만 위생화하고 "(sub) value" 형태로 조립해 반환한다.
@@ -8962,6 +9202,36 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                           style:
                               TextStyle(color: _textSub, fontSize: 11.4),
                         ),
+                        // 객관식 허용 상태일 때만 "AI 보기 수정" 버튼 노출.
+                        // 진행 중이면 disable + spinner, 아니면 아이콘.
+                        if (q.allowObjective) ...[
+                          const SizedBox(width: 2),
+                          SizedBox(
+                            height: 22,
+                            width: 22,
+                            child: IconButton(
+                              tooltip: _objectiveGenerationInFlight.contains(q.id)
+                                  ? 'AI 객관식 보기 생성 중...'
+                                  : '객관식 보기 수정',
+                              padding: EdgeInsets.zero,
+                              visualDensity: const VisualDensity(
+                                  horizontal: -4, vertical: -4),
+                              icon: _objectiveGenerationInFlight.contains(q.id)
+                                  ? const SizedBox(
+                                      width: 12,
+                                      height: 12,
+                                      child: CircularProgressIndicator(
+                                          strokeWidth: 2),
+                                    )
+                                  : const Icon(Icons.tune,
+                                      size: 14, color: _textSub),
+                              onPressed:
+                                  _objectiveGenerationInFlight.contains(q.id)
+                                      ? null
+                                      : () => _openObjectiveChoicesEditor(q),
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                     Row(

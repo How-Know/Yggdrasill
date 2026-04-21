@@ -10,6 +10,7 @@ import { URL, fileURLToPath } from 'node:url';
 import { createClient } from '@supabase/supabase-js';
 import sharp from 'sharp';
 import { renderPdfWithXeLatex } from './problem_bank/render_engine/xelatex/renderer.js';
+import { generateObjectiveDraftForQuestion } from './problem_bank_extract_worker.js';
 
 const __api_dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__api_dirname, '..', '..');
@@ -2718,6 +2719,151 @@ async function documentSummary(url, res) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// 단일 문항의 객관식 보기 + 정답 라벨을 AI(Gemini) 로 자동 생성해 pb_questions 에 기록한다.
+//
+// 매니저 UI 에서 사용자가 "객관식 허용" 을 새로 켜는 순간 호출된다. 보기가 이미 저장되어
+// 있는 문항에는 기본적으로 손대지 않고(skip), 사용자가 force=true 를 명시할 때만 재생성한다.
+// ---------------------------------------------------------------------------
+async function generateObjectiveForQuestion(questionId, body, res) {
+  if (!isUuid(questionId)) {
+    sendJson(res, 400, { ok: false, error: 'questionId must be uuid' });
+    return;
+  }
+  const force = body?.force === true;
+
+  const { data: row, error: fetchError } = await supa
+    .from('pb_questions')
+    .select(
+      'id,academy_id,document_id,question_number,question_type,stem,' +
+        'allow_objective,allow_subjective,objective_choices,objective_answer_key,' +
+        'objective_generated,subjective_answer,flags,source_type_code,meta',
+    )
+    .eq('id', questionId)
+    .maybeSingle();
+
+  if (fetchError) {
+    sendJson(res, 500, {
+      ok: false,
+      error: `question_fetch_failed:${fetchError.message}`,
+    });
+    return;
+  }
+  if (!row) {
+    sendJson(res, 404, { ok: false, error: 'question_not_found' });
+    return;
+  }
+
+  const existingChoices = Array.isArray(row.objective_choices)
+    ? row.objective_choices
+    : [];
+  const existingAnswerKey = String(row.objective_answer_key || '').trim();
+  const hasUsableChoices =
+    existingChoices.filter((c) =>
+      String(c?.text || '').trim().length > 0,
+    ).length >= 2 && existingAnswerKey.length > 0;
+
+  if (!force && hasUsableChoices) {
+    sendJson(res, 200, {
+      ok: true,
+      skipped: true,
+      reason: 'choices_already_exist',
+      objective_choices: existingChoices,
+      objective_answer_key: existingAnswerKey,
+      objective_generated: row.objective_generated === true,
+      allow_objective: row.allow_objective === true,
+    });
+    return;
+  }
+
+  const examProfileHint =
+    row.source_type_code === 'susi_sunsi' ? 'susi_sunsi' : 'naesin';
+
+  let draft;
+  try {
+    draft = await generateObjectiveDraftForQuestion({
+      questionNumber: row.question_number || '1',
+      stem: row.stem || '',
+      subjectiveAnswer: row.subjective_answer || '',
+      examProfileHint,
+    });
+  } catch (err) {
+    sendJson(res, 500, {
+      ok: false,
+      error: `objective_generation_failed:${compact(err?.message || err)}`,
+    });
+    return;
+  }
+
+  if (!draft || !Array.isArray(draft.choices) || draft.choices.length < 5 || !draft.answerKey) {
+    // 생성 실패 — DB 는 건드리지 않는다. 매니저 UI 가 스낵바로 알림.
+    const flags = Array.from(
+      new Set([...(Array.isArray(row.flags) ? row.flags : []), 'objective_generation_failed']),
+    );
+    sendJson(res, 200, {
+      ok: true,
+      skipped: false,
+      success: false,
+      error: draft?.error || 'insufficient_choices',
+      flags,
+    });
+    return;
+  }
+
+  const generated = draft.generated === true || draft.usedFallback === true;
+  const prevFlags = Array.isArray(row.flags) ? row.flags : [];
+  const flagSet = new Set(prevFlags.filter(
+    (f) => f !== 'objective_generation_failed' && f !== 'objective_generation_error',
+  ));
+  if (draft.usedFallback) flagSet.add('objective_generated_fallback');
+  if (draft.error) flagSet.add('objective_generation_warning');
+  const newFlags = Array.from(flagSet);
+
+  const prevMeta = row.meta && typeof row.meta === 'object' ? row.meta : {};
+  const newMeta = {
+    ...prevMeta,
+    allow_objective: true,
+    objective_answer_key: draft.answerKey,
+    objective_generated: generated,
+  };
+
+  const { data: updated, error: updateError } = await supa
+    .from('pb_questions')
+    .update({
+      allow_objective: true,
+      objective_choices: draft.choices,
+      objective_answer_key: draft.answerKey,
+      objective_generated: generated,
+      flags: newFlags,
+      meta: newMeta,
+    })
+    .eq('id', questionId)
+    .select(
+      'id,allow_objective,objective_choices,objective_answer_key,objective_generated,flags,meta',
+    )
+    .single();
+
+  if (updateError) {
+    sendJson(res, 500, {
+      ok: false,
+      error: `question_update_failed:${updateError.message}`,
+    });
+    return;
+  }
+
+  sendJson(res, 200, {
+    ok: true,
+    skipped: false,
+    success: true,
+    used_fallback: draft.usedFallback === true,
+    objective_choices: updated.objective_choices,
+    objective_answer_key: updated.objective_answer_key,
+    objective_generated: updated.objective_generated === true,
+    allow_objective: updated.allow_objective === true,
+    flags: updated.flags,
+  });
+}
+
 async function listQuestions(url, res) {
   const academyId = String(url.searchParams.get('academyId') || '').trim();
   if (!isUuid(academyId)) {
@@ -3583,6 +3729,16 @@ async function handler(req, res) {
 
     if (method === 'GET' && url.pathname === '/pb/questions') {
       await listQuestions(url, res);
+      return;
+    }
+
+    if (
+      method === 'POST' &&
+      /^\/pb\/questions\/[^/]+\/generate-objective$/.test(url.pathname)
+    ) {
+      const questionId = url.pathname.split('/')[3];
+      const body = await readJson(req);
+      await generateObjectiveForQuestion(questionId, body, res);
       return;
     }
 

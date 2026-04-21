@@ -2721,6 +2721,120 @@ async function enrichQuestionsWithDualMode({
   };
 }
 
+// 단일 문항에 대해 AI(Gemini) 기반 5지선다 보기 + 정답 라벨을 생성한다.
+// 기존 `enrichQuestionsWithDualMode` 는 "추출 배치" 전체를 훑어 보기가 없는 모든 주관식에
+// 일괄 적용하는 형태라, 매니저 UI 에서 "문항 1개만 방금 객관식으로 토글" 하는 시나리오에는
+// 그대로 쓰기 어렵다. 그래서 동일한 프롬프트/폴백 파이프라인을 그대로 유지하되
+// 반환 타입만 "단일 문항용 draft" 로 좁힌 래퍼를 제공한다.
+//
+// 반환 객체:
+//   choices       : [{label, text}, ...]  // 0개이면 생성 실패
+//   answerKey     : '①'|'②'|...|''
+//   generated     : boolean               // Gemini 가 실제로 5개를 맞춰 준 경우 true
+//   usedFallback  : boolean               // 폴백 distractor(숫자/수식 휴리스틱) 로 보충된 경우 true
+//   error         : string|null
+export async function generateObjectiveDraftForQuestion({
+  questionNumber,
+  stem,
+  subjectiveAnswer,
+  examProfileHint,
+} = {}) {
+  const normalizedStem = normalizeWhitespace(String(stem || ''));
+  const normalizedAnswer = normalizeWhitespace(String(subjectiveAnswer || ''));
+  if (!normalizedStem) {
+    return {
+      choices: [],
+      answerKey: '',
+      generated: false,
+      usedFallback: false,
+      error: 'stem_empty',
+    };
+  }
+
+  const qnum = String(questionNumber || '1').trim() || '1';
+  let generatedMap = new Map();
+  let error = null;
+  try {
+    generatedMap = await callGeminiObjectiveGenerator({
+      subjectiveQuestions: [
+        {
+          questionNumber: qnum,
+          stem: normalizedStem,
+          subjectiveAnswer: normalizedAnswer,
+        },
+      ],
+      examProfileHint,
+    });
+  } catch (err) {
+    error = compact(err?.message || err);
+  }
+
+  const generated = generatedMap.get(qnum);
+  const correctText = normalizeWhitespace(
+    generated?.correctText || normalizedAnswer || '',
+  );
+  const distractors = Array.isArray(generated?.distractors)
+    ? generated.distractors
+    : [];
+
+  const candidateTexts = [];
+  if (correctText) candidateTexts.push(correctText);
+  for (const d of distractors) {
+    const text = normalizeWhitespace(String(d || ''));
+    if (!text) continue;
+    if (candidateTexts.some((x) => normalizeWhitespace(x) === text)) continue;
+    candidateTexts.push(text);
+    if (candidateTexts.length >= 5) break;
+  }
+
+  let usedFallback = false;
+  if (candidateTexts.length < 5 && correctText) {
+    for (const d of buildFallbackDistractors(correctText)) {
+      const text = normalizeWhitespace(String(d || ''));
+      if (!text) continue;
+      if (candidateTexts.some((x) => normalizeWhitespace(x) === text)) continue;
+      candidateTexts.push(text);
+      usedFallback = true;
+      if (candidateTexts.length >= 5) break;
+    }
+  }
+
+  if (candidateTexts.length < 5 || !correctText) {
+    return {
+      choices: [],
+      answerKey: '',
+      generated: false,
+      usedFallback,
+      error: error || 'insufficient_choices',
+    };
+  }
+
+  const optionTexts = shuffleArray(candidateTexts.slice(0, 5));
+  const correctIndex = optionTexts.findIndex(
+    (x) => normalizeWhitespace(x) === normalizeWhitespace(correctText),
+  );
+  if (correctIndex < 0) {
+    return {
+      choices: [],
+      answerKey: '',
+      generated: false,
+      usedFallback,
+      error: error || 'correct_not_found',
+    };
+  }
+
+  return {
+    choices: optionTexts.map((text, idx) => ({
+      label: choiceLabelByIndex(idx),
+      text: normalizeWhitespace(text),
+    })),
+    answerKey: choiceLabelByIndex(correctIndex),
+    generated: Boolean(generated),
+    usedFallback,
+    error,
+  };
+}
+
 function buildQuestionRows({ academyId, documentId, extractJobId, parsed, threshold }) {
   const allLines = [];
   let sourceLineCount = 0;

@@ -22,6 +22,44 @@ class AcademyIdNotFoundException implements Exception {
   String toString() => message;
 }
 
+/// AI(Gemini) 기반 5지선다 자동 생성 결과. 매니저 UI 는 이 결과만 있으면
+/// 스낵바 문구(성공/폴백/이미 존재/실패) 와 로컬 상태 패치(보기+정답 라벨) 을 모두 수행할 수 있다.
+class ProblemBankObjectiveGenerationResult {
+  const ProblemBankObjectiveGenerationResult({
+    required this.skipped,
+    required this.success,
+    required this.usedFallback,
+    required this.choices,
+    required this.answerKey,
+    required this.allowObjective,
+    required this.objectiveGenerated,
+    this.reason,
+    this.error,
+  });
+
+  /// 서버가 "이미 쓸만한 보기가 있으므로 건너뜀" 이라고 응답한 경우 true.
+  final bool skipped;
+
+  /// 실제로 생성에 성공했고 DB 가 업데이트된 경우 true. (skipped==true 일 때는 무조건 false)
+  final bool success;
+
+  /// Gemini 응답이 모자라 숫자/수식 폴백으로 보충된 경우 true.
+  final bool usedFallback;
+
+  /// 현재 문항에 적용되어야 할 5개 보기. skipped 의 경우 기존 보기가 그대로 담긴다.
+  final List<ProblemBankChoice> choices;
+
+  /// 현재 정답 라벨 (`①` ~ `⑤`).
+  final String answerKey;
+
+  final bool allowObjective;
+  final bool objectiveGenerated;
+
+  /// skipped 이유 ("choices_already_exist" 등) 또는 success=false 시 간단한 사유.
+  final String? reason;
+  final String? error;
+}
+
 class ProblemBankManualImportResult {
   const ProblemBankManualImportResult({
     required this.document,
@@ -290,6 +328,51 @@ class ProblemBankService {
     } catch (_) {
       return <String, dynamic>{};
     }
+  }
+
+  /// 단일 문항에 대해 "객관식 허용" 상태가 새로 켜졌을 때 게이트웨이로 AI 생성 요청을 보낸다.
+  ///
+  /// - 서버는 기본적으로 `objective_choices.length >= 2` 이고 `objective_answer_key` 가
+  ///   비어 있지 않으면 자동으로 건너뛴다. 덮어쓰려면 [force] 를 true 로 준다.
+  /// - 생성 성공 시 DB 에는 이미 `allow_objective=true`, `objective_choices`,
+  ///   `objective_answer_key`, `objective_generated` 가 반영된 상태로 응답이 내려온다.
+  /// - 네트워크/서버 오류는 예외로 throw. 단순 "생성 실패(보기 부족)" 는 예외 없이
+  ///   `success=false` 로 내려오며, UI 는 스낵바로만 알리면 된다.
+  Future<ProblemBankObjectiveGenerationResult> generateObjectiveChoices({
+    required String questionId,
+    bool force = false,
+  }) async {
+    if (!hasGateway) {
+      throw StateError(
+        '게이트웨이 URL 이 설정되어 있지 않아 AI 객관식 보기 생성을 사용할 수 없습니다.',
+      );
+    }
+    final json = await _gatewayPost(
+      '/pb/questions/$questionId/generate-objective',
+      body: <String, dynamic>{if (force) 'force': true},
+    );
+    final rawChoices = json['objective_choices'];
+    final choices = <ProblemBankChoice>[];
+    if (rawChoices is List) {
+      for (final entry in rawChoices) {
+        if (entry is Map) {
+          choices.add(ProblemBankChoice.fromMap(
+            entry.map((k, dynamic v) => MapEntry('$k', v)),
+          ));
+        }
+      }
+    }
+    return ProblemBankObjectiveGenerationResult(
+      skipped: json['skipped'] == true,
+      success: json['success'] == true,
+      usedFallback: json['used_fallback'] == true,
+      choices: choices,
+      answerKey: '${json['objective_answer_key'] ?? ''}',
+      allowObjective: json['allow_objective'] == true,
+      objectiveGenerated: json['objective_generated'] == true,
+      reason: json['reason'] is String ? json['reason'] as String : null,
+      error: json['error'] is String ? json['error'] as String : null,
+    );
   }
 
   bool _isSchemaMissingMessage(String raw) {
