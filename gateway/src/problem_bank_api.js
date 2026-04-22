@@ -40,6 +40,18 @@ import {
   buildPreviewHtmlBatch,
   buildDocumentHtmlForPreview,
 } from './problem_bank_preview_service.js';
+import {
+  createUploadUrl as storageCreateUploadUrl,
+  createDownloadUrl as storageCreateDownloadUrl,
+  statObject as storageStatObject,
+  buildTextbookStorageKey,
+  DEFAULT_TEXTBOOK_BUCKET,
+  DEFAULT_TEXTBOOK_DRIVER,
+} from './storage/driver.js';
+import {
+  detectProblemsOnPage,
+  normalizeDetectResult,
+} from './textbook/vlm_detect_client.js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -487,11 +499,16 @@ function normalizeColumnLabelAnchors(raw, layoutColumns) {
       ? parsedRowIndex
       : 0;
     const label = String(one.label || one.text || '').replace(/\s+/g, ' ').trim();
-    if (!label) continue;
+    const sourceRaw = String(one.source || '').trim().toLowerCase();
+    // 'suppressed' 마커는 사용자가 × 로 제거한 slot. label 은 비어있지만 entry 가 있어야
+    //   다음 렌더링에서 auto 재생성을 차단할 수 있다.
+    const isSuppressed = sourceRaw === 'suppressed';
+    if (!label && !isSuppressed) continue;
     const topPt = Number.parseFloat(String(one.topPt ?? ''));
     const paddingTopPt = Number.parseFloat(String(one.paddingTopPt ?? ''));
-    const sourceRaw = String(one.source || '').trim().toLowerCase();
-    const source = sourceRaw === 'auto' ? 'auto' : 'manual';
+    const source = isSuppressed
+      ? 'suppressed'
+      : (sourceRaw === 'auto' ? 'auto' : 'manual');
     out.push({
       columnIndex,
       rowIndex,
@@ -770,6 +787,14 @@ function normalizeExportRenderConfig(options, selectedQuestionUids, defaults = {
     titlePageIndices,
     subjectTitleText,
   );
+  // 클라이언트(Flutter) 가 '새로고침' 이나 'PDF 생성' 시 true 로 넘겨주는 플래그.
+  //   true 이면 렌더 엔진은 객관식/유형 전환 기반 자동 라벨을 더 이상 생성하지 않고,
+  //   columnLabelAnchors 에 들어있는 항목만 그대로 사용한다.
+  //   (최초 미리보기 생성 경로에서는 이 플래그가 없으므로 기존 auto-gen 동작 유지)
+  const disableAutoLabels = normalizeBool(
+    src.disableAutoLabels ?? src.suppressAutoLabels ?? src.disableAutoColumnLabels,
+    normalizeBool(defaults.disableAutoLabels, false),
+  );
   return {
     // Force server-side renderer to latest stable path even if older app build
     // sends a stale renderConfigVersion.
@@ -814,6 +839,7 @@ function normalizeExportRenderConfig(options, selectedQuestionUids, defaults = {
     questionScoreByQuestionId: questionScoreByQuestionUid,
     hideDocumentHeader: hidePreviewHeader,
     mathEngine: String(src.mathEngine || '').trim() || undefined,
+    disableAutoLabels,
   };
 }
 
@@ -946,6 +972,9 @@ function buildRenderHashPayload({
     questionModeByQuestionUid: renderConfig.questionModeByQuestionUid,
     questionModeByQuestionId: renderConfig.questionModeByQuestionUid,
     mathEngine: renderConfig.mathEngine,
+    // disableAutoLabels 가 true 이면 서버가 auto 라벨을 만들지 않아 출력 PDF 가 달라진다.
+    //   캐시 오염을 막기 위해 hash 에 포함.
+    disableAutoLabels: renderConfig.disableAutoLabels === true,
   };
 }
 
@@ -997,6 +1026,8 @@ function buildExportOptions({
     questionModeByQuestionUid: renderConfig.questionModeByQuestionUid,
     questionModeByQuestionId: renderConfig.questionModeByQuestionUid,
     mathEngine: renderConfig.mathEngine,
+    // 워커가 옵션을 다시 정규화할 때도 플래그를 살리기 위해 함께 저장.
+    disableAutoLabels: renderConfig.disableAutoLabels === true,
     renderHash,
     previewOnly,
   };
@@ -1325,8 +1356,29 @@ async function retryExtractJob(jobId, body, res) {
     return;
   }
   if (oldJob.status === 'extracting') {
-    sendJson(res, 409, { ok: false, error: 'extract_job_in_progress' });
-    return;
+    // 워커가 정상 동작 중이면 진짜로 진행 중일 가능성이 높지만, 비정상 종료된
+    // 경우 'extracting' 락이 영구히 남아 UI 가 무한 로딩 상태가 된다. 마지막
+    // 업데이트가 충분히 오래됐으면(=stale) 사용자의 재시도 요청을 받아 다시
+    // queued 로 풀어준다. 기본 임계값은 워커의 stale reclaim 과 동일(5분).
+    // 짧게 낮추려면 PB_EXTRACT_STALE_MS 환경변수를 양쪽에 공유.
+    const staleMs = Math.max(
+      60_000,
+      Number.parseInt(process.env.PB_EXTRACT_STALE_MS || '300000', 10),
+    );
+    const lastTouchIso = oldJob.updated_at || oldJob.started_at || null;
+    const ageMs = lastTouchIso
+      ? Date.now() - new Date(lastTouchIso).getTime()
+      : Number.POSITIVE_INFINITY;
+    if (ageMs < staleMs) {
+      sendJson(res, 409, {
+        ok: false,
+        error: 'extract_job_in_progress',
+        ageMs,
+        staleThresholdMs: staleMs,
+      });
+      return;
+    }
+    // stale → 진행 허용. 아래의 queued 전환 update 가 락을 해제한다.
   }
   const oldSummary =
     oldJob && typeof oldJob.result_summary === 'object' && oldJob.result_summary
@@ -3596,6 +3648,485 @@ async function batchRenderThumbnails(res, req) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Textbook PDF dual-track endpoints
+// ---------------------------------------------------------------------------
+// These endpoints cover the Dropbox -> Supabase Storage migration for
+// `resource_file_links` rows. They are intentionally permissive on input:
+// the manager app can pass either `link_id` (preferred, once the row exists)
+// or the logical tuple (academy_id + file_id + grade_label + kind) to
+// provision a fresh key before the row has a `storage_key`.
+//
+// AUTH TODO (pre-release):
+// - Replace the bare `requireApiKey` gate with per-user JWT validation so we
+//   can scope uploads/downloads to the caller's academy memberships.
+
+const VALID_TEXTBOOK_KINDS = new Set(['body', 'ans', 'sol']);
+const UPLOAD_URL_TTL_SEC = 60 * 30;
+const DOWNLOAD_URL_TTL_SEC = 60 * 60;
+
+function parseGradeComposite(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return { gradeLabel: '', kind: '' };
+  const idx = s.indexOf('#');
+  if (idx < 0) return { gradeLabel: s, kind: '' };
+  return {
+    gradeLabel: s.slice(0, idx).trim(),
+    kind: s.slice(idx + 1).trim().toLowerCase(),
+  };
+}
+
+function buildGradeComposite(gradeLabel, kind) {
+  return `${String(gradeLabel || '').trim()}#${String(kind || '').trim().toLowerCase()}`;
+}
+
+async function resolveTextbookLink({
+  linkId,
+  academyId,
+  fileId,
+  gradeLabel,
+  kind,
+}) {
+  if (linkId != null && String(linkId).trim() !== '') {
+    const { data, error } = await supa
+      .from('resource_file_links')
+      .select(
+        'id, academy_id, file_id, grade, url, storage_driver, storage_bucket, storage_key, migration_status, file_size_bytes, content_hash, uploaded_at',
+      )
+      .eq('id', Number(linkId))
+      .maybeSingle();
+    if (error) return { ok: false, error: `link_lookup_failed: ${error.message}` };
+    if (!data) return { ok: false, error: 'link_not_found' };
+    return { ok: true, row: data };
+  }
+  if (!academyId || !fileId || !gradeLabel || !kind) {
+    return { ok: false, error: 'missing_identifiers' };
+  }
+  const composite = buildGradeComposite(gradeLabel, kind);
+  const { data, error } = await supa
+    .from('resource_file_links')
+    .select(
+      'id, academy_id, file_id, grade, url, storage_driver, storage_bucket, storage_key, migration_status, file_size_bytes, content_hash, uploaded_at',
+    )
+    .eq('academy_id', academyId)
+    .eq('file_id', fileId)
+    .eq('grade', composite)
+    .maybeSingle();
+  if (error) return { ok: false, error: `link_lookup_failed: ${error.message}` };
+  return { ok: true, row: data || null, composite };
+}
+
+async function handleTextbookUploadUrl(body, res) {
+  const academyId = String(body?.academy_id || '').trim();
+  const fileId = String(body?.file_id || '').trim();
+  const gradeLabel = String(body?.grade_label || '').trim();
+  const kind = String(body?.kind || '').trim().toLowerCase();
+  if (!academyId || !fileId || !gradeLabel || !kind) {
+    sendJson(res, 400, {
+      ok: false,
+      error: 'missing_required_fields',
+      required: ['academy_id', 'file_id', 'grade_label', 'kind'],
+    });
+    return;
+  }
+  if (!VALID_TEXTBOOK_KINDS.has(kind)) {
+    sendJson(res, 400, { ok: false, error: `invalid_kind: ${kind}` });
+    return;
+  }
+  const driver = DEFAULT_TEXTBOOK_DRIVER;
+  const bucket = DEFAULT_TEXTBOOK_BUCKET;
+  let storageKey;
+  try {
+    storageKey = buildTextbookStorageKey({
+      academyId,
+      fileId,
+      gradeLabel,
+      kind,
+    });
+  } catch (e) {
+    sendJson(res, 400, { ok: false, error: `invalid_key: ${e?.message || e}` });
+    return;
+  }
+  const signed = await storageCreateUploadUrl({
+    driver,
+    bucket,
+    key: storageKey,
+    expiresIn: UPLOAD_URL_TTL_SEC,
+  });
+  if (!signed.ok) {
+    sendJson(res, 500, { ok: false, error: signed.error });
+    return;
+  }
+  sendJson(res, 200, {
+    ok: true,
+    upload: {
+      url: signed.url,
+      method: signed.method || 'PUT',
+      headers: signed.headers || {},
+      token: signed.token || null,
+    },
+    storage: {
+      driver,
+      bucket,
+      key: storageKey,
+    },
+    grade_composite: buildGradeComposite(gradeLabel, kind),
+    expires_in: UPLOAD_URL_TTL_SEC,
+  });
+}
+
+async function handleTextbookFinalize(body, res) {
+  const linkId = body?.link_id;
+  const academyId = String(body?.academy_id || '').trim();
+  const fileId = String(body?.file_id || '').trim();
+  const gradeLabel = String(body?.grade_label || '').trim();
+  const kind = String(body?.kind || '').trim().toLowerCase();
+  const storageDriver = String(
+    body?.storage_driver || DEFAULT_TEXTBOOK_DRIVER,
+  ).trim();
+  const storageBucket = String(
+    body?.storage_bucket || DEFAULT_TEXTBOOK_BUCKET,
+  ).trim();
+  const storageKey = String(body?.storage_key || '').trim();
+  const fileSizeBytesRaw = body?.file_size_bytes;
+  const contentHash = String(body?.content_hash || '').trim() || null;
+  const rawDropboxUrl = body?.legacy_url != null ? String(body.legacy_url) : null;
+  const desiredStatus = String(body?.migration_status || 'dual').trim();
+
+  if (!storageKey) {
+    sendJson(res, 400, {
+      ok: false,
+      error: 'missing_storage_key',
+    });
+    return;
+  }
+  if (!['legacy', 'dual', 'migrated'].includes(desiredStatus)) {
+    sendJson(res, 400, {
+      ok: false,
+      error: `invalid_migration_status: ${desiredStatus}`,
+    });
+    return;
+  }
+
+  // Verify the object really exists before we flip the DB row.
+  const stat = await storageStatObject({
+    driver: storageDriver,
+    bucket: storageBucket,
+    key: storageKey,
+  });
+  if (!stat.ok) {
+    sendJson(res, 409, {
+      ok: false,
+      error: `object_not_found: ${stat.error}`,
+    });
+    return;
+  }
+  const objectSize = Number.isFinite(Number(fileSizeBytesRaw))
+    ? Number(fileSizeBytesRaw)
+    : Number(stat.size || 0);
+
+  const resolved = await resolveTextbookLink({
+    linkId,
+    academyId,
+    fileId,
+    gradeLabel,
+    kind,
+  });
+  if (!resolved.ok) {
+    sendJson(res, 400, { ok: false, error: resolved.error });
+    return;
+  }
+
+  const nowIso = new Date().toISOString();
+  const payload = {
+    storage_driver: storageDriver,
+    storage_bucket: storageBucket,
+    storage_key: storageKey,
+    migration_status: desiredStatus,
+    file_size_bytes: objectSize,
+    content_hash: contentHash,
+    uploaded_at: nowIso,
+  };
+
+  let updatedRow = null;
+  if (resolved.row) {
+    const { data, error } = await supa
+      .from('resource_file_links')
+      .update(payload)
+      .eq('id', resolved.row.id)
+      .select()
+      .maybeSingle();
+    if (error) {
+      sendJson(res, 500, { ok: false, error: `db_update_failed: ${error.message}` });
+      return;
+    }
+    updatedRow = data;
+  } else {
+    if (!academyId || !fileId || !gradeLabel || !kind) {
+      sendJson(res, 400, {
+        ok: false,
+        error: 'missing_identifiers_for_insert',
+      });
+      return;
+    }
+    const insertPayload = {
+      academy_id: academyId,
+      file_id: fileId,
+      grade: buildGradeComposite(gradeLabel, kind),
+      url: rawDropboxUrl || '',
+      ...payload,
+    };
+    const { data, error } = await supa
+      .from('resource_file_links')
+      .insert(insertPayload)
+      .select()
+      .maybeSingle();
+    if (error) {
+      sendJson(res, 500, { ok: false, error: `db_insert_failed: ${error.message}` });
+      return;
+    }
+    updatedRow = data;
+  }
+
+  sendJson(res, 200, {
+    ok: true,
+    link: updatedRow,
+  });
+}
+
+async function handleTextbookStatusPatch(body, res) {
+  const linkId = body?.link_id;
+  const desiredStatus = String(body?.migration_status || '').trim();
+  if (linkId == null || String(linkId).trim() === '') {
+    sendJson(res, 400, { ok: false, error: 'missing_link_id' });
+    return;
+  }
+  if (!['legacy', 'dual', 'migrated'].includes(desiredStatus)) {
+    sendJson(res, 400, {
+      ok: false,
+      error: `invalid_migration_status: ${desiredStatus}`,
+    });
+    return;
+  }
+  const { data, error } = await supa
+    .from('resource_file_links')
+    .update({ migration_status: desiredStatus })
+    .eq('id', Number(linkId))
+    .select()
+    .maybeSingle();
+  if (error) {
+    sendJson(res, 500, { ok: false, error: `db_update_failed: ${error.message}` });
+    return;
+  }
+  if (!data) {
+    sendJson(res, 404, { ok: false, error: 'link_not_found' });
+    return;
+  }
+  sendJson(res, 200, { ok: true, link: data });
+}
+
+async function handleTextbookDownloadUrl(url, res) {
+  const linkIdRaw = url.searchParams.get('link_id');
+  const academyId = (url.searchParams.get('academy_id') || '').trim();
+  const fileId = (url.searchParams.get('file_id') || '').trim();
+  const gradeLabel = (url.searchParams.get('grade_label') || '').trim();
+  const kind = (url.searchParams.get('kind') || '').trim().toLowerCase();
+
+  const resolved = await resolveTextbookLink({
+    linkId: linkIdRaw,
+    academyId,
+    fileId,
+    gradeLabel,
+    kind,
+  });
+  if (!resolved.ok) {
+    sendJson(res, 400, { ok: false, error: resolved.error });
+    return;
+  }
+  const row = resolved.row;
+  if (!row) {
+    sendJson(res, 404, { ok: false, error: 'link_not_found' });
+    return;
+  }
+  const status = String(row.migration_status || 'legacy');
+  const hasStorage =
+    !!row.storage_key && !!row.storage_bucket && !!row.storage_driver;
+
+  // legacy rows always resolve to Dropbox URL.
+  if (status === 'legacy' || !hasStorage) {
+    const legacyUrl = String(row.url || '').trim();
+    if (!legacyUrl) {
+      sendJson(res, 404, { ok: false, error: 'no_url_available' });
+      return;
+    }
+    sendJson(res, 200, {
+      ok: true,
+      kind: 'legacy',
+      url: legacyUrl,
+      migration_status: status,
+      link_id: row.id,
+    });
+    return;
+  }
+
+  // dual or migrated rows: prefer storage, fall back to legacy only when dual.
+  const signed = await storageCreateDownloadUrl({
+    driver: row.storage_driver,
+    bucket: row.storage_bucket,
+    key: row.storage_key,
+    expiresIn: DOWNLOAD_URL_TTL_SEC,
+  });
+  if (signed.ok) {
+    sendJson(res, 200, {
+      ok: true,
+      kind: 'storage',
+      url: signed.url,
+      expires_in: signed.expires_in,
+      migration_status: status,
+      link_id: row.id,
+      file_size_bytes: Number(row.file_size_bytes || 0) || null,
+      content_hash: row.content_hash || null,
+    });
+    return;
+  }
+  if (status === 'dual') {
+    const legacyUrl = String(row.url || '').trim();
+    if (legacyUrl) {
+      sendJson(res, 200, {
+        ok: true,
+        kind: 'legacy',
+        url: legacyUrl,
+        migration_status: status,
+        link_id: row.id,
+        fallback_reason: signed.error,
+      });
+      return;
+    }
+  }
+  sendJson(res, 500, {
+    ok: false,
+    error: `download_url_failed: ${signed.error}`,
+  });
+}
+
+// ----- Textbook VLM (page-level problem number detection) -----
+//
+// Test-only endpoint that lets the manager UI render a single PDF page to
+// PNG and ask Gemini Vision "where are the problem numbers on this page".
+// This is *not* a batch job — each call analyzes exactly one rendered page.
+//
+// SECURITY TODO (pre-release): this route currently shares the `requireApiKey`
+// gate at the top of `handler`. Before we expose this beyond internal manager
+// testing, add per-user JWT validation + academy membership check here.
+
+const TEXTBOOK_VLM_MODEL =
+  (process.env.TEXTBOOK_VLM_MODEL || process.env.PB_VLM_MODEL || 'gemini-3.1-pro-preview').trim();
+const TEXTBOOK_VLM_TIMEOUT_MS = Number.parseInt(
+  process.env.TEXTBOOK_VLM_TIMEOUT_MS || '120000',
+  10,
+);
+const TEXTBOOK_VLM_VALID_MIMES = new Set(['image/png', 'image/jpeg', 'image/webp']);
+
+async function lookupTextbookPageOffset({ academyId, bookId, gradeLabel }) {
+  if (!academyId || !bookId || !gradeLabel) return { pageOffset: 0, found: false };
+  const { data, error } = await supa
+    .from('textbook_metadata')
+    .select('page_offset')
+    .eq('academy_id', academyId)
+    .eq('book_id', bookId)
+    .eq('grade_label', gradeLabel)
+    .maybeSingle();
+  if (error || !data) return { pageOffset: 0, found: false };
+  const raw = Number(data.page_offset);
+  return {
+    pageOffset: Number.isFinite(raw) ? raw : 0,
+    found: true,
+  };
+}
+
+async function handleTextbookVlmDetectProblems(body, res) {
+  const apiKey =
+    (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '').trim();
+  if (!apiKey) {
+    sendJson(res, 500, {
+      ok: false,
+      error: 'gemini_api_key_missing',
+      hint: 'Set GEMINI_API_KEY or GOOGLE_API_KEY in the gateway env.',
+    });
+    return;
+  }
+
+  const imageBase64 = String(body?.image_base64 || '').trim();
+  if (!imageBase64) {
+    sendJson(res, 400, { ok: false, error: 'missing_image_base64' });
+    return;
+  }
+  const mimeType = String(body?.mime_type || 'image/png').trim();
+  if (!TEXTBOOK_VLM_VALID_MIMES.has(mimeType)) {
+    sendJson(res, 400, {
+      ok: false,
+      error: `invalid_mime_type: ${mimeType}`,
+      allowed: Array.from(TEXTBOOK_VLM_VALID_MIMES),
+    });
+    return;
+  }
+
+  const rawPage = Number.parseInt(String(body?.raw_page ?? ''), 10);
+  if (!Number.isFinite(rawPage) || rawPage <= 0) {
+    sendJson(res, 400, { ok: false, error: 'invalid_raw_page' });
+    return;
+  }
+
+  const academyId = String(body?.academy_id || '').trim();
+  const bookId = String(body?.book_id || '').trim();
+  const gradeLabel = String(body?.grade_label || '').trim();
+
+  const { pageOffset, found: offsetFound } = await lookupTextbookPageOffset({
+    academyId,
+    bookId,
+    gradeLabel,
+  });
+  const displayPage = rawPage - pageOffset;
+
+  let result;
+  try {
+    result = await detectProblemsOnPage({
+      imageBase64,
+      mimeType,
+      rawPage,
+      displayPage,
+      pageOffset,
+      model: TEXTBOOK_VLM_MODEL,
+      apiKey,
+      timeoutMs: TEXTBOOK_VLM_TIMEOUT_MS,
+    });
+  } catch (err) {
+    sendJson(res, 502, {
+      ok: false,
+      error: 'vlm_detect_failed',
+      message: compact(err?.message || err),
+    });
+    return;
+  }
+
+  const normalized = normalizeDetectResult(result.parsedJson);
+  sendJson(res, 200, {
+    ok: true,
+    raw_page: rawPage,
+    display_page: displayPage,
+    page_offset: pageOffset,
+    page_offset_found: offsetFound,
+    section: normalized.section,
+    layout: normalized.page_layout,
+    items: normalized.items,
+    notes: normalized.notes,
+    model: TEXTBOOK_VLM_MODEL,
+    elapsed_ms: result.elapsedMs,
+    usage: result.usageMetadata || null,
+    finish_reason: result.finishReason || '',
+  });
+}
+
 async function handler(req, res) {
   if (req.method === 'OPTIONS') {
     sendJson(res, 200, { ok: true });
@@ -3764,6 +4295,40 @@ async function handler(req, res) {
 
     if (method === 'POST' && url.pathname === '/pb/preview/batch-render') {
       await batchRenderThumbnails(res, req);
+      return;
+    }
+
+    // ----- Textbook PDF dual-track endpoints -----
+    // SECURITY TODO (pre-release): replace the shared `requireApiKey` gate on
+    // these four routes with per-user JWT validation + academy membership
+    // check. Each handler should receive a resolved `{ user_id, academy_ids }`
+    // context so it can reject requests that target an academy the caller
+    // does not belong to. Insertion point for the auth middleware is right
+    // before each `await handleTextbookXxx(...)` call below.
+    if (method === 'POST' && url.pathname === '/textbook/pdf/upload-url') {
+      const body = await readJson(req);
+      await handleTextbookUploadUrl(body, res);
+      return;
+    }
+    if (method === 'POST' && url.pathname === '/textbook/pdf/finalize') {
+      const body = await readJson(req);
+      await handleTextbookFinalize(body, res);
+      return;
+    }
+    if (method === 'POST' && url.pathname === '/textbook/pdf/status') {
+      const body = await readJson(req);
+      await handleTextbookStatusPatch(body, res);
+      return;
+    }
+    if (method === 'GET' && url.pathname === '/textbook/pdf/download-url') {
+      await handleTextbookDownloadUrl(url, res);
+      return;
+    }
+
+    // Textbook VLM (test-only) — page-level problem number detection.
+    if (method === 'POST' && url.pathname === '/textbook/vlm/detect-problems') {
+      const body = await readJson(req);
+      await handleTextbookVlmDetectProblems(body, res);
       return;
     }
 

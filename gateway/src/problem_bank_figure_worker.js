@@ -16,6 +16,12 @@ const PROCESS_ONCE =
   process.argv.includes('--once') || process.env.PB_FIGURE_WORKER_ONCE === '1';
 const WORKER_NAME =
   process.env.PB_FIGURE_WORKER_NAME || `pb-figure-worker-${process.pid}`;
+// pb_figure_jobs 가 status='rendering' 으로 오래 남아 있으면 워커가 비정상
+// 종료된 것으로 간주하고 복구한다. 기본 5분. (pb-extract-worker 와 동일 기준)
+const STALE_RENDERING_MS = Math.max(
+  60_000,
+  Number.parseInt(process.env.PB_FIGURE_STALE_MS || '300000', 10),
+);
 const GEMINI_API_KEY = String(process.env.GEMINI_API_KEY || '').trim();
 const FIGURE_MODEL = String(
   process.env.PB_FIGURE_MODEL || 'gemini-2.5-flash-image',
@@ -364,6 +370,80 @@ async function callGeminiImage(promptText, modelName, referenceImages = []) {
     mimeType,
     bytes: Buffer.from(data, 'base64'),
   };
+}
+
+// 비정상 종료된 워커가 남긴 orphan 'rendering' job 을 queued 로 되돌린다.
+// 자세한 배경 설명은 pb-extract-worker 의 reclaimStaleExtractingJobs 주석 참고.
+async function reclaimStaleRenderingJobs() {
+  const cutoffIso = new Date(Date.now() - STALE_RENDERING_MS).toISOString();
+  const { data: stale, error } = await supa
+    .from('pb_figure_jobs')
+    .select('id,retry_count,max_retries,worker_name,updated_at,started_at')
+    .eq('status', 'rendering')
+    .lt('updated_at', cutoffIso)
+    .limit(50);
+  if (error) {
+    console.warn(
+      '[pb-figure-worker] reclaim_stale_query_failed',
+      compact(error.message || error),
+    );
+    return { requeued: 0, failed: 0 };
+  }
+  if (!stale || stale.length === 0) return { requeued: 0, failed: 0 };
+
+  let requeued = 0;
+  let failed = 0;
+  for (const row of stale) {
+    const retryCount = Number(row.retry_count || 0);
+    const maxRetries = Number(row.max_retries || 0);
+    const ageMs =
+      Date.now() - new Date(row.updated_at || row.started_at || 0).getTime();
+    const canRetry = retryCount < maxRetries || maxRetries <= 0;
+    const nowIso = new Date().toISOString();
+    if (canRetry) {
+      const { data: updated } = await supa
+        .from('pb_figure_jobs')
+        .update({
+          status: 'queued',
+          started_at: null,
+          finished_at: null,
+          error_code: 'worker_stalled',
+          error_message: `reclaimed stale rendering lock after ${Math.round(ageMs / 1000)}s (prev worker=${row.worker_name || '-'})`,
+          updated_at: nowIso,
+        })
+        .eq('id', row.id)
+        .eq('status', 'rendering')
+        .select('id')
+        .maybeSingle();
+      if (updated) requeued += 1;
+    } else {
+      const { data: updated } = await supa
+        .from('pb_figure_jobs')
+        .update({
+          status: 'failed',
+          error_code: 'worker_stalled',
+          error_message: `stale rendering lock gave up after ${retryCount}/${maxRetries} retries (age ${Math.round(ageMs / 1000)}s)`,
+          finished_at: nowIso,
+          updated_at: nowIso,
+        })
+        .eq('id', row.id)
+        .eq('status', 'rendering')
+        .select('id')
+        .maybeSingle();
+      if (updated) failed += 1;
+    }
+  }
+  if (requeued > 0 || failed > 0) {
+    console.warn(
+      '[pb-figure-worker] reclaim_stale',
+      JSON.stringify({
+        requeued,
+        failed,
+        thresholdMs: STALE_RENDERING_MS,
+      }),
+    );
+  }
+  return { requeued, failed };
 }
 
 async function lockQueuedJob(job) {
@@ -835,10 +915,33 @@ async function main() {
       referenceImageLimit: FIGURE_REFERENCE_IMAGE_LIMIT,
       referenceMaxBytes: FIGURE_REFERENCE_MAX_BYTES,
       referencePassthrough: FIGURE_REFERENCE_PASSTHROUGH,
+      staleRenderingMs: STALE_RENDERING_MS,
     }),
   );
+
+  try {
+    await reclaimStaleRenderingJobs();
+  } catch (err) {
+    console.error(
+      '[pb-figure-worker] reclaim_startup_failed',
+      compact(err?.message || err),
+    );
+  }
+
+  let lastReclaimAt = Date.now();
+  const reclaimIntervalMs = Math.max(30_000, Math.floor(STALE_RENDERING_MS / 2));
+
   while (true) {
     try {
+      if (Date.now() - lastReclaimAt >= reclaimIntervalMs) {
+        await reclaimStaleRenderingJobs().catch((err) => {
+          console.warn(
+            '[pb-figure-worker] reclaim_periodic_failed',
+            compact(err?.message || err),
+          );
+        });
+        lastReclaimAt = Date.now();
+      }
       const summary = await processBatch();
       if (summary.processed > 0) {
         console.log('[pb-figure-worker] batch', JSON.stringify(summary));

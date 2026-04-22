@@ -66,15 +66,21 @@ function normalizeAnchors(rawAnchors, columns) {
     const parsedRowIndex = toSafeInt(one.rowIndex, 0);
     const rowIndex = parsedRowIndex >= 0 ? parsedRowIndex : 0;
     const label = String(one.label || one.text || '').replace(/\s+/g, ' ').trim();
-    if (!label) continue;
+    const sourceRaw = String(one.source || '').trim().toLowerCase();
+    // 'suppressed' : 사용자가 × 로 제거한 slot. label 은 비어있지만 slot_plan 안에서도
+    //   '명시적 intent' 로 인정해야 defaultTitlePageAnchors 의 자동 fallback ('5지선다형') 을
+    //   차단할 수 있다. 실제 슬롯 렌더링에는 anchorLabel 이 빈 문자열이 되어 라벨이 그려지지 않는다.
+    const isSuppressed = sourceRaw === 'suppressed';
+    if (!label && !isSuppressed) continue;
     const topPt = Number(one.topPt);
     const paddingTopPt = Number(one.paddingTopPt);
-    const sourceRaw = String(one.source || '').trim().toLowerCase();
-    const source = sourceRaw === 'auto' ? 'auto' : 'manual';
+    const source = isSuppressed
+      ? 'suppressed'
+      : (sourceRaw === 'auto' ? 'auto' : 'manual');
     anchors.push({
       columnIndex,
       rowIndex,
-      label,
+      label: isSuppressed ? '' : label,
       source,
       page: normalizeAnchorPage(one.page),
       topPt: Number.isFinite(topPt) ? topPt : 9.2,
@@ -125,6 +131,10 @@ export function buildSlotPlan({
   profile,
   pageIndex = 0,
   isTitlePage = false,
+  // true 이면 defaultTitlePageAnchors('5지선다형') 자동 fallback 도 스킵한다.
+  //   새로고침 경로에서 사용자가 라벨을 모두 지웠는데 서버가 '제목 페이지 0번 column' 에
+  //   기본 라벨을 복구해 넣어버리는 문제를 차단하기 위해 필요.
+  disableAutoLabels = false,
 }) {
   const safeColumns = Math.max(1, toSafeInt(layoutColumns, 1));
   const safePerPage = Math.max(1, toSafeInt(perPage, 1));
@@ -155,7 +165,7 @@ export function buildSlotPlan({
       hasExplicitAnchorForPage = true;
     }
   }
-  if (!hasExplicitAnchorForPage) {
+  if (!hasExplicitAnchorForPage && !disableAutoLabels) {
     for (const anchor of defaultTitlePageAnchors({
       profile,
       isTitlePage,
@@ -193,7 +203,9 @@ export function buildSlotPlan({
         && Number.isFinite(slotQuestionOrder)
         && slotQuestionOrder < safeChunkLength;
       const anchor = anchorByKey.get(`${row}:${col}`) || null;
-      if (anchor) {
+      // 'suppressed' anchor 는 렌더링되지 않으므로 row 정렬 카운트에도 포함하지 않는다.
+      const anchorRendered = !!(anchor && anchor.source !== 'suppressed' && anchor.label);
+      if (anchorRendered) {
         rowHasAnchor[row] = true;
         rowAnchorCount[row] += 1;
       }
@@ -207,7 +219,7 @@ export function buildSlotPlan({
         hasQuestion,
         isHiddenPlaceholder: !expectsQuestion,
         questionOrder: Number.isFinite(slotQuestionOrder) ? slotQuestionOrder : null,
-        anchorLabel: anchor?.label || '',
+        anchorLabel: anchorRendered ? anchor.label : '',
         anchorSource: anchor?.source || 'manual',
         anchorTopPt: anchor?.topPt ?? 9.2,
         anchorPaddingTopPt: anchor?.paddingTopPt ?? 35.8,

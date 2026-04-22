@@ -7,7 +7,7 @@
     "start": "node src/index.js",
     "start:prod": "node src/index.js",
     "dev": "node --watch src/index.js",
-    "dev:all": "concurrently -k -n gateway,pb-api,pb-extract,pb-figure,pb-export -c blue,cyan,magenta,yellow,green \"node src/index.js\" \"node src/problem_bank_api.js\" \"node src/problem_bank_extract_worker.js\" \"node src/problem_bank_figure_worker.js\" \"node src/problem_bank_export_worker.js\"",
+    "dev:all": "concurrently -k -n gateway,pb-api,pb-extract,pb-figure,pb-export -c blue,cyan,magenta,yellow,green \"node --watch src/index.js\" \"node --watch src/problem_bank_api.js\" \"node --watch src/problem_bank_extract_worker.js\" \"node --watch src/problem_bank_figure_worker.js\" \"node --watch src/problem_bank_export_worker.js\"",
     "pm2:start": "pm2 start ecosystem.config.cjs --only ygg-gateway",
     "pm2:restart": "pm2 restart ygg-gateway",
     "pm2:logs": "pm2 logs ygg-gateway",

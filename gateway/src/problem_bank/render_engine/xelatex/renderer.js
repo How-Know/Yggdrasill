@@ -245,6 +245,7 @@ export async function renderPdfWithXeLatex({
   fontFamilyResolved,
   fontRegularPath,
   fontBoldPath,
+  subjectFontPath,
   fontSize,
   supabaseClient,
 }) {
@@ -296,11 +297,16 @@ export async function renderPdfWithXeLatex({
       ? renderConfig.titlePageHeaders
       : [];
 
+    const layoutMeta = {};
     const texSource = buildDocumentTexSource(questions || [], {
       paper: paper || 'B4',
       fontFamily,
       fontBold: fontBoldPath ? '' : `${fontFamily} Bold`,
       fontRegularPath: fontRegularPath || '',
+      // 사용자 요청 7차: MathJax HTML 엔진의 YggSubject 폰트(기본 AppleSDGothicNeoB.ttf) 를
+      //   XeLaTeX 에도 등록 → 제목페이지 타이틀/제목페이지타이틀/홀수형박스/라벨박스가
+      //   HTML 쪽과 동일한 고딕 제목 폰트로 렌더되도록 한다.
+      subjectFontPath: subjectFontPath || '',
       fontSize: fontSize || 11,
       columns: cols,
       subjectTitle,
@@ -320,6 +326,12 @@ export async function renderPdfWithXeLatex({
       includeQuickAnswer,
       titlePageIndices,
       titlePageHeaders,
+      columnLabelAnchors: Array.isArray(renderConfig?.columnLabelAnchors)
+        ? renderConfig.columnLabelAnchors
+        : [],
+      // 새로고침/PDF 생성 경로에서 auto 라벨 생성을 전면 중단.
+      disableAutoLabels: renderConfig?.disableAutoLabels === true,
+      layoutMeta,
     });
 
     fs.writeFileSync(texPath, texSource, 'utf-8');
@@ -375,7 +387,9 @@ export async function renderPdfWithXeLatex({
         regenerationQueuedCount: 0,
         effectiveDpiByQuestionId: {},
       },
-      columnLabelAnchors: [],
+      columnLabelAnchors: Array.isArray(layoutMeta.columnLabelAnchors)
+        ? layoutMeta.columnLabelAnchors
+        : (Array.isArray(renderConfig?.columnLabelAnchors) ? renderConfig.columnLabelAnchors : []),
       titlePageIndices: titlePageIndices.length > 0 ? titlePageIndices : [1],
       titlePageHeaders,
       pageColumnQuestionCounts: [],

@@ -10315,8 +10315,16 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                 _buildPipelineMarquee(),
                 const SizedBox(height: 12),
                 Expanded(
+                  // 데스크톱에서 마우스 휠 좌우 스와이프(또는 트랙패드 가로 제스처) 가
+                  // TabBarView 의 페이지 스와이프로 해석되면 인접 탭이 layout 되기 전에
+                  // RenderBox.size 가 호출되어 'hasSize' assertion → mouse_tracker 의
+                  // pointerLifecycle assertion 연쇄가 발생하고, 그 결과 프레임 전체가
+                  // 멈추면서 마우스가 먹히지 않게 된다. 탭 전환은 탭 헤더 클릭만으로
+                  // 충분하므로 물리 스크롤을 비활성화한다. (reproduction: 카드 리스트
+                  // 위에서 두 손가락 좌우 스와이프 또는 수평 휠)
                   child: TabBarView(
                     controller: _topTabController,
+                    physics: const NeverScrollableScrollPhysics(),
                     children: [
                       _buildUploadTabBody(),
                       _buildClassificationTabBody(),

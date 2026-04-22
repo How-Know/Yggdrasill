@@ -34,7 +34,9 @@ function buildStyles({
   const headerApproxMm = 22;
   const grid4HeightMm = Math.max(100, paperMm.height - 2 * marginMm - headerApproxMm).toFixed(1);
   const mockFirstSubjectPt = ((stemSizePt + 20.5) * 1.1).toFixed(2);
-  const mockSimpleSubjectPt = ((stemSizePt + 11.2) * 1.1).toFixed(2);
+  // 사용자 요청 19차: 비제목 페이지 "수학 영역" 폰트를 페이지라벨(.mock-page-no)의 80% 로 맞춤.
+  //   .mock-page-no 는 (stemSizePt + 15.8)pt 이므로 80% = (stemSizePt + 15.8) × 0.8.
+  const mockSimpleSubjectPt = ((stemSizePt + 15.8) * 0.8).toFixed(2);
   const coverTopPaddingPt = 33 * 0.8;
   const isB4Paper = String(paper || '').trim().toUpperCase() === 'B4';
   const coverTopRowMarginPt = isB4Paper ? 12 : 10;
@@ -106,7 +108,7 @@ function buildStyles({
     .question-stream-grid4 .slot-label-overlay {
       position: absolute;
       left: 0;
-      top: var(--slot-label-top, 9.2pt);
+      top: var(--slot-label-top, 0pt);
       z-index: 2;
       pointer-events: none;
     }
@@ -939,13 +941,19 @@ function buildStyles({
       line-height: 1;
     }
     .mock-chip-type-simple {
-      min-height: 26.1pt;
-      padding: 0 5.0pt;
-      border-radius: 3.6pt;
+      /* 사용자 요청 20차: 제목페이지 .mock-chip-type 스타일 참조, 크기 70%.
+         min-height 32pt → 22.4pt, padding-x 8.2pt → 5.74pt, border-radius 4.4pt → 3.08pt,
+         font (stem+5.6)×1 → (stem+5.6)×0.7, text-stroke 0.13pt → 0.091pt.
+         사용자 요청 21차: 높이만 추가 5% 증가 (22.4pt → 23.52pt, border-radius 3.08 → 3.234pt).
+         폭·폰트·장평은 그대로 유지. */
+      min-height: 23.52pt;
+      padding: 0 5.74pt;
+      border-radius: 3.234pt;
       font-family: "YggSubject", "YggMain", "HCR Batang", "Malgun Gothic", sans-serif;
-      font-size: calc((var(--stem-size-pt) + 3.6) * 1pt);
+      font-size: calc((var(--stem-size-pt) + 5.6) * 0.7 * 1pt);
       font-weight: 900;
-      -webkit-text-stroke: 0.1pt #111;
+      -webkit-text-stroke: 0.091pt #111;
+      line-height: 1;
       transform: translateY(1.2pt);
     }
     .mock-chip-type-text {
@@ -1059,19 +1067,44 @@ function buildStyles({
     .mock-page-title .mock-content .question-stream.question-stream-grid4 {
       row-gap: calc(var(--question-gap-pt) * 0.32 * 1pt);
     }
+    /* 사용자 요청 17차 (비제목 페이지 상단 여백 조정):
+       - 페이지 라벨(page-no)은 "절대 위치 고정" → translateY 제거
+       - 수학영역/홀수형 박스만 위로 이동 (XeLaTeX 상승과 일치)
+       - .mock-main 에 margin-top 음수화 → 디바이더와 본문이 헤더 쪽으로 상승
+         (헤더는 건드리지 않음 → 페이지 라벨 Y 좌표 불변)
+       - 라벨박스와 디바이더 간격은 --slot-label-top 음수화로 라벨박스를 끌어올림
+       사용자 요청 19차:
+       - .mock-main margin-top: -3pt → -6pt (디바이더 추가 3pt 상승, 라벨-디바이더 간격 ~20% 축소)
+       - 수학영역/홀수형 translateY: -6pt → -9pt (디바이더와 함께 3pt 추가 상승)
+       - 비제목 페이지 첫 행 firstline 을 제목 페이지와 동일한 값으로 맞춰
+         "라벨 없을때 디바이더↔슬롯 여백" 일관성 확보. */
     .mock-page:not(.mock-page-title) .mock-header-simple {
-      margin-bottom: 6.4pt;
+      margin-top: 0;
+      margin-bottom: 0;
+    }
+    .mock-page:not(.mock-page-title) .mock-main {
+      margin-top: -6pt;
     }
     .mock-page:not(.mock-page-title) .mock-content .question-stream {
-      margin-top: 0.8pt;
+      margin-top: 0;
+    }
+    .mock-page:not(.mock-page-title) .mock-simple-subject {
+      /* 사용자 요청 21차: 수학영역과 홀수형박스의 vertical center 정렬.
+         grid 의 기본 align-items:end 를 override 하여 두 요소의 가로 중앙선을 일치시킴. */
+      transform: translateY(-9pt);
+      align-self: center;
+    }
+    .mock-page:not(.mock-page-title) .mock-chip-type-simple {
+      transform: translateY(-9pt);
+      align-self: center;
     }
     .mock-page:not(.mock-page-title) .question-stream-grid4 .question-slot-firstline {
       height: calc(var(--line-height-pt) * 0.20 * 1pt);
       line-height: calc(var(--line-height-pt) * 0.20 * 1pt);
     }
     .mock-page:not(.mock-page-title) .question-stream-grid4 .question-slot[data-slot-row="1"] .question-slot-firstline {
-      height: calc(var(--line-height-pt) * 0.20 * 1pt + 4.8pt);
-      line-height: calc(var(--line-height-pt) * 0.20 * 1pt + 4.8pt);
+      height: calc(var(--line-height-pt) * 0.45 * 1pt + 15pt);
+      line-height: calc(var(--line-height-pt) * 0.45 * 1pt + 15pt);
     }
     .mock-content .question-stream.question-stream-grid4 {
       columns: auto;
@@ -1093,9 +1126,11 @@ function buildStyles({
       gap: 8pt;
     }
     .mock-page-box {
+      /* 사용자 요청 21차 (재수정): 너비 10% 증가 + 높이 5% 감소.
+         width 38pt → 41.8pt (×1.10), height 22pt → 20.9pt (×0.95). */
       position: relative;
-      width: 38pt;
-      height: 22pt;
+      width: 41.8pt;
+      height: 20.9pt;
       border: 0.8pt solid #666;
       color: #111;
       font-weight: 700;
@@ -1649,6 +1684,11 @@ export function buildDocumentHtml({
   maxQuestionsPerPage = 99,
   layoutMeta = null,
   debugDots = false,
+  // 클라이언트(Flutter) 가 '새로고침' / 'PDF 생성' 경로에서 true 로 넘겨주는 플래그.
+  //   true 이면 buildAutoTypeTransitionAnchors 가 빈 배열만 반환해서
+  //   mode 전환 기반 자동 라벨(예: '5지선다형') 생성을 전면 중단한다.
+  //   columnLabelAnchors 에 들어있는 항목만 그대로 그려진다.
+  disableAutoLabels = false,
 }) {
   const isMockStyle = profile === 'mock' || profile === 'csat';
   const columns = Number(layout?.layoutColumns || 1) === 2 ? 2 : 1;
@@ -1767,13 +1807,16 @@ export function buildDocumentHtml({
     isTitlePage,
     manualAnchors,
   }) => {
+    // '새로고침' / 'PDF 생성' 경로에서는 클라이언트 payload 의 라벨만 그대로 써야 하므로
+    //   여기서 auto 라벨을 만들지 않는다. (최초 렌더에서는 플래그가 false 라 정상 생성.)
+    if (disableAutoLabels) return [];
     if (!isMockStyle) return [];
     if (!slotPlan || !Array.isArray(slotPlan?.slots)) return [];
     const rows = Array.isArray(questionChunk) ? questionChunk : [];
     if (rows.length === 0) return [];
     const manualKeys = collectManualAnchorKeysForPage(manualAnchors, pageIndex);
     const firstPageAnchor = pageIndex === 0 && isTitlePage;
-    const topPt = firstPageAnchor ? 16 : 9.2;
+    const topPt = firstPageAnchor ? 16 : 0;
     const paddingTopPt = firstPageAnchor ? 27 : 35.8;
     const autoAnchors = [];
     let prevMode = autoAnchorCarryMode;
@@ -1806,8 +1849,10 @@ export function buildDocumentHtml({
   };
   const collectEffectiveAnchorsForPage = (slotPlan, pageIndex, isTitlePageForPage) => {
     if (!slotPlan || !Array.isArray(slotPlan.slots)) return;
-    const defaultTopPt = isTitlePageForPage ? 16 : 9.2;
-    const defaultPaddingTopPt = isTitlePageForPage ? 27 : 35.8;
+    // 사용자 요청 20차: 렌더링 기준값과 일치시켜 메타 응답에 동일 값 노출.
+    // 사용자 요청 21차 (수정본): 렌더링 쪽 값(top 10% 축소 + padding 3pt 축소)과 동일.
+    const defaultTopPt = isTitlePageForPage ? 9.7 : -10.3;
+    const defaultPaddingTopPt = isTitlePageForPage ? 19 : 23.8;
     for (const slot of slotPlan.slots) {
       if (!slot || !slot.expectsQuestion || !slot.anchorLabel) continue;
       const label = String(slot.anchorLabel || '').replace(/\s+/g, ' ').trim();
@@ -1825,6 +1870,35 @@ export function buildDocumentHtml({
         source: String(slot.anchorSource || 'manual').trim().toLowerCase() === 'auto'
           ? 'auto'
           : 'manual',
+        topPt: defaultTopPt,
+        paddingTopPt: defaultPaddingTopPt,
+      });
+    }
+    // 사용자가 명시적으로 '제거' 한 slot (source='suppressed', label='') 도 meta 에 포함해
+    //   Flutter 쪽에서 새로고침 후에도 제거 상태를 복원할 수 있도록 한다.
+    //   (렌더링 측면에선 이미 normalizeAnchors 가 empty label 을 걸러내므로 영향 없음.)
+    const rawAnchors = Array.isArray(layout?.columnLabelAnchors)
+      ? layout.columnLabelAnchors
+      : [];
+    for (const one of rawAnchors) {
+      if (!one || typeof one !== 'object') continue;
+      const sourceRaw = String(one.source || '').trim().toLowerCase();
+      if (sourceRaw !== 'suppressed') continue;
+      const page = normalizeAnchorPageValue(one.page);
+      if (!anchorAppliesToPage(page, pageIndex)) continue;
+      const columnIndex = Number.parseInt(String(one.columnIndex ?? ''), 10);
+      if (!Number.isFinite(columnIndex) || columnIndex < 0) continue;
+      const rowIndexRaw = Number.parseInt(String(one.rowIndex ?? ''), 10);
+      const rowIndex = Number.isFinite(rowIndexRaw) && rowIndexRaw >= 0 ? rowIndexRaw : 0;
+      const key = `${pageIndex + 1}:${columnIndex}:${rowIndex}`;
+      if (effectiveAnchorSeen.has(key)) continue;
+      effectiveAnchorSeen.add(key);
+      effectiveColumnLabelAnchorRows.push({
+        page: pageIndex + 1,
+        columnIndex,
+        rowIndex,
+        label: '',
+        source: 'suppressed',
         topPt: defaultTopPt,
         paddingTopPt: defaultPaddingTopPt,
       });
@@ -1855,6 +1929,7 @@ export function buildDocumentHtml({
       profile,
       pageIndex,
       isTitlePage,
+      disableAutoLabels,
     });
     if (!baseSlotPlan) {
       return `<section class="${cls}">${chunk.join('')}</section>`;
@@ -1881,6 +1956,7 @@ export function buildDocumentHtml({
         profile,
         pageIndex,
         isTitlePage,
+        disableAutoLabels,
       })
       : baseSlotPlan;
     if (!slotPlan) {
@@ -1923,8 +1999,20 @@ export function buildDocumentHtml({
       }
       if (slot.anchorLabel) {
         // Use fixed per-page defaults so single/dual-label rows always align identically.
-        const defaultLabelTopPt = isTitlePage ? 16 : 9.2;
-        const defaultAnchorPadTopPt = isTitlePage ? 27 : 35.8;
+        // 사용자 요청 17차: 비제목 페이지의 라벨박스가 디바이더에 더 가까이 붙도록 top 을 -3pt 로
+        //   당긴다. slot 내부 position: absolute 오버레이를 3pt 위로 올려 라벨박스 상단
+        //   가장자리를 디바이더 바로 아래에 위치시킨다.
+        // 사용자 요청 20차: 가로 구분선-라벨박스 간격 30% 축소.
+        //   제목페이지: 16pt → 11pt (약 31% 감소)
+        //   비제목페이지: -3pt → -9pt (추가 6pt 끌어올림, XeLaTeX 6pt raisebox 와 일치)
+        // 사용자 요청 21차 (수정본):
+        //   - 10% 추가 축소만 반영. 과한 축소(-10.3pt) 는 원상복구하고 1.3pt 만 더 올림.
+        //     제목: 11 → 9.7pt, 비제목: -9 → -10.3pt.
+        //   - 라벨박스 ↔ 문항번호 간격 30% 축소 → anchor-pad-top 값 감소 (10pt → 7pt,
+        //     즉 3pt 감소).
+        //     제목: 22 → 19pt, 비제목: 26.8 → 23.8pt.
+        const defaultLabelTopPt = isTitlePage ? 9.7 : -10.3;
+        const defaultAnchorPadTopPt = isTitlePage ? 19 : 23.8;
         slotStyleParts.push(`--slot-label-top:${defaultLabelTopPt}pt`);
         slotStyleParts.push(`--slot-anchor-pad-top:${defaultAnchorPadTopPt}pt`);
       }

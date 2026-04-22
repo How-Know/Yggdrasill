@@ -20,11 +20,14 @@ import 'dart:ui' as ui;
 import 'dart:math' as math;
 import 'package:mneme_flutter/utils/ime_aware_text_editing_controller.dart';
 import '../../widgets/pdf/pdf_editor_dialog.dart';
+import '../../widgets/pdf/textbook_viewer_dialog.dart';
 import '../../widgets/resource_file_meta_dialog.dart';
 import '../../widgets/latex_text_renderer.dart';
 import '../../models/textbook_drag_payload.dart';
 import '../../app_overlays.dart';
 import '../../services/print_routing_service.dart';
+import '../../services/textbook_pdf_service.dart';
+import '../../services/textbook_viewer_preference.dart';
 
 class _ResColors {
   static const Color container1 = Color(0xFF263238);
@@ -2154,6 +2157,7 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     _loadLayout();
     _ensureGradesLoaded();
     _initFavoritesAndDefaultSelection();
+    unawaited(TextbookViewerPreference.instance.ensureLoaded());
   }
 
   @override
@@ -5853,6 +5857,20 @@ class _GridFileCardState extends State<_GridFileCard> {
         return;
       }
       if (currentGrade == null) return;
+      // Textbook category: the in-app viewer is opt-in while we stabilise
+      // the Supabase Storage migration. When the per-card switch is off we
+      // fall back to the previous external-launcher / Dropbox flow.
+      if (isTextbook &&
+          TextbookViewerPreference.instance.useInApp) {
+        await _openTextbookInAppViewer(
+          context,
+          fileId: file.id,
+          displayName: file.name,
+          gradeLabel: currentGrade,
+          kind: 'body',
+        );
+        return;
+      }
       final key = '${currentGrade}#body';
       final link = file.linksByGrade[key]?.trim() ?? '';
       if (link.isEmpty) return;
@@ -6054,6 +6072,16 @@ class _GridFileCardState extends State<_GridFileCard> {
                                           ),
                                         ),
                                       ),
+                                    ),
+                                    // Migration-phase toggle: swap between
+                                    // the legacy (Dropbox / external app)
+                                    // flow and the new in-app viewer.
+                                    // TODO: remove once the new viewer is
+                                    // fully stabilised.
+                                    const Positioned(
+                                      top: 8,
+                                      left: 8,
+                                      child: _TextbookViewerModeToggle(),
                                     ),
                                     Positioned(
                                       bottom: 8,
@@ -6576,6 +6604,120 @@ class _MiniPill extends StatelessWidget {
   }
 }
 
+/// Compact toggle that lets each textbook cover pick between the legacy
+/// Dropbox/external-launcher flow and the new in-app pdfrx viewer. The state
+/// is global (stored in [TextbookViewerPreference]) so flipping it on one
+/// card immediately updates every other card.
+///
+/// TODO(migration-cleanup): delete this widget and all usages once the
+/// in-app viewer is promoted to the default behaviour.
+class _TextbookViewerModeToggle extends StatelessWidget {
+  const _TextbookViewerModeToggle();
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<bool>(
+      valueListenable:
+          TextbookViewerPreference.instance.useInAppListenable,
+      builder: (context, useInApp, _) {
+        final label = useInApp ? '신규' : '기존';
+        final tooltip = useInApp
+            ? '인앱 뷰어(로컬 캐시) 사용 중 · 탭하면 기존 방식으로'
+            : '기존 방식(Dropbox/외부 앱) 사용 중 · 탭하면 인앱 뷰어로';
+        final bg = useInApp
+            ? const Color(0xFF1F3A28).withOpacity(0.85)
+            : Colors.black.withOpacity(0.45);
+        final fg = useInApp
+            ? const Color(0xFF7CC67C)
+            : Colors.white70;
+        return Tooltip(
+          message: tooltip,
+          waitDuration: const Duration(milliseconds: 400),
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: () async {
+                await TextbookViewerPreference.instance.toggle();
+              },
+              borderRadius: BorderRadius.circular(999),
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: bg,
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(
+                    color: useInApp
+                        ? const Color(0xFF7CC67C).withOpacity(0.55)
+                        : Colors.white24,
+                    width: 0.8,
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      useInApp
+                          ? Icons.picture_as_pdf
+                          : Icons.open_in_new,
+                      size: 12,
+                      color: fg,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      label,
+                      style: TextStyle(
+                        color: fg,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 0.2,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// Opens the in-app textbook viewer for the `(file_id, grade, kind)` tuple.
+/// Falls back to the external launcher if we cannot figure out the academy
+/// (e.g. a brand new install before sign-in completes).
+Future<void> _openTextbookInAppViewer(
+  BuildContext context, {
+  required String fileId,
+  required String displayName,
+  required String gradeLabel,
+  required String kind,
+}) async {
+  try {
+    final academyId = await TenantService.instance.getActiveAcademyId();
+    if (academyId == null || academyId.isEmpty) {
+      return;
+    }
+    await openTextbookViewerDialog(
+      context,
+      ref: TextbookPdfRef(
+        academyId: academyId,
+        fileId: fileId,
+        gradeLabel: gradeLabel,
+        kind: kind,
+        displayName: displayName,
+      ),
+      title: displayName,
+      cacheKey: 'tb|$academyId|$fileId|$gradeLabel|$kind',
+    );
+  } catch (_) {
+    // Viewer failure is non-fatal; silently ignore so we do not crash the
+    // resources screen. Any dialog-level errors are already surfaced inside
+    // the viewer itself.
+  }
+}
+
 class _SmallLinkButton extends StatelessWidget {
   final _ResourceFile file;
   final String kind; // 'ans' | 'sol'
@@ -6594,6 +6736,21 @@ class _SmallLinkButton extends StatelessWidget {
         onTap: !enabled
             ? null
             : () async {
+                // ans/sol buttons live on textbook cards only. The in-app
+                // viewer is gated behind the per-card toggle during the
+                // migration so we can compare the old and new flows.
+                final useInApp =
+                    TextbookViewerPreference.instance.useInApp;
+                if (useInApp && currentGrade != null) {
+                  await _openTextbookInAppViewer(
+                    context,
+                    fileId: file.id,
+                    displayName: '${file.name} · ${kind == 'ans' ? '정답' : '해설'}',
+                    gradeLabel: currentGrade!,
+                    kind: kind,
+                  );
+                  return;
+                }
                 if (link.startsWith('http://') || link.startsWith('https://')) {
                   final uri = Uri.parse(link);
                   await launchUrl(uri, mode: LaunchMode.platformDefault);
@@ -6632,6 +6789,18 @@ class _SmallLinkButtonPill extends StatelessWidget {
         onTap: !enabled
             ? null
             : () async {
+                final useInApp =
+                    TextbookViewerPreference.instance.useInApp;
+                if (useInApp && currentGrade != null) {
+                  await _openTextbookInAppViewer(
+                    context,
+                    fileId: file.id,
+                    displayName: '${file.name} · ${isAns ? '정답' : '해설'}',
+                    gradeLabel: currentGrade!,
+                    kind: kind,
+                  );
+                  return;
+                }
                 if (link.startsWith('http://') || link.startsWith('https://')) {
                   final uri = Uri.parse(link);
                   await launchUrl(uri, mode: LaunchMode.platformDefault);

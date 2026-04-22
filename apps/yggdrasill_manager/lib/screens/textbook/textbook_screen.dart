@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:path/path.dart' as p;
 import '../../widgets/math_shortcuts.dart';
 import '../../widgets/latex_text_renderer.dart';
+import 'textbook_migration_pane.dart';
 
 const double _treeIndentStep = 18.0;
 const double _treeConnectorWidth = 12.0;
@@ -34,6 +35,14 @@ class TextbookScreen extends StatefulWidget {
 
 class _TextbookScreenState extends State<TextbookScreen> {
   final _supabase = Supabase.instance.client;
+
+  // Temporary migration toggle. While `false` the tab renders exactly the
+  // legacy UI (book picker + chapter tree). When `true` we swap the body
+  // out for [TextbookMigrationPane] so we can upload PDFs to Supabase
+  // Storage and flip `migration_status` without touching the old flow.
+  // TODO(migration-cleanup): remove this flag and the switch bar once the
+  // new viewer is promoted to the default.
+  bool _showMigrationPane = false;
 
   bool _isLoadingBooks = false;
   bool _isLoadingPdfs = false;
@@ -568,35 +577,98 @@ class _TextbookScreenState extends State<TextbookScreen> {
   Widget build(BuildContext context) {
     return Container(
       color: const Color(0xFF1F1F1F),
-      padding: const EdgeInsets.all(24),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Text(
-            '교재',
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 24,
-              fontWeight: FontWeight.w900,
-            ),
-          ),
-          const SizedBox(height: 8),
-          const Text(
-            '책과 본문을 선택하면 해설/정답이 자동으로 연결됩니다.',
-            style: TextStyle(color: Color(0xFFB3B3B3), fontSize: 14),
-          ),
-          const SizedBox(height: 20),
-          _buildToolbarCard(),
-          const SizedBox(height: 16),
+          _buildModeSwitchBar(),
+          const Divider(height: 1, color: Color(0xFF2A2A2A)),
           Expanded(
-            child: ListView(
-              children: [
-                _buildSelectionCard(),
-                const SizedBox(height: 16),
-                _buildChapterTreeCard(),
-              ],
+            child: _showMigrationPane
+                ? const TextbookMigrationPane()
+                : Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          '교재',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 24,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        const Text(
+                          '책과 본문을 선택하면 해설/정답이 자동으로 연결됩니다.',
+                          style:
+                              TextStyle(color: Color(0xFFB3B3B3), fontSize: 14),
+                        ),
+                        const SizedBox(height: 20),
+                        _buildToolbarCard(),
+                        const SizedBox(height: 16),
+                        Expanded(
+                          child: ListView(
+                            children: [
+                              _buildSelectionCard(),
+                              const SizedBox(height: 16),
+                              _buildChapterTreeCard(),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Temporary mode switch bar. Sits above both the legacy textbook UI and
+  /// the migration pane so toggling is always one click away.
+  Widget _buildModeSwitchBar() {
+    return Container(
+      color: const Color(0xFF15171C),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+      child: Row(
+        children: [
+          const Icon(Icons.swap_horiz, size: 18, color: Color(0xFF9FB3B3)),
+          const SizedBox(width: 8),
+          const Text(
+            '보기 모드',
+            style: TextStyle(
+              color: Color(0xFFB3B3B3),
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
             ),
           ),
+          const SizedBox(width: 16),
+          _ModeSegment(
+            label: '기존 (교재 관리)',
+            active: !_showMigrationPane,
+            onTap: () {
+              if (_showMigrationPane) {
+                setState(() => _showMigrationPane = false);
+              }
+            },
+          ),
+          const SizedBox(width: 6),
+          _ModeSegment(
+            label: '신규 마이그레이션 (테스트)',
+            active: _showMigrationPane,
+            onTap: () {
+              if (!_showMigrationPane) {
+                setState(() => _showMigrationPane = true);
+              }
+            },
+          ),
+          const Spacer(),
+          if (_showMigrationPane)
+            const Text(
+              'Dropbox → Supabase Storage 업로드/상태 전환 테스트 화면',
+              style: TextStyle(color: Color(0xFF7AA9E6), fontSize: 12),
+            ),
         ],
       ),
     );
@@ -1693,6 +1765,47 @@ class _TextbookScreenState extends State<TextbookScreen> {
     final parsed = int.tryParse(trimmed);
     if (parsed == null || parsed < 0) return null;
     return parsed;
+  }
+}
+
+class _ModeSegment extends StatelessWidget {
+  const _ModeSegment({
+    required this.label,
+    required this.active,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool active;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final Color bg =
+        active ? const Color(0xFF1B2B1B) : const Color(0xFF1E1E22);
+    final Color fg = active ? const Color(0xFF7CC67C) : const Color(0xFFB3B3B3);
+    final Color border =
+        active ? const Color(0xFF2E7D32) : const Color(0xFF2A2A2A);
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: border),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: fg,
+            fontSize: 12,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+      ),
+    );
   }
 }
 

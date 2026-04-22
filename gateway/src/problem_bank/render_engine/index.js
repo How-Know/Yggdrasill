@@ -251,11 +251,16 @@ function normalizeColumnLabelAnchors(raw, layoutColumns) {
     const parsedRowIndex = toSafeInt(one.rowIndex, 0);
     const rowIndex = parsedRowIndex >= 0 ? parsedRowIndex : 0;
     const label = normalizeWhitespace(one.label || one.text || '');
-    if (!label) continue;
+    const sourceRaw = String(one.source || '').trim().toLowerCase();
+    // 'suppressed' 는 사용자가 × 로 제거한 slot 마커. label 은 비어있지만
+    //   이 entry 가 있어야 서버의 auto 재생성을 막을 수 있다.
+    const isSuppressed = sourceRaw === 'suppressed';
+    if (!label && !isSuppressed) continue;
     const topPt = Number(one.topPt);
     const paddingTopPt = Number(one.paddingTopPt);
-    const sourceRaw = String(one.source || '').trim().toLowerCase();
-    const source = sourceRaw === 'auto' ? 'auto' : 'manual';
+    const source = isSuppressed
+      ? 'suppressed'
+      : (sourceRaw === 'auto' ? 'auto' : 'manual');
     out.push({
       columnIndex,
       rowIndex,
@@ -565,6 +570,9 @@ export async function renderPdfWithHtmlEngine({
       fontFamilyResolved,
       fontRegularPath,
       fontBoldPath,
+      // 사용자 요청 7차: XeLaTeX 엔진에도 HTML/MathJax 와 동일한 `YggSubject` 폰트를
+      //   노출해 제목 페이지 타이틀/박스/라벨에서 사용할 수 있도록 subjectFontPath 전달.
+      subjectFontPath,
       fontSize,
       supabaseClient,
     });
@@ -594,6 +602,8 @@ export async function renderPdfWithHtmlEngine({
     maxQuestionsPerPage: maxQuestionsPerPage || 99,
     layoutMeta,
     debugDots: _DEBUG_MATH_DOTS,
+    // 새로고침/PDF 경로에서 서버의 자동 라벨(객관식 맨앞/유형 전환) 생성을 중단.
+    disableAutoLabels: renderConfig?.disableAutoLabels === true,
   });
   const rendered = await renderHtmlToPdfBuffer(html);
   return {

@@ -1051,6 +1051,9 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           'questionScoreByQuestionUid': request.questionScoreByQuestionId,
           'questionScoreByQuestionId': request.questionScoreByQuestionId,
           'mathEngine': request.mathEngine,
+          // 새로고침/PDF 생성 경로에서는 서버의 auto 라벨 생성을 끈다.
+          //   (최초 렌더에는 이 패치가 전달되지 않으므로 default auto-gen 동작 유지)
+          'disableAutoLabels': request.disableAutoLabels,
         };
         if (_exportSettings.layoutColumnCount == 2) {
           patch['layoutMode'] = 'custom_columns';

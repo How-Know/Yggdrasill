@@ -33,6 +33,7 @@ class ProblemBankPreviewRefreshRequest {
     required this.questionScoreByQuestionId,
     this.presetDisplayName = '',
     this.mathEngine = 'xelatex',
+    this.disableAutoLabels = false,
   });
 
   final String subjectTitleText;
@@ -51,6 +52,10 @@ class ProblemBankPreviewRefreshRequest {
   final Map<String, double> questionScoreByQuestionId;
   final String presetDisplayName;
   final String mathEngine;
+  // 새로고침 시 서버의 '객관식 맨앞/유형 변경시 자동 라벨 생성' 로직을 끄기 위한 플래그.
+  //   true 이면 서버는 columnLabelAnchors 에 들어있는 항목들만 사용하고
+  //   mode 변화 기반 자동 라벨은 전혀 추가하지 않는다.
+  final bool disableAutoLabels;
 
   ProblemBankPreviewRefreshRequest copyWith({
     String? subjectTitleText,
@@ -69,6 +74,7 @@ class ProblemBankPreviewRefreshRequest {
     Map<String, double>? questionScoreByQuestionId,
     String? presetDisplayName,
     String? mathEngine,
+    bool? disableAutoLabels,
   }) {
     return ProblemBankPreviewRefreshRequest(
       subjectTitleText: subjectTitleText ?? this.subjectTitleText,
@@ -89,6 +95,7 @@ class ProblemBankPreviewRefreshRequest {
           questionScoreByQuestionId ?? this.questionScoreByQuestionId,
       presetDisplayName: presetDisplayName ?? this.presetDisplayName,
       mathEngine: mathEngine ?? this.mathEngine,
+      disableAutoLabels: disableAutoLabels ?? this.disableAutoLabels,
     );
   }
 }
@@ -385,7 +392,7 @@ class _ProblemBankExportServerPreviewDialogState
     _computedPageColumnCounts = _recomputePageColumnCounts();
     _columnLabelAnchorMap = _readInitialColumnLabelAnchors();
     _titlePageHeaderMap = _readInitialTitlePageHeaders();
-    _labelPanelPageSet = <int>{};
+    _labelPanelPageSet = _labelPagesFromAnchorMap(_columnLabelAnchorMap);
     _titlePageIndexSet = _normalizeTitlePageIndices(<dynamic>[
       ...widget.initialTitlePageIndices,
       ..._titlePageHeaderMap.keys,
@@ -979,7 +986,6 @@ class _ProblemBankExportServerPreviewDialogState
       if (columnIndex == null || columnIndex < 0 || columnIndex > 1) continue;
       if (rowIndex < 0) continue;
       if (label.isEmpty) continue;
-      if (source == 'auto') continue;
       final defaultTop = _defaultAnchorTopForPage(pageIndex);
       final defaultPadding = _defaultAnchorPaddingForPage(pageIndex);
       var topPt =
@@ -1018,6 +1024,18 @@ class _ProblemBankExportServerPreviewDialogState
     return _parseColumnLabelAnchors(widget.initialColumnLabelAnchors);
   }
 
+  Set<int> _labelPagesFromAnchorMap(
+    Map<String, Map<String, dynamic>> source,
+  ) {
+    final maxPage = _maxEditablePageCount;
+    final out = <int>{};
+    for (final row in source.values) {
+      final page = int.tryParse('${row['page'] ?? ''}') ?? 0;
+      if (page >= 1 && page <= maxPage) out.add(page);
+    }
+    return out;
+  }
+
   TextEditingController _controllerForAnchor({
     required int pageIndex,
     required int columnIndex,
@@ -1041,6 +1059,8 @@ class _ProblemBankExportServerPreviewDialogState
     final key = _anchorKey(pageIndex, columnIndex, rowIndex: rowIndex);
     final label = rawLabel.replaceAll(RegExp(r'\s+'), ' ').trim();
     if (label.isEmpty) {
+      // 빈 라벨 → 해당 slot 의 라벨 제거. 서버는 refresh 시 자동 라벨 생성을 끄므로
+      //   (`disableAutoLabels: true`) map 에서 그냥 빼면 된다.
       _columnLabelAnchorMap.remove(key);
       return;
     }
@@ -1078,47 +1098,54 @@ class _ProblemBankExportServerPreviewDialogState
   }
 
   List<Map<String, dynamic>> _columnLabelAnchorsPayload() {
-    if (!_isTwoColumnLayout || _columnLabelAnchorMap.isEmpty) {
+    if (!_isTwoColumnLayout) {
+      return const <Map<String, dynamic>>[];
+    }
+    if (_columnLabelAnchorMap.isEmpty) {
       return const <Map<String, dynamic>>[];
     }
     final maxPage = _computedPageColumnCounts.length;
-    return _columnLabelAnchorMap.values
-        .where((row) {
-          final page = int.tryParse('${row['page'] ?? 0}') ?? 0;
-          final col = int.tryParse('${row['columnIndex'] ?? -1}') ?? -1;
-          final rowIndex = int.tryParse('${row['rowIndex'] ?? 0}') ?? 0;
-          if (!(page >= 1 && page <= maxPage && col >= 0 && col <= 1)) {
-            return false;
-          }
-          if (rowIndex < 0) return false;
-          if (page - 1 < 0 || page - 1 >= _computedPageColumnCounts.length) {
-            return false;
-          }
-          final pageCounts = _computedPageColumnCounts[page - 1];
-          final rowLimit = col < pageCounts.length ? pageCounts[col] : 0;
-          return rowLimit > 0 && rowIndex < rowLimit;
-        })
-        .map((row) => <String, dynamic>{
-              'columnIndex': row['columnIndex'],
-              'rowIndex': row['rowIndex'],
-              'label': row['label'],
-              'source': row['source'] ?? 'manual',
-              'page': row['page'],
-              'topPt': row['topPt'],
-              'paddingTopPt': row['paddingTopPt'],
-            })
-        .toList(growable: false)
-      ..sort((a, b) {
-        final pageA = int.tryParse('${a['page'] ?? 0}') ?? 0;
-        final pageB = int.tryParse('${b['page'] ?? 0}') ?? 0;
-        if (pageA != pageB) return pageA.compareTo(pageB);
-        final colA = int.tryParse('${a['columnIndex'] ?? 0}') ?? 0;
-        final colB = int.tryParse('${b['columnIndex'] ?? 0}') ?? 0;
-        if (colA != colB) return colA.compareTo(colB);
-        final rowA = int.tryParse('${a['rowIndex'] ?? 0}') ?? 0;
-        final rowB = int.tryParse('${b['rowIndex'] ?? 0}') ?? 0;
-        return rowA.compareTo(rowB);
+    bool isValidSlot(int page, int columnIndex, int rowIndex) {
+      if (!(page >= 1 && page <= maxPage && columnIndex >= 0 && columnIndex <= 1)) {
+        return false;
+      }
+      if (rowIndex < 0) return false;
+      if (page - 1 < 0 || page - 1 >= _computedPageColumnCounts.length) {
+        return false;
+      }
+      final pageCounts = _computedPageColumnCounts[page - 1];
+      final rowLimit = columnIndex < pageCounts.length ? pageCounts[columnIndex] : 0;
+      return rowLimit > 0 && rowIndex < rowLimit;
+    }
+
+    final items = <Map<String, dynamic>>[];
+    for (final row in _columnLabelAnchorMap.values) {
+      final page = int.tryParse('${row['page'] ?? 0}') ?? 0;
+      final col = int.tryParse('${row['columnIndex'] ?? -1}') ?? -1;
+      final rowIndex = int.tryParse('${row['rowIndex'] ?? 0}') ?? 0;
+      if (!isValidSlot(page, col, rowIndex)) continue;
+      items.add(<String, dynamic>{
+        'columnIndex': col,
+        'rowIndex': rowIndex,
+        'label': row['label'],
+        'source': row['source'] ?? 'manual',
+        'page': page,
+        'topPt': row['topPt'],
+        'paddingTopPt': row['paddingTopPt'],
       });
+    }
+    items.sort((a, b) {
+      final pageA = int.tryParse('${a['page'] ?? 0}') ?? 0;
+      final pageB = int.tryParse('${b['page'] ?? 0}') ?? 0;
+      if (pageA != pageB) return pageA.compareTo(pageB);
+      final colA = int.tryParse('${a['columnIndex'] ?? 0}') ?? 0;
+      final colB = int.tryParse('${b['columnIndex'] ?? 0}') ?? 0;
+      if (colA != colB) return colA.compareTo(colB);
+      final rowA = int.tryParse('${a['rowIndex'] ?? 0}') ?? 0;
+      final rowB = int.tryParse('${b['rowIndex'] ?? 0}') ?? 0;
+      return rowA.compareTo(rowB);
+    });
+    return List<Map<String, dynamic>>.unmodifiable(items);
   }
 
   List<List<int>> _recomputePageColumnCounts() {
@@ -1758,6 +1785,10 @@ class _ProblemBankExportServerPreviewDialogState
       questionScoreByQuestionId: _questionScorePayload(),
       presetDisplayName: '',
       mathEngine: _mathEngine,
+      // '새로고침' 및 'PDF 생성' 은 첫 렌더 이후의 재렌더 경로이므로
+      //   서버의 자동 라벨(객관식/유형 전환) 생성을 끄고, UI 에 있는 라벨만 그대로 사용한다.
+      //   최초 렌더(대화상자 오픈)에는 이 payload 가 쓰이지 않으므로 auto 생성이 정상 동작.
+      disableAutoLabels: true,
     );
   }
 
@@ -1896,6 +1927,10 @@ class _ProblemBankExportServerPreviewDialogState
           _computedPageColumnCounts = _recomputePageColumnCounts();
           _columnLabelAnchorMap =
               _parseColumnLabelAnchors(refreshed.columnLabelAnchors);
+          _labelPanelPageSet = <int>{
+            ..._labelPanelPageSet,
+            ..._labelPagesFromAnchorMap(_columnLabelAnchorMap),
+          };
           final refreshedTitles = refreshed.titlePageIndices.isNotEmpty
               ? refreshed.titlePageIndices
               : _titlePageIndexSet.toList(growable: false);

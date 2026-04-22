@@ -2188,11 +2188,14 @@ function normalizeColumnLabelAnchors(raw, layoutColumns) {
       ? parsedRowIndex
       : 0;
     const label = normalizeWhitespace(one.label || one.text || '');
-    if (!label) continue;
+    const sourceRaw = String(one.source || '').trim().toLowerCase();
+    const isSuppressed = sourceRaw === 'suppressed';
+    if (!label && !isSuppressed) continue;
     const topPt = Number(one.topPt);
     const paddingTopPt = Number(one.paddingTopPt);
-    const sourceRaw = String(one.source || '').trim().toLowerCase();
-    const source = sourceRaw === 'auto' ? 'auto' : 'manual';
+    const source = isSuppressed
+      ? 'suppressed'
+      : (sourceRaw === 'auto' ? 'auto' : 'manual');
     out.push({
       columnIndex,
       rowIndex,
@@ -2425,6 +2428,13 @@ function buildRenderConfigFromJob(job) {
     titlePageIndices,
     subjectTitleText,
   );
+  // 클라이언트가 '새로고침' / 'PDF 생성' 요청에 실어 보내는 플래그.
+  //   true 이면 렌더 엔진은 auto 라벨(객관식/유형 전환) 생성을 전면 중단하고
+  //   columnLabelAnchors 에 포함된 라벨만 그려야 한다.
+  const disableAutoLabels = normalizeBool(
+    options.disableAutoLabels ?? options.suppressAutoLabels ?? options.disableAutoColumnLabels,
+    false,
+  );
   return {
     // Always normalize to current renderer version on worker side.
     renderConfigVersion: RENDER_CONFIG_VERSION,
@@ -2463,6 +2473,7 @@ function buildRenderConfigFromJob(job) {
     titlePageTopText,
     timeLimitText,
     mathEngine: String(options.mathEngine || '').trim() || undefined,
+    disableAutoLabels,
   };
 }
 
@@ -2511,6 +2522,7 @@ function computeRenderHash(renderConfig) {
     timeLimitText: renderConfig.timeLimitText,
     includeAcademyLogo: renderConfig.includeAcademyLogo === true,
     mathEngine: renderConfig.mathEngine || undefined,
+    disableAutoLabels: renderConfig.disableAutoLabels === true,
   };
   const canonical = JSON.stringify(canonicalizeJson(payload));
   return createHash('sha256').update(canonical).digest('hex');

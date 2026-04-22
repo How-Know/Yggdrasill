@@ -25,6 +25,14 @@ const PROCESS_ONCE =
   process.argv.includes('--once') || process.env.PB_WORKER_ONCE === '1';
 const WORKER_NAME =
   process.env.PB_WORKER_NAME || `pb-extract-worker-${process.pid}`;
+// status='extracting' 인 채 N ms 이상 업데이트가 없는 job 은 워커가 비정상 종료된
+// 것으로 간주하고 자동 복구한다. (기본 5분). 환경변수로 조정 가능.
+// 지나치게 짧으면 정상 처리 중인 long job 이 뺏길 수 있으니 VLM 최대 타임아웃
+// (PB_VLM_TIMEOUT_MS) 의 1.5배 이상으로 잡는 게 안전.
+const STALE_EXTRACTING_MS = Math.max(
+  60_000,
+  Number.parseInt(process.env.PB_EXTRACT_STALE_MS || '300000', 10),
+);
 const GEMINI_API_KEY = String(
   process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '',
 ).trim();
@@ -3869,6 +3877,125 @@ function buildQuestionWritePayload({
   };
 }
 
+// ---------------------------------------------------------------------------
+// Stale 'extracting' 락 자동 복구
+//
+// 배경:
+//   - 워커가 job 을 pick 하는 순간 status 를 'extracting' 으로 전환한다.
+//   - 워커 프로세스가 그 사이에 비정상 종료(전원 끊김, OOM, 개발 중 Ctrl+C 등)
+//     하면 해당 row 는 'extracting' 상태로 영구히 남는다.
+//   - processBatch() 는 status='queued' 만 pick 하고, /pb/jobs/extract/:id/retry
+//     API 는 'extracting' 상태를 409 로 거부하므로 매니저 UI 에서는 무한 로딩만
+//     관찰된다.
+//
+// 이 함수는 그런 orphan 을 찾아 (updated_at 이 STALE_EXTRACTING_MS 이상 지난
+// row) 안전한 상태로 되돌린다.
+//   - retry_count < max_retries  → 'queued' 로 다시 큐잉 (자동 재시도)
+//   - retry_count >= max_retries → 'failed' 로 마무리 + 문서 status='failed'
+//
+// lockQueuedJob 이 status='queued' 조건을 WHERE 에 걸고 낙관적 업데이트를 하므로
+// reclaim 이후 동시 다중 워커가 떠 있어도 double pick 은 발생하지 않는다.
+// ---------------------------------------------------------------------------
+async function reclaimStaleExtractingJobs() {
+  const cutoffIso = new Date(Date.now() - STALE_EXTRACTING_MS).toISOString();
+  const { data: stale, error } = await supa
+    .from('pb_extract_jobs')
+    .select(
+      'id,document_id,retry_count,max_retries,worker_name,updated_at,started_at',
+    )
+    .eq('status', 'extracting')
+    .lt('updated_at', cutoffIso)
+    .limit(50);
+  if (error) {
+    console.warn(
+      '[pb-extract-worker] reclaim_stale_query_failed',
+      compact(error.message || error),
+    );
+    return { requeued: 0, failed: 0 };
+  }
+  if (!stale || stale.length === 0) {
+    return { requeued: 0, failed: 0 };
+  }
+
+  let requeued = 0;
+  let failed = 0;
+  for (const row of stale) {
+    const retryCount = Number(row.retry_count || 0);
+    const maxRetries = Number(row.max_retries || 0);
+    const ageMs =
+      Date.now() - new Date(row.updated_at || row.started_at || 0).getTime();
+    const canRetry = retryCount < maxRetries || maxRetries <= 0;
+
+    if (canRetry) {
+      const { data: updated, error: updErr } = await supa
+        .from('pb_extract_jobs')
+        .update({
+          status: 'queued',
+          started_at: null,
+          finished_at: null,
+          error_code: 'worker_stalled',
+          error_message: `reclaimed stale extracting lock after ${Math.round(ageMs / 1000)}s (prev worker=${row.worker_name || '-'})`,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', row.id)
+        .eq('status', 'extracting')
+        .select('id')
+        .maybeSingle();
+      if (updErr) {
+        console.warn(
+          '[pb-extract-worker] reclaim_requeue_failed',
+          compact(updErr.message || updErr),
+        );
+        continue;
+      }
+      if (updated) requeued += 1;
+    } else {
+      const nowIso = new Date().toISOString();
+      const { data: updated, error: updErr } = await supa
+        .from('pb_extract_jobs')
+        .update({
+          status: 'failed',
+          error_code: 'worker_stalled',
+          error_message: `stale extracting lock gave up after ${retryCount}/${maxRetries} retries (age ${Math.round(ageMs / 1000)}s)`,
+          finished_at: nowIso,
+          updated_at: nowIso,
+        })
+        .eq('id', row.id)
+        .eq('status', 'extracting')
+        .select('id,document_id')
+        .maybeSingle();
+      if (updErr) {
+        console.warn(
+          '[pb-extract-worker] reclaim_fail_mark_failed',
+          compact(updErr.message || updErr),
+        );
+        continue;
+      }
+      if (updated) {
+        failed += 1;
+        if (row.document_id) {
+          await supa
+            .from('pb_documents')
+            .update({ status: 'failed', updated_at: nowIso })
+            .eq('id', row.document_id);
+        }
+      }
+    }
+  }
+
+  if (requeued > 0 || failed > 0) {
+    console.warn(
+      '[pb-extract-worker] reclaim_stale',
+      JSON.stringify({
+        requeued,
+        failed,
+        thresholdMs: STALE_EXTRACTING_MS,
+      }),
+    );
+  }
+  return { requeued, failed };
+}
+
 async function lockQueuedJob(row) {
   const nextRetry = Number(row.retry_count || 0) + 1;
   const { data, error } = await supa
@@ -4669,6 +4796,7 @@ async function main() {
       geminiFlag: process.env.PB_GEMINI_ENABLED || '',
       autoQueueFigureJobs: AUTO_QUEUE_FIGURE_JOBS,
       once: PROCESS_ONCE,
+      staleExtractingMs: STALE_EXTRACTING_MS,
     }),
   );
   if (!GEMINI_ENABLED) {
@@ -4682,8 +4810,33 @@ async function main() {
     );
   }
 
+  // 기동 직후: 이전 워커가 비정상 종료되어 'extracting' 에 묶여 있는 job 들을
+  // 먼저 풀어준다. 그래야 매니저 UI 의 "무한 로딩" 이 바로 해소된다.
+  try {
+    await reclaimStaleExtractingJobs();
+  } catch (err) {
+    console.error(
+      '[pb-extract-worker] reclaim_startup_failed',
+      compact(err?.message || err),
+    );
+  }
+
+  // stale 체크를 매 tick 마다 하면 DB 쿼리가 낭비되므로 최소 인터벌을 두고
+  // (기본 STALE/2) 만큼 지난 경우에만 재검사한다.
+  let lastReclaimAt = Date.now();
+  const reclaimIntervalMs = Math.max(30_000, Math.floor(STALE_EXTRACTING_MS / 2));
+
   while (true) {
     try {
+      if (Date.now() - lastReclaimAt >= reclaimIntervalMs) {
+        await reclaimStaleExtractingJobs().catch((err) => {
+          console.warn(
+            '[pb-extract-worker] reclaim_periodic_failed',
+            compact(err?.message || err),
+          );
+        });
+        lastReclaimAt = Date.now();
+      }
       const summary = await processBatch();
       if (summary.processed > 0) {
         console.log('[pb-extract-worker] batch', JSON.stringify(summary));

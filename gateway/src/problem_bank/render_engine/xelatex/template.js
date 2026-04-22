@@ -346,13 +346,27 @@ function splitAtSubQuestionMarkers(sub) {
  * 그룹/마진이 닫히기 전에 현재 paragraph 의 line-break 가 결정되도록 한다.
  */
 function renderStemTextLine(sub, equations) {
+  // 사용자 요청 23차: 문항 본문(stem text) 줄간격을 본문 기본(\setstretch{1.7}) 대비
+  //   10% 축소하여 `\setstretch{1.53}` (=1.7×0.9) 로 조판한다.
+  //   → 보기박스/조건박스/그림/표/5지선다형 보기는 별도 경로로 조판되므로 영향 없음
+  //     (이들은 renderStemTextLine 을 거치지 않음 — seg.type !== 'text').
+  //   래퍼: `{\setstretch{1.53} <inner> \par}` 로 감싸 해당 paragraph 스코프에만 적용.
+  //   grouping `{}` 로 외부 stretch(1.7) 로 정확히 원복 → 이후 다른 요소에 오염 없음.
+  //
+  // 사용자 요청 24차: stem 줄간격 축소(1.7→1.53) 로 `\baselineskip` 이 10% 줄어들면서
+  //   분수/큰 수식이 포함된 행의 위·아래 여백이 TeX 의 `\lineskip` fallback 값(기본 1pt)
+  //   으로 떨어져 붙어 보이는 부작용이 발생. → 본문 stem 영역에서도 `\lineskip` 과
+  //   `\lineskiplimit` 를 em 기반으로 설정해, baseline 부족 상황에서 최소 간격을 보장한다.
+  //   (choice 영역의 `\lineskip=1.2em` 과 유사한 접근, 값은 보수적으로 0.6em 로 설정해
+  //    일반 본문 행간까지 과도하게 늘어나지 않도록.)
+  const STEM_STRETCH = '1.53';
+  const wrapStem = (inner) => `{\\setstretch{${STEM_STRETCH}}\\lineskiplimit=0.4em\\lineskip=0.6em${inner}\\par}`;
   // 세트형 하위문항 (1), (2), ...
   const subQ = sub.match(/^\((\d+)\)\s+(.*)$/);
   if (subQ) {
     const labelTex = `(${subQ[1]})\\ `;
     const restTex = smartTexLine(subQ[2], equations);
-    // \makebox[\wd0][l] 로 레이블 폭을 고정 → 1행/2행+ 좌측선 정확히 일치.
-    return `{\\setbox0=\\hbox{${labelTex}}\\hangindent=\\wd0\\hangafter=1\\noindent\\makebox[\\wd0][l]{${labelTex}}${restTex}\\par}`;
+    return wrapStem(`{\\setbox0=\\hbox{${labelTex}}\\hangindent=\\wd0\\hangafter=1\\noindent\\makebox[\\wd0][l]{${labelTex}}${restTex}\\par}`);
   }
   // 대화형 "이름 : 내용" (이름은 12자 이내).
   const dialogue = sub.match(/^([^:\n]{1,12}?)\s*:\s+(.*)$/);
@@ -363,10 +377,10 @@ function renderStemTextLine(sub, equations) {
       const nameTex = smartTexLine(namePart, equations);
       const restTex = smartTexLine(rest, equations);
       const labelTex = `${nameTex}\\ :\\ `;
-      return `{\\setbox0=\\hbox{${labelTex}}\\hangindent=\\wd0\\hangafter=1\\noindent\\makebox[\\wd0][l]{${labelTex}}${restTex}\\par}`;
+      return wrapStem(`{\\setbox0=\\hbox{${labelTex}}\\hangindent=\\wd0\\hangafter=1\\noindent\\makebox[\\wd0][l]{${labelTex}}${restTex}\\par}`);
     }
   }
-  return smartTexLine(sub, equations);
+  return wrapStem(smartTexLine(sub, equations));
 }
 
 /* ------------------------------------------------------------------ */
@@ -621,6 +635,24 @@ function renderBogiBoxLatex(lines, equations, replaceFigureMarkers = null) {
       .replace(/\\par\s*$/g, '');
     content = `\\begin{center}${cleaned}\\end{center}`;
   }
+  // 사용자 요청 27차: "보 기" 사이 공백을 한 글자 폭(≈1em) 으로 확장.
+  //   `smartTexLine` 은 기본적으로 Hangul 구간 내 공백을 그대로 넘기기 때문에
+  //   xetexko 의 Hangul glue 로 좁게 조판됨. text-mode `\hspace{1em}` 으로 치환해
+  //   시각적 한 글자 만큼 간격을 확보한다.
+  let bogiLabelTex = smartTexLine('<보 기>', []);
+  bogiLabelTex = bogiLabelTex.replace('보 기', '보\\hspace{0.8em}기');
+  // 사용자 요청 29차: 꺽쇠 양쪽 여백이 과하게 보이는 문제 해결.
+  //   원인 (중첩):
+  //     (a) TikZ 노드의 `inner xsep=3pt` 가 fill=white 영역을 bbox 기준 좌·우 3pt 씩 확장
+  //         → 선이 글리프에서 3pt 떨어진 지점에서 끊어진 것처럼 보임 (주범).
+  //     (b) math-mode `<`/`>` 글리프의 자연 side-bearing. math 경계라 `\thickmuskip` 은
+  //         추가되지 않으나, 폰트 고유의 sidebearing 이 약간 남음.
+  //   해결:
+  //     1) 아래 overlay 에서 `inner xsep=0pt` 로 노드 좌우 패딩 제거.
+  //     2) 여기서 label 양 끝에 `\kern-0.5pt` 를 넣어 bbox 를 소폭 당겨, 남아있는 글리프
+  //        side-bearing 까지 상쇄 → 꺽쇠 꼬리가 선 안쪽으로 박히는 느낌을 만든다.
+  //   사용자 요청 30차: "보 기" 문자 간격을 1em → 0.8em 으로 축소 (기존 대비 80%).
+  bogiLabelTex = `\\kern-0.5pt ${bogiLabelTex}\\kern-0.5pt`;
   return [
     '\\begin{tcolorbox}[',
     '  enhanced,',
@@ -628,13 +660,44 @@ function renderBogiBoxLatex(lines, equations, replaceFigureMarkers = null) {
     '  colback=white, colframe=black, boxrule=0.4pt,',
     '  arc=0pt, outer arc=0pt,',
     '  before skip=0pt, after skip=0pt,',
-    '  attach boxed title to top center={yshift=-\\tcboxedtitleheight/2},',
-    '  boxed title style={',
-    '    sharp corners, colback=white, colframe=white, boxrule=0pt,',
-    '    left=0pt, right=0pt, top=0pt, bottom=0pt,',
-    '  },',
-    '  title={\\normalfont\\normalsize 〈보\\enspace\\enspace기〉},',
-    '  coltitle=black,',
+    // 사용자 요청 25차: `boxed title` / `attach boxed title to top center` 조합은
+    //   내부 padding 과 `\tcboxedtitleheight` 연산식 때문에 상단선과 〈 기호 사이 gap 을
+    //   완벽히 제거하기 어렵고, `fonttitle` 로도 late styling 이 간헐적으로 적용되어
+    //   본문 폰트와 일치시키는 것도 불안정했다. → `overlay` + TikZ node 방식으로 전환.
+    //   - TikZ `\node` 를 frame.north 중앙에 배치하고 `fill=white` 로 선을 덮어 박힌 형태
+    //     재현.
+    //   - `anchor=center` + `inner ysep=1pt` 로 상단선이 타이틀 y-center 를 가로지르게
+    //     → 〈/〉 상·하단이 선과 맞닿아 보이도록.
+    //   - `inner xsep=3pt` 로 좌우 패딩만 미세하게 확보 (상단선 끊어지는 폭).
+    //   - 미세 조정이 필요하면 `at ([yshift=...pt]frame.north)` 의 yshift 값으로 수직 위치
+    //     조절 가능.
+    // 사용자 요청 26차: 꺽쇠 글리프가 본문 stem 과 달라 보이는 문제 해결.
+    //   원인: 본문의 비-한글 문자(꺽쇠 포함)는 `smartTexLine` 에서 math-mode `$\displaystyle …$`
+    //     로 분기되어 "math font 의 < >" 로 조판되는 반면, 라벨은 text-mode `\normalfont`
+    //     경로로 "main hangul font 의 〈 〉" 가 되어 문자 자체와 글리프 디자인 모두 다르다.
+    //   해결: 라벨 원문을 본문에서 실제로 사용되는 ASCII `<` `>` 로 교체하고, 동일한
+    //     `smartTexLine` 경로를 통과시켜 본문과 같은 조판 파이프라인을 그대로 따르게 한다.
+    //     결과 LaTeX = `$\displaystyle <$보 기$\displaystyle >$`
+    //     → 꺽쇠는 본문 math-mode 와 동일 폰트/글리프, "보 기" 는 본문과 동일 hangul font.
+    // 사용자 요청 28차: 라벨이 상단선과 "박혀 있는" 느낌이 되도록 `\raisebox` 트릭으로
+    //   노드 content 의 bbox 크기를 0 으로 선언하고, TikZ anchor 계산을 확정화.
+    //   - `\raisebox{-0.5ex}[0pt][0pt]{...}`:
+    //       실제 글리프는 baseline 기준 -0.5ex 로 내려 배치되지만, 외부가 인식하는 ht/dp 는 0.
+    //       → TikZ 노드 bbox 가 inner ysep 만큼만 확장 → anchor=center 계산이
+    //         "bbox center = baseline" 으로 확정되어 frame.north 에 정확히 정렬.
+    //   - `inner ysep=0.5ex` + `fill=white`:
+    //       bbox 가 상하 0.5ex 씩 확장되고 흰 배경으로 채워져, 글자 영역에서 박스 상단선이
+    //       정확히 가려져 "선에 박힌 느낌" 이 연출된다.
+    //   - 수직 위치 미세 조정: `\raisebox{-0.5ex}` 값 하나만 ±0.1ex 단위로 조절하면 됨.
+    //     (ex 단위라 폰트 크기에 비례해 자동 스케일)
+    //   - 수평 여백 미세 조정: `inner xsep` (노드 패딩) + label 양끝 `\kern` 값으로 제어.
+    //     현재는 `inner xsep=0pt` + 양끝 `\kern-0.5pt` → 꺽쇠가 선에 박힌 느낌.
+    //     더 박히게: kern 을 -1pt 로 / 덜 박히게 (여백 확보): xsep 을 1~2pt 로 상향.
+    //   - 수직 위치 미세 조정: `at ([yshift=-Npt]frame.north)` 의 yshift 값으로 라벨을
+    //     위/아래로 이동 (음수 = 아래). 사용자 요청 30/31/32/33차 누적 조정: -0.5pt.
+    '  overlay={\\node[anchor=center, fill=white, inner xsep=0pt, inner ysep=0.5ex]'
+      + ' at ([yshift=-0.5pt]frame.north)'
+      + ` {\\raisebox{-0.5ex}[0pt][0pt]{\\normalfont\\mdseries\\normalsize ${bogiLabelTex}}};},`,
     // 내부 위/아래 여백을 12pt 로 확대 → 항목과 박스 선의 숨통 확보.
     '  left=8pt, right=8pt, top=12pt, bottom=12pt',
     ']',
@@ -1133,13 +1196,20 @@ function renderChoicesLatex(choices, equations) {
 function paperGeometry(paper) {
   const p = String(paper || 'B4').toUpperCase();
   // 좌/우 여백은 사용자 요청으로 30% 축소 (20mm * 0.7 = 14mm).
-  // 상단 여백(top) : 기본 20mm → 28mm 으로 확장 (사용자 요청: 일반 페이지 상단 가로선 위쪽 영역 50% 증가).
-  //   - geometry 에서 `headheight/headsep` 만 키워도 body top(="text top") 은 top 값에 고정되어 이동하지 않으므로,
-  //     실제로 "가로선 위쪽 영역"(= 0 ~ 가로선) 을 늘리려면 top 자체를 증가시켜야 한다.
-  //   - top 을 28mm 로 하면 body top 이 8mm(≈22.7pt) 아래로 내려가며, 가로선(=body top - 14pt) 도 함께 내려가
-  //     "페이지 top ~ 가로선" 거리가 약 50% 증가한다.
+  // 상단 여백(top) :
+  //   - 기본 20mm → 초기 28mm 확장(가로선 위 영역 ~50% 증가) → 추가 +5pt 조정(사용자 요청 2차).
+  //   - 최종 84.4pt ≈ 29.76mm. 일반 페이지 body top 과 가로선(=body top - 14pt) 이 함께 +5pt 하향.
+  //   - 제목 페이지는 overlay 의 VRuleStartY offset(28pt → 13pt) + 콘텐츠 앞 `\vspace*{-15pt}` 삽입으로
+  //     **-10pt** 순 이동(본 geometry 증가분 +5pt 를 상쇄하고도 -10pt 추가로 올라감).
   //   - 하단 여백(bottom)은 20mm 유지 → \mockLayBotY / 세로선 끝 / 페이지박스 위치 **불변**.
-  const vmargins = 'top=28mm,bottom=20mm';
+  // 일반페이지 헤더/디바이더 간격 조정:
+  //   - top 을 34mm → 32.06mm 로 줄여 slot 시작점을 위로 이동
+  //   - headsep 을 25pt → 19.5pt 로 줄여 페이지라벨과 가로선 간격을 약 절반 수준으로 축소
+  //   - (사용자 요청 17차) top 을 32.06mm → 29.95mm 로 추가 6pt 축소. 헤더/본문/디바이더가
+  //     통째로 6pt 위로 이동한다. 페이지번호는 뒤쪽에서 `\raisebox` 값을 6pt 줄여(9.37→3.37)
+  //     절대 위치를 고정. 홀수형/수학영역은 보정 없이 6pt 상승.
+  // headheight 54pt : 페이지번호/홀수형 박스를 \raisebox 로 올릴 공간 확보.
+  const vmargins = 'top=29.95mm,bottom=20mm,headheight=54pt,headsep=19.5pt';
   if (p === 'A4') return `a4paper,hmargin=14mm,${vmargins}`;
   if (p === 'A3') return `a3paper,hmargin=14mm,${vmargins}`;
   return `b4paper,hmargin=14mm,${vmargins}`;
@@ -1183,6 +1253,7 @@ function hangulFontDirective(fontPath, fontFamily, fontBold) {
 
 function buildPreamble({
   paper, fontFamily, fontBold, fontRegularPath, fontSize,
+  subjectFontPath = '',
   subjectTitle, profile,
   hidePreviewHeader = false,
   geometryOverride = '',
@@ -1195,26 +1266,80 @@ function buildPreamble({
   const size = fontSize || 11;
   const mainDirective = fontSpecDirective(fontRegularPath, mainFont, boldFont);
   const hangulDirective = hangulFontDirective(fontRegularPath, mainFont, boldFont);
+  // 사용자 요청 7차: HTML/MathJax 엔진의 `YggSubject` 폰트(기본 AppleSDGothicNeoB.ttf)
+  //   를 XeLaTeX 에도 `\YggSubject` 로 등록. subjectFontPath 가 빈 값이면
+  //   noop 매크로로 선언 (폴백 = 메인 폰트).
+  const subjectFontDirective = subjectFontPath
+    ? (() => {
+      const normalized = subjectFontPath.replace(/\\/g, '/');
+      const fileName = normalized.split('/').pop();
+      const dir = normalized.replace(/[^/]+$/, '');
+      const ext = fileName.includes('.') ? fileName.split('.').pop() : 'ttf';
+      return `\\newfontfamily\\YggSubject{${fileName}}[\n`
+        + `  Path = ${dir},\n`
+        + `  Extension = .${ext},\n`
+        + `  UprightFont = ${fileName},\n`
+        + `  BoldFont = ${fileName},\n`
+        + `  BoldFeatures = {FakeBold=1.3},\n`
+        + `]`;
+    })()
+    : '\\newcommand{\\YggSubject}{}';
+  // 제목페이지 부제/메인타이틀/큰 홀수형 박스는 HTML `.mock-first-subject`, `.mock-chip-type`
+  // 와 같은 YggSubject 계열을 명시적으로 사용한다.
+  const subjectDisplayFontDirective = subjectFontPath
+    ? (() => {
+      const normalized = subjectFontPath.replace(/\\/g, '/');
+      const fileName = normalized.split('/').pop();
+      const dir = normalized.replace(/[^/]+$/, '');
+      const ext = fileName.includes('.') ? fileName.split('.').pop() : 'ttf';
+      return `\\newfontfamily\\YggSubjectDisplay{${fileName}}[\n`
+        + `  Path = ${dir},\n`
+        + `  Extension = .${ext},\n`
+        + `  UprightFont = ${fileName},\n`
+        + `  BoldFont = ${fileName},\n`
+        + `  BoldFeatures = {FakeBold=1.3},\n`
+        + `]`;
+    })()
+    : '\\newcommand{\\YggSubjectDisplay}{\\YggSubject}';
+  const topLabelFontDirective = '\\newfontfamily\\YggTopLabel{Malgun Gothic}[\n'
+    + '  BoldFont = {Malgun Gothic Bold},\n'
+    + ']';
   const isMock = profile === 'mock' || profile === 'csat';
 
   const lines = [];
-  lines.push(`\\documentclass[${size}pt]{article}`);
+  // 모의고사형은 일반 페이지 헤더가 짝수/홀수 페이지 레이아웃이 달라야 하므로 `twoside` 활성화.
+  //   - 좌/우 여백은 hmargin=14mm 으로 대칭이라 twoside 전환이 시각적 여백에는 영향을 주지 않음.
+  //   - fancyhdr `[LE,LO,RE,RO,CE,CO]` 구분이 활성화된다.
+  const docClassOpts = isMock ? `${size}pt,twoside` : `${size}pt`;
+  lines.push(`\\documentclass[${docClassOpts}]{article}`);
   lines.push(`\\usepackage[${geom}]{geometry}`);
   lines.push('\\usepackage{fontspec}');
   lines.push('\\usepackage{amsmath,amssymb}');
-  // ─── \dfrac 재정의: ht/dp 를 대칭화하여 "분수 때문에 늘어난 수직 여유" 를 위·아래 반반씩 분배 ───
-  //   기본 \dfrac 는 분자 쪽 ht (≈10pt) 이 분모 쪽 dp (≈5pt) 보다 커서 비대칭.
+  // ─── \dfrac / \frac / \tfrac 재정의: ht/dp 를 대칭화하여 "분수 때문에 늘어난 수직 여유" 를 위·아래 반반씩 분배 ───
+  //   기본 분수 명령은 분자 쪽 ht (≈10pt) 이 분모 쪽 dp (≈5pt) 보다 커서 비대칭.
   //   → TeX 의 baselineskip 규칙상 위쪽 line 과의 간격이 크게 늘어나고 아래쪽은 덜 늘어남.
   //   재정의: \raisebox 의 `[height][depth]` 옵션으로 content 는 제자리(raise=0) 에 두고
   //     box 가 "대외적으로 주장하는" ht/dp 만 (natural_ht + natural_dp)/2 로 균등화.
   //     → 위·아래 여유가 같은 양씩 확보되어 시각적 수직 대칭이 성립.
   //     raisebox 안 `\height`, `\depth` 는 content 측정값을 참조하므로 재귀/동적 크기에 안전.
+  //   사용자 요청 23차: 기존엔 `\dfrac` 만 재정의되어 있어 본문 대부분이 쓰는 `\frac` / `\tfrac`
+  //     은 비대칭 상태로 남아 "위쪽만 여백이 크게 늘어나는" 현상이 남아 있었다.
+  //     → `\frac`, `\tfrac` 도 동일 패턴으로 재정의하여 모든 분수가 대칭화되도록 보강한다.
+  // 사용자 요청 24차: 분수 가로선(rule) 을 약간 더 길게 보이도록 분자/분모 양쪽에 `\,` 를
+  //   주입. `\,` 는 3mu ≈ 0.167em 의 얇은 공백으로, 분자·분모 폭을 넓혀 LaTeX 이 rule 길이를
+  //   max(분자, 분모) 기준으로 그릴 때 약 0.33em 만큼 더 길어진다. math-mode 전용 공백이라
+  //   텍스트 조판에는 영향 없음.
+  const symFrac = (orig) => '\\mathchoice'
+    + `{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\displaystyle\\${orig}{\\,#1\\,}{\\,#2\\,}$}}`
+    + `{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\textstyle\\${orig}{\\,#1\\,}{\\,#2\\,}$}}`
+    + `{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\scriptstyle\\${orig}{\\,#1\\,}{\\,#2\\,}$}}`
+    + `{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\scriptscriptstyle\\${orig}{\\,#1\\,}{\\,#2\\,}$}}`;
   lines.push('\\let\\origdfrac\\dfrac');
-  lines.push('\\renewcommand{\\dfrac}[2]{\\mathchoice'
-    + '{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\displaystyle\\origdfrac{#1}{#2}$}}'
-    + '{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\textstyle\\origdfrac{#1}{#2}$}}'
-    + '{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\scriptstyle\\origdfrac{#1}{#2}$}}'
-    + '{\\raisebox{0pt}[\\dimexpr 0.5\\height+0.5\\depth\\relax][\\dimexpr 0.5\\height+0.5\\depth\\relax]{$\\scriptscriptstyle\\origdfrac{#1}{#2}$}}}');
+  lines.push(`\\renewcommand{\\dfrac}[2]{${symFrac('origdfrac')}}`);
+  lines.push('\\let\\origfrac\\frac');
+  lines.push(`\\renewcommand{\\frac}[2]{${symFrac('origfrac')}}`);
+  lines.push('\\let\\origtfrac\\tfrac');
+  lines.push(`\\renewcommand{\\tfrac}[2]{${symFrac('origtfrac')}}`);
   lines.push('\\usepackage{array}');
   lines.push('\\usepackage{kotex}');
   // 어절 중간에서 줄바꿈 금지: kotex 가 기본 설정한 ICU 한국어 줄바꿈 로케일을
@@ -1257,6 +1382,37 @@ function buildPreamble({
   lines.push('');
   lines.push(mainDirective);
   lines.push(hangulDirective);
+  lines.push(subjectFontDirective);
+  lines.push(subjectDisplayFontDirective);
+  lines.push(topLabelFontDirective);
+  // ── 숫자를 한글(HG) charclass 로 국지 편입하는 래퍼 ──────────────────────
+  //   배경: xetexko 는 유니코드 charclass (HG/CJ/Latin 등) 에 따라 font instance 를
+  //     자동 분기한다. `\newfontfamily\YggTopLabel{Malgun Gothic}` 같은 선언이 있어도
+  //     본문에서 ASCII 숫자를 만나면 Latin instance 로, 한글을 만나면 Hangul instance
+  //     로 나눠 렌더되어 "같은 Malgun Gothic 이지만 한글-숫자 글리프 디자인 이질성"
+  //     문제가 드러난다 (probe 로 instance #1 vs #2 직접 확인).
+  //   해결: 숫자 0-9 의 charclass 를 HG 로 임시 편입하면 xetexko 가 숫자도 hangul
+  //     instance 로 routing → 한글과 **동일 instance** 에서 렌더되어 시각 이질성 최소화.
+  //   주의: `\XeTeXcharclass` 는 **글로벌** 할당이라 `\begingroup…\endgroup` 만으로는
+  //     원복되지 않는다. 반드시 `\YggRestoreDigits` 를 명시 호출해 원복해야 본문 숫자가
+  //     본문 Latin instance (KoPubWorldBatangPro 등) 로 돌아가 영향이 없다.
+  //   적용 범위: 제 2 교시 박스 / 제목페이지 부제(2026…) / 라벨박스(5지선다형…) 등
+  //     **헤더·라벨 블록에만** `\YggWithUnifiedDigits{…}` 로 감싸 적용. 본문은 미적용.
+  lines.push('\\newcommand{\\YggUnifyDigits}{%');
+  lines.push('  \\XeTeXcharclass`\\0=\\XeTeXcharclassHG \\XeTeXcharclass`\\1=\\XeTeXcharclassHG');
+  lines.push('  \\XeTeXcharclass`\\2=\\XeTeXcharclassHG \\XeTeXcharclass`\\3=\\XeTeXcharclassHG');
+  lines.push('  \\XeTeXcharclass`\\4=\\XeTeXcharclassHG \\XeTeXcharclass`\\5=\\XeTeXcharclassHG');
+  lines.push('  \\XeTeXcharclass`\\6=\\XeTeXcharclassHG \\XeTeXcharclass`\\7=\\XeTeXcharclassHG');
+  lines.push('  \\XeTeXcharclass`\\8=\\XeTeXcharclassHG \\XeTeXcharclass`\\9=\\XeTeXcharclassHG');
+  lines.push('}');
+  lines.push('\\newcommand{\\YggRestoreDigits}{%');
+  lines.push('  \\XeTeXcharclass`\\0=0 \\XeTeXcharclass`\\1=0 \\XeTeXcharclass`\\2=0 \\XeTeXcharclass`\\3=0');
+  lines.push('  \\XeTeXcharclass`\\4=0 \\XeTeXcharclass`\\5=0 \\XeTeXcharclass`\\6=0 \\XeTeXcharclass`\\7=0');
+  lines.push('  \\XeTeXcharclass`\\8=0 \\XeTeXcharclass`\\9=0');
+  lines.push('}');
+  lines.push('\\newcommand{\\YggWithUnifiedDigits}[1]{%');
+  lines.push('  \\begingroup\\YggUnifyDigits #1\\YggRestoreDigits\\endgroup');
+  lines.push('}');
   lines.push('');
 
   // 학원 로고를 사용할 경우 \includegraphics 에 넘길 정규화된 경로.
@@ -1266,6 +1422,50 @@ function buildPreamble({
   const logoHeadGraphic = logoEnabled
     ? `\\raisebox{-0.2em}{\\includegraphics[height=1.4em,keepaspectratio]{${logoPathTex}}}`
     : '';
+
+  // 일반/제목 페이지 공통으로 사용하는 헤더 스펙 (모의고사형에서만 의미 있음).
+  //   - pageNumSpec : **28.6pt** bold 페이지번호.
+  //     사용자 요청 10차: HTML/MathJax 렌더엔진의 `.mock-page-no` 는 body 의
+  //     `YggMain` (KoPubWorldBatangPro Light = 본문 명조) 을 상속한다. → XeLaTeX 에서도
+  //     `\YggSubject` (고딕) 이 아닌 기본 메인 폰트(동일 = KoPubWorld) 를 쓰도록 제거.
+  //     크기도 22pt → **28.6pt (+30%)** 로 증가.
+  //   - formBoxSpec : 일반 페이지용 12pt bold "홀수형" + fbox.
+  //     (HTML `.mock-chip-type` 이 YggSubject 를 명시 지정하고 있음).
+  //   이 두 값은 일반 페이지 `\pagestyle{fancy}` 와 제목 페이지 `mocktitle` 양쪽에서 동일 재사용.
+  const pageNumSpec = '{\\fontsize{28.6pt}{34pt}\\selectfont\\bfseries\\thepage}';
+  // 사용자 요청 20차: 비제목 페이지 홀수형 박스를 제목 페이지 스타일(titleFormBoxSpec)
+  //   참조 tikz 스타일로 교체. 크기는 70% 로 축소.
+  //     titleFormBoxSpec : line width=0.8pt, rounded corners=3.0pt, minimum height=35.2pt,
+  //                       inner xsep=8.6pt, font=20.7pt, scalebox=0.95
+  // 사용자 요청 21차: 높이만 추가 5% 증가 (min-height 24.6 → 25.83pt, rounded corners 2.1 → 2.205pt).
+  //     폭/폰트/장평은 그대로 유지.
+  const formBoxSpec = '{\\tikz[baseline=(box.center)]'
+    + '\\node[draw=black,line width=0.56pt,line join=round,line cap=round,'
+    + 'rounded corners=2.205pt,minimum height=25.83pt,inner xsep=6pt,inner ysep=0pt,outer sep=0pt] (box) '
+    + '{{\\YggSubjectDisplay\\fontsize{14.5pt}{14.5pt}\\selectfont\\bfseries'
+    + '\\scalebox{0.95}[1]{홀수형}}};}';
+  // 제목페이지 전용 큰 홀수형 박스. 스크린샷 기준으로 오른쪽에 별도로 배치되며,
+  // 텍스트는 장평 95% + 박스 안 수직 중앙 정렬.
+  const titleFormBoxSpec = '{\\tikz[baseline=(box.center)]'
+    + '\\node[draw=black,line width=0.8pt,line join=round,line cap=round,'
+    + 'rounded corners=3.0pt,minimum height=35.2pt,inner xsep=8.6pt,inner ysep=0pt,outer sep=0pt] (box) '
+    + '{{\\YggSubjectDisplay\\fontsize{20.7pt}{20.7pt}\\selectfont\\bfseries'
+    + '\\scalebox{0.95}[1]{홀수형}}};}';
+  // 사용자 요청 20차: 제2교시 박스 높이만 10% 증가 (위치 = box.center baseline 유지).
+  //   minimum height: 26pt → 28.6pt, rounded corners: 13pt → 14.3pt (height/2 유지, pill).
+  //   폰트/장평/raisebox 는 변경 없음 (위치 그대로).
+  // 사용자 요청 22차: '제 2 교시' 의 숫자 '2' 가 한글과 다른 font instance (Malgun Gothic Latin)
+  //   로 렌더되는 이질감을 제거하기 위해 박스 내부 텍스트를 `\YggWithUnifiedDigits` 로 감싼다.
+  //   → 숫자도 한글 instance (MalgunGothic(1)) 에서 렌더. 래퍼는 지역 scope 에서만 charclass 를
+  //     변경 후 즉시 원복하므로 본문 숫자에는 전혀 영향 없음.
+  const titleSessionBoxSpec = '{\\tikz[baseline=(box.center)]'
+    + '\\node[draw=black,line width=0.8pt,line join=round,line cap=round,'
+    + 'rounded corners=14.3pt,minimum height=28.6pt,inner xsep=8pt,inner ysep=0pt,outer sep=0pt] (box) '
+    + '{\\YggWithUnifiedDigits{{\\YggTopLabel\\fontsize{20pt}{20pt}\\selectfont\\scalebox{0.90}[1]{제\\,2\\,교시}}}};}';
+  const titleRightHeaderSpec = '{'
+    + `\\makebox[0pt][r]{\\raisebox{47.53pt}[0pt][0pt]{${pageNumSpec}}}`
+    + `\\makebox[0pt][r]{\\raisebox{1.37pt}[0pt][0pt]{${titleFormBoxSpec}}}`
+    + '}';
 
   if (hidePreviewHeader) {
     // 미리보기 헤더를 숨기는 경우에도 로고는 상단에 찍고자 fancy 를 쓰되 테두리 없음.
@@ -1285,15 +1485,49 @@ function buildPreamble({
     //
     //   → 이 세 요소를 '절대 좌표' 에 고정한다:
     //     - header rule / column rule / pagebox : \AddToShipoutPictureFG + tikz overlay.
-    //     - fancyhdr 는 '헤더 텍스트' (좌: 과목명, 우: 페이지번호/로고) 만 담당.
+    //     - fancyhdr 는 '헤더 텍스트' (좌: 큰 페이지번호, 중앙: 수학 영역, 우: 홀수형 박스) 만 담당.
+    //
+    // 사용자 요청(3차) — 수능 시험지 스타일 헤더:
+    //   - 짝수 페이지 : [L] 페이지번호(큰 글자), [C] "수학 영역", [R] [홀수형] 박스.
+    //   - 홀수 페이지 : [L] [홀수형] 박스, [C] "수학 영역",     [R] 페이지번호(큰 글자).
+    //   - documentclass 의 `twoside` 옵션과 함께 [LE,LO,CE,CO,RE,RO] 지시자 사용.
+    // 사용자 요청 19차: 비제목 페이지 "수학 영역" 폰트를 페이지라벨(28.6pt) 의 80% 로 맞춤.
+    //   28.6 × 0.8 = 22.88pt. lead 는 동일한 비율(1.2×) 유지 → 27.5pt.
+    // 사용자 요청 23차: subjectTitle 에 숫자가 포함될 경우(예: "수학 1", "물리 2") 한글/숫자
+    //   instance 분기가 일어나지 않도록 `\YggWithUnifiedDigits` 로 감싼다. 래퍼는 scope
+    //   종료 시 charclass 를 원복하므로 본문에 영향 없음.
+    const centerTitleSpec = `\\YggWithUnifiedDigits{{\\YggSubject\\fontsize{22.88pt}{27.5pt}\\selectfont\\bfseries ${escapeLatexText(subjectTitle)}}}`;
     lines.push('\\pagestyle{fancy}');
     lines.push('\\fancyhf{}');
-    lines.push(`\\fancyhead[L]{\\small ${escapeLatexText(subjectTitle)}}`);
-    if (logoEnabled) {
-      lines.push(`\\fancyhead[R]{${logoHeadGraphic}}`);
-    } else {
-      lines.push('\\fancyhead[R]{\\small \\thepage}');
-    }
+    // 사용자 요청 12차: 상단 페이지 라벨 전체를 추가로 5pt 더 아래로 이동.
+    //   일반 페이지 기준 raisebox = 14.37pt → 9.37pt.
+    //   [totalheight][depth] = 0pt 로 layout 에는 영향 없음.
+    // 사용자 요청 17차:
+    //   - `top=29.95mm` 으로 geometry 를 6pt 위로 이동. 헤더 영역 전체가 6pt 상승.
+    //   - 페이지번호는 "절대 위치 고정" 이 필요하므로 raisebox 를 9.37pt → 3.37pt 로 6pt 감소
+    //     → geometry 상승분(-6pt) + raisebox 감소분(+6pt) 상쇄 → 페이지번호 y = 불변.
+    //   - 홀수형박스는 raisebox 를 9.37pt 유지 → 헤더 상승분(-6pt) 만 반영되어 6pt 위로 이동.
+    //   - 가운데 "수학 영역" (centerTitleSpec) 은 raisebox 없음 → 자연히 6pt 위로 이동.
+    // 사용자 요청 19차:
+    //   - 비제목 페이지 디바이더를 3pt 위로 올림 (아래 mockLayRuleY 11pt→14pt 변경)
+    //   - 수학영역/홀수형박스도 3pt 위로 이동해 디바이더와 같이 상승
+    //   - 페이지라벨은 "절대 위치 고정" 이므로 raisebox 3.37pt 유지
+    //   - 수학영역: fancyhead[C] 전체를 \raisebox{3pt} 로 감싸 3pt 상승
+    //   - 홀수형박스: raisebox 9.37pt → 12.37pt (3pt 추가 상승)
+    // 사용자 요청 20차:
+    //   - 홀수형박스 스펙을 fbox → tikz(box.center) 로 교체 (제목페이지 스타일 참조, 70%).
+    //     tikz 박스는 baseline=(box.center) 이므로 raisebox 값은 "박스 중심의 상승량" 이 된다.
+    //     기존 fbox 시각 top 위치(≈baseline+28pt) 를 유지하도록 raisebox 12.37 → 15.7pt 로 조정.
+    //     (box 높이 24.6pt / 2 = 12.3pt + 15.7pt = 28.0pt, 기존 top 대비 거의 동일)
+    // 사용자 요청 21차: 홀수형박스 중심을 "수학 영역" 텍스트 vertical center 와 수평 정렬.
+    //   centerTitleSpec : font 22.88pt, 한글 글자 top ≈ baseline + 16pt, descender 없음 →
+    //                     visual center ≈ baseline + 8pt.  여기에 \raisebox{3pt} 적용 →
+    //                     수학영역 visual center ≈ hbox_baseline + 11pt.
+    //   홀수형박스      : tikz baseline=(box.center) 이므로 raisebox 값 = "박스 중심의 상승량".
+    //                     수학영역 center(11pt) 와 일치시키기 위해 raisebox 15.7pt → 11pt.
+    lines.push(`\\fancyhead[LE,RO]{\\raisebox{3.37pt}[0pt][0pt]{${pageNumSpec}}}`);
+    lines.push(`\\fancyhead[C]{\\raisebox{3pt}[0pt][0pt]{${centerTitleSpec}}}`);
+    lines.push(`\\fancyhead[LO,RE]{\\raisebox{11pt}[0pt][0pt]{${formBoxSpec}}}`);
     // header rule / footer pagebox 는 절대 좌표로 그리므로 fancyhdr 의 기본 rule 은 끈다.
     lines.push('\\renewcommand{\\headrulewidth}{0pt}');
     lines.push('\\renewcommand{\\footrulewidth}{0pt}');
@@ -1320,11 +1554,61 @@ function buildPreamble({
     lines.push('}');
   }
 
-  // 모의고사 '제목 페이지' 전용 스타일: 기본 fancy header 를 끄고, 본문 위에 직접
-  // 큰 타이틀 헤더를 그린다. (header rule / pagebox 는 shipout overlay 가 담당.)
+  // 모의고사 '제목 페이지' 전용 스타일 (사용자 요청 7차):
+  //   - 일반 페이지와 **동일한 좌우 헤더 요소** (페이지번호 / 홀수형박스) 를 상속.
+  //   - 가운데 `[C]` 에 **부제(titleTop) + 큰 타이틀(title)** 을 parbox[b] 로 담는다.
+  //     ┌ 부제 "2025 경신중 1학년 내신 기출"       (titleTop × 1.1)
+  //     │ \\[11.7pt]                              (= X, 부제 ↔ 제목페이지타이틀 여백)
+  //     └ 제목페이지타이틀 "수학 영역"             (title × 1.1, 큰 글씨)
+  //     → parbox[b] 로 정렬 → 마지막 줄(수학영역) baseline 이 head box 바닥과 맞춰져
+  //       fancyhdr [LE,RO] 페이지번호 baseline 과 일치.
+  //   - headsep = 24pt 로 설정 (본문 쪽 newgeometry 에서) → head bottom 이 일반 페이지와
+  //     같은 y(72.4pt) 에 오도록 함 → 페이지번호도 일반 페이지와 같은 위치.
+  //   - overlay 가로선은 "수학영역 baseline + 여백(= X × 1.2)" 위치에 그려진다.
+  //     (타이틀↔부제 여백) : (수학영역↔가로선 여백) = 1.0 : 1.2.
+  //   - 사용자 요청 7차 : 수학영역 폰트 크기를 \mockTitleFontSize × 1.1 로 10% 증가.
+  //   - 부제/타이틀 텍스트는 각 페이지 진입 시 `\gdef\mockTitlePageSubtitle{…}` /
+  //     `\gdef\mockTitlePageMain{…}` 로 글로벌 매크로에 세팅해두므로 여기서 참조.
+  //   - headheight 은 `\newgeometry` 로 제목페이지에서만 확장 (본문 쪽에서).
   if (isMock) {
+    // 기본 매크로를 빈 값으로 선언해두기(제목페이지 아닌 경우 참조 오류 방지).
+    lines.push('\\providecommand{\\mockTitlePageSubtitle}{}');
+    lines.push('\\providecommand{\\mockTitlePageMain}{}');
     lines.push('\\fancypagestyle{mocktitle}{%');
     lines.push('  \\fancyhf{}%');
+    // 사용자 요청 16차:
+    //   - 제목페이지의 부제/페이지라벨 정렬은 유지
+    //   - 가로 디바이더와 슬롯 시작점만 더 아래로
+    //   - 오른쪽은 페이지번호 + 홀수형 박스 세로 스택
+    //   - 왼쪽은 "제 2교시" pill 박스
+    lines.push(`  \\fancyhead[LE]{\\raisebox{47.53pt}[0pt][0pt]{${pageNumSpec}}}%`);
+    lines.push(`  \\fancyhead[LO]{\\raisebox{13.1pt}[0pt][0pt]{${titleSessionBoxSpec}}}%`);
+    lines.push(`  \\fancyhead[RO]{${titleRightHeaderSpec}}%`);
+    // 부제(위) → \\[11.7pt] → 수학영역(아래, 큰글씨) 순서.
+    //   parbox[b] 로 마지막 줄 baseline 이 head box 바닥에 align.
+    lines.push('  \\fancyhead[C]{%');
+    lines.push('    \\parbox[b]{\\dimexpr 0.6\\textwidth\\relax}{%');
+    lines.push('      \\centering%');
+    // 사용자 요청 14차:
+    //   - 부제/메인타이틀 폰트를 HTML title row 와 같은 YggSubjectDisplay 로 통일
+    //   - 메인타이틀 크기 +10% (기존 1.32 → 1.452)
+    //   - 부제↔메인타이틀 간격 +30% (11.7pt → 15.21pt)
+    // 사용자 요청 22차: 부제("2026학년도 …") 의 숫자 '2026' 이 한글과 다른 instance 로
+    //   분기되는 이질감 제거를 위해 `\YggWithUnifiedDigits` 래퍼로 감싼다. 래퍼는 지역 scope
+    //   에서만 0-9 의 charclass 를 HG 로 바꿨다가 즉시 원복하므로 본문 숫자에는 영향 없음.
+    lines.push('      \\YggWithUnifiedDigits{{\\YggTopLabel\\fontsize{\\the\\dimexpr 1.1\\mockTitleTopFontSize\\relax}{\\the\\dimexpr 1.1\\mockTitleTopLead\\relax}'
+      + '\\selectfont\\mockTitlePageSubtitle}}\\\\[15.21pt]%');
+    // 사용자 요청 23차: 제목페이지 메인 타이틀(기본 "수학 영역") 에 숫자가 올 수 있으므로
+    //   `\YggWithUnifiedDigits` 로 감싸 한글-숫자 instance 통일. 래퍼 범위는 이 한 줄.
+    // 사용자 요청 24차: `\bfseries` + 22pt ↑ 환경에서 한글 어간격이 시각적으로 좁아 보이는
+    //   문제("띄어쓰기가 반영이 안된 것처럼 보임") 를 `\spaceskip` 으로 보강. `\spaceskip`
+    //   은 0pt 가 아닐 때 interword-glue 를 덮어쓰므로 그룹 내에서만 적용되도록 스코프 유지.
+    // 사용자 요청 25차: 0.5em 은 과도 → 80% 수준인 0.4em 로 축소. 한글 사이 공간이
+    //   시각적으로 "1글자" 정도로 자연스러워지도록.
+    lines.push('      \\YggWithUnifiedDigits{{\\YggSubjectDisplay\\fontsize{\\the\\dimexpr 1.452\\mockTitleFontSize\\relax}{\\the\\dimexpr 1.452\\mockTitleLead\\relax}'
+      + '\\selectfont\\bfseries\\spaceskip=0.4em\\xspaceskip=0.4em\\mockTitlePageMain}}%');
+    lines.push('    }%');
+    lines.push('  }%');
     lines.push('  \\renewcommand{\\headrulewidth}{0pt}%');
     lines.push('  \\renewcommand{\\footrulewidth}{0pt}%');
     lines.push('  \\fancyfoot{}%');
@@ -1365,13 +1649,17 @@ function buildPreamble({
     // 폭 = 용지 "긴 변" 의 4%  ( B4(257x364mm) 세로배치 기준 14.56mm ≈ 41pt ).
     //   - \paperwidth < \paperheight  → portrait: 긴 변은 \paperheight.
     //   - 그 외 (landscape 또는 정사각형)  → 긴 변은 \paperwidth.
+    // 사용자 요청 21차 (재수정): 너비 10% 증가 + 높이 5% 감소.
+    //   W = 0.04×긴변 × 1.10 = 0.044×긴변.
+    //   H = 0.5×W × 0.95 / 1.10 × W (원본 대비) → new H/new W = 0.5 × 0.95 / 1.10 = 0.4318.
+    //   즉 new H = 0.4318 × new W (= old H × 0.95 = 원본 대비 5% 감소).
     lines.push('\\AtBeginDocument{%');
     lines.push('  \\ifdim\\paperheight>\\paperwidth%');
-    lines.push('    \\setlength{\\mockPageBoxW}{\\dimexpr0.04\\paperheight\\relax}%');
+    lines.push('    \\setlength{\\mockPageBoxW}{\\dimexpr0.044\\paperheight\\relax}%');
     lines.push('  \\else%');
-    lines.push('    \\setlength{\\mockPageBoxW}{\\dimexpr0.04\\paperwidth\\relax}%');
+    lines.push('    \\setlength{\\mockPageBoxW}{\\dimexpr0.044\\paperwidth\\relax}%');
     lines.push('  \\fi%');
-    lines.push('  \\setlength{\\mockPageBoxH}{\\dimexpr0.5\\mockPageBoxW\\relax}%');
+    lines.push('  \\setlength{\\mockPageBoxH}{\\dimexpr0.4318\\mockPageBoxW\\relax}%');
     // 제목페이지 타이틀 폰트 크기: title = \paperwidth * 4%, titleTop = title * 55%.
     //   B4 가로 257mm 기준 ⇒ title ≈ 10.28mm ≈ 29.2pt, titleTop ≈ 16.1pt.
     //   행간(lead) 은 각각 글자 크기의 1.15배로 설정.
@@ -1454,14 +1742,44 @@ function buildPreamble({
     // 세로선 시작 y (제목페이지용). \mockLayTopY 는 위에서 이 overlay 안에 세팅됐고,
     //   \mockHeaderBoxHeight 는 제목페이지 콘텐츠가 shipout 에 포함될 때 이미 글로벌로 세팅됨.
     //   일반 페이지에서는 이 값이 사용되지 않으므로 값이 부정확해도 무방.
+    // offset (사용자 요청 6차) :
+    //   - 제목페이지의 타이틀/부제 블록이 fancyhdr `[C]` parbox[t] 에 담기며,
+    //     구조는 [타이틀 "수학 영역"] → vskip 11.7pt (X) → [부제 "2025 …"] 순.
+    //   - `headsep=14pt` 로 설정 → parbox top 이 head 영역 top 에 align.
+    //     head 영역 top = body_top - headsep - headheight = body_top - 86pt.
+    //     parbox[t]: 타이틀 baseline ≈ head 영역 top + ascent ≈ body_top - 86 + 22 = body_top - 64pt.
+    //     부제 baseline = 타이틀 baseline + 11.7pt + (lead 차이 보정 ≈ 20pt)
+    //                   ≈ body_top - 64 + 31.7 ≈ body_top - 32pt.
+    //   - 사용자 요청 7차 :
+    //       parbox[b] + `\\[11.7pt]` 로 head bottom (= 72.4pt, 일반 페이지와 동일) 에
+    //       수학영역 baseline 이 align. 수학영역 폰트 = mockTitleFontSize × 1.1 ≈ 32pt,
+    //       descender ≈ 3.5pt → 수학영역 bottom ≈ head bottom = 72.4pt.
+    //       사용자 요구 (수학영역↔가로선 여백) = X × 1.2 ≈ 14pt
+    //         → 가로선 y = 72.4 + 14 ≈ 86.4pt = body_top - 10pt.
+    //     ⇒ `\mockLayVRuleStartY = \mockLayTopY + 10pt`.
+    //   - 슬롯 첫 줄 ≈ body_top + \topskip (≈ body_top + 11pt) → 가로선 아래 ≈ 21pt 간격.
+    //   - `\mockHeaderBoxHeight` = 0pt 유지 (본문에 headerBlock 을 찍지 않음).
+    //   - 일반 페이지는 \mockLayRuleY 를 사용하므로 이 값은 무관.
     lines.push('  \\setlength{\\mockLayVRuleStartY}{\\mockLayTopY}%');
     lines.push('  \\addtolength{\\mockLayVRuleStartY}{-\\mockHeaderBoxHeight}%');
-    lines.push('  \\addtolength{\\mockLayVRuleStartY}{-28pt}%');
+    // 사용자 요청 15차: 직전 변경에서 제목페이지 디바이더/슬롯 시작점이 과도하게 위로 올라가
+    //   상단 여백이 부족해졌으므로, 제목페이지 전용 offset 을 14pt 로 되돌린다.
+    lines.push('  \\addtolength{\\mockLayVRuleStartY}{14pt}%');
 
     lines.push('  \\begin{tikzpicture}[remember picture,overlay]%');
     // 상단 header rule 과 세로 단구분선이 '한 점' 에서 만나도록 공유 y 좌표 사용.
-    //   \mockLayRuleY = \mockLayTopY + 14pt (본문 상단선보다 14pt 위, 일반 페이지용).
-    //   → 가로선과 슬롯 첫 줄(= \mockLayTopY) 사이 간격 = 14pt.
+    //   \mockLayRuleY = \mockLayTopY + 11pt (본문 상단선보다 11pt 위, 일반 페이지용).
+    //   → 가로선과 슬롯 첫 줄(= \mockLayTopY) 사이 간격 = 11pt.
+    // 사용자 요청 17차: +14pt → +11pt 로 3pt 축소 (디바이더가 본문에 더 가까워짐).
+    //   효과: 디바이더-라벨박스 top 사이 간격이 10pt → 7pt 로 ~30% 감소.
+    //   단, 이 변경만으로는 페이지라벨-디바이더 간격이 3pt 증가하므로
+    //   위의 `top=29.95mm` 6pt 축소와 결합해 전체적으로 페이지라벨-디바이더 간격은
+    //   14.87pt → 11.87pt (20% 감소) 로 맞춘다.
+    // 사용자 요청 19차: +11pt → +14pt 로 3pt 확대. 두 가지 목적 동시 달성:
+    //   1) 제목페이지 디바이더-슬롯 간격(14pt)과 일치 → 페이지 간 일관성.
+    //   2) 비제목 페이지 디바이더가 3pt 위로 이동 → 페이지라벨과의 간격 ~20% 축소.
+    //      (디바이더↔페이지라벨 하단 간격 ≈ 11.85pt → 8.85pt, 약 25% 감소.)
+    //   수학영역/홀수형 박스는 위 raisebox 보정으로 3pt 함께 상승.
     lines.push('    \\pgfmathsetlengthmacro{\\mockLayRuleY}{\\mockLayTopY+14pt}%');
     // 상단 header rule + 세로 단구분선.
     //   - 일반 페이지  : 가로선 y = \mockLayRuleY        / 세로선 시작 y = \mockLayRuleY.
@@ -1474,11 +1792,13 @@ function buildPreamble({
     //   - 가로선 / 페이지박스 : 0.6pt (기존과 동일).
     //   - 세로 단구분선       : 0.8pt (가로선보다 약간 더 두껍게 — "단 구분선만 조금 더 두껍게").
     lines.push('    \\ifmocktitlepage%');
-    // 제목페이지: 가로선 (헤더 아래로 내림).
+    // 제목페이지: 가로선 (수학영역 아래).
     lines.push('      \\draw[line width=0.6pt]%');
     lines.push('        ([shift={(\\mockLayLeftX,\\mockLayVRuleStartY)}]current page.north west) --%');
     lines.push('        ([shift={(\\mockLayRightX,\\mockLayVRuleStartY)}]current page.north west);%');
-    // 제목페이지: 세로선 (헤더 아래 ~ 본문 하단 + 5pt).
+    // 사용자 요청 10차: 세로선 시작 y 를 **가로선과 동일**한 \mockLayVRuleStartY 로 맞춤
+    //   → 가로선과 세로선이 붙어있음. (메인 타이틀 폰트가 +20% 커졌지만 가로선 offset 을
+    //   14pt 로 낮췄기 때문에 여전히 수학영역 아래에 위치 → 관통 없음.)
     lines.push('      \\draw[line width=0.8pt]%');
     lines.push('        ([shift={(\\mockLayCenterX,\\mockLayVRuleStartY)}]current page.north west) --%');
     lines.push('        ([shift={(\\mockLayCenterX,\\mockLayVRuleEndY)}]current page.north west);%');
@@ -1915,17 +2235,31 @@ function renderOneQuestion(question, {
     const spaced = Array.from(String(sectionLabel)).map((c) => escapeLatexText(c)).join('\\,');
     // 10% 확대: 폰트 13.2pt(약 \large 의 1.1배), fboxsep 4.4pt, 좌우 \hspace 13.2pt, fboxrule 0.55pt.
     // \hspace{-1em} 으로 leftskip 바깥으로 빼서 slot minipage 왼쪽 경계에 딱 붙임.
+    // 사용자 요청 22차: 라벨박스 내부 '5지선다형' 같은 텍스트에서 '5' 만 Latin instance
+    //   로 분기되는 이질감을 제거하기 위해 fbox 내부 전체를 `\YggWithUnifiedDigits` 로
+    //   감싼다. 래퍼는 지역 scope 에서만 charclass 를 바꾸고 원복하므로 본문 미영향.
+    //   (아래 buildLabelProbe 도 동일하게 감싸 ht/dp 계산이 실제 렌더와 1:1 일치하도록 함.)
     const labelBoxInner = '{\\setlength{\\fboxrule}{0.55pt}\\setlength{\\fboxsep}{4.4pt}'
-      + '\\fbox{\\hspace{13.2pt}\\fontsize{13.2pt}{15.84pt}\\selectfont\\bfseries '
+      + '\\fbox{\\YggWithUnifiedDigits{\\YggTopLabel\\hspace{13.2pt}\\fontsize{13.2pt}{15.84pt}\\selectfont '
       + spaced
-      + '\\hspace{13.2pt}}}';
-    // labelBox 를 \raisebox 로 감싸 output ht 만 +5pt. content 는 제자리(raise=0) 이므로
-    //   ink 는 움직이지 않고 "box 상단의 가상 여백 5pt" 만 확보 → slot top 이 ink 위 5pt 에 위치.
-    //   짝 slot 의 \vphantom strut 도 동일한 +5pt 트릭을 적용해 두 slot 의 slot top 이 정렬.
-    const labelBox = `\\raisebox{0pt}[\\dimexpr\\height+5pt\\relax][\\depth]{${labelBoxInner}}`;
+      + '\\hspace{13.2pt}}}}';
+    // labelBox 를 \raisebox 로 감싸 line ht 를 조절한다.
+    //   - 사용자 요청 20차 (초안): 가로 구분선-라벨박스 상단 간격을 30% 축소.
+    //     기존(raise=0pt, strut +5pt) 기준 gap ≈ 19pt (divider y = body_top-14pt,
+    //     labelBox visible top ≈ body_top+5pt).
+    //   - 사용자 요청 21차 (수정본):
+    //       ① gap 을 기존 13pt → 11.7pt (10% 축소) 만 조정.
+    //       ② 라벨박스 text baseline 과 짝슬롯 qNum baseline 이 수평 유지.
+    //     구현: `\raisebox{0pt}[\dimexpr\height-2.3pt\relax][\depth]` 로 **baseline 은
+    //     그대로 두고 reported ht 만 2.3pt 축소** 한다. (과거 raise=7.3pt 방식은 baseline
+    //     자체가 이동해 qNum 과의 수평이 깨지는 부작용이 있어 철회)
+    //     → 짝 slot strut 에도 동일한 2.3pt 축소 적용 → line ht = a - 2.3pt, 양쪽 공통
+    //       baseline 유지 → labelBox ink top = body_top - 2.3pt → gap = 14 - 2.3 = 11.7pt ✓
+    //   - 라벨박스 ↔ 문항번호 간격 (\vspace) 은 10pt → 7pt (30% 축소) 유지.
+    const labelBox = `\\raisebox{0pt}[\\dimexpr\\height-2.3pt\\relax][\\depth]{${labelBoxInner}}`;
     parts.push(
       `\\noindent\\hspace{-1em}${labelBox}\\par`,
-      '\\vspace{10pt}',
+      '\\vspace{7pt}',
     );
   }
 
@@ -2488,8 +2822,14 @@ function renderMockTitlePageHeader({ titleTop = '', title = '', subtitle = '' } 
   inner.push('\\centering');
   if (titleTop) {
     // titleTop : title 의 70% 크기. \the\dimen 으로 pt 문자열을 뽑아 \fontsize 에 전달.
+    // 사용자 요청(3차):
+    //   - titleTop 에 `\bfseries` 로 굵게 효과 추가.
+    //   - titleTop 자체를 5pt 위로 올림 (\raisebox). [\height][\depth] 지정으로 박스 크기는 원본 유지
+    //     → 뒤이은 \vspace/\vbox 수직 배치에 영향 없음, 시각적 이동만.
+    //   - titleTop ↔ title 간 간격 `\vspace{6pt}` → `\vspace{9pt}` (지금의 1.5배).
+    //     결과적으로 title 도 위로 살짝 올라감 (subtitle -5pt + gap +3pt = net -2pt).
     inner.push(
-      `{\\fontsize{\\the\\mockTitleTopFontSize}{\\the\\mockTitleTopLead}\\selectfont ${escapeLatexText(titleTop)}}\\par\\vspace{6pt}`,
+      `\\raisebox{5pt}[\\height][\\depth]{\\fontsize{\\the\\mockTitleTopFontSize}{\\the\\mockTitleTopLead}\\selectfont\\bfseries ${escapeLatexText(titleTop)}}\\par\\vspace{9pt}`,
     );
   }
   if (title) {
@@ -2568,13 +2908,15 @@ function renderMockGridPageLatex(
   const rightTopPadsPt = [];
   const pairProbePrelude = [];
   // 라벨 박스 probe — 실제 렌더 스타일과 1:1 동일해야 ht/dp 가 맞는다.
+  //   사용자 요청 22차: 실제 labelBoxInner 와 똑같이 `\YggWithUnifiedDigits` 를 적용해야
+  //   숫자 glyph 의 ht/dp (hangul instance 기반) 측정이 일치한다.
   const buildLabelProbe = (txt) => {
     if (!txt) return '';
     const spaced = Array.from(String(txt)).map((c) => escapeLatexText(c)).join('\\,');
     return '{\\setlength{\\fboxrule}{0.55pt}\\setlength{\\fboxsep}{4.4pt}'
-      + '\\fbox{\\hspace{13.2pt}\\fontsize{13.2pt}{15.84pt}\\selectfont\\bfseries '
+      + '\\fbox{\\YggWithUnifiedDigits{\\YggTopLabel\\hspace{13.2pt}\\fontsize{13.2pt}{15.84pt}\\selectfont '
       + spaced
-      + '\\hspace{13.2pt}}}';
+      + '\\hspace{13.2pt}}}}';
   };
   // 라벨이 있는 row 는 공통 상단 padding.
   //   (주의) `\vspace*{Npt}` 방식은 minipage[t][h][t] vlist 첫 item 에 삽입 시
@@ -2588,7 +2930,21 @@ function renderMockGridPageLatex(
     const qL = leftQuestions[r];
     const qR = rightQuestions[r];
 
-    // --- case 1: row 에 라벨이 하나라도 있음 → 라벨박스 ht 를 기준으로 동기화 ---
+    // --- case 1: row 에 라벨이 하나라도 있음 ---
+    //
+    // 사용자 요청 21차 (수정본):
+    //   목표 ① 가로 구분선 ↔ 라벨박스 상단 gap 을 기존 13pt → 11.7pt (10% 축소).
+    //   목표 ② 라벨박스 내부 텍스트 baseline ↔ 짝슬롯 qNum baseline 이 수평 정렬.
+    //
+    //   구현: strut 을 복원하되 `+5pt` 인플레이션 대신 "baseline 유지 + reported ht 만
+    //         2.3pt 축소" 로 바꾼다. 동일한 ht 축소를 labelBox 에도 적용한다.
+    //         → line ht = a - 2.3pt (양쪽 동일) 로 line ceiling 이 위로 올라가면서
+    //           라벨박스 ink top 이 body_top 보다 2.3pt 위로 돌출 → gap = 14 - 2.3 = 11.7pt ✓
+    //         → labelBox external baseline 은 content baseline 그대로 (raise=0) →
+    //           짝 slot strut 의 baseline(=labelProbe baseline=labelBox text baseline) 과
+    //           외부 line baseline 에서 자동 공유 → qNum baseline = labelBox text baseline ✓
+    //   * 짝슬롯 qNum 줄에 분수·큰 수식이 있어 qNum ht 가 strut ht(=a-2.3) 를 초과할 경우
+    //     line ceiling 이 그쪽 ht 로 확장 → labelBox 위치도 자연히 그에 맞춰 내려감.
     if (labelL || labelR) {
       const probeText = labelL || labelR;
       const macroName = `pair@labelprobe@${pageMacroPrefix}@${r}`;
@@ -2596,20 +2952,11 @@ function renderMockGridPageLatex(
         `% --- pair label probe row ${r} (page ${pageMacroPrefix}) ---`,
         `\\expandafter\\gdef\\csname ${macroName}\\endcsname{${buildLabelProbe(probeText)}}%`,
       );
-      // 짝슬롯 strut 은 \raisebox 로 output ht 를 "라벨박스 ht + 5pt" 로 인위적으로 부풀린다.
-      //   - content(\vphantom) 는 제자리(raise=0). 실제 ink 는 없으므로 위아래 overlap 없음.
-      //   - output ht = \height + 5pt  → line ht 가 라벨박스보다 5pt 더 크게 잡힘.
-      //   - 짝 slot first hbox ht = line ht → minipage[t] 의 "slot top = first hbox top" 규칙에 따라
-      //     slot top 이 ink 위 5pt 에 위치. 라벨 있는 slot 에서도 labelBox 에 동일한 트릭을 적용하면
-      //     두 slot 모두 "slot top 과 ink top 사이 5pt 여백" 이 공통으로 확보된다.
-      const strutSnippet = `\\raisebox{0pt}[\\dimexpr\\height+5pt\\relax][\\depth]{\\vphantom{\\csname ${macroName}\\endcsname}}`;
-      // 라벨 있는 slot : 라벨박스 자체가 첫 hbox → strut 불필요.
-      // 라벨 없는 slot : 문항번호 라인 앞에 strut 주입 → 라벨박스와 동일 ht 확보.
+      const strutSnippet = `\\raisebox{0pt}[\\dimexpr\\height-2.3pt\\relax][\\depth]{\\vphantom{\\csname ${macroName}\\endcsname}}`;
       leftStrutMacros.push(labelL ? '' : strutSnippet);
       rightStrutMacros.push(labelR ? '' : strutSnippet);
       leftLabelStrutMacros.push(null);
       rightLabelStrutMacros.push(null);
-      // 공통 상단 pad : 라벨 없는 쪽도 5pt 만큼 내려가야 수평.
       leftTopPadsPt.push(LABEL_ROW_TOP_PAD_PT);
       rightTopPadsPt.push(LABEL_ROW_TOP_PAD_PT);
       continue;
@@ -2689,40 +3036,20 @@ function renderMockGridPageLatex(
   // outer minipage 는 자기 높이가 고정이므로 중간에 페이지 breaker 가 끼어들지 않는다.
   // 좌/우 minipage 높이는 outer 안에서 남은 공간(= \textheight - 헤더 박스 \ht+\dp - 여유) 로 계산.
   if (titleHeader) {
-    const headerBlock = renderMockTitlePageHeader(titleHeader);
-    // 제목페이지 슬롯 위치 = 헤더 바닥 + 32pt (= headerBlock 끝 \vspace{8pt} + 추가 \vspace*{24pt}).
-    //   세로선/가로선 시작 y (\mockLayVRuleStartY) = 헤더 바닥 + 28pt (overlay 쪽 -28pt 유지).
-    //   → 가로선 ↔ 슬롯 첫 baseline 수식 간격 = 32 - 28 = 4pt (설계값).
-    //
-    //   실측 기반 근본 보정:
-    //     - 일반 페이지 : 가로선 y = TopY+14pt, 슬롯 첫 baseline = TopY-\topskip(~10pt)
-    //                   → 가로선 ~ 첫 baseline ≈ 24pt.
-    //     - 제목 페이지 : 기존 \vspace*{31pt} 사용 시 ≈ 31.5pt 로 일반보다 +7pt.
-    //     - \vspace*{31pt} → \vspace*{24pt} 로 7pt 축소 → 일반과 동일한 ~24pt 간격.
+    // 사용자 요청(5차): 제목페이지 타이틀/부제를 fancyhdr 의 `[C]` parbox[b] 로 이관.
+    //   - 제목페이지 전용 `\newgeometry{...,headheight=72pt,headsep=14pt,...}` (호출부에서 적용).
+    //   - 본문에서는 headerBlock 출력하지 않음 → `\mockHeaderBoxHeight = 0`.
+    //   - 가로선을 "부제 ↔ 타이틀 사이" 로 이동했으므로, 슬롯 시작도 함께 위로 당겨서
+    //     타이틀 바로 밑에 자연스러운 간격(≈12pt)만 두고 시작하도록 한다.
+    //     → body_top 기준 `\vspace*{-14pt}` 로 슬롯 첫 줄을 14pt 위로 올림.
+    //     (타이틀 bottom ≈ body_top - 16pt 이므로 슬롯 label top ≈ body_top - 3pt
+    //      ⇒ 타이틀 bottom 과 slot label top 간 ≈ 13pt 간격.)
     return [
       '\\begingroup',
-      // 제목페이지 플래그는 buildDocumentTexSource 의 페이지 루프에서
-      //   \AtBeginShipoutNext{\global\mocktitlepagetrue} 로 shipout 타이밍에 세팅.
-      //   (여기서 \global 으로 세팅하면 output routine 지연으로 인접 페이지에 새 나갈 수 있음.)
       '\\setlength{\\mockSlotGap}{8pt}',
+      '\\global\\setlength{\\mockHeaderBoxHeight}{0pt}%',
       '\\noindent\\begin{minipage}[t][\\textheight][t]{\\linewidth}',
-      // 헤더 박스 생성 & 출력. renderMockTitlePageHeader 내부의 \setbox 는 로컬이므로
-      //   overlay 가 \ht/\dp 를 읽을 땐 이미 스코프가 종료되어 값이 롤백될 수 있다.
-      //   → 출력 직후 '전역 dimen' \mockHeaderBoxHeight 로 복사해둔다.
-      headerBlock,
-      '\\global\\setlength{\\mockHeaderBoxHeight}{\\ht\\mockHeaderBox}%',
-      '\\global\\advance\\mockHeaderBoxHeight by \\dp\\mockHeaderBox%',
-      // 주의: \mockLayVRuleStartY 는 여기서 계산하면 안 된다.
-      //   \mockLayTopY 는 \AddToShipoutPictureFG 의 overlay 본문에서 shipout 시점에
-      //   세팅되므로, 페이지 콘텐츠 안에서는 아직 0pt → 부정확한 값이 저장됨.
-      //   → overlay 내부에서 \mockLayTopY 세팅 직후 \mockHeaderBoxHeight 를 사용해
-      //     \mockLayVRuleStartY 를 계산하도록 위임.
-      // 본문 시작 전 추가 수직 공백 — headerBlock 끝 \vspace{8pt} 와 합쳐
-      //   헤더 바닥 → 슬롯 첫 줄 = 32pt. overlay 가로/세로선 시작은 헤더 바닥+28pt.
-      //   실측 기반: 일반 페이지 가로선~첫 baseline 간격(~24pt) 과 동일하게 맞춤.
-      '\\vspace*{24pt}',
-      // 남은 컬럼 높이 = \textheight - (헤더 높이 + 32pt 여백).
-      '\\setlength{\\mockColumnHeight}{\\dimexpr\\textheight-\\mockHeaderBoxHeight-32pt\\relax}',
+      '\\setlength{\\mockColumnHeight}{\\dimexpr\\textheight-8pt\\relax}',
       '\\ifdim\\mockColumnHeight<180pt\\setlength{\\mockColumnHeight}{180pt}\\fi',
       `\\setlength{\\mockLeftSlotHeight}{\\dimexpr(\\mockColumnHeight-${leftGapExpr})/${safeLeftSlots}\\relax}`,
       `\\setlength{\\mockRightSlotHeight}{\\dimexpr(\\mockColumnHeight-${rightGapExpr})/${safeRightSlots}\\relax}`,
@@ -3071,6 +3398,7 @@ export function buildDocumentTexSource(questions, options = {}) {
     fontFamily = 'Malgun Gothic',
     fontBold = 'Malgun Gothic Bold',
     fontRegularPath = '',
+    subjectFontPath = '',
     fontSize = 11,
     columns = 2,
     subjectTitle = '수학 영역',
@@ -3092,12 +3420,23 @@ export function buildDocumentTexSource(questions, options = {}) {
     titlePageIndices = [],
     // 제목 페이지별 타이틀/부제 override. [{ page, title, subtitle }, ...]
     titlePageHeaders = [],
+    // UI 가 관리하는 컬럼 라벨 앵커. manual/auto/suppressed 3가지 source 를 가진다.
+    //   - manual   : 사용자가 직접 입력한 라벨 (auto 를 덮어씀)
+    //   - auto     : 서버 기본 생성. 클라이언트가 payload 에 포함해 보내면 그대로 그려진다.
+    //   - suppressed : 사용자가 × 로 '제거' 한 slot. 이 slot 에는 auto 라벨도 출력하지 않는다.
+    columnLabelAnchors = [],
+    // 클라이언트(Flutter) 가 '새로고침' / 'PDF 생성' 경로에서 true 로 넘겨주는 플래그.
+    //   true 이면 모드 전환 기반 자동 라벨 생성(예: '5지선다형') 을 전면 중단하고,
+    //   columnLabelAnchors 에 들어있는 항목들만 그대로 사용한다.
+    disableAutoLabels = false,
+    layoutMeta = null,
   } = options;
 
   const logoEnabled = includeAcademyLogo && !!academyLogoPath;
 
   const preamble = buildPreamble({
     paper, fontFamily, fontBold, fontRegularPath, fontSize,
+    subjectFontPath,
     subjectTitle, profile,
     hidePreviewHeader,
     geometryOverride,
@@ -3112,6 +3451,7 @@ export function buildDocumentTexSource(questions, options = {}) {
 
   const qList = Array.isArray(questions) ? questions : [];
   const isMock = profile === 'mock' || profile === 'csat';
+  const effectiveLayoutMeta = layoutMeta && typeof layoutMeta === 'object' ? layoutMeta : null;
   let lastMode = null;
 
   // 표지 페이지 삽입 (본문 앞). mock/csat 뿐 아니라 일반 프로파일에서도 옵션이 켜졌으면 허용.
@@ -3199,6 +3539,88 @@ export function buildDocumentTexSource(questions, options = {}) {
       } while (n >= 0);
       return s;
     };
+    // 제목페이지 전용 geometry (사용자 요청 4차):
+    //   - 부제(×1.1) + vskip 11.7pt + 큰 타이틀(\mockTitleFontSize) 을 fancyhdr 의 [C] vbox 로 그림.
+    //     vbox 예상 높이 ≈ 22pt(부제 lead) + 11.7pt + 36pt(타이틀 lead) ≈ 70pt ⇒ headheight=72pt.
+    //   - headsep=14pt : 헤더 바닥 ↔ body_top 간격. 가로선은 이 범위 혹은 헤더 내부에 배치됨.
+    //   - top ≈ 34mm ≈ 96.4pt : headheight+headsep = 86pt 를 top 안에 수용.
+    //   - bottom / hmargin 은 일반 페이지와 동일 (세로선 끝 / 페이지박스 위치 유지).
+    // 사용자 요청 18차: 제목페이지 부제/페이지라벨 정렬은 유지한 채,
+    //   가로 디바이더와 슬롯 시작점을 한 번 더 아래로 보낸다.
+    //   body_top 과 headsep 을 동일하게 +4.56pt 확장하면 header bottom 은 유지되고
+    //   body_top/디바이더/슬롯만 선형으로 하향된다.
+    const titleGeom = `${paper === 'A3' ? 'a3paper' : (paper === 'A4' ? 'a4paper' : 'b4paper')}`
+      + ',hmargin=14mm,top=52.59mm,bottom=20mm,headheight=72pt,headsep=38.68pt';
+    // 직전 페이지가 제목페이지였는지 기록 (일반 페이지 진입 시 \restoregeometry 삽입용).
+    let activeTitleGeom = false;
+    const autoColumnLabelAnchors = [];
+    // UI 에서 들어온 columnLabelAnchors 를 page→(col,row) 맵으로 정규화.
+    //   manual: 해당 slot 의 auto 라벨을 덮어씀.
+    //   suppressed: 해당 slot 의 라벨을 완전히 제거 (auto 재생성도 금지).
+    //   auto: 현재 XeLaTeX 경로에선 재생성이 기본이므로 참고용.
+    //
+    // 주의: 서버(api/worker)의 normalizeColumnLabelAnchors 를 거치면
+    //   one.page 는 'first' | 'all' | number 중 하나가 될 수 있다.
+    //   'first' 는 1페이지, 'all' 은 모든 페이지로 해석해야 한다.
+    //   이전에 Number.parseInt 만 쓰면 'first' 가 NaN 이 되어 suppressed
+    //   entry 가 drop 되는 버그가 있었음.
+    const resolveAnchorPages = (raw, totalPages) => {
+      if (raw === 'all' || raw === 'every') {
+        const out = [];
+        for (let p = 1; p <= totalPages; p += 1) out.push(p);
+        return out;
+      }
+      if (raw === 'first' || raw === '' || raw === null || raw === undefined) {
+        return [1];
+      }
+      const str = String(raw).trim().toLowerCase();
+      if (str === 'all' || str === 'every') {
+        const out = [];
+        for (let p = 1; p <= totalPages; p += 1) out.push(p);
+        return out;
+      }
+      if (!str || str === 'first') return [1];
+      const n = Number.parseInt(str, 10);
+      if (Number.isFinite(n) && n >= 1) return [n];
+      return [];
+    };
+    const normalizedAnchorByPage = new Map();
+    if (Array.isArray(columnLabelAnchors)) {
+      for (const one of columnLabelAnchors) {
+        if (!one || typeof one !== 'object') continue;
+        const colRaw = Number.parseInt(
+          String(one.columnIndex ?? one.column ?? one.col ?? ''),
+          10,
+        );
+        const rowRaw = Number.parseInt(
+          String(one.rowIndex ?? one.row ?? ''),
+          10,
+        );
+        if (!Number.isFinite(colRaw) || colRaw < 0) continue;
+        const rowIdx = Number.isFinite(rowRaw) && rowRaw >= 0 ? rowRaw : 0;
+        const sourceRaw = String(one.source || '').trim().toLowerCase();
+        const label = String(one.label ?? one.text ?? '')
+          .replace(/\s+/g, ' ')
+          .trim();
+        const rawPage = one.page ?? one.pageIndex ?? one.pageNo ?? 1;
+        const pageNos = resolveAnchorPages(rawPage, pages.length);
+        for (const pageNoRaw of pageNos) {
+          if (!normalizedAnchorByPage.has(pageNoRaw)) {
+            normalizedAnchorByPage.set(pageNoRaw, new Map());
+          }
+          normalizedAnchorByPage
+            .get(pageNoRaw)
+            .set(`${colRaw}:${rowIdx}`, {
+              source: sourceRaw === 'suppressed'
+                ? 'suppressed'
+                : sourceRaw === 'auto'
+                  ? 'auto'
+                  : 'manual',
+              label,
+            });
+        }
+      }
+    }
     for (let i = 0; i < pages.length; i += 1) {
       const pageNo = i + 1;
       const titleHeader = hidePreviewHeader ? null : buildTitleHeaderForPage(pageNo);
@@ -3208,13 +3630,26 @@ export function buildDocumentTexSource(questions, options = {}) {
       //   '일반 페이지' 에선 명시적으로 false 로 리셋해야 직전 제목페이지 상태가
       //   이월되지 않는다.
       if (titleHeader) {
+        // 제목페이지 진입: geometry 를 headheight 확장 버전으로 전환.
+        if (!activeTitleGeom) {
+          parts.push(`\\newgeometry{${titleGeom}}`);
+          activeTitleGeom = true;
+        }
+        // `\fancyhead[C]` vbox 가 참조할 글로벌 매크로에 부제/타이틀 텍스트 세팅.
+        //   (subtitle 필드는 현재 디자인에서 사용하지 않음 — titleTop=부제, title=메인타이틀.)
+        parts.push(`\\gdef\\mockTitlePageSubtitle{${escapeLatexText(titleHeader.titleTop || '')}}`);
+        parts.push(`\\gdef\\mockTitlePageMain{${escapeLatexText(titleHeader.title || '')}}`);
         parts.push('\\thispagestyle{mocktitle}');
         // 이 페이지(ship out 직전)에만 제목페이지 플래그 ON.
         //   \AtBeginShipoutNext 는 '다음 1회의 shipout 직전' 실행되므로
         //   \AddToShipoutPictureFG 의 \ifmocktitlepage 분기를 이 페이지에서만 true 로.
         parts.push('\\AtBeginShipoutNext{\\global\\mocktitlepagetrue}');
       } else {
-        // 일반 페이지: 혹시 직전 타이틀 페이지에서 true 였다면 이 페이지 shipout 전에 false.
+        // 일반 페이지: 직전이 제목페이지였다면 geometry 를 원복.
+        if (activeTitleGeom) {
+          parts.push('\\restoregeometry');
+          activeTitleGeom = false;
+        }
         parts.push('\\AtBeginShipoutNext{\\global\\mocktitlepagefalse}');
         if (i === 0 && logoEnabled && !includeCoverPage) {
           // 첫 페이지 로고 강조(mockfirst) — 표지가 없고 제목 페이지 헤더도 없을 때.
@@ -3226,17 +3661,63 @@ export function buildDocumentTexSource(questions, options = {}) {
       const pageRightSlots = ov ? ov.right : rightSlots;
       // 페이지 문항들의 sectionLabel 결정. 문항 mode 가 직전 mode 와 다를 때만 라벨 부여.
       const pageQs = pages[i];
-      const pageLabels = pageQs.map((q) => {
+      const pageAnchorMap = normalizedAnchorByPage.get(pageNo) || new Map();
+      const pageLabels = pageQs.map((q, idx) => {
         const qMode = q?.mode
           || q?.questionMode
           || q?.export_mode
           || q?.exportMode
           || 'objective';
-        if (qMode === lastModeMock) return null;
+        const modeChanged = qMode !== lastModeMock;
         lastModeMock = qMode;
+        const columnIndex = idx < pageLeftSlots ? 0 : 1;
+        const rowIndex = idx < pageLeftSlots ? idx : (idx - pageLeftSlots);
+        const anchorKey = `${columnIndex}:${rowIndex}`;
+        const override = pageAnchorMap.get(anchorKey);
+        // 사용자가 × 로 제거한 slot: 라벨을 완전히 출력하지 않음.
+        if (override?.source === 'suppressed') return null;
+        // 사용자가 직접 입력한 라벨 / 이전 렌더에서 auto 로 붙었다가 클라이언트가 보관해서
+        //   다시 전달한 라벨: 그대로 출력. (auto 든 manual 이든 label 이 있으면 우선.)
+        if (override && override.label) {
+          return override.label;
+        }
+        // 새로고침/PDF 생성 경로에서는 모드 전환 기반 자동 라벨 생성을 중단한다.
+        //   (최초 렌더 경로에서는 flag 가 false 라 아래 기본 분기로 진입해 auto-gen 됨)
+        if (disableAutoLabels) return null;
+        if (!modeChanged) return null;
         if (qMode === 'objective') return '5지선다형';
         if (qMode === 'essay') return '서술형';
         return '단답형';
+      });
+      const defaultTopPt = titleHeader ? 16 : 9.2;
+      const defaultPaddingTopPt = titleHeader ? 27 : 35.8;
+      pageLabels.forEach((label, idx) => {
+        const columnIndex = idx < pageLeftSlots ? 0 : 1;
+        const rowIndex = idx < pageLeftSlots ? idx : (idx - pageLeftSlots);
+        const anchorKey = `${columnIndex}:${rowIndex}`;
+        const override = pageAnchorMap.get(anchorKey);
+        if (override?.source === 'suppressed') {
+          autoColumnLabelAnchors.push({
+            page: pageNo,
+            columnIndex,
+            rowIndex,
+            label: '',
+            source: 'suppressed',
+            topPt: defaultTopPt,
+            paddingTopPt: defaultPaddingTopPt,
+          });
+          return;
+        }
+        if (!label) return;
+        autoColumnLabelAnchors.push({
+          page: pageNo,
+          columnIndex,
+          rowIndex,
+          label,
+          source: override?.source === 'manual' ? 'manual' : 'auto',
+          topPt: defaultTopPt,
+          paddingTopPt: defaultPaddingTopPt,
+        });
       });
       parts.push(
         renderMockGridPageLatex(pages[i], {
@@ -3253,6 +3734,9 @@ export function buildDocumentTexSource(questions, options = {}) {
         }),
       );
       parts.push('\n');
+    }
+    if (effectiveLayoutMeta) {
+      effectiveLayoutMeta.columnLabelAnchors = autoColumnLabelAnchors;
     }
   } else {
     if (!hidePreviewHeader && (titlePageTopText || subjectTitle)) {
@@ -3324,5 +3808,8 @@ export function buildDocumentTexSource(questions, options = {}) {
   }
 
   parts.push('\\end{document}\n');
+  if (effectiveLayoutMeta && !Array.isArray(effectiveLayoutMeta.columnLabelAnchors)) {
+    effectiveLayoutMeta.columnLabelAnchors = [];
+  }
   return parts.join('\n');
 }
