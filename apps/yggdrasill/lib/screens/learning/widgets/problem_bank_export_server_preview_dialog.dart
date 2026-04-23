@@ -32,6 +32,7 @@ class ProblemBankPreviewRefreshRequest {
     required this.includeQuestionScore,
     required this.questionScoreByQuestionId,
     this.presetDisplayName = '',
+    this.presetIdToUpdate = '',
     this.mathEngine = 'xelatex',
     this.disableAutoLabels = false,
   });
@@ -51,6 +52,9 @@ class ProblemBankPreviewRefreshRequest {
   final bool includeQuestionScore;
   final Map<String, double> questionScoreByQuestionId;
   final String presetDisplayName;
+  // 사용자가 프리셋 카드에서 이 다이얼로그에 진입한 경우, 해당 preset 의 id 가 들어온다.
+  //   비어 있지 않으면 저장 시 "덮어쓰기"로 간주하고, 비어 있으면 "신규 저장"으로 처리한다.
+  final String presetIdToUpdate;
   final String mathEngine;
   // 새로고침 시 서버의 '객관식 맨앞/유형 변경시 자동 라벨 생성' 로직을 끄기 위한 플래그.
   //   true 이면 서버는 columnLabelAnchors 에 들어있는 항목들만 사용하고
@@ -73,6 +77,7 @@ class ProblemBankPreviewRefreshRequest {
     bool? includeQuestionScore,
     Map<String, double>? questionScoreByQuestionId,
     String? presetDisplayName,
+    String? presetIdToUpdate,
     String? mathEngine,
     bool? disableAutoLabels,
   }) {
@@ -94,6 +99,7 @@ class ProblemBankPreviewRefreshRequest {
       questionScoreByQuestionId:
           questionScoreByQuestionId ?? this.questionScoreByQuestionId,
       presetDisplayName: presetDisplayName ?? this.presetDisplayName,
+      presetIdToUpdate: presetIdToUpdate ?? this.presetIdToUpdate,
       mathEngine: mathEngine ?? this.mathEngine,
       disableAutoLabels: disableAutoLabels ?? this.disableAutoLabels,
     );
@@ -173,6 +179,8 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
     this.initialMathEngine = 'xelatex',
     this.initialQuestionScoreByQuestionId = const <String, double>{},
     this.questionScoreEntries = const <ProblemBankPreviewQuestionScoreEntry>[],
+    this.initialEditingPresetId = '',
+    this.initialEditingPresetName = '',
     this.onRefreshRequested,
     this.onGeneratePdfRequested,
     this.onSaveSettingsRequested,
@@ -199,6 +207,10 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
   final String initialMathEngine;
   final Map<String, double> initialQuestionScoreByQuestionId;
   final List<ProblemBankPreviewQuestionScoreEntry> questionScoreEntries;
+  // 프리셋 카드에서 진입한 경우에만 non-empty.
+  //   → UI 에서 "저장"(덮어쓰기) / "새 세팅으로 저장" 두 버튼을 노출하기 위한 신호.
+  final String initialEditingPresetId;
+  final String initialEditingPresetName;
   final ProblemBankPreviewRefreshCallback? onRefreshRequested;
   final ProblemBankPreviewGeneratePdfCallback? onGeneratePdfRequested;
   final ProblemBankPreviewSaveSettingsCallback? onSaveSettingsRequested;
@@ -231,6 +243,8 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
         const <String, double>{},
     List<ProblemBankPreviewQuestionScoreEntry> questionScoreEntries =
         const <ProblemBankPreviewQuestionScoreEntry>[],
+    String initialEditingPresetId = '',
+    String initialEditingPresetName = '',
     ProblemBankPreviewRefreshCallback? onRefreshRequested,
     ProblemBankPreviewGeneratePdfCallback? onGeneratePdfRequested,
     ProblemBankPreviewSaveSettingsCallback? onSaveSettingsRequested,
@@ -275,6 +289,8 @@ class ProblemBankExportServerPreviewDialog extends StatefulWidget {
               initialQuestionScoreByQuestionId:
                   initialQuestionScoreByQuestionId,
               questionScoreEntries: questionScoreEntries,
+              initialEditingPresetId: initialEditingPresetId,
+              initialEditingPresetName: initialEditingPresetName,
               onRefreshRequested: onRefreshRequested,
               onGeneratePdfRequested: onGeneratePdfRequested,
               onSaveSettingsRequested: onSaveSettingsRequested,
@@ -334,6 +350,10 @@ class _ProblemBankExportServerPreviewDialogState
   String _mathEngine = 'xelatex';
   String? _previewFailureMessage;
   String _lastPresetDisplayName = '';
+  // 프리셋 카드에서 진입했을 때 해당 프리셋을 "덮어쓰기" 하기 위한 참조.
+  //   빈 값이면 create-new 경로만 제공한다.
+  String _editingPresetId = '';
+  String _editingPresetName = '';
   late bool _includeAcademyLogo;
   late bool _includeCoverPage;
   late bool _includeAnswerSheet;
@@ -361,6 +381,11 @@ class _ProblemBankExportServerPreviewDialogState
     final initialEngine = widget.initialMathEngine.trim().toLowerCase();
     _mathEngine = initialEngine == 'mathjax-svg' ? 'mathjax-svg' : 'xelatex';
     _previewFailureMessage = null;
+    _editingPresetId = widget.initialEditingPresetId.trim();
+    _editingPresetName = widget.initialEditingPresetName.trim();
+    if (_editingPresetName.isNotEmpty) {
+      _lastPresetDisplayName = _editingPresetName;
+    }
     _subjectController =
         TextEditingController(text: widget.initialSubjectTitle);
     _titlePageTopTextController = TextEditingController(
@@ -2026,7 +2051,50 @@ class _ProblemBankExportServerPreviewDialogState
     return normalized;
   }
 
-  Future<void> _saveSettings() async {
+  /// 현재 편집 중인 프리셋(프리셋 카드에서 진입한 경우)에 덮어쓰기 저장.
+  ///   - 이름 프롬프트 없이 기존 display_name 을 그대로 재사용한다.
+  ///   - `_editingPresetId` 가 비어 있으면 호출되지 않도록 UI 에서 버튼을 비활성화한다.
+  Future<void> _saveUpdateCurrentPreset() async {
+    final callback = widget.onSaveSettingsRequested;
+    if (callback == null || _isSavingSettings || _isRefreshing) return;
+    final presetId = _editingPresetId.trim();
+    if (presetId.isEmpty) {
+      // 방어적 분기 — 이 경로는 UI 에서 진입할 수 없어야 한다.
+      await _saveAsNewPreset();
+      return;
+    }
+    final presetDisplayName = _editingPresetName.trim().isNotEmpty
+        ? _editingPresetName.trim()
+        : _defaultPresetDisplayName();
+    setState(() {
+      _isSavingSettings = true;
+      _lastPresetDisplayName = presetDisplayName;
+    });
+    try {
+      final payload = _buildRequestPayload().copyWith(
+        presetDisplayName: presetDisplayName,
+        presetIdToUpdate: presetId,
+      );
+      await callback(payload);
+      if (mounted) {
+        setState(() {
+          _editingPresetName = presetDisplayName;
+        });
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSavingSettings = false;
+        });
+      }
+    }
+  }
+
+  /// 새 프리셋으로 저장.
+  ///   - 프리셋 이름을 프롬프트로 받고 `presetIdToUpdate` 는 빈 값으로 둔다.
+  ///   - 저장 성공 후에는 같은 다이얼로그에서 방금 만든 프리셋을 "편집 중"으로 바꿔,
+  ///     이후 "저장" 버튼이 덮어쓰기로 동작하도록 한다.
+  Future<void> _saveAsNewPreset() async {
     final callback = widget.onSaveSettingsRequested;
     if (callback == null || _isSavingSettings || _isRefreshing) return;
     final presetDisplayName = await _askPresetDisplayName();
@@ -2038,6 +2106,7 @@ class _ProblemBankExportServerPreviewDialogState
     try {
       final payload = _buildRequestPayload().copyWith(
         presetDisplayName: presetDisplayName,
+        presetIdToUpdate: '',
       );
       await callback(payload);
     } finally {
@@ -2047,6 +2116,133 @@ class _ProblemBankExportServerPreviewDialogState
         });
       }
     }
+  }
+
+  /// 오른쪽 옵션 패널 하단의 저장 버튼 영역.
+  ///   - 프리셋 카드에서 진입한 경우(`_editingPresetId` 가 non-empty): '저장' + '새 세팅으로 저장' 두 버튼.
+  ///   - 일반 미리보기에서 진입한 경우: '세팅 저장' 단일 버튼(= save-as-new).
+  Widget _buildSaveSettingsButtons() {
+    final hasCallback = widget.onSaveSettingsRequested != null;
+    final busy = _isSavingSettings || _isGeneratingPdf || _isRefreshing;
+    final canSave = hasCallback && !busy;
+    final editingLabel = _editingPresetName.trim().isEmpty
+        ? '현재 프리셋'
+        : _editingPresetName.trim();
+    final isEditingPreset = _editingPresetId.trim().isNotEmpty;
+
+    Widget primaryUpdateButton() {
+      return FilledButton.icon(
+        onPressed: canSave ? _saveUpdateCurrentPreset : null,
+        style: FilledButton.styleFrom(
+          backgroundColor: const Color(0xFF1F3842),
+          foregroundColor: const Color(0xFFD9F0FF),
+          disabledBackgroundColor: const Color(0xFF1A2A31),
+          disabledForegroundColor: const Color(0xFF86A4B3),
+          minimumSize: const Size.fromHeight(42),
+          shape: const StadiumBorder(),
+        ),
+        icon: _isSavingSettings
+            ? const SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : const Icon(Icons.save_outlined, size: 18),
+        label: const Text(
+          '저장',
+          style: TextStyle(
+            fontWeight: FontWeight.w800,
+            fontSize: 13,
+          ),
+        ),
+      );
+    }
+
+    Widget secondarySaveAsNewButton({bool primary = false}) {
+      return OutlinedButton.icon(
+        onPressed: canSave ? _saveAsNewPreset : null,
+        style: OutlinedButton.styleFrom(
+          foregroundColor: const Color(0xFFD9F0FF),
+          disabledForegroundColor: const Color(0xFF86A4B3),
+          side: const BorderSide(color: Color(0xFF2F4B55), width: 1.2),
+          minimumSize: const Size.fromHeight(42),
+          shape: const StadiumBorder(),
+          backgroundColor:
+              primary ? const Color(0xFF1F3842) : const Color(0xFF121C21),
+        ),
+        icon: _isSavingSettings
+            ? const SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : const Icon(Icons.note_add_outlined, size: 18),
+        label: const Text(
+          '새 세팅으로 저장',
+          style: TextStyle(
+            fontWeight: FontWeight.w800,
+            fontSize: 13,
+          ),
+        ),
+      );
+    }
+
+    if (!isEditingPreset) {
+      // 프리셋 카드 진입이 아닌 경우: 단일 "세팅 저장" 버튼.
+      //   내부 동작은 save-as-new 와 동일하다(프리셋 이름 프롬프트).
+      return SizedBox(
+        width: double.infinity,
+        child: FilledButton.icon(
+          onPressed: canSave ? _saveAsNewPreset : null,
+          style: FilledButton.styleFrom(
+            backgroundColor: const Color(0xFF1F3842),
+            foregroundColor: const Color(0xFFD9F0FF),
+            disabledBackgroundColor: const Color(0xFF1A2A31),
+            disabledForegroundColor: const Color(0xFF86A4B3),
+            minimumSize: const Size.fromHeight(42),
+            shape: const StadiumBorder(),
+          ),
+          icon: _isSavingSettings
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.save_outlined, size: 18),
+          label: const Text(
+            '세팅 저장',
+            style: TextStyle(
+              fontWeight: FontWeight.w800,
+              fontSize: 13,
+            ),
+          ),
+        ),
+      );
+    }
+
+    // 프리셋 카드 진입: 덮어쓰기("저장") + 신규 저장 두 버튼.
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(bottom: 6),
+          child: Text(
+            '편집 중: $editingLabel',
+            style: const TextStyle(
+              color: Color(0xFFB6C9CF),
+              fontSize: 11.5,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.2,
+            ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        primaryUpdateButton(),
+        const SizedBox(height: 8),
+        secondarySaveAsNewButton(),
+      ],
+    );
   }
 
   Widget _buildSectionCard({
@@ -3391,39 +3587,7 @@ class _ProblemBankExportServerPreviewDialogState
                     ),
                   ),
                   const SizedBox(height: 12),
-                  SizedBox(
-                    width: double.infinity,
-                    child: FilledButton.icon(
-                      onPressed: (widget.onSaveSettingsRequested == null ||
-                              _isSavingSettings ||
-                              _isGeneratingPdf ||
-                              _isRefreshing)
-                          ? null
-                          : _saveSettings,
-                      style: FilledButton.styleFrom(
-                        backgroundColor: const Color(0xFF1F3842),
-                        foregroundColor: const Color(0xFFD9F0FF),
-                        disabledBackgroundColor: const Color(0xFF1A2A31),
-                        disabledForegroundColor: const Color(0xFF86A4B3),
-                        minimumSize: const Size.fromHeight(42),
-                        shape: const StadiumBorder(),
-                      ),
-                      icon: _isSavingSettings
-                          ? const SizedBox(
-                              width: 16,
-                              height: 16,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(Icons.save_outlined, size: 18),
-                      label: const Text(
-                        '세팅 저장',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w800,
-                          fontSize: 13,
-                        ),
-                      ),
-                    ),
-                  ),
+                  _buildSaveSettingsButtons(),
                   const SizedBox(height: 8),
                   SizedBox(
                     width: double.infinity,

@@ -2741,9 +2741,43 @@ class _ClassContentScreenState extends State<ClassContentScreen>
 
     final modeByUid = preset.questionModeByQuestionUid;
     final presetScoreByUid = preset.questionScoreByQuestionUid;
+
+    // 프리셋(renderConfig)에 저장된 페이지별 문항 수 레이아웃을 우선 사용한다.
+    // 저장 포맷: `[{pageIndex: 1, left: N, right: M}, ...]` (1-based pageIndex).
+    // 총 문항 = left + right. 없거나 비어있으면 question.sourcePage 로 폴백.
+    final pageCapacityByPage = <int, int>{};
+    final rawPageRows = preset.renderConfig['pageColumnQuestionCounts'];
+    if (rawPageRows is List) {
+      for (final row in rawPageRows) {
+        if (row is! Map) continue;
+        final map = Map<String, dynamic>.from(row);
+        final pageIdx = int.tryParse(
+              '${map['pageIndex'] ?? map['page'] ?? map['pageNo'] ?? ''}',
+            ) ??
+            0;
+        final left = int.tryParse(
+              '${map['left'] ?? map['leftCount'] ?? map['col1'] ?? 0}',
+            ) ??
+            0;
+        final right = int.tryParse(
+              '${map['right'] ?? map['rightCount'] ?? map['col2'] ?? 0}',
+            ) ??
+            0;
+        if (pageIdx <= 0) continue;
+        final int capacity =
+            (left < 0 ? 0 : left) + (right < 0 ? 0 : right);
+        if (capacity <= 0) continue;
+        pageCapacityByPage[pageIdx] = capacity;
+      }
+    }
+    final orderedPageNumbers = pageCapacityByPage.keys.toList()..sort();
+
     final cellsByPage = <int, List<HomeworkAnswerGradingCell>>{};
     final scoreByQuestionKey = <String, double>{};
     var fallbackIndex = 0;
+    var layoutCursor = 0; // orderedPageNumbers 인덱스
+    var layoutRemaining =
+        orderedPageNumbers.isEmpty ? 0 : pageCapacityByPage[orderedPageNumbers.first]!;
     for (final uid in selectedUids) {
       final question = questionByKey[uid];
       if (question == null) continue;
@@ -2754,7 +2788,26 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           : (question.sourceOrder > 0 ? question.sourceOrder : fallbackIndex);
       final answer =
           previewAnswerForMode(question, modeByUid[uid] ?? '').trim();
-      final pageNumber = question.sourcePage > 0 ? question.sourcePage : 1;
+
+      int pageNumber;
+      if (orderedPageNumbers.isNotEmpty) {
+        while (layoutCursor < orderedPageNumbers.length && layoutRemaining <= 0) {
+          layoutCursor += 1;
+          if (layoutCursor < orderedPageNumbers.length) {
+            layoutRemaining =
+                pageCapacityByPage[orderedPageNumbers[layoutCursor]] ?? 0;
+          }
+        }
+        if (layoutCursor < orderedPageNumbers.length) {
+          pageNumber = orderedPageNumbers[layoutCursor];
+          layoutRemaining -= 1;
+        } else {
+          pageNumber = orderedPageNumbers.last;
+        }
+      } else {
+        pageNumber = question.sourcePage > 0 ? question.sourcePage : 1;
+      }
+
       final key = '${baseItem.id}|$pageNumber|$questionIndex|$uid';
       final uidScore = presetScoreByUid[uid];
       if (uidScore != null && uidScore.isFinite && uidScore > 0) {
@@ -2859,12 +2912,17 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           final payloadTitle = payload.title.trim();
           return payloadTitle.isEmpty ? '그룹 과제' : payloadTitle;
         }();
+        final rawAssignmentCode = (hw.assignmentCode ?? '').trim();
+        final normalizedAssignmentCode = rawAssignmentCode
+            .toUpperCase()
+            .replaceAll(RegExp(r'[^A-Z0-9]'), '');
         rightSideSheetTestGradingSession.value =
             RightSideSheetTestGradingSession(
           sessionId: 'student:$studentId|test_pb_grade:${payload.homeworkId}',
           title: payload.title,
           studentName: studentName,
           groupHomeworkTitle: groupHomeworkTitle,
+          assignmentCode: normalizedAssignmentCode,
           gradingPages: _toRightSheetGradingPages(payload.gradingPages),
           scoreByQuestionKey: payload.scoreByQuestionKey,
           overlayEntries: overlayEntries
@@ -8535,12 +8593,14 @@ class _HomeworkPrintOverlayMeta {
   final String bookCourseText;
   final String studentName;
   final String assignmentCodeText;
+  final bool isTest;
 
   const _HomeworkPrintOverlayMeta({
     required this.assignedDateText,
     required this.bookCourseText,
     required this.studentName,
     required this.assignmentCodeText,
+    this.isTest = false,
   });
 }
 
@@ -8578,6 +8638,7 @@ Future<_HomeworkPrintOverlayMeta> _resolveHomeworkPrintOverlayMeta({
       bookCourseText: '교재 미기재',
       studentName: _resolveHomeworkPrintStudentName(studentId),
       assignmentCodeText: '-',
+      isTest: _isTestHomeworkType(fallbackHomework.type),
     );
   }
 
@@ -8629,11 +8690,14 @@ Future<_HomeworkPrintOverlayMeta> _resolveHomeworkPrintOverlayMeta({
       : (sortedCodes.length == 1
           ? sortedCodes.first
           : '${sortedCodes.first} 외 ${sortedCodes.length - 1}건');
+  final bool isTestMeta = byId.values.any((hw) => _isTestHomeworkType(hw.type)) ||
+      _isTestHomeworkType(fallbackHomework.type);
   return _HomeworkPrintOverlayMeta(
     assignedDateText: assignedDateText,
     bookCourseText: bookCourseText,
     studentName: _resolveHomeworkPrintStudentName(studentId),
     assignmentCodeText: assignmentCodeText,
+    isTest: isTestMeta,
   );
 }
 
@@ -8689,6 +8753,15 @@ void _drawHomeworkPrintOverlayOnFirstPage({
   final line2 = meta.studentName.trim().isEmpty ? '학생' : meta.studentName;
   final assignmentCodeText =
       meta.assignmentCodeText.trim().isEmpty ? '-' : meta.assignmentCodeText;
+  // 테스트 카드는 상단을 한 줄로(날짜·교재·학생명 합쳐서) 출력한다.
+  final bool singleLineTop = meta.isTest;
+  final String singleLineText = () {
+    final parts = <String>[
+      if (line1.trim().isNotEmpty && line1 != '-') line1,
+      if (line2.trim().isNotEmpty) line2,
+    ];
+    return parts.isEmpty ? '-' : parts.join(' · ');
+  }();
 
   if (bottomLeftLayout) {
     const double leftInset = 14;
@@ -8697,12 +8770,12 @@ void _drawHomeworkPrintOverlayOnFirstPage({
     final double bottomInset = bottomInsetOverride;
     final textBrush = sf.PdfSolidBrush(sf.PdfColor(32, 32, 32));
 
-    final double infoBlockH = lineH * 2;
+    final double infoBlockH = singleLineTop ? lineH : lineH * 2;
     final double infoTop = size.height - bottomInset - infoBlockH;
     final infoBgRect = Rect.fromLTWH(
       leftInset - pad,
       infoTop - pad,
-      180 + pad * 2,
+      (singleLineTop ? 260 : 180) + pad * 2,
       infoBlockH + pad * 2,
     );
     g.drawRectangle(
@@ -8713,20 +8786,30 @@ void _drawHomeworkPrintOverlayOnFirstPage({
       alignment: sf.PdfTextAlignment.left,
       lineAlignment: sf.PdfVerticalAlignment.top,
     );
-    g.drawString(
-      line1,
-      line1Font,
-      brush: textBrush,
-      bounds: Rect.fromLTWH(leftInset, infoTop, 180, lineH),
-      format: leftFormat,
-    );
-    g.drawString(
-      line2,
-      line2Font,
-      brush: textBrush,
-      bounds: Rect.fromLTWH(leftInset, infoTop + lineH, 180, lineH),
-      format: leftFormat,
-    );
+    if (singleLineTop) {
+      g.drawString(
+        singleLineText,
+        line1Font,
+        brush: textBrush,
+        bounds: Rect.fromLTWH(leftInset, infoTop, 260, lineH),
+        format: leftFormat,
+      );
+    } else {
+      g.drawString(
+        line1,
+        line1Font,
+        brush: textBrush,
+        bounds: Rect.fromLTWH(leftInset, infoTop, 180, lineH),
+        format: leftFormat,
+      );
+      g.drawString(
+        line2,
+        line2Font,
+        brush: textBrush,
+        bounds: Rect.fromLTWH(leftInset, infoTop + lineH, 180, lineH),
+        format: leftFormat,
+      );
+    }
 
     const double codeW = 120;
     final double codeTop = size.height - bottomInset - lineH;
@@ -8765,20 +8848,30 @@ void _drawHomeworkPrintOverlayOnFirstPage({
     lineAlignment: sf.PdfVerticalAlignment.top,
   );
   final textBrush = sf.PdfSolidBrush(sf.PdfColor(32, 32, 32));
-  g.drawString(
-    line1,
-    line1Font,
-    brush: textBrush,
-    bounds: Rect.fromLTWH(left, topInset, boxWidth, lineH),
-    format: format,
-  );
-  g.drawString(
-    line2,
-    line2Font,
-    brush: textBrush,
-    bounds: Rect.fromLTWH(left, topInset + lineH, boxWidth, lineH),
-    format: format,
-  );
+  if (singleLineTop) {
+    g.drawString(
+      singleLineText,
+      line1Font,
+      brush: textBrush,
+      bounds: Rect.fromLTWH(left, topInset, boxWidth, lineH),
+      format: format,
+    );
+  } else {
+    g.drawString(
+      line1,
+      line1Font,
+      brush: textBrush,
+      bounds: Rect.fromLTWH(left, topInset, boxWidth, lineH),
+      format: format,
+    );
+    g.drawString(
+      line2,
+      line2Font,
+      brush: textBrush,
+      bounds: Rect.fromLTWH(left, topInset + lineH, boxWidth, lineH),
+      format: format,
+    );
+  }
   final double bottomInset = bottomInsetOverride;
   const double codeLineH = 18;
   final codeTop = math.max(0.0, size.height - bottomInset - codeLineH);
@@ -9436,10 +9529,72 @@ List<int> _parsePageRange(String input, int pageCount) {
   return out;
 }
 
+/// 표준 용지의 포트레잇 포인트 크기(1pt = 1/72 inch).
+/// 한국/일본 프린터가 인식하는 JIS B4/B5 치수를 사용한다.
+/// XELATEX의 `b4paper`는 ISO B4(250×353mm=709×1001pt)로 나오는데,
+/// 프린터는 JIS B4(257×364mm=729×1032pt)를 기대하므로 여기서 규격을 맞춰준다.
+Size? _standardPaperPointSize(String raw) {
+  final normalized =
+      raw.trim().toUpperCase().replaceAll(RegExp(r'[\s\-_]+'), '');
+  if (normalized.isEmpty) return null;
+  switch (normalized) {
+    case 'A3':
+      return const Size(842, 1191);
+    case 'A4':
+      return const Size(595, 842);
+    case 'A5':
+      return const Size(420, 595);
+    case 'B4':
+    case 'B4JIS':
+    case 'JISB4':
+      return const Size(729, 1032);
+    case 'B5':
+    case 'B5JIS':
+    case 'JISB5':
+      return const Size(516, 729);
+    case 'ISOB4':
+      return const Size(709, 1001);
+    case 'ISOB5':
+      return const Size(499, 709);
+    case 'LETTER':
+    case 'NORTHAMERICALETTER':
+      return const Size(612, 792);
+    case 'LEGAL':
+    case 'NORTHAMERICALEGAL':
+      return const Size(612, 1008);
+    default:
+      return null;
+  }
+}
+
+/// src의 방향(가로/세로)에 맞춰 target을 회전한다.
+Size _orientPaperToSource(Size target, Size src) {
+  if (target.width <= 0 || target.height <= 0) return src;
+  final srcLandscape = src.width > src.height;
+  if (srcLandscape) return Size(target.height, target.width);
+  return target;
+}
+
+/// src 치수가 비표준(ISO B4 등)일 때 프린터 인식 가능한 JIS 표준 치수로 추정한다.
+/// 일치하는 표준이 없으면 null.
+Size? _guessStandardFromSrcSize(Size src) {
+  final w = src.width;
+  final h = src.height;
+  final short = w < h ? w : h;
+  final long = w < h ? h : w;
+  bool near(double a, double b, {double tol = 12}) => (a - b).abs() <= tol;
+  // ISO B4 (250×353mm = 709×1001pt) → JIS B4
+  if (near(short, 709) && near(long, 1001)) return const Size(729, 1032);
+  // ISO B5 (176×250mm = 499×709pt) → JIS B5
+  if (near(short, 499) && near(long, 709)) return const Size(516, 729);
+  return null;
+}
+
 Future<String?> _buildPdfForPrintRange({
   required String inputPath,
   required String pageRange,
   _HomeworkPrintOverlayMeta? overlayMeta,
+  String preferredPaperSize = '',
 }) async {
   final inPath = inputPath.trim();
   if (inPath.isEmpty || !inPath.toLowerCase().endsWith('.pdf')) return null;
@@ -9453,14 +9608,32 @@ Future<String?> _buildPdfForPrintRange({
     final pageCount = src.pages.count;
     final indices = _parsePageRange(pageRange, pageCount);
     if (indices.isEmpty) return null;
+    final standardPortrait = _standardPaperPointSize(preferredPaperSize);
+    // preferredPaperSize가 명시적으로 없어도, 첫 페이지 크기가 ISO B4 등 비표준이면
+    // 자동으로 JIS 표준으로 정규화하도록 sneak peek.
+    Size? firstAutoStandard;
+    if (standardPortrait == null && pageCount > 0) {
+      try {
+        firstAutoStandard = _guessStandardFromSrcSize(src.pages[0].size);
+      } catch (_) {
+        firstAutoStandard = null;
+      }
+    }
+    final bool needsResize =
+        standardPortrait != null || firstAutoStandard != null;
+    print(
+        '[PRINT][buildPdf] preferredPaper="$preferredPaperSize" standard=${standardPortrait == null ? "(none)" : "${standardPortrait.width}x${standardPortrait.height}"} autoGuess=${firstAutoStandard == null ? "(none)" : "${firstAutoStandard.width}x${firstAutoStandard.height}"}');
     const double kOverlayPrintFontPt = 10.2;
     sf.PdfFont? overlayPdfFont = overlayMeta == null
         ? null
         : await _loadHomeworkPrintOverlayFont(kOverlayPrintFontPt, bold: false);
+    // 표준 용지 치수로 강제 정규화가 필요한 경우(B4 등) 짧은 경로를 생략하고
+    // 아래 리렌더 루프로 내려가 페이지 크기를 JIS 표준으로 맞춘다.
     if (overlayMeta != null &&
         pageRange.trim().isEmpty &&
         pageCount > 0 &&
-        overlayPdfFont != null) {
+        overlayPdfFont != null &&
+        !needsResize) {
       // 외부 생성 PDF는 page.graphics 수정이 기존 콘텐츠 아래에 깔린다.
       // round-trip 정규화 후 페이지 레이어를 추가해 콘텐츠 위에 오버레이를 그린다.
       final normalizedBytes = await src.save();
@@ -9499,19 +9672,35 @@ Future<String?> _buildPdfForPrintRange({
         normalizedDoc.dispose();
       }
     }
-    for (int outIndex = 0; outIndex < indices.length; outIndex++) {
-      final i = indices[outIndex];
+    // pageRange가 비었고 표준 용지 정규화가 필요한 경우, 전체 페이지를 대상으로 한다.
+    final effectiveIndices = (indices.isEmpty && pageRange.trim().isEmpty)
+        ? List<int>.generate(pageCount, (i) => i)
+        : indices;
+    for (int outIndex = 0; outIndex < effectiveIndices.length; outIndex++) {
+      final i = effectiveIndices[outIndex];
       if (i < 0 || i >= pageCount) continue;
       final srcPage = src.pages[i];
       final srcSize = srcPage.size;
+      // 우선순위: preferredPaperSize에서 직접 해석 > src 치수 기반 자동 추정 > 원본 유지
+      Size? effectiveStandardPortrait = standardPortrait;
+      if (effectiveStandardPortrait == null) {
+        effectiveStandardPortrait = _guessStandardFromSrcSize(srcSize);
+        if (effectiveStandardPortrait != null && outIndex == 0) {
+          print(
+              '[PRINT][buildPdf] auto-normalized src=${srcSize.width}x${srcSize.height} -> ${effectiveStandardPortrait.width}x${effectiveStandardPortrait.height}');
+        }
+      }
+      final targetSize = effectiveStandardPortrait != null
+          ? _orientPaperToSource(effectiveStandardPortrait, srcSize)
+          : srcSize;
       try {
-        dst.pageSettings.size = srcSize;
+        dst.pageSettings.size = targetSize;
         dst.pageSettings.margins.all = 0;
       } catch (_) {}
       final tmpl = srcPage.createTemplate();
       final newPage = dst.pages.add();
-      final tw = srcSize.width;
-      final th = srcSize.height;
+      final tw = targetSize.width;
+      final th = targetSize.height;
       final sw = srcSize.width;
       final sh = srcSize.height;
       if (tw <= 0 || th <= 0 || sw <= 0 || sh <= 0) {
@@ -9532,12 +9721,8 @@ Future<String?> _buildPdfForPrintRange({
         continue;
       }
       // 왜곡 채움(stretch): 가로/세로를 독립 스케일로 늘려 페이지를 꽉 채운다.
-      final scaleX = tw / sw;
-      final scaleY = th / sh;
-      final w = sw * scaleX;
-      final h = sh * scaleY;
       try {
-        newPage.graphics.drawPdfTemplate(tmpl, const Offset(0, 0), Size(w, h));
+        newPage.graphics.drawPdfTemplate(tmpl, const Offset(0, 0), Size(tw, th));
       } catch (_) {
         newPage.graphics.drawPdfTemplate(tmpl, const Offset(0, 0));
       }
@@ -9761,23 +9946,26 @@ Future<_ResolvedHomeworkPrintSource?> _sourceFromPbExportJobForPrint({
   if (academyId.trim().isEmpty || safeJobId.isEmpty) return null;
   final pbService = problemBankService ?? LearningProblemBankService();
   try {
-    final expectedPaperSize = preferredPaperSize.trim();
-    if (expectedPaperSize.isNotEmpty) {
-      try {
-        final job = await pbService.getExportJob(
-          academyId: academyId,
-          jobId: safeJobId,
-        );
-        final actualPaperSize = (job?.paperSize ?? '').trim();
-        if (actualPaperSize.isNotEmpty &&
-            !_isPaperSizeCompatibleForPrint(
-              expectedPaperSize: expectedPaperSize,
-              actualPaperSize: actualPaperSize,
-            )) {
+    String resolvedPaperSize = preferredPaperSize.trim();
+    // export_job에 기록된 paperSize를 우선 확보: 검증 + 빈 값일 때 폴백.
+    try {
+      final job = await pbService.getExportJob(
+        academyId: academyId,
+        jobId: safeJobId,
+      );
+      final actualPaperSize = (job?.paperSize ?? '').trim();
+      if (resolvedPaperSize.isNotEmpty && actualPaperSize.isNotEmpty) {
+        if (!_isPaperSizeCompatibleForPrint(
+          expectedPaperSize: resolvedPaperSize,
+          actualPaperSize: actualPaperSize,
+        )) {
           return null;
         }
-      } catch (_) {}
-    }
+      } else if (resolvedPaperSize.isEmpty && actualPaperSize.isNotEmpty) {
+        // 프리셋/라이브릴리즈에 저장되지 않았더라도 export_job.paper_size로 보완.
+        resolvedPaperSize = actualPaperSize;
+      }
+    } catch (_) {}
     final signedUrl = await pbService.regenerateExportSignedUrl(
       academyId: academyId,
       exportJobId: safeJobId,
@@ -9788,7 +9976,7 @@ Future<_ResolvedHomeworkPrintSource?> _sourceFromPbExportJobForPrint({
       pathRaw: safeSignedUrl,
       sourceKey: sourceKey,
       isProblemBank: true,
-      preferredPaperSize: preferredPaperSize,
+      preferredPaperSize: resolvedPaperSize,
     );
   } catch (_) {
     return null;
@@ -10034,6 +10222,19 @@ Future<_ResolvedHomeworkPrintSource?> _resolvePbPrintSource(
 
   final assignmentSignedUrl = (assignment?.liveReleaseSignedUrl ?? '').trim();
   if (assignmentSignedUrl.isNotEmpty && preferredPaperSize.isEmpty) {
+    // signed URL 경로에서도 export_job.paperSize로 용지 크기 보완 시도.
+    if (lockedExportJobId.isNotEmpty) {
+      try {
+        final job = await pbService.getExportJob(
+          academyId: safeAcademyId,
+          jobId: lockedExportJobId,
+        );
+        final actualPaperSize = (job?.paperSize ?? '').trim();
+        if (actualPaperSize.isNotEmpty) {
+          preferredPaperSize = actualPaperSize;
+        }
+      } catch (_) {}
+    }
     return _ResolvedHomeworkPrintSource(
       pathRaw: assignmentSignedUrl,
       sourceKey: liveReleaseId.isNotEmpty
@@ -10787,6 +10988,7 @@ Future<void> _handleWaitingChipLongPressPrint({
               inputPath: printablePath,
               pageRange: rangeRaw,
               overlayMeta: overlayMeta,
+              preferredPaperSize: resolvedSource.preferredPaperSize,
             );
             if (out == null || out.isEmpty) {
               printError = rangeRaw.isEmpty

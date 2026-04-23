@@ -49,6 +49,7 @@ class RightSideSheetTestGradingSession {
   final String title;
   final String studentName;
   final String groupHomeworkTitle;
+  final String assignmentCode;
   final List<Map<String, dynamic>> gradingPages;
   final List<Map<String, String>> overlayEntries;
   final RightSheetTestGradingStates initialStates;
@@ -61,6 +62,7 @@ class RightSideSheetTestGradingSession {
     required this.title,
     this.studentName = '',
     this.groupHomeworkTitle = '',
+    this.assignmentCode = '',
     required this.gradingPages,
     this.overlayEntries = const <Map<String, String>>[],
     this.initialStates = const <String, String>{},
@@ -111,6 +113,12 @@ final ValueNotifier<bool> rightSideSheetOpen = ValueNotifier<bool>(false);
 final ValueNotifier<RightSideSheetTestGradingSession?>
     rightSideSheetTestGradingSession =
     ValueNotifier<RightSideSheetTestGradingSession?>(null);
+
+/// 답지바로가기 > 채점 탭이 현재 활성화(가시) 상태인지.
+/// - `true` 이면 우측 시트의 너비를 확장해 채점 UI가 답답하지 않도록 한다.
+/// - 다른 탭(교재 등) 으로 이동하거나 시트가 닫히면 `false` 로 되돌려야 한다.
+final ValueNotifier<bool> rightSideSheetGradingTabActive =
+    ValueNotifier<bool>(false);
 
 /// 우측 시트 채점 검색 실행 액션.
 RightSheetGradingSearchRunAction? rightSheetGradingSearchRunAction;

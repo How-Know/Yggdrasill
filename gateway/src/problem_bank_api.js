@@ -2235,6 +2235,8 @@ async function saveSettingsAsDocument(body, res) {
   const sourceDocumentId = String(body.sourceDocumentId || '').trim();
   const createdBy = String(body.createdBy || '').trim();
   const rawDisplayName = body.displayName;
+  // 선택적 presetId — 전달되면 기존 preset 행을 update 하고, 없으면 새로 insert 한다.
+  const presetIdToUpdate = String(body.presetId || '').trim();
   const rawRenderConfig = normalizeJsonObject(body.renderConfig, {});
   const selectedQuestionUidsOrderedInput = normalizeUuidListOrdered(
     body.selectedQuestionUidsOrdered || body.selectedQuestionUids,
@@ -2457,30 +2459,78 @@ async function saveSettingsAsDocument(body, res) {
       String(sourceDoc.source_filename || '').trim() || '문제은행 프리셋',
     );
 
-    const { data: preset, error: presetErr } = await supa
-      .from('pb_export_presets')
-      .insert({
-        academy_id: academyId,
-        source_document_id: sourceDocumentId,
-        document_id: null,
-        source_document_ids: sourceQuestionDocIds,
-        render_config: renderConfig,
-        selected_question_uids: selectedQuestionUidsOrdered,
-        selected_question_ids: selectedQuestionIdsOrdered,
-        question_mode_by_question_uid: sourceQuestionModeByQuestionUid,
-        question_mode_by_question_id: sourceQuestionModeByQuestionUid,
-        display_name: presetDisplayName,
-        created_by: isUuid(createdBy) ? createdBy : null,
-      })
-      .select('*')
-      .maybeSingle();
+    let preset;
+    let presetErr;
+    let responseMode = 'reference_preset';
+    let responseStatus = 201;
+    if (isUuid(presetIdToUpdate)) {
+      // 기존 preset 업데이트 흐름 — academy_id 일치 여부 확인 후 덮어쓴다.
+      const { data: existingPreset, error: existingErr } = await supa
+        .from('pb_export_presets')
+        .select('id')
+        .eq('academy_id', academyId)
+        .eq('id', presetIdToUpdate)
+        .maybeSingle();
+      if (existingErr) {
+        sendJson(res, 500, {
+          ok: false,
+          error: `save_settings_preset_lookup_failed:${existingErr.message}`,
+        });
+        return;
+      }
+      if (!existingPreset) {
+        sendJson(res, 404, { ok: false, error: 'preset_not_found' });
+        return;
+      }
+      const updateResult = await supa
+        .from('pb_export_presets')
+        .update({
+          source_document_id: sourceDocumentId,
+          source_document_ids: sourceQuestionDocIds,
+          render_config: renderConfig,
+          selected_question_uids: selectedQuestionUidsOrdered,
+          selected_question_ids: selectedQuestionIdsOrdered,
+          question_mode_by_question_uid: sourceQuestionModeByQuestionUid,
+          question_mode_by_question_id: sourceQuestionModeByQuestionUid,
+          display_name: presetDisplayName,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('academy_id', academyId)
+        .eq('id', presetIdToUpdate)
+        .select('*')
+        .maybeSingle();
+      preset = updateResult.data;
+      presetErr = updateResult.error;
+      responseMode = 'reference_preset_update';
+      responseStatus = 200;
+    } else {
+      const insertResult = await supa
+        .from('pb_export_presets')
+        .insert({
+          academy_id: academyId,
+          source_document_id: sourceDocumentId,
+          document_id: null,
+          source_document_ids: sourceQuestionDocIds,
+          render_config: renderConfig,
+          selected_question_uids: selectedQuestionUidsOrdered,
+          selected_question_ids: selectedQuestionIdsOrdered,
+          question_mode_by_question_uid: sourceQuestionModeByQuestionUid,
+          question_mode_by_question_id: sourceQuestionModeByQuestionUid,
+          display_name: presetDisplayName,
+          created_by: isUuid(createdBy) ? createdBy : null,
+        })
+        .select('*')
+        .maybeSingle();
+      preset = insertResult.data;
+      presetErr = insertResult.error;
+    }
     if (presetErr || !preset) {
       throw new Error(
         `save_settings_preset_save_failed:${presetErr?.message || 'unknown'}`,
       );
     }
 
-    sendJson(res, 201, {
+    sendJson(res, responseStatus, {
       ok: true,
       preset,
       copiedQuestionCount: 0,
@@ -2488,7 +2538,7 @@ async function saveSettingsAsDocument(body, res) {
       selectedQuestionUids: selectedQuestionUidsOrdered,
       sourceDocumentIds: sourceQuestionDocIds,
       sourceDocumentId,
-      mode: 'reference_preset',
+      mode: responseMode,
     });
   } catch (err) {
     sendJson(res, 500, {

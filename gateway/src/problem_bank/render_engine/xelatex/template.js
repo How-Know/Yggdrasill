@@ -2594,8 +2594,21 @@ function renderOneQuestion(question, {
       // 점수가 새 paragraph 로 떨어져 "줄바꿈된 상태"로 보이게 된다.
       // → `\par}` 으로 끝나는 파트는 `\par` 직전(그룹 내부 본문 끝)에 suffix 를 삽입해
       //   본문 마지막 어절과 같은 paragraph 에 포함시킨다.
+      //
+      // 사용자 요청 34차: 세트형 소문항 `(N) ...` 은 실제로 이중 래핑 구조를 가진다.
+      //   `renderStemTextLine` 의 출력 말미:
+      //     {\setstretch{...}... {\setbox0=\hbox{(N)\ }\hangindent=\wd0\hangafter=1
+      //                          \noindent\makebox[\wd0][l]{(N)\ }<본문>\par}\par}
+      //                                                                ^^^^^^^^^^
+      //                                                          inner \par} + outer \par}
+      //   단일 `\par}` 매칭으로는 OUTER 를 잡아 suffix 가 inner 그룹 **바깥** 에 들어가
+      //   → hangindent 가 풀린 새 paragraph 로 `[N점]` 이 떨어져 보이는 버그 발생.
+      //   해결: 이중 `\par}\par}` 를 우선 탐지해 inner \par 직전에 삽입.
+      const nestedParClose = /\\par\}\s*\\par\}\s*$/;
       const hangingParClose = /\\par\}\s*$/;
-      if (hangingParClose.test(cur)) {
+      if (nestedParClose.test(cur)) {
+        parts[partIdx] = cur.replace(nestedParClose, `${suffix}\\par}\\par}`);
+      } else if (hangingParClose.test(cur)) {
         parts[partIdx] = cur.replace(hangingParClose, `${suffix}\\par}`);
       } else {
         parts[partIdx] = `${cur}${suffix}`;

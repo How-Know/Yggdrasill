@@ -13,6 +13,7 @@ class ProblemBankBottomFabBar extends StatelessWidget {
     required this.onToggleShowOnlySelected,
     required this.onPreview,
     required this.onCreatePlaceholder,
+    required this.onPreset,
   });
 
   final int selectedCount;
@@ -23,6 +24,7 @@ class ProblemBankBottomFabBar extends StatelessWidget {
   final VoidCallback onToggleShowOnlySelected;
   final VoidCallback onPreview;
   final VoidCallback onCreatePlaceholder;
+  final VoidCallback onPreset;
 
   @override
   Widget build(BuildContext context) {
@@ -67,6 +69,12 @@ class ProblemBankBottomFabBar extends StatelessWidget {
                     onPressed: disabled ? null : onCreatePlaceholder,
                     icon: Icons.auto_awesome,
                     label: '만들기',
+                  ),
+                  const SizedBox(width: 8),
+                  _fab(
+                    onPressed: disabled ? null : onPreset,
+                    icon: Icons.bookmark_outline,
+                    label: '프리셋',
                   ),
                   const SizedBox(width: 10),
                   _selectionCartChip(

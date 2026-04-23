@@ -808,8 +808,8 @@ void main() async {
     }
     await windowManager.focus();
   });
-  // 시작 시 최신 버전 존재 여부를 백그라운드에서 확인해 전역 알림 상태를 준비한다.
-  unawaited(UpdateService.checkForAvailableUpdateNotice());
+  // 시작 시 최신 버전 존재 여부를 확인해 전역 알림 상태를 준비한다.
+  unawaited(UpdateService.triggerAvailableUpdateNoticeCheck(force: true));
   // 백필 실행 플래그
   const runBackfill =
       String.fromEnvironment('RUN_BACKFILL', defaultValue: 'false');
@@ -876,7 +876,8 @@ class MyApp extends StatefulWidget {
   State<MyApp> createState() => _MyAppState();
 }
 
-class _MyAppState extends State<MyApp> with WindowListener {
+class _MyAppState extends State<MyApp>
+    with WindowListener, WidgetsBindingObserver {
   bool _windowCloseInProgress = false;
   OverlayEntry? _closingOverlayEntry;
 
@@ -886,8 +887,10 @@ class _MyAppState extends State<MyApp> with WindowListener {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _scheduleStartupWindowState();
     unawaited(_initWindowCloseHandler());
+    UpdateService.startAvailableUpdateNoticeAutoRefresh();
   }
 
   void _scheduleStartupWindowState() {
@@ -916,6 +919,18 @@ class _MyAppState extends State<MyApp> with WindowListener {
     } catch (_) {
       // ignore
     }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(UpdateService.triggerAvailableUpdateNoticeCheck(force: true));
+    }
+  }
+
+  @override
+  void onWindowFocus() {
+    unawaited(UpdateService.triggerAvailableUpdateNoticeCheck(force: true));
   }
 
   void _showClosingOverlay() {
@@ -994,6 +1009,8 @@ class _MyAppState extends State<MyApp> with WindowListener {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    UpdateService.stopAvailableUpdateNoticeAutoRefresh();
     _hideClosingOverlay();
     if (_isDesktop) {
       try {
@@ -6360,7 +6377,10 @@ class _MemoSlideOverlayState extends State<_MemoSlideOverlay> {
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(builder: (context, constraints) {
-      const double panelWidth = 238 * 1.2 * 1.2 * 1.1 * 1.155; // 직전 너비 대비 +10%
+      const double baseWidth =
+          238 * 1.2 * 1.2 * 1.1 * 1.155; // 기본 너비 (직전 너비 대비 +10%)
+      const double gradingWidthMultiplier =
+          1.4; // 채점 세션일 때 기본 대비 +40%
       const double edgeOpenZoneWidth = 9; // 기존 16.8px에서 -30% (호버/엣지 스와이프 오픈 영역)
       return ValueListenableBuilder<bool>(
         valueListenable: blockRightSideSheetOpen,
@@ -6449,24 +6469,33 @@ class _MemoSlideOverlayState extends State<_MemoSlideOverlay> {
                 ValueListenableBuilder<bool>(
                   valueListenable: widget.isOpenListenable,
                   builder: (context, open, _) {
-                    return AnimatedPositioned(
-                      duration: const Duration(milliseconds: 220),
-                      curve: Curves.easeInOut,
-                      right: open ? 0 : -panelWidth,
-                      top: 0,
-                      bottom: 0,
-                      width: panelWidth,
-                      child: Stack(
-                        fit: StackFit.expand,
-                        children: [
-                          _MemoPanel(
-                            memosListenable: widget.memosListenable,
-                            onAddMemo: () => widget.onAddMemo(context),
-                            onEditMemo: (m) => widget.onEditMemo(context, m),
-                            onRequestClose: () => _setOpen(false),
+                    return ValueListenableBuilder<bool>(
+                      valueListenable: rightSideSheetGradingTabActive,
+                      builder: (context, gradingTabActive, __) {
+                        final double panelWidth = gradingTabActive
+                            ? baseWidth * gradingWidthMultiplier
+                            : baseWidth;
+                        return AnimatedPositioned(
+                          duration: const Duration(milliseconds: 220),
+                          curve: Curves.easeInOut,
+                          right: open ? 0 : -panelWidth,
+                          top: 0,
+                          bottom: 0,
+                          width: panelWidth,
+                          child: Stack(
+                            fit: StackFit.expand,
+                            children: [
+                              _MemoPanel(
+                                memosListenable: widget.memosListenable,
+                                onAddMemo: () => widget.onAddMemo(context),
+                                onEditMemo: (m) =>
+                                    widget.onEditMemo(context, m),
+                                onRequestClose: () => _setOpen(false),
+                              ),
+                            ],
                           ),
-                        ],
-                      ),
+                        );
+                      },
                     );
                   },
                 ),

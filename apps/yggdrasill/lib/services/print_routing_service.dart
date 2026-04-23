@@ -538,12 +538,49 @@ class PrintRoutingService {
     }
   }
 
+  /// PJL `@PJL SET PAPER=...` 커맨드 조각을 생성한다.
+  /// raw TCP(9100) 경로에서 프린터가 용지 토큰을 인식하도록 PDF 앞에 삽입한다.
+  String? _pjlPaperCommands(String preferredPaperSize) {
+    final token = _windowsPaperSizeToken(preferredPaperSize);
+    if (token == null) return null;
+    // PJL 표준 용지 토큰(대다수 벤더 공통). B4는 JISB4 별칭을 함께 사용.
+    String? pjlToken;
+    switch (token) {
+      case 'A3':
+        pjlToken = 'A3';
+        break;
+      case 'A4':
+        pjlToken = 'A4';
+        break;
+      case 'A5':
+        pjlToken = 'A5';
+        break;
+      case 'B4':
+        pjlToken = 'JISB4';
+        break;
+      case 'B5':
+        pjlToken = 'JISB5';
+        break;
+      case 'NorthAmericaLetter':
+        pjlToken = 'LETTER';
+        break;
+      case 'NorthAmericaLegal':
+        pjlToken = 'LEGAL';
+        break;
+      default:
+        pjlToken = null;
+    }
+    if (pjlToken == null) return null;
+    return '@PJL SET PAPER=$pjlToken\r\n';
+  }
+
   Future<bool> _tryRawTcpPrint({
     required String target,
     required String portIp,
     required String debugSource,
     int tcpPort = 9100,
     PrintDuplexMode duplexMode = PrintDuplexMode.systemDefault,
+    String preferredPaperSize = '',
   }) async {
     if (!Platform.isWindows) return false;
 
@@ -555,9 +592,10 @@ class PrintRoutingService {
 
     try {
       final duplexLabel = _duplexModeLabel(duplexMode);
+      final paperLabel = _paperSizeLabel(preferredPaperSize);
       _printLog(
         debugSource,
-        'Try raw TCP print to $portIp:$tcpPort duplex=$duplexLabel',
+        'Try raw TCP print to $portIp:$tcpPort duplex=$duplexLabel paper=$paperLabel',
       );
       final socket = await Socket.connect(
         portIp,
@@ -573,8 +611,9 @@ class PrintRoutingService {
 
       const uel = '\x1b%-12345X';
       final duplexPjl = _pjlDuplexCommands(duplexMode) ?? '';
+      final paperPjl = _pjlPaperCommands(preferredPaperSize) ?? '';
       socket.add(utf8.encode(
-        '$uel@PJL\r\n$duplexPjl@PJL ENTER LANGUAGE = PDF\r\n',
+        '$uel@PJL\r\n$paperPjl$duplexPjl@PJL ENTER LANGUAGE = PDF\r\n',
       ));
       socket.add(pdfBytes);
       socket.add(utf8.encode('$uel@PJL EOJ\r\n$uel'));
@@ -737,6 +776,7 @@ class PrintRoutingService {
                     portIp: portIp,
                     debugSource: debugSource,
                     duplexMode: duplexMode,
+                    preferredPaperSize: preferredPaperSize,
                   );
                   if (rawPrinted) {
                     _printLog(

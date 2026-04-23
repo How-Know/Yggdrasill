@@ -1,6 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_math_fork/flutter_math.dart';
 
+/// `$$...$$` 블록이 가용 폭을 초과할 때의 처리 방식.
+/// - [scroll]: 기본값. 가로 스크롤 가능한 [SingleChildScrollView]로 감싼다.
+/// - [scaleDown]: 가로 스크롤 없이 [FittedBox]로 축소(필요 시)한다.
+enum DisplayMathOverflow { scroll, scaleDown }
+
 class LatexTextRenderer extends StatelessWidget {
   static final RegExp _displayRegex = RegExp(
     r'\$\$([\s\S]*?)\$\$',
@@ -27,6 +32,7 @@ class LatexTextRenderer extends StatelessWidget {
   final double inlineMathScale;
   final double fractionInlineMathScale;
   final double displayMathScale;
+  final DisplayMathOverflow displayMathOverflow;
 
   const LatexTextRenderer(
     this.text, {
@@ -42,6 +48,7 @@ class LatexTextRenderer extends StatelessWidget {
     this.inlineMathScale = _defaultInlineMathScale,
     this.fractionInlineMathScale = _defaultFractionInlineMathScale,
     this.displayMathScale = _defaultDisplayMathScale,
+    this.displayMathOverflow = DisplayMathOverflow.scroll,
   });
 
   static bool hasLatex(String raw) {
@@ -66,22 +73,39 @@ class LatexTextRenderer extends StatelessWidget {
         if (formula.isEmpty) {
           continue;
         }
+        final mathWidget = Math.tex(
+          formula,
+          mathStyle: MathStyle.display,
+          textStyle: displayMathTextStyle,
+          onErrorFallback: (dynamic _) => _buildMathFallback(
+            formula,
+            displayMathTextStyle,
+            mathStyle: MathStyle.display,
+          ),
+        );
+        final Widget boxed;
+        switch (displayMathOverflow) {
+          case DisplayMathOverflow.scaleDown:
+            boxed = SizedBox(
+              width: double.infinity,
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: _fittedBoxAlignment(crossAxisAlignment),
+                child: mathWidget,
+              ),
+            );
+            break;
+          case DisplayMathOverflow.scroll:
+            boxed = SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: mathWidget,
+            );
+            break;
+        }
         children.add(
           Padding(
             padding: EdgeInsets.symmetric(vertical: blockVerticalPadding),
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Math.tex(
-                formula,
-                mathStyle: MathStyle.display,
-                textStyle: displayMathTextStyle,
-                onErrorFallback: (dynamic _) => _buildMathFallback(
-                  formula,
-                  displayMathTextStyle,
-                  mathStyle: MathStyle.display,
-                ),
-              ),
-            ),
+            child: boxed,
           ),
         );
       } else if (part.content.isNotEmpty) {
@@ -191,6 +215,19 @@ class LatexTextRenderer extends StatelessWidget {
       parts.add(_DisplayPart.text(raw.substring(lastIndex)));
     }
     return parts;
+  }
+
+  Alignment _fittedBoxAlignment(CrossAxisAlignment cross) {
+    switch (cross) {
+      case CrossAxisAlignment.end:
+        return Alignment.centerRight;
+      case CrossAxisAlignment.center:
+      case CrossAxisAlignment.baseline:
+      case CrossAxisAlignment.stretch:
+        return Alignment.center;
+      case CrossAxisAlignment.start:
+        return Alignment.centerLeft;
+    }
   }
 
   TextStyle _scaleMathTextStyle(TextStyle base, double scale) {

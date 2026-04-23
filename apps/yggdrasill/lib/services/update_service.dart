@@ -36,12 +36,18 @@ class UpdateService {
 
   static const String _kLastInstalledTag = 'last_installed_tag';
   static const String _kUpdateNoticeSnoozeUntil = 'update_notice_snooze_until';
+  static const String _kUpdateNoticeSnoozeTag = 'update_notice_snooze_tag';
+  static const Duration _kNoticeRefreshInterval = Duration(minutes: 7);
+  static const Duration _kNoticeMinCheckInterval = Duration(seconds: 20);
 
   // 간단한 진행 상태 노출용 모델/노티파이어 (앱 내 커스텀 UI 연동)
   static final ValueNotifier<UpdateInfo> progressNotifier =
       ValueNotifier<UpdateInfo>(const UpdateInfo(phase: UpdatePhase.idle));
   static final ValueNotifier<UpdateNotice?> availableNoticeNotifier =
       ValueNotifier<UpdateNotice?>(null);
+  static Timer? _noticeRefreshTimer;
+  static bool _noticeCheckInFlight = false;
+  static DateTime? _lastNoticeCheckAt;
 
   static void _setProgress(UpdateInfo info) {
     try {
@@ -78,14 +84,55 @@ class UpdateService {
 
       final nowMs = DateTime.now().millisecondsSinceEpoch;
       final snoozeUntil = prefs.getInt(_kUpdateNoticeSnoozeUntil) ?? 0;
-      if (snoozeUntil > nowMs) {
+      final snoozeTag = prefs.getString(_kUpdateNoticeSnoozeTag) ?? '';
+      // "나중에 알림"은 같은 버전에만 적용.
+      // 새 버전이 배포된 경우에는 즉시 다시 노출되어야 한다.
+      if (snoozeUntil > nowMs && snoozeTag == tag) {
         _setNotice(null);
         return;
+      }
+      if (snoozeUntil > 0 && snoozeTag != tag) {
+        try {
+          await prefs.remove(_kUpdateNoticeSnoozeUntil);
+          await prefs.remove(_kUpdateNoticeSnoozeTag);
+        } catch (_) {}
       }
       _setNotice(UpdateNotice(tag: tag));
     } catch (_) {
       _setNotice(null);
     }
+  }
+
+  static Future<void> triggerAvailableUpdateNoticeCheck(
+      {bool force = false}) async {
+    if (_noticeCheckInFlight) return;
+    final now = DateTime.now();
+    final last = _lastNoticeCheckAt;
+    if (!force &&
+        last != null &&
+        now.difference(last) < _kNoticeMinCheckInterval) {
+      return;
+    }
+    _noticeCheckInFlight = true;
+    _lastNoticeCheckAt = now;
+    try {
+      await checkForAvailableUpdateNotice();
+    } finally {
+      _noticeCheckInFlight = false;
+    }
+  }
+
+  static void startAvailableUpdateNoticeAutoRefresh() {
+    stopAvailableUpdateNoticeAutoRefresh();
+    _noticeRefreshTimer =
+        Timer.periodic(_kNoticeRefreshInterval, (_) {
+      unawaited(triggerAvailableUpdateNoticeCheck());
+    });
+  }
+
+  static void stopAvailableUpdateNoticeAutoRefresh() {
+    _noticeRefreshTimer?.cancel();
+    _noticeRefreshTimer = null;
   }
 
   static Future<void> snoozeAvailableUpdateNotice({
@@ -94,7 +141,13 @@ class UpdateService {
     try {
       final prefs = await SharedPreferences.getInstance();
       final until = DateTime.now().add(duration).millisecondsSinceEpoch;
+      final snoozeTag = availableNoticeNotifier.value?.tag ?? '';
       await prefs.setInt(_kUpdateNoticeSnoozeUntil, until);
+      if (snoozeTag.isNotEmpty) {
+        await prefs.setString(_kUpdateNoticeSnoozeTag, snoozeTag);
+      } else {
+        await prefs.remove(_kUpdateNoticeSnoozeTag);
+      }
     } catch (_) {}
     _setNotice(null);
   }
@@ -160,6 +213,7 @@ class UpdateService {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove(_kUpdateNoticeSnoozeUntil);
+      await prefs.remove(_kUpdateNoticeSnoozeTag);
     } catch (_) {}
 
     // 항상 ZIP 자체업데이터 사용 (MSIX/AppInstaller 경로는 폐기)

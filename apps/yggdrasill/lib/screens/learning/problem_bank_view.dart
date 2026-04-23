@@ -917,7 +917,15 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     return completed;
   }
 
-  Future<void> _openExportLayoutPreviewDialog() async {
+  Future<void> _openExportLayoutPreviewDialog({
+    bool skipDocumentPresetPreload = false,
+    String editingPresetId = '',
+    String editingPresetName = '',
+    // 프리셋 카드 탭 → 편집 모드로 들어올 때, 해당 프리셋의 renderConfig 를
+    // 최초 렌더의 initialRenderPatch 로 사용해 페이지별 문항수/라벨/헤더/제목 등이
+    // 다이얼로그 초기값으로 복원되도록 한다.
+    LearningProblemDocumentExportPreset? explicitPreset,
+  }) async {
     final selected = _selectedQuestions;
     if (selected.isEmpty) {
       _showSnack('레이아웃 미리보기할 문항을 먼저 선택해주세요.');
@@ -1074,121 +1082,130 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         'mathEngine': _previewMathEngine,
       };
 
-      if (academyId != null &&
+      // 1) 외부에서 명시적으로 넘겨준 preset (프리셋 카드 탭 경로) 을 우선 적용한다.
+      // 2) 그렇지 않고 preload 를 건너뛰지 않을 때는, 선택된 단일 문서의 기본 저장 프리셋을 조회한다.
+      LearningProblemDocumentExportPreset? presetToApply = explicitPreset;
+      if (presetToApply == null &&
+          !skipDocumentPresetPreload &&
+          academyId != null &&
           academyId.isNotEmpty &&
           selectedDocumentIds.length == 1) {
         final documentId = selectedDocumentIds.first;
         try {
-          final preset = await _service.getDocumentExportPreset(
+          presetToApply = await _service.getDocumentExportPreset(
             academyId: academyId,
             documentId: documentId,
           );
-          if (preset != null) {
-            final presetSettings =
-                LearningProblemExportSettings.fromPresetRenderConfig(
-              base: _exportSettings,
-              renderConfig: preset.renderConfig,
-            );
-            final presetMathEngine = normalizeMathEngineValue(
-              preset.renderConfig['mathEngine'],
-            );
-            final presetModeMap = <String, String>{};
-            for (final question in selected) {
-              final rawMode = preset
-                      .questionModeByQuestionUid[question.stableQuestionKey] ??
-                  preset.questionModeByQuestionUid[question.id];
-              if (rawMode == null || rawMode.trim().isEmpty) continue;
-              presetModeMap[question.id] = normalizeQuestionModeSelection(
-                question,
-                rawMode,
-                fallbackMode: kLearningQuestionModeOriginal,
-              );
-            }
-            if (mounted) {
-              setState(() {
-                _exportSettings = presetSettings;
-                _previewMathEngine = presetMathEngine;
-                // 사용자가 카드에서 수동으로 선택한 모드가 항상 우선.
-                // 프리셋 모드는 사용자가 아직 지정하지 않은 문항에 대해서만 적용한다.
-                final userModes =
-                    Map<String, String>.of(_selectedQuestionModes);
-                final merged = <String, String>{...presetModeMap};
-                for (final entry in userModes.entries) {
-                  if (entry.value.trim().isNotEmpty) {
-                    merged[entry.key] = entry.value;
-                  }
-                }
-                _selectedQuestionModes
-                  ..clear()
-                  ..addAll(merged);
-              });
-            }
-            final subjectTitle =
-                '${preset.renderConfig['subjectTitleText'] ?? ''}'.trim();
-            final titlePageTopText =
-                '${preset.renderConfig['titlePageTopText'] ?? ''}'.trim();
-            final timeLimitText =
-                '${preset.renderConfig['timeLimitText'] ?? ''}'.trim();
-            initialRenderPatch = <String, dynamic>{
-              'subjectTitleText': subjectTitle.isEmpty ? '수학 영역' : subjectTitle,
-              'titlePageTopText': titlePageTopText.isEmpty
-                  ? kLearningDefaultTitlePageTopText
-                  : titlePageTopText,
-              'timeLimitText': timeLimitText,
-              'mathEngine': presetMathEngine,
-              'includeAcademyLogo': readBoolFlag(
-                preset.renderConfig['includeAcademyLogo'],
-                null,
-                false,
-              ),
-              'includeCoverPage': readBoolFlag(
-                preset.renderConfig['includeCoverPage'],
-                null,
-                false,
-              ),
-              'includeQuestionScore': readBoolFlag(
-                preset.renderConfig['includeQuestionScore'],
-                null,
-                false,
-              ),
-              'questionScoreByQuestionId': readScoreMap(
-                preset.renderConfig['questionScoreByQuestionUid'],
-                preset.renderConfig['questionScoreByQuestionId'],
-              ),
-              'questionScoreByQuestionUid': readScoreMap(
-                preset.renderConfig['questionScoreByQuestionUid'],
-                const <String, dynamic>{},
-              ),
-              'coverPageTexts': readCoverPageTexts(
-                preset.renderConfig['coverPageTexts'],
-                const <String, dynamic>{},
-              ),
-            };
-            if (presetSettings.layoutColumnCount == 2) {
-              initialRenderPatch = <String, dynamic>{
-                ...initialRenderPatch,
-                'layoutMode': 'custom_columns',
-                'pageColumnQuestionCounts': readMapRows(
-                  preset.renderConfig['pageColumnQuestionCounts'],
-                  const <dynamic>[],
-                ),
-                'columnLabelAnchors': readMapRows(
-                  preset.renderConfig['columnLabelAnchors'],
-                  const <dynamic>[],
-                ),
-                'titlePageIndices': readPositiveIntList(
-                  preset.renderConfig['titlePageIndices'],
-                  const <dynamic>[],
-                ),
-                'titlePageHeaders': readMapRows(
-                  preset.renderConfig['titlePageHeaders'],
-                  const <dynamic>[],
-                ),
-              };
-            }
-          }
         } catch (e) {
           _showSnack('저장된 세팅 조회 실패: $e');
+        }
+      }
+      if (presetToApply != null) {
+        final preset = presetToApply;
+        final presetSettings =
+            LearningProblemExportSettings.fromPresetRenderConfig(
+          base: _exportSettings,
+          renderConfig: preset.renderConfig,
+        );
+        final presetMathEngine = normalizeMathEngineValue(
+          preset.renderConfig['mathEngine'],
+        );
+        final presetModeMap = <String, String>{};
+        for (final question in selected) {
+          final rawMode = preset
+                  .questionModeByQuestionUid[question.stableQuestionKey] ??
+              preset.questionModeByQuestionUid[question.id];
+          if (rawMode == null || rawMode.trim().isEmpty) continue;
+          presetModeMap[question.id] = normalizeQuestionModeSelection(
+            question,
+            rawMode,
+            fallbackMode: kLearningQuestionModeOriginal,
+          );
+        }
+        if (mounted) {
+          setState(() {
+            _exportSettings = presetSettings;
+            _previewMathEngine = presetMathEngine;
+            // explicitPreset 경로 (applyPresetAndOpenPreview) 는 이미 자체 setState 로
+            //   모드 맵을 완전히 덮어썼으므로 그 상태를 그대로 존중한다.
+            //   문서 기본 프리셋 preload 경로에서는 기존과 동일한 "사용자 선택 우선" 머지 적용.
+            if (explicitPreset == null) {
+              final userModes =
+                  Map<String, String>.of(_selectedQuestionModes);
+              final merged = <String, String>{...presetModeMap};
+              for (final entry in userModes.entries) {
+                if (entry.value.trim().isNotEmpty) {
+                  merged[entry.key] = entry.value;
+                }
+              }
+              _selectedQuestionModes
+                ..clear()
+                ..addAll(merged);
+            }
+          });
+        }
+        final subjectTitle =
+            '${preset.renderConfig['subjectTitleText'] ?? ''}'.trim();
+        final titlePageTopText =
+            '${preset.renderConfig['titlePageTopText'] ?? ''}'.trim();
+        final timeLimitText =
+            '${preset.renderConfig['timeLimitText'] ?? ''}'.trim();
+        initialRenderPatch = <String, dynamic>{
+          'subjectTitleText': subjectTitle.isEmpty ? '수학 영역' : subjectTitle,
+          'titlePageTopText': titlePageTopText.isEmpty
+              ? kLearningDefaultTitlePageTopText
+              : titlePageTopText,
+          'timeLimitText': timeLimitText,
+          'mathEngine': presetMathEngine,
+          'includeAcademyLogo': readBoolFlag(
+            preset.renderConfig['includeAcademyLogo'],
+            null,
+            false,
+          ),
+          'includeCoverPage': readBoolFlag(
+            preset.renderConfig['includeCoverPage'],
+            null,
+            false,
+          ),
+          'includeQuestionScore': readBoolFlag(
+            preset.renderConfig['includeQuestionScore'],
+            null,
+            false,
+          ),
+          'questionScoreByQuestionId': readScoreMap(
+            preset.renderConfig['questionScoreByQuestionUid'],
+            preset.renderConfig['questionScoreByQuestionId'],
+          ),
+          'questionScoreByQuestionUid': readScoreMap(
+            preset.renderConfig['questionScoreByQuestionUid'],
+            const <String, dynamic>{},
+          ),
+          'coverPageTexts': readCoverPageTexts(
+            preset.renderConfig['coverPageTexts'],
+            const <String, dynamic>{},
+          ),
+        };
+        if (presetSettings.layoutColumnCount == 2) {
+          initialRenderPatch = <String, dynamic>{
+            ...initialRenderPatch,
+            'layoutMode': 'custom_columns',
+            'pageColumnQuestionCounts': readMapRows(
+              preset.renderConfig['pageColumnQuestionCounts'],
+              const <dynamic>[],
+            ),
+            'columnLabelAnchors': readMapRows(
+              preset.renderConfig['columnLabelAnchors'],
+              const <dynamic>[],
+            ),
+            'titlePageIndices': readPositiveIntList(
+              preset.renderConfig['titlePageIndices'],
+              const <dynamic>[],
+            ),
+            'titlePageHeaders': readMapRows(
+              preset.renderConfig['titlePageHeaders'],
+              const <dynamic>[],
+            ),
+          };
         }
       }
 
@@ -1294,6 +1311,8 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           completed.resultSummary['coverPageTexts'],
           completed.options['coverPageTexts'],
         ),
+        initialEditingPresetId: editingPresetId,
+        initialEditingPresetName: editingPresetName,
         onRefreshRequested: (request) async {
           final nextSettings = _exportSettings.copyWith(
             includeAcademyLogo: request.includeAcademyLogo,
@@ -1489,6 +1508,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
             return;
           }
           try {
+            final presetIdToUpdate = request.presetIdToUpdate.trim();
             final saveResult = await _service.saveExportSettingsAsDocument(
               academyId: academyId,
               sourceDocumentId: sourceDocumentId,
@@ -1500,10 +1520,15 @@ class _ProblemBankViewState extends State<ProblemBankView> {
               includeAnswerSheet: request.includeAnswerSheet,
               includeExplanation: request.includeExplanation,
               displayName: request.presetDisplayName.trim(),
+              presetId: presetIdToUpdate,
             );
             final count = saveResult.copiedQuestionCount;
+            final effectiveCount =
+                count > 0 ? count : orderedQuestionUids.length;
             _showSnack(
-              '프리셋 저장 완료 (${count > 0 ? count : orderedQuestionUids.length}문항)',
+              presetIdToUpdate.isNotEmpty
+                  ? '프리셋 업데이트 완료 ($effectiveCount문항)'
+                  : '새 프리셋 저장 완료 ($effectiveCount문항)',
             );
           } catch (e) {
             _showSnack('세팅 저장 실패: $e');
@@ -2087,24 +2112,82 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           }
         }
 
-        Future<void> applyPreset(
+        String normalizeMathEngineValue(dynamic raw) {
+          final v = '$raw'.trim().toLowerCase();
+          return v == 'mathjax-svg' ? 'mathjax-svg' : 'xelatex';
+        }
+
+        Future<void> applyPresetAndOpenPreview(
           LearningProblemDocumentExportPreset preset,
+          StateSetter setModalState,
         ) async {
+          final presetUids = preset.selectedQuestionUids
+              .map((u) => u.trim())
+              .where((u) => u.isNotEmpty)
+              .toList(growable: false);
+          if (presetUids.isEmpty) {
+            _showSnack('프리셋에 저장된 문항이 없습니다.');
+            return;
+          }
+          setModalState(() {
+            isWorking = true;
+          });
+          // 1) 프리셋의 실제 문항을 서비스에서 uid 로 직접 로드한다.
+          //    → 현재 사이드바 필터(교육과정/레벨/과정/출처)와 무관하게 가져올 수 있어
+          //      프리셋이 다른 문서/필터에서 저장되었어도 정상 복원된다.
+          List<LearningProblemQuestion> fetched;
+          try {
+            fetched = await _service.loadQuestionsByQuestionUids(
+              academyId: academyId,
+              questionUids: presetUids,
+            );
+          } catch (e) {
+            if (mounted) {
+              setModalState(() {
+                isWorking = false;
+              });
+            }
+            _showSnack('프리셋 문항 로드 실패: $e');
+            return;
+          }
+          if (fetched.isEmpty) {
+            if (mounted) {
+              setModalState(() {
+                isWorking = false;
+              });
+            }
+            _showSnack('프리셋에 연결된 문항을 찾을 수 없습니다.');
+            return;
+          }
+          // 2) 프리셋 저장 당시의 UID 순서 그대로 정렬.
+          final orderIndexByUid = <String, int>{};
+          for (var i = 0; i < presetUids.length; i++) {
+            orderIndexByUid[presetUids[i]] = i;
+          }
+          final ordered = List<LearningProblemQuestion>.from(fetched)
+            ..sort((a, b) {
+              final ai = orderIndexByUid[a.stableQuestionKey.trim()] ??
+                  orderIndexByUid[a.id.trim()] ??
+                  1 << 20;
+              final bi = orderIndexByUid[b.stableQuestionKey.trim()] ??
+                  orderIndexByUid[b.id.trim()] ??
+                  1 << 20;
+              return ai.compareTo(bi);
+            });
+          // 3) 프리셋 설정 / 출제형식 맵 구성.
           final presetSettings =
               LearningProblemExportSettings.fromPresetRenderConfig(
             base: _exportSettings,
             renderConfig: preset.renderConfig,
           );
+          final presetMathEngine = normalizeMathEngineValue(
+            preset.renderConfig['mathEngine'],
+          );
           final modeMap = <String, String>{};
-          final presetUidSet = preset.selectedQuestionUids
-              .map((uid) => uid.trim())
-              .where((uid) => uid.isNotEmpty)
-              .toSet();
-          final matchedSelectedIds = <String>{};
-          for (final question in _questions) {
-            final rawMode =
-                preset.questionModeByQuestionUid[question.stableQuestionKey] ??
-                    preset.questionModeByQuestionUid[question.id];
+          for (final question in ordered) {
+            final rawMode = preset.questionModeByQuestionUid[
+                    question.stableQuestionKey] ??
+                preset.questionModeByQuestionUid[question.id];
             if (rawMode == null || rawMode.trim().isEmpty) continue;
             modeMap[question.id] = normalizeQuestionModeSelection(
               question,
@@ -2112,37 +2195,56 @@ class _ProblemBankViewState extends State<ProblemBankView> {
               fallbackMode: kLearningQuestionModeOriginal,
             );
           }
-          if (presetUidSet.isNotEmpty) {
-            for (final question in _questions) {
-              final key = question.stableQuestionKey.trim();
-              if (key.isEmpty) continue;
-              if (presetUidSet.contains(key)) {
-                matchedSelectedIds.add(question.id);
-              }
-            }
-          }
           if (!mounted) return;
           setState(() {
-            _exportSettings = presetSettings;
+            _questions = ordered;
+            _selectedQuestionIds
+              ..clear()
+              ..addAll(ordered.map((q) => q.id));
             _selectedQuestionModes
               ..clear()
               ..addAll(modeMap);
-            if (presetUidSet.isNotEmpty) {
-              _selectedQuestionIds
-                ..clear()
-                ..addAll(matchedSelectedIds);
+            _exportSettings = presetSettings;
+            _previewMathEngine = presetMathEngine;
+            _showOnlySelectedQuestions = false;
+            final srcDoc = preset.sourceDocumentId.trim();
+            if (srcDoc.isNotEmpty) {
+              _selectedDocumentId = srcDoc;
             }
+            _questionFigureUrlsByPath = const <String, Map<String, String>>{};
+            _questionPreviewUrls = const <String, String>{};
+            _questionPreviewPdfUrls = const <String, String>{};
+            _questionPreviewStatus = const <String, String>{};
+            _questionPreviewError = const <String, String>{};
+            _pendingPreviewQuestionIds = <String>{};
           });
+          _previewArtifactPollTimer?.cancel();
+          _previewArtifactPollTimer = null;
+          unawaited(
+            _prefetchFigureSignedUrls(
+              ordered,
+              loadVersion: ++_figureLoadVersion,
+            ),
+          );
+          unawaited(_fetchQuestionPreviews(ordered));
+          // 4) 프리셋 다이얼로그 닫고 서버 PDF 미리보기 열기.
+          //    skipDocumentPresetPreload: 방금 명시적으로 적용한 프리셋이
+          //    문서 "마지막 저장 프리셋" 에 덮어써지지 않도록 한다.
           if (Navigator.of(dialogContext).canPop()) {
             Navigator.of(dialogContext).pop();
           }
-          if (presetUidSet.isNotEmpty) {
-            _showSnack(
-              '프리셋 적용: ${preset.displayName} (선택 ${matchedSelectedIds.length}/${presetUidSet.length}문항)',
-            );
-          } else {
-            _showSnack('프리셋 적용: ${preset.displayName}');
-          }
+          _showSnack(
+            '프리셋 적용: ${preset.displayName} (${ordered.length}문항)',
+          );
+          await _openExportLayoutPreviewDialog(
+            // 문서 "기본 프리셋" 자동 로드는 건너뛰고,
+            //   카드에서 선택한 preset 객체를 명시적으로 전달해
+            //   페이지별 문항수/라벨/타이틀이 프리셋 그대로 복원되게 한다.
+            skipDocumentPresetPreload: true,
+            explicitPreset: preset,
+            editingPresetId: preset.id,
+            editingPresetName: preset.displayName,
+          );
         }
 
         Future<void> renamePreset(
@@ -2596,174 +2698,180 @@ class _ProblemBankViewState extends State<ProblemBankView> {
 
         return StatefulBuilder(
           builder: (context, setModalState) {
-            return AlertDialog(
-              backgroundColor: const Color(0xFF0B1112),
+            final dialogWidth = math.min(size.width * 0.82, 900.0);
+            final dialogHeight = math.min(size.height * 0.82, 680.0);
+            // 가용 너비에 따라 1~3단 카드 그리드로 자동 전환 (학습앱 그리드 UX와 통일)
+            final gridColumns = dialogWidth >= 820
+                ? 3
+                : dialogWidth >= 560
+                    ? 2
+                    : 1;
+            return Dialog(
+              backgroundColor: _rsBg,
+              insetPadding: const EdgeInsets.symmetric(
+                horizontal: 24,
+                vertical: 32,
+              ),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(14),
+                side: const BorderSide(color: _rsBorder),
               ),
-              title: Row(
-                children: [
-                  const Expanded(
-                    child: Text(
-                      '저장된 프리셋',
-                      style: TextStyle(
-                        color: _rsTextPrimary,
-                        fontWeight: FontWeight.w800,
+              child: SizedBox(
+                width: dialogWidth,
+                height: dialogHeight,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(18, 14, 10, 14),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
+                        children: [
+                          const Text(
+                            '저장된 프리셋',
+                            style: TextStyle(
+                              color: _rsTextPrimary,
+                              fontSize: 18,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            '${presets.length}개',
+                            style: const TextStyle(
+                              color: _rsTextMuted,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          const Spacer(),
+                          if (isWorking)
+                            const Padding(
+                              padding: EdgeInsets.only(right: 6),
+                              child: SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: _rsTextMuted,
+                                ),
+                              ),
+                            ),
+                          IconButton(
+                            tooltip: '레거시 정리',
+                            onPressed: isWorking
+                                ? null
+                                : () => runLegacyCloneCleanup(setModalState),
+                            icon: const Icon(
+                              Icons.cleaning_services_outlined,
+                              color: _rsTextMuted,
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: '새로고침',
+                            onPressed: isWorking
+                                ? null
+                                : () => reloadPresets(setModalState),
+                            icon: const Icon(
+                              Icons.refresh,
+                              color: _rsTextMuted,
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: '닫기',
+                            onPressed: isWorking
+                                ? null
+                                : () => Navigator.of(dialogContext).pop(),
+                            icon: const Icon(
+                              Icons.close,
+                              color: _rsTextMuted,
+                            ),
+                          ),
+                        ],
                       ),
-                    ),
-                  ),
-                  IconButton(
-                    tooltip: '레거시 정리',
-                    onPressed: isWorking
-                        ? null
-                        : () => runLegacyCloneCleanup(setModalState),
-                    icon: const Icon(
-                      Icons.cleaning_services_outlined,
-                      color: _rsTextMuted,
-                    ),
-                  ),
-                  IconButton(
-                    tooltip: '새로고침',
-                    onPressed:
-                        isWorking ? null : () => reloadPresets(setModalState),
-                    icon: const Icon(Icons.refresh, color: _rsTextMuted),
-                  ),
-                ],
-              ),
-              content: SizedBox(
-                width: math.min(size.width * 0.75, 860.0),
-                height: math.min(size.height * 0.7, 560.0),
-                child: presets.isEmpty
-                    ? const Center(
+                      const SizedBox(height: 4),
+                      const Padding(
+                        padding: EdgeInsets.only(right: 8),
                         child: Text(
-                          '저장된 프리셋이 없습니다.',
+                          '카드를 누르면 해당 설정·문항으로 서버 PDF 미리보기를 엽니다.',
                           style: TextStyle(
                             color: _rsTextMuted,
-                            fontWeight: FontWeight.w700,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
                           ),
                         ),
-                      )
-                    : ListView.separated(
-                        itemCount: presets.length,
-                        separatorBuilder: (_, __) => const SizedBox(height: 8),
-                        itemBuilder: (context, index) {
-                          final preset = presets[index];
-                          final profile = preset.templateProfile.toUpperCase();
-                          final paper = preset.paperSize.trim();
-                          final rawNaesinLinkKey =
-                              '${preset.renderConfig[_kNaesinLinkConfigKey] ?? preset.naesinLinkKey}'
-                                  .trim();
-                          final naesinLinkLabel =
-                              _naesinLinkSummaryLabel(rawNaesinLinkKey);
-                          final metaLine = [
-                            if (profile.isNotEmpty) profile,
-                            if (paper.isNotEmpty) paper,
-                            '${preset.selectedQuestionCount}문항',
-                            _formatDateTimeShort(preset.createdAt),
-                          ].join(' · ');
-                          return Container(
-                            padding: const EdgeInsets.fromLTRB(10, 10, 10, 8),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF0F171B),
-                              borderRadius: BorderRadius.circular(10),
-                              border: Border.all(color: _rsBorder),
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  preset.displayName,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    color: _rsTextPrimary,
-                                    fontSize: 13.2,
-                                    fontWeight: FontWeight.w800,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  metaLine,
-                                  style: const TextStyle(
+                      ),
+                      const SizedBox(height: 10),
+                      Expanded(
+                        child: presets.isEmpty
+                            ? const Center(
+                                child: Text(
+                                  '저장된 프리셋이 없습니다.',
+                                  style: TextStyle(
                                     color: _rsTextMuted,
-                                    fontSize: 11.8,
-                                    fontWeight: FontWeight.w600,
+                                    fontWeight: FontWeight.w700,
                                   ),
                                 ),
-                                if (naesinLinkLabel.isNotEmpty) ...[
-                                  const SizedBox(height: 3),
-                                  Text(
-                                    '내신 연결: $naesinLinkLabel',
-                                    style: const TextStyle(
-                                      color: Color(0xFFAFC2D6),
-                                      fontSize: 11.4,
-                                      fontWeight: FontWeight.w700,
-                                    ),
+                              )
+                            : Padding(
+                                padding: const EdgeInsets.only(right: 6),
+                                child: GridView.builder(
+                                  padding: const EdgeInsets.only(
+                                    top: 2,
+                                    bottom: 6,
                                   ),
-                                ],
-                                const SizedBox(height: 6),
-                                Row(
-                                  children: [
-                                    TextButton.icon(
-                                      onPressed: isWorking
+                                  itemCount: presets.length,
+                                  gridDelegate:
+                                      SliverGridDelegateWithFixedCrossAxisCount(
+                                    crossAxisCount: gridColumns,
+                                    crossAxisSpacing: 10,
+                                    mainAxisSpacing: 10,
+                                    mainAxisExtent: 146,
+                                  ),
+                                  itemBuilder: (context, index) {
+                                    final preset = presets[index];
+                                    return _PresetCardTile(
+                                      preset: preset,
+                                      disabled: isWorking,
+                                      naesinLinkLabel: _naesinLinkSummaryLabel(
+                                        '${preset.renderConfig[_kNaesinLinkConfigKey] ?? preset.naesinLinkKey}'
+                                            .trim(),
+                                      ),
+                                      createdAtLabel: _formatDateTimeShort(
+                                        preset.createdAt,
+                                      ),
+                                      onTap: isWorking
                                           ? null
-                                          : () => applyPreset(preset),
-                                      icon: const Icon(Icons.playlist_add_check,
-                                          size: 16),
-                                      label: const Text('적용'),
-                                    ),
-                                    const SizedBox(width: 4),
-                                    TextButton.icon(
-                                      onPressed: isWorking
+                                          : () => applyPresetAndOpenPreview(
+                                                preset,
+                                                setModalState,
+                                              ),
+                                      onLink: isWorking
                                           ? null
                                           : () => linkPresetToNaesinCell(
-                                              preset, setModalState),
-                                      icon: const Icon(
-                                        Icons.link_outlined,
-                                        size: 16,
-                                      ),
-                                      label: const Text('내신 연결'),
-                                    ),
-                                    const SizedBox(width: 4),
-                                    IconButton(
-                                      tooltip: '이름 수정',
-                                      onPressed: isWorking
+                                                preset,
+                                                setModalState,
+                                              ),
+                                      onRename: isWorking
                                           ? null
                                           : () => renamePreset(
-                                              preset, setModalState),
-                                      icon: const Icon(Icons.edit_outlined,
-                                          size: 18),
-                                      color: _rsTextMuted,
-                                    ),
-                                    IconButton(
-                                      tooltip: '삭제',
-                                      onPressed: isWorking
+                                                preset,
+                                                setModalState,
+                                              ),
+                                      onDelete: isWorking
                                           ? null
                                           : () => deletePreset(
-                                              preset, setModalState),
-                                      icon: const Icon(Icons.delete_outline,
-                                          size: 18),
-                                      color: const Color(0xFFD38E8E),
-                                    ),
-                                  ],
+                                                preset,
+                                                setModalState,
+                                              ),
+                                    );
+                                  },
                                 ),
-                              ],
-                            ),
-                          );
-                        },
+                              ),
                       ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: isWorking
-                      ? null
-                      : () => Navigator.of(dialogContext).pop(),
-                  child: const Text(
-                    '닫기',
-                    style: TextStyle(color: _rsTextMuted),
+                    ],
                   ),
                 ),
-              ],
+              ),
             );
           },
         );
@@ -2818,7 +2926,6 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                     isBusy: _isExporting,
                     isSavingLocally: _isSavingExportLocally,
                     activeJob: _activeExportJob,
-                    onPresetPressed: _openExportPresetManagerDialog,
                     onTemplateChanged: (value) {
                       setState(() {
                         if (value == '모의고사형' || value == '수능형') {
@@ -3017,6 +3124,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                     onToggleShowOnlySelected: _onToggleShowOnlySelectedFilter,
                     onPreview: _openExportLayoutPreviewDialog,
                     onCreatePlaceholder: _showCreatePlaceholder,
+                    onPreset: _openExportPresetManagerDialog,
                   ),
                 ),
               ],
@@ -3231,4 +3339,198 @@ class _QuestionOrderSaveRequest {
   final String academyId;
   final String scopeKey;
   final List<String> orderedQuestionIds;
+}
+
+/// 저장된 프리셋 카드. 탭하면 onTap 으로 "프리셋 적용 + 서버 PDF 미리보기" 흐름을 연다.
+class _PresetCardTile extends StatelessWidget {
+  const _PresetCardTile({
+    required this.preset,
+    required this.disabled,
+    required this.naesinLinkLabel,
+    required this.createdAtLabel,
+    required this.onTap,
+    required this.onLink,
+    required this.onRename,
+    required this.onDelete,
+  });
+
+  static const _cardBg = Color(0xFF0F171B);
+  static const _cardBgHover = Color(0xFF15222A);
+  static const _border = Color(0xFF223131);
+  static const _textPrimary = Color(0xFFEAF2F2);
+  static const _textMuted = Color(0xFF9FB3B3);
+  static const _naesin = Color(0xFFAFC2D6);
+  static const _danger = Color(0xFFD38E8E);
+
+  final LearningProblemDocumentExportPreset preset;
+  final bool disabled;
+  final String naesinLinkLabel;
+  final String createdAtLabel;
+  final VoidCallback? onTap;
+  final VoidCallback? onLink;
+  final VoidCallback? onRename;
+  final VoidCallback? onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final profile = preset.templateProfile.toUpperCase();
+    final paper = preset.paperSize.trim();
+    final metaLine = [
+      if (profile.isNotEmpty) profile,
+      if (paper.isNotEmpty) paper,
+      '${preset.selectedQuestionCount}문항',
+      if (createdAtLabel.isNotEmpty) createdAtLabel,
+    ].join(' · ');
+
+    return Opacity(
+      opacity: disabled ? 0.55 : 1.0,
+      child: Material(
+        color: _cardBg,
+        borderRadius: BorderRadius.circular(12),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: onTap,
+          hoverColor: _cardBgHover,
+          splashColor: const Color(0x3326524A),
+          child: Ink(
+            decoration: BoxDecoration(
+              color: Colors.transparent,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: _border),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 10, 6, 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Text(
+                            preset.displayName,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: _textPrimary,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w800,
+                              height: 1.2,
+                            ),
+                          ),
+                        ),
+                      ),
+                      _CardIconButton(
+                        tooltip: '내신 연결',
+                        icon: Icons.link_outlined,
+                        onPressed: onLink,
+                        color: _textMuted,
+                      ),
+                      _CardIconButton(
+                        tooltip: '이름 수정',
+                        icon: Icons.edit_outlined,
+                        onPressed: onRename,
+                        color: _textMuted,
+                      ),
+                      _CardIconButton(
+                        tooltip: '삭제',
+                        icon: Icons.delete_outline,
+                        onPressed: onDelete,
+                        color: _danger,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    metaLine,
+                    style: const TextStyle(
+                      color: _textMuted,
+                      fontSize: 11.6,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  if (naesinLinkLabel.isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        const Icon(Icons.link, size: 12, color: _naesin),
+                        const SizedBox(width: 4),
+                        Expanded(
+                          child: Text(
+                            naesinLinkLabel,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: _naesin,
+                              fontSize: 11.4,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                  const Spacer(),
+                  Row(
+                    children: [
+                      const Icon(
+                        Icons.picture_as_pdf_outlined,
+                        size: 13,
+                        color: Color(0xFF7FB8A8),
+                      ),
+                      const SizedBox(width: 4),
+                      const Text(
+                        '탭하여 서버 PDF 미리보기',
+                        style: TextStyle(
+                          color: Color(0xFF7FB8A8),
+                          fontSize: 11.4,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const Spacer(),
+                      const Icon(
+                        Icons.arrow_forward,
+                        size: 14,
+                        color: _textMuted,
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CardIconButton extends StatelessWidget {
+  const _CardIconButton({
+    required this.tooltip,
+    required this.icon,
+    required this.onPressed,
+    required this.color,
+  });
+
+  final String tooltip;
+  final IconData icon;
+  final VoidCallback? onPressed;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      tooltip: tooltip,
+      onPressed: onPressed,
+      icon: Icon(icon, size: 16),
+      color: color,
+      splashRadius: 16,
+      constraints: const BoxConstraints.tightFor(width: 28, height: 28),
+      padding: EdgeInsets.zero,
+      visualDensity: VisualDensity.compact,
+    );
+  }
 }

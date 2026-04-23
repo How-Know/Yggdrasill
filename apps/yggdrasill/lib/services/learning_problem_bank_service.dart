@@ -1265,6 +1265,7 @@ class LearningProblemBankService {
     required bool includeAnswerSheet,
     required bool includeExplanation,
     String displayName = '',
+    String presetId = '',
   }) async {
     if (!hasGateway) {
       throw Exception('세팅 저장은 게이트웨이 연결이 필요합니다.');
@@ -1282,6 +1283,7 @@ class LearningProblemBankService {
       if (mode.isEmpty) continue;
       modeMap[uid] = mode;
     }
+    final safePresetId = presetId.trim();
     final payload = await _gatewayPost(
       '/pb/documents/save-settings',
       body: <String, dynamic>{
@@ -1296,6 +1298,7 @@ class LearningProblemBankService {
         'includeAnswerSheet': includeAnswerSheet,
         'includeExplanation': includeExplanation,
         'displayName': displayName.trim(),
+        if (safePresetId.isNotEmpty) 'presetId': safePresetId,
       },
     );
     return LearningProblemSavedSettingsDocumentResult.fromGatewayResponse(

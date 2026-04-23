@@ -165,6 +165,79 @@ export function buildRowUpdate(existingRow, vlmQ, opts = {}) {
   // VLM 이 시각적으로 판별한 그림 개수를 원본 HWPX 이미지에 정확히 나눠줄 수 있다.
   const figureCountForMapping = stemFigureMarkerCount;
 
+  // VLM prompt [S10] 은 각 문항의 배점을 questions[i].score 에 실수 또는 null
+  // 로 내려달라고 지시한다. 그런데 예전 구현에서는 이 값을 DB 에 연결해 두지
+  // 않아, VLM 경로로 들어온 문서는 meta.score_point 가 전부 null 이 되었다.
+  // (HWPX-only 경로는 problem_bank_extract_worker.js 3125 근처에서 이미
+  // meta.score_point 를 채우므로 UI/렌더러 계약은 'meta.score_point') 여기서
+  // VLM 의 score 를 같은 키에 주입한다.
+  //
+  // 안전 장치:
+  //   - VLM 이 null/undefined 를 내려도 기존 row 의 meta.score_point 를 보존.
+  //     (부분 재추출 시 배점이 0으로 덮이는 걸 막기 위함)
+  //   - 숫자로 강제 변환 후 유한 값이 아니면 null 로 폴백.
+  const rawVlmScore =
+    vlmQ && Object.prototype.hasOwnProperty.call(vlmQ, 'score')
+      ? vlmQ.score
+      : undefined;
+  let vlmTopScore = null;
+  if (rawVlmScore !== undefined && rawVlmScore !== null && rawVlmScore !== '') {
+    const n = Number(rawVlmScore);
+    vlmTopScore = Number.isFinite(n) && n > 0 ? n : null;
+  }
+
+  // 세트형 소문항별 배점 (matching UI: meta.score_parts = [{sub:'1', value:N},...]).
+  // prompt [S8] 은 sub_questions[i].score 에 실수 또는 null 을 내려주도록 지시한다.
+  // - value <= 0 / NaN / 누락이면 그 소문항은 score_parts 에 넣지 않는다.
+  //   (UI 의 scorePartsFromMetaRaw 와 같은 기준으로 필터링.)
+  // - 하나라도 유효하면 meta.score_parts 를 구성하고, meta.score_point 는
+  //   그 합으로 동기화 (매니저 UI 의 "세트형 총점 = score_parts 합" 계약과 일치).
+  const subs = Array.isArray(vlmQ?.sub_questions) ? vlmQ.sub_questions : [];
+  const rawScoreParts = [];
+  if (isSet && subs.length > 0) {
+    for (let i = 0; i < subs.length; i += 1) {
+      const sq = subs[i] || {};
+      const rawSub = sq.label || `(${i + 1})`;
+      const subMatch = String(rawSub).match(/(\d+)/);
+      const subKey = subMatch ? subMatch[1] : String(i + 1);
+      const rawVal = sq.score;
+      if (rawVal === undefined || rawVal === null || rawVal === '') continue;
+      const n = Number(rawVal);
+      if (!Number.isFinite(n) || n <= 0) continue;
+      rawScoreParts.push({
+        sub: subKey,
+        value: n === Math.round(n) ? Math.round(n) : n,
+      });
+    }
+  }
+
+  const nextScorePartsRaw = rawScoreParts.length > 0 ? rawScoreParts : null;
+
+  // score_point 결정 규칙:
+  //   1) score_parts 가 있으면 그 합계가 우선 (UI 와 동기화)
+  //   2) 없으면 VLM top-level score 사용
+  //   3) 둘 다 없으면 기존 meta.score_point 보존 (재추출에서 0 으로 덮이는 사고 방지)
+  let nextScorePoint = null;
+  if (nextScorePartsRaw) {
+    const sum = nextScorePartsRaw.reduce((acc, p) => acc + Number(p.value || 0), 0);
+    nextScorePoint = Number.isFinite(sum) && sum > 0 ? sum : null;
+  }
+  if (nextScorePoint === null) nextScorePoint = vlmTopScore;
+  if (nextScorePoint === null) {
+    const prev = Number(existingMeta.score_point);
+    if (Number.isFinite(prev) && prev > 0) nextScorePoint = prev;
+  }
+
+  // score_parts: 세트형이고 유효 값이 하나 이상이면 저장, 그 외에는 기존 값 보존
+  // (재추출에서 실수로 날려먹지 않도록). 세트형이 해제(isSet=false) 되면 키 자체를
+  // 지워 UI 가 "단일 배점" 모드로 돌아가게 한다.
+  const existingParts = Array.isArray(existingMeta.score_parts)
+    ? existingMeta.score_parts
+    : null;
+  const scorePartsMetaValue = !isSet
+    ? undefined
+    : nextScorePartsRaw || existingParts || undefined;
+
   const newMeta = {
     ...existingMeta,
     is_set_question: isSet || existingMeta.is_set_question === true,
@@ -175,6 +248,7 @@ export function buildRowUpdate(existingRow, vlmQ, opts = {}) {
         }))
       : [],
     answer_key: isSet ? subjectiveAnswer : existingMeta.answer_key || '',
+    score_point: nextScorePoint,
     figure_count: figureCountForMapping,
     vlm: {
       model: opts.modelName || 'gemini-3.1-pro-preview',
@@ -189,6 +263,15 @@ export function buildRowUpdate(existingRow, vlmQ, opts = {}) {
       overwritten_at: new Date().toISOString(),
     },
   };
+
+  // 세트형 소문항별 배점 반영: scorePartsMetaValue 가 undefined 면 키를 제거.
+  // UI (problem_bank_models.dart:scorePartsFromMetaRaw) 는 배열이 아닐 때 null 로
+  // 취급하므로, null 대신 키 자체를 없애는 편이 데이터가 깔끔하다.
+  if (scorePartsMetaValue === undefined) {
+    delete newMeta.score_parts;
+  } else {
+    newMeta.score_parts = scorePartsMetaValue;
+  }
 
   return {
     stem,

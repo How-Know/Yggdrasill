@@ -124,6 +124,9 @@ class _RightSideSheetState extends State<RightSideSheet> {
     _testGradingSession = rightSideSheetTestGradingSession.value;
     rightSideSheetTestGradingSession.addListener(_onTestGradingSessionChanged);
     unawaited(_ensureGradesThenLoadAnswerKeyData());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _syncGradingTabActiveFlag();
+    });
   }
 
   void _onTestGradingSessionChanged() {
@@ -137,6 +140,18 @@ class _RightSideSheetState extends State<RightSideSheet> {
         _answerKeyTabIndex = 0;
       }
     });
+    _syncGradingTabActiveFlag();
+  }
+
+  /// 답지바로가기 > 채점 탭 활성 상태를 전역 notifier로 반영.
+  /// (채점 탭에 있을 때만 우측 시트 너비를 확장하기 위해 사용)
+  void _syncGradingTabActiveFlag() {
+    final bool active = _mode == RightSideSheetMode.answerKey &&
+        _answerKeyTabIndex == 0 &&
+        _testGradingSession != null;
+    if (rightSideSheetGradingTabActive.value != active) {
+      rightSideSheetGradingTabActive.value = active;
+    }
   }
 
   Future<void> _ensureGradesThenLoadAnswerKeyData() async {
@@ -175,6 +190,9 @@ class _RightSideSheetState extends State<RightSideSheet> {
     rightSideSheetTestGradingSession.removeListener(
       _onTestGradingSessionChanged,
     );
+    if (rightSideSheetGradingTabActive.value) {
+      rightSideSheetGradingTabActive.value = false;
+    }
     for (final t in _bookGradeSaveTimers.values) {
       t.cancel();
     }
@@ -1289,6 +1307,7 @@ class _RightSideSheetState extends State<RightSideSheet> {
       _pdfsLoading = false;
     });
     _answerKeyLoadFuture = null;
+    _syncGradingTabActiveFlag();
     unawaited(_ensureGradesThenLoadAnswerKeyData());
   }
 
@@ -1308,6 +1327,7 @@ class _RightSideSheetState extends State<RightSideSheet> {
                 mode: _mode,
                 onModeSelected: (m) {
                   setState(() => _mode = m);
+                  _syncGradingTabActiveFlag();
                   if (m == RightSideSheetMode.answerKey) {
                     unawaited(_ensureGradesThenLoadAnswerKeyData());
                   }
@@ -2646,6 +2666,16 @@ class _RightSheetGradingPageVm {
   });
 }
 
+/// 세트형 문항의 소문항 덩어리.
+/// - [marker] : 소문항 번호(`(1)`, `①` 등). 선행 텍스트라 마커가 없으면 null.
+/// - [body]   : 소문항 정답 본문.
+class _RsSubChunk {
+  final String? marker;
+  final String body;
+
+  const _RsSubChunk({this.marker, required this.body});
+}
+
 class _AnswerKeyGradingTabPanel extends StatefulWidget {
   final RightSideSheetTestGradingSession? session;
   final VoidCallback onClearSession;
@@ -2904,6 +2934,244 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       return '\$\$\\text{$escaped}\$\$';
     }
     return '\$\$$normalized\$\$';
+  }
+
+  /// 오버플로 정답 리스트 전용 변환.
+  /// - 한글은 plain text, 비한글 수학 토큰은 인라인 `\(...\)` 조각으로 잘게 쪼개
+  ///   `LatexTextRenderer` 의 `RichText` 가 토큰 경계에서 자연스럽게 줄바꿈하도록 한다.
+  /// - 분수는 `\displaystyle\dfrac{..}{..}` 로 승격 → XELATEX "빠른정답" 과 동일한 2D 스택.
+  /// - 폭이 좁아 한 줄에 못 들어가면 가로 스크롤/축소 없이 그냥 다음 줄로 내려간다.
+  String _normalizeAnswerForOverflowDisplay(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) return '-';
+    if (trimmed == '-') return trimmed;
+    return _overflowAnswerMarkup(trimmed);
+  }
+
+  // --- 이하 헬퍼들은 모두 긴 정답 리스트 전용.
+
+  /// LaTeX 로 바뀌지 못한 채 저장된 흔한 케이스들을 복구.
+  /// - 유니코드 연산자: `×`, `÷`, `≤`, `≥`, `·` → `\times`, `\div`, ...
+  /// - OCR/수동 입력에서 종종 섞여 들어오는 literal `TIMES`, `\mathrm{TIMES}`,
+  ///   `\text{TIMES}`, `\operatorname{TIMES}` 등도 `\times` 로 복구.
+  /// - 토큰화가 가능하도록 핵심 연산자 주변 공백을 보정한다.
+  String _rsPreprocessOverflowRaw(String raw) {
+    var s = raw.replaceAll('\n', ' ').replaceAll('\r', ' ');
+    const opMap = <String, String>{
+      '×': r' \times ',
+      '÷': r' \div ',
+      '·': r' \cdot ',
+      '≤': r' \le ',
+      '≥': r' \ge ',
+      '≠': r' \ne ',
+      '±': r' \pm ',
+    };
+    for (final e in opMap.entries) {
+      s = s.replaceAll(e.key, e.value);
+    }
+    s = s.replaceAllMapped(
+      RegExp(r'\\(?:mathrm|text|operatorname)\s*\{\s*TIMES\s*\}'),
+      (_) => r' \times ',
+    );
+    s = s.replaceAllMapped(
+      RegExp(r'\\(?:mathrm|text|operatorname)\s*\{\s*DIV\s*\}'),
+      (_) => r' \div ',
+    );
+    s = s.replaceAllMapped(
+      RegExp(r'(?<![A-Za-z\\])TIMES(?![A-Za-z])'),
+      (_) => r' \times ',
+    );
+    s = s.replaceAllMapped(
+      RegExp(r'(?<![A-Za-z\\])DIV(?![A-Za-z])'),
+      (_) => r' \div ',
+    );
+    s = s.replaceAll(RegExp(r'\s+'), ' ').trim();
+    return s;
+  }
+
+  /// 토큰 분리가 가능하도록 핵심 경계 앞뒤에 공백을 강제 주입.
+  /// 괄호/중괄호 깊이를 추적하지 않고 단순 치환이지만, 주어진 경계 문자들은
+  /// LaTeX 문법상 토큰 바깥에서만 나타나므로 안전하다.
+  String _rsInsertSplittableSpaces(String input) {
+    var s = input;
+    s = s.replaceAllMapped(RegExp(r','), (_) => ' , ');
+    s = s.replaceAllMapped(RegExp(r';'), (_) => ' ; ');
+    s = s.replaceAllMapped(RegExp(r'='), (_) => ' = ');
+    s = s.replaceAllMapped(RegExp(r'(?<![A-Za-z])\\times(?![A-Za-z])'),
+        (_) => r' \times ');
+    s = s.replaceAllMapped(
+        RegExp(r'(?<![A-Za-z])\\div(?![A-Za-z])'), (_) => r' \div ');
+    s = s.replaceAllMapped(
+        RegExp(r'(?<![A-Za-z])\\cdot(?![A-Za-z])'), (_) => r' \cdot ');
+    s = s.replaceAllMapped(
+        RegExp(r'(?<![A-Za-z])\\pm(?![A-Za-z])'), (_) => r' \pm ');
+    s = s.replaceAllMapped(
+        RegExp(r'(?<![A-Za-z])\\le(?![A-Za-z])'), (_) => r' \le ');
+    s = s.replaceAllMapped(
+        RegExp(r'(?<![A-Za-z])\\ge(?![A-Za-z])'), (_) => r' \ge ');
+    s = s.replaceAllMapped(
+        RegExp(r'(?<![A-Za-z])\\ne(?![A-Za-z])'), (_) => r' \ne ');
+    // `)(` 또는 `)`+숫자/영문 → 공백 주입 (중괄호 안은 건드리지 않기 위해 단순)
+    s = s.replaceAllMapped(
+        RegExp(r'\)(?=[A-Za-z0-9\\])'), (_) => ') ');
+    s = s.replaceAll(RegExp(r'\s+'), ' ').trim();
+    return s;
+  }
+
+  /// 중괄호 깊이를 추적하며 최상위 공백에서만 토큰을 분리.
+  List<String> _rsSplitTopLevelTokens(String s) {
+    final out = <String>[];
+    final buf = StringBuffer();
+    var braceDepth = 0;
+    for (var i = 0; i < s.length; i++) {
+      final c = s[i];
+      if (c == '{') braceDepth += 1;
+      if (c == '}') braceDepth = braceDepth > 0 ? braceDepth - 1 : 0;
+      if (c == ' ' && braceDepth == 0) {
+        final token = buf.toString();
+        if (token.isNotEmpty) out.add(token);
+        buf.clear();
+      } else {
+        buf.write(c);
+      }
+    }
+    final tail = buf.toString();
+    if (tail.isNotEmpty) out.add(tail);
+    return out;
+  }
+
+  String _overflowAnswerMarkup(String raw) {
+    final preprocessed = _rsPreprocessOverflowRaw(raw);
+    if (preprocessed.isEmpty) return '';
+    final buffer = StringBuffer();
+    int lastIndex = 0;
+    final nonKorean = RegExp(r'[^가-힣]+');
+    for (final match in nonKorean.allMatches(preprocessed)) {
+      if (match.start > lastIndex) {
+        buffer.write(preprocessed.substring(lastIndex, match.start));
+      }
+      final segment = preprocessed.substring(match.start, match.end);
+      final core = segment.trim();
+      final leading = segment.startsWith(' ') ? ' ' : '';
+      final trailing = segment.endsWith(' ') && segment.length > 1 ? ' ' : '';
+      if (core.isEmpty) {
+        buffer.write(segment);
+        lastIndex = match.end;
+        continue;
+      }
+      buffer.write(leading);
+      buffer.write(_rsBuildTokenizedMathMarkup(core));
+      buffer.write(trailing);
+      lastIndex = match.end;
+    }
+    if (lastIndex < preprocessed.length) {
+      buffer.write(preprocessed.substring(lastIndex));
+    }
+    return buffer.toString();
+  }
+
+  String _rsPromoteFractionsForOverflow(String latex) {
+    var out = latex;
+    out = out.replaceAllMapped(
+      RegExp(r'\\(?:dfrac|tfrac|frac)\s*(?=\{)'),
+      (_) => r'\dfrac',
+    );
+    out = out.replaceAllMapped(
+      RegExp(r'(?<![\\\w])(-?\d+(?:\.\d+)?)\s*/\s*(-?\d+(?:\.\d+)?)(?![\w])'),
+      (m) => r'\dfrac{' + (m.group(1) ?? '') + '}{' + (m.group(2) ?? '') + '}',
+    );
+    return out;
+  }
+
+  bool _rsLooksLikeMathCandidate(String raw) {
+    final input = raw.trim();
+    if (input.isEmpty) return false;
+    if (RegExp(r'[가-힣]').hasMatch(input)) return false;
+    return RegExp(r'[A-Za-z0-9=^_{}\\]|\\times|\\over|\\le|\\ge|\\frac|\\dfrac')
+        .hasMatch(input);
+  }
+
+  void _rsAppendMathToken(StringBuffer buffer, String latex) {
+    final hasFraction = latex.contains(r'\frac') ||
+        latex.contains(r'\dfrac') ||
+        latex.contains(r'\tfrac');
+    if (hasFraction) {
+      buffer.write(r'\(\displaystyle ');
+      buffer.write(latex);
+      buffer.write(r'\)');
+      return;
+    }
+    buffer.write(r'\(');
+    buffer.write(latex);
+    buffer.write(r'\)');
+  }
+
+  /// 세트형 소문항 구분자 `(1)`, `(2)`, `①` 등을 매칭하는 정규식.
+  /// - `(1)` ~ `(99)` 형태의 괄호번호. 단, `f(1)` 같이 함수 호출로 붙는 경우는 제외하기 위해
+  ///   직전 문자가 영문/백슬래시/한글이면 매칭하지 않는다.
+  /// - 원 번호 `①~⑳`
+  static final RegExp _rsSubQuestionMarkerRegex = RegExp(
+    r'(?<![A-Za-z가-힣\\])\(\s*\d{1,2}\s*\)|[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]',
+  );
+
+  /// 전처리된 답을 소문항 번호 단위로 잘라 `(marker, body)` 목록 반환.
+  /// - 첫 마커 앞에 선행 텍스트가 있으면 marker=null 로 포함.
+  /// - 마커가 하나도 없으면 전체가 한 덩어리.
+  List<_RsSubChunk> _rsSplitBySubQuestionMarker(String preprocessed) {
+    final matches = _rsSubQuestionMarkerRegex.allMatches(preprocessed).toList();
+    if (matches.isEmpty) {
+      final body = preprocessed.trim();
+      return body.isEmpty ? const [] : [_RsSubChunk(body: body)];
+    }
+    final out = <_RsSubChunk>[];
+    if (matches.first.start > 0) {
+      final leading =
+          preprocessed.substring(0, matches.first.start).trim();
+      if (leading.isNotEmpty) {
+        out.add(_RsSubChunk(body: leading));
+      }
+    }
+    for (var i = 0; i < matches.length; i++) {
+      final m = matches[i];
+      final markerRaw = m.group(0) ?? '';
+      final marker = markerRaw.replaceAll(RegExp(r'\s+'), '');
+      final bodyStart = m.end;
+      final bodyEnd =
+          (i + 1 < matches.length) ? matches[i + 1].start : preprocessed.length;
+      var body = preprocessed.substring(bodyStart, bodyEnd);
+      body = body.replaceAll(RegExp(r'^[\s,;]+'), '');
+      body = body.replaceAll(RegExp(r'[\s,;]+$'), '');
+      out.add(_RsSubChunk(marker: marker, body: body));
+    }
+    return out;
+  }
+
+  /// 연속된 비한글 구간(`segment`) 을 토큰 단위로 인라인 `\(..\)` 로 감싼다.
+  /// - 연산자 주변에 공백을 강제 주입 → 최상위 공백 경계에서 분할.
+  /// - 각 토큰 단위로 분수 승격 후 개별 `\(..\)` 로 래핑 → RichText 가 토큰
+  ///   경계에서 줄바꿈할 수 있도록 한다. (`softWrap: true`)
+  String _rsBuildTokenizedMathMarkup(String segment) {
+    final spaced = _rsInsertSplittableSpaces(segment);
+    final tokens = _rsSplitTopLevelTokens(spaced);
+    if (tokens.isEmpty) return '';
+    final pieces = <String>[];
+    for (final rawToken in tokens) {
+      final token = rawToken.trim();
+      if (token.isEmpty) continue;
+      final latex = _rsPromoteFractionsForOverflow(token);
+      final isOperatorToken = RegExp(
+        r'^(?:=|,|;|:|[+\-*/<>]|\\times|\\div|\\cdot|\\pm|\\le|\\ge|\\ne)+$',
+      ).hasMatch(token);
+      final tokenIsMath = isOperatorToken || _rsLooksLikeMathCandidate(token);
+      if (tokenIsMath) {
+        final sb = StringBuffer();
+        _rsAppendMathToken(sb, latex);
+        pieces.add(sb.toString());
+      } else {
+        pieces.add(latex);
+      }
+    }
+    return pieces.join(' ');
   }
 
   String _normalizeSearchToken(String raw) {
@@ -3667,18 +3935,42 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     final groupHomeworkTitle = session.groupHomeworkTitle.trim().isEmpty
         ? (session.title.trim().isEmpty ? '그룹 과제' : session.title.trim())
         : session.groupHomeworkTitle.trim();
+    final assignmentCode = session.assignmentCode.trim();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          studentName,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
-            color: _rsTextSub,
-            fontWeight: FontWeight.w800,
-            fontSize: 25,
-          ),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.baseline,
+          textBaseline: TextBaseline.alphabetic,
+          children: [
+            Expanded(
+              child: Text(
+                studentName,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: _rsTextSub,
+                  fontWeight: FontWeight.w800,
+                  fontSize: 25,
+                ),
+              ),
+            ),
+            if (assignmentCode.isNotEmpty) ...[
+              const SizedBox(width: 8),
+              Text(
+                assignmentCode,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.right,
+                style: const TextStyle(
+                  color: _rsTextSub,
+                  fontWeight: FontWeight.w800,
+                  fontSize: 18,
+                  letterSpacing: 0.2,
+                ),
+              ),
+            ],
+          ],
         ),
         const SizedBox(height: 2),
         Text(
@@ -3826,6 +4118,15 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     return size;
   }
 
+  /// 답이 기본 셀 너비(75px)를 넘는 "긴 정답"인지 판정.
+  /// 원문자(①~⑳)는 항상 기본 폭에 맞으므로 제외한다.
+  bool _isOverflowAnswer(String raw) {
+    final normalized = raw.trim();
+    if (normalized.isEmpty) return false;
+    if (_isCircledChoiceAnswer(normalized)) return false;
+    return _resolveCellWidth(normalized) > 75.0;
+  }
+
   Widget _buildPageDivider() {
     return Container(
       height: 1,
@@ -3838,8 +4139,9 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     final answerRaw = cell.answer.trim();
     final circledNumber = _circledChoiceToNumber(answerRaw);
     final isCircledChoice = circledNumber != null;
+    final isOverflow = _isOverflowAnswer(answerRaw);
     final latexText = _normalizeAnswerForMathRendering(answerRaw);
-    final cellWidth = _resolveCellWidth(answerRaw);
+    final cellWidth = isOverflow ? 75.0 : _resolveCellWidth(answerRaw);
     final isWideCell = cellWidth > 75.0;
     final contentFontSize = _resolveCellFontSize(
       answerRaw: answerRaw,
@@ -3872,23 +4174,49 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       default:
         break;
     }
-    return Tooltip(
-      message: '${cell.questionIndex}번',
-      child: InkWell(
-        borderRadius: BorderRadius.circular(8),
-        onTap: () => _toggleCellState(cell.key),
-        child: SizedBox(
-          width: cellWidth,
-          height: 75,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
-            decoration: BoxDecoration(
-              color: backgroundColor,
+    // 문항번호 라벨: 페이지 라벨(p.X)과 동일한 사이즈/굵기로 통일.
+    final indexLabel = Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Text(
+        '${cell.questionIndex}',
+        textAlign: TextAlign.center,
+        maxLines: 1,
+        overflow: TextOverflow.fade,
+        softWrap: false,
+        style: const TextStyle(
+          color: Color(0xFF9FB3B3),
+          fontSize: 16.5,
+          fontWeight: FontWeight.w800,
+          height: 1.0,
+          letterSpacing: -0.2,
+        ),
+      ),
+    );
+    return SizedBox(
+      width: cellWidth,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          indexLabel,
+          Tooltip(
+            message: '${cell.questionIndex}번',
+            child: InkWell(
               borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: borderColor),
-            ),
-            child: Center(
-              child: (state == 'correct' && isCircledChoice)
+              onTap: () => _toggleCellState(cell.key),
+              child: SizedBox(
+                width: cellWidth,
+                height: 75,
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: backgroundColor,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: borderColor),
+                  ),
+                  child: Center(
+                    child: (state == 'correct' && isCircledChoice && !isOverflow)
                   ? Container(
                       width: circledNumber >= 10 ? 33 : 30,
                       height: circledNumber >= 10 ? 33 : 30,
@@ -3911,32 +4239,11 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                         ),
                       ),
                     )
-                  : (state == 'correct')
-                      ? SizedBox(
-                          width: cellWidth - 14,
-                          height: 64,
-                          child: FittedBox(
-                            fit: BoxFit.scaleDown,
-                            alignment: Alignment.center,
-                            child: LatexTextRenderer(
-                              latexText,
-                              textAlign: TextAlign.center,
-                              crossAxisAlignment: CrossAxisAlignment.center,
-                              maxLines: 3,
-                              softWrap: true,
-                              style: TextStyle(
-                                color: textColor,
-                                fontWeight: FontWeight.w800,
-                                fontSize: contentFontSize,
-                                height: 1.0,
-                              ),
-                            ),
-                          ),
-                        )
-                      : FittedBox(
+                  : (state == 'correct' && isOverflow)
+                      ? FittedBox(
                           fit: BoxFit.scaleDown,
                           child: Text(
-                            text,
+                            '${cell.questionIndex}',
                             textAlign: TextAlign.center,
                             maxLines: 1,
                             overflow: TextOverflow.fade,
@@ -3948,10 +4255,51 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                               height: 1.0,
                             ),
                           ),
-                        ),
+                        )
+                      : (state == 'correct')
+                          ? SizedBox(
+                              width: cellWidth - 14,
+                              height: 64,
+                              child: FittedBox(
+                                fit: BoxFit.scaleDown,
+                                alignment: Alignment.center,
+                                child: LatexTextRenderer(
+                                  latexText,
+                                  textAlign: TextAlign.center,
+                                  crossAxisAlignment: CrossAxisAlignment.center,
+                                  maxLines: 3,
+                                  softWrap: true,
+                                  style: TextStyle(
+                                    color: textColor,
+                                    fontWeight: FontWeight.w800,
+                                    fontSize: contentFontSize,
+                                    height: 1.0,
+                                  ),
+                                ),
+                              ),
+                            )
+                          : FittedBox(
+                              fit: BoxFit.scaleDown,
+                              child: Text(
+                                text,
+                                textAlign: TextAlign.center,
+                                maxLines: 1,
+                                overflow: TextOverflow.fade,
+                                softWrap: false,
+                                style: TextStyle(
+                                  color: textColor,
+                                  fontWeight: FontWeight.w800,
+                                  fontSize: contentFontSize,
+                                  height: 1.0,
+                                ),
+                              ),
+                            ),
+                  ),
+                ),
+              ),
             ),
           ),
-        ),
+        ],
       ),
     );
   }
@@ -3994,6 +4342,166 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
               fontSize: 16.5,
               fontWeight: FontWeight.w800,
             ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 긴 정답(네모 셀 기본 폭을 넘는 답)을 번호+정답 리스트로 따로 렌더링.
+  /// 채점 상태와 무관하게 참조용으로 항상 표시하며, 탭 상호작용은 없다(읽기 전용).
+  Widget _buildOverflowAnswerList(List<_RightSheetGradingPageVm> pages) {
+    final rows = <_RightSheetGradingCellVm>[];
+    for (final page in pages) {
+      for (final cell in page.cells) {
+        if (_isOverflowAnswer(cell.answer)) {
+          rows.add(cell);
+        }
+      }
+    }
+    if (rows.isEmpty) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 14),
+      child: Container(
+        decoration: BoxDecoration(
+          color: _rsPanelBg,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: _rsBorder),
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            for (int i = 0; i < rows.length; i++) ...[
+              if (i != 0)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 10),
+                  child: Divider(height: 1, color: _rsBorder),
+                ),
+              _buildOverflowAnswerRow(rows[i]),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildOverflowAnswerRow(_RightSheetGradingCellVm cell) {
+    // XELATEX 빠른정답과 동일한 인라인 `\displaystyle\dfrac` 방식 +
+    // 연산자 주변 공백 주입을 통한 토큰화 → RichText 가 토큰 경계에서 줄바꿈.
+    // 세트형: `(1)`, `(2)`, `①` 같은 소문항 마커가 2개 이상이면 마커 단위로
+    // 줄을 바꾸고, 마커 기준 들여쓰기(hanging indent)를 주어 본문이 길어
+    // 줄바꿈되더라도 후속 줄이 마커 오른쪽으로 자연스럽게 정렬되게 한다.
+    const contentStyle = TextStyle(
+      color: _rsText,
+      fontWeight: FontWeight.w700,
+      fontSize: 20,
+      height: 2.0,
+    );
+    const markerStyle = TextStyle(
+      color: _rsTextSub,
+      fontWeight: FontWeight.w800,
+      fontSize: 20,
+      height: 2.0,
+    );
+
+    final preprocessed = _rsPreprocessOverflowRaw(cell.answer);
+    final subChunks = _rsSplitBySubQuestionMarker(preprocessed);
+    final markerCount =
+        subChunks.where((c) => c.marker != null).length;
+
+    Widget bodyArea;
+    if (markerCount < 2) {
+      // 소문항 마커가 없거나 1개 이하면 단순 줄바꿈 렌더러로.
+      bodyArea = LatexTextRenderer(
+        _normalizeAnswerForOverflowDisplay(cell.answer),
+        textAlign: TextAlign.left,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        softWrap: true,
+        enableDisplayMath: false,
+        inlineMathScale: 1.35,
+        fractionInlineMathScale: 1.5,
+        style: contentStyle,
+      );
+    } else {
+      bodyArea = Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (var i = 0; i < subChunks.length; i++)
+            Padding(
+              padding: EdgeInsets.only(top: i == 0 ? 0 : 6),
+              child: _buildOverflowSubChunkRow(
+                subChunks[i],
+                contentStyle: contentStyle,
+                markerStyle: markerStyle,
+              ),
+            ),
+        ],
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 62,
+            child: Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(
+                '${cell.questionIndex}번',
+                style: const TextStyle(
+                  color: _rsTextSub,
+                  fontWeight: FontWeight.w800,
+                  fontSize: 20,
+                  height: 1.4,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(child: bodyArea),
+        ],
+      ),
+    );
+  }
+
+  /// 세트형 소문항 한 줄 렌더링.
+  /// - 왼쪽: 고정 너비의 마커(`(1)` 등)
+  /// - 오른쪽: 본문 (Expanded + softWrap)
+  /// 본문이 가로 폭을 초과해 줄바꿈될 경우, 두번째 줄부터는 마커 오른쪽 영역에서
+  /// 이어지므로 자동으로 행잉 인덴트가 된다.
+  Widget _buildOverflowSubChunkRow(
+    _RsSubChunk chunk, {
+    required TextStyle contentStyle,
+    required TextStyle markerStyle,
+  }) {
+    const subMarkerWidth = 44.0; // `(10)` 까지 여유
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: subMarkerWidth,
+          child: Text(
+            chunk.marker ?? '',
+            style: markerStyle,
+          ),
+        ),
+        Expanded(
+          child: LatexTextRenderer(
+            chunk.body.isEmpty
+                ? '-'
+                : _overflowAnswerMarkup(chunk.body),
+            textAlign: TextAlign.left,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            softWrap: true,
+            enableDisplayMath: false,
+            inlineMathScale: 1.35,
+            fractionInlineMathScale: 1.5,
+            style: contentStyle,
           ),
         ),
       ],
@@ -4105,6 +4613,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                             ),
                           ),
                         ),
+                      _buildOverflowAnswerList(pages),
                       const SizedBox(height: 10),
                       _buildScoreCalculator(session),
                       const SizedBox(height: 24),
