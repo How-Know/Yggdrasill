@@ -8,6 +8,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../services/textbook_pdf_service.dart';
 import '../../widgets/latex_text_renderer.dart';
 import 'textbook_crop_extract_dialog.dart';
+import 'textbook_register_wizard.dart';
+import 'textbook_unit_authoring_dialog.dart';
 import 'textbook_vlm_test_dialog.dart';
 
 /// Phase-1 migration pane for the textbook tab.
@@ -347,6 +349,19 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
           ),
         ),
         const SizedBox(width: 12),
+        FilledButton.icon(
+          onPressed: _openAddBookWizard,
+          icon: const Icon(Icons.library_add, size: 16, color: Colors.white),
+          label: const Text(
+            '책 추가',
+            style: TextStyle(color: Colors.white, fontSize: 12),
+          ),
+          style: FilledButton.styleFrom(
+            backgroundColor: const Color(0xFF33A373),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          ),
+        ),
+        const SizedBox(width: 8),
         OutlinedButton.icon(
           onPressed: _loadBooks,
           icon: const Icon(Icons.refresh, size: 16, color: Color(0xFFB3B3B3)),
@@ -360,6 +375,32 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
           ),
         ),
       ],
+    );
+  }
+
+  Future<void> _openAddBookWizard() async {
+    final defaultAcademyId = _selectedBook?.academyId ??
+        (_books.isNotEmpty ? _books.first.academyId : null);
+    final result = await TextbookRegisterWizard.show(
+      context,
+      defaultAcademyId: defaultAcademyId,
+    );
+    if (!mounted || result == null) return;
+    _toast('신규 교재 "${result.bookId}"를 등록했습니다');
+    await _loadBooks();
+    setState(() => _selectedBookId = result.bookId);
+    await _loadLinks(result.bookId);
+  }
+
+  void _openUnitAuthoring(_MigLink link) {
+    final book = _resolveBookForLink(link);
+    TextbookUnitAuthoringDialog.show(
+      context,
+      academyId: link.academyId,
+      bookId: link.fileId,
+      bookName: book.name,
+      gradeLabel: link.gradeLabel,
+      linkId: link.id == 0 ? null : link.id,
     );
   }
 
@@ -590,7 +631,7 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
         SizedBox(width: 84, child: Text('상태', style: style)),
         Expanded(child: Text('파일', style: style)),
         SizedBox(width: 72, child: Text('크기', style: style)),
-        SizedBox(width: 460, child: Text('조작', style: style)),
+        SizedBox(width: 560, child: Text('조작', style: style)),
       ],
     );
   }
@@ -654,7 +695,7 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
             ),
           ),
           SizedBox(
-            width: 460,
+            width: 560,
             child: isBusy
                 ? const Row(
                     mainAxisSize: MainAxisSize.min,
@@ -710,6 +751,12 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
       }
       if (link.kind == 'body' &&
           (link.storageKey.isNotEmpty || link.url.isNotEmpty)) {
+        widgets.add(const SizedBox(width: 6));
+        widgets.add(_ActionButton(
+          icon: Icons.account_tree_outlined,
+          label: '단원·분석',
+          onPressed: () => _openUnitAuthoring(link),
+        ));
         widgets.add(const SizedBox(width: 6));
         widgets.add(_ActionButton(
           icon: Icons.visibility_outlined,

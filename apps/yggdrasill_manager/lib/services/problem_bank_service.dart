@@ -1355,6 +1355,71 @@ class ProblemBankService {
     );
   }
 
+  /// 한 문서에서 status='failed' 로 굳은 figure_jobs 들을 일괄 재큐한다.
+  /// 워커 측 transient 실패(예: HWPX BMP 디코더 버그)가 수정된 직후 복구용.
+  /// [errorMessageContains] 를 주면 error_message 에 해당 substring 이
+  /// 포함된 실패 건만 재큐한다. 비워두면 해당 문서의 모든 failed 를 재큐.
+  /// 반환값: { 'requeued': int, 'total': int }
+  Future<Map<String, int>> requeueFailedFigureJobs({
+    required String academyId,
+    required String documentId,
+    String? errorMessageContains,
+  }) async {
+    final pattern = (errorMessageContains ?? '').trim();
+    if (hasGateway) {
+      try {
+        final json = await _gatewayPost(
+          '/pb/jobs/figure/requeue-failed',
+          body: {
+            'academyId': academyId,
+            'documentId': documentId,
+            if (pattern.isNotEmpty) 'errorMessageContains': pattern,
+          },
+        );
+        final requeued = (json['requeued'] as num?)?.toInt() ?? 0;
+        final total = (json['total'] as num?)?.toInt() ?? requeued;
+        return {'requeued': requeued, 'total': total};
+      } catch (_) {
+        // fallback — 아래 direct update 로 시도
+      }
+    }
+    // Gateway 실패 시 Supabase 직접 업데이트 (개발 환경 편의용).
+    var q = _client
+        .from('pb_figure_jobs')
+        .select('id,error_message')
+        .eq('academy_id', academyId)
+        .eq('document_id', documentId)
+        .eq('status', 'failed');
+    final rows = await q.limit(500) as List<dynamic>;
+    final ids = <String>[];
+    for (final r in rows) {
+      final m = Map<String, dynamic>.from(r as Map<dynamic, dynamic>);
+      final msg = '${m['error_message'] ?? ''}';
+      if (pattern.isNotEmpty && !msg.contains(pattern)) continue;
+      ids.add('${m['id']}');
+    }
+    if (ids.isEmpty) return {'requeued': 0, 'total': 0};
+    final updatedRows = await _client
+        .from('pb_figure_jobs')
+        .update({
+          'status': 'queued',
+          'error_code': '',
+          'error_message': '',
+          'result_summary': <String, dynamic>{},
+          'output_storage_path': '',
+          'started_at': null,
+          'finished_at': null,
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
+        })
+        .inFilter('id', ids)
+        .eq('status', 'failed')
+        .select('id');
+    return {
+      'requeued': (updatedRows as List<dynamic>).length,
+      'total': ids.length,
+    };
+  }
+
   Future<List<ProblemBankFigureJob>> listFigureJobs({
     required String academyId,
     String? documentId,

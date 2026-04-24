@@ -1,6 +1,8 @@
 import 'dotenv/config';
 import AdmZip from 'adm-zip';
 import { createClient } from '@supabase/supabase-js';
+import sharp from 'sharp';
+import bmp from 'bmp-js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -307,6 +309,85 @@ function extensionFromMime(mimeType) {
   return 'png';
 }
 
+// Supabase Storage(problem-previews 버킷) 의 allowed_mime_types 는
+// png/jpeg/webp 만 허용한다. HWPX BinData 에는 종종 BMP(=image/bmp) 가 섞여
+// 있어 업로드 단계에서 "mime type image/bmp is not supported" 로 실패하고,
+// 그 결과 매니저 UI 에는 [그림] placeholder 만 남고 실제 이미지가 비는
+// 증상이 생긴다. 업로드 직전에 BMP/알 수 없는 포맷을 PNG 로 강제 변환해
+// 이 간극을 메운다.
+//
+// 주의: sharp(=libvips) 의 prebuilt 바이너리는 BMP 읽기를 지원하지 않는다
+// ("Input buffer contains unsupported image format"). 따라서 BMP 디코드는
+// pure-JS 경량 디코더인 `bmp-js` 로 처리하고, 결과 raw RGBA 픽셀을 sharp 에
+// raw 모드로 넘겨 PNG 로 인코딩한다.
+function looksLikeBmp(bytes) {
+  if (!bytes || bytes.length < 2) return false;
+  return bytes[0] === 0x42 && bytes[1] === 0x4d; // "BM"
+}
+
+function bmpToPngBuffer(bytes) {
+  // bmp-js 는 동기 함수. 픽셀 배열은 ABGR 순서(per-pixel 4 bytes:
+  //   data[i+0]=A, data[i+1]=B, data[i+2]=G, data[i+3]=R)
+  // 로 반환되므로 sharp 의 raw RGBA 입력 규격에 맞게 swap 한다.
+  const decoded = bmp.decode(Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes));
+  if (!decoded || !decoded.data || !decoded.width || !decoded.height) {
+    throw new Error('bmp_decode_empty');
+  }
+  const src = decoded.data;
+  // 대부분의 BMP(BMPv3, 24bpp) 는 alpha 채널이 없고, bmp-js 는 그런 경우
+  // data[i+0]=A 자리를 0 으로 채워 반환한다. 이 0 을 그대로 PNG alpha 로
+  // 넘기면 전체 이미지가 완전 투명(Alpha=0) 으로 인코딩되어, 업로드 자체는
+  // 성공하지만 매니저 UI 에는 빈 흰색만 보이는 증상이 난다(2026-04 경신중
+  // 2학년 q9/q11/q20 등). 따라서 "전 픽셀 A=0" 인 경우만 BMPv3/24bpp 로
+  // 간주해 강제 불투명(255) 으로 복원하고, 실제 alpha 가 있는 BMPv5 등은
+  // 원본 값을 보존한다.
+  let allAlphaZero = true;
+  for (let i = 0; i < src.length; i += 4) {
+    if (src[i] !== 0) {
+      allAlphaZero = false;
+      break;
+    }
+  }
+  const dst = Buffer.allocUnsafe(src.length);
+  for (let i = 0; i < src.length; i += 4) {
+    dst[i + 0] = src[i + 3];
+    dst[i + 1] = src[i + 2];
+    dst[i + 2] = src[i + 1];
+    dst[i + 3] = allAlphaZero ? 255 : src[i + 0];
+  }
+  return sharp(dst, {
+    raw: { width: decoded.width, height: decoded.height, channels: 4 },
+  })
+    .png()
+    .toBuffer();
+}
+
+async function normalizeUploadableImage(mimeType, bytes) {
+  const m = String(mimeType || '').toLowerCase();
+  const declaredBmp = m.includes('bmp');
+  const magicBmp = looksLikeBmp(bytes);
+  if (!declaredBmp && !magicBmp) {
+    return { mimeType: mimeType || 'image/png', bytes };
+  }
+  // 1차 경로: bmp-js + sharp(raw→png)
+  try {
+    const png = await bmpToPngBuffer(bytes);
+    return { mimeType: 'image/png', bytes: png };
+  } catch (errPrimary) {
+    // 2차 경로(보험): 매직이 BM 이 아닌데 mime 만 bmp 로 잘못 선언된
+    // 케이스(실제는 png/jpeg 등) 가 있을 수 있어 sharp 로 재시도.
+    try {
+      const png = await sharp(bytes, { failOn: 'none' }).png().toBuffer();
+      return { mimeType: 'image/png', bytes: png };
+    } catch (errSecondary) {
+      throw new Error(
+        `bmp_to_png_failed:${compact(errPrimary?.message || errPrimary) || 'bmp_unknown_error'}` +
+          `|fallback:${compact(errSecondary?.message || errSecondary) || 'sharp_unknown_error'}`,
+      );
+    }
+  }
+}
+
 async function callGeminiImage(promptText, modelName, referenceImages = []) {
   if (!FIGURE_ENABLED) {
     throw new Error('figure_generation_disabled');
@@ -372,13 +453,16 @@ async function callGeminiImage(promptText, modelName, referenceImages = []) {
   };
 }
 
-// 비정상 종료된 워커가 남긴 orphan 'rendering' job 을 queued 로 되돌린다.
-// 자세한 배경 설명은 pb-extract-worker 의 reclaimStaleExtractingJobs 주석 참고.
+// 비정상 종료된 워커가 남긴 orphan 'rendering' job 을 다시 'queued' 로 되돌린다.
+// pb_figure_jobs 는 extract 테이블과 달리 retry_count/max_retries 컬럼이 없는
+// 단순 큐라서, stale lock 은 무조건 'queued' 로 재투입한다. 영속적으로 실패하는
+// 작업은 워커가 처리한 뒤 markFailed() 가 한 번 더 업데이트하므로 무한 루프는
+// 형성되지 않는다. (실제 실패 원인은 error_message 로 이력 보존.)
 async function reclaimStaleRenderingJobs() {
   const cutoffIso = new Date(Date.now() - STALE_RENDERING_MS).toISOString();
   const { data: stale, error } = await supa
     .from('pb_figure_jobs')
-    .select('id,retry_count,max_retries,worker_name,updated_at,started_at')
+    .select('id,worker_name,updated_at,started_at')
     .eq('status', 'rendering')
     .lt('updated_at', cutoffIso)
     .limit(50);
@@ -392,58 +476,36 @@ async function reclaimStaleRenderingJobs() {
   if (!stale || stale.length === 0) return { requeued: 0, failed: 0 };
 
   let requeued = 0;
-  let failed = 0;
   for (const row of stale) {
-    const retryCount = Number(row.retry_count || 0);
-    const maxRetries = Number(row.max_retries || 0);
     const ageMs =
       Date.now() - new Date(row.updated_at || row.started_at || 0).getTime();
-    const canRetry = retryCount < maxRetries || maxRetries <= 0;
     const nowIso = new Date().toISOString();
-    if (canRetry) {
-      const { data: updated } = await supa
-        .from('pb_figure_jobs')
-        .update({
-          status: 'queued',
-          started_at: null,
-          finished_at: null,
-          error_code: 'worker_stalled',
-          error_message: `reclaimed stale rendering lock after ${Math.round(ageMs / 1000)}s (prev worker=${row.worker_name || '-'})`,
-          updated_at: nowIso,
-        })
-        .eq('id', row.id)
-        .eq('status', 'rendering')
-        .select('id')
-        .maybeSingle();
-      if (updated) requeued += 1;
-    } else {
-      const { data: updated } = await supa
-        .from('pb_figure_jobs')
-        .update({
-          status: 'failed',
-          error_code: 'worker_stalled',
-          error_message: `stale rendering lock gave up after ${retryCount}/${maxRetries} retries (age ${Math.round(ageMs / 1000)}s)`,
-          finished_at: nowIso,
-          updated_at: nowIso,
-        })
-        .eq('id', row.id)
-        .eq('status', 'rendering')
-        .select('id')
-        .maybeSingle();
-      if (updated) failed += 1;
-    }
+    const { data: updated } = await supa
+      .from('pb_figure_jobs')
+      .update({
+        status: 'queued',
+        started_at: null,
+        finished_at: null,
+        error_code: 'worker_stalled',
+        error_message: `reclaimed stale rendering lock after ${Math.round(ageMs / 1000)}s (prev worker=${row.worker_name || '-'})`,
+        updated_at: nowIso,
+      })
+      .eq('id', row.id)
+      .eq('status', 'rendering')
+      .select('id')
+      .maybeSingle();
+    if (updated) requeued += 1;
   }
-  if (requeued > 0 || failed > 0) {
+  if (requeued > 0) {
     console.warn(
       '[pb-figure-worker] reclaim_stale',
       JSON.stringify({
         requeued,
-        failed,
         thresholdMs: STALE_RENDERING_MS,
       }),
     );
   }
-  return { requeued, failed };
+  return { requeued, failed: 0 };
 }
 
 async function lockQueuedJob(job) {
@@ -704,15 +766,24 @@ async function processOneJob(job) {
   }
   const uploaded = [];
   for (const output of generatedOutputs) {
-    const ext = extensionFromMime(output.mimeType);
+    // HWPX BinData 에 들어있는 BMP 등 Storage 가 거부하는 포맷은
+    // 업로드 전에 PNG 로 변환한다. 변환 결과물로 mime_type/ext 도 동기화해
+    // DB 의 figure_assets[].mime_type 과 실제 파일이 어긋나지 않게 한다.
+    const normalized = await normalizeUploadableImage(
+      output.mimeType,
+      output.bytes,
+    );
+    const uploadMime = normalized.mimeType;
+    const uploadBytes = normalized.bytes;
+    const ext = extensionFromMime(uploadMime);
     const suffix = generatedOutputs.length > 1 ? `_${output.figureIndex}` : '';
     const objectPath =
       `${job.academy_id}/${job.document_id}/${job.question_id}/` +
       `${job.id}${suffix}.${ext}`;
     const { error: uploadErr } = await supa.storage
       .from('problem-previews')
-      .upload(objectPath, output.bytes, {
-        contentType: output.mimeType || `image/${ext}`,
+      .upload(objectPath, uploadBytes, {
+        contentType: uploadMime || `image/${ext}`,
         upsert: true,
       });
     if (uploadErr) {
@@ -720,6 +791,8 @@ async function processOneJob(job) {
     }
     uploaded.push({
       ...output,
+      mimeType: uploadMime,
+      bytes: uploadBytes,
       objectPath,
     });
   }

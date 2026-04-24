@@ -44,8 +44,11 @@ import {
   createUploadUrl as storageCreateUploadUrl,
   createDownloadUrl as storageCreateDownloadUrl,
   statObject as storageStatObject,
+  uploadBytes as storageUploadBytes,
   buildTextbookStorageKey,
+  buildTextbookCropStorageKey,
   DEFAULT_TEXTBOOK_BUCKET,
+  DEFAULT_TEXTBOOK_CROPS_BUCKET,
   DEFAULT_TEXTBOOK_DRIVER,
 } from './storage/driver.js';
 import {
@@ -1577,6 +1580,78 @@ async function getFigureJob(jobId, url, res) {
     return;
   }
   sendJson(res, 200, { ok: true, job: data });
+}
+
+// 한 문서에 쌓인 status='failed' 인 figure_jobs 를 일괄 queued 로 되돌린다.
+// 사용 시나리오: 워커 측 transient 실패(예: HWPX BMP 디코드 실패) 가 fix 된 직후,
+// 이미 failed 로 굳어 자동 재시도되지 않는 잡들을 한 번에 복구하기 위함.
+// body:
+//   academyId:  uuid (필수)
+//   documentId: uuid (필수)
+//   errorMessageContains?: string — 실패 메시지 substring 일치 건만 재큐
+//     (빈 값이면 모든 failed 재큐). e.g. "bmp_to_png_failed"
+async function requeueFailedFigureJobs(body, res) {
+  const academyId = String(body.academyId || '').trim();
+  const documentId = String(body.documentId || '').trim();
+  const pattern = String(body.errorMessageContains || '').trim();
+  if (!isUuid(academyId) || !isUuid(documentId)) {
+    sendJson(res, 400, {
+      ok: false,
+      error: 'academyId/documentId must be uuid',
+    });
+    return;
+  }
+  const selectFields = 'id,error_code,error_message';
+  let q = supa
+    .from('pb_figure_jobs')
+    .select(selectFields)
+    .eq('academy_id', academyId)
+    .eq('document_id', documentId)
+    .eq('status', 'failed');
+  if (pattern) {
+    q = q.ilike('error_message', `%${pattern}%`);
+  }
+  const { data: rows, error: listErr } = await q.limit(500);
+  if (listErr) {
+    sendJson(res, 500, {
+      ok: false,
+      error: `figure_job_list_failed:${listErr.message}`,
+    });
+    return;
+  }
+  const targetIds = (rows || []).map((r) => r.id);
+  if (targetIds.length === 0) {
+    sendJson(res, 200, { ok: true, requeued: 0, total: 0 });
+    return;
+  }
+  const nowIso = new Date().toISOString();
+  const { data: updatedRows, error: updErr } = await supa
+    .from('pb_figure_jobs')
+    .update({
+      status: 'queued',
+      error_code: '',
+      error_message: '',
+      result_summary: {},
+      output_storage_path: '',
+      started_at: null,
+      finished_at: null,
+      updated_at: nowIso,
+    })
+    .in('id', targetIds)
+    .eq('status', 'failed')
+    .select('id');
+  if (updErr) {
+    sendJson(res, 500, {
+      ok: false,
+      error: `figure_job_requeue_failed:${updErr.message}`,
+    });
+    return;
+  }
+  sendJson(res, 200, {
+    ok: true,
+    requeued: (updatedRows || []).length,
+    total: targetIds.length,
+  });
 }
 
 async function retryFigureJob(jobId, body, res) {
@@ -3637,6 +3712,17 @@ async function batchRenderThumbnails(res, req) {
       const thumbnails = {};
       const uploadPromises = [];
 
+      if (pngFiles.length !== qidOrder.length) {
+        const missTail =
+          pngFiles.length < qidOrder.length
+            ? qidOrder.slice(pngFiles.length).join(',')
+            : '(extra-pages)';
+        console.warn(
+          `[pb-api] batch-thumb page/question mismatch: pages=${pngFiles.length} ` +
+            `questions=${qidOrder.length} missingOrExtra=${missTail}`,
+        );
+      }
+
       for (let i = 0; i < Math.min(pngFiles.length, qidOrder.length); i++) {
         const qid = qidOrder[i];
         const pngPath = pngFiles[i];
@@ -4177,6 +4263,263 @@ async function handleTextbookVlmDetectProblems(body, res) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Textbook problem crops (PNG + VLM metadata) batch upsert
+// ---------------------------------------------------------------------------
+//
+// Body shape:
+// {
+//   academy_id, book_id, grade_label,
+//   big_order, mid_order, sub_key, big_name?, mid_name?,
+//   crops: [
+//     {
+//       raw_page, display_page, section, problem_number, label,
+//       is_set_header, set_from, set_to, column_index,
+//       bbox_1k, item_region_1k,
+//       crop_rect_px, padding_px, crop_long_edge_px, deskew_angle_deg,
+//       width_px, height_px,
+//       png_base64,        // preferred; uploaded to Storage by the gateway
+//       content_hash,      // sha256 hex of the PNG bytes (required for dedup)
+//       // OR: storage_key — already uploaded via pre-signed URL
+//     },
+//     ...
+//   ]
+// }
+
+const MAX_CROP_BATCH = 120;
+const MAX_CROP_BYTES = 25 * 1024 * 1024; // matches the bucket limit
+
+function parseIntArray(input, expectedLen) {
+  if (!Array.isArray(input)) return null;
+  if (typeof expectedLen === 'number' && input.length !== expectedLen) {
+    return null;
+  }
+  const out = [];
+  for (const v of input) {
+    const n = Number.parseInt(String(v), 10);
+    if (!Number.isFinite(n)) return null;
+    out.push(n);
+  }
+  return out;
+}
+
+async function handleTextbookCropsBatchUpsert(body, res) {
+  const academyId = String(body?.academy_id || '').trim();
+  const bookId = String(body?.book_id || '').trim();
+  const gradeLabel = String(body?.grade_label || '').trim();
+  const bigOrder = Number.parseInt(String(body?.big_order ?? ''), 10);
+  const midOrder = Number.parseInt(String(body?.mid_order ?? ''), 10);
+  const subKeyRaw = String(body?.sub_key || '').trim().toUpperCase();
+  const bigName = body?.big_name != null ? String(body.big_name) : null;
+  const midName = body?.mid_name != null ? String(body.mid_name) : null;
+  const crops = Array.isArray(body?.crops) ? body.crops : [];
+
+  if (!academyId || !bookId || !gradeLabel) {
+    sendJson(res, 400, {
+      ok: false,
+      error: 'missing_required_fields',
+      required: ['academy_id', 'book_id', 'grade_label'],
+    });
+    return;
+  }
+  if (!Number.isFinite(bigOrder) || !Number.isFinite(midOrder)) {
+    sendJson(res, 400, { ok: false, error: 'invalid_unit_order' });
+    return;
+  }
+  if (!['A', 'B', 'C'].includes(subKeyRaw)) {
+    sendJson(res, 400, { ok: false, error: `invalid_sub_key: ${subKeyRaw}` });
+    return;
+  }
+  if (crops.length === 0) {
+    sendJson(res, 400, { ok: false, error: 'empty_crops' });
+    return;
+  }
+  if (crops.length > MAX_CROP_BATCH) {
+    sendJson(res, 413, {
+      ok: false,
+      error: 'crop_batch_too_large',
+      limit: MAX_CROP_BATCH,
+      got: crops.length,
+    });
+    return;
+  }
+
+  const bucket = DEFAULT_TEXTBOOK_CROPS_BUCKET;
+  const uploadedKeys = [];
+  const rows = [];
+  for (let i = 0; i < crops.length; i += 1) {
+    const c = crops[i] || {};
+    const rawPage = Number.parseInt(String(c.raw_page ?? ''), 10);
+    const problemNumber = String(c.problem_number || '').trim();
+    if (!Number.isFinite(rawPage) || rawPage <= 0 || !problemNumber) {
+      sendJson(res, 400, {
+        ok: false,
+        error: `invalid_crop_row_at_${i}`,
+        hint: 'raw_page (>0) and problem_number are required',
+      });
+      return;
+    }
+
+    let storageKey;
+    try {
+      storageKey = buildTextbookCropStorageKey({
+        academyId,
+        bookId,
+        gradeLabel,
+        bigOrder,
+        midOrder,
+        subKey: subKeyRaw,
+        problemNumber,
+      });
+    } catch (e) {
+      sendJson(res, 400, {
+        ok: false,
+        error: `invalid_storage_key_at_${i}: ${e?.message || e}`,
+      });
+      return;
+    }
+
+    const pngBase64 = typeof c.png_base64 === 'string' ? c.png_base64 : '';
+    const preUploadedKey = typeof c.storage_key === 'string' ? c.storage_key.trim() : '';
+
+    let fileSizeBytes = null;
+    if (pngBase64) {
+      let bytes;
+      try {
+        bytes = Buffer.from(pngBase64, 'base64');
+      } catch (e) {
+        sendJson(res, 400, {
+          ok: false,
+          error: `invalid_base64_at_${i}: ${e?.message || e}`,
+        });
+        return;
+      }
+      if (!bytes || bytes.length === 0) {
+        sendJson(res, 400, {
+          ok: false,
+          error: `empty_png_at_${i}`,
+        });
+        return;
+      }
+      if (bytes.length > MAX_CROP_BYTES) {
+        sendJson(res, 413, {
+          ok: false,
+          error: `crop_too_large_at_${i}`,
+          limit_bytes: MAX_CROP_BYTES,
+          got_bytes: bytes.length,
+        });
+        return;
+      }
+      const uploaded = await storageUploadBytes({
+        driver: DEFAULT_TEXTBOOK_DRIVER,
+        bucket,
+        key: storageKey,
+        contentType: 'image/png',
+        bytes,
+      });
+      if (!uploaded.ok) {
+        sendJson(res, 502, {
+          ok: false,
+          error: `storage_upload_failed_at_${i}`,
+          detail: uploaded.error,
+        });
+        return;
+      }
+      fileSizeBytes = bytes.length;
+      uploadedKeys.push(storageKey);
+    } else if (preUploadedKey) {
+      storageKey = preUploadedKey;
+    } else {
+      sendJson(res, 400, {
+        ok: false,
+        error: `missing_png_and_key_at_${i}`,
+        hint: 'Provide either png_base64 or storage_key.',
+      });
+      return;
+    }
+
+    const bbox1k = parseIntArray(c.bbox_1k, 4);
+    const itemRegion1k = parseIntArray(c.item_region_1k, 4);
+    const cropRectPx = parseIntArray(c.crop_rect_px, 4);
+
+    const displayPage = Number.parseInt(String(c.display_page ?? ''), 10);
+    const setFrom = Number.parseInt(String(c.set_from ?? ''), 10);
+    const setTo = Number.parseInt(String(c.set_to ?? ''), 10);
+    const columnIndex = Number.parseInt(String(c.column_index ?? ''), 10);
+    const paddingPx = Number.parseInt(String(c.padding_px ?? ''), 10);
+    const cropLongEdgePx = Number.parseInt(String(c.crop_long_edge_px ?? ''), 10);
+    const widthPx = Number.parseInt(String(c.width_px ?? ''), 10);
+    const heightPx = Number.parseInt(String(c.height_px ?? ''), 10);
+    const deskewAngle = Number(c.deskew_angle_deg);
+
+    rows.push({
+      academy_id: academyId,
+      book_id: bookId,
+      grade_label: gradeLabel,
+      big_order: bigOrder,
+      mid_order: midOrder,
+      sub_key: subKeyRaw,
+      big_name: bigName,
+      mid_name: midName,
+      raw_page: rawPage,
+      display_page: Number.isFinite(displayPage) ? displayPage : null,
+      section: c.section != null ? String(c.section) : null,
+      problem_number: problemNumber,
+      label: c.label != null ? String(c.label) : '',
+      is_set_header: Boolean(c.is_set_header),
+      set_from: Number.isFinite(setFrom) ? setFrom : null,
+      set_to: Number.isFinite(setTo) ? setTo : null,
+      column_index: Number.isFinite(columnIndex) ? columnIndex : null,
+      bbox_1k: bbox1k,
+      item_region_1k: itemRegion1k,
+      storage_bucket: bucket,
+      storage_key: storageKey,
+      file_size_bytes: fileSizeBytes,
+      content_hash: c.content_hash != null ? String(c.content_hash) : null,
+      width_px: Number.isFinite(widthPx) ? widthPx : null,
+      height_px: Number.isFinite(heightPx) ? heightPx : null,
+      crop_rect_px: cropRectPx,
+      padding_px: Number.isFinite(paddingPx) ? paddingPx : null,
+      crop_long_edge_px: Number.isFinite(cropLongEdgePx) ? cropLongEdgePx : null,
+      deskew_angle_deg: Number.isFinite(deskewAngle) ? deskewAngle : null,
+      updated_at: new Date().toISOString(),
+    });
+  }
+
+  const { data, error } = await supa
+    .from('textbook_problem_crops')
+    .upsert(rows, {
+      onConflict:
+        'academy_id,book_id,grade_label,big_order,mid_order,sub_key,problem_number',
+    })
+    .select('id, storage_key, problem_number');
+  if (error) {
+    sendJson(res, 500, {
+      ok: false,
+      error: `db_upsert_failed: ${error.message || error}`,
+      uploaded_keys: uploadedKeys,
+    });
+    return;
+  }
+
+  sendJson(res, 200, {
+    ok: true,
+    upserted: Array.isArray(data) ? data.length : 0,
+    bucket,
+    rows: data || [],
+  });
+}
+
+async function handleTextbookVlmExtractAnswersStub(_body, res) {
+  sendJson(res, 501, {
+    ok: false,
+    error: 'not_implemented',
+    message:
+      'VLM 기반 정답지 추출은 다음 단계에서 구현될 예정입니다. 현재는 라우팅만 열려 있습니다.',
+    stage: 'planned',
+  });
+}
+
 async function handler(req, res) {
   if (req.method === 'OPTIONS') {
     sendJson(res, 200, { ok: true });
@@ -4225,6 +4568,11 @@ async function handler(req, res) {
     }
     if (method === 'GET' && url.pathname === '/pb/jobs/figure') {
       await listFigureJobs(url, res);
+      return;
+    }
+    if (method === 'POST' && url.pathname === '/pb/jobs/figure/requeue-failed') {
+      const body = await readJson(req);
+      await requeueFailedFigureJobs(body, res);
       return;
     }
     if (method === 'POST' && /^\/pb\/jobs\/figure\/[^/]+\/retry$/.test(url.pathname)) {
@@ -4379,6 +4727,22 @@ async function handler(req, res) {
     if (method === 'POST' && url.pathname === '/textbook/vlm/detect-problems') {
       const body = await readJson(req);
       await handleTextbookVlmDetectProblems(body, res);
+      return;
+    }
+
+    // Textbook crop batch upsert — writes PNG to Storage + row to
+    // textbook_problem_crops. Used by the manager app's unit authoring dialog.
+    if (method === 'POST' && url.pathname === '/textbook/crops/batch-upsert') {
+      const body = await readJson(req);
+      await handleTextbookCropsBatchUpsert(body, res);
+      return;
+    }
+
+    // VLM answer-key extraction — stubbed for now; UI button is wired so the
+    // next milestone only needs to fill in the implementation.
+    if (method === 'POST' && url.pathname === '/textbook/vlm/extract-answers') {
+      const body = await readJson(req);
+      await handleTextbookVlmExtractAnswersStub(body, res);
       return;
     }
 

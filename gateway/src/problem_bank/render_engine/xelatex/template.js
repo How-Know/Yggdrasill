@@ -1105,10 +1105,29 @@ function resolveTableScale(question, type, index) {
 
 const CIRCLED_DIGITS = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩'];
 
+// 선택지 시각폭 측정 — HTML 엔진 `choice_block.js` 의 visualLength 와 동일한
+//   전처리(LaTeX 토큰 스트리핑) 를 적용해 두 엔진의 레이아웃 결정 기준을 통일한다.
+//
+// 전처리 후 남은 "가시 글리프 근사 문자열" 에 대해 XeLaTeX 본 렌더 스케일에
+//   맞춘 가중치(Hangul=2, Non-ASCII=1.5, ASCII=0.6) 로 합산한다.
+//
+//   - `\frac`/`\dfrac`/`\tfrac`/`\over` : 가로로 넓고 세로가 큰 분수 → "FRAC"
+//   - `\sqrt` : 제곱근 기호 → "SQRT"
+//   - `\times`/`\div`/`\le`/`\ge`/…     : 단일 연산자 기호 → "X"
+//   - `\left`/`\right`/`\mathrm`/`\text{}` 류: 폭 기여 거의 없음 → 제거
+//   - 기타 `\[a-zA-Z]+` 매크로         : 일반 기호 1개 → "S"
 function visualLength(text) {
-  const clean = stripMarkers(text).trim();
+  const stripped = stripMarkers(text)
+    .replace(/\\(?:times|div|cdot|pm|mp|le|ge|leq|geq|neq|approx|equiv|sim|lt|gt)\b/g, ' X ')
+    .replace(/\\(?:frac|dfrac|tfrac|over)\b/g, ' FRAC ')
+    .replace(/\\sqrt\b/g, ' SQRT ')
+    .replace(/\\(?:left|right|mathrm|mathbf|mathit|text|operatorname|displaystyle|textstyle)\b/g, '')
+    .replace(/\\[a-zA-Z]+/g, ' S ')
+    .replace(/[{}$\\^_]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
   let len = 0;
-  for (const ch of clean) {
+  for (const ch of stripped) {
     const code = ch.codePointAt(0);
     if (code >= 0xAC00 && code <= 0xD7AF) len += 2;
     else if (code >= 0x3130 && code <= 0x318F) len += 2;
@@ -1118,11 +1137,24 @@ function visualLength(text) {
   return Math.round(len);
 }
 
-function chooseChoiceLayout(choices) {
+// 레이아웃 결정 전에 equation placeholder 를 실제 LaTeX 로 펼친 뒤 측정한다.
+//   choice.text 에는 DB 규약상 짧은 raw 토큰(예: "R1") 이 들어있을 수 있고,
+//   실제 렌더는 smartTexLine → applyEquationLookup 으로 긴 수식으로 확장된다.
+//   측정이 그 확장을 무시하면 row1 로 잘못 내려가 \makebox 에서 오버플로우가 발생한다.
+//
+// Tier 2 — 칼럼 폭 인지:
+//   row1 cell = 0.2 × \linewidth. 1단에서는 \linewidth ≈ textwidth, 2단에서는 그 절반.
+//   즉 2단 페이지에서는 같은 선택지라도 "보기 셀 대비 차지하는 비율" 이 2배.
+//   임계값을 고정한 채 **측정 길이에 widthFactor(=layoutColumns) 를 곱해** 동일 폭 기준으로
+//   정규화한다. 결과: 2단에서는 더 쉽게 row2/stack 으로 내려간다.
+function chooseChoiceLayout(choices, equations, layoutColumns = 1) {
   if (choices.length !== 5) return 'stack';
+  const lookup = buildEquationLookup(equations);
+  const widthFactor = Math.max(1, Number(layoutColumns) || 1);
   const lengths = choices.map((c) => {
-    const text = typeof c === 'string' ? c : c?.text || c?.label || '';
-    return visualLength(text);
+    const raw = typeof c === 'string' ? c : c?.text || c?.label || '';
+    const expanded = applyEquationLookup(raw, lookup);
+    return visualLength(expanded) * widthFactor;
   });
   const maxLen = Math.max(...lengths);
   const totalLen = lengths.reduce((a, b) => a + b, 0);
@@ -1133,10 +1165,10 @@ function chooseChoiceLayout(choices) {
   return 'row1';
 }
 
-function renderChoicesLatex(choices, equations) {
+function renderChoicesLatex(choices, equations, layoutColumns = 1) {
   if (!Array.isArray(choices) || choices.length === 0) return '';
 
-  const layout = chooseChoiceLayout(choices);
+  const layout = chooseChoiceLayout(choices, equations, layoutColumns);
 
   const renderItem = (c, idx) => {
     const text = typeof c === 'string' ? c : c?.text || c?.label || '';
@@ -1983,6 +2015,9 @@ function renderOneQuestion(question, {
   // 짝슬롯 공통 상단 vertical padding (pt). row 에 라벨이 하나라도 있으면 양쪽 slot 모두
   // 같은 값을 받아 "첫 hbox 전 공통 간격" 을 대칭으로 확보 → [t] baseline 정렬 유지.
   topPadPt = 0,
+  // 문항이 그려지는 페이지의 칼럼 수(1 | 2). 5지선다 레이아웃 선택 시 셀 폭 대비 선택지 길이
+  // 비율을 바르게 평가하기 위해 필요. mock/csat 모드는 항상 2단.
+  layoutColumns = 1,
 } = {}) {
   const qNum = question?.question_number || question?.questionNumber || '';
   const stem = question?.stem || '';
@@ -2635,7 +2670,7 @@ function renderOneQuestion(question, {
     const choiceGap = trailingBigType ? gapAfter(trailingBigType) : BLOCK_GAP;
     parts.push(`% DBG choices-gap: trailingBigType=${trailingBigType} gap=${choiceGap.replace(/\\/g, '\\\\')}`);
     parts.push(choiceGap);
-    parts.push(renderChoicesLatex(choices, equations));
+    parts.push(renderChoicesLatex(choices, equations, layoutColumns));
   }
 
   parts.push('\\par');
@@ -2759,6 +2794,7 @@ function renderMockSlotColumnBody(
         pairStrutMacro: pairStrutMacros[i] || null,
         pairLabelStrutMacro: pairLabelStrutMacros[i] || null,
         topPadPt: Number(topPadsPt[i] || 0),
+        layoutColumns: 2,
       }));
     } else {
       lines.push('\\vspace*{0.6\\baselineskip}');
@@ -3804,6 +3840,7 @@ export function buildDocumentTexSource(questions, options = {}) {
           stemSizePt: fontSize,
           includeQuestionScore,
           questionScoreByQuestionId,
+          layoutColumns: columns,
         }),
       );
       parts.push('\n');

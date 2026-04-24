@@ -223,6 +223,82 @@ export function buildTextbookStorageKey({ academyId, fileId, gradeLabel, kind })
   return `academies/${a}/files/${f}/${g}/${k}.pdf`;
 }
 
+function slugForFileName(input) {
+  const s = sanitizeString(input);
+  // Keep word chars, dash, tilde (~ appears in 48~52 set-header numbers),
+  // fold the rest to '_' so that Storage accepts the path segment.
+  return s.replace(/[^A-Za-z0-9_\-~]/g, '_');
+}
+
+/**
+ * Canonical crop storage key.
+ * Path: academies/<academy_id>/books/<book_id>/<grade_label>/
+ *   <big_order>_<mid_order>_<sub_key>/<problem_number>.png
+ */
+export function buildTextbookCropStorageKey({
+  academyId,
+  bookId,
+  gradeLabel,
+  bigOrder,
+  midOrder,
+  subKey,
+  problemNumber,
+  ext = 'png',
+}) {
+  const a = sanitizeString(academyId);
+  const b = sanitizeString(bookId);
+  const g = slugForFileName(gradeLabel);
+  const s = sanitizeString(subKey).toUpperCase();
+  const num = slugForFileName(problemNumber);
+  if (!a || !b || !g || !s || !num) {
+    throw new Error('buildTextbookCropStorageKey: missing required fields');
+  }
+  const bigI = Number.isFinite(Number(bigOrder)) ? Number(bigOrder) : 0;
+  const midI = Number.isFinite(Number(midOrder)) ? Number(midOrder) : 0;
+  return (
+    `academies/${a}/books/${b}/${g}/` +
+    `${bigI}_${midI}_${s}/${num}.${ext}`
+  );
+}
+
+/**
+ * Server-side direct upload. Primarily used by endpoints that receive
+ * base64-encoded bytes and need to push them straight into Storage without
+ * round-tripping through a signed URL.
+ */
+export async function uploadBytes(opts) {
+  const driver = sanitizeString(opts?.driver);
+  const bucket = sanitizeString(opts?.bucket);
+  const key = sanitizeString(opts?.key);
+  const contentType = sanitizeString(opts?.contentType) || 'application/octet-stream';
+  const bytes = opts?.bytes;
+  if (!isSupportedDriver(driver)) {
+    return { ok: false, error: `unsupported_driver: ${driver}` };
+  }
+  if (!bucket || !key) {
+    return { ok: false, error: 'missing_bucket_or_key' };
+  }
+  if (!(bytes instanceof Uint8Array) && !Buffer.isBuffer(bytes)) {
+    return { ok: false, error: 'missing_bytes' };
+  }
+  if (driver !== 'supabase') {
+    return r2NotImplemented('upload_bytes');
+  }
+  const supa = getSupabase();
+  const { error } = await supa.storage.from(bucket).upload(key, bytes, {
+    contentType,
+    upsert: true,
+  });
+  if (error) {
+    return {
+      ok: false,
+      error: `supabase_upload_bytes_failed: ${error.message || error}`,
+    };
+  }
+  return { ok: true };
+}
+
 export const SUPPORTED_DRIVERS = Object.freeze(['supabase', 'r2']);
 export const DEFAULT_TEXTBOOK_BUCKET = 'textbooks';
+export const DEFAULT_TEXTBOOK_CROPS_BUCKET = 'textbook-crops';
 export const DEFAULT_TEXTBOOK_DRIVER = 'supabase';

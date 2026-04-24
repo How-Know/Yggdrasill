@@ -86,6 +86,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   bool _isPdfDropHover = false;
   bool _isExtracting = false;
   bool _isResetting = false;
+  bool _isRequeuingFigures = false;
   bool _hasExtracted = false;
   bool _showLowConfidenceOnly = false;
   bool _schemaMissing = false;
@@ -825,7 +826,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
             pathMap[path] = signed;
           }
         } catch (_) {
-          // 미리보기 URL 발급 실패는 무시한다.
+          // 스토리지 일시 오류는 무시하고 다음 자산으로 진행.
         }
       }
       final latest = _latestFigureAssetOf(q);
@@ -929,6 +930,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         if (uid.isNotEmpty && uid != id) uidToId[uid] = id;
       }
 
+      final missingNumbers = <String>[];
       setState(() {
         for (final entry in urlMap.entries) {
           final qid = uidToId[entry.key.trim()] ?? entry.key.trim();
@@ -942,10 +944,17 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           if (id.isNotEmpty && !_questionPreviewUrls.containsKey(id)) {
             _questionPreviewStatus[id] = 'failed';
             _questionPreviewErrors[id] = '서버 미리보기 응답에서 누락되었습니다.';
+            missingNumbers.add('q${q.questionNumber}(id=${id.substring(0, 8)})');
           }
         }
         _pendingPreviewQuestionIds.clear();
       });
+      if (missingNumbers.isNotEmpty) {
+        debugPrint(
+          '[pb-preview] missing ${missingNumbers.length}/${ordered.length}: '
+          '${missingNumbers.join(', ')}',
+        );
+      }
     } catch (err) {
       if (!mounted) return;
       final msg = err.toString().trim();
@@ -1867,6 +1876,63 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       return Uint8List.fromList(bytes);
     } catch (_) {
       return _readBytesFromPath(item.path);
+    }
+  }
+
+  // 현재 문서에서 status='failed' 로 굳은 figure_jobs 를 일괄 queued 로 되돌린다.
+  // 워커 측 transient 실패(예: HWPX BMP 디코더 버그) 가 수정된 직후,
+  // 이미 실패로 굳어 자동 재시도되지 않는 잡들을 한 번에 복구하기 위한 용도.
+  Future<void> _requeueFailedFiguresForActiveDocument() async {
+    if (_isRequeuingFigures) return;
+    final academyId = _academyId;
+    final doc = _activeDocument;
+    if (academyId == null || academyId.isEmpty || doc == null) {
+      _showSnack('복구할 문서를 먼저 선택해주세요.', error: true);
+      return;
+    }
+    setState(() {
+      _isRequeuingFigures = true;
+    });
+    _appendPipelineLog('figure', '실패한 그림 작업 일괄 재큐 요청');
+    try {
+      final result = await _service.requeueFailedFigureJobs(
+        academyId: academyId,
+        documentId: doc.id,
+      );
+      final requeued = result['requeued'] ?? 0;
+      final total = result['total'] ?? 0;
+      _appendPipelineLog(
+        'figure',
+        '실패한 그림 재큐 완료: $requeued건 재투입 (대상 $total건)',
+      );
+      if (requeued > 0) {
+        if (mounted) {
+          // figure polling 을 켜서 워커 완료 시점에 _reloadQuestions() 가
+          // 자동으로 호출되도록 한다. 플래그를 안 켜면 worker 가 정상 처리해도
+          // 매니저 앱은 stale 한 meta.figure_assets 를 계속 들고 있어서
+          // 카드/확대 미리보기에 그림이 '업로드 후에도' 안 뜨는 증상이 난다.
+          setState(() {
+            _isFigurePolling = true;
+            _statusText =
+                '실패한 그림 $requeued건 재생성 중… (자동 새로고침됩니다)';
+          });
+          _ensurePolling();
+        }
+        _showSnack(
+          '실패한 그림 $requeued건을 큐에 다시 넣었습니다. 잠시 후 미리보기에 반영됩니다.',
+        );
+      } else {
+        _showSnack('재시도할 실패 그림 작업이 없습니다.');
+      }
+    } catch (e) {
+      _appendPipelineLog('figure', '실패한 그림 재큐 실패: $e', error: true);
+      _showSnack('실패한 그림 재시도 실패: $e', error: true);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isRequeuingFigures = false;
+        });
+      }
     }
   }
 
@@ -3981,6 +4047,33 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
               ),
             ],
           ),
+          if (_hasExtracted && _activeDocument != null) ...[
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: (_isRequeuingFigures || commonBlockers)
+                    ? null
+                    : () => unawaited(_requeueFailedFiguresForActiveDocument()),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: _textSub,
+                  side: const BorderSide(color: _border),
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                ),
+                icon: _isRequeuingFigures
+                    ? const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: _accent,
+                        ),
+                      )
+                    : const Icon(Icons.auto_fix_high_outlined, size: 16),
+                label: const Text('실패한 그림 다시 생성'),
+              ),
+            ),
+          ],
           const SizedBox(height: 12),
           Row(
             children: [
@@ -5823,7 +5916,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                     width: double.infinity,
                     errorBuilder: (_, __, ___) => const Text(
                       '이미지 로드 실패',
-                      style: TextStyle(color: Color(0xFF9C5A5A), fontSize: 12),
+                      style:
+                          TextStyle(color: Color(0xFF9C5A5A), fontSize: 12),
                     ),
                   ),
                 ),

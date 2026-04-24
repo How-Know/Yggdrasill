@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -109,7 +108,7 @@ class _TextbookVlmTestDialogState extends State<TextbookVlmTestDialog> {
   /// focused one (crop mode) and the sidebar shows a cropped preview.
   int? _focusedItemIndex;
 
-  /// Cache of cropped PNG bytes keyed by "<pageNumber>:<itemIndex>".
+  /// Cache of cropped PNG bytes keyed by `"<pageNumber>:<itemIndex>"`.
   /// Populated lazily when the user focuses an item.
   final Map<String, Uint8List> _cropCache = {};
 
@@ -900,9 +899,9 @@ class _TextbookVlmTestDialogState extends State<TextbookVlmTestDialog> {
               children: [
                 Text(
                   _rangeRunning
-                      ? '단원 분석 중: p$_rangeCursor (${_rangeStart}~$_rangeEnd) '
+                      ? '단원 분석 중: p$_rangeCursor ($_rangeStart~$_rangeEnd) '
                           '· 성공 $_rangeDone · 실패 $_rangeFailed · $percentTxt%'
-                      : '단원 분석 완료: ${_rangeStart}~$_rangeEnd '
+                      : '단원 분석 완료: $_rangeStart~$_rangeEnd '
                           '· 성공 $_rangeDone · 실패 $_rangeFailed',
                   style: const TextStyle(
                     color: _kText,
