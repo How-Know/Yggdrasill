@@ -1187,6 +1187,25 @@ class ProblemBankService {
       }
     }
 
+    final docRow = await _client
+        .from('pb_documents')
+        .select('source_storage_path, source_pdf_storage_path')
+        .eq('academy_id', academyId)
+        .eq('id', documentId)
+        .maybeSingle();
+    final docMap = docRow == null
+        ? const <String, dynamic>{}
+        : Map<String, dynamic>.from(docRow as Map<dynamic, dynamic>);
+    if (docMap.isEmpty) {
+      throw Exception('document_not_found');
+    }
+    if ('${docMap['source_storage_path'] ?? ''}'.trim().isEmpty) {
+      throw Exception('hwpx_source_required');
+    }
+    if ('${docMap['source_pdf_storage_path'] ?? ''}'.trim().isEmpty) {
+      throw Exception('pdf_source_required');
+    }
+
     final row = await _client
         .from('pb_extract_jobs')
         .insert({

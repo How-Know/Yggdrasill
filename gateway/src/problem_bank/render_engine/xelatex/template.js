@@ -316,7 +316,12 @@ function normalizeMathSegment(mathContent) {
   out = out.replace(/\\left\|/g, '\\left|\\,');
   out = out.replace(/\\right\|/g, '\\,\\right|');
   out = out.replace(/(?<!\\left|\\right)\|([^|]+)\|/g, '\\left|\\,$1\\,\\right|');
-  out = expandCasesEnvironmentToDisplayArray(out, { thinBrace: true });
+  out = expandCasesEnvironmentToDisplayArray(out, {
+    thinBrace: true,
+    braceXScale: 0.65,
+    braceYScale: 0.72,
+    braceGap: '\\hspace{0.22em}',
+  });
 
   return out;
 }
@@ -2192,6 +2197,12 @@ function buildPreamble({
     lines.push('\\newif\\ifquickanswerpage');
     lines.push('\\quickanswerpagefalse');
   }
+  if (!isMock) {
+    lines.push('\\newif\\ifquickanswerpage');
+    lines.push('\\quickanswerpagefalse');
+    lines.push('\\newif\\ifmocktitlepage');
+    lines.push('\\mocktitlepagefalse');
+  }
   lines.push('\\newlength{\\mockColumnHeight}');
   lines.push('\\newlength{\\mockSlotGap}');
   lines.push('\\newlength{\\mockLeftSlotHeight}');
@@ -3693,6 +3704,36 @@ function renderQuickAnswerTableLatex(questions) {
     return out;
   }
 
+  function answerFigureLayoutFor(question, index) {
+    const meta = question?.meta && typeof question.meta === 'object' ? question.meta : {};
+    const layout = meta.answer_figure_layout && typeof meta.answer_figure_layout === 'object'
+      ? meta.answer_figure_layout
+      : {};
+    const items = Array.isArray(layout.items) ? layout.items : [];
+    const wantedKeys = [`idx:${index + 1}`, `ord:${index + 1}`];
+    const item = items.find((it) => wantedKeys.includes(String(it?.assetKey || '').trim())) || {};
+    return {
+      widthEm: Math.max(2, Math.min(30, Number.isFinite(item.widthEm) ? Number(item.widthEm) : 10)),
+      verticalAlign: String(item.verticalAlign || layout.verticalAlign || 'top').toLowerCase(),
+      topOffsetEm: Math.max(0, Math.min(2, Number.isFinite(item.topOffsetEm) ? Number(item.topOffsetEm) : 0.55)),
+    };
+  }
+
+  function renderAnswerFigureLatex(question, index) {
+    const paths = Array.isArray(question?.answer_figure_local_paths)
+      ? question.answer_figure_local_paths
+      : [];
+    const p = paths[index];
+    if (!p) return escapeLatexText('[그림]');
+    const normalized = String(p).replace(/\\/g, '/');
+    const layout = answerFigureLayoutFor(question, index);
+    const include = `\\includegraphics[width=${layout.widthEm.toFixed(2)}em]{${normalized}}`;
+    if (layout.verticalAlign === 'top') {
+      return `\\raisebox{\\dimexpr\\ht\\strutbox-\\height-${layout.topOffsetEm.toFixed(2)}em\\relax}{${include}}`;
+    }
+    return include;
+  }
+
   const isCJKCh = (ch) => {
     const code = ch.codePointAt(0);
     if (code === undefined) return false;
@@ -3793,7 +3834,7 @@ function renderQuickAnswerTableLatex(questions) {
     return out.join('');
   }
 
-  function formatAnswerTex(ans) {
+  function formatAnswerTextTex(ans) {
     let raw = String(ans || '').trim();
     if (!raw) return '-';
     raw = normalizeSpecialTokens(raw);
@@ -3803,6 +3844,28 @@ function renderQuickAnswerTableLatex(questions) {
     if (/\(\d\)/.test(raw)) return formatAnswerWithSubLabels(raw);
     // 규칙 3. 단일 세그먼트.
     return formatAnswerSegment(raw);
+  }
+
+  function formatAnswerTex(ans, question) {
+    const raw = String(ans || '').trim();
+    if (!raw) return '-';
+    const markerRe = /(\[\[PB_ANSWER_FIG_[^\]]+\]\]|\[그림\])/g;
+    if (!markerRe.test(raw)) return formatAnswerTextTex(raw);
+    markerRe.lastIndex = 0;
+    const out = [];
+    let last = 0;
+    let figIndex = 0;
+    let match;
+    while ((match = markerRe.exec(raw)) !== null) {
+      const before = raw.slice(last, match.index).trim();
+      if (before) out.push(formatAnswerTextTex(before));
+      out.push(renderAnswerFigureLatex(question, figIndex));
+      figIndex += 1;
+      last = match.index + match[0].length;
+    }
+    const tail = raw.slice(last).trim();
+    if (tail) out.push(formatAnswerTextTex(tail));
+    return out.join('\\hspace{0.45em}');
   }
 
   // 문항 수에 따라 표 컬럼 수 결정.
@@ -3823,7 +3886,7 @@ function renderQuickAnswerTableLatex(questions) {
       if (q) {
         const num = String(q?.question_number || '?');
         cells.push(`${escapeLatexText(num)}.`);
-        cells.push(formatAnswerTex(resolveAnswer(q)));
+        cells.push(formatAnswerTex(resolveAnswer(q), q));
       } else {
         cells.push('');
         cells.push('');

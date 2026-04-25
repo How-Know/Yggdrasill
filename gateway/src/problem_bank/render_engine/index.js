@@ -494,43 +494,62 @@ async function hydrateFiguresForHtml(questions, supabaseClient) {
     //   등장하면 HTML 렌더러가 itemId → dataUrl 인덱스 를 직접 해결해 위치/개수 추측 없이
     //   정확히 박아 넣는다. 값이 비어 있는 슬롯은 plain 마커 positional fallback 경로로 처리된다.
     q.figure_item_ids = [];
+    q.answer_figure_data_urls = [];
+    q.answer_figure_item_ids = [];
     const meta = q.meta && typeof q.meta === 'object' ? q.meta : {};
-    const assets = Array.isArray(meta.figure_assets) ? meta.figure_assets : [];
-    if (assets.length === 0) continue;
+    const assetSets = [
+      {
+        assets: Array.isArray(meta.figure_assets) ? meta.figure_assets : [],
+        dataUrls: q.figure_data_urls,
+        itemIds: q.figure_item_ids,
+      },
+      {
+        assets: Array.isArray(meta.answer_figure_assets)
+          ? meta.answer_figure_assets
+          : [],
+        dataUrls: q.answer_figure_data_urls,
+        itemIds: q.answer_figure_item_ids,
+      },
+    ];
 
-    const byIndex = new Map();
-    for (const asset of assets) {
-      const idx = asset?.figure_index ?? 0;
-      const existing = byIndex.get(idx);
-      if (!existing) {
-        byIndex.set(idx, asset);
-      } else {
-        const ec = String(existing.created_at || '');
-        const ac = String(asset.created_at || '');
-        if (ac > ec) byIndex.set(idx, asset);
+    for (const set of assetSets) {
+      const assets = set.assets;
+      if (assets.length === 0) continue;
+
+      const byIndex = new Map();
+      for (const asset of assets) {
+        const idx = asset?.figure_index ?? 0;
+        const existing = byIndex.get(idx);
+        if (!existing) {
+          byIndex.set(idx, asset);
+        } else {
+          const ec = String(existing.created_at || '');
+          const ac = String(asset.created_at || '');
+          if (ac > ec) byIndex.set(idx, asset);
+        }
       }
-    }
-    const deduped = [...byIndex.values()].sort(
-      (a, b) => (a.figure_index ?? 0) - (b.figure_index ?? 0),
-    );
+      const deduped = [...byIndex.values()].sort(
+        (a, b) => (a.figure_index ?? 0) - (b.figure_index ?? 0),
+      );
 
-    for (const asset of deduped) {
-      const bucket = normalizeWhitespace(asset?.bucket || '');
-      const path = normalizeWhitespace(asset?.path || '');
-      if (!bucket || !path) continue;
-      try {
-        const { data, error } = await supabaseClient.storage
-          .from(bucket)
-          .download(path);
-        if (error || !data) continue;
-        const buf = Buffer.from(await data.arrayBuffer());
-        const mime = normalizeWhitespace(asset?.mime_type || asset?.mimeType || 'image/png');
-        const b64 = buf.toString('base64');
-        q.figure_data_urls.push(`data:${mime};base64,${b64}`);
-        q.figure_item_ids.push(String(asset?.item_id || '').trim());
-        appliedCount += 1;
-      } catch (_) {
-        // skip failed downloads
+      for (const asset of deduped) {
+        const bucket = normalizeWhitespace(asset?.bucket || '');
+        const path = normalizeWhitespace(asset?.path || '');
+        if (!bucket || !path) continue;
+        try {
+          const { data, error } = await supabaseClient.storage
+            .from(bucket)
+            .download(path);
+          if (error || !data) continue;
+          const buf = Buffer.from(await data.arrayBuffer());
+          const mime = normalizeWhitespace(asset?.mime_type || asset?.mimeType || 'image/png');
+          const b64 = buf.toString('base64');
+          set.dataUrls.push(`data:${mime};base64,${b64}`);
+          set.itemIds.push(String(asset?.item_id || '').trim());
+          appliedCount += 1;
+        } catch (_) {
+          // skip failed downloads
+        }
       }
     }
   }

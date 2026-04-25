@@ -2716,6 +2716,9 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
   String? _searchError;
   Map<String, String> _gradingStates = <String, String>{};
   String _boundSessionId = '';
+  RightSideSheetTestGradingSession? _boundSessionRef;
+  bool _gradingEditLocked = false;
+  bool _editResetBusy = false;
   bool _actionBusy = false;
 
   @override
@@ -2835,11 +2838,13 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
   void _hydrateSessionState({bool force = false}) {
     final session = widget.session;
     final nextId = session?.sessionId ?? '';
-    if (!force && nextId == _boundSessionId) return;
+    if (!force && identical(session, _boundSessionRef)) return;
+    _boundSessionRef = session;
     _boundSessionId = nextId;
     if (session == null) {
       setState(() {
         _gradingStates = <String, String>{};
+        _gradingEditLocked = false;
       });
       return;
     }
@@ -2849,6 +2854,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     });
     setState(() {
       _gradingStates = mapped;
+      _gradingEditLocked = session.gradingLocked;
     });
   }
 
@@ -2893,12 +2899,78 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     );
   }
 
-  void _toggleCellState(String key) {
+  Future<void> _toggleCellState(String key) async {
+    if (_gradingEditLocked) {
+      final unlocked = await _confirmResetForEdit();
+      if (!unlocked || !mounted) return;
+    }
     setState(() {
       final current = _normalizeState(_gradingStates[key]);
       _gradingStates[key] = _nextState(current);
     });
     _emitStateChanged();
+  }
+
+  Future<bool> _confirmResetForEdit() async {
+    final session = widget.session;
+    if (session == null || _editResetBusy) return false;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          backgroundColor: _rsPanelBg,
+          title: const Text(
+            '채점 결과를 수정할까요?',
+            style: TextStyle(
+              color: _rsText,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          content: const Text(
+            '이미 저장된 첫 채점 결과가 있습니다.\n수정하면 저장된 점수와 오답 기록이 리셋되고, 다시 확인할 때 새 결과로 저장됩니다.',
+            style: TextStyle(
+              color: _rsTextSub,
+              fontWeight: FontWeight.w700,
+              height: 1.45,
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('취소'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('수정하고 리셋'),
+            ),
+          ],
+        );
+      },
+    );
+    if (confirmed != true || !mounted) return false;
+    setState(() {
+      _editResetBusy = true;
+    });
+    var ok = true;
+    try {
+      final resetAction = session.onRequestEditReset;
+      if (resetAction != null) {
+        ok = await resetAction();
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _editResetBusy = false;
+        });
+      }
+    }
+    if (!ok || !mounted) return false;
+    setState(() {
+      _gradingEditLocked = false;
+      _gradingStates = <String, String>{};
+    });
+    _emitStateChanged();
+    return true;
   }
 
   String _normalizeAnswerForMathRendering(String raw) {
@@ -2997,8 +3069,8 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     s = s.replaceAllMapped(RegExp(r','), (_) => ' , ');
     s = s.replaceAllMapped(RegExp(r';'), (_) => ' ; ');
     s = s.replaceAllMapped(RegExp(r'='), (_) => ' = ');
-    s = s.replaceAllMapped(RegExp(r'(?<![A-Za-z])\\times(?![A-Za-z])'),
-        (_) => r' \times ');
+    s = s.replaceAllMapped(
+        RegExp(r'(?<![A-Za-z])\\times(?![A-Za-z])'), (_) => r' \times ');
     s = s.replaceAllMapped(
         RegExp(r'(?<![A-Za-z])\\div(?![A-Za-z])'), (_) => r' \div ');
     s = s.replaceAllMapped(
@@ -3012,8 +3084,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     s = s.replaceAllMapped(
         RegExp(r'(?<![A-Za-z])\\ne(?![A-Za-z])'), (_) => r' \ne ');
     // `)(` 또는 `)`+숫자/영문 → 공백 주입 (중괄호 안은 건드리지 않기 위해 단순)
-    s = s.replaceAllMapped(
-        RegExp(r'\)(?=[A-Za-z0-9\\])'), (_) => ') ');
+    s = s.replaceAllMapped(RegExp(r'\)(?=[A-Za-z0-9\\])'), (_) => ') ');
     s = s.replaceAll(RegExp(r'\s+'), ' ').trim();
     return s;
   }
@@ -3125,8 +3196,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     }
     final out = <_RsSubChunk>[];
     if (matches.first.start > 0) {
-      final leading =
-          preprocessed.substring(0, matches.first.start).trim();
+      final leading = preprocessed.substring(0, matches.first.start).trim();
       if (leading.isNotEmpty) {
         out.add(_RsSubChunk(body: leading));
       }
@@ -4201,10 +4271,12 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         children: [
           indexLabel,
           Tooltip(
-            message: '${cell.questionIndex}번',
+            message: _gradingEditLocked
+                ? '${cell.questionIndex}번 · 저장된 채점 결과'
+                : '${cell.questionIndex}번',
             child: InkWell(
               borderRadius: BorderRadius.circular(8),
-              onTap: () => _toggleCellState(cell.key),
+              onTap: () => unawaited(_toggleCellState(cell.key)),
               child: SizedBox(
                 width: cellWidth,
                 height: 75,
@@ -4218,58 +4290,37 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                   ),
                   child: Center(
                     child: (showsAnswer && isCircledChoice && !isOverflow)
-                  ? Container(
-                      width: circledNumber >= 10 ? 33 : 30,
-                      height: circledNumber >= 10 ? 33 : 30,
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: textColor,
-                          width: 1.2,
-                        ),
-                      ),
-                      child: Text(
-                        '$circledNumber',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          color: textColor,
-                          fontWeight: FontWeight.w800,
-                          fontSize: circledNumber >= 10 ? 14.5 : 16.5,
-                          height: 1.0,
-                        ),
-                      ),
-                    )
-                  : (showsAnswer && isOverflow)
-                      ? FittedBox(
-                          fit: BoxFit.scaleDown,
-                          child: Text(
-                            '해설',
-                            textAlign: TextAlign.center,
-                            maxLines: 1,
-                            overflow: TextOverflow.fade,
-                            softWrap: false,
-                            style: TextStyle(
-                              color: textColor,
-                              fontWeight: FontWeight.w800,
-                              fontSize: contentFontSize,
-                              height: 1.0,
+                        ? Container(
+                            width: circledNumber >= 10 ? 33 : 30,
+                            height: circledNumber >= 10 ? 33 : 30,
+                            alignment: Alignment.center,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: textColor,
+                                width: 1.2,
+                              ),
                             ),
-                          ),
-                        )
-                      : showsAnswer
-                          ? SizedBox(
-                              width: cellWidth - 14,
-                              height: 64,
-                              child: FittedBox(
+                            child: Text(
+                              '$circledNumber',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                color: textColor,
+                                fontWeight: FontWeight.w800,
+                                fontSize: circledNumber >= 10 ? 14.5 : 16.5,
+                                height: 1.0,
+                              ),
+                            ),
+                          )
+                        : (showsAnswer && isOverflow)
+                            ? FittedBox(
                                 fit: BoxFit.scaleDown,
-                                alignment: Alignment.center,
-                                child: LatexTextRenderer(
-                                  latexText,
+                                child: Text(
+                                  '해설',
                                   textAlign: TextAlign.center,
-                                  crossAxisAlignment: CrossAxisAlignment.center,
-                                  maxLines: 3,
-                                  softWrap: true,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.fade,
+                                  softWrap: false,
                                   style: TextStyle(
                                     color: textColor,
                                     fontWeight: FontWeight.w800,
@@ -4277,24 +4328,46 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                                     height: 1.0,
                                   ),
                                 ),
-                              ),
-                            )
-                          : FittedBox(
-                              fit: BoxFit.scaleDown,
-                              child: Text(
-                                text,
-                                textAlign: TextAlign.center,
-                                maxLines: 1,
-                                overflow: TextOverflow.fade,
-                                softWrap: false,
-                                style: TextStyle(
-                                  color: textColor,
-                                  fontWeight: FontWeight.w800,
-                                  fontSize: contentFontSize,
-                                  height: 1.0,
-                                ),
-                              ),
-                            ),
+                              )
+                            : showsAnswer
+                                ? SizedBox(
+                                    width: cellWidth - 14,
+                                    height: 64,
+                                    child: FittedBox(
+                                      fit: BoxFit.scaleDown,
+                                      alignment: Alignment.center,
+                                      child: LatexTextRenderer(
+                                        latexText,
+                                        textAlign: TextAlign.center,
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.center,
+                                        maxLines: 3,
+                                        softWrap: true,
+                                        style: TextStyle(
+                                          color: textColor,
+                                          fontWeight: FontWeight.w800,
+                                          fontSize: contentFontSize,
+                                          height: 1.0,
+                                        ),
+                                      ),
+                                    ),
+                                  )
+                                : FittedBox(
+                                    fit: BoxFit.scaleDown,
+                                    child: Text(
+                                      text,
+                                      textAlign: TextAlign.center,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.fade,
+                                      softWrap: false,
+                                      style: TextStyle(
+                                        color: textColor,
+                                        fontWeight: FontWeight.w800,
+                                        fontSize: contentFontSize,
+                                        height: 1.0,
+                                      ),
+                                    ),
+                                  ),
                   ),
                 ),
               ),
@@ -4409,8 +4482,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
 
     final preprocessed = _rsPreprocessOverflowRaw(cell.answer);
     final subChunks = _rsSplitBySubQuestionMarker(preprocessed);
-    final markerCount =
-        subChunks.where((c) => c.marker != null).length;
+    final markerCount = subChunks.where((c) => c.marker != null).length;
 
     Widget bodyArea;
     if (markerCount < 2) {
@@ -4493,9 +4565,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         ),
         Expanded(
           child: LatexTextRenderer(
-            chunk.body.isEmpty
-                ? '-'
-                : _overflowAnswerMarkup(chunk.body),
+            chunk.body.isEmpty ? '-' : _overflowAnswerMarkup(chunk.body),
             textAlign: TextAlign.left,
             crossAxisAlignment: CrossAxisAlignment.start,
             softWrap: true,

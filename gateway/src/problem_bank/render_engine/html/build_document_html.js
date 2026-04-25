@@ -1242,9 +1242,18 @@ function buildStyles({
     .answer-item {
       white-space: nowrap;
       display: inline-flex;
-      align-items: center;
+      align-items: flex-start;
       gap: 4.5pt;
       overflow: visible;
+    }
+    .answer-figure {
+      display: inline-block;
+      vertical-align: top;
+      height: auto;
+    }
+    .answer-figure-gap {
+      display: inline-block;
+      width: 0.45em;
     }
     .answer-item .math-inline {
       transform: translateY(-1pt);
@@ -1272,9 +1281,32 @@ function buildStyles({
 function renderAnswerSheet(questions, mathRenderer) {
   if (!Array.isArray(questions) || questions.length === 0) return '';
   const CIRCLED_RE = /^[①②③④⑤]$/;
-  const rows = questions.map((q) => {
-    const raw = String(q?.export_answer || '').trim() || '(미기입)';
-    let answerHtml;
+  const answerFigureHtml = (q, index) => {
+    const dataUrls = Array.isArray(q?.answer_figure_data_urls)
+      ? q.answer_figure_data_urls
+      : [];
+    const src = dataUrls[index];
+    if (!src) return escapeHtml('[그림]');
+    const meta = q?.meta && typeof q.meta === 'object' ? q.meta : {};
+    const layout = meta.answer_figure_layout && typeof meta.answer_figure_layout === 'object'
+      ? meta.answer_figure_layout
+      : {};
+    const items = Array.isArray(layout.items) ? layout.items : [];
+    const item = items.find((it) => {
+      const key = String(it?.assetKey || '').trim();
+      return key === `idx:${index + 1}` || key === `ord:${index + 1}`;
+    }) || {};
+    const widthEm = Number.isFinite(item.widthEm)
+      ? Math.max(2, Math.min(30, Number(item.widthEm)))
+      : 10;
+    const topOffsetEm = Number.isFinite(item.topOffsetEm)
+      ? Math.max(0, Math.min(2, Number(item.topOffsetEm)))
+      : 0.55;
+    return `<img class="answer-figure" src="${escapeHtml(src)}" style="width:${widthEm.toFixed(2)}em; transform: translateY(${topOffsetEm.toFixed(2)}em)" alt="정답 그림 ${index + 1}">`;
+  };
+  const renderAnswerText = (q, rawText) => {
+    const raw = String(rawText || '').trim();
+    if (!raw) return '';
     if (mathRenderer && raw !== '(미기입)' && !CIRCLED_RE.test(raw)) {
       const latex = normalizeMathLatex(raw) || raw;
       const result = mathRenderer.renderInline(latex);
@@ -1284,11 +1316,35 @@ function renderAnswerSheet(questions, mathRenderer) {
         answerHtml = `<span class="${klass}" data-latex="${escapeHtml(latex)}">${result.svg}</span>`;
       } else {
         const composed = composeLineV1(raw, mathRenderer, q?.equations);
-        answerHtml = composed.html;
+        return composed.html;
       }
     } else {
-      answerHtml = escapeHtml(raw);
+      return escapeHtml(raw);
     }
+  };
+  const renderAnswerValue = (q, raw) => {
+    const text = String(raw || '').trim() || '(미기입)';
+    const markerRe = /(\[\[PB_ANSWER_FIG_[^\]]+\]\]|\[그림\])/g;
+    if (!markerRe.test(text)) return renderAnswerText(q, text);
+    markerRe.lastIndex = 0;
+    const parts = [];
+    let last = 0;
+    let figIndex = 0;
+    let match;
+    while ((match = markerRe.exec(text)) !== null) {
+      const before = text.slice(last, match.index).trim();
+      if (before) parts.push(renderAnswerText(q, before));
+      parts.push(answerFigureHtml(q, figIndex));
+      figIndex += 1;
+      last = match.index + match[0].length;
+    }
+    const tail = text.slice(last).trim();
+    if (tail) parts.push(renderAnswerText(q, tail));
+    return parts.join('<span class="answer-figure-gap"></span>');
+  };
+  const rows = questions.map((q) => {
+    const raw = String(q?.export_answer || '').trim() || '(미기입)';
+    const answerHtml = renderAnswerValue(q, raw);
     return `<div class="answer-item"><span class="answer-num">${escapeHtml(String(q?.question_number || '?'))}.</span>${answerHtml}</div>`;
   });
   return `

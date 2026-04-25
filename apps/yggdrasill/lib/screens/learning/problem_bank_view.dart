@@ -1042,6 +1042,8 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           'includeAcademyLogo': request.includeAcademyLogo,
           'includeCoverPage': request.includeCoverPage,
           'coverPageTexts': request.coverPageTexts,
+          'includeAnswerSheet': request.includeAnswerSheet,
+          'includeExplanation': request.includeExplanation,
           'includeQuestionScore': request.includeQuestionScore,
           'questionScoreByQuestionUid': request.questionScoreByQuestionId,
           'questionScoreByQuestionId': request.questionScoreByQuestionId,

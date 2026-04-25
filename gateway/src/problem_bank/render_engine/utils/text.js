@@ -228,7 +228,9 @@ export function expandCasesEnvironmentToDisplayArray(value, options = {}) {
   const {
     thinBrace = false,
     braceXScale = 0.78,
+    braceYScale = 1,
     braceGap = '\\hspace{0.45em}',
+    rowGap = '0.35em',
   } = options || {};
 
   return String(value || '').replace(
@@ -243,12 +245,14 @@ export function expandCasesEnvironmentToDisplayArray(value, options = {}) {
       const colSpec = `@{}${Array.from({ length: colCount }, () => 'l').join('@{\\quad}')}@{}`;
       const latexRows = rows
         .map(applyDisplaystyleToCaseRow)
-        .join('\\\\[0.35em]');
+        .join(`\\\\[${rowGap}]`);
       const arrayTex = `\\begin{array}{${colSpec}}${latexRows}\\end{array}`;
       if (thinBrace) {
         // XeLaTeX 전용: delimiter 두께를 직접 지정할 수 없으므로 brace만 가로로 살짝
-        // 압축해 선을 얇게 보이게 한다. 배열은 별도 math box로 두어 글자폭은 유지한다.
-        return `\\vcenter{\\hbox{\\scalebox{${braceXScale}}[1]{$\\left\\{\\vphantom{${arrayTex}}\\right.$}${braceGap}$${arrayTex}$}}`;
+        // 압축해 선을 얇게 보이게 한다. braceYScale 은 행간을 건드리지 않고
+        // delimiter 자체의 위아래 과한 여유만 줄이는 용도다.
+        // 배열은 별도 math box로 두어 글자폭과 행간은 유지한다.
+        return `\\vcenter{\\hbox{\\scalebox{${braceXScale}}[${braceYScale}]{$\\left\\{\\vphantom{${arrayTex}}\\right.$}${braceGap}$${arrayTex}$}}`;
       }
       return `\\left\\{${braceGap}${arrayTex}\\right.`;
     },

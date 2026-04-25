@@ -52,6 +52,16 @@ class HomeworkTestGradingAttemptRecord {
   });
 }
 
+class HomeworkTestSavedGradingSession {
+  final HomeworkTestGradingAttemptRecord attempt;
+  final Map<String, HomeworkAnswerCellState> states;
+
+  const HomeworkTestSavedGradingSession({
+    required this.attempt,
+    required this.states,
+  });
+}
+
 class HomeworkTestGradingStudentPeriodStats {
   final String studentId;
   final int attemptCount;
@@ -236,6 +246,85 @@ class HomeworkTestGradingResultService {
         debugPrintStack(stackTrace: stackTrace);
       }
       return const <HomeworkTestGradingAttemptRecord>[];
+    }
+  }
+
+  Future<HomeworkTestSavedGradingSession?> loadLatestSavedSessionForHomework({
+    required String homeworkItemId,
+  }) async {
+    final academyId = await _resolveAcademyId();
+    final itemId = homeworkItemId.trim();
+    if (academyId.isEmpty || itemId.isEmpty) return null;
+    try {
+      final attemptRows = await Supabase.instance.client
+          .from('homework_test_grading_attempts')
+          .select(
+            'id,student_id,homework_item_id,action,assignment_code_snapshot,'
+            'group_homework_title_snapshot,solve_elapsed_ms,extra_elapsed_ms,'
+            'score_correct,score_total,wrong_count,unsolved_count,graded_at',
+          )
+          .eq('academy_id', academyId)
+          .eq('homework_item_id', itemId)
+          .order('graded_at', ascending: false)
+          .limit(1);
+      if (attemptRows.isEmpty) return null;
+      final attempt = _attemptFromRow(Map<String, dynamic>.from(
+        attemptRows.first as Map,
+      ));
+      if (attempt.id.isEmpty) return null;
+
+      final itemRows = await Supabase.instance.client
+          .from('homework_test_grading_attempt_items')
+          .select('question_key,state')
+          .eq('academy_id', academyId)
+          .eq('attempt_id', attempt.id)
+          .order('page_number', ascending: true)
+          .order('question_index', ascending: true);
+      final states = <String, HomeworkAnswerCellState>{};
+      for (final raw in itemRows) {
+        final row = Map<String, dynamic>.from(raw as Map);
+        final key = '${row['question_key'] ?? ''}'.trim();
+        if (key.isEmpty) continue;
+        states[key] = _decodeState('${row['state'] ?? ''}');
+      }
+      return HomeworkTestSavedGradingSession(
+        attempt: attempt,
+        states: states,
+      );
+    } catch (error, stackTrace) {
+      if (!_isMissingTableError(error)) {
+        debugPrint('loadLatestSavedSessionForHomework failed: $error');
+        debugPrintStack(stackTrace: stackTrace);
+      }
+      return null;
+    }
+  }
+
+  Future<bool> resetAttemptsForHomework({
+    required String homeworkItemId,
+  }) async {
+    final academyId = await _resolveAcademyId();
+    final itemId = homeworkItemId.trim();
+    if (academyId.isEmpty || itemId.isEmpty) return false;
+    try {
+      final supa = Supabase.instance.client;
+      await supa
+          .from('homework_test_grading_attempt_items')
+          .delete()
+          .eq('academy_id', academyId)
+          .eq('homework_item_id', itemId);
+      await supa
+          .from('homework_test_grading_attempts')
+          .delete()
+          .eq('academy_id', academyId)
+          .eq('homework_item_id', itemId);
+      return true;
+    } catch (error, stackTrace) {
+      if (!_isMissingTableError(error)) {
+        debugPrint('resetAttemptsForHomework failed: $error');
+        debugPrintStack(stackTrace: stackTrace);
+      }
+      return false;
     }
   }
 
@@ -548,6 +637,18 @@ class HomeworkTestGradingResultService {
         return 'wrong';
       case HomeworkAnswerCellState.unsolved:
         return 'unsolved';
+    }
+  }
+
+  HomeworkAnswerCellState _decodeState(String raw) {
+    switch (raw.trim().toLowerCase()) {
+      case 'wrong':
+        return HomeworkAnswerCellState.wrong;
+      case 'unsolved':
+        return HomeworkAnswerCellState.unsolved;
+      case 'correct':
+      default:
+        return HomeworkAnswerCellState.correct;
     }
   }
 

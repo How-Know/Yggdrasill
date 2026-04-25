@@ -11,6 +11,7 @@ typedef RightSheetTestGradingAction = Future<void> Function(
   String action,
   RightSheetTestGradingStates states,
 );
+typedef RightSheetTestGradingEditResetAction = Future<bool> Function();
 
 class RightSheetGradingSearchResult {
   final String studentId;
@@ -55,6 +56,8 @@ class RightSideSheetTestGradingSession {
   final RightSheetTestGradingStates initialStates;
   final RightSheetTestGradingStatesChanged? onStatesChanged;
   final RightSheetTestGradingAction? onAction;
+  final bool gradingLocked;
+  final RightSheetTestGradingEditResetAction? onRequestEditReset;
   final Map<String, double> scoreByQuestionKey;
 
   const RightSideSheetTestGradingSession({
@@ -68,6 +71,8 @@ class RightSideSheetTestGradingSession {
     this.initialStates = const <String, String>{},
     this.onStatesChanged,
     this.onAction,
+    this.gradingLocked = false,
+    this.onRequestEditReset,
     this.scoreByQuestionKey = const <String, double>{},
   });
 }

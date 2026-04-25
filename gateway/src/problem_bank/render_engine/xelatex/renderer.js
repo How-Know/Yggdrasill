@@ -91,64 +91,85 @@ export async function hydrateFiguresForXeLatex(questions, supabaseClient, workDi
   for (const q of questions) {
     q.figure_local_paths = [];
     q.figure_local_infos = [];
+    q.answer_figure_local_paths = [];
+    q.answer_figure_local_infos = [];
     const meta = q.meta && typeof q.meta === 'object' ? q.meta : {};
-    const assets = Array.isArray(meta.figure_assets) ? meta.figure_assets : [];
-    if (assets.length === 0) continue;
+    const assetSets = [
+      {
+        assets: Array.isArray(meta.figure_assets) ? meta.figure_assets : [],
+        paths: q.figure_local_paths,
+        infos: q.figure_local_infos,
+        prefix: 'fig',
+      },
+      {
+        assets: Array.isArray(meta.answer_figure_assets)
+          ? meta.answer_figure_assets
+          : [],
+        paths: q.answer_figure_local_paths,
+        infos: q.answer_figure_local_infos,
+        prefix: 'answer-fig',
+      },
+    ];
 
-    // figure_index 기준 중복 제거 시 approved=true 를 우선, 동률이면 created_at 최신 우선.
-    const byIdx = new Map();
-    for (const a of assets) {
-      const idx = Number.parseInt(String(a?.figure_index ?? ''), 10);
-      if (!Number.isFinite(idx) || idx <= 0) continue;
-      const prev = byIdx.get(idx);
-      if (!prev) { byIdx.set(idx, a); continue; }
-      const prevApproved = prev?.approved === true ? 1 : 0;
-      const curApproved = a?.approved === true ? 1 : 0;
-      if (curApproved > prevApproved) { byIdx.set(idx, a); continue; }
-      if (curApproved < prevApproved) continue;
-      const prevCreated = String(prev?.created_at || '');
-      const curCreated = String(a?.created_at || '');
-      if (curCreated.localeCompare(prevCreated) > 0) byIdx.set(idx, a);
-    }
-    const deduped = [...byIdx.values()].sort(
-      (a, b) => (a.figure_index || 0) - (b.figure_index || 0),
-    );
+    for (const set of assetSets) {
+      const assets = set.assets;
+      if (assets.length === 0) continue;
 
-    let ordinal = 0;
-    for (const asset of deduped) {
-      const bucket = String(asset?.bucket || '').trim();
-      const storagePath = String(asset?.path || '').trim();
-      if (!bucket || !storagePath) continue;
-      try {
-        const { data, error } = await supabaseClient.storage
-          .from(bucket)
-          .download(storagePath);
-        if (error || !data) continue;
-        const ext = (asset.mime_type || 'image/png').split('/').pop() || 'png';
-        const qid = q.id || q.question_uid || randomUUID();
-        const filename = `fig-${qid}-${asset.figure_index || 0}.${ext}`;
-        const filePath = path.join(workDir, filename);
-        fs.writeFileSync(filePath, Buffer.from(await data.arrayBuffer()));
-        ordinal += 1;
-        const figIdx = Number.parseInt(String(asset?.figure_index ?? ''), 10);
-        const assetKey = Number.isFinite(figIdx) && figIdx > 0
-          ? `idx:${figIdx}`
-          : (asset?.path ? `path:${asset.path}` : `ord:${ordinal}`);
-        q.figure_local_paths.push(filePath);
-        q.figure_local_infos.push({
-          path: filePath,
-          assetKey,
-          // HWPX binaryItemIDRef. 본문의 [[PB_FIG_<id>]] 토큰 치환 시 item_id 일치하는
-          //   asset 을 직접 선택하는 용도. figure_worker 가 생성 시 보존하고, 이 값이
-          //   존재하면 순서·개수 추측을 완전히 우회한다.
-          itemId: String(asset?.item_id || '').trim(),
-          figureIndex: Number.isFinite(figIdx) && figIdx > 0 ? figIdx : ordinal,
-          ordinal,
-          mimeType: asset.mime_type || 'image/png',
-        });
-        appliedCount += 1;
-      } catch (_) {
-        /* skip failed downloads */
+      // figure_index 기준 중복 제거 시 approved=true 를 우선, 동률이면 created_at 최신 우선.
+      const byIdx = new Map();
+      for (const a of assets) {
+        const idx = Number.parseInt(String(a?.figure_index ?? ''), 10);
+        if (!Number.isFinite(idx) || idx <= 0) continue;
+        const prev = byIdx.get(idx);
+        if (!prev) { byIdx.set(idx, a); continue; }
+        const prevApproved = prev?.approved === true ? 1 : 0;
+        const curApproved = a?.approved === true ? 1 : 0;
+        if (curApproved > prevApproved) { byIdx.set(idx, a); continue; }
+        if (curApproved < prevApproved) continue;
+        const prevCreated = String(prev?.created_at || '');
+        const curCreated = String(a?.created_at || '');
+        if (curCreated.localeCompare(prevCreated) > 0) byIdx.set(idx, a);
+      }
+      const deduped = [...byIdx.values()].sort(
+        (a, b) => (a.figure_index || 0) - (b.figure_index || 0),
+      );
+
+      let ordinal = 0;
+      for (const asset of deduped) {
+        const bucket = String(asset?.bucket || '').trim();
+        const storagePath = String(asset?.path || '').trim();
+        if (!bucket || !storagePath) continue;
+        try {
+          const { data, error } = await supabaseClient.storage
+            .from(bucket)
+            .download(storagePath);
+          if (error || !data) continue;
+          const ext = (asset.mime_type || 'image/png').split('/').pop() || 'png';
+          const qid = q.id || q.question_uid || randomUUID();
+          const filename = `${set.prefix}-${qid}-${asset.figure_index || 0}.${ext}`;
+          const filePath = path.join(workDir, filename);
+          fs.writeFileSync(filePath, Buffer.from(await data.arrayBuffer()));
+          ordinal += 1;
+          const figIdx = Number.parseInt(String(asset?.figure_index ?? ''), 10);
+          const assetKey = Number.isFinite(figIdx) && figIdx > 0
+            ? `idx:${figIdx}`
+            : (asset?.path ? `path:${asset.path}` : `ord:${ordinal}`);
+          set.paths.push(filePath);
+          set.infos.push({
+            path: filePath,
+            assetKey,
+            // HWPX binaryItemIDRef. 본문의 [[PB_FIG_<id>]] 토큰 치환 시 item_id 일치하는
+            //   asset 을 직접 선택하는 용도. figure_worker 가 생성 시 보존하고, 이 값이
+            //   존재하면 순서·개수 추측을 완전히 우회한다.
+            itemId: String(asset?.item_id || '').trim(),
+            figureIndex: Number.isFinite(figIdx) && figIdx > 0 ? figIdx : ordinal,
+            ordinal,
+            mimeType: asset.mime_type || 'image/png',
+          });
+          appliedCount += 1;
+        } catch (_) {
+          /* skip failed downloads */
+        }
       }
     }
   }

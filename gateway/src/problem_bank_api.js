@@ -904,6 +904,11 @@ async function ensureDocumentBelongs(academyId, documentId) {
         'source_storage_path',
         'source_sha256',
         'source_size_bytes',
+        'source_pdf_storage_bucket',
+        'source_pdf_storage_path',
+        'source_pdf_filename',
+        'source_pdf_sha256',
+        'source_pdf_size_bytes',
         'meta',
         'curriculum_code',
         'source_type_code',
@@ -1228,6 +1233,14 @@ async function createExtractJob(body, res) {
   const doc = await ensureDocumentBelongs(academyId, documentId);
   if (!doc) {
     sendJson(res, 404, { ok: false, error: 'document_not_found' });
+    return;
+  }
+  if (!String(doc.source_storage_path || '').trim()) {
+    sendJson(res, 400, { ok: false, error: 'hwpx_source_required' });
+    return;
+  }
+  if (!String(doc.source_pdf_storage_path || '').trim()) {
+    sendJson(res, 400, { ok: false, error: 'pdf_source_required' });
     return;
   }
   let targetQuestionIds = [];

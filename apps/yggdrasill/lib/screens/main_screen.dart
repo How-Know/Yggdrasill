@@ -2100,6 +2100,10 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
           CustomNavigationRail(
             selectedIndex: _railSelectedIndex,
             onDestinationSelected: (int index) {
+              final closeRightSheet = closeRightSideSheetAction;
+              if (closeRightSheet != null) {
+                unawaited(closeRightSheet());
+              }
               setState(() {
                 _selectedIndex = index;
               });

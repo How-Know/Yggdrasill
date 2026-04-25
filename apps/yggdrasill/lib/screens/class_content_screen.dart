@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
@@ -59,6 +60,10 @@ class _ClassContentScreenState extends State<ClassContentScreen>
   DateTime _now = DateTime.now();
   bool _isGradingMode = false;
   bool _printPickMode = false;
+  final List<_HomePrintQueueItem> _homePrintQueue = <_HomePrintQueueItem>[];
+  bool _homePrintQueueRunning = false;
+  bool _homePrintQueuePanelDismissed = false;
+  int _homePrintQueueSeq = 0;
   final HomeworkBatchConfirmService _batchConfirmService =
       HomeworkBatchConfirmService.instance;
   final Set<String> _expandedHomeworkIds = {};
@@ -75,6 +80,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
   final Map<String, List<Map<String, dynamic>>>
       _testGradingSerializedDraftByHomeworkId =
       <String, List<Map<String, dynamic>>>{};
+  final Set<String> _testGradingSavedHomeworkIds = <String>{};
 
   Map<({String studentId, String itemId}), bool> get _pendingConfirms =>
       _batchConfirmService.pending;
@@ -310,7 +316,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       return;
     }
 
-    if (_isTestHomeworkType(hw.type)) {
+    if ((hw.pbPresetId ?? '').trim().isNotEmpty) {
       if (!_isSubmittedHomeworkForGradingSearch(hw)) {
         await homeworkStore.submit(studentId, hw.id);
         await HomeworkAssignmentStore.instance.clearActiveAssignmentsForItems(
@@ -379,445 +385,659 @@ class _ClassContentScreenState extends State<ClassContentScreen>
   @override
   Widget build(BuildContext context) {
     _scheduleHomeBatchConfirmFabSync();
-    return Stack(
-      children: [
-        Container(
-          color: const Color(0xFF0B1112),
-          width: double.infinity,
-          child: ValueListenableBuilder<List<AttendanceRecord>>(
-            valueListenable: DataManager.instance.attendanceRecordsNotifier,
-            builder: (context, _records, __) {
-              // sessionOverrides 변화도 함께 트리거
-              final _ = DataManager.instance.sessionOverridesNotifier.value;
-              final list = _computeAttendingStudentsRealtime();
-              final attendingStudentIds =
-                  list.map((s) => s.id).toList(growable: false);
-              final studentNamesById = <String, String>{
-                for (final s in list) s.id: s.name,
-              };
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  ValueListenableBuilder<int>(
-                    valueListenable: HomeworkStore.instance.revision,
-                    builder: (context, homeworkRevision, _) {
-                      final submittedCount = _isGradingMode
-                          ? _countSubmittedHomeworkItems(list)
-                          : 0;
-                      return Padding(
-                        padding: const EdgeInsets.fromLTRB(40, 8, 16, 0),
-                        child: LayoutBuilder(
-                          builder: (context, constraints) {
-                            // 인쇄·채점 컨트롤은 항상 1행 우측에 고정. 좌측만 날짜/통계 줄바꿈.
-                            final double controlsReserve =
-                                _isGradingMode ? 380 : 270;
-                            final double leftBudget = math.max(
-                              0.0,
-                              constraints.maxWidth -
-                                  controlsReserve -
-                                  56, // 좌우 패딩·간격 여유
-                            );
-                            final double headerScale =
-                                (constraints.maxWidth / 1680.0)
-                                    .clamp(0.68, 1.0);
-                            final double dateTimeFontSize =
-                                (50 * headerScale).clamp(26.0, 50.0);
-                            final double statsFontSize =
-                                (38 * headerScale).clamp(18.0, 40.0);
-                            final double weatherIconSize =
-                                dateTimeFontSize * 1.1;
-                            // 한 줄에 날짜+통계까지 넣기에 부족하면 통계만 2번째 줄.
-                            final bool statsOnSecondLine =
-                                leftBudget < 920 * headerScale;
-                            final Widget dateLine = Wrap(
-                              crossAxisAlignment: WrapCrossAlignment.center,
-                              spacing: 12 * headerScale,
-                              runSpacing: 4,
-                              children: [
-                                HomeHeaderWeatherIcon(
-                                  iconSize: weatherIconSize,
-                                  color: Colors.white70,
-                                ),
-                                Text(
-                                  _formatDateWithWeekdayAndTime(_now),
-                                  style: TextStyle(
-                                    color: Colors.white,
-                                    fontSize: dateTimeFontSize,
-                                    fontWeight: FontWeight.bold,
-                                    height: 1.0,
+    return Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: (event) {
+        if (_printPickMode && (event.buttons & kSecondaryMouseButton) != 0) {
+          _exitHomePrintPickMode();
+        }
+      },
+      child: Stack(
+        children: [
+          Container(
+            color: const Color(0xFF0B1112),
+            width: double.infinity,
+            child: ValueListenableBuilder<List<AttendanceRecord>>(
+              valueListenable: DataManager.instance.attendanceRecordsNotifier,
+              builder: (context, _records, __) {
+                // sessionOverrides 변화도 함께 트리거
+                final _ = DataManager.instance.sessionOverridesNotifier.value;
+                final list = _computeAttendingStudentsRealtime();
+                final attendingStudentIds =
+                    list.map((s) => s.id).toList(growable: false);
+                final studentNamesById = <String, String>{
+                  for (final s in list) s.id: s.name,
+                };
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    ValueListenableBuilder<int>(
+                      valueListenable: HomeworkStore.instance.revision,
+                      builder: (context, homeworkRevision, _) {
+                        final submittedCount = _isGradingMode
+                            ? _countSubmittedHomeworkItems(list)
+                            : 0;
+                        return Padding(
+                          padding: const EdgeInsets.fromLTRB(40, 8, 16, 0),
+                          child: LayoutBuilder(
+                            builder: (context, constraints) {
+                              // 인쇄·채점 컨트롤은 항상 1행 우측에 고정. 좌측만 날짜/통계 줄바꿈.
+                              final double controlsReserve =
+                                  _isGradingMode ? 380 : 270;
+                              final double leftBudget = math.max(
+                                0.0,
+                                constraints.maxWidth -
+                                    controlsReserve -
+                                    56, // 좌우 패딩·간격 여유
+                              );
+                              final double headerScale =
+                                  (constraints.maxWidth / 1680.0)
+                                      .clamp(0.68, 1.0);
+                              final double dateTimeFontSize =
+                                  (50 * headerScale).clamp(26.0, 50.0);
+                              final double statsFontSize =
+                                  (38 * headerScale).clamp(18.0, 40.0);
+                              final double weatherIconSize =
+                                  dateTimeFontSize * 1.1;
+                              // 한 줄에 날짜+통계까지 넣기에 부족하면 통계만 2번째 줄.
+                              final bool statsOnSecondLine =
+                                  leftBudget < 920 * headerScale;
+                              final Widget dateLine = Wrap(
+                                crossAxisAlignment: WrapCrossAlignment.center,
+                                spacing: 12 * headerScale,
+                                runSpacing: 4,
+                                children: [
+                                  HomeHeaderWeatherIcon(
+                                    iconSize: weatherIconSize,
+                                    color: Colors.white70,
                                   ),
-                                ),
-                              ],
-                            );
-                            final Widget statsLine = Wrap(
-                              crossAxisAlignment: WrapCrossAlignment.center,
-                              spacing: 14 * headerScale,
-                              runSpacing: 4,
-                              children: [
-                                if (!_isGradingMode)
                                   Text(
-                                    '등원: ${list.length}명',
+                                    _formatDateWithWeekdayAndTime(_now),
                                     style: TextStyle(
-                                      color: Colors.white60,
-                                      fontSize: statsFontSize,
+                                      color: Colors.white,
+                                      fontSize: dateTimeFontSize,
                                       fontWeight: FontWeight.bold,
-                                    ),
-                                  )
-                                else
-                                  Text(
-                                    '제출: $submittedCount개',
-                                    style: TextStyle(
-                                      color: const Color(0xFF8FB3FF),
-                                      fontSize: statsFontSize,
-                                      fontWeight: FontWeight.bold,
+                                      height: 1.0,
                                     ),
                                   ),
-                              ],
-                            );
-                            final Widget infoBlock = statsOnSecondLine
-                                ? Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
+                                ],
+                              );
+                              final Widget statsLine = Wrap(
+                                crossAxisAlignment: WrapCrossAlignment.center,
+                                spacing: 14 * headerScale,
+                                runSpacing: 4,
+                                children: [
+                                  if (!_isGradingMode)
+                                    Text(
+                                      '등원: ${list.length}명',
+                                      style: TextStyle(
+                                        color: Colors.white60,
+                                        fontSize: statsFontSize,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    )
+                                  else
+                                    Text(
+                                      '제출: $submittedCount개',
+                                      style: TextStyle(
+                                        color: const Color(0xFF8FB3FF),
+                                        fontSize: statsFontSize,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                ],
+                              );
+                              final Widget infoBlock = statsOnSecondLine
+                                  ? Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        dateLine,
+                                        SizedBox(height: 6 * headerScale),
+                                        statsLine,
+                                      ],
+                                    )
+                                  : Wrap(
+                                      crossAxisAlignment:
+                                          WrapCrossAlignment.center,
+                                      spacing: 18 * headerScale,
+                                      runSpacing: 6,
+                                      children: [
+                                        HomeHeaderWeatherIcon(
+                                          iconSize: weatherIconSize,
+                                          color: Colors.white70,
+                                        ),
+                                        Text(
+                                          _formatDateWithWeekdayAndTime(_now),
+                                          style: TextStyle(
+                                            color: Colors.white,
+                                            fontSize: dateTimeFontSize,
+                                            fontWeight: FontWeight.bold,
+                                            height: 1.0,
+                                          ),
+                                        ),
+                                        if (!_isGradingMode)
+                                          Text(
+                                            '등원: ${list.length}명',
+                                            style: TextStyle(
+                                              color: Colors.white60,
+                                              fontSize: statsFontSize,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          )
+                                        else
+                                          Text(
+                                            '제출: $submittedCount개',
+                                            style: TextStyle(
+                                              color: const Color(0xFF8FB3FF),
+                                              fontSize: statsFontSize,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          ),
+                                      ],
+                                    );
+                              final Widget controls = Wrap(
+                                alignment: WrapAlignment.end,
+                                crossAxisAlignment: WrapCrossAlignment.center,
+                                spacing: 12,
+                                runSpacing: 12,
+                                children: [
+                                  _buildHeaderPillIconButton(
+                                    icon: Icons.link_rounded,
+                                    tooltip: 'M5 바인딩 이력',
+                                    iconColor: const Color(0xFFD0DDDD),
+                                    onTap: () => unawaited(
+                                      _showM5BindingHistoryDialog(
+                                        context: context,
+                                      ),
+                                    ),
+                                  ),
+                                  _buildHeaderPillIconButton(
+                                    icon: Icons.print,
+                                    tooltip: '인쇄',
+                                    iconColor: _printPickMode
+                                        ? const Color(0xFFEAF2F2)
+                                        : const Color(0xFFD0DDDD),
+                                    onTap: () => unawaited(
+                                      _openHeaderHomeworkPrintFlow(
+                                        attendingStudents: list,
+                                      ),
+                                    ),
+                                  ),
+                                  if (_isGradingMode)
+                                    ValueListenableBuilder<bool>(
+                                      valueListenable: rightSideSheetOpen,
+                                      builder: (context, isOpen, _) {
+                                        return _buildHeaderPillIconButton(
+                                          icon: isOpen
+                                              ? Icons
+                                                  .keyboard_double_arrow_right_rounded
+                                              : Icons
+                                                  .keyboard_double_arrow_left_rounded,
+                                          tooltip: isOpen
+                                              ? '오른쪽 시트 닫기'
+                                              : '오른쪽 시트 열기',
+                                          iconColor: const Color(0xFFD0DDDD),
+                                          onTap: () async {
+                                            blockRightSideSheetOpen.value =
+                                                false;
+                                            final action =
+                                                toggleRightSideSheetAction;
+                                            if (action != null) {
+                                              await action();
+                                            }
+                                          },
+                                        );
+                                      },
+                                    ),
+                                  if (_isGradingMode)
+                                    _buildHeaderPillIconButton(
+                                      icon: Icons.history_rounded,
+                                      tooltip: '채점 이력',
+                                      iconColor: const Color(0xFFD0DDDD),
+                                      onTap: () {
+                                        unawaited(
+                                          _showGradingHistoryDialog(
+                                            context: context,
+                                            attendingStudentIds:
+                                                attendingStudentIds,
+                                            studentNamesById: studentNamesById,
+                                          ),
+                                        );
+                                      },
+                                    ),
+                                  Row(
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
-                                      dateLine,
-                                      SizedBox(height: 6 * headerScale),
-                                      statsLine,
-                                    ],
-                                  )
-                                : Wrap(
-                                    crossAxisAlignment:
-                                        WrapCrossAlignment.center,
-                                    spacing: 18 * headerScale,
-                                    runSpacing: 6,
-                                    children: [
-                                      HomeHeaderWeatherIcon(
-                                        iconSize: weatherIconSize,
-                                        color: Colors.white70,
-                                      ),
-                                      Text(
-                                        _formatDateWithWeekdayAndTime(_now),
-                                        style: TextStyle(
-                                          color: Colors.white,
-                                          fontSize: dateTimeFontSize,
-                                          fontWeight: FontWeight.bold,
-                                          height: 1.0,
-                                        ),
-                                      ),
-                                      if (!_isGradingMode)
-                                        Text(
-                                          '등원: ${list.length}명',
-                                          style: TextStyle(
-                                            color: Colors.white60,
-                                            fontSize: statsFontSize,
-                                            fontWeight: FontWeight.bold,
-                                          ),
-                                        )
-                                      else
-                                        Text(
-                                          '제출: $submittedCount개',
-                                          style: TextStyle(
-                                            color: const Color(0xFF8FB3FF),
-                                            fontSize: statsFontSize,
-                                            fontWeight: FontWeight.bold,
-                                          ),
-                                        ),
-                                    ],
-                                  );
-                            final Widget controls = Wrap(
-                              alignment: WrapAlignment.end,
-                              crossAxisAlignment: WrapCrossAlignment.center,
-                              spacing: 12,
-                              runSpacing: 12,
-                              children: [
-                                _buildHeaderPillIconButton(
-                                  icon: Icons.link_rounded,
-                                  tooltip: 'M5 바인딩 이력',
-                                  iconColor: const Color(0xFFD0DDDD),
-                                  onTap: () => unawaited(
-                                    _showM5BindingHistoryDialog(
-                                      context: context,
-                                    ),
-                                  ),
-                                ),
-                                _buildHeaderPillIconButton(
-                                  icon: Icons.print,
-                                  tooltip: '인쇄',
-                                  iconColor: _printPickMode
-                                      ? const Color(0xFFEAF2F2)
-                                      : const Color(0xFFD0DDDD),
-                                  onTap: () => unawaited(
-                                    _openHeaderHomeworkPrintFlow(
-                                      attendingStudents: list,
-                                    ),
-                                  ),
-                                ),
-                                if (_isGradingMode)
-                                  ValueListenableBuilder<bool>(
-                                    valueListenable: rightSideSheetOpen,
-                                    builder: (context, isOpen, _) {
-                                      return _buildHeaderPillIconButton(
-                                        icon: isOpen
-                                            ? Icons
-                                                .keyboard_double_arrow_right_rounded
-                                            : Icons
-                                                .keyboard_double_arrow_left_rounded,
-                                        tooltip:
-                                            isOpen ? '오른쪽 시트 닫기' : '오른쪽 시트 열기',
-                                        iconColor: const Color(0xFFD0DDDD),
-                                        onTap: () async {
-                                          blockRightSideSheetOpen.value = false;
-                                          final action =
-                                              toggleRightSideSheetAction;
-                                          if (action != null) {
-                                            await action();
+                                      Switch(
+                                        value: _isGradingMode,
+                                        onChanged: (value) {
+                                          setState(() {
+                                            _isGradingMode = value;
+                                            if (!value) {
+                                              _batchConfirmService
+                                                  .clearPending();
+                                            }
+                                          });
+                                          gradingModeActive.value = value;
+                                          if (value) {
+                                            blockRightSideSheetOpen.value =
+                                                false;
+                                          } else {
+                                            blockRightSideSheetOpen.value =
+                                                true;
+                                            final closeAction =
+                                                closeRightSideSheetAction;
+                                            if (closeAction != null) {
+                                              unawaited(closeAction());
+                                            }
                                           }
                                         },
-                                      );
-                                    },
+                                        activeColor: kDlgAccent,
+                                      ),
+                                    ],
                                   ),
-                                if (_isGradingMode)
-                                  _buildHeaderPillIconButton(
-                                    icon: Icons.history_rounded,
-                                    tooltip: '채점 이력',
-                                    iconColor: const Color(0xFFD0DDDD),
-                                    onTap: () {
-                                      unawaited(
-                                        _showGradingHistoryDialog(
-                                          context: context,
-                                          attendingStudentIds:
-                                              attendingStudentIds,
-                                          studentNamesById: studentNamesById,
-                                        ),
-                                      );
-                                    },
-                                  ),
-                                Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Switch(
-                                      value: _isGradingMode,
-                                      onChanged: (value) {
-                                        setState(() {
-                                          _isGradingMode = value;
-                                          if (!value) {
-                                            _batchConfirmService.clearPending();
-                                          }
-                                        });
-                                        gradingModeActive.value = value;
-                                        if (value) {
-                                          blockRightSideSheetOpen.value = false;
-                                        } else {
-                                          blockRightSideSheetOpen.value = true;
-                                          final closeAction =
-                                              closeRightSideSheetAction;
-                                          if (closeAction != null) {
-                                            unawaited(closeAction());
-                                          }
-                                        }
-                                      },
-                                      activeColor: kDlgAccent,
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            );
-                            return Row(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Expanded(child: infoBlock),
-                                const SizedBox(width: 20),
-                                controls,
-                              ],
-                            );
-                          },
-                        ),
-                      );
-                    },
-                  ),
-                  const SizedBox(height: 16),
-                  const SizedBox(height: 20),
-                  Expanded(
-                    child: _isGradingMode
-                        ? GradingModePage(
-                            attendingStudentIds: attendingStudentIds,
-                            studentNamesById: studentNamesById,
-                            pendingConfirms: _pendingConfirms,
-                            onSubmittedCardTap:
-                                (studentId, group, summary, children) async {
-                              final submittedChildren = children
-                                  .where(
-                                    (e) =>
-                                        e.status != HomeworkStatus.completed &&
-                                        e.phase == 3 &&
-                                        e.completedAt == null,
-                                  )
-                                  .toList(growable: false);
-                              if (submittedChildren.isEmpty) return;
-                              final pendingKeys = submittedChildren
-                                  .map(
-                                    (e) => (
-                                      studentId: studentId,
-                                      itemId: e.id,
-                                    ),
-                                  )
-                                  .toList(growable: false);
-                              if (submittedChildren.length == 1) {
+                                ],
+                              );
+                              return Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Expanded(child: infoBlock),
+                                  const SizedBox(width: 20),
+                                  controls,
+                                ],
+                              );
+                            },
+                          ),
+                        );
+                      },
+                    ),
+                    const SizedBox(height: 16),
+                    const SizedBox(height: 20),
+                    Expanded(
+                      child: _isGradingMode
+                          ? GradingModePage(
+                              attendingStudentIds: attendingStudentIds,
+                              studentNamesById: studentNamesById,
+                              pendingConfirms: _pendingConfirms,
+                              onSubmittedCardTap:
+                                  (studentId, group, summary, children) async {
+                                final submittedChildren = children
+                                    .where(
+                                      (e) =>
+                                          e.status !=
+                                              HomeworkStatus.completed &&
+                                          e.phase == 3 &&
+                                          e.completedAt == null,
+                                    )
+                                    .toList(growable: false);
+                                if (submittedChildren.isEmpty) return;
+                                final pendingKeys = submittedChildren
+                                    .map(
+                                      (e) => (
+                                        studentId: studentId,
+                                        itemId: e.id,
+                                      ),
+                                    )
+                                    .toList(growable: false);
+                                if (submittedChildren.length == 1) {
+                                  return _handleSubmittedChipTapForPending(
+                                    context: context,
+                                    studentId: studentId,
+                                    hw: submittedChildren.first,
+                                    targetKeys: pendingKeys,
+                                  );
+                                }
+                                HomeworkItem answerSeed =
+                                    submittedChildren.first;
+                                for (final child in submittedChildren) {
+                                  if (_hasDirectHomeworkTextbookLink(child)) {
+                                    answerSeed = child;
+                                    break;
+                                  }
+                                }
                                 return _handleSubmittedChipTapForPending(
                                   context: context,
                                   studentId: studentId,
-                                  hw: submittedChildren.first,
+                                  hw: answerSeed,
                                   targetKeys: pendingKeys,
                                 );
-                              }
-                              HomeworkItem answerSeed = submittedChildren.first;
-                              for (final child in submittedChildren) {
-                                if (_hasDirectHomeworkTextbookLink(child)) {
-                                  answerSeed = child;
-                                  break;
-                                }
-                              }
-                              return _handleSubmittedChipTapForPending(
-                                context: context,
-                                studentId: studentId,
-                                hw: answerSeed,
-                                targetKeys: pendingKeys,
-                              );
-                            },
-                            onHomeworkCardTap:
-                                (studentId, group, summary, children) {
-                              if (_printPickMode) {
-                                if (group != null) {
-                                  return _handleHomeworkGroupPrintPick(
+                              },
+                              onHomeworkCardTap:
+                                  (studentId, group, summary, children) {
+                                if (_printPickMode) {
+                                  if (group != null) {
+                                    return _handleHomeworkGroupPrintPick(
+                                      context: context,
+                                      studentId: studentId,
+                                      group: group,
+                                      summary: summary,
+                                      children: children,
+                                    );
+                                  }
+                                  return _handleHomeworkPrintPick(
                                     context: context,
                                     studentId: studentId,
-                                    group: group,
-                                    summary: summary,
-                                    children: children,
+                                    hw: summary,
                                   );
                                 }
-                                return _handleHomeworkPrintPick(
+                                return _runHomeworkGradingForCardWithCombo(
                                   context: context,
                                   studentId: studentId,
-                                  hw: summary,
+                                  group: group,
+                                  summary: summary,
+                                  children: children,
                                 );
-                              }
-                              return _runHomeworkGradingForCardWithCombo(
-                                context: context,
-                                studentId: studentId,
-                                group: group,
-                                summary: summary,
-                                children: children,
-                              );
-                            },
-                            onTogglePending: (studentId, itemId) {
-                              setState(() {
-                                final key =
-                                    (studentId: studentId, itemId: itemId);
-                                if (_pendingConfirms.containsKey(key)) {
-                                  _pendingConfirms.remove(key);
-                                } else {
-                                  _pendingConfirms[key] = false;
-                                }
-                              });
-                            },
-                          )
-                        : ListView.separated(
-                            scrollDirection: Axis.horizontal,
-                            padding: const EdgeInsets.fromLTRB(24, 0, 24, 0),
-                            itemCount: list.length,
-                            separatorBuilder: (_, __) => SizedBox(
-                              width: 14.4,
-                              child: Align(
-                                alignment: Alignment.topCenter,
-                                child: Container(
-                                  width: 1,
-                                  height:
-                                      ClassContentScreen._attendingCardHeight,
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFF223131),
-                                    borderRadius: BorderRadius.circular(999),
+                              },
+                              onTogglePending: (studentId, itemId) {
+                                setState(() {
+                                  final key =
+                                      (studentId: studentId, itemId: itemId);
+                                  if (_pendingConfirms.containsKey(key)) {
+                                    _pendingConfirms.remove(key);
+                                  } else {
+                                    _pendingConfirms[key] = false;
+                                  }
+                                });
+                              },
+                            )
+                          : ListView.separated(
+                              scrollDirection: Axis.horizontal,
+                              padding: const EdgeInsets.fromLTRB(24, 0, 24, 0),
+                              itemCount: list.length,
+                              separatorBuilder: (_, __) => SizedBox(
+                                width: 14.4,
+                                child: Align(
+                                  alignment: Alignment.topCenter,
+                                  child: Container(
+                                    width: 1,
+                                    height:
+                                        ClassContentScreen._attendingCardHeight,
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF223131),
+                                      borderRadius: BorderRadius.circular(999),
+                                    ),
                                   ),
                                 ),
                               ),
+                              itemBuilder: (ctx, i) {
+                                return _buildStudentColumn(context, list[i]);
+                              },
                             ),
-                            itemBuilder: (ctx, i) {
-                              return _buildStudentColumn(context, list[i]);
-                            },
-                          ),
-                  ),
-                ],
-              );
-            },
+                    ),
+                  ],
+                );
+              },
+            ),
           ),
-        ),
-        if (_printPickMode)
-          Positioned(
-            top: 86,
-            left: 0,
-            right: 0,
-            child: Center(
-              child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                decoration: BoxDecoration(
-                  color: _homePrintPickPanelBg,
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                      color: _homePrintPickAccent.withValues(alpha: 0.8)),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.35),
-                      blurRadius: 10,
-                      offset: const Offset(0, 6),
-                    ),
-                  ],
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(
-                      Icons.print,
-                      size: 16,
-                      color: _homePrintPickAccent,
-                    ),
-                    const SizedBox(width: 6),
-                    const Text(
-                      '인쇄할 과제를 고르세요',
-                      style: TextStyle(
-                        color: _homePrintPickText,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w800,
+          if (_printPickMode)
+            Positioned(
+              top: 86,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: _homePrintPickPanelBg,
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                        color: _homePrintPickAccent.withValues(alpha: 0.8)),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.35),
+                        blurRadius: 10,
+                        offset: const Offset(0, 6),
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    InkWell(
-                      onTap: () {
-                        if (mounted) setState(() => _printPickMode = false);
-                      },
-                      borderRadius: BorderRadius.circular(999),
-                      child: Container(
-                        width: 20,
-                        height: 20,
-                        decoration: BoxDecoration(
-                          color: Colors.black.withValues(alpha: 0.25),
-                          shape: BoxShape.circle,
-                          border: Border.all(color: _homePrintPickBorder),
-                        ),
-                        alignment: Alignment.center,
-                        child: const Icon(
-                          Icons.close,
-                          size: 12,
-                          color: _homePrintPickTextSub,
+                    ],
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(
+                        Icons.print,
+                        size: 16,
+                        color: _homePrintPickAccent,
+                      ),
+                      const SizedBox(width: 6),
+                      const Text(
+                        '인쇄할 과제를 고르세요',
+                        style: TextStyle(
+                          color: _homePrintPickText,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w800,
                         ),
                       ),
-                    ),
-                  ],
+                      const SizedBox(width: 8),
+                      InkWell(
+                        onTap: () {
+                          if (mounted) setState(() => _printPickMode = false);
+                        },
+                        borderRadius: BorderRadius.circular(999),
+                        child: Container(
+                          width: 20,
+                          height: 20,
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.25),
+                            shape: BoxShape.circle,
+                            border: Border.all(color: _homePrintPickBorder),
+                          ),
+                          alignment: Alignment.center,
+                          child: const Icon(
+                            Icons.close,
+                            size: 12,
+                            color: _homePrintPickTextSub,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
+          _buildHomePrintQueuePanel(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHomePrintQueuePanel() {
+    if (_homePrintQueue.isEmpty || _homePrintQueuePanelDismissed) {
+      return const SizedBox.shrink();
+    }
+    final queued = _homePrintQueue
+        .where((item) => item.status == _HomePrintQueueStatus.queued)
+        .length;
+    final printing = _homePrintQueue
+        .where((item) => item.status == _HomePrintQueueStatus.printing)
+        .length;
+    final completed = _homePrintQueue
+        .where((item) => item.status == _HomePrintQueueStatus.completed)
+        .length;
+    final failed = _homePrintQueue
+        .where((item) => item.status == _HomePrintQueueStatus.failed)
+        .length;
+    final allDone = _homePrintQueue.isNotEmpty && queued == 0 && printing == 0;
+    final visibleQueueItems = _homePrintQueue.take(3).toList(growable: false);
+    final hiddenQueueItemCount =
+        _homePrintQueue.length - visibleQueueItems.length;
+    final statusText = allDone
+        ? (failed > 0 ? '완료 $completed · 실패 $failed' : '모두 완료 $completed')
+        : '대기 $queued · 인쇄 중 $printing · 완료 $completed';
+
+    return Positioned(
+      left: 24,
+      bottom: 24,
+      child: Material(
+        color: Colors.transparent,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOutCubic,
+          width: allDone ? 260 : 380,
+          padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+          decoration: BoxDecoration(
+            color: _homePrintPickPanelBg,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: allDone
+                  ? _homePrintPickBorder
+                  : _homePrintPickAccent.withValues(alpha: 0.75),
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.35),
+                blurRadius: 14,
+                offset: const Offset(0, 7),
+              ),
+            ],
           ),
-      ],
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    allDone ? Icons.check_circle_rounded : Icons.print_rounded,
+                    size: 18,
+                    color: allDone
+                        ? const Color(0xFF8BCDAF)
+                        : _homePrintPickAccent,
+                  ),
+                  const SizedBox(width: 7),
+                  Expanded(
+                    child: Text(
+                      allDone ? '인쇄 작업 완료' : '인쇄 대기열',
+                      style: const TextStyle(
+                        color: _homePrintPickText,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ),
+                  if (allDone)
+                    InkWell(
+                      onTap: _dismissHomePrintQueuePanel,
+                      borderRadius: BorderRadius.circular(999),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.22),
+                          borderRadius: BorderRadius.circular(999),
+                          border: Border.all(color: _homePrintPickBorder),
+                        ),
+                        child: const Text(
+                          '닫기',
+                          style: TextStyle(
+                            color: _homePrintPickTextSub,
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(
+                statusText,
+                style: const TextStyle(
+                  color: _homePrintPickTextSub,
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              if (!allDone && visibleQueueItems.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                ...visibleQueueItems.map(
+                  (item) => Padding(
+                    padding: const EdgeInsets.only(bottom: 5),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          width: 6,
+                          height: 6,
+                          margin: const EdgeInsets.only(top: 6, right: 7),
+                          decoration: BoxDecoration(
+                            color: _homePrintQueueStatusColor(item),
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                item.title,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: _homePrintPickText,
+                                  fontSize: 12.3,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                              const SizedBox(height: 1),
+                              Text(
+                                '${_homePrintQueueStatusLabel(item)} · ${item.message}',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: _homePrintPickTextSub,
+                                  fontSize: 11.2,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                if (hiddenQueueItemCount > 0)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 1),
+                    child: Text(
+                      '+ $hiddenQueueItemCount개 더 있습니다',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: _homePrintPickTextSub,
+                        fontSize: 11.2,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+              ],
+              if (allDone && failed > 0) ...[
+                const SizedBox(height: 7),
+                Text(
+                  _homePrintQueue
+                          .firstWhere(
+                            (item) =>
+                                item.status == _HomePrintQueueStatus.failed,
+                          )
+                          .error ??
+                      '일부 인쇄가 실패했습니다.',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Color(0xFFE6A0A0),
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
     );
   }
 
@@ -963,6 +1183,11 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                         printPickMode: _printPickMode,
                         onPrintPickTap: _handleHomeworkPrintPick,
                         onGroupPrintPickTap: _handleHomeworkGroupPrintPick,
+                        onPrintPickLongPress:
+                            _handleHomeworkPrintPickWithSettings,
+                        onGroupPrintPickLongPress:
+                            _handleHomeworkGroupPrintPickWithSettings,
+                        onPrintPickSecondaryTap: _exitHomePrintPickMode,
                         onSlideDownComplete: (key) {
                           setState(() => _pendingConfirms[key] = true);
                         },
@@ -2689,18 +2914,16 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     if (allItems.isEmpty) {
       allItems.add(seedHomework);
     }
-    final testPbItems = allItems
+    final pbItems = allItems
         .where(
-          (item) =>
-              _isTestHomeworkType(item.type) &&
-              (item.pbPresetId ?? '').trim().isNotEmpty,
+          (item) => (item.pbPresetId ?? '').trim().isNotEmpty,
         )
         .toList(growable: false);
-    if (testPbItems.isEmpty) return null;
+    if (pbItems.isEmpty) return null;
 
-    final baseItem = testPbItems.firstWhere(
+    final baseItem = pbItems.firstWhere(
       (item) => item.id == seedHomework.id,
-      orElse: () => testPbItems.first,
+      orElse: () => pbItems.first,
     );
     final presetId = (baseItem.pbPresetId ?? '').trim();
     if (presetId.isEmpty) return null;
@@ -2764,8 +2987,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
             ) ??
             0;
         if (pageIdx <= 0) continue;
-        final int capacity =
-            (left < 0 ? 0 : left) + (right < 0 ? 0 : right);
+        final int capacity = (left < 0 ? 0 : left) + (right < 0 ? 0 : right);
         if (capacity <= 0) continue;
         pageCapacityByPage[pageIdx] = capacity;
       }
@@ -2776,8 +2998,9 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     final scoreByQuestionKey = <String, double>{};
     var fallbackIndex = 0;
     var layoutCursor = 0; // orderedPageNumbers 인덱스
-    var layoutRemaining =
-        orderedPageNumbers.isEmpty ? 0 : pageCapacityByPage[orderedPageNumbers.first]!;
+    var layoutRemaining = orderedPageNumbers.isEmpty
+        ? 0
+        : pageCapacityByPage[orderedPageNumbers.first]!;
     for (final uid in selectedUids) {
       final question = questionByKey[uid];
       if (question == null) continue;
@@ -2791,7 +3014,8 @@ class _ClassContentScreenState extends State<ClassContentScreen>
 
       int pageNumber;
       if (orderedPageNumbers.isNotEmpty) {
-        while (layoutCursor < orderedPageNumbers.length && layoutRemaining <= 0) {
+        while (
+            layoutCursor < orderedPageNumbers.length && layoutRemaining <= 0) {
           layoutCursor += 1;
           if (layoutCursor < orderedPageNumbers.length) {
             layoutRemaining =
@@ -2872,13 +3096,12 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       keys: keys,
       fallbackHomework: hw,
     );
-    final hasTestPbCandidate = keys.any((key) {
+    final hasPbCandidate = keys.any((key) {
       final item = HomeworkStore.instance.getById(key.studentId, key.itemId);
       if (item == null) return false;
-      if (!_isTestHomeworkType(item.type)) return false;
       return (item.pbPresetId ?? '').trim().isNotEmpty;
     });
-    if (hasTestPbCandidate) {
+    if (hasPbCandidate) {
       final payload = await _resolveTestPbGradingViewerPayload(
         seedHomework: hw,
         keys: keys,
@@ -2888,6 +3111,16 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         final cachedStates =
             _testGradingDraftStatesByHomeworkId[payload.homeworkId] ??
                 const <String, HomeworkAnswerCellState>{};
+        final savedSession =
+            await _gradingResultService.loadLatestSavedSessionForHomework(
+          homeworkItemId: payload.homeworkId,
+        );
+        if (!context.mounted) return;
+        final initialStates = savedSession?.states.isNotEmpty == true
+            ? savedSession!.states
+            : cachedStates;
+        final hasSavedGrading = savedSession != null ||
+            _testGradingSavedHomeworkIds.contains(payload.homeworkId);
         final homeworkStore = HomeworkStore.instance;
         final studentName = _resolveHomeworkPrintStudentName(studentId);
         final groupHomeworkTitle = () {
@@ -2934,7 +3167,26 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                 },
               )
               .toList(growable: false),
-          initialStates: _toRightSheetStateMap(cachedStates),
+          initialStates: _toRightSheetStateMap(initialStates),
+          gradingLocked: hasSavedGrading,
+          onRequestEditReset: () async {
+            final reset = await _gradingResultService.resetAttemptsForHomework(
+              homeworkItemId: payload.homeworkId,
+            );
+            if (!mounted) return false;
+            if (!reset) {
+              _showHomeworkChipSnackBar(this.context, '기존 채점 결과 리셋에 실패했습니다.');
+              return false;
+            }
+            _testGradingDraftStatesByHomeworkId.remove(payload.homeworkId);
+            _testGradingSerializedDraftByHomeworkId.remove(payload.homeworkId);
+            _testGradingSavedHomeworkIds.remove(payload.homeworkId);
+            _showHomeworkChipSnackBar(
+              this.context,
+              '기존 채점 결과를 리셋했습니다. 다시 확인하면 새 결과로 저장됩니다.',
+            );
+            return true;
+          },
           onStatesChanged: (states) {
             final decoded = _fromRightSheetStateMap(states);
             _testGradingDraftStatesByHomeworkId[payload.homeworkId] =
@@ -2975,6 +3227,8 @@ class _ClassContentScreenState extends State<ClassContentScreen>
               if (!mounted) return;
               if (!saved) {
                 _showHomeworkChipSnackBar(context, '채점 결과 저장에 실패했습니다.');
+              } else {
+                _testGradingSavedHomeworkIds.add(payload.homeworkId);
               }
             }
             if (!mounted) return;
@@ -3376,6 +3630,157 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     }
   }
 
+  String _homePrintQueueTitleFor({
+    required String studentId,
+    required HomeworkItem hw,
+    HomeworkGroup? group,
+    HomeworkItem? summary,
+  }) {
+    final studentName = _resolveHomeworkPrintStudentName(studentId);
+    final rawTitle = (summary?.title ?? group?.title ?? hw.title).trim();
+    final title = rawTitle.isEmpty ? '(제목 없음)' : rawTitle;
+    return '$studentName · $title';
+  }
+
+  String _homePrintQueueStatusLabel(_HomePrintQueueItem item) {
+    switch (item.status) {
+      case _HomePrintQueueStatus.queued:
+        return '대기';
+      case _HomePrintQueueStatus.printing:
+        return '인쇄 중';
+      case _HomePrintQueueStatus.completed:
+        return '완료';
+      case _HomePrintQueueStatus.failed:
+        return '실패';
+    }
+  }
+
+  Color _homePrintQueueStatusColor(_HomePrintQueueItem item) {
+    switch (item.status) {
+      case _HomePrintQueueStatus.queued:
+        return _homePrintPickTextSub;
+      case _HomePrintQueueStatus.printing:
+        return _homePrintPickAccent;
+      case _HomePrintQueueStatus.completed:
+        return const Color(0xFF8BCDAF);
+      case _HomePrintQueueStatus.failed:
+        return const Color(0xFFE6A0A0);
+    }
+  }
+
+  void _enqueueHomePrintQueueItem(_HomePrintQueueItem item) {
+    if (!mounted) return;
+    setState(() {
+      _homePrintQueuePanelDismissed = false;
+      _homePrintQueue.add(item);
+    });
+    unawaited(_pumpHomePrintQueue());
+  }
+
+  Future<void> _pumpHomePrintQueue() async {
+    if (_homePrintQueueRunning) return;
+    _homePrintQueueRunning = true;
+    try {
+      while (mounted) {
+        final nextIndex = _homePrintQueue.indexWhere(
+          (item) => item.status == _HomePrintQueueStatus.queued,
+        );
+        if (nextIndex < 0) break;
+        final item = _homePrintQueue[nextIndex];
+        setState(() {
+          item.status = _HomePrintQueueStatus.printing;
+          item.message = '인쇄 준비 중';
+          item.error = null;
+        });
+        try {
+          await _runHomePrintQueueItem(item);
+          if (!mounted) return;
+          setState(() {
+            item.status = _HomePrintQueueStatus.completed;
+            item.message = '완료';
+          });
+        } catch (e) {
+          if (!mounted) return;
+          setState(() {
+            item.status = _HomePrintQueueStatus.failed;
+            item.error = _messageFromPrintError(e);
+            item.message = '실패';
+          });
+        }
+      }
+    } finally {
+      _homePrintQueueRunning = false;
+      if (mounted) setState(() {});
+    }
+  }
+
+  Future<void> _runHomePrintQueueItem(_HomePrintQueueItem item) async {
+    final progressText = ValueNotifier<String>('인쇄 준비 중');
+    void syncProgress() {
+      if (!mounted) return;
+      setState(() => item.message = progressText.value);
+    }
+
+    progressText.addListener(syncProgress);
+    try {
+      if (item.group != null && item.summary != null) {
+        final request = await _buildHomeworkGroupPrintRequest(
+          studentId: item.studentId,
+          group: item.group!,
+          summary: item.summary!,
+          children: item.children,
+        );
+        if ((request.warning ?? '').isNotEmpty && mounted) {
+          _showHomeworkChipSnackBar(context, request.warning!);
+        }
+        if ((request.error ?? '').isNotEmpty) {
+          throw StateError(request.error!);
+        }
+        final result = await _runHomeworkPrintWithDefaultSettings(
+          studentId: item.studentId,
+          hw: request.seed,
+          initialRangeOverride: request.initialRange,
+          selectableGroupChildren: request.eligibleChildren,
+          groupChildPrintableById: request.printableById,
+          groupInitialSelectionById: request.initialSelectedById,
+          assignmentByItemId: request.assignmentByItemId,
+          preResolvedSourceByItemId: request.sourceByItemId,
+          progressText: progressText,
+        );
+        if ((result.error ?? '').isNotEmpty) throw StateError(result.error!);
+        return;
+      }
+
+      final latest =
+          HomeworkStore.instance.getById(item.studentId, item.hw.id) ?? item.hw;
+      if (latest.status == HomeworkStatus.completed) {
+        throw StateError('완료된 과제는 인쇄할 수 없습니다.');
+      }
+      final result = await _runHomeworkPrintWithDefaultSettings(
+        studentId: item.studentId,
+        hw: latest,
+        progressText: progressText,
+      );
+      if ((result.error ?? '').isNotEmpty) throw StateError(result.error!);
+    } finally {
+      progressText.removeListener(syncProgress);
+      progressText.dispose();
+    }
+  }
+
+  void _dismissHomePrintQueuePanel() {
+    if (!mounted) return;
+    setState(() {
+      _homePrintQueuePanelDismissed = true;
+      _homePrintQueue.removeWhere((item) => item.isTerminal);
+    });
+  }
+
+  void _exitHomePrintPickMode() {
+    if (!mounted || !_printPickMode) return;
+    setState(() => _printPickMode = false);
+  }
+
   Future<void> _handleHomeworkPrintPick({
     required BuildContext context,
     required String studentId,
@@ -3385,9 +3790,25 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     final latest = HomeworkStore.instance.getById(studentId, hw.id);
     if (latest == null) return;
     if (latest.status == HomeworkStatus.completed) return;
-    if (mounted) {
-      setState(() => _printPickMode = false);
-    }
+    _enqueueHomePrintQueueItem(
+      _HomePrintQueueItem(
+        id: ++_homePrintQueueSeq,
+        studentId: studentId,
+        title: _homePrintQueueTitleFor(studentId: studentId, hw: latest),
+        hw: latest,
+      ),
+    );
+  }
+
+  Future<void> _handleHomeworkPrintPickWithSettings({
+    required BuildContext context,
+    required String studentId,
+    required HomeworkItem hw,
+  }) async {
+    if (!_printPickMode) return;
+    final latest = HomeworkStore.instance.getById(studentId, hw.id);
+    if (latest == null) return;
+    if (latest.status == HomeworkStatus.completed) return;
     await _handleWaitingChipLongPressPrint(
       context: context,
       studentId: studentId,
@@ -3406,94 +3827,63 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     final latestChildren = children
         .map((e) => HomeworkStore.instance.getById(studentId, e.id) ?? e)
         .toList(growable: false);
-    final eligibleChildren = latestChildren
+    if (latestChildren
         .where((e) => e.status != HomeworkStatus.completed)
-        .toList(growable: false);
-    if (eligibleChildren.isEmpty) {
+        .isEmpty) {
       _showHomeworkChipSnackBar(context, '인쇄 가능한 하위 과제가 없습니다.');
       return;
     }
+    _enqueueHomePrintQueueItem(
+      _HomePrintQueueItem(
+        id: ++_homePrintQueueSeq,
+        studentId: studentId,
+        title: _homePrintQueueTitleFor(
+          studentId: studentId,
+          hw: summary,
+          group: group,
+          summary: summary,
+        ),
+        hw: summary,
+        group: group,
+        summary: summary,
+        children: latestChildren,
+      ),
+    );
+  }
 
-    if (mounted) {
-      setState(() => _printPickMode = false);
-    }
-
-    final assignmentByItemId = await _loadActiveAssignmentByItemId(studentId);
+  Future<void> _handleHomeworkGroupPrintPickWithSettings({
+    required BuildContext context,
+    required String studentId,
+    required HomeworkGroup group,
+    required HomeworkItem summary,
+    required List<HomeworkItem> children,
+  }) async {
+    if (!_printPickMode) return;
+    final request = await _buildHomeworkGroupPrintRequest(
+      studentId: studentId,
+      group: group,
+      summary: summary,
+      children: children,
+    );
     if (!mounted) return;
-    final printableById = <String, bool>{};
-    final sourceByItemId = <String, _ResolvedHomeworkPrintSource>{};
-    String? canonicalPipelineKey;
-    final observedPipelineKinds = <String>{};
-    for (final child in eligibleChildren) {
-      final assignment = assignmentByItemId[child.id.trim()];
-      final pipelineKey =
-          _printPipelineKeyForHomework(hw: child, assignment: assignment);
-      observedPipelineKinds.add(pipelineKey);
-      final isPb = pipelineKey == _kPrintPipelinePb;
-      final source = isPb
-          ? (await _resolvePbPrintSource(
-                child,
-                assignment: assignment,
-              ) ??
-              const _ResolvedHomeworkPrintSource(
-                pathRaw: '',
-                sourceKey: 'pb_missing',
-                isProblemBank: true,
-              ))
-          : await _resolveTextbookPrintSource(
-              child,
-              allowFlowFallback: true,
-            );
-      sourceByItemId[child.id] = source;
-      final available = isPb
-          ? (await _isPrintableResolvedHomeworkPrintSource(source) ||
-              _canCreatePbPrintFromTarget(hw: child, assignment: assignment))
-          : await _isPrintableResolvedHomeworkPrintSource(source);
-      if (!available) {
-        printableById[child.id] = false;
-        continue;
-      }
-      canonicalPipelineKey ??= pipelineKey;
-      printableById[child.id] = canonicalPipelineKey == pipelineKey;
+    if ((request.warning ?? '').isNotEmpty) {
+      _showHomeworkChipSnackBar(context, request.warning!);
     }
-    if (!mounted) return;
-    if (observedPipelineKinds.length > 1) {
-      _showHomeworkChipSnackBar(
-          context, '혼합 인쇄는 지원되지 않아요. 문제은행/교재를 분리해서 인쇄해 주세요.');
-    }
-    final initialSelectedById = <String, bool>{
-      for (final child in eligibleChildren)
-        child.id: printableById[child.id] ?? false,
-    };
-    final defaultPrintableChildren = eligibleChildren
-        .where((e) => printableById[e.id] ?? false)
-        .toList(growable: false);
-    if (defaultPrintableChildren.isEmpty) {
-      _showHomeworkChipSnackBar(context, '인쇄 가능한 하위 과제가 없습니다.');
+    if ((request.error ?? '').isNotEmpty) {
+      _showHomeworkChipSnackBar(context, request.error!);
       return;
     }
-
-    final seed = defaultPrintableChildren.first;
-    final mergedPage = _mergeGroupPageText(defaultPrintableChildren);
-    final mergedTitle = summary.title.trim().isNotEmpty
-        ? summary.title.trim()
-        : (group.title.trim().isNotEmpty
-            ? group.title.trim()
-            : seed.title.trim());
-    final printRange = mergedPage.isEmpty ? (seed.page ?? '') : mergedPage;
-    final dialogTitle = mergedTitle.isEmpty ? '(제목 없음)' : mergedTitle;
-
     await _handleWaitingChipLongPressPrint(
       context: context,
       studentId: studentId,
-      hw: seed,
-      initialRangeOverride: printRange,
-      dialogTitleOverride: dialogTitle,
-      selectableGroupChildren: eligibleChildren,
-      groupChildPrintableById: printableById,
-      groupInitialSelectionById: initialSelectedById,
-      assignmentByItemId: assignmentByItemId,
-      preResolvedSourceByItemId: sourceByItemId,
+      hw: request.seed,
+      initialRangeOverride: request.initialRange,
+      dialogTitleOverride: request.dialogTitle,
+      selectableGroupChildren: request.eligibleChildren,
+      groupChildPrintableById: request.printableById,
+      groupInitialSelectionById: request.initialSelectedById,
+      assignmentByItemId: request.assignmentByItemId,
+      preResolvedSourceByItemId: request.sourceByItemId,
     );
   }
 
@@ -4804,8 +5194,7 @@ class _GradingComboCandidate {
   });
 
   bool get isGroup => group != null;
-  String get uniqueKey =>
-      isGroup ? 'group:${group!.id}' : 'item:${summary.id}';
+  String get uniqueKey => isGroup ? 'group:${group!.id}' : 'item:${summary.id}';
 }
 
 _GradingComboMatchKey? _resolveGradingComboMatchKey({
@@ -4885,7 +5274,8 @@ Future<List<_GradingComboCandidate>> _collectGradingComboCandidates({
   for (final studentId in attendingStudentIds) {
     Set<String> assignedItemIds = <String>{};
     try {
-      final assignments = await assignmentStore.loadActiveAssignments(studentId);
+      final assignments =
+          await assignmentStore.loadActiveAssignments(studentId);
       for (final a in assignments) {
         if ((a.note ?? '').trim() == HomeworkAssignmentStore.reservationNote) {
           continue;
@@ -4914,8 +5304,7 @@ Future<List<_GradingComboCandidate>> _collectGradingComboCandidates({
         continue;
       }
 
-      final hasSubmitted =
-          childrenAll.any(_itemHasSubmittedCandidateForCombo);
+      final hasSubmitted = childrenAll.any(_itemHasSubmittedCandidateForCombo);
       final assignedChildren = childrenAll
           .where((c) => assignedItemIds.contains(c.id) && c.phase != 0)
           .toList(growable: false);
@@ -4976,8 +5365,7 @@ Future<List<_GradingComboCandidate>> _collectGradingComboCandidates({
           children: [item],
         ),
         typeLabel: (item.type ?? '').trim(),
-        displayTitle:
-            item.title.trim().isEmpty ? '개별 숙제' : item.title.trim(),
+        displayTitle: item.title.trim().isEmpty ? '개별 숙제' : item.title.trim(),
         firstPageNumber: _firstPageNumberOfHomework(item),
         orderIndex: item.orderIndex,
       ));
@@ -5010,8 +5398,7 @@ Future<_GradingComboCandidate?> _showGradingComboDialog({
   required List<_GradingComboCandidate> candidates,
   required _GradingComboSection section,
 }) {
-  final sectionLabel =
-      section == _GradingComboSection.submitted ? '제출' : '숙제';
+  final sectionLabel = section == _GradingComboSection.submitted ? '제출' : '숙제';
   return showDialog<_GradingComboCandidate?>(
     context: context,
     barrierDismissible: false,
@@ -7038,6 +7425,19 @@ Widget _buildHomeworkChipsReactiveForStudent(
     required HomeworkItem summary,
     required List<HomeworkItem> children,
   })? onGroupPrintPickTap,
+  Future<void> Function(
+          {required BuildContext context,
+          required String studentId,
+          required HomeworkItem hw})?
+      onPrintPickLongPress,
+  Future<void> Function({
+    required BuildContext context,
+    required String studentId,
+    required HomeworkGroup group,
+    required HomeworkItem summary,
+    required List<HomeworkItem> children,
+  })? onGroupPrintPickLongPress,
+  VoidCallback? onPrintPickSecondaryTap,
   void Function(({String studentId, String itemId}) key)? onSlideDownComplete,
   Set<String> expandedHomeworkIds = const {},
   void Function(String id)? onToggleExpand,
@@ -7161,6 +7561,10 @@ Widget _buildHomeworkChipsReactiveForStudent(
                             printPickMode: printPickMode,
                             onPrintPickTap: onPrintPickTap,
                             onGroupPrintPickTap: onGroupPrintPickTap,
+                            onPrintPickLongPress: onPrintPickLongPress,
+                            onGroupPrintPickLongPress:
+                                onGroupPrintPickLongPress,
+                            onPrintPickSecondaryTap: onPrintPickSecondaryTap,
                             onSlideDownComplete: onSlideDownComplete,
                             expandedHomeworkIds: expandedHomeworkIds,
                             onToggleExpand: onToggleExpand,
@@ -8033,6 +8437,19 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
     required HomeworkItem summary,
     required List<HomeworkItem> children,
   })? onGroupPrintPickTap,
+  Future<void> Function(
+          {required BuildContext context,
+          required String studentId,
+          required HomeworkItem hw})?
+      onPrintPickLongPress,
+  Future<void> Function({
+    required BuildContext context,
+    required String studentId,
+    required HomeworkGroup group,
+    required HomeworkItem summary,
+    required List<HomeworkItem> children,
+  })? onGroupPrintPickLongPress,
+  VoidCallback? onPrintPickSecondaryTap,
   void Function(({String studentId, String itemId}) key)? onSlideDownComplete,
   Set<String> expandedHomeworkIds = const {},
   void Function(String id)? onToggleExpand,
@@ -8367,7 +8784,32 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
         }
         onToggleExpand?.call(group.id);
       },
-      onLongPress: null,
+      onLongPress: printPickMode
+          ? () {
+              if (onGroupPrintPickLongPress != null) {
+                unawaited(
+                  onGroupPrintPickLongPress(
+                    context: context,
+                    studentId: studentId,
+                    group: group,
+                    summary: summary,
+                    children: children,
+                  ),
+                );
+                return;
+              }
+              if (onPrintPickLongPress != null) {
+                unawaited(
+                  onPrintPickLongPress(
+                    context: context,
+                    studentId: studentId,
+                    hw: summary,
+                  ),
+                );
+              }
+            }
+          : null,
+      onSecondaryTap: printPickMode ? onPrintPickSecondaryTap : null,
       onSlideDown: () {
         if (printPickMode) return;
         if (groupSlideDownIsEdit) {
@@ -8576,6 +9018,52 @@ class _ResolvedHomeworkPrintSource {
   bool get isEmpty => pathRaw.trim().isEmpty;
 }
 
+class _PreparedHomeworkPrintTarget {
+  final _ResolvedHomeworkPrintSource source;
+  final String printablePath;
+
+  const _PreparedHomeworkPrintTarget({
+    required this.source,
+    required this.printablePath,
+  });
+}
+
+class _HomeworkPrintRunResult {
+  final bool printJobSentToSpooler;
+  final String? error;
+
+  const _HomeworkPrintRunResult({
+    required this.printJobSentToSpooler,
+    this.error,
+  });
+}
+
+class _HomeworkGroupPrintRequest {
+  final HomeworkItem seed;
+  final String initialRange;
+  final String dialogTitle;
+  final List<HomeworkItem> eligibleChildren;
+  final Map<String, bool> printableById;
+  final Map<String, bool> initialSelectedById;
+  final Map<String, HomeworkAssignmentDetail> assignmentByItemId;
+  final Map<String, _ResolvedHomeworkPrintSource> sourceByItemId;
+  final String? warning;
+  final String? error;
+
+  const _HomeworkGroupPrintRequest({
+    required this.seed,
+    required this.initialRange,
+    required this.dialogTitle,
+    required this.eligibleChildren,
+    required this.printableById,
+    required this.initialSelectedById,
+    required this.assignmentByItemId,
+    required this.sourceByItemId,
+    this.warning,
+    this.error,
+  });
+}
+
 class _HomeworkPrintConfirmResult {
   final String pageRange;
   final List<String> selectedChildIds;
@@ -8586,6 +9074,42 @@ class _HomeworkPrintConfirmResult {
     this.selectedChildIds = const <String>[],
     this.duplexMode = PrintDuplexMode.twoSidedLongEdge,
   });
+}
+
+enum _HomePrintQueueStatus {
+  queued,
+  printing,
+  completed,
+  failed,
+}
+
+class _HomePrintQueueItem {
+  final int id;
+  final String studentId;
+  final String title;
+  final HomeworkItem hw;
+  final HomeworkGroup? group;
+  final HomeworkItem? summary;
+  final List<HomeworkItem> children;
+  _HomePrintQueueStatus status;
+  String message;
+  String? error;
+
+  _HomePrintQueueItem({
+    required this.id,
+    required this.studentId,
+    required this.title,
+    required this.hw,
+    this.group,
+    this.summary,
+    this.children = const <HomeworkItem>[],
+  })  : status = _HomePrintQueueStatus.queued,
+        message = '대기 중',
+        error = null;
+
+  bool get isTerminal =>
+      status == _HomePrintQueueStatus.completed ||
+      status == _HomePrintQueueStatus.failed;
 }
 
 class _HomeworkPrintOverlayMeta {
@@ -8690,8 +9214,9 @@ Future<_HomeworkPrintOverlayMeta> _resolveHomeworkPrintOverlayMeta({
       : (sortedCodes.length == 1
           ? sortedCodes.first
           : '${sortedCodes.first} 외 ${sortedCodes.length - 1}건');
-  final bool isTestMeta = byId.values.any((hw) => _isTestHomeworkType(hw.type)) ||
-      _isTestHomeworkType(fallbackHomework.type);
+  final bool isTestMeta =
+      byId.values.any((hw) => _isTestHomeworkType(hw.type)) ||
+          _isTestHomeworkType(fallbackHomework.type);
   return _HomeworkPrintOverlayMeta(
     assignedDateText: assignedDateText,
     bookCourseText: bookCourseText,
@@ -9722,7 +10247,8 @@ Future<String?> _buildPdfForPrintRange({
       }
       // 왜곡 채움(stretch): 가로/세로를 독립 스케일로 늘려 페이지를 꽉 채운다.
       try {
-        newPage.graphics.drawPdfTemplate(tmpl, const Offset(0, 0), Size(tw, th));
+        newPage.graphics
+            .drawPdfTemplate(tmpl, const Offset(0, 0), Size(tw, th));
       } catch (_) {
         newPage.graphics.drawPdfTemplate(tmpl, const Offset(0, 0));
       }
@@ -10104,7 +10630,7 @@ Future<LearningProblemExportJob?> _ensurePbExportJob({
   final paperSize = preset.paperSize.isNotEmpty ? preset.paperSize : 'A4';
   final includeAnswerSheet = _parseBoolLooseForPrint(
     renderConfig['includeAnswerSheet'],
-    fallback: true,
+    fallback: false,
   );
   final includeExplanation = _parseBoolLooseForPrint(
     renderConfig['includeExplanation'],
@@ -10113,6 +10639,8 @@ Future<LearningProblemExportJob?> _ensurePbExportJob({
   final renderHash = '${renderConfig['renderHash'] ?? ''}'.trim();
   final options = <String, dynamic>{
     ...renderConfig,
+    'includeAnswerSheet': includeAnswerSheet,
+    'includeExplanation': includeExplanation,
     if (renderHash.isNotEmpty) 'renderHash': renderHash,
     'previewOnly': false,
   };
@@ -10783,6 +11311,342 @@ Future<void> _runWithPrintProgressDialog(
   }
 }
 
+String _messageFromPrintError(Object error) {
+  final raw = error.toString().trim();
+  if (raw.isEmpty) return '인쇄 요청 중 오류가 발생했습니다.';
+  return raw
+      .replaceFirst(RegExp(r'^Bad state:\s*'), '')
+      .replaceFirst(RegExp(r'^Exception:\s*'), '');
+}
+
+Future<_PreparedHomeworkPrintTarget> _prepareHomeworkPrintTarget({
+  required String studentId,
+  required HomeworkItem hw,
+  Map<String, HomeworkAssignmentDetail> assignmentByItemId =
+      const <String, HomeworkAssignmentDetail>{},
+  Map<String, _ResolvedHomeworkPrintSource> preResolvedSourceByItemId =
+      const <String, _ResolvedHomeworkPrintSource>{},
+  ValueNotifier<String>? progressText,
+}) async {
+  final resolvedAssignments = assignmentByItemId.isNotEmpty
+      ? assignmentByItemId
+      : await _loadActiveAssignmentByItemIdForPrint(studentId);
+  final assignment = resolvedAssignments[hw.id.trim()];
+  final isPbTarget = _isPbPrintTarget(hw: hw, assignment: assignment);
+  final preResolved = preResolvedSourceByItemId[hw.id];
+
+  _ResolvedHomeworkPrintSource resolvedSource;
+  String? bodyPath;
+
+  if (isPbTarget) {
+    var pbSource = (preResolved != null && preResolved.isProblemBank)
+        ? preResolved
+        : const _ResolvedHomeworkPrintSource(
+            pathRaw: '',
+            sourceKey: 'pb_missing',
+            isProblemBank: true,
+          );
+    final hasPrintableSource =
+        await _isPrintableResolvedHomeworkPrintSource(pbSource);
+    if (pbSource.isEmpty || !hasPrintableSource) {
+      progressText?.value = '문제은행 인쇄 PDF를 준비하는 중입니다...';
+      pbSource = await _resolvePbPrintSource(
+            hw,
+            assignment: assignment,
+            ensureExportJob: true,
+            progressText: progressText,
+          ) ??
+          const _ResolvedHomeworkPrintSource(
+            pathRaw: '',
+            sourceKey: 'pb_missing',
+            isProblemBank: true,
+          );
+    }
+    if (pbSource.isEmpty) {
+      throw StateError('문제은행 인쇄 PDF를 준비하지 못했습니다.');
+    }
+    progressText?.value = '인쇄 파일을 내려받는 중입니다...';
+    bodyPath = await _materializePrintablePathFromSource(
+      pbSource,
+      cacheKey: 'hw_print_${hw.id}',
+    );
+    resolvedSource = pbSource;
+  } else {
+    resolvedSource = (preResolved != null && !preResolved.isProblemBank)
+        ? preResolved
+        : await _resolveTextbookPrintSource(
+            hw,
+            allowFlowFallback: true,
+          );
+    if (resolvedSource.isEmpty) {
+      throw StateError('인쇄 가능한 교재 PDF를 찾지 못했습니다.');
+    }
+    progressText?.value = '인쇄 파일을 준비하는 중입니다...';
+    bodyPath = await _materializePrintablePathFromSource(
+      resolvedSource,
+      cacheKey: 'hw_print_${hw.id}',
+    );
+  }
+
+  if (bodyPath == null || bodyPath.isEmpty) {
+    throw StateError('인쇄 파일을 찾을 수 없습니다.');
+  }
+  return _PreparedHomeworkPrintTarget(
+    source: resolvedSource,
+    printablePath: bodyPath,
+  );
+}
+
+Future<_HomeworkPrintRunResult> _runResolvedHomeworkPrint({
+  required String studentId,
+  required HomeworkItem hw,
+  required _ResolvedHomeworkPrintSource resolvedSource,
+  required String printablePath,
+  required _HomeworkPrintConfirmResult confirmResult,
+  List<HomeworkItem> selectableGroupChildren = const <HomeworkItem>[],
+  ValueNotifier<String>? progressText,
+}) async {
+  if (selectableGroupChildren.isNotEmpty &&
+      confirmResult.selectedChildIds.isEmpty) {
+    return const _HomeworkPrintRunResult(
+      printJobSentToSpooler: false,
+      error: '인쇄 가능한 하위 과제를 선택하세요.',
+    );
+  }
+
+  final selectedIds = confirmResult.selectedChildIds.toSet();
+  final selectedHomeworks = selectableGroupChildren.isNotEmpty
+      ? selectableGroupChildren
+          .where((child) => selectedIds.contains(child.id))
+          .toList(growable: false)
+      : <HomeworkItem>[hw];
+  final overlayMeta = await _resolveHomeworkPrintOverlayMeta(
+    studentId: studentId,
+    fallbackHomework: hw,
+    selectedHomeworks: selectedHomeworks,
+  );
+
+  final isPdf = printablePath.toLowerCase().endsWith('.pdf');
+  final int pageOffset = (!resolvedSource.isProblemBank && isPdf)
+      ? await _loadTextbookPageOffset(
+          bookId: resolvedSource.bookId,
+          gradeLabel: resolvedSource.gradeLabel,
+        )
+      : 0;
+  final selectedRange = confirmResult.pageRange;
+  String pathToPrint = printablePath;
+  final rangeDisplay = _normalizePageRangeForPrint(selectedRange);
+  final rangeRaw = resolvedSource.isProblemBank
+      ? ''
+      : _shiftNormalizedPageRangeForPdf(rangeDisplay, pageOffset);
+
+  if (isPdf) {
+    progressText?.value = rangeRaw.isEmpty
+        ? '인쇄 파일을 준비하는 중입니다...'
+        : '선택한 페이지를 인쇄 파일로 만드는 중입니다...';
+    final out = await _buildPdfForPrintRange(
+      inputPath: printablePath,
+      pageRange: rangeRaw,
+      overlayMeta: overlayMeta,
+      preferredPaperSize: resolvedSource.preferredPaperSize,
+    );
+    if (out == null || out.isEmpty) {
+      return _HomeworkPrintRunResult(
+        printJobSentToSpooler: false,
+        error: rangeRaw.isEmpty
+            ? '인쇄 파일 생성에 실패했습니다.'
+            : '페이지 범위를 확인하세요. (예: 10-15, 20)',
+      );
+    }
+    pathToPrint = out;
+    _scheduleTempDelete(pathToPrint);
+  } else if (rangeRaw.isNotEmpty) {
+    return const _HomeworkPrintRunResult(
+      printJobSentToSpooler: false,
+      error: '페이지 범위 인쇄는 PDF에서만 지원합니다.',
+    );
+  }
+
+  progressText?.value = '프린터로 전송 중입니다...';
+  final printJobSentToSpooler = await _openPrintDialogForPath(
+    pathToPrint,
+    preferredPaperSize: resolvedSource.preferredPaperSize,
+    duplexMode: confirmResult.duplexMode,
+  );
+  if (printJobSentToSpooler) {
+    _applyHomeworkTypePrintAfterSuccessfulPrint(
+      studentId: studentId,
+      itemIds: selectedHomeworks.map((e) => e.id),
+    );
+  }
+  return _HomeworkPrintRunResult(
+    printJobSentToSpooler: printJobSentToSpooler,
+  );
+}
+
+Future<_HomeworkPrintRunResult> _runHomeworkPrintWithDefaultSettings({
+  required String studentId,
+  required HomeworkItem hw,
+  String? initialRangeOverride,
+  List<HomeworkItem> selectableGroupChildren = const <HomeworkItem>[],
+  Map<String, bool> groupChildPrintableById = const <String, bool>{},
+  Map<String, bool> groupInitialSelectionById = const <String, bool>{},
+  Map<String, HomeworkAssignmentDetail> assignmentByItemId =
+      const <String, HomeworkAssignmentDetail>{},
+  Map<String, _ResolvedHomeworkPrintSource> preResolvedSourceByItemId =
+      const <String, _ResolvedHomeworkPrintSource>{},
+  ValueNotifier<String>? progressText,
+}) async {
+  final prepared = await _prepareHomeworkPrintTarget(
+    studentId: studentId,
+    hw: hw,
+    assignmentByItemId: assignmentByItemId,
+    preResolvedSourceByItemId: preResolvedSourceByItemId,
+    progressText: progressText,
+  );
+  final resolvedAssignments = assignmentByItemId.isNotEmpty
+      ? assignmentByItemId
+      : await _loadActiveAssignmentByItemIdForPrint(studentId);
+  final assignment = resolvedAssignments[hw.id.trim()];
+  final isPbTarget = _isPbPrintTarget(hw: hw, assignment: assignment);
+  final initialRangeRaw =
+      isPbTarget ? '' : (initialRangeOverride ?? hw.page ?? '');
+  final selectedChildIds = selectableGroupChildren.isEmpty
+      ? const <String>[]
+      : selectableGroupChildren
+          .where((child) =>
+              (groupChildPrintableById[child.id] ?? true) &&
+              (groupInitialSelectionById[child.id] ?? true))
+          .map((child) => child.id)
+          .toList(growable: false);
+  final confirmResult = _HomeworkPrintConfirmResult(
+    pageRange: _normalizePageRangeForPrint(initialRangeRaw),
+    selectedChildIds: selectedChildIds,
+    duplexMode: PrintDuplexMode.twoSidedLongEdge,
+  );
+  return _runResolvedHomeworkPrint(
+    studentId: studentId,
+    hw: hw,
+    resolvedSource: prepared.source,
+    printablePath: prepared.printablePath,
+    confirmResult: confirmResult,
+    selectableGroupChildren: selectableGroupChildren,
+    progressText: progressText,
+  );
+}
+
+Future<_HomeworkGroupPrintRequest> _buildHomeworkGroupPrintRequest({
+  required String studentId,
+  required HomeworkGroup group,
+  required HomeworkItem summary,
+  required List<HomeworkItem> children,
+}) async {
+  final latestChildren = children
+      .map((e) => HomeworkStore.instance.getById(studentId, e.id) ?? e)
+      .toList(growable: false);
+  final eligibleChildren = latestChildren
+      .where((e) => e.status != HomeworkStatus.completed)
+      .toList(growable: false);
+  if (eligibleChildren.isEmpty) {
+    return _HomeworkGroupPrintRequest(
+      seed: summary,
+      initialRange: '',
+      dialogTitle: summary.title.trim().isEmpty ? '(제목 없음)' : summary.title,
+      eligibleChildren: const <HomeworkItem>[],
+      printableById: const <String, bool>{},
+      initialSelectedById: const <String, bool>{},
+      assignmentByItemId: const <String, HomeworkAssignmentDetail>{},
+      sourceByItemId: const <String, _ResolvedHomeworkPrintSource>{},
+      error: '인쇄 가능한 하위 과제가 없습니다.',
+    );
+  }
+
+  final assignmentByItemId =
+      await _loadActiveAssignmentByItemIdForPrint(studentId);
+  final printableById = <String, bool>{};
+  final sourceByItemId = <String, _ResolvedHomeworkPrintSource>{};
+  String? canonicalPipelineKey;
+  final observedPipelineKinds = <String>{};
+  for (final child in eligibleChildren) {
+    final assignment = assignmentByItemId[child.id.trim()];
+    final pipelineKey =
+        _printPipelineKeyForHomework(hw: child, assignment: assignment);
+    observedPipelineKinds.add(pipelineKey);
+    final isPb = pipelineKey == _kPrintPipelinePb;
+    final source = isPb
+        ? (await _resolvePbPrintSource(
+              child,
+              assignment: assignment,
+            ) ??
+            const _ResolvedHomeworkPrintSource(
+              pathRaw: '',
+              sourceKey: 'pb_missing',
+              isProblemBank: true,
+            ))
+        : await _resolveTextbookPrintSource(
+            child,
+            allowFlowFallback: true,
+          );
+    sourceByItemId[child.id] = source;
+    final available = isPb
+        ? (await _isPrintableResolvedHomeworkPrintSource(source) ||
+            _canCreatePbPrintFromTarget(hw: child, assignment: assignment))
+        : await _isPrintableResolvedHomeworkPrintSource(source);
+    if (!available) {
+      printableById[child.id] = false;
+      continue;
+    }
+    canonicalPipelineKey ??= pipelineKey;
+    printableById[child.id] = canonicalPipelineKey == pipelineKey;
+  }
+
+  final defaultPrintableChildren = eligibleChildren
+      .where((e) => printableById[e.id] ?? false)
+      .toList(growable: false);
+  if (defaultPrintableChildren.isEmpty) {
+    return _HomeworkGroupPrintRequest(
+      seed: eligibleChildren.first,
+      initialRange: '',
+      dialogTitle: summary.title.trim().isEmpty ? '(제목 없음)' : summary.title,
+      eligibleChildren: eligibleChildren,
+      printableById: printableById,
+      initialSelectedById: {
+        for (final child in eligibleChildren)
+          child.id: printableById[child.id] ?? false,
+      },
+      assignmentByItemId: assignmentByItemId,
+      sourceByItemId: sourceByItemId,
+      error: '인쇄 가능한 하위 과제가 없습니다.',
+    );
+  }
+
+  final seed = defaultPrintableChildren.first;
+  final mergedPage = _mergeGroupPageText(defaultPrintableChildren);
+  final mergedTitle = summary.title.trim().isNotEmpty
+      ? summary.title.trim()
+      : (group.title.trim().isNotEmpty
+          ? group.title.trim()
+          : seed.title.trim());
+  final printRange = mergedPage.isEmpty ? (seed.page ?? '') : mergedPage;
+  final dialogTitle = mergedTitle.isEmpty ? '(제목 없음)' : mergedTitle;
+  return _HomeworkGroupPrintRequest(
+    seed: seed,
+    initialRange: printRange,
+    dialogTitle: dialogTitle,
+    eligibleChildren: eligibleChildren,
+    printableById: printableById,
+    initialSelectedById: {
+      for (final child in eligibleChildren)
+        child.id: printableById[child.id] ?? false,
+    },
+    assignmentByItemId: assignmentByItemId,
+    sourceByItemId: sourceByItemId,
+    warning: observedPipelineKinds.length > 1
+        ? '혼합 인쇄는 지원되지 않아요. 문제은행/교재를 분리해서 인쇄해 주세요.'
+        : null,
+  );
+}
+
 Future<void> _handleWaitingChipLongPressPrint({
   required BuildContext context,
   required String studentId,
@@ -10803,109 +11667,28 @@ Future<void> _handleWaitingChipLongPressPrint({
       : await _loadActiveAssignmentByItemIdForPrint(studentId);
   final assignment = resolvedAssignments[hw.id.trim()];
   final isPbTarget = _isPbPrintTarget(hw: hw, assignment: assignment);
-  final preResolved = preResolvedSourceByItemId[hw.id];
 
   // ── Phase 1: kick off background PDF preparation ──
-  final bgCompleter = Completer<
-      ({
-        _ResolvedHomeworkPrintSource source,
-        String? bodyPath,
-        String? error,
-      })>();
-
+  final bgCompleter = Completer<_PreparedHomeworkPrintTarget>();
   unawaited(() async {
     try {
-      _ResolvedHomeworkPrintSource resolvedSource;
-      String? bodyPath;
-
-      if (isPbTarget) {
-        var pbSource = (preResolved != null && preResolved.isProblemBank)
-            ? preResolved
-            : const _ResolvedHomeworkPrintSource(
-                pathRaw: '',
-                sourceKey: 'pb_missing',
-                isProblemBank: true,
-              );
-        final hasPrintableSource =
-            await _isPrintableResolvedHomeworkPrintSource(pbSource);
-        if (pbSource.isEmpty || !hasPrintableSource) {
-          pbSource = await _resolvePbPrintSource(
-                hw,
-                assignment: assignment,
-                ensureExportJob: true,
-              ) ??
-              const _ResolvedHomeworkPrintSource(
-                pathRaw: '',
-                sourceKey: 'pb_missing',
-                isProblemBank: true,
-              );
-        }
-        if (pbSource.isEmpty) {
-          bgCompleter.complete((
-            source: pbSource,
-            bodyPath: null,
-            error: '문제은행 인쇄 PDF를 준비하지 못했습니다.',
-          ));
-          return;
-        }
-        bodyPath = await _materializePrintablePathFromSource(
-          pbSource,
-          cacheKey: 'hw_print_${hw.id}',
-        );
-        resolvedSource = pbSource;
-      } else {
-        resolvedSource = (preResolved != null && !preResolved.isProblemBank)
-            ? preResolved
-            : await _resolveTextbookPrintSource(
-                hw,
-                allowFlowFallback: true,
-              );
-        if (resolvedSource.isEmpty) {
-          bgCompleter.complete((
-            source: resolvedSource,
-            bodyPath: null,
-            error: '인쇄 가능한 교재 PDF를 찾지 못했습니다.',
-          ));
-          return;
-        }
-        bodyPath = await _materializePrintablePathFromSource(
-          resolvedSource,
-          cacheKey: 'hw_print_${hw.id}',
-        );
-      }
-
-      if (bodyPath == null || bodyPath.isEmpty) {
-        bgCompleter.complete((
-          source: resolvedSource,
-          bodyPath: null,
-          error: '인쇄 파일을 찾을 수 없습니다.',
-        ));
-        return;
-      }
-      bgCompleter.complete(
-        (source: resolvedSource, bodyPath: bodyPath, error: null),
+      final prepared = await _prepareHomeworkPrintTarget(
+        studentId: studentId,
+        hw: hw,
+        assignmentByItemId: resolvedAssignments,
+        preResolvedSourceByItemId: preResolvedSourceByItemId,
       );
+      if (!bgCompleter.isCompleted) bgCompleter.complete(prepared);
     } catch (e) {
-      if (!bgCompleter.isCompleted) {
-        bgCompleter.complete((
-          source: const _ResolvedHomeworkPrintSource(
-            pathRaw: '',
-            sourceKey: 'bg_error',
-          ),
-          bodyPath: null,
-          error: '인쇄 PDF 준비 중 오류가 발생했습니다.',
-        ));
-      }
+      if (!bgCompleter.isCompleted) bgCompleter.completeError(e);
     }
   }());
 
   // ── Phase 2: show print confirm dialog immediately ──
   final isPdf = true;
-  final initialRangeRaw = isPbTarget
-      ? ''
-      : (initialRangeOverride ?? (isPdf ? (hw.page ?? '') : ''));
-  final initialRange =
-      isPdf ? _normalizePageRangeForPrint(initialRangeRaw) : '';
+  final initialRangeRaw =
+      isPbTarget ? '' : (initialRangeOverride ?? (hw.page ?? ''));
+  final initialRange = _normalizePageRangeForPrint(initialRangeRaw);
   final confirmResult = await _showHomeworkPrintConfirmDialog(
     context: context,
     hw: hw,
@@ -10925,107 +11708,53 @@ Future<void> _handleWaitingChipLongPressPrint({
   }
 
   // ── Phase 3: wait for background PDF if not done yet ──
-  final bgResult = bgCompleter.isCompleted
-      ? await bgCompleter.future
-      : await () async {
-          late final result;
-          await _runWithPrintProgressDialog(
-            context,
-            run: (progressText) async {
-              progressText.value = '인쇄 파일을 준비하는 중입니다...';
-              result = await bgCompleter.future;
-            },
-          );
-          return result;
-        }();
-  if (!context.mounted) return;
-
-  if (bgResult.error != null) {
-    _showHomeworkChipSnackBar(context, bgResult.error!);
+  _PreparedHomeworkPrintTarget prepared;
+  try {
+    prepared = bgCompleter.isCompleted
+        ? await bgCompleter.future
+        : await () async {
+            late final _PreparedHomeworkPrintTarget result;
+            await _runWithPrintProgressDialog(
+              context,
+              run: (progressText) async {
+                progressText.value = '인쇄 파일을 준비하는 중입니다...';
+                result = await bgCompleter.future;
+              },
+            );
+            return result;
+          }();
+  } catch (e) {
+    if (!context.mounted) return;
+    _showHomeworkChipSnackBar(context, _messageFromPrintError(e));
     return;
   }
-  final resolvedSource = bgResult.source;
-  final printablePath = bgResult.bodyPath!;
-
-  final selectedIds = confirmResult.selectedChildIds.toSet();
-  final selectedHomeworks = selectableGroupChildren.isNotEmpty
-      ? selectableGroupChildren
-          .where((child) => selectedIds.contains(child.id))
-          .toList(growable: false)
-      : <HomeworkItem>[hw];
-  final overlayMeta = await _resolveHomeworkPrintOverlayMeta(
-    studentId: studentId,
-    fallbackHomework: hw,
-    selectedHomeworks: selectedHomeworks,
-  );
   if (!context.mounted) return;
 
-  final int pageOffset = (!resolvedSource.isProblemBank && isPdf)
-      ? await _loadTextbookPageOffset(
-          bookId: resolvedSource.bookId,
-          gradeLabel: resolvedSource.gradeLabel,
-        )
-      : 0;
-  final selectedRange = confirmResult.pageRange;
-  String pathToPrint = printablePath;
-  final rangeDisplay = _normalizePageRangeForPrint(selectedRange);
-  final rangeRaw = resolvedSource.isProblemBank
-      ? ''
-      : _shiftNormalizedPageRangeForPdf(rangeDisplay, pageOffset);
-  String? printError;
-  var printJobSentToSpooler = false;
+  _HomeworkPrintRunResult runResult =
+      const _HomeworkPrintRunResult(printJobSentToSpooler: false);
   try {
     await _runWithPrintProgressDialog(
       context,
       run: (progressText) async {
-        if (printablePath.toLowerCase().endsWith('.pdf')) {
-          final shouldRewritePdf = true;
-          if (shouldRewritePdf) {
-            progressText.value = rangeRaw.isEmpty
-                ? '인쇄 파일을 준비하는 중입니다...'
-                : '선택한 페이지를 인쇄 파일로 만드는 중입니다...';
-            final out = await _buildPdfForPrintRange(
-              inputPath: printablePath,
-              pageRange: rangeRaw,
-              overlayMeta: overlayMeta,
-              preferredPaperSize: resolvedSource.preferredPaperSize,
-            );
-            if (out == null || out.isEmpty) {
-              printError = rangeRaw.isEmpty
-                  ? '인쇄 파일 생성에 실패했습니다.'
-                  : '페이지 범위를 확인하세요. (예: 10-15, 20)';
-              return;
-            }
-            pathToPrint = out;
-            _scheduleTempDelete(pathToPrint);
-          }
-        } else if (rangeRaw.isNotEmpty) {
-          printError = '페이지 범위 인쇄는 PDF에서만 지원합니다.';
-          return;
-        }
-        progressText.value = '프린터로 전송 중입니다...';
-        printJobSentToSpooler = await _openPrintDialogForPath(
-          pathToPrint,
-          preferredPaperSize: resolvedSource.preferredPaperSize,
-          duplexMode: confirmResult.duplexMode,
+        runResult = await _runResolvedHomeworkPrint(
+          studentId: studentId,
+          hw: hw,
+          resolvedSource: prepared.source,
+          printablePath: prepared.printablePath,
+          confirmResult: confirmResult,
+          selectableGroupChildren: selectableGroupChildren,
+          progressText: progressText,
         );
       },
     );
-  } catch (_) {
+  } catch (e) {
     if (!context.mounted) return;
-    _showHomeworkChipSnackBar(context, '인쇄 요청 중 오류가 발생했습니다.');
+    _showHomeworkChipSnackBar(context, _messageFromPrintError(e));
     return;
   }
   if (!context.mounted) return;
-  if (printError != null) {
-    _showHomeworkChipSnackBar(context, printError!);
-    return;
-  }
-  if (printJobSentToSpooler) {
-    _applyHomeworkTypePrintAfterSuccessfulPrint(
-      studentId: studentId,
-      itemIds: selectedHomeworks.map((e) => e.id),
-    );
+  if (runResult.error != null) {
+    _showHomeworkChipSnackBar(context, runResult.error!);
   }
 }
 
@@ -12932,6 +13661,7 @@ class _SlideableHomeworkChip extends StatefulWidget {
   final Widget child;
   final VoidCallback onTap;
   final VoidCallback? onLongPress;
+  final VoidCallback? onSecondaryTap;
   final VoidCallback? onDoubleTap;
   final VoidCallback onSlideDown;
   final Future<void> Function() onSlideUp;
@@ -12950,6 +13680,7 @@ class _SlideableHomeworkChip extends StatefulWidget {
     required this.child,
     required this.onTap,
     this.onLongPress,
+    this.onSecondaryTap,
     this.onDoubleTap,
     required this.onSlideDown,
     required this.onSlideUp,
@@ -13107,6 +13838,7 @@ class _SlideableHomeworkChipState extends State<_SlideableHomeworkChip> {
             child: GestureDetector(
               onTap: widget.onTap,
               onLongPress: widget.onLongPress,
+              onSecondaryTap: widget.onSecondaryTap,
               onDoubleTap: widget.onDoubleTap,
               onHorizontalDragUpdate: (details) {
                 final delta = details.delta.dx;
