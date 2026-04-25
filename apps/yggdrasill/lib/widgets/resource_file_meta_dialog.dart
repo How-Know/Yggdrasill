@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
 
 import '../services/data_manager.dart';
+import '../services/tenant_service.dart';
+import '../services/textbook_pdf_service.dart';
 import 'dialog_tokens.dart';
 import 'latex_text_renderer.dart';
+import 'pdf/textbook_problem_region.dart';
+import 'pdf/textbook_viewer_dialog.dart';
 
 class ResourceFileMetaDialog extends StatefulWidget {
   final String? bookId;
@@ -38,15 +42,68 @@ class _ResourceFileMetaDialogState extends State<ResourceFileMetaDialog> {
   List<_BigUnitNode> _units = const <_BigUnitNode>[];
   Map<String, _SmallUnitStats> _statsBySmallKey = const <String, _SmallUnitStats>{};
 
+  // Problem regions (textbook_problem_crops) grouped by raw page number.
+  bool _regionsLoading = false;
+  String? _regionsErrorText;
+  List<TextbookProblemRegion> _regions = const <TextbookProblemRegion>[];
+  int _pageOffset = 0;
+
   bool get _isTextbook => (widget.categoryLabel ?? '').trim() == '교재';
   bool get _hasBookId => (widget.bookId ?? '').trim().isNotEmpty;
   bool get _hasGradeLabel => (widget.gradeLabel ?? '').trim().isNotEmpty;
   bool get _canLoadUnitStats => _isTextbook && _hasBookId && _hasGradeLabel;
+  bool get _canLoadRegions => _isTextbook && _hasBookId;
 
   @override
   void initState() {
     super.initState();
     _loadUnitStats();
+    _loadRegions();
+  }
+
+  Future<void> _loadRegions() async {
+    if (!_canLoadRegions) return;
+    setState(() {
+      _regionsLoading = true;
+      _regionsErrorText = null;
+    });
+    try {
+      final rows = await DataManager.instance.loadTextbookProblemRegions(
+        bookId: widget.bookId!.trim(),
+        gradeLabel: _hasGradeLabel ? widget.gradeLabel!.trim() : null,
+      );
+      // Pull the page_offset so we can show printed page numbers in the
+      // page-group headers instead of the raw PDF page index.
+      int offset = 0;
+      if (_hasGradeLabel) {
+        final payloadRow =
+            await DataManager.instance.loadTextbookMetadataPayload(
+          bookId: widget.bookId!.trim(),
+          gradeLabel: widget.gradeLabel!.trim(),
+        );
+        final rawOffset = payloadRow?['page_offset'];
+        if (rawOffset is int) offset = rawOffset;
+        if (rawOffset is num) offset = rawOffset.toInt();
+      }
+      final regions = <TextbookProblemRegion>[];
+      for (final row in rows) {
+        final r = TextbookProblemRegion.fromRow(row);
+        if (r != null) regions.add(r);
+      }
+      if (!mounted) return;
+      setState(() {
+        _regions = regions;
+        _pageOffset = offset;
+        _regionsLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _regionsLoading = false;
+        _regionsErrorText =
+            '문항 영역을 불러오지 못했어요. 잠시 후 다시 시도해 주세요.';
+      });
+    }
   }
 
   Future<void> _loadUnitStats() async {
@@ -495,6 +552,14 @@ class _ResourceFileMetaDialogState extends State<ResourceFileMetaDialog> {
                   title: '소단원 통계',
                 ),
                 _buildUnitStatsSection(),
+                if (_canLoadRegions) ...[
+                  const SizedBox(height: 12),
+                  const YggDialogSectionHeader(
+                    icon: Icons.crop_free,
+                    title: '문항 위치',
+                  ),
+                  _buildRegionsSection(),
+                ],
               ],
             ),
           ),
@@ -509,6 +574,214 @@ class _ResourceFileMetaDialogState extends State<ResourceFileMetaDialog> {
           child: const Text('닫기'),
         ),
       ],
+    );
+  }
+
+  Widget _buildRegionsSection() {
+    if (_regionsLoading) {
+      return _buildInfoPanel(
+        children: const [
+          SizedBox(
+            height: 36,
+            child: Center(
+              child: SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: kDlgAccent,
+                ),
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+    if (_regionsErrorText != null) {
+      return _buildNoticeCard(_regionsErrorText!);
+    }
+    if (_regions.isEmpty) {
+      return _buildNoticeCard(
+        '아직 저장된 문항 위치가 없어요. 매니저 앱에서 단원 분석 후 "영역 저장"을 눌러 주세요.',
+      );
+    }
+
+    // Group regions by raw_page, preserving the sorted order from the
+    // query so problem numbers stay in reading order per page.
+    final byPage = <int, List<TextbookProblemRegion>>{};
+    for (final r in _regions) {
+      byPage.putIfAbsent(r.rawPage, () => <TextbookProblemRegion>[]).add(r);
+    }
+    final pages = byPage.keys.toList()..sort();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: Row(
+            children: [
+              Text(
+                '총 ${_regions.length}개 · ${pages.length}페이지',
+                style: const TextStyle(
+                  color: kDlgTextSub,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 12,
+                ),
+              ),
+              const Spacer(),
+              FilledButton.icon(
+                icon: const Icon(Icons.menu_book_outlined, size: 16),
+                onPressed: _openViewerWithRegions,
+                label: const Text('원본 보기 (탭 감지)'),
+                style: FilledButton.styleFrom(
+                  backgroundColor: kDlgAccent,
+                  foregroundColor: Colors.black,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                ),
+              ),
+            ],
+          ),
+        ),
+        ConstrainedBox(
+          constraints: const BoxConstraints(maxHeight: 280),
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (final page in pages)
+                  _buildPageGroupCard(
+                    rawPage: page,
+                    regions: byPage[page]!,
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPageGroupCard({
+    required int rawPage,
+    required List<TextbookProblemRegion> regions,
+  }) {
+    final displayPage = rawPage - _pageOffset;
+    final headerParts = <String>[
+      'p$rawPage',
+      if (displayPage != rawPage && displayPage > 0) '본문 p$displayPage',
+      '${regions.length}문항',
+    ];
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      decoration: BoxDecoration(
+        color: kDlgPanelBg,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: kDlgBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.menu_book_outlined,
+                  size: 14, color: kDlgTextSub),
+              const SizedBox(width: 6),
+              Text(
+                headerParts.join(' · '),
+                style: const TextStyle(
+                  color: kDlgText,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const Spacer(),
+              TextButton.icon(
+                onPressed: () => _openViewerWithRegions(initialPage: rawPage),
+                icon: const Icon(Icons.open_in_new, size: 14),
+                label: const Text('이 페이지 열기'),
+                style: TextButton.styleFrom(
+                  foregroundColor: kDlgAccent,
+                  textStyle: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                  ),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              for (final r in regions) _buildNumberChip(r),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildNumberChip(TextbookProblemRegion r) {
+    final text = r.isSetHeader
+        ? '${r.setFrom ?? '?'}~${r.setTo ?? '?'}'
+        : r.problemNumber;
+    final bg = r.isSetHeader
+        ? const Color(0x332D2419)
+        : const Color(0x221B2430);
+    final fg = r.isSetHeader
+        ? const Color(0xFFEAB968)
+        : const Color(0xFF7AA9E6);
+    return Tooltip(
+      message: [
+        if (r.section != null && r.section!.isNotEmpty) r.section!,
+        if (r.label.isNotEmpty) r.label,
+        if (r.subKey != null) '${r.subKey} 단원',
+      ].join(' · '),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: fg.withOpacity(0.35)),
+        ),
+        child: Text(
+          text,
+          style: TextStyle(
+            color: fg,
+            fontSize: 11,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openViewerWithRegions({int? initialPage}) async {
+    if (!_hasBookId || !_hasGradeLabel) return;
+    final academyId = await TenantService.instance.getActiveAcademyId();
+    if (academyId == null || academyId.isEmpty) return;
+    if (!mounted) return;
+    await openTextbookViewerDialog(
+      context,
+      ref: TextbookPdfRef(
+        academyId: academyId,
+        fileId: widget.bookId!.trim(),
+        gradeLabel: widget.gradeLabel!.trim(),
+        kind: 'body',
+        displayName: widget.fileName,
+      ),
+      title: widget.fileName,
+      cacheKey:
+          'tb|$academyId|${widget.bookId!.trim()}|${widget.gradeLabel!.trim()}|body',
+      initialPage: initialPage,
+      problemRegions: _regions,
+      tapDetectionMode: true,
     );
   }
 }

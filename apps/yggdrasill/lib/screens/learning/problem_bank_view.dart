@@ -76,6 +76,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
 
   List<LearningProblemQuestion> _questions = const <LearningProblemQuestion>[];
   final Set<String> _selectedQuestionIds = <String>{};
+
   /// 장바구니(선택만 보기) 활성 시 그리드에 선택된 문항만 표시.
   bool _showOnlySelectedQuestions = false;
   final Map<String, String> _selectedQuestionModes = <String, String>{};
@@ -494,7 +495,9 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     }
 
     final questionIds = questions
-        .map((q) => q.questionUid.trim().isNotEmpty ? q.questionUid.trim() : q.id.trim())
+        .map((q) => q.questionUid.trim().isNotEmpty
+            ? q.questionUid.trim()
+            : q.id.trim())
         .where((id) => id.isNotEmpty)
         .toList();
     if (questionIds.isEmpty) return;
@@ -559,7 +562,8 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     String message,
   ) {
     if (!mounted) return;
-    final safeMsg = message.trim().isNotEmpty ? message.trim() : '서버 미리보기에 실패했습니다.';
+    final safeMsg =
+        message.trim().isNotEmpty ? message.trim() : '서버 미리보기에 실패했습니다.';
     setState(() {
       final nextStatus = <String, String>{..._questionPreviewStatus};
       final nextError = <String, String>{..._questionPreviewError};
@@ -818,20 +822,6 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     );
   }
 
-  String _buildRenderHashForSelection(
-    List<LearningProblemQuestion> selectedQuestions, {
-    LearningProblemExportSettings? settingsOverride,
-  }) {
-    final selectedModes = _selectedModeMapForQuestions(selectedQuestions);
-    final orderedUids = _selectedQuestionUidsInCurrentOrder(selectedQuestions);
-    final settings = settingsOverride ?? _exportSettings;
-    return buildLearningRenderHash(
-      settings: settings,
-      selectedQuestionUidsOrdered: orderedUids,
-      questionModeByQuestionUid: selectedModes,
-    );
-  }
-
   Future<LearningProblemExportJob?> _waitForExportCompletion(
     LearningProblemExportJob initialJob,
   ) async {
@@ -872,10 +862,6 @@ class _ProblemBankViewState extends State<ProblemBankView> {
     if (academyId == null || academyId.isEmpty) return null;
     if (selectedQuestions.isEmpty) return null;
     final settings = settingsOverride ?? _exportSettings;
-    final renderHash = _buildRenderHashForSelection(
-      selectedQuestions,
-      settingsOverride: settings,
-    );
     final renderConfig = <String, dynamic>{
       ..._buildRenderConfigForSelection(
         selectedQuestions,
@@ -883,6 +869,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
       ),
       ...renderConfigPatch,
     };
+    final renderHash = buildLearningRenderHashFromConfig(renderConfig);
     // Always generate a fresh server render so preview/PDF never picks
     // up stale completed jobs from an older renderer process/version.
     const reusable = null;
@@ -1078,8 +1065,13 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           .map((q) => q.documentId.trim())
           .where((id) => id.isNotEmpty)
           .toSet();
+      final isPresetEditFlow =
+          explicitPreset != null || editingPresetId.trim().isNotEmpty;
       var initialRenderPatch = <String, dynamic>{
         'mathEngine': _previewMathEngine,
+        // 프리셋 카드에서 들어온 편집 경로는 저장된 라벨을 그대로 복원해야 하므로
+        // 최초 렌더부터 서버의 자동 라벨 생성을 막는다.
+        if (isPresetEditFlow) 'disableAutoLabels': true,
       };
 
       // 1) 외부에서 명시적으로 넘겨준 preset (프리셋 카드 탭 경로) 을 우선 적용한다.
@@ -1112,9 +1104,9 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         );
         final presetModeMap = <String, String>{};
         for (final question in selected) {
-          final rawMode = preset
-                  .questionModeByQuestionUid[question.stableQuestionKey] ??
-              preset.questionModeByQuestionUid[question.id];
+          final rawMode =
+              preset.questionModeByQuestionUid[question.stableQuestionKey] ??
+                  preset.questionModeByQuestionUid[question.id];
           if (rawMode == null || rawMode.trim().isEmpty) continue;
           presetModeMap[question.id] = normalizeQuestionModeSelection(
             question,
@@ -1130,8 +1122,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
             //   모드 맵을 완전히 덮어썼으므로 그 상태를 그대로 존중한다.
             //   문서 기본 프리셋 preload 경로에서는 기존과 동일한 "사용자 선택 우선" 머지 적용.
             if (explicitPreset == null) {
-              final userModes =
-                  Map<String, String>.of(_selectedQuestionModes);
+              final userModes = Map<String, String>.of(_selectedQuestionModes);
               final merged = <String, String>{...presetModeMap};
               for (final entry in userModes.entries) {
                 if (entry.value.trim().isNotEmpty) {
@@ -1151,6 +1142,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         final timeLimitText =
             '${preset.renderConfig['timeLimitText'] ?? ''}'.trim();
         initialRenderPatch = <String, dynamic>{
+          ...initialRenderPatch,
           'subjectTitleText': subjectTitle.isEmpty ? '수학 영역' : subjectTitle,
           'titlePageTopText': titlePageTopText.isEmpty
               ? kLearningDefaultTitlePageTopText
@@ -1225,18 +1217,36 @@ class _ProblemBankViewState extends State<ProblemBankView> {
         );
         return;
       }
+      final presetRenderConfig =
+          presetToApply?.renderConfig ?? const <String, dynamic>{};
+      dynamic initialPrimary(String key) {
+        if (isPresetEditFlow) return presetRenderConfig[key];
+        if (presetRenderConfig.containsKey(key)) {
+          return presetRenderConfig[key];
+        }
+        return completed.resultSummary[key];
+      }
+
+      dynamic initialFallback(String key) {
+        if (isPresetEditFlow) return null;
+        if (presetRenderConfig.containsKey(key)) {
+          return completed.resultSummary[key] ?? completed.options[key];
+        }
+        return completed.options[key];
+      }
+
       final initialSubjectTitle =
-          '${completed.resultSummary['subjectTitleText'] ?? completed.options['subjectTitleText'] ?? '수학 영역'}'
+          '${initialPrimary('subjectTitleText') ?? initialFallback('subjectTitleText') ?? '수학 영역'}'
               .trim();
       final initialTitlePageTopText =
-          '${completed.resultSummary['titlePageTopText'] ?? completed.options['titlePageTopText'] ?? kLearningDefaultTitlePageTopText}'
+          '${initialPrimary('titlePageTopText') ?? initialFallback('titlePageTopText') ?? kLearningDefaultTitlePageTopText}'
               .trim();
       final initialTimeLimitText =
-          '${completed.resultSummary['timeLimitText'] ?? completed.options['timeLimitText'] ?? _exportSettings.timeLimitText}'
+          '${initialPrimary('timeLimitText') ?? initialFallback('timeLimitText') ?? _exportSettings.timeLimitText}'
               .trim();
       final initialMathEngine = normalizeMathEngineValue(
-        completed.resultSummary['mathEngine'] ??
-            completed.options['mathEngine'] ??
+        initialPrimary('mathEngine') ??
+            initialFallback('mathEngine') ??
             _previewMathEngine,
       );
       if (mounted) {
@@ -1256,60 +1266,60 @@ class _ProblemBankViewState extends State<ProblemBankView> {
             : initialTitlePageTopText,
         initialTimeLimitText: initialTimeLimitText,
         initialIncludeAcademyLogo: readBoolFlag(
-          completed.resultSummary['includeAcademyLogo'],
-          completed.options['includeAcademyLogo'],
+          initialPrimary('includeAcademyLogo'),
+          initialFallback('includeAcademyLogo'),
           _exportSettings.includeAcademyLogo,
         ),
         layoutColumns: _exportSettings.layoutColumnCount,
         maxQuestionsPerPage: _exportSettings.maxQuestionsPerPageCount,
         totalQuestionCount: selected.length,
         initialPageColumnQuestionCounts: readMapRows(
-          completed.resultSummary['pageColumnQuestionCounts'],
-          completed.options['pageColumnQuestionCounts'],
+          initialPrimary('pageColumnQuestionCounts'),
+          initialFallback('pageColumnQuestionCounts'),
         ),
         initialColumnLabelAnchors: readMapRows(
-          completed.resultSummary['columnLabelAnchors'],
-          completed.options['columnLabelAnchors'],
+          initialPrimary('columnLabelAnchors'),
+          initialFallback('columnLabelAnchors'),
         ),
         initialTitlePageIndices: readPositiveIntList(
-          completed.resultSummary['titlePageIndices'],
-          completed.options['titlePageIndices'],
+          initialPrimary('titlePageIndices'),
+          initialFallback('titlePageIndices'),
         ),
         initialTitlePageHeaders: readMapRows(
-          completed.resultSummary['titlePageHeaders'],
-          completed.options['titlePageHeaders'],
+          initialPrimary('titlePageHeaders'),
+          initialFallback('titlePageHeaders'),
         ),
         initialIncludeCoverPage: readBoolFlag(
-          completed.resultSummary['includeCoverPage'],
-          completed.options['includeCoverPage'],
+          initialPrimary('includeCoverPage'),
+          initialFallback('includeCoverPage'),
           false,
         ),
         initialIncludeAnswerSheet: readBoolFlag(
-          completed.resultSummary['includeAnswerSheet'],
-          completed.options['includeAnswerSheet'],
+          initialPrimary('includeAnswerSheet'),
+          initialFallback('includeAnswerSheet'),
           _exportSettings.includeAnswerSheet,
         ),
         initialIncludeExplanation: readBoolFlag(
-          completed.resultSummary['includeExplanation'],
-          completed.options['includeExplanation'],
+          initialPrimary('includeExplanation'),
+          initialFallback('includeExplanation'),
           _exportSettings.includeExplanation,
         ),
         initialIncludeQuestionScore: readBoolFlag(
-          completed.resultSummary['includeQuestionScore'],
-          completed.options['includeQuestionScore'],
+          initialPrimary('includeQuestionScore'),
+          initialFallback('includeQuestionScore'),
           _exportSettings.includeQuestionScore,
         ),
         initialMathEngine: initialMathEngine,
         initialQuestionScoreByQuestionId: readScoreMap(
-          completed.resultSummary['questionScoreByQuestionUid'],
-          completed.options['questionScoreByQuestionUid'] ??
-              completed.resultSummary['questionScoreByQuestionId'] ??
-              completed.options['questionScoreByQuestionId'],
+          initialPrimary('questionScoreByQuestionUid'),
+          initialFallback('questionScoreByQuestionUid') ??
+              initialPrimary('questionScoreByQuestionId') ??
+              initialFallback('questionScoreByQuestionId'),
         ),
         questionScoreEntries: scoreEntries,
         initialCoverPageTexts: readCoverPageTexts(
-          completed.resultSummary['coverPageTexts'],
-          completed.options['coverPageTexts'],
+          initialPrimary('coverPageTexts'),
+          initialFallback('coverPageTexts'),
         ),
         initialEditingPresetId: editingPresetId,
         initialEditingPresetName: editingPresetName,
@@ -1352,7 +1362,8 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                 refreshed.options['mathEngine'] ??
                 request.mathEngine,
           );
-          if (refreshedMathEngine != normalizeMathEngineValue(request.mathEngine)) {
+          if (refreshedMathEngine !=
+              normalizeMathEngineValue(request.mathEngine)) {
             _showSnack(
               '미리보기 생성 실패: 요청 엔진(${request.mathEngine})과 응답 엔진($refreshedMathEngine)이 다릅니다.',
             );
@@ -1502,6 +1513,12 @@ class _ProblemBankViewState extends State<ProblemBankView> {
             ..._buildRenderConfigForSelection(selected),
             ...renderPatch,
           };
+          final preservedNaesinLinkKey =
+              '${presetToApply?.renderConfig[_kNaesinLinkConfigKey] ?? presetToApply?.naesinLinkKey ?? ''}'
+                  .trim();
+          if (preservedNaesinLinkKey.isNotEmpty) {
+            renderConfig[_kNaesinLinkConfigKey] = preservedNaesinLinkKey;
+          }
           final sourceDocumentId = selected.first.documentId.trim();
           if (sourceDocumentId.isEmpty) {
             _showSnack('원본 문서 정보를 찾지 못했습니다.');
@@ -1522,6 +1539,15 @@ class _ProblemBankViewState extends State<ProblemBankView> {
               displayName: request.presetDisplayName.trim(),
               presetId: presetIdToUpdate,
             );
+            final savedPresetId =
+                (saveResult.preset?.id ?? presetIdToUpdate).trim();
+            if (savedPresetId.isNotEmpty) {
+              await _service.overwriteExportPresetRenderConfig(
+                academyId: academyId,
+                presetId: savedPresetId,
+                renderConfig: renderConfig,
+              );
+            }
             final count = saveResult.copiedQuestionCount;
             final effectiveCount =
                 count > 0 ? count : orderedQuestionUids.length;
@@ -2121,7 +2147,19 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           LearningProblemDocumentExportPreset preset,
           StateSetter setModalState,
         ) async {
-          final presetUids = preset.selectedQuestionUids
+          var effectivePreset = preset;
+          try {
+            final latest = await _service.getExportPresetById(
+              academyId: academyId,
+              presetId: preset.id,
+            );
+            if (latest != null) {
+              effectivePreset = latest;
+            }
+          } catch (_) {
+            // 목록 카드의 preset 으로 계속 진행한다.
+          }
+          final presetUids = effectivePreset.selectedQuestionUids
               .map((u) => u.trim())
               .where((u) => u.isNotEmpty)
               .toList(growable: false);
@@ -2178,16 +2216,16 @@ class _ProblemBankViewState extends State<ProblemBankView> {
           final presetSettings =
               LearningProblemExportSettings.fromPresetRenderConfig(
             base: _exportSettings,
-            renderConfig: preset.renderConfig,
+            renderConfig: effectivePreset.renderConfig,
           );
           final presetMathEngine = normalizeMathEngineValue(
-            preset.renderConfig['mathEngine'],
+            effectivePreset.renderConfig['mathEngine'],
           );
           final modeMap = <String, String>{};
           for (final question in ordered) {
-            final rawMode = preset.questionModeByQuestionUid[
-                    question.stableQuestionKey] ??
-                preset.questionModeByQuestionUid[question.id];
+            final rawMode = effectivePreset
+                    .questionModeByQuestionUid[question.stableQuestionKey] ??
+                effectivePreset.questionModeByQuestionUid[question.id];
             if (rawMode == null || rawMode.trim().isEmpty) continue;
             modeMap[question.id] = normalizeQuestionModeSelection(
               question,
@@ -2207,7 +2245,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
             _exportSettings = presetSettings;
             _previewMathEngine = presetMathEngine;
             _showOnlySelectedQuestions = false;
-            final srcDoc = preset.sourceDocumentId.trim();
+            final srcDoc = effectivePreset.sourceDocumentId.trim();
             if (srcDoc.isNotEmpty) {
               _selectedDocumentId = srcDoc;
             }
@@ -2234,16 +2272,16 @@ class _ProblemBankViewState extends State<ProblemBankView> {
             Navigator.of(dialogContext).pop();
           }
           _showSnack(
-            '프리셋 적용: ${preset.displayName} (${ordered.length}문항)',
+            '프리셋 적용: ${effectivePreset.displayName} (${ordered.length}문항)',
           );
           await _openExportLayoutPreviewDialog(
             // 문서 "기본 프리셋" 자동 로드는 건너뛰고,
             //   카드에서 선택한 preset 객체를 명시적으로 전달해
             //   페이지별 문항수/라벨/타이틀이 프리셋 그대로 복원되게 한다.
             skipDocumentPresetPreload: true,
-            explicitPreset: preset,
-            editingPresetId: preset.id,
-            editingPresetName: preset.displayName,
+            explicitPreset: effectivePreset,
+            editingPresetId: effectivePreset.id,
+            editingPresetName: effectivePreset.displayName,
           );
         }
 
@@ -3216,13 +3254,11 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                 (defaultGridColumns - 1) * spacing);
         var cols = defaultGridColumns;
         while (cols > 1) {
-          final trialWidth =
-              (availableWidth - (cols - 1) * spacing) / cols;
+          final trialWidth = (availableWidth - (cols - 1) * spacing) / cols;
           if (trialWidth >= minCardWidth) break;
           cols -= 1;
         }
-        final cardWidth =
-            (availableWidth - (cols - 1) * spacing) / cols;
+        final cardWidth = (availableWidth - (cols - 1) * spacing) / cols;
         return Align(
           alignment: Alignment.topLeft,
           child: SizedBox(
@@ -3242,15 +3278,13 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                 final selected = _selectedQuestionIds.contains(question.id);
                 return GestureDetector(
                   behavior: HitTestBehavior.opaque,
-                  onTap: () =>
-                      _toggleQuestionSelection(question.id, !selected),
+                  onTap: () => _toggleQuestionSelection(question.id, !selected),
                   child: ProblemBankQuestionCard(
                     question: question,
                     selected: selected,
                     selectedMode: _selectedModeOfQuestion(question),
-                    figureUrlsByPath:
-                        _questionFigureUrlsByPath[question.id] ??
-                            const <String, String>{},
+                    figureUrlsByPath: _questionFigureUrlsByPath[question.id] ??
+                        const <String, String>{},
                     previewImageUrl: _questionPreviewUrls[question.id],
                     previewStatus: _questionPreviewStatus[question.id] ?? '',
                     previewErrorMessage:
@@ -3275,8 +3309,7 @@ class _ProblemBankViewState extends State<ProblemBankView> {
                       const <String, String>{},
                   previewImageUrl: _questionPreviewUrls[question.id],
                   previewStatus: _questionPreviewStatus[question.id] ?? '',
-                  previewErrorMessage:
-                      _questionPreviewError[question.id] ?? '',
+                  previewErrorMessage: _questionPreviewError[question.id] ?? '',
                   onRetryPreview: () => _retryQuestionPreview(question.id),
                   onSelectedChanged: (_) {},
                   onModeSelected: null,

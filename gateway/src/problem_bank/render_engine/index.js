@@ -490,6 +490,10 @@ async function hydrateFiguresForHtml(questions, supabaseClient) {
   let appliedCount = 0;
   for (const q of questions) {
     q.figure_data_urls = [];
+    // figure_data_urls 와 병행해 itemId 배열을 보존한다. 본문의 [[PB_FIG_<id>]] 토큰이
+    //   등장하면 HTML 렌더러가 itemId → dataUrl 인덱스 를 직접 해결해 위치/개수 추측 없이
+    //   정확히 박아 넣는다. 값이 비어 있는 슬롯은 plain 마커 positional fallback 경로로 처리된다.
+    q.figure_item_ids = [];
     const meta = q.meta && typeof q.meta === 'object' ? q.meta : {};
     const assets = Array.isArray(meta.figure_assets) ? meta.figure_assets : [];
     if (assets.length === 0) continue;
@@ -523,6 +527,7 @@ async function hydrateFiguresForHtml(questions, supabaseClient) {
         const mime = normalizeWhitespace(asset?.mime_type || asset?.mimeType || 'image/png');
         const b64 = buf.toString('base64');
         q.figure_data_urls.push(`data:${mime};base64,${b64}`);
+        q.figure_item_ids.push(String(asset?.item_id || '').trim());
         appliedCount += 1;
       } catch (_) {
         // skip failed downloads

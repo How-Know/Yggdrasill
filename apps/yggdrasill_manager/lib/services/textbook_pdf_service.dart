@@ -280,6 +280,62 @@ class TextbookPdfService {
   static String sha256Hex(Uint8List bytes) {
     return sha256.convert(bytes).toString();
   }
+
+  /// Deletes an entire textbook: PDFs, crops, cover and the DB row. The
+  /// gateway handles the Storage sweeping; `resource_files` row removal
+  /// cascades to `resource_file_links`, `textbook_metadata`, and
+  /// `textbook_problem_crops`.
+  Future<TextbookDeleteResult> deleteBook({
+    required String academyId,
+    required String bookId,
+  }) async {
+    final res = await _http.post(
+      _uri('/textbook/book/delete'),
+      headers: _headers(),
+      body: jsonEncode(<String, dynamic>{
+        'academy_id': academyId,
+        'book_id': bookId,
+      }),
+    );
+    final json = _decode(res.body);
+    if (res.statusCode < 200 || res.statusCode >= 300 || json['ok'] != true) {
+      throw Exception(
+        'delete_failed(${res.statusCode}): ${json['error'] ?? res.body}',
+      );
+    }
+    final removedMap = (json['removed'] as Map?) ?? const <String, dynamic>{};
+    final warnings = <String>[];
+    final rawWarnings = json['warnings'];
+    if (rawWarnings is List) {
+      for (final w in rawWarnings) {
+        warnings.add('$w');
+      }
+    }
+    int asInt(dynamic v) => v is num ? v.toInt() : 0;
+    return TextbookDeleteResult(
+      bookId: bookId,
+      removedCrops: asInt(removedMap['crops']),
+      removedPdfs: asInt(removedMap['pdfs']),
+      removedCovers: asInt(removedMap['covers']),
+      warnings: warnings,
+    );
+  }
+}
+
+class TextbookDeleteResult {
+  const TextbookDeleteResult({
+    required this.bookId,
+    required this.removedCrops,
+    required this.removedPdfs,
+    required this.removedCovers,
+    required this.warnings,
+  });
+
+  final String bookId;
+  final int removedCrops;
+  final int removedPdfs;
+  final int removedCovers;
+  final List<String> warnings;
 }
 
 class TextbookDownloadTarget {

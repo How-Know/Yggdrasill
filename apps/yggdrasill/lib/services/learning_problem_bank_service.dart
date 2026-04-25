@@ -1520,6 +1520,49 @@ class LearningProblemBankService {
     return LearningProblemDocumentExportPreset.fromMap(_mapOrEmpty(row));
   }
 
+  Future<LearningProblemDocumentExportPreset?>
+      overwriteExportPresetRenderConfig({
+    required String academyId,
+    required String presetId,
+    required Map<String, dynamic> renderConfig,
+  }) async {
+    final safeAcademyId = academyId.trim();
+    final safePresetId = presetId.trim();
+    if (safeAcademyId.isEmpty || safePresetId.isEmpty) return null;
+    final normalizedRenderConfig = renderConfig.map(
+      (key, value) => MapEntry('$key', value),
+    );
+    final existing = await _client
+        .from('pb_export_presets')
+        .select('render_config')
+        .eq('academy_id', safeAcademyId)
+        .eq('id', safePresetId)
+        .maybeSingle();
+    final existingRow = _mapOrEmpty(existing);
+    final existingRenderConfig = _mapOrEmpty(
+      existingRow['render_config'],
+    );
+    final existingNaesinLinkKey =
+        '${existingRenderConfig['naesinLinkKey'] ?? ''}'.trim();
+    final nextNaesinLinkKey =
+        '${normalizedRenderConfig['naesinLinkKey'] ?? ''}'.trim();
+    if (nextNaesinLinkKey.isEmpty && existingNaesinLinkKey.isNotEmpty) {
+      normalizedRenderConfig['naesinLinkKey'] = existingNaesinLinkKey;
+    }
+    final updated = await _client
+        .from('pb_export_presets')
+        .update(<String, dynamic>{
+          'render_config': normalizedRenderConfig,
+          'updated_at': DateTime.now().toIso8601String(),
+        })
+        .eq('academy_id', safeAcademyId)
+        .eq('id', safePresetId)
+        .select('*')
+        .maybeSingle();
+    if (updated == null) return null;
+    return LearningProblemDocumentExportPreset.fromMap(_mapOrEmpty(updated));
+  }
+
   Future<void> deleteExportPreset({
     required String academyId,
     required String presetId,

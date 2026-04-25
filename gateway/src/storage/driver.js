@@ -109,6 +109,96 @@ async function supabaseRemove({ bucket, key }) {
   return { ok: true };
 }
 
+async function supabaseListDeep({ bucket, prefix, limit = 500 }) {
+  // Supabase Storage `list()` is not recursive, so we walk the tree
+  // depth-first. Returns full object keys (relative to the bucket root).
+  const supa = getSupabase();
+  const root = sanitizeString(prefix).replace(/\/+$/, '');
+  const keys = [];
+  const stack = [root];
+  let visited = 0;
+  const maxVisits = 200;
+  while (stack.length > 0 && visited < maxVisits) {
+    const cur = stack.shift();
+    visited += 1;
+    // eslint-disable-next-line no-await-in-loop
+    const { data, error } = await supa.storage
+      .from(bucket)
+      .list(cur, { limit, offset: 0, sortBy: { column: 'name', order: 'asc' } });
+    if (error) {
+      return {
+        ok: false,
+        error: `supabase_list_failed: ${error.message || error}`,
+      };
+    }
+    if (!Array.isArray(data)) continue;
+    for (const entry of data) {
+      if (!entry || !entry.name) continue;
+      const full = cur ? `${cur}/${entry.name}` : entry.name;
+      // A Supabase "folder" has id === null (there is no `isDirectory`).
+      if (entry.id == null) {
+        stack.push(full);
+      } else {
+        keys.push(full);
+      }
+    }
+  }
+  return { ok: true, keys };
+}
+
+async function supabaseRemoveByPrefix({ bucket, prefix }) {
+  const listed = await supabaseListDeep({ bucket, prefix });
+  if (!listed.ok) return listed;
+  const keys = listed.keys;
+  if (keys.length === 0) return { ok: true, removed: 0 };
+  const supa = getSupabase();
+  // Supabase remove accepts batches; chunk to avoid gigantic payloads.
+  const chunkSize = 200;
+  let removed = 0;
+  for (let i = 0; i < keys.length; i += chunkSize) {
+    const chunk = keys.slice(i, i + chunkSize);
+    // eslint-disable-next-line no-await-in-loop
+    const { error } = await supa.storage.from(bucket).remove(chunk);
+    if (error) {
+      return {
+        ok: false,
+        error: `supabase_remove_failed: ${error.message || error}`,
+        removed,
+      };
+    }
+    removed += chunk.length;
+  }
+  return { ok: true, removed };
+}
+
+async function supabaseRemoveByMatchingPrefix({ bucket, folder, nameStartsWith }) {
+  // For buckets that store book artifacts at the top level (e.g. the
+  // `resource-covers` bucket keeps `<academy>/resource-covers/<bookId>_*.png`).
+  const supa = getSupabase();
+  const { data, error } = await supa.storage
+    .from(bucket)
+    .list(folder, { limit: 1000 });
+  if (error) {
+    return { ok: false, error: `supabase_list_failed: ${error.message || error}` };
+  }
+  if (!Array.isArray(data) || data.length === 0) {
+    return { ok: true, removed: 0 };
+  }
+  const keys = data
+    .filter((e) => e && e.id != null && typeof e.name === 'string')
+    .filter((e) => e.name.startsWith(nameStartsWith))
+    .map((e) => (folder ? `${folder}/${e.name}` : e.name));
+  if (keys.length === 0) return { ok: true, removed: 0 };
+  const { error: removeErr } = await supa.storage.from(bucket).remove(keys);
+  if (removeErr) {
+    return {
+      ok: false,
+      error: `supabase_remove_failed: ${removeErr.message || removeErr}`,
+    };
+  }
+  return { ok: true, removed: keys.length };
+}
+
 // ---------- Cloudflare R2 stubs --------------------------------------------
 // These are left intentionally unimplemented. When we switch to R2:
 //   1. `npm i @aws-sdk/client-s3 @aws-sdk/s3-request-presigner`.
@@ -205,6 +295,50 @@ export async function removeObject(opts) {
     return supabaseRemove({ bucket, key });
   }
   return r2NotImplemented('remove');
+}
+
+/**
+ * Recursively remove every object under a prefix (folder-style). Used by
+ * book deletion to sweep PDFs and crops in one call.
+ * @param {{driver: 'supabase'|'r2', bucket: string, prefix: string}} opts
+ */
+export async function removeObjectsByPrefix(opts) {
+  const driver = sanitizeString(opts?.driver);
+  const bucket = sanitizeString(opts?.bucket);
+  const prefix = sanitizeString(opts?.prefix);
+  if (!isSupportedDriver(driver)) {
+    return { ok: false, error: `unsupported_driver: ${driver}` };
+  }
+  if (!bucket) {
+    return { ok: false, error: 'missing_bucket' };
+  }
+  if (driver === 'supabase') {
+    return supabaseRemoveByPrefix({ bucket, prefix });
+  }
+  return r2NotImplemented('remove_prefix');
+}
+
+/**
+ * Remove every object in a folder whose basename starts with `nameStartsWith`.
+ * Handy for the `resource-covers` bucket where covers live at the folder
+ * top level (e.g. `<academy>/resource-covers/<book_id>_<ts>.png`).
+ * @param {{driver: 'supabase'|'r2', bucket: string, folder: string, nameStartsWith: string}} opts
+ */
+export async function removeObjectsByPrefixInFolder(opts) {
+  const driver = sanitizeString(opts?.driver);
+  const bucket = sanitizeString(opts?.bucket);
+  const folder = sanitizeString(opts?.folder);
+  const nameStartsWith = sanitizeString(opts?.nameStartsWith);
+  if (!isSupportedDriver(driver)) {
+    return { ok: false, error: `unsupported_driver: ${driver}` };
+  }
+  if (!bucket || !nameStartsWith) {
+    return { ok: false, error: 'missing_bucket_or_name_prefix' };
+  }
+  if (driver === 'supabase') {
+    return supabaseRemoveByMatchingPrefix({ bucket, folder, nameStartsWith });
+  }
+  return r2NotImplemented('remove_name_prefix');
 }
 
 /**

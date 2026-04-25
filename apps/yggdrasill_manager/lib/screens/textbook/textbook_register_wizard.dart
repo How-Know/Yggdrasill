@@ -2,15 +2,18 @@
 //
 // Step 1 — 메타+표지: series dropdown, book name, grade label, textbook type,
 //                     page offset, and an optional cover image.
-// Step 2 — 파일:       body / answer PDFs with the existing dual-track upload
-//                     pipeline (signed URL → PUT → finalize). Legacy URL
-//                     fields are kept for books that still live on Dropbox.
+// Step 2 — 파일:       body / answer / solution PDFs with the existing
+//                     dual-track upload pipeline (signed URL → PUT → finalize).
+//                     Every PDF slot is optional — you can register the book
+//                     with none of them and upload later via the migration
+//                     pane. Legacy URL fields are kept for books that still
+//                     live on Dropbox.
 // Step 3 — 단원 구조:   대/중 units with A/B/C sub-sections (쎈) — only start
 //                     and end pages are collected per sub-section.
 //
 // On finish, the service layer writes:
 //   * resource_files
-//   * resource_file_links (body / ans / cover composite grades)
+//   * resource_file_links (body / ans / sol / cover composite grades)
 //   * textbook_metadata.payload (series + unit tree)
 // Then any selected PDFs are uploaded via [TextbookPdfService].
 
@@ -21,6 +24,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:uuid/uuid.dart';
 
 import '../../services/textbook_book_registry.dart';
 import '../../services/textbook_pdf_service.dart';
@@ -62,6 +66,7 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
   final _supabase = Supabase.instance.client;
   final _registry = TextbookBookRegistry();
   final _pdfService = TextbookPdfService();
+  static const String _rootFolderValue = '__ROOT__';
 
   int _step = 0;
   bool _submitting = false;
@@ -70,6 +75,7 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
   // Step 1 fields -----------------------------------------------------------
   String _seriesKey = kTextbookSeriesCatalog.first.key;
   final _bookNameCtrl = TextEditingController();
+  final _bookDescCtrl = TextEditingController();
   final _gradeLabelCtrl = TextEditingController();
   String _textbookType = '문제집';
   final _pageOffsetCtrl = TextEditingController(text: '0');
@@ -77,14 +83,19 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
   String? _coverExistingUrl;
   bool _loadingGrades = true;
   List<String> _gradeOptions = const <String>[];
+  bool _loadingFolders = true;
+  List<_ResourceFolderOption> _folderOptions = const <_ResourceFolderOption>[];
+  String _selectedFolderId = _rootFolderValue;
 
   String? _resolvedAcademyId;
 
   // Step 2 fields -----------------------------------------------------------
   String? _bodyPdfPath;
   String? _answerPdfPath;
+  String? _solutionPdfPath;
   final _bodyLegacyCtrl = TextEditingController();
   final _answerLegacyCtrl = TextEditingController();
+  final _solutionLegacyCtrl = TextEditingController();
 
   // Step 3 fields -----------------------------------------------------------
   final List<_BigUnitEdit> _bigUnits = <_BigUnitEdit>[];
@@ -96,9 +107,10 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
   }
 
   Future<void> _bootstrap() async {
+    await _resolveAcademyId();
     await Future.wait<void>([
       _loadGradeOptions(),
-      _resolveAcademyId(),
+      _loadFolderOptions(),
     ]);
     if (_bigUnits.isEmpty) {
       _addBigUnit(silent: true);
@@ -133,6 +145,89 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
     }
   }
 
+  Future<void> _loadFolderOptions() async {
+    final academyId = (_resolvedAcademyId ?? '').trim();
+    if (academyId.isEmpty) {
+      if (!mounted) return;
+      setState(() {
+        _loadingFolders = false;
+        _folderOptions = const <_ResourceFolderOption>[];
+        _selectedFolderId = _rootFolderValue;
+      });
+      return;
+    }
+    try {
+      final dynamic data = await _supabase
+          .from('resource_folders')
+          .select('id,name,parent_id,order_index,category')
+          .eq('academy_id', academyId)
+          .or('category.is.null,category.eq.textbook')
+          .order('order_index')
+          .order('name');
+      List<Map<String, dynamic>> rows = (data as List).cast<Map<String, dynamic>>();
+      if (rows.isEmpty) {
+        final all = await _supabase
+            .from('resource_folders')
+            .select('id,name,parent_id,order_index,category')
+            .eq('academy_id', academyId)
+            .order('order_index')
+            .order('name');
+        rows = (all as List).cast<Map<String, dynamic>>().where((row) {
+          final category = (row['category'] as String?)?.trim();
+          return category == null || category.isEmpty || category == 'textbook';
+        }).toList();
+      }
+
+      final children = <String?, List<Map<String, dynamic>>>{};
+      for (final row in rows) {
+        final parentId = (row['parent_id'] as String?)?.trim();
+        children.putIfAbsent(parentId?.isEmpty == true ? null : parentId, () => <Map<String, dynamic>>[]).add(row);
+      }
+      for (final list in children.values) {
+        list.sort((a, b) {
+          final ai = (a['order_index'] as num?)?.toInt() ?? 1 << 20;
+          final bi = (b['order_index'] as num?)?.toInt() ?? 1 << 20;
+          if (ai != bi) return ai.compareTo(bi);
+          final an = (a['name'] as String?)?.toLowerCase() ?? '';
+          final bn = (b['name'] as String?)?.toLowerCase() ?? '';
+          return an.compareTo(bn);
+        });
+      }
+
+      final options = <_ResourceFolderOption>[];
+      void walk(String? parentId, int depth) {
+        for (final row in children[parentId] ?? const <Map<String, dynamic>>[]) {
+          final id = (row['id'] as String?)?.trim() ?? '';
+          final name = (row['name'] as String?)?.trim() ?? '';
+          if (id.isEmpty || name.isEmpty) continue;
+          options.add(_ResourceFolderOption(
+            id: id,
+            name: name,
+            depth: depth,
+          ));
+          walk(id, depth + 1);
+        }
+      }
+
+      walk(null, 0);
+      if (!mounted) return;
+      setState(() {
+        _loadingFolders = false;
+        _folderOptions = options;
+        if (!_folderOptions.any((folder) => folder.id == _selectedFolderId)) {
+          _selectedFolderId = _rootFolderValue;
+        }
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _loadingFolders = false;
+        _folderOptions = const <_ResourceFolderOption>[];
+        _selectedFolderId = _rootFolderValue;
+      });
+    }
+  }
+
   Future<void> _resolveAcademyId() async {
     if (widget.defaultAcademyId != null &&
         widget.defaultAcademyId!.trim().isNotEmpty) {
@@ -158,10 +253,12 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
   @override
   void dispose() {
     _bookNameCtrl.dispose();
+    _bookDescCtrl.dispose();
     _gradeLabelCtrl.dispose();
     _pageOffsetCtrl.dispose();
     _bodyLegacyCtrl.dispose();
     _answerLegacyCtrl.dispose();
+    _solutionLegacyCtrl.dispose();
     for (final unit in _bigUnits) {
       unit.dispose();
     }
@@ -214,9 +311,15 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
     });
   }
 
-  Future<void> _pickPdf({required bool isBody}) async {
+  Future<void> _pickPdf({required String kind}) async {
+    final title = switch (kind) {
+      'body' => '본문 PDF 선택',
+      'ans' => '정답 PDF 선택',
+      'sol' => '해설 PDF 선택',
+      _ => 'PDF 선택',
+    };
     final result = await FilePicker.platform.pickFiles(
-      dialogTitle: isBody ? '본문 PDF 선택' : '정답 PDF 선택',
+      dialogTitle: title,
       type: FileType.custom,
       allowedExtensions: const ['pdf'],
       withData: false,
@@ -225,10 +328,16 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
     final path = result.files.first.path;
     if (path == null) return;
     setState(() {
-      if (isBody) {
-        _bodyPdfPath = path;
-      } else {
-        _answerPdfPath = path;
+      switch (kind) {
+        case 'body':
+          _bodyPdfPath = path;
+          break;
+        case 'ans':
+          _answerPdfPath = path;
+          break;
+        case 'sol':
+          _solutionPdfPath = path;
+          break;
       }
     });
   }
@@ -309,18 +418,26 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
         academyId: academyId,
         seriesKey: _series.key,
         bookName: _bookNameCtrl.text.trim(),
+        description: _bookDescCtrl.text.trim().isEmpty
+            ? null
+            : _bookDescCtrl.text.trim(),
         gradeLabel: _gradeLabelCtrl.text.trim(),
         textbookType: _textbookType,
         pageOffset: _pageOffsetValue,
         bigUnits: _buildBigUnitInputs(),
         coverLocalPath: _coverLocalPath,
         coverExplicitUrl: _coverExistingUrl,
+        parentFolderId:
+            _selectedFolderId == _rootFolderValue ? null : _selectedFolderId,
         bodyLegacyUrl: _bodyLegacyCtrl.text.trim().isEmpty
             ? null
             : _bodyLegacyCtrl.text.trim(),
         answerLegacyUrl: _answerLegacyCtrl.text.trim().isEmpty
             ? null
             : _answerLegacyCtrl.text.trim(),
+        solutionLegacyUrl: _solutionLegacyCtrl.text.trim().isEmpty
+            ? null
+            : _solutionLegacyCtrl.text.trim(),
       );
       final result = await _registry.registerBook(registerInput);
 
@@ -339,6 +456,14 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
         fileId: result.bookId,
         gradeLabel: result.gradeLabel,
         legacyUrl: registerInput.answerLegacyUrl,
+      );
+      await _uploadPdfIfPicked(
+        filePath: _solutionPdfPath,
+        kind: 'sol',
+        academyId: result.academyId,
+        fileId: result.bookId,
+        gradeLabel: result.gradeLabel,
+        legacyUrl: registerInput.solutionLegacyUrl,
       );
 
       if (!mounted) return;
@@ -589,6 +714,15 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
             ],
           ),
           const SizedBox(height: 16),
+          _labeled(
+            '설명 (선택)',
+            _buildTextField(
+              _bookDescCtrl,
+              hint: '학생앱 책카드 아래에 보이는 짧은 설명',
+              maxLines: 3,
+            ),
+          ),
+          const SizedBox(height: 16),
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -607,6 +741,13 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
                 child: _labeled('페이지 보정', _buildPageOffsetField()),
               ),
             ],
+          ),
+          const SizedBox(height: 16),
+          _buildFolderField(),
+          const SizedBox(height: 8),
+          const Text(
+            '선택한 폴더 안에 책카드가 생성됩니다. 선택하지 않으면 최상위(루트)에 저장됩니다.',
+            style: TextStyle(color: Color(0xFF8A8A8A), fontSize: 11),
           ),
           const SizedBox(height: 20),
           const _SectionTitle('표지 (선택)'),
@@ -659,7 +800,8 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
           const _SectionTitle('PDF 파일 (선택)'),
           const SizedBox(height: 8),
           const Text(
-            '본문/정답 PDF는 이 단계에서 바로 업로드되거나, 비워둔 뒤 마이그레이션 목록에서 올릴 수 있습니다. '
+            '본문·정답·해설 PDF는 모두 선택 사항입니다. 이 단계에서 바로 업로드하거나, '
+            '비워둔 뒤 마이그레이션 목록에서 "신규 행 추가"로 나중에 올릴 수 있습니다. '
             'Dropbox 등 기존 링크는 fallback URL로 저장됩니다.',
             style: TextStyle(color: Color(0xFF9FB3B3), fontSize: 12),
           ),
@@ -667,7 +809,7 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
           _buildPdfPicker(
             label: '본문 PDF',
             pickedPath: _bodyPdfPath,
-            onPick: () => _pickPdf(isBody: true),
+            onPick: () => _pickPdf(kind: 'body'),
             onClear: () => setState(() => _bodyPdfPath = null),
           ),
           const SizedBox(height: 10),
@@ -679,13 +821,25 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
           _buildPdfPicker(
             label: '정답 PDF',
             pickedPath: _answerPdfPath,
-            onPick: () => _pickPdf(isBody: false),
+            onPick: () => _pickPdf(kind: 'ans'),
             onClear: () => setState(() => _answerPdfPath = null),
           ),
           const SizedBox(height: 10),
           _buildTextField(
             _answerLegacyCtrl,
             hint: '정답 legacy URL (옵션)',
+          ),
+          const SizedBox(height: 20),
+          _buildPdfPicker(
+            label: '해설 PDF',
+            pickedPath: _solutionPdfPath,
+            onPick: () => _pickPdf(kind: 'sol'),
+            onClear: () => setState(() => _solutionPdfPath = null),
+          ),
+          const SizedBox(height: 10),
+          _buildTextField(
+            _solutionLegacyCtrl,
+            hint: '해설 legacy URL (옵션)',
           ),
         ],
       ),
@@ -721,6 +875,31 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
             '쎈 교재는 각 중단원이 A 기본다잡기 / B 유형뽀개기 / C 만점도전하기 세 개의 소단원으로 고정됩니다. '
             '소단원별 시작/끝 페이지만 입력하세요.',
             style: TextStyle(color: Color(0xFF9FB3B3), fontSize: 12),
+          ),
+        ),
+        const SizedBox(height: 6),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1C2430),
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(color: const Color(0xFF2B3A55)),
+            ),
+            child: const Row(
+              children: [
+                Icon(Icons.info_outline, size: 14, color: Color(0xFF8AB8E8)),
+                SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    '신규 등록 교재는 학습앱에 바로 노출되지 않습니다. '
+                    '등록 후 "교재 마이그레이션" 화면에서 "학습앱 교재 탭 노출" 스위치를 켜주세요.',
+                    style: TextStyle(color: Color(0xFFB0C4DA), fontSize: 11),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
         const SizedBox(height: 10),
@@ -996,6 +1175,198 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
     );
   }
 
+  Widget _buildFolderField() {
+    // Same visual language as `_labeled`, but with a trailing "+ 새 폴더"
+    // button so the operator can seed a new textbook folder (name + 설명)
+    // without leaving the wizard.
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Text(
+              '교재 폴더',
+              style: TextStyle(
+                color: Color(0xFFB3B3B3),
+                fontSize: 11,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 0.3,
+              ),
+            ),
+            const Spacer(),
+            TextButton.icon(
+              onPressed: _loadingFolders ? null : _openNewFolderDialog,
+              icon: const Icon(Icons.create_new_folder_outlined,
+                  size: 14, color: Color(0xFF9FD49F)),
+              label: const Text(
+                '새 폴더',
+                style: TextStyle(
+                  color: Color(0xFF9FD49F),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
+                minimumSize: const Size(0, 22),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                visualDensity: VisualDensity.compact,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        _buildFolderDropdown(),
+      ],
+    );
+  }
+
+  Future<void> _openNewFolderDialog() async {
+    final parentId = _selectedFolderId == _rootFolderValue
+        ? null
+        : _selectedFolderId;
+    final parentName = parentId == null
+        ? null
+        : _folderOptions
+            .firstWhere(
+              (f) => f.id == parentId,
+              orElse: () => const _ResourceFolderOption(
+                id: '', name: '', depth: 0),
+            )
+            .name;
+    final result = await showDialog<_NewFolderResult>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => _NewFolderDialog(
+        parentName: (parentName ?? '').isEmpty ? null : parentName,
+      ),
+    );
+    if (result == null) return;
+    await _createFolder(
+      name: result.name,
+      description: result.description,
+      parentId: parentId,
+    );
+  }
+
+  Future<void> _createFolder({
+    required String name,
+    required String description,
+    required String? parentId,
+  }) async {
+    final academyId = (_resolvedAcademyId ?? '').trim();
+    if (academyId.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('학원 정보를 확인할 수 없어 폴더를 만들 수 없습니다.')),
+      );
+      return;
+    }
+    final trimmedName = name.trim();
+    if (trimmedName.isEmpty) return;
+    final id = const Uuid().v4();
+    int nextOrderIndex = 0;
+    try {
+      final builder = _supabase
+          .from('resource_folders')
+          .select('order_index')
+          .eq('academy_id', academyId);
+      final dynamic siblings = parentId == null
+          ? await builder.isFilter('parent_id', null)
+          : await builder.eq('parent_id', parentId);
+      if (siblings is List) {
+        int maxIdx = -1;
+        for (final row in siblings) {
+          if (row is Map && row['order_index'] is num) {
+            final v = (row['order_index'] as num).toInt();
+            if (v > maxIdx) maxIdx = v;
+          }
+        }
+        nextOrderIndex = maxIdx + 1;
+      }
+    } catch (_) {
+      nextOrderIndex = 0;
+    }
+
+    final payload = <String, Object?>{
+      'id': id,
+      'academy_id': academyId,
+      'name': trimmedName,
+      'description': description.trim().isEmpty ? null : description.trim(),
+      'parent_id': parentId,
+      'category': 'textbook',
+      'order_index': nextOrderIndex,
+    };
+    try {
+      await _supabase.from('resource_folders').insert(payload);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('폴더 생성 실패: $e')),
+      );
+      return;
+    }
+    await _loadFolderOptions();
+    if (!mounted) return;
+    setState(() {
+      _selectedFolderId = id;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('새 폴더 "$trimmedName" 을 만들었어요.')),
+    );
+  }
+
+  Widget _buildFolderDropdown() {
+    if (_loadingFolders) {
+      return _dropdownContainer(
+        child: const Row(
+          children: [
+            SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: Color(0xFF9FB3B3),
+              ),
+            ),
+            SizedBox(width: 8),
+            Text('교재 폴더 로드 중...',
+                style: TextStyle(color: Color(0xFFB3B3B3), fontSize: 12)),
+          ],
+        ),
+      );
+    }
+    final items = <DropdownMenuItem<String>>[
+      const DropdownMenuItem<String>(
+        value: _rootFolderValue,
+        child: Text('최상위 (루트)'),
+      ),
+      for (final folder in _folderOptions)
+        DropdownMenuItem<String>(
+          value: folder.id,
+          child: Text(folder.displayName),
+        ),
+    ];
+    final value = items.any((item) => item.value == _selectedFolderId)
+        ? _selectedFolderId
+        : _rootFolderValue;
+    return _dropdownContainer(
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          value: value,
+          dropdownColor: const Color(0xFF15171C),
+          isExpanded: true,
+          style: const TextStyle(color: Colors.white, fontSize: 13),
+          items: items,
+          onChanged: (next) {
+            if (next == null) return;
+            setState(() => _selectedFolderId = next);
+          },
+        ),
+      ),
+    );
+  }
+
   Widget _buildPageOffsetField() {
     return _buildTextField(
       _pageOffsetCtrl,
@@ -1190,11 +1561,13 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
     required String hint,
     TextInputType? keyboardType,
     List<TextInputFormatter>? inputFormatters,
+    int maxLines = 1,
   }) {
     return TextField(
       controller: controller,
       keyboardType: keyboardType,
       inputFormatters: inputFormatters,
+      maxLines: maxLines,
       style: const TextStyle(color: Colors.white, fontSize: 13),
       onChanged: (_) => setState(() {}),
       decoration: InputDecoration(
@@ -1268,6 +1641,23 @@ class _SectionTitle extends StatelessWidget {
         fontWeight: FontWeight.w800,
       ),
     );
+  }
+}
+
+class _ResourceFolderOption {
+  const _ResourceFolderOption({
+    required this.id,
+    required this.name,
+    required this.depth,
+  });
+
+  final String id;
+  final String name;
+  final int depth;
+
+  String get displayName {
+    if (depth <= 0) return name;
+    return '${'  ' * depth}$name';
   }
 }
 
@@ -1345,4 +1735,126 @@ int? _positiveInt(String raw) {
   final n = int.tryParse(t);
   if (n == null || n <= 0) return null;
   return n;
+}
+
+// ─────────── New folder dialog (name + 설명) ───────────
+
+class _NewFolderResult {
+  const _NewFolderResult({required this.name, required this.description});
+  final String name;
+  final String description;
+}
+
+class _NewFolderDialog extends StatefulWidget {
+  const _NewFolderDialog({this.parentName});
+
+  /// When non-null, the new folder will be created under this folder.
+  final String? parentName;
+
+  @override
+  State<_NewFolderDialog> createState() => _NewFolderDialogState();
+}
+
+class _NewFolderDialogState extends State<_NewFolderDialog> {
+  final _nameCtrl = TextEditingController();
+  final _descCtrl = TextEditingController();
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _descCtrl.dispose();
+    super.dispose();
+  }
+
+  void _save() {
+    final name = _nameCtrl.text.trim();
+    if (name.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('폴더 이름을 입력하세요.')),
+      );
+      return;
+    }
+    Navigator.of(context).pop(
+      _NewFolderResult(name: name, description: _descCtrl.text),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final parent = widget.parentName;
+    return AlertDialog(
+      backgroundColor: const Color(0xFF1F1F1F),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      title: const Text('새 교재 폴더',
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800)),
+      content: SizedBox(
+        width: 420,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (parent != null && parent.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: Text(
+                  '상위 폴더: $parent',
+                  style: const TextStyle(
+                      color: Color(0xFFB3B3B3),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600),
+                ),
+              ),
+            TextField(
+              controller: _nameCtrl,
+              autofocus: true,
+              style: const TextStyle(color: Colors.white),
+              decoration: const InputDecoration(
+                labelText: '폴더명',
+                labelStyle: TextStyle(color: Colors.white70),
+                enabledBorder: OutlineInputBorder(
+                  borderSide: BorderSide(color: Colors.white24),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderSide: BorderSide(color: Color(0xFF1976D2)),
+                ),
+              ),
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: _descCtrl,
+              style: const TextStyle(color: Colors.white),
+              maxLines: 3,
+              decoration: const InputDecoration(
+                labelText: '설명 (선택)',
+                labelStyle: TextStyle(color: Colors.white70),
+                hintText: '이 폴더에 어떤 교재가 들어가는지 간단히',
+                hintStyle: TextStyle(color: Colors.white38),
+                alignLabelWithHint: true,
+                enabledBorder: OutlineInputBorder(
+                  borderSide: BorderSide(color: Colors.white24),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderSide: BorderSide(color: Color(0xFF1976D2)),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child:
+              const Text('취소', style: TextStyle(color: Colors.white70)),
+        ),
+        FilledButton(
+          onPressed: _save,
+          style: FilledButton.styleFrom(
+            backgroundColor: const Color(0xFF33A373),
+          ),
+          child: const Text('만들기'),
+        ),
+      ],
+    );
+  }
 }

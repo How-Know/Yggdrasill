@@ -138,6 +138,10 @@ export async function hydrateFiguresForXeLatex(questions, supabaseClient, workDi
         q.figure_local_infos.push({
           path: filePath,
           assetKey,
+          // HWPX binaryItemIDRef. 본문의 [[PB_FIG_<id>]] 토큰 치환 시 item_id 일치하는
+          //   asset 을 직접 선택하는 용도. figure_worker 가 생성 시 보존하고, 이 값이
+          //   존재하면 순서·개수 추측을 완전히 우회한다.
+          itemId: String(asset?.item_id || '').trim(),
           figureIndex: Number.isFinite(figIdx) && figIdx > 0 ? figIdx : ordinal,
           ordinal,
           mimeType: asset.mime_type || 'image/png',

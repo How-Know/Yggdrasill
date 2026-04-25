@@ -37,6 +37,13 @@ export const VLM_DETECT_SECTIONS = Object.freeze([
   'unknown',
 ]);
 
+export const VLM_DETECT_PAGE_KINDS = Object.freeze([
+  'problem_page',
+  'concept_page',
+  'mixed',
+  'unknown',
+]);
+
 export function buildDetectProblemsPrompt({ displayPage, rawPage, pageOffset }) {
   const pageLine =
     displayPage != null && Number.isFinite(displayPage)
@@ -60,6 +67,9 @@ export function buildDetectProblemsPrompt({ displayPage, rawPage, pageOffset }) 
     '      한 줄 ~ 몇 줄짜리가 보통이다. 세로로 쌓이는 게 아니라 "행" 처럼 보인다.',
     '    - 주변에 "개념", "핵심", "요약", "정리" 같은 개념 설명 박스가 섞여 있다.',
     '      설명 박스는 문항이 아니므로 items 에 넣지 마라.',
+    '    - A 파트에는 문항이 전혀 없고 개념 설명만 있는 페이지도 있다.',
+    '      이런 페이지는 반드시 page_kind="concept_page", items=[] 로 반환한다.',
+    '      개념/예제/설명 박스를 문항처럼 억지로 감싸지 마라.',
     '',
     '[B] 유형뽀개기 (section="type_practice")',
     '    - 번호 스타일: 일반 숫자 (예: 1, 12, 48). 보통 1자리~3자리.',
@@ -77,6 +87,7 @@ export function buildDetectProblemsPrompt({ displayPage, rawPage, pageOffset }) 
     '=== 출력 스키마 ===',
     '{',
     '  "section": "basic_drill" | "type_practice" | "mastery" | "unknown",',
+    '  "page_kind": "problem_page" | "concept_page" | "mixed" | "unknown",',
     '  "page_layout": "two_column" | "one_column" | "unknown",',
     '  "items": [',
     '    {',
@@ -101,6 +112,11 @@ export function buildDetectProblemsPrompt({ displayPage, rawPage, pageOffset }) 
     '     - 4자리 번호(0001~) 는 기본다잡기 문항이다. 라벨이 없고 번호 옆에 본문이 바로 온다는 이유로 절대 제외하지 마라.',
     '     - number 에는 원문 그대로 써라. "0001" 은 "0001" 이지 "1" 이 아니다.',
     '     - 번호 글자 색은 검정, 오렌지, 갈색, 파랑 등 다양할 수 있다. 색만으로 필터링하지 마라.',
+    '[D0-Concept] A 기본다잡기 중 **개념 설명만 있는 페이지**는 문항 페이지가 아니다.',
+    '     - 4자리 문항번호(0001 등) 또는 B/C식 문항번호가 실제로 보이지 않으면 items=[] 로 둔다.',
+    '     - page_kind="concept_page" 로 설정하고 notes 에 "concept_page" 를 포함한다.',
+    '     - "개념", "핵심", "예제", "정리", 번호 없는 설명 박스, 페이지 장식, 표/그림만 있는 블록은 절대 item_region 으로 만들지 마라.',
+    '     - 문항번호 없이 본문처럼 보이는 텍스트가 있어도 추측해서 문항을 만들지 마라.',
     '[D1] 본문 안의 "(1), (2)" 같은 소문항 레이블, "①~⑤" 같은 선택지 기호, "풀이/해설/정답" 같은 섹션 헤더는 문항 번호가 아니다. items 에 넣지 마라.',
     '[D2] 페이지 번호(쪽 번호) 는 문항 번호가 아니다. 페이지 번호는 페이지 하단/상단에 단독으로 위치한다. 넣지 마라.',
     '     - 4자리여도 페이지 번호처럼 모서리에 혼자 있고 주변에 본문이 없으면 제외.',
@@ -135,6 +151,10 @@ export function buildDetectProblemsPrompt({ displayPage, rawPage, pageOffset }) 
     '[D7] 문항번호가 잘려 있거나 흐릿해 판독이 불확실하면 그래도 items 에 포함하되, notes 에 짧게 "숫자 N 번 판독 불확실" 처럼 기록한다.',
     '[D8] 같은 번호가 중복되면 더 신뢰도 높은 것 하나만 남겨라.',
     '[D9] items 는 위→아래, 좌단→우단 순으로 정렬하라.',
+    '[D10] page_kind 규칙:',
+    '     - 문항만 있으면 "problem_page".',
+    '     - 문항 없이 개념/설명만 있으면 "concept_page" + items=[].',
+    '     - 개념 설명과 문항이 함께 있으면 "mixed" (items에는 문항만).',
     '',
     '=== 절대 금지 ===',
     '[N1] stem, choices, answer, figures 등 다른 필드를 만들지 마라. 이 프롬프트는 "번호 위치 탐지 전용" 이다.',

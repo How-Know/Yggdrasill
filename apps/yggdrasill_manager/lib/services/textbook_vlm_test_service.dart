@@ -123,6 +123,7 @@ class TextbookVlmDetectResult {
     required this.pageOffset,
     required this.pageOffsetFound,
     required this.section,
+    required this.pageKind,
     required this.layout,
     required this.items,
     required this.notes,
@@ -141,6 +142,11 @@ class TextbookVlmDetectResult {
   /// Maps to the Korean textbook unit structure
   /// (기본다잡기 / 유형뽀개기 / 만점도전하기) so the UI can group results.
   final String section;
+
+  /// 'problem_page' | 'concept_page' | 'mixed' | 'unknown'.
+  /// Concept-only A pages are intentionally returned with zero items so the
+  /// UI can mark the page without persisting a fake problem region.
+  final String pageKind;
 
   /// 'two_column' | 'one_column' | 'unknown'
   final String layout;
@@ -183,6 +189,7 @@ class TextbookVlmDetectResult {
       pageOffset: asInt(map['page_offset']),
       pageOffsetFound: map['page_offset_found'] == true,
       section: allowedSections.contains(sec) ? sec : 'unknown',
+      pageKind: '${map['page_kind'] ?? 'unknown'}',
       layout: '${map['layout'] ?? 'unknown'}',
       items: parsed,
       notes: '${map['notes'] ?? ''}',

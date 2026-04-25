@@ -3,6 +3,7 @@ import {
   isFractionLatex,
   normalizeMathLatex,
   tokenizeWithEquations,
+  splitBySpaceMarkers,
 } from '../utils/text.js';
 
 const MATH_EXCEPTION_RE = /^[,?.]+$/;
@@ -10,6 +11,16 @@ const BOGAGI_RE = /^<보기>$/;
 
 function debugDotHtml() {
   return '<span class="math-debug-dot dot-forced"></span>';
+}
+
+/**
+ * `[공백:N]` 마커 → inline-block span (width: Nem).
+ *   - `display:inline-block` 으로 `white-space` collapse 영향을 피한다.
+ *   - `aria-hidden` 으로 스크린리더 무시.
+ */
+function spaceMarkerHtml(amount) {
+  const n = Number.isFinite(amount) ? amount : 1;
+  return `<span class="stem-space" style="display:inline-block;width:${n}em;" aria-hidden="true"></span>`;
 }
 
 /**
@@ -21,7 +32,22 @@ function debugDotHtml() {
  * @param {{ debugDots?: boolean }} [opts]
  */
 export function renderInlineMixedContent(input, mathRenderer, equations, opts) {
-  const tokens = tokenizeWithEquations(input, equations);
+  const src = String(input ?? '');
+  // `[공백:N]` 마커를 가장 바깥에서 먼저 분리한다. tokenizeWithEquations 의 text/math
+  // 분류에 `[`, `]`, 숫자가 섞이면 오탐이 나므로, 마커 경계를 미리 끊는 게 안전하다.
+  const pieces = src.includes('[공백:')
+    ? splitBySpaceMarkers(src)
+    : [{ type: 'text', value: src }];
+
+  const tokens = [];
+  for (const piece of pieces) {
+    if (piece.type === 'space') {
+      tokens.push({ type: 'space', amount: piece.amount });
+      continue;
+    }
+    const sub = tokenizeWithEquations(piece.value, equations);
+    for (const t of sub) tokens.push(t);
+  }
   if (tokens.length === 0) return { html: '', hasFraction: false };
 
   const showDots = opts?.debugDots === true;
@@ -31,6 +57,10 @@ export function renderInlineMixedContent(input, mathRenderer, equations, opts) {
   for (const token of tokens) {
     if (token.type === 'newline') {
       chunks.push('<br/>');
+      continue;
+    }
+    if (token.type === 'space') {
+      chunks.push(spaceMarkerHtml(token.amount));
       continue;
     }
     if (token.type === 'text') {

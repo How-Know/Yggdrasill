@@ -5,6 +5,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../services/textbook_book_registry.dart';
 import '../../services/textbook_pdf_service.dart';
 import '../../widgets/latex_text_renderer.dart';
 import 'textbook_crop_extract_dialog.dart';
@@ -37,6 +38,7 @@ class TextbookMigrationPane extends StatefulWidget {
 class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
   final _supabase = Supabase.instance.client;
   final _service = TextbookPdfService();
+  final _registry = TextbookBookRegistry();
 
   bool _loadingBooks = false;
   bool _loadingLinks = false;
@@ -70,12 +72,25 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
       _bookError = null;
     });
     try {
-      final data = await _supabase
-          .from('resource_files')
-          .select('id,name,category,order_index,academy_id')
-          .order('order_index')
-          .order('name');
-      final rows = (data as List).cast<Map<String, dynamic>>();
+      List<Map<String, dynamic>> rows;
+      try {
+        final data = await _supabase
+            .from('resource_files')
+            .select('id,name,category,order_index,academy_id,is_published')
+            .order('order_index')
+            .order('name');
+        rows = (data as List).cast<Map<String, dynamic>>();
+      } catch (e) {
+        // Graceful fallback if the `is_published` migration has not been
+        // applied yet (e.g. developer running against an older DB). We
+        // treat unknown books as `published=true` so nothing disappears.
+        final data = await _supabase
+            .from('resource_files')
+            .select('id,name,category,order_index,academy_id')
+            .order('order_index')
+            .order('name');
+        rows = (data as List).cast<Map<String, dynamic>>();
+      }
       final books = rows
           .where((r) {
             final rawCategory = r['category'];
@@ -83,12 +98,17 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
                 rawCategory is String ? rawCategory.trim().toLowerCase() : '';
             return category.isEmpty || category == 'textbook';
           })
-          .map((r) => _MigBook(
-                id: r['id'] as String,
-                academyId: r['academy_id'] as String?,
-                name: (r['name'] as String?)?.trim() ?? '(이름 없음)',
-                orderIndex: r['order_index'] as int?,
-              ))
+          .map((r) {
+            final rawPub = r['is_published'];
+            final pub = rawPub is bool ? rawPub : true;
+            return _MigBook(
+              id: r['id'] as String,
+              academyId: r['academy_id'] as String?,
+              name: (r['name'] as String?)?.trim() ?? '(이름 없음)',
+              orderIndex: r['order_index'] as int?,
+              isPublished: pub,
+            );
+          })
           .toList();
       books.sort((a, b) {
         final ai = a.orderIndex ?? 1 << 30;
@@ -546,6 +566,8 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
             'file_id: ${book.id}',
             style: const TextStyle(color: Color(0xFF8A8A8A), fontSize: 11),
           ),
+          const SizedBox(height: 12),
+          _buildBookControlBar(book),
           const SizedBox(height: 14),
           const Divider(height: 1, color: Color(0xFF2A2A2A)),
           const SizedBox(height: 10),
@@ -553,6 +575,224 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
         ],
       ),
     );
+  }
+
+  Widget _buildBookControlBar(_MigBook book) {
+    final busyKey = 'book_ctrl:${book.id}';
+    final busy = _busy.contains(busyKey);
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFF181818),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFF2A2A2A)),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      child: Row(
+        children: [
+          Icon(
+            book.isPublished ? Icons.public : Icons.public_off,
+            size: 16,
+            color: book.isPublished
+                ? const Color(0xFF7CC67C)
+                : const Color(0xFF9FB3B3),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  '학습앱 교재 탭 노출',
+                  style: TextStyle(
+                    color: book.isPublished
+                        ? Colors.white
+                        : const Color(0xFFD8E0E0),
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  book.isPublished
+                      ? '학생이 교재 탭에서 이 책을 열람할 수 있습니다.'
+                      : '스위치를 켜야 학생 교재 탭에 책카드가 노출됩니다.',
+                  style: const TextStyle(
+                    color: Color(0xFF8A8A8A),
+                    fontSize: 11,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Switch.adaptive(
+            value: book.isPublished,
+            activeThumbColor: const Color(0xFF7CC67C),
+            onChanged: busy ? null : (v) => _togglePublished(book, v),
+          ),
+          const SizedBox(width: 8),
+          OutlinedButton.icon(
+            onPressed: busy ? null : () => _confirmDeleteBook(book),
+            icon: const Icon(Icons.delete_outline,
+                size: 16, color: Color(0xFFE46A6A)),
+            label: const Text(
+              '책 삭제',
+              style: TextStyle(color: Color(0xFFE46A6A), fontSize: 12),
+            ),
+            style: OutlinedButton.styleFrom(
+              side: const BorderSide(color: Color(0xFF5A2323)),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _togglePublished(_MigBook book, bool next) async {
+    final busyKey = 'book_ctrl:${book.id}';
+    setState(() => _busy.add(busyKey));
+    try {
+      await _registry.setBookPublished(
+        bookId: book.id,
+        isPublished: next,
+      );
+      final updated = _MigBook(
+        id: book.id,
+        name: book.name,
+        academyId: book.academyId,
+        orderIndex: book.orderIndex,
+        isPublished: next,
+      );
+      if (!mounted) return;
+      setState(() {
+        for (var i = 0; i < _books.length; i += 1) {
+          if (_books[i].id == book.id) {
+            _books[i] = updated;
+            break;
+          }
+        }
+      });
+      _toast(next ? '학습앱 노출을 켰습니다' : '학습앱 노출을 껐습니다');
+    } catch (e) {
+      _toast('노출 상태 변경 실패: $e', error: true);
+    } finally {
+      if (mounted) setState(() => _busy.remove(busyKey));
+    }
+  }
+
+  Future<void> _confirmDeleteBook(_MigBook book) async {
+    final academyId = (book.academyId ?? '').trim();
+    if (academyId.isEmpty) {
+      _toast('academy_id가 없어 삭제할 수 없습니다', error: true);
+      return;
+    }
+    final typedName = TextEditingController();
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF1B1B1D),
+          title: const Text(
+            '교재 삭제',
+            style: TextStyle(color: Colors.white),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                '"${book.name}" 교재의 PDF·표지·크롭 이미지·단원 메타데이터를\n모두 영구 삭제합니다. 되돌릴 수 없습니다.',
+                style: const TextStyle(color: Color(0xFFD8E0E0), fontSize: 13),
+              ),
+              const SizedBox(height: 10),
+              const Text(
+                '확인을 위해 아래에 교재 이름을 그대로 입력하세요.',
+                style: TextStyle(color: Color(0xFF9FB3B3), fontSize: 11),
+              ),
+              const SizedBox(height: 6),
+              TextField(
+                controller: typedName,
+                autofocus: true,
+                style: const TextStyle(color: Colors.white, fontSize: 13),
+                decoration: InputDecoration(
+                  isDense: true,
+                  hintText: book.name,
+                  hintStyle: const TextStyle(color: Color(0xFF5A5A5A)),
+                  filled: true,
+                  fillColor: const Color(0xFF232323),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: const BorderSide(color: Color(0xFF2A2A2A)),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('취소'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final entered = typedName.text.trim();
+                if (entered != book.name.trim()) {
+                  ScaffoldMessenger.of(ctx).showSnackBar(
+                    const SnackBar(
+                      content: Text('이름이 일치하지 않습니다'),
+                      backgroundColor: Color(0xFFB53A3A),
+                    ),
+                  );
+                  return;
+                }
+                Navigator.of(ctx).pop(true);
+              },
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFFB53A3A),
+              ),
+              child: const Text('영구 삭제'),
+            ),
+          ],
+        );
+      },
+    );
+    if (confirm != true) return;
+
+    final busyKey = 'book_ctrl:${book.id}';
+    setState(() => _busy.add(busyKey));
+    try {
+      final result = await _service.deleteBook(
+        academyId: academyId,
+        bookId: book.id,
+      );
+      if (!mounted) return;
+      final removed = result.removedCrops +
+          result.removedPdfs +
+          result.removedCovers;
+      _toast(
+        '교재 삭제 완료 (PDF ${result.removedPdfs}, 크롭 ${result.removedCrops}, 표지 ${result.removedCovers}, 총 $removed개)',
+      );
+      setState(() {
+        _books.removeWhere((b) => b.id == book.id);
+        if (_selectedBookId == book.id) {
+          _selectedBookId = null;
+          _links = [];
+        }
+      });
+      if (result.warnings.isNotEmpty) {
+        // Non-fatal Storage cleanup warnings — log but keep the row removed.
+        // ignore: avoid_print
+        print('[pane][delete] warnings: ${result.warnings}');
+      }
+    } catch (e) {
+      if (!mounted) return;
+      _toast('교재 삭제 실패: $e', error: true);
+    } finally {
+      if (mounted) setState(() => _busy.remove(busyKey));
+    }
   }
 
   Widget _buildLinksTable() {
@@ -782,6 +1022,7 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
         name: link.fileId,
         academyId: link.academyId,
         orderIndex: null,
+        isPublished: true,
       ),
     );
   }
@@ -1091,11 +1332,13 @@ class _MigBook {
     required this.name,
     required this.academyId,
     required this.orderIndex,
+    required this.isPublished,
   });
   final String id;
   final String name;
   final String? academyId;
   final int? orderIndex;
+  final bool isPublished;
 }
 
 class _MigLink {

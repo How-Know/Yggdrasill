@@ -125,7 +125,9 @@ class ProblemBankPdfPreviewArtifact {
       pdfUrl: '${map['pdfUrl'] ?? ''}'.trim(),
       thumbnailUrl: '${map['thumbnailUrl'] ?? ''}'.trim(),
       error: '${map['error'] ?? ''}'.trim(),
-      pollAfterMs: int.tryParse('${map['pollAfterMs'] ?? defaultPollAfterMs}') ?? defaultPollAfterMs,
+      pollAfterMs:
+          int.tryParse('${map['pollAfterMs'] ?? defaultPollAfterMs}') ??
+              defaultPollAfterMs,
     );
   }
 }
@@ -1703,6 +1705,7 @@ class ProblemBankService {
     String? objectiveAnswerKey,
     String? subjectiveAnswer,
     bool? objectiveGenerated,
+    List<String>? figureRefs,
     List<ProblemBankEquation>? equations,
     Map<String, dynamic>? meta,
     String? curriculumCode,
@@ -1735,6 +1738,7 @@ class ProblemBankService {
         'objective_answer_key': objectiveAnswerKey,
       if (subjectiveAnswer != null) 'subjective_answer': subjectiveAnswer,
       if (objectiveGenerated != null) 'objective_generated': objectiveGenerated,
+      if (figureRefs != null) 'figure_refs': figureRefs,
       if (equations != null)
         'equations': equations.map((e) => e.toMap()).toList(growable: false),
       if (meta != null) 'meta': meta,
@@ -1781,8 +1785,7 @@ class ProblemBankService {
   }) async {
     final rows = await _client
         .from('pb_question_revisions')
-        .select(
-            'id,academy_id,document_id,question_id,engine,engine_model,'
+        .select('id,academy_id,document_id,question_id,engine,engine_model,'
             'revised_at,edited_fields,reason_tags,reason_note,diff')
         .eq('academy_id', academyId)
         .eq('question_id', questionId)
@@ -1804,13 +1807,10 @@ class ProblemBankService {
     required List<ProblemBankRevisionReasonTag> tags,
     String note = '',
   }) async {
-    await _client
-        .from('pb_question_revisions')
-        .update({
-          'reason_tags': tags.map((t) => t.key).toList(growable: false),
-          'reason_note': note,
-        })
-        .eq('id', revisionId);
+    await _client.from('pb_question_revisions').update({
+      'reason_tags': tags.map((t) => t.key).toList(growable: false),
+      'reason_note': note,
+    }).eq('id', revisionId);
   }
 
   Future<void> updateQuestionMeta({
@@ -2264,7 +2264,7 @@ class ProblemBankService {
       }
       return map;
     } catch (_) {
-      return {};
+      return <String, String>{};
     }
   }
 
@@ -2306,8 +2306,8 @@ class ProblemBankService {
         }
       }
       return out;
-    } catch (_) {
-      return {};
+    } catch (e) {
+      throw Exception('batch_render_thumbnails_failed: $e');
     }
   }
 
@@ -2511,8 +2511,7 @@ bool _isSyncedSavedSettingsRow(Map<String, dynamic> row) {
   final raw = row['meta'];
   if (raw is! Map) return false;
   if (raw.isEmpty) return false;
-  return raw.containsKey('saved_settings') ||
-      raw.containsKey('savedSettings');
+  return raw.containsKey('saved_settings') || raw.containsKey('savedSettings');
 }
 
 /// 초/중/고 단계와 학년 숫자를 혼합한 정렬 rank (학습앱 `pbDocumentGradeSortRank`와 동일).

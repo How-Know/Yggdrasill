@@ -125,6 +125,7 @@ export async function detectProblemsOnPage({
 export function normalizeDetectResult(parsedJson) {
   const out = {
     section: 'unknown',
+    page_kind: 'unknown',
     page_layout: 'unknown',
     items: [],
     notes: '',
@@ -143,6 +144,24 @@ export function normalizeDetectResult(parsedJson) {
     ? layout
     : 'unknown';
   out.notes = String(parsedJson.notes || '').trim();
+
+  const pageKind = String(parsedJson.page_kind || '').trim();
+  out.page_kind = ['problem_page', 'concept_page', 'mixed', 'unknown'].includes(
+    pageKind,
+  )
+    ? pageKind
+    : 'unknown';
+
+  if (
+    out.page_kind === 'concept_page' ||
+    /\bconcept_page\b/i.test(out.notes)
+  ) {
+    // Concept-only A pages should be visible in the UI as analyzed pages, but
+    // must never persist fake crop rows.
+    out.page_kind = 'concept_page';
+    out.items = [];
+    return out;
+  }
 
   const rawItems = Array.isArray(parsedJson.items) ? parsedJson.items : [];
   for (const raw of rawItems) {

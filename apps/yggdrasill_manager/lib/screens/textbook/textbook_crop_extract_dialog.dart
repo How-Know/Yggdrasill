@@ -238,10 +238,21 @@ class _TextbookCropExtractDialogState
       if (!mounted) return;
 
       setState(() => _phase = '문항 크롭 (${detection.items.length}건)...');
+      final normalisedRegions = normalizeItemRegionsByColumn(
+        items: [
+          for (final it in detection.items)
+            ColumnRegionInput(
+              itemRegion: it.itemRegion,
+              column: it.column,
+            ),
+        ],
+      );
       final batch = <_BatchCropJob>[];
       for (var i = 0; i < detection.items.length; i += 1) {
         final item = detection.items[i];
-        final region = item.itemRegion;
+        final region = normalisedRegions.length > i
+            ? normalisedRegions[i]
+            : item.itemRegion;
         if (region != null && region.length == 4) {
           batch.add(_BatchCropJob(
             orderIndex: i + 1,

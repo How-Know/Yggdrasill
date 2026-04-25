@@ -4,6 +4,8 @@ import {
   escapeHtml,
   isFractionLatex,
   normalizeMathLatex,
+  applyInlineAlignmentMarkers,
+  splitByUnderlineMarkers,
 } from '../../utils/text.js';
 import { resolveFigureLayout } from '../../utils/figure_layout.js';
 
@@ -17,15 +19,25 @@ import { resolveFigureLayout } from '../../utils/figure_layout.js';
 //   3) 스케일은 CSS transform: scale(Sw, Sh) 또는 width/height 비율로 적용
 // 순서로 확장한다. 현재는 XeLaTeX 전용 기능.
 
-const STRUCTURAL_STRIP = /\[(문단)\]/g;
+// `[문단]` 및 속성부 변형(`[문단:가운데]` 등) 을 strip 대상으로 함께 인식.
+// 속성부는 applyInlineAlignmentMarkers 가 stemLineAligns 로 옮긴 뒤
+// plain `[문단]` 으로 정규화하지만, safety net 으로 여기서도 속성 변형을 매칭한다.
+const STRUCTURAL_STRIP = /\[문단(?::[^\]]*)?\]/g;
 const BOX_START = /\[박스시작\]/;
 const BOX_END = /\[박스끝\]/;
 const BOGI_RE = /<\s*보\s*기\s*>/;
-const FIGURE_MARKER_RE = /\[(?:그림|도형|도표|표)\]/g;
+const BOX_ALIGN_MARKER_RE = /^\s*\[(?:정렬|align)\s*:\s*(왼쪽|좌측|left|가운데|중앙|center|오른쪽|우측|right)\]\s*$/i;
+// 본문 그림 마커 정규식.
+//   - plain: [그림], [도형], [도표], [표]
+//   - HWPX binaryItemIDRef 토큰: [[PB_FIG_<itemID>]]
+//   capture group 1 값이 있으면 itemID. 없으면 plain 마커.
+const FIGURE_MARKER_RE = /\[\[PB_FIG_([^\]]+)\]\]|\[(?:그림|도형|도표|표)\]/g;
 const BOGI_ITEM_SPLIT_RE =
   /(?=(?:[ㄱ-ㅎ]\.\s|(?:\(|（)\s*[가나다라마바사아자차카타파하]\s*(?:\)|）)\s))/;
 const BOGI_ITEM_RE =
   /^(?:([ㄱ-ㅎ])\.\s*|(?:\(|（)\s*([가나다라마바사아자차카타파하])\s*(?:\)|）)\s*)/;
+const BULLET_LINE_RE = /^\s*\\bullet\b\s*/;
+const PARAGRAPH_MARKER_LINE_RE = /^\s*\[문단(?::[^\]]*)?\]\s*$/;
 
 function cleanLine(line) {
   return line
@@ -38,14 +50,37 @@ function cleanLine(line) {
 }
 
 /**
- * Replace [그림]/[도형]/[도표]/[표] markers with {{FIG_N}} placeholders.
- * Returns { text, count } where count is the number of markers replaced
- * starting from `startIndex`.
+ * 본문 그림 마커를 {{FIG_N}} 플레이스홀더로 치환한다.
+ *   - [[PB_FIG_<id>]] 토큰은 itemIdToFigIdx 룩업으로 직접 지정 인덱스를 쓴다.
+ *   - plain [그림]/[도형]/... 는 positional: startIndex 부터 1씩 증가하며 consumed 를 피해 간다.
+ *   - 같은 index 가 이미 consumed 에 있으면 (token 경로로 선점) positional 은 건너뛴다.
+ * @returns { text, count, nextPosIdx } — count 는 이번 호출에서 치환된 마커 총 개수.
  */
-function replaceMarkersWithPlaceholders(line, startIndex) {
-  let idx = startIndex;
-  const text = line.replace(FIGURE_MARKER_RE, () => `{{FIG_${idx++}}}`);
-  return { text, count: idx - startIndex };
+function replaceMarkersWithPlaceholders(
+  line,
+  startIndex,
+  itemIdToFigIdx = null,
+  consumed = null,
+) {
+  let posIdx = startIndex;
+  let count = 0;
+  const consumedSet = consumed || new Set();
+  const text = line.replace(FIGURE_MARKER_RE, (_m, capturedId) => {
+    const trimmedId = capturedId ? String(capturedId).trim() : '';
+    if (trimmedId && itemIdToFigIdx && itemIdToFigIdx.has(trimmedId)) {
+      const i = itemIdToFigIdx.get(trimmedId);
+      consumedSet.add(i);
+      count += 1;
+      return `{{FIG_${i}}}`;
+    }
+    while (consumedSet.has(posIdx)) posIdx += 1;
+    const pos = posIdx;
+    consumedSet.add(pos);
+    posIdx += 1;
+    count += 1;
+    return `{{FIG_${pos}}}`;
+  });
+  return { text, count, nextPosIdx: posIdx };
 }
 
 function buildSingleFigureHtml(url, layoutItem) {
@@ -166,6 +201,27 @@ function renderOneLine(text, mathRenderer, equations, opts) {
     const forced = renderForcedMathLine(text, mathRenderer, opts);
     if (forced) return forced;
   }
+  if (String(text).includes('[밑줄]')) {
+    const parts = splitByUnderlineMarkers(text);
+    const renderedParts = [];
+    let hasFraction = false;
+    for (const part of parts) {
+      const value = String(part.value || '');
+      if (!value) continue;
+      const augmented = augmentEquations(equations, value, { includeVars: true });
+      const rendered = composeLineV1(value, mathRenderer, augmented, opts);
+      if (rendered.hasFraction) hasFraction = true;
+      if (part.type === 'underline') {
+        renderedParts.push(`<span class="pb-underline">${rendered.html}</span>`);
+      } else {
+        renderedParts.push(rendered.html);
+      }
+    }
+    return {
+      html: renderedParts.join(''),
+      hasFraction,
+    };
+  }
   const augmented = augmentEquations(equations, text, { includeVars: true });
   const rendered = composeLineV1(text, mathRenderer, augmented, opts);
   return {
@@ -176,6 +232,7 @@ function renderOneLine(text, mathRenderer, equations, opts) {
 
 function normalizeLineAlign(value) {
   const raw = String(value || '').trim().toLowerCase();
+  if (raw === 'force-left') return 'force-left';
   if (raw === 'center' || raw === 'right' || raw === 'justify') return raw;
   return 'left';
 }
@@ -243,13 +300,40 @@ function splitBogiItemsFromText(text) {
   return items;
 }
 
+function sectionLabelForBogiPart(part) {
+  const text = String(part || '').trim();
+  if (BULLET_LINE_RE.test(text)) {
+    return { labelHtml: '&bull;', content: text.replace(BULLET_LINE_RE, '').trim() };
+  }
+  const match = text.match(BOGI_ITEM_RE);
+  if (!match) return null;
+  const consonantLabel = match[1] || '';
+  const syllableLabel = match[2] || '';
+  const label = consonantLabel || syllableLabel;
+  const labelText = consonantLabel ? `${label}.` : `(${label})`;
+  return {
+    labelHtml: escapeHtml(labelText),
+    content: text.slice(match[0].length).trim(),
+  };
+}
+
 function renderBogiItems(lines, mathRenderer, equations, opts) {
   const allParts = [];
   let hasFraction = false;
+  let forcedBoxAlign = '';
   for (const line of lines) {
     const lineText =
       typeof line === 'string' ? line : String(line?.text || '');
-    const lineAlign = normalizeLineAlign(line?.align);
+    const alignMarker = lineText.match(BOX_ALIGN_MARKER_RE);
+    if (alignMarker) {
+      const rawAlign = String(alignMarker[1] || '').trim().toLowerCase();
+      forcedBoxAlign =
+        rawAlign === '왼쪽' || rawAlign === '좌측' || rawAlign === 'left'
+          ? 'force-left'
+          : normalizeLineAlign(rawAlign);
+      continue;
+    }
+    const lineAlign = forcedBoxAlign || normalizeLineAlign(line?.align);
     const items = splitBogiItemsFromText(lineText);
     if (items.length > 0) {
       allParts.push(
@@ -259,6 +343,10 @@ function renderBogiItems(lines, mathRenderer, equations, opts) {
         })),
       );
     } else {
+      if (PARAGRAPH_MARKER_LINE_RE.test(lineText)) {
+        allParts.push({ paragraph: true });
+        continue;
+      }
       const clean = lineText.replace(BOGI_RE, '').trim();
       if (clean) {
         allParts.push({
@@ -270,32 +358,50 @@ function renderBogiItems(lines, mathRenderer, equations, opts) {
   }
 
   const result = [];
+  let activeLabelHtml = '';
   for (const one of allParts) {
+    if (one?.paragraph) {
+      result.push('<div class="bogi-paragraph-gap"></div>');
+      activeLabelHtml = '';
+      continue;
+    }
     const part = String(one?.text || '');
     const lineAlign = normalizeLineAlign(one?.align);
-    const match = part.match(BOGI_ITEM_RE);
-    if (match) {
-      const consonantLabel = match[1] || '';
-      const syllableLabel = match[2] || '';
-      const label = consonantLabel || syllableLabel;
-      const labelText = consonantLabel ? `${label}.` : `(${label})`;
-      const text = part.slice(match[0].length).trim();
+    const sectionLabel = sectionLabelForBogiPart(part);
+    if (sectionLabel) {
+      activeLabelHtml = sectionLabel.labelHtml;
+      const text = sectionLabel.content;
       const bogiEqs = augmentEquations(equations, text, { includeVars: true, includeNumbers: true });
       const rendered = renderOneLine(text, mathRenderer, bogiEqs, opts);
       if (!rendered) continue;
       if (rendered.hasFraction) hasFraction = true;
       const alignClass =
-        lineAlign === 'left' ? '' : ` bogi-item-${lineAlign}`;
+        lineAlign === 'left' || lineAlign === 'force-left'
+          ? ''
+          : ` bogi-item-${lineAlign}`;
       result.push(
-        `<div class="bogi-item${alignClass}"><span class="bogi-item-label">${escapeHtml(labelText)}</span><span class="bogi-item-text">${rendered.html}</span></div>`,
+        `<div class="bogi-item${alignClass}"><span class="bogi-item-label">${activeLabelHtml}</span><span class="bogi-item-text">${rendered.html}</span></div>`,
       );
     } else {
       const bogiEqs = augmentEquations(equations, part, { includeVars: true, includeNumbers: true });
       const r = renderOneLine(part, mathRenderer, bogiEqs, opts);
       if (r) {
         if (r.hasFraction) hasFraction = true;
+        const forceLeft = lineAlign === 'force-left';
+        if (
+          activeLabelHtml &&
+          (lineAlign === 'left' || forceLeft) &&
+          (forceLeft || !looksCenterAlignedMathOnlyLine(part))
+        ) {
+          result.push(
+            `<div class="bogi-item bogi-item-continuation"><span class="bogi-item-label bogi-item-label-placeholder" aria-hidden="true">${activeLabelHtml}</span><span class="bogi-item-text">${r.html}</span></div>`,
+          );
+          continue;
+        }
         let alignClass = '';
-        if (lineAlign !== 'left') {
+        if (forceLeft) {
+          alignClass = '';
+        } else if (lineAlign !== 'left') {
           alignClass = ` bogi-line-${lineAlign}`;
         } else if (looksCenterAlignedMathOnlyLine(part)) {
           alignClass = ' bogi-line-center';
@@ -329,6 +435,7 @@ function renderStemWithBoxes(stem, mathRenderer, equations, {
   layoutItems = [],
   figureLayout = null,
   stemLineAligns = [],
+  figureItemIds = [],
   debugDots = false,
 } = {}) {
   const opts = debugDots ? { debugDots: true } : undefined;
@@ -346,14 +453,32 @@ function renderStemWithBoxes(stem, mathRenderer, equations, {
   let inlineBuffer = [];
   let figureCounter = 0;
 
+  // HWPX binaryItemIDRef → dataUrls 인덱스 룩업.
+  //   figureItemIds[i] 가 비어있지 않으면 해당 itemId 가 i 번 dataUrl 을 가리킨다.
+  //   본문에 [[PB_FIG_<id>]] 토큰이 등장하면 이 맵으로 직접 {{FIG_i}} 플레이스홀더로 연결된다.
+  const itemIdToFigIdx = new Map();
+  if (Array.isArray(figureItemIds)) {
+    for (let i = 0; i < figureItemIds.length; i += 1) {
+      const id = String(figureItemIds[i] || '').trim();
+      if (id && !itemIdToFigIdx.has(id)) itemIdToFigIdx.set(id, i);
+    }
+  }
+  // 라인 간 공유되는 consumed 집합. token 경로가 선점한 인덱스를 positional 이 재사용하지 않도록.
+  const consumedFigIdxs = new Set();
+
   const prepareLine = (rawLine) => {
     if (hasInlineFigures) {
       let line = rawLine
         .replace(STRUCTURAL_STRIP, ' ')
         .replace(BOX_START, '')
         .replace(BOX_END, '');
-      const result = replaceMarkersWithPlaceholders(line, figureCounter);
-      figureCounter += result.count;
+      const result = replaceMarkersWithPlaceholders(
+        line,
+        figureCounter,
+        itemIdToFigIdx,
+        consumedFigIdxs,
+      );
+      figureCounter = result.nextPosIdx;
       return result.text.replace(/\s+/g, ' ').trim();
     }
     return cleanLine(rawLine);
@@ -426,9 +551,11 @@ function renderStemWithBoxes(stem, mathRenderer, equations, {
   for (let lineIdx = 0; lineIdx < lines.length; lineIdx += 1) {
     const rawLine = lines[lineIdx];
     const lineAlign = lineAligns[lineIdx] || 'left';
-    if (/^\s*\[문단\]\s*$/.test(rawLine)) {
+    if (PARAGRAPH_MARKER_LINE_RE.test(rawLine)) {
       if (!inBox) {
         flushInline();
+      } else {
+        boxLines.push({ text: '[문단]', align: lineAlign });
       }
       continue;
     }
@@ -675,22 +802,36 @@ export function renderQuestionBlock(
   const number = String(question?.question_number || '?');
   const equations = Array.isArray(question?.equations) ? question.equations : [];
   const dataUrls = Array.isArray(question?.figure_data_urls) ? question.figure_data_urls : [];
+  // hydrateFiguresForHtml 이 dataUrls 와 같은 인덱스에 HWPX binaryItemIDRef 를 채워둔다.
+  //   본문 [[PB_FIG_<id>]] 토큰 해석에 사용 — 비어있으면 plain 마커처럼 positional 로 동작.
+  const figureItemIds = Array.isArray(question?.figure_item_ids) ? question.figure_item_ids : [];
   const meta =
     question?.meta && typeof question.meta === 'object' ? question.meta : {};
-  const stemLineAligns = Array.isArray(meta.stem_line_aligns)
+  const rawStemLineAligns = Array.isArray(meta.stem_line_aligns)
     ? meta.stem_line_aligns
     : Array.isArray(meta.stemLineAligns)
       ? meta.stemLineAligns
       : [];
 
+  // 사용자가 리뷰 UI 에서 `[문단:가운데]` 처럼 속성부 마커를 추가하면,
+  // plain `[문단]` 으로 정규화한 뒤 속성값을 stemLineAligns 에 이식해
+  // XeLaTeX / HTML 두 경로가 같은 "라인별 정렬" 인프라를 공유하도록 한다.
+  const normalizedAlign = applyInlineAlignmentMarkers(
+    question?.stem || '',
+    rawStemLineAligns,
+  );
+  const normalizedStem = normalizedAlign.stem;
+  const stemLineAligns = normalizedAlign.stemLineAligns;
+
   const figureLayout = resolveFigureLayout(question, stemSizePt);
   const layoutItems = figureLayout ? figureLayout.items : [];
 
-  const stem = renderStemWithBoxes(question?.stem || '', mathRenderer, equations, {
+  const stem = renderStemWithBoxes(normalizedStem, mathRenderer, equations, {
     dataUrls,
     layoutItems,
     figureLayout,
     stemLineAligns,
+    figureItemIds,
     debugDots,
   });
 

@@ -1120,6 +1120,11 @@ String buildLearningRenderHash({
   return sha256.convert(utf8.encode(canonicalJson)).toString();
 }
 
+String buildLearningRenderHashFromConfig(Map<String, dynamic> renderConfig) {
+  final canonicalJson = _canonicalJsonEncode(renderConfig);
+  return sha256.convert(utf8.encode(canonicalJson)).toString();
+}
+
 String _canonicalJsonEncode(dynamic value) {
   return jsonEncode(_canonicalizeJsonValue(value));
 }

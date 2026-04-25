@@ -25,6 +25,11 @@ import 'package:http/http.dart' as http;
 /// Single crop entry. Keep the fields aligned with what
 /// `textbook_problem_crops` stores — the gateway performs a direct upsert
 /// using the same names.
+///
+/// [pngBytes] is optional: omit (or pass `null`) when uploading in
+/// `regions_only` mode (see [TextbookCropUploader.uploadCropBatch]). In
+/// that mode we only persist the VLM-detected coordinates so the student
+/// app can do tap-to-identify without ever downloading a crop image.
 class TextbookCropUploadItem {
   const TextbookCropUploadItem({
     required this.rawPage,
@@ -38,7 +43,7 @@ class TextbookCropUploadItem {
     this.columnIndex,
     this.bbox1k,
     this.itemRegion1k,
-    required this.pngBytes,
+    this.pngBytes,
     this.cropRectPx,
     this.paddingPx,
     this.cropLongEdgePx,
@@ -59,7 +64,8 @@ class TextbookCropUploadItem {
   final List<int>? bbox1k; // [ymin, xmin, ymax, xmax] on 0..1000
   final List<int>? itemRegion1k;
 
-  final Uint8List pngBytes;
+  /// Crop image bytes. `null` when the caller is in `regions_only` mode.
+  final Uint8List? pngBytes;
   final List<int>? cropRectPx; // [x, y, w, h] in source
   final int? paddingPx;
   final int? cropLongEdgePx;
@@ -135,6 +141,11 @@ class TextbookCropUploader {
 
   /// Uploads a list of crops for one 소단원 (A/B/C) in one or more HTTP
   /// round-trips. Returns the aggregate result.
+  ///
+  /// When [regionsOnly] is true the client skips the PNG payload entirely
+  /// and the gateway persists only the coordinate row. This is the fast
+  /// path we use now that the student app does tap-to-identify from
+  /// `item_region_1k` directly instead of downloading crop images.
   Future<TextbookCropBatchResult> uploadCropBatch({
     required String academyId,
     required String bookId,
@@ -146,6 +157,7 @@ class TextbookCropUploader {
     String? midName,
     required List<TextbookCropUploadItem> items,
     void Function(int processed, int total)? onProgress,
+    bool regionsOnly = false,
   }) async {
     if (items.isEmpty) {
       return const TextbookCropBatchResult(
@@ -171,7 +183,10 @@ class TextbookCropUploader {
         'sub_key': subKey,
         if (bigName != null && bigName.isNotEmpty) 'big_name': bigName,
         if (midName != null && midName.isNotEmpty) 'mid_name': midName,
-        'crops': chunk.map(_itemToMap).toList(),
+        if (regionsOnly) 'regions_only': true,
+        'crops': chunk
+            .map((item) => _itemToMap(item, regionsOnly: regionsOnly))
+            .toList(),
       };
       final res = await _http.post(
         _uri('/textbook/crops/batch-upsert'),
@@ -214,9 +229,11 @@ class TextbookCropUploader {
     );
   }
 
-  Map<String, dynamic> _itemToMap(TextbookCropUploadItem item) {
-    final hash = sha256.convert(item.pngBytes).toString();
-    return <String, dynamic>{
+  Map<String, dynamic> _itemToMap(
+    TextbookCropUploadItem item, {
+    required bool regionsOnly,
+  }) {
+    final map = <String, dynamic>{
       'raw_page': item.rawPage,
       if (item.displayPage != null) 'display_page': item.displayPage,
       if (item.section != null && item.section!.isNotEmpty)
@@ -236,10 +253,14 @@ class TextbookCropUploader {
         'deskew_angle_deg': item.deskewAngleDeg,
       if (item.widthPx != null) 'width_px': item.widthPx,
       if (item.heightPx != null) 'height_px': item.heightPx,
-      'file_size_bytes': item.pngBytes.lengthInBytes,
-      'content_hash': hash,
-      'png_base64': base64Encode(item.pngBytes),
     };
+    final bytes = item.pngBytes;
+    if (!regionsOnly && bytes != null && bytes.isNotEmpty) {
+      map['file_size_bytes'] = bytes.lengthInBytes;
+      map['content_hash'] = sha256.convert(bytes).toString();
+      map['png_base64'] = base64Encode(bytes);
+    }
+    return map;
   }
 
   /// Fire a stubbed call to the answer-key VLM endpoint. Returns the gateway

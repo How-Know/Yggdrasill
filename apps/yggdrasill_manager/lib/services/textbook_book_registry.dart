@@ -111,12 +111,15 @@ class TextbookRegistrationInput {
     required this.textbookType,
     required this.pageOffset,
     required this.bigUnits,
+    this.description,
     this.existingBookId,
     this.coverLocalPath,
     this.coverExplicitUrl,
+    this.parentFolderId,
     this.bodyLegacyUrl,
     this.answerLegacyUrl,
     this.solutionLegacyUrl,
+    this.isPublished = false,
   });
 
   final String academyId;
@@ -127,6 +130,11 @@ class TextbookRegistrationInput {
   final int? pageOffset;
   final List<BigUnitInput> bigUnits;
 
+  /// Optional short note shown under the book name in both the manager app
+  /// migration pane and the student app resource list. Maps 1:1 to the
+  /// `resource_files.description` column the student app already renders.
+  final String? description;
+
   /// If set, the service upserts into the existing row instead of inserting.
   final String? existingBookId;
 
@@ -136,12 +144,21 @@ class TextbookRegistrationInput {
   /// Already-hosted cover URL (e.g. from a previous upload).
   final String? coverExplicitUrl;
 
+  /// Optional textbook folder id. When null, the book is saved at the root of
+  /// the textbook tree.
+  final String? parentFolderId;
+
   /// Optional Dropbox / legacy fallback URLs. The storage-backed PDFs are
   /// uploaded via [TextbookPdfService] before this registration runs, so we
   /// only write legacy URLs into `resource_file_links` when they exist.
   final String? bodyLegacyUrl;
   final String? answerLegacyUrl;
   final String? solutionLegacyUrl;
+
+  /// When false (default for the wizard), the book is hidden from the
+  /// student app until the operator flips the switch in the migration pane.
+  /// Set to true only for manual/admin flows that should publish instantly.
+  final bool isPublished;
 }
 
 class TextbookBookRegistry {
@@ -176,7 +193,10 @@ class TextbookBookRegistry {
       bookId: bookId,
       academyId: input.academyId,
       name: input.bookName.trim(),
+      description: input.description?.trim(),
       isUpdate: input.existingBookId != null,
+      isPublished: input.isPublished,
+      parentFolderId: input.parentFolderId?.trim(),
     );
 
     final coverUrl = await _resolveCoverUrl(
@@ -220,22 +240,70 @@ class TextbookBookRegistry {
     required String bookId,
     required String academyId,
     required String name,
+    required String? description,
     required bool isUpdate,
+    required bool isPublished,
+    required String? parentFolderId,
   }) async {
+    // Treat the empty string as "no description" so we don't overwrite an
+    // existing note with a blank when the user leaves the field alone on
+    // update. The student app renders whichever value we persist here.
+    final descValue = (description ?? '').trim();
     if (isUpdate) {
-      await _supa.from('resource_files').update(<String, dynamic>{
+      final row = <String, dynamic>{
         'name': name,
         'category': 'textbook',
-      }).eq('id', bookId);
+        'folder_id': (parentFolderId ?? '').trim().isEmpty ? null : parentFolderId,
+      };
+      if (descValue.isNotEmpty) {
+        row['description'] = descValue;
+      }
+      await _supa.from('resource_files').update(row).eq('id', bookId);
       return;
     }
     final row = <String, dynamic>{
       'id': bookId,
       'academy_id': academyId,
       'name': name,
+      'description': descValue.isEmpty ? null : descValue,
       'category': 'textbook',
+      'folder_id': (parentFolderId ?? '').trim().isEmpty ? null : parentFolderId,
+      // Explicit so newly-registered books stay hidden until the operator
+      // flips the switch in the migration pane.
+      'is_published': isPublished,
     };
     await _supa.from('resource_files').upsert(row, onConflict: 'id');
+  }
+
+  /// Flip `resource_files.is_published` for a single book. Used by the
+  /// migration pane's 학습앱 노출 switch.
+  Future<void> setBookPublished({
+    required String bookId,
+    required bool isPublished,
+  }) async {
+    await _supa
+        .from('resource_files')
+        .update(<String, dynamic>{'is_published': isPublished})
+        .eq('id', bookId);
+  }
+
+  /// Reads back the current is_published value. Used by the migration pane
+  /// to render the initial switch state without inflating the book list
+  /// query.
+  Future<bool> loadBookPublished({required String bookId}) async {
+    try {
+      final row = await _supa
+          .from('resource_files')
+          .select('is_published')
+          .eq('id', bookId)
+          .maybeSingle();
+      if (row == null) return false;
+      final v = row['is_published'];
+      if (v is bool) return v;
+      return true;
+    } catch (_) {
+      return true;
+    }
   }
 
   Future<String?> _resolveCoverUrl({
@@ -280,30 +348,42 @@ class TextbookBookRegistry {
     String? solutionLegacyUrl,
     String? coverUrl,
   }) async {
-    final rows = <Map<String, dynamic>>[];
-    void add(String kind, String? url) {
-      if (url == null || url.isEmpty) return;
-      rows.add(<String, dynamic>{
-        'academy_id': academyId,
-        'file_id': bookId,
-        'grade': '$gradeLabel#$kind',
-        'url': url,
-      });
+    // `resource_file_links` has no unique on (academy_id,file_id,grade), so
+    // ON CONFLICT is unavailable. Do a per-row lookup → update-or-insert
+    // instead, which also mirrors the gateway's finalize logic.
+    Future<void> upsertOne(String kind, String? url) async {
+      if (url == null || url.trim().isEmpty) return;
+      final grade = '$gradeLabel#$kind';
+      final existing = await _supa
+          .from('resource_file_links')
+          .select('id')
+          .match(<String, Object>{
+            'academy_id': academyId,
+            'file_id': bookId,
+            'grade': grade,
+          })
+          .limit(1)
+          .maybeSingle();
+      if (existing != null && existing['id'] != null) {
+        final linkId = (existing['id'] as num).toInt();
+        await _supa
+            .from('resource_file_links')
+            .update(<String, dynamic>{'url': url})
+            .eq('id', linkId);
+      } else {
+        await _supa.from('resource_file_links').insert(<String, dynamic>{
+          'academy_id': academyId,
+          'file_id': bookId,
+          'grade': grade,
+          'url': url,
+        });
+      }
     }
 
-    add('body', bodyLegacyUrl);
-    add('ans', answerLegacyUrl);
-    add('sol', solutionLegacyUrl);
-    add('cover', coverUrl);
-
-    if (rows.isEmpty) return;
-    // Upsert the composite-grade rows only — don't touch existing storage_*
-    // rows that may already exist for the same book (e.g. when the wizard is
-    // re-run to edit metadata).
-    await _supa.from('resource_file_links').upsert(
-          rows,
-          onConflict: 'academy_id,file_id,grade',
-        );
+    await upsertOne('body', bodyLegacyUrl);
+    await upsertOne('ans', answerLegacyUrl);
+    await upsertOne('sol', solutionLegacyUrl);
+    await upsertOne('cover', coverUrl);
   }
 
   Future<void> _upsertMetadataPayload({

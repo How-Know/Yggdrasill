@@ -257,6 +257,18 @@ class ResourceService {
         'id': id,
         'academy_id': academyId,
         'name': r['name'],
+        // 설명은 로컬 SQLite 에서는 v0 부터 있었지만 Supabase 에는
+        // 20260425120000_resource_folders_description.sql 로 새로 추가된 컬럼이다.
+        // 빈 문자열은 null 로 바꿔 공간을 낭비하지 않는다.
+        'description': () {
+          final raw = r['description'];
+          if (raw is String) {
+            final trimmed = raw.trim();
+            if (trimmed.isEmpty) return null;
+            return trimmed;
+          }
+          return null;
+        }(),
         'parent_id': r['parent_id'],
         'order_index': r['order_index'],
         'category': category ?? r['category'],
@@ -327,7 +339,7 @@ class ResourceService {
         final supa = Supabase.instance.client;
         final data = await supa
             .from('resource_folders')
-            .select('id,name,parent_id,order_index,category')
+            .select('id,name,description,parent_id,order_index,category')
             .eq('academy_id', academyId)
             .order('order_index');
         return (data as List).cast<Map<String, dynamic>>();
@@ -354,15 +366,14 @@ class ResourceService {
         if (category == 'textbook') {
           data = await supa
               .from('resource_folders')
-              .select('id,name,parent_id,order_index,category')
+              .select('id,name,description,parent_id,order_index,category')
               .eq('academy_id', academyId)
               .or('category.is.null,category.eq.textbook')
               .order('order_index');
-          // legacy fallback: empty-string category rows
           if ((data as List).isEmpty) {
             final all = await supa
                 .from('resource_folders')
-                .select('id,name,parent_id,order_index,category')
+                .select('id,name,description,parent_id,order_index,category')
                 .eq('academy_id', academyId)
                 .order('order_index');
             final filtered = (all as List)
@@ -377,7 +388,7 @@ class ResourceService {
         } else {
           data = await supa
               .from('resource_folders')
-              .select('id,name,parent_id,order_index,category')
+              .select('id,name,description,parent_id,order_index,category')
               .match({'academy_id': academyId, 'category': category})
               .order('order_index');
         }
@@ -492,11 +503,18 @@ class ResourceService {
         bool usedExtended = _resourceFilesExtendedColumnsAvailable;
         Future<List<dynamic>> runSelect(String cols) async {
           if (category == 'textbook') {
+            // Textbook tab is gated by `resource_files.is_published`. The
+            // column has `default true` so legacy books remain visible;
+            // newly-registered books from the manager wizard start at
+            // `false` and only appear after the operator flips the switch
+            // in the migration pane. We treat NULL as published for
+            // forward/backward compatibility with older DBs.
             return await supa
                 .from('resource_files')
                 .select(cols)
                 .eq('academy_id', academyId)
                 .or('category.is.null,category.eq.textbook')
+                .or('is_published.is.null,is_published.eq.true')
                 .order('order_index');
           }
           return await supa
@@ -519,11 +537,13 @@ class ResourceService {
         }
         var rows = (data as List).cast<Map<String, dynamic>>();
         if (category == 'textbook' && rows.isEmpty) {
-          // legacy fallback: include empty-string category rows
+          // legacy fallback: include empty-string category rows, still
+          // respecting `is_published` so unpublished drafts stay hidden.
           final all = await supa
               .from('resource_files')
               .select(usedExtended ? _resourceFileSelectExtended : _resourceFileSelectBase)
               .eq('academy_id', academyId)
+              .or('is_published.is.null,is_published.eq.true')
               .order('order_index');
           rows = (all as List).cast<Map<String, dynamic>>().where((r) {
             final c = (r['category'] as String?)?.trim();
@@ -838,6 +858,56 @@ class ResourceService {
     } catch (e, st) {
       print('[RES][textbookMetadataPayload] load failed: $e\n$st');
       return null;
+    }
+  }
+
+  /// Loads the VLM-detected problem regions for [bookId] / [gradeLabel]
+  /// from `textbook_problem_crops`. We project only the columns the
+  /// student app needs (coordinates + identification), deliberately
+  /// omitting `storage_key` / `file_size_bytes` because the new flow
+  /// persists regions without crop images.
+  ///
+  /// Returns rows already sorted by (big_order, mid_order, sub_key,
+  /// raw_page, problem_number). Callers typically re-group by page.
+  Future<List<Map<String, dynamic>>> loadTextbookProblemRegions({
+    required String bookId,
+    String? gradeLabel,
+  }) async {
+    if (bookId.trim().isEmpty) return <Map<String, dynamic>>[];
+    try {
+      final academyId =
+          await TenantService.instance.getActiveAcademyId() ??
+              await TenantService.instance.ensureActiveAcademy();
+      final supa = Supabase.instance.client;
+      var query = supa
+          .from('textbook_problem_crops')
+          .select(
+            'big_order, mid_order, sub_key, big_name, mid_name, '
+            'raw_page, display_page, section, '
+            'problem_number, label, is_set_header, set_from, set_to, '
+            'column_index, bbox_1k, item_region_1k',
+          )
+          .eq('academy_id', academyId)
+          .eq('book_id', bookId);
+      if (gradeLabel != null && gradeLabel.trim().isNotEmpty) {
+        query = query.eq('grade_label', gradeLabel.trim());
+      }
+      final rows = await query
+          .order('big_order')
+          .order('mid_order')
+          .order('sub_key')
+          .order('raw_page')
+          .order('problem_number');
+      if (rows is! List) return <Map<String, dynamic>>[];
+      final out = <Map<String, dynamic>>[];
+      for (final row in rows) {
+        if (row is Map) out.add(Map<String, dynamic>.from(row));
+      }
+      return out;
+    } catch (e, st) {
+      // ignore: avoid_print
+      print('[RES][textbookProblemRegions] load failed: $e\n$st');
+      return <Map<String, dynamic>>[];
     }
   }
 

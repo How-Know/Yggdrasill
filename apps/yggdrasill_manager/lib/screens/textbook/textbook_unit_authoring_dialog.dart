@@ -1,42 +1,42 @@
-// Unit tree authoring + VLM analysis dialog.
+// Unit tree authoring + VLM analysis dialog (coordinate-only redesign).
 //
-// This is the main workbench after a textbook has been registered via
-// `TextbookRegisterWizard`. It orchestrates:
+// After the pivot away from client-side cropping, this dialog no longer
+// decodes/stores/exports per-problem PNGs. Instead it:
 //
-//   1. Loading the stored unit tree from `textbook_metadata.payload` and
-//      letting the user edit 대/중단원 names and A/B/C start/end pages.
-//   2. Running the VLM range-analysis + hi-res crop pipeline for one 소단원
-//      at a time — reusing `textbook_vlm_range_runner.dart` so the retry
-//      behavior matches `TextbookVlmTestDialog`.
-//   3. Rendering the crop grid, letting the user review problems, and
-//      uploading the selected crops through `TextbookCropUploader` — which
-//      fans out to the gateway's `/textbook/crops/batch-upsert` endpoint.
-//   4. Surfacing a "정답 VLM 추출 (베타)" stub button that hits
-//      `/textbook/vlm/extract-answers` so the real implementation can slot
-//      in later without UI changes.
+//   1. Loads the unit tree from `textbook_metadata.payload` and lets the
+//      operator edit 대/중단원 names and A/B/C start/end pages (unchanged).
+//   2. Runs the VLM problem-number detection for one 소단원 at a time,
+//      accumulating the normalised bounding boxes in memory.
+//   3. Renders the body PDF with `PdfViewer.file` + `pageOverlaysBuilder`
+//      so the user can visually confirm the detected regions on the real
+//      PDF — two pages per row (layoutPages) so spreads are easier to
+//      review.
+//   4. Supports **manual fine-tuning**: click a bbox → drag its four
+//      corner handles → the stored `item_region_1k` is overridden.
+//   5. Saves the coordinates (no images) via `TextbookCropUploader` in
+//      `regions_only` mode.
+//   6. A "다음 →" button opens the Stage 2/3 authoring dialog
+//      (`TextbookAuthoringStageDialog`) for 정답 VLM / 해설 좌표 VLM.
 
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
-import 'package:file_picker/file_picker.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
-import 'package:image/image.dart' as img;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:pdfrx/pdfrx.dart';
 
 import '../../services/textbook_book_registry.dart';
 import '../../services/textbook_crop_uploader.dart';
-import '../../services/textbook_page_deskew.dart';
 import '../../services/textbook_pdf_page_renderer.dart';
 import '../../services/textbook_pdf_service.dart';
-import '../../services/textbook_problem_crop.dart';
 import '../../services/textbook_series_catalog.dart';
 import '../../services/textbook_vlm_range_runner.dart';
 import '../../services/textbook_vlm_test_service.dart';
+import 'textbook_authoring_stage_dialog.dart';
 
 class TextbookUnitAuthoringDialog extends StatefulWidget {
   const TextbookUnitAuthoringDialog({
@@ -93,37 +93,37 @@ class _TextbookUnitAuthoringDialogState
   static const _kInfo = Color(0xFF7AA9E6);
 
   static const int _kAnalysisLongEdgePx = 1500;
-  static const List<int> _kCropResolutionChoices = [1500, 2000, 2400, 3000];
 
   final _registry = TextbookBookRegistry();
   final _pdfService = TextbookPdfService();
   final _vlmService = TextbookVlmTestService();
   final _cropUploader = TextbookCropUploader();
 
-  // Cached PDF document for the body PDF. Loaded lazily because the user
-  // may browse the unit tree without ever triggering an analysis.
   PdfDocument? _bodyDocument;
+  String? _bodyLocalPath;
   String? _pdfLoadError;
   bool _loadingPdf = false;
+  final _viewerController = PdfViewerController();
 
   bool _loadingPayload = true;
   String? _payloadError;
   String _seriesKey = kTextbookSeriesCatalog.first.key;
   final List<_BigUnitEdit> _bigUnits = <_BigUnitEdit>[];
 
-  // Navigation state for the right pane.
   _SubFocus? _focus;
 
   // Per-sub VLM state. Keyed by '<big>/<mid>/<sub>' so switching tabs keeps
   // previously computed results visible.
   final Map<String, _SubRunState> _subStates = <String, _SubRunState>{};
 
-  int _cropLongEdgePx = 2400;
-  bool _deskew = true;
+  // Manual item_region overrides. Outer key = state key, inner key = problem
+  // key (rawPage + ':' + 0-based order). When present, the stored value
+  // wins over the VLM's original `item.itemRegion`.
+  final Map<String, Map<String, List<int>>> _manualEdits =
+      <String, Map<String, List<int>>>{};
 
-  // Answer-extraction stub state.
-  bool _answerBusy = false;
-  String? _answerStatus;
+  // Single-selection for the corner-handle editor. Null ⇒ no handles drawn.
+  String? _selectedProblemKey;
 
   @override
   void initState() {
@@ -168,14 +168,12 @@ class _TextbookUnitAuthoringDialogState
         final bigEdit = _BigUnitEdit(bigName: big.bigName);
         for (final mid in big.middles) {
           final midEdit = _MidUnitEdit(series: entry, midName: mid.midName);
-          // Overlay stored start/end pages.
           for (final sub in mid.subs) {
             for (final slot in midEdit.subs) {
               if (slot.preset.key == sub.subKey) {
                 slot.startCtrl.text =
                     sub.startPage == null ? '' : '${sub.startPage}';
-                slot.endCtrl.text =
-                    sub.endPage == null ? '' : '${sub.endPage}';
+                slot.endCtrl.text = sub.endPage == null ? '' : '${sub.endPage}';
                 break;
               }
             }
@@ -221,7 +219,7 @@ class _TextbookUnitAuthoringDialogState
         bigUnits: payload,
       );
       if (!mounted) return;
-      _toast('단원 구조를 저장했습니다');
+      _toast('단원 구조를 Supabase에 저장했어요.');
     } catch (e) {
       if (!mounted) return;
       _toast('저장 실패: $e', error: true);
@@ -282,8 +280,7 @@ class _TextbookUnitAuthoringDialogState
       if (url.isEmpty) throw Exception('empty_download_url');
 
       final tempDir = await getTemporaryDirectory();
-      final safeBook =
-          widget.bookId.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
+      final safeBook = widget.bookId.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
       final file = File(p.join(
         tempDir.path,
         'auth_${safeBook}_${widget.gradeLabel}_body.pdf',
@@ -300,6 +297,7 @@ class _TextbookUnitAuthoringDialogState
       }
       setState(() {
         _bodyDocument = doc;
+        _bodyLocalPath = file.path;
         _loadingPdf = false;
       });
       return doc;
@@ -323,6 +321,29 @@ class _TextbookUnitAuthoringDialogState
     return _subStates.putIfAbsent(key, () => _SubRunState());
   }
 
+  Map<String, List<int>> _ensureManualEdits(_SubFocus focus) {
+    return _manualEdits.putIfAbsent(
+      _stateKeyFor(focus),
+      () => <String, List<int>>{},
+    );
+  }
+
+  String _problemKey(int rawPage, int orderIndex) => '$rawPage:$orderIndex';
+
+  /// Returns the currently effective item_region for a problem: the manual
+  /// edit if present, else the VLM original (possibly null).
+  List<int>? _effectiveItemRegion({
+    required _SubFocus focus,
+    required int rawPage,
+    required int orderIndex,
+    required TextbookVlmItem item,
+  }) {
+    final edits = _manualEdits[_stateKeyFor(focus)];
+    final edited = edits?[_problemKey(rawPage, orderIndex)];
+    if (edited != null && edited.length == 4) return edited;
+    return item.itemRegion;
+  }
+
   Future<void> _runFocusedAnalysis(_SubFocus focus) async {
     final big = _bigUnits[focus.bigIndex];
     final mid = big.middles[focus.midIndex];
@@ -340,6 +361,10 @@ class _TextbookUnitAuthoringDialogState
     if (doc == null) return;
     final state = _ensureSubState(focus);
     if (state.running) return;
+    // Wipe prior manual edits for this sub before re-analysing — once the
+    // VLM items change index the old keys can silently point at the wrong
+    // problem, which is worse than asking the user to redo tweaks.
+    _manualEdits.remove(_stateKeyFor(focus));
     setState(() {
       state.running = true;
       state.cancelled = false;
@@ -354,6 +379,7 @@ class _TextbookUnitAuthoringDialogState
       state.phase = '페이지 렌더링/분석 중...';
       state.error = null;
       state.uploadResult = null;
+      _selectedProblemKey = null;
     });
 
     Future<Uint8List> render({
@@ -389,11 +415,16 @@ class _TextbookUnitAuthoringDialogState
         detector: detect,
         isCancelled: () => state.cancelled,
         onPageSuccess: (outcome) async {
-          await _processPageOutcome(
-            doc: doc,
-            focus: focus,
-            outcome: outcome,
-          );
+          state.pageResults.add(_PageAnalysisRow.success(
+            rawPage: outcome.rawPage,
+            displayPage: outcome.result.displayPage,
+            section: outcome.result.section,
+            pageKind: outcome.result.pageKind,
+            notes: outcome.result.notes,
+            items: outcome.result.items,
+          ));
+          if (!mounted) return;
+          setState(() {});
         },
         onPageFailure: (f) {
           state.pageResults.add(_PageAnalysisRow.failure(
@@ -422,96 +453,6 @@ class _TextbookUnitAuthoringDialogState
         state.error = '$e';
         state.phase = '실패';
       });
-    }
-  }
-
-  Future<void> _processPageOutcome({
-    required PdfDocument doc,
-    required _SubFocus focus,
-    required PageAnalysisOutcome outcome,
-  }) async {
-    final state = _ensureSubState(focus);
-    try {
-      final analysisBase = outcome.renderedPng;
-      Uint8List analysisPng = analysisBase;
-      double skew = 0.0;
-      if (_deskew) {
-        final deskew = await deskewPng(analysisBase);
-        analysisPng = deskew.pngBytes;
-        skew = deskew.angleDeg;
-      }
-
-      Uint8List hiresPng = analysisPng;
-      int hiresW = 0;
-      int hiresH = 0;
-      if (_cropLongEdgePx != _kAnalysisLongEdgePx) {
-        final hiresBase = await renderPdfPageToPng(
-          document: doc,
-          pageNumber: outcome.rawPage,
-          longEdgePx: _cropLongEdgePx,
-        );
-        hiresPng = _deskew && skew.abs() > 1e-6
-            ? await rotatePng(hiresBase, skew)
-            : hiresBase;
-      }
-
-      final batch = <_BatchCropJob>[];
-      for (var i = 0; i < outcome.result.items.length; i += 1) {
-        final item = outcome.result.items[i];
-        final region = item.itemRegion;
-        if (region != null && region.length == 4) {
-          batch.add(_BatchCropJob(
-            orderIndex: i + 1,
-            itemRegion: region,
-            numberBbox: item.bbox,
-          ));
-        }
-      }
-      final cropsByOrder = batch.isEmpty
-          ? <int, ProblemCrop?>{}
-          : await compute<_BatchCropInput, Map<int, ProblemCrop?>>(
-              _batchCropInIsolate,
-              _BatchCropInput(sourcePng: hiresPng, jobs: batch),
-            );
-
-      final hiresProbe = identical(hiresPng, analysisPng)
-          ? img.decodePng(analysisPng)
-          : img.decodePng(hiresPng);
-      hiresW = hiresProbe?.width ?? 0;
-      hiresH = hiresProbe?.height ?? 0;
-
-      final crops = <_ProblemCropEntry>[];
-      for (var i = 0; i < outcome.result.items.length; i += 1) {
-        final item = outcome.result.items[i];
-        final order = i + 1;
-        crops.add(_ProblemCropEntry(
-          orderIndex: order,
-          item: item,
-          crop: cropsByOrder[order],
-        ));
-      }
-
-      final row = _PageAnalysisRow.success(
-        rawPage: outcome.rawPage,
-        displayPage: outcome.result.displayPage,
-        section: outcome.result.section,
-        analysisPng: analysisPng,
-        deskewAngle: skew,
-        hiresLongEdgePx: _cropLongEdgePx,
-        hiresW: hiresW,
-        hiresH: hiresH,
-        crops: crops,
-      );
-      state.pageResults.add(row);
-      if (!mounted) return;
-      setState(() {});
-    } catch (e) {
-      state.pageResults.add(_PageAnalysisRow.failure(
-        rawPage: outcome.rawPage,
-        error: '크롭 실패: $e',
-      ));
-      if (!mounted) return;
-      setState(() {});
     }
   }
 
@@ -567,18 +508,21 @@ class _TextbookUnitAuthoringDialogState
         detector: detect,
         isCancelled: () => state.cancelled,
         onPageSuccess: (outcome) async {
-          // Drop the previous failure marker for this page, if any.
           state.pageResults
               .removeWhere((r) => r.rawPage == outcome.rawPage && !r.ok);
-          await _processPageOutcome(
-            doc: doc,
-            focus: focus,
-            outcome: outcome,
-          );
+          state.pageResults.add(_PageAnalysisRow.success(
+            rawPage: outcome.rawPage,
+            displayPage: outcome.result.displayPage,
+            section: outcome.result.section,
+            pageKind: outcome.result.pageKind,
+            notes: outcome.result.notes,
+            items: outcome.result.items,
+          ));
+          if (!mounted) return;
+          setState(() {});
         },
         onPageFailure: (f) {
-          state.pageResults
-              .removeWhere((r) => r.rawPage == f.rawPage && !r.ok);
+          state.pageResults.removeWhere((r) => r.rawPage == f.rawPage && !r.ok);
           state.pageResults.add(_PageAnalysisRow.failure(
             rawPage: f.rawPage,
             error: '${f.error}',
@@ -608,45 +552,56 @@ class _TextbookUnitAuthoringDialogState
     }
   }
 
+  int _totalRegionsFor(_SubRunState state, _SubFocus focus) {
+    final edits = _manualEdits[_stateKeyFor(focus)];
+    var total = 0;
+    for (final row in state.pageResults.where((r) => r.ok)) {
+      for (var i = 0; i < row.items.length; i += 1) {
+        final item = row.items[i];
+        final edited = edits?[_problemKey(row.rawPage, i)];
+        final region = edited ?? item.itemRegion;
+        if (region != null && region.length == 4) total += 1;
+      }
+    }
+    return total;
+  }
+
   Future<void> _uploadFocused(_SubFocus focus) async {
     final state = _ensureSubState(focus);
     if (state.running || state.uploading) return;
     final big = _bigUnits[focus.bigIndex];
     final mid = big.middles[focus.midIndex];
+    final edits = _manualEdits[_stateKeyFor(focus)];
     final items = <TextbookCropUploadItem>[];
     for (final row in state.pageResults.where((r) => r.ok)) {
-      for (final c in row.crops) {
-        if (c.crop == null) continue;
+      for (var i = 0; i < row.items.length; i += 1) {
+        final vlm = row.items[i];
+        final edited = edits?[_problemKey(row.rawPage, i)];
+        final region = edited ?? vlm.itemRegion;
+        if (region == null || region.length != 4) continue;
         items.add(TextbookCropUploadItem(
           rawPage: row.rawPage,
           displayPage: row.displayPage,
           section: row.section,
-          problemNumber: c.item.number,
-          label: c.item.label,
-          isSetHeader: c.item.isSetHeader,
-          setFrom: c.item.setFrom,
-          setTo: c.item.setTo,
-          columnIndex: c.item.column,
-          bbox1k: c.item.bbox,
-          itemRegion1k: c.item.itemRegion,
-          pngBytes: c.crop!.pngBytes,
-          cropRectPx: c.crop!.cropRectPx,
-          paddingPx: c.crop!.paddingPx,
-          cropLongEdgePx: row.hiresLongEdgePx,
-          deskewAngleDeg: row.deskewAngle,
-          widthPx: row.hiresW,
-          heightPx: row.hiresH,
+          problemNumber: vlm.number,
+          label: vlm.label,
+          isSetHeader: vlm.isSetHeader,
+          setFrom: vlm.setFrom,
+          setTo: vlm.setTo,
+          columnIndex: vlm.column,
+          bbox1k: vlm.bbox,
+          itemRegion1k: region,
         ));
       }
     }
     if (items.isEmpty) {
-      _toast('업로드할 크롭이 없습니다', error: true);
+      _toast('저장할 문항 영역이 없습니다', error: true);
       return;
     }
 
     setState(() {
       state.uploading = true;
-      state.phase = '업로드 중... (${items.length}건)';
+      state.phase = '영역 저장 중... (${items.length}건)';
       state.error = null;
       state.uploadResult = null;
     });
@@ -661,10 +616,11 @@ class _TextbookUnitAuthoringDialogState
         bigName: big.nameCtrl.text.trim(),
         midName: mid.nameCtrl.text.trim(),
         items: items,
+        regionsOnly: true,
         onProgress: (processed, total) {
           if (!mounted) return;
           setState(() {
-            state.phase = '업로드 중... $processed / $total';
+            state.phase = '영역 저장 중... $processed / $total';
           });
         },
       );
@@ -672,86 +628,88 @@ class _TextbookUnitAuthoringDialogState
       setState(() {
         state.uploading = false;
         state.uploadResult = result;
-        state.phase =
-            '업로드 완료 · ${result.upserted}/${items.length}건 · ${result.bucket}';
+        state.phase = '영역 저장 완료 · ${result.upserted}/${items.length}건';
       });
       _toast(
-        '${focus.subKey} 크롭 ${result.upserted}건을 서버에 저장했습니다',
+        '${focus.subKey} 영역 ${result.upserted}건을 서버에 저장했습니다',
       );
     } catch (e) {
       if (!mounted) return;
       setState(() {
         state.uploading = false;
         state.error = '$e';
-        state.phase = '업로드 실패';
+        state.phase = '영역 저장 실패';
       });
     }
   }
 
-  Future<void> _exportFocusedToFolder(_SubFocus focus) async {
+  // ------------------------------------------------------------ next stage
+
+  void _openStageDialog(_SubFocus focus) {
     final state = _ensureSubState(focus);
-    if (state.pageResults.every((r) => !r.ok || r.crops.isEmpty)) {
-      _toast('내보낼 크롭이 없습니다', error: true);
+    // Must have something to match against. A "다음" with zero regions just
+    // takes the operator to an empty second stage, which is confusing.
+    final total = _totalRegionsFor(state, focus);
+    if (total == 0) {
+      _toast('먼저 문항 영역을 분석하고 저장하세요', error: true);
       return;
     }
-    final dir = await FilePicker.platform.getDirectoryPath(
-      dialogTitle: '소단원 크롭 저장 폴더',
-    );
-    if (dir == null) return;
-    final safeBook =
-        widget.bookName.replaceAll(RegExp(r'[^A-Za-z0-9가-힣_-]'), '_');
-    final folderName =
-        '${safeBook}_${widget.gradeLabel}_${focus.bigIndex}_${focus.midIndex}_${focus.subKey}';
-    final outDir = Directory(p.join(dir, folderName));
-    await outDir.create(recursive: true);
-    var count = 0;
-    for (final row in state.pageResults.where((r) => r.ok)) {
-      for (final c in row.crops) {
-        if (c.crop == null) continue;
-        final safeNum = c.item.number
-            .replaceAll(RegExp(r'[^A-Za-z0-9가-힣_-]'), '_');
-        final file = File(p.join(
-          outDir.path,
-          'p${row.rawPage}_${c.orderIndex.toString().padLeft(2, '0')}_$safeNum.png',
-        ));
-        await file.writeAsBytes(c.crop!.pngBytes, flush: true);
-        count += 1;
-      }
+    final seedRows = _buildStageCropSeeds(focus, state);
+    if (seedRows.isEmpty) {
+      _toast('먼저 "영역 저장"을 눌러 문항 정보를 서버에 저장하세요', error: true);
+      return;
     }
-    if (!mounted) return;
-    _toast('$count개 크롭을 ${outDir.path} 에 저장했습니다');
+    final big = _bigUnits[focus.bigIndex];
+    final mid = big.middles[focus.midIndex];
+    TextbookAuthoringStageDialog.show(
+      context,
+      academyId: widget.academyId,
+      bookId: widget.bookId,
+      bookName: widget.bookName,
+      gradeLabel: widget.gradeLabel,
+      linkId: widget.linkId,
+      bigOrder: focus.bigIndex,
+      midOrder: focus.midIndex,
+      subKey: focus.subKey,
+      bigName: big.nameCtrl.text.trim(),
+      midName: mid.nameCtrl.text.trim(),
+      initialCrops: seedRows,
+    );
   }
 
-  // ------------------------------------------------------------ answer stub
-
-  Future<void> _requestAnswerExtraction() async {
-    if (_answerBusy) return;
-    setState(() {
-      _answerBusy = true;
-      _answerStatus = null;
-    });
-    try {
-      final res = await _cropUploader.requestAnswerExtraction(
-        academyId: widget.academyId,
-        bookId: widget.bookId,
-        gradeLabel: widget.gradeLabel,
-      );
-      final message = (res['message'] as String?)?.trim() ??
-          (res['error'] as String?)?.trim() ??
-          '응답 코드 ${res['status_code']}';
-      if (!mounted) return;
-      setState(() {
-        _answerStatus = message;
-        _answerBusy = false;
-      });
-      _toast(message);
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _answerBusy = false;
-        _answerStatus = '호출 실패: $e';
-      });
+  List<TextbookAuthoringStageCropSeed> _buildStageCropSeeds(
+    _SubFocus focus,
+    _SubRunState state,
+  ) {
+    final uploadRows =
+        state.uploadResult?.rows ?? const <Map<String, dynamic>>[];
+    if (uploadRows.isEmpty) return const <TextbookAuthoringStageCropSeed>[];
+    final idByNumber = <String, String>{};
+    for (final row in uploadRows) {
+      final id = '${row['id'] ?? ''}'.trim();
+      final number = '${row['problem_number'] ?? ''}'.trim();
+      if (id.isNotEmpty && number.isNotEmpty) {
+        idByNumber[number] = id;
+      }
     }
+    if (idByNumber.isEmpty) return const <TextbookAuthoringStageCropSeed>[];
+
+    final seeds = <TextbookAuthoringStageCropSeed>[];
+    for (final row in state.pageResults.where((r) => r.ok)) {
+      for (final item in row.items) {
+        final id = idByNumber[item.number];
+        if (id == null) continue;
+        seeds.add(TextbookAuthoringStageCropSeed(
+          id: id,
+          problemNumber: item.number,
+          rawPage: row.rawPage,
+          displayPage: row.displayPage,
+          section: row.section,
+          isSetHeader: item.isSetHeader,
+        ));
+      }
+    }
+    return seeds;
   }
 
   // ------------------------------------------------------------ UI
@@ -798,8 +756,7 @@ class _TextbookUnitAuthoringDialogState
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: Row(
         children: [
-          const Icon(Icons.account_tree_outlined,
-              color: _kAccent, size: 20),
+          const Icon(Icons.account_tree_outlined, color: _kAccent, size: 20),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
@@ -831,21 +788,24 @@ class _TextbookUnitAuthoringDialogState
           if (_pdfLoadError != null) ...[
             Tooltip(
               message: _pdfLoadError!,
-              child: const Icon(Icons.warning_amber,
-                  size: 14, color: _kDanger),
+              child: const Icon(Icons.warning_amber, size: 14, color: _kDanger),
             ),
             const SizedBox(width: 10),
           ],
-          OutlinedButton.icon(
-            onPressed: _saveTree,
-            icon: const Icon(Icons.save_outlined,
-                size: 14, color: _kTextSub),
-            label: const Text(
-              '단원 저장',
-              style: TextStyle(color: _kTextSub, fontSize: 12),
-            ),
-            style: OutlinedButton.styleFrom(
-              side: const BorderSide(color: _kBorder),
+          Tooltip(
+            message:
+                '대·중·소단원 이름과 페이지 범위를 Supabase textbook_metadata.payload에 저장합니다.\n'
+                '영역 저장은 각 A/B/C 탭의 "영역 저장" 버튼을 눌러야 진행됩니다.',
+            child: OutlinedButton.icon(
+              onPressed: _saveTree,
+              icon: const Icon(Icons.save_outlined, size: 14, color: _kTextSub),
+              label: const Text(
+                '단원 구조 저장',
+                style: TextStyle(color: _kTextSub, fontSize: 12),
+              ),
+              style: OutlinedButton.styleFrom(
+                side: const BorderSide(color: _kBorder),
+              ),
             ),
           ),
           IconButton(
@@ -937,7 +897,10 @@ class _TextbookUnitAuthoringDialogState
         children: [
           Row(
             children: [
-              _pill(text: '대 ${i + 1}', color: const Color(0xFF1B2B1B), fg: _kAccent),
+              _pill(
+                  text: '대 ${i + 1}',
+                  color: const Color(0xFF1B2B1B),
+                  fg: _kAccent),
               const SizedBox(width: 8),
               Expanded(
                 child: _textInput(big.nameCtrl, hint: '대단원 이름'),
@@ -1013,14 +976,12 @@ class _TextbookUnitAuthoringDialogState
                     ? null
                     : () {
                         setState(() {
-                          _bigUnits[bigIndex]
-                              .middles[midIndex]
-                              .dispose();
+                          _bigUnits[bigIndex].middles[midIndex].dispose();
                           _bigUnits[bigIndex].middles.removeAt(midIndex);
                           if (_focus != null &&
                               _focus!.bigIndex == bigIndex &&
-                              _focus!.midIndex >= _bigUnits[bigIndex]
-                                  .middles.length) {
+                              _focus!.midIndex >=
+                                  _bigUnits[bigIndex].middles.length) {
                             _focus = null;
                           }
                         });
@@ -1047,7 +1008,18 @@ class _TextbookUnitAuthoringDialogState
         _focus!.midIndex == focus.midIndex &&
         _focus!.subKey == focus.subKey;
     final state = _subStates[_stateKeyFor(focus)];
-    final upserted = state?.uploadResult?.upserted ?? 0;
+    final analyzed = state == null
+        ? 0
+        : state.pageResults.where((r) => r.ok).fold<int>(
+              0,
+              (sum, row) =>
+                  sum +
+                  row.items
+                      .where((it) => (it.itemRegion?.length ?? 0) == 4)
+                      .length,
+            );
+    final uploaded = state?.uploadResult?.upserted ?? 0;
+    final isRunning = state?.running == true || state?.uploading == true;
     return Container(
       margin: const EdgeInsets.only(top: 4),
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
@@ -1057,14 +1029,17 @@ class _TextbookUnitAuthoringDialogState
       ),
       child: InkWell(
         onTap: () {
-          setState(() => _focus = focus);
+          setState(() {
+            _focus = focus;
+            _selectedProblemKey = null;
+          });
+          _jumpViewerToFocusStart(focus);
         },
         child: Row(
           children: [
             Container(
               width: 80,
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 6, vertical: 3),
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
               decoration: BoxDecoration(
                 color: const Color(0xFF1E1A12),
                 borderRadius: BorderRadius.circular(4),
@@ -1100,18 +1075,33 @@ class _TextbookUnitAuthoringDialogState
                 inputFormatters: [FilteringTextInputFormatter.digitsOnly],
               ),
             ),
-            if (upserted > 0) ...[
-              const SizedBox(width: 4),
-              Tooltip(
-                message: '이 소단원에 $upserted건의 크롭이 저장되어 있습니다',
-                child: const Icon(Icons.check_circle,
-                    size: 13, color: _kAccent),
-              ),
-            ],
+            const SizedBox(width: 6),
+            _SubRowStats(
+              analyzed: analyzed,
+              uploaded: uploaded,
+              running: isRunning,
+            ),
           ],
         ),
       ),
     );
+  }
+
+  void _jumpViewerToFocusStart(_SubFocus focus) {
+    final big = _bigUnits[focus.bigIndex];
+    final mid = big.middles[focus.midIndex];
+    final sub = mid.subs.firstWhere(
+      (s) => s.preset.key == focus.subKey,
+      orElse: () => mid.subs.first,
+    );
+    final start = _positiveInt(sub.startCtrl.text);
+    if (start == null) return;
+    if (!_viewerController.isReady) return;
+    try {
+      _viewerController.goToPage(pageNumber: start);
+    } catch (_) {
+      // Best-effort; pdfrx throws if the page number is out of range.
+    }
   }
 
   Widget _buildRightPane() {
@@ -1156,7 +1146,7 @@ class _TextbookUnitAuthoringDialogState
                   ),
                 ),
               ),
-              _buildAnswerExtractButton(),
+              _buildNextButton(focus, state),
             ],
           ),
         ),
@@ -1166,8 +1156,32 @@ class _TextbookUnitAuthoringDialogState
           child: _buildSubControls(focus, state, sub),
         ),
         if (state.progress != null) _buildProgressRow(state),
-        Expanded(child: _buildResultsGrid(state)),
+        Expanded(child: _buildViewerArea(focus, state)),
       ],
+    );
+  }
+
+  Widget _buildNextButton(_SubFocus focus, _SubRunState state) {
+    final total = _totalRegionsFor(state, focus);
+    final hasSavedRows = (state.uploadResult?.rows ?? const []).isNotEmpty;
+    final enabled =
+        total > 0 && hasSavedRows && !state.running && !state.uploading;
+    return Tooltip(
+      message: total == 0
+          ? '먼저 이 소단원에서 문항 영역을 분석하세요.'
+          : !hasSavedRows
+              ? '다음 단계로 가기 전에 "영역 저장"을 먼저 눌러 주세요.'
+              : '$total개 문항을 기반으로 정답·해설 좌표 단계로 이동합니다.',
+      child: FilledButton.icon(
+        onPressed: enabled ? () => _openStageDialog(focus) : null,
+        icon: const Icon(Icons.arrow_forward, size: 14),
+        label: const Text('다음'),
+        style: FilledButton.styleFrom(
+          backgroundColor: _kAccent,
+          disabledBackgroundColor: const Color(0xFF2A2A2A),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        ),
+      ),
     );
   }
 
@@ -1179,12 +1193,11 @@ class _TextbookUnitAuthoringDialogState
     final start = _positiveInt(sub.startCtrl.text);
     final end = _positiveInt(sub.endCtrl.text);
     final readyRange = start != null && end != null && end >= start;
-    final hasFailures = (state.progress?.failedPages ?? const <int>{}).isNotEmpty;
-    final succeeded = state.pageResults.where((r) => r.ok).toList();
-    final totalCrops = succeeded.fold<int>(
-      0,
-      (sum, row) => sum + row.crops.where((c) => c.crop != null).length,
-    );
+    final hasFailures =
+        (state.progress?.failedPages ?? const <int>{}).isNotEmpty;
+    final totalRegions = _totalRegionsFor(state, focus);
+    final edits = _manualEdits[_stateKeyFor(focus)];
+    final manualCount = edits?.length ?? 0;
 
     return Container(
       padding: const EdgeInsets.all(10),
@@ -1202,54 +1215,16 @@ class _TextbookUnitAuthoringDialogState
             const _InfoTag(text: '시작/끝 페이지를 입력하세요', danger: true),
           const SizedBox(width: 8),
           _tag('분석 ${_kAnalysisLongEdgePx}px', const Color(0xFF333333)),
-          const SizedBox(width: 6),
-          Row(
-            children: [
-              const Text('크롭',
-                  style:
-                      TextStyle(color: _kTextSub, fontSize: 11)),
-              const SizedBox(width: 4),
-              DropdownButton<int>(
-                value: _cropLongEdgePx,
-                dropdownColor: _kCard,
-                isDense: true,
-                underline: const SizedBox.shrink(),
-                style: const TextStyle(color: _kText, fontSize: 12),
-                iconEnabledColor: _kTextSub,
-                onChanged: state.running || state.uploading
-                    ? null
-                    : (v) => setState(() => _cropLongEdgePx = v!),
-                items: [
-                  for (final r in _kCropResolutionChoices)
-                    DropdownMenuItem<int>(
-                      value: r,
-                      child: Text('${r}px'),
-                    ),
-                ],
-              ),
-            ],
-          ),
-          const SizedBox(width: 10),
-          Row(
-            children: [
-              Switch(
-                value: _deskew,
-                onChanged: state.running || state.uploading
-                    ? null
-                    : (v) => setState(() => _deskew = v),
-                activeThumbColor: _kAccent,
-              ),
-              const Text('스큐 보정',
-                  style:
-                      TextStyle(color: _kTextSub, fontSize: 11)),
-            ],
-          ),
+          if (manualCount > 0) ...[
+            const SizedBox(width: 6),
+            _tag('수동 편집 $manualCount건', const Color(0xFF3A2F18)),
+          ],
           const Spacer(),
-          if (totalCrops > 0)
+          if (totalRegions > 0)
             Padding(
               padding: const EdgeInsets.only(right: 6),
               child: Text(
-                '$totalCrops개 준비',
+                '$totalRegions개 준비',
                 style: const TextStyle(color: _kAccent, fontSize: 11),
               ),
             ),
@@ -1287,73 +1262,43 @@ class _TextbookUnitAuthoringDialogState
                   : () => _runFocusedAnalysis(focus),
               icon: const Icon(Icons.play_arrow, size: 16),
               label: const Text('분석 시작'),
-              style: FilledButton.styleFrom(
-                backgroundColor: _kAccent,
-              ),
+              style: FilledButton.styleFrom(backgroundColor: _kAccent),
             ),
           ],
           const SizedBox(width: 6),
-          OutlinedButton.icon(
-            onPressed:
-                (state.running || state.uploading || totalCrops == 0)
-                    ? null
-                    : () => _exportFocusedToFolder(focus),
-            icon: const Icon(Icons.folder_zip_outlined,
-                size: 14, color: _kTextSub),
-            label: const Text(
-              '폴더 내보내기',
-              style: TextStyle(color: _kTextSub, fontSize: 12),
-            ),
-            style: OutlinedButton.styleFrom(
-              side: const BorderSide(color: _kBorder),
-            ),
-          ),
-          const SizedBox(width: 6),
-          FilledButton.icon(
-            onPressed: state.running || state.uploading || totalCrops == 0
-                ? null
-                : () => _uploadFocused(focus),
-            icon: state.uploading
-                ? const SizedBox(
-                    width: 14,
-                    height: 14,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: Colors.white,
-                    ),
-                  )
-                : const Icon(Icons.cloud_upload_outlined, size: 16),
-            label: Text(state.uploading ? '업로드 중' : '서버로 저장'),
-            style: FilledButton.styleFrom(
-              backgroundColor: _kInfo,
-              disabledBackgroundColor: const Color(0xFF2A2A2A),
+          Tooltip(
+            message: totalRegions == 0
+                ? '분석된 문항 영역이 없어요. 먼저 "분석 시작" 을 눌러 VLM으로 감지하세요.'
+                : '이 소단원에서 감지된 $totalRegions건의 문항 영역(좌표)을 '
+                    'textbook_problem_crops 테이블에 저장합니다.',
+            child: FilledButton.icon(
+              onPressed: state.running || state.uploading || totalRegions == 0
+                  ? null
+                  : () => _uploadFocused(focus),
+              icon: state.uploading
+                  ? const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : const Icon(Icons.save_outlined, size: 16),
+              label: Text(
+                state.uploading
+                    ? '영역 저장 중'
+                    : totalRegions == 0
+                        ? '영역 저장'
+                        : '영역 저장 ($totalRegions건)',
+              ),
+              style: FilledButton.styleFrom(
+                backgroundColor: _kInfo,
+                disabledBackgroundColor: const Color(0xFF2A2A2A),
+              ),
             ),
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _buildAnswerExtractButton() {
-    return OutlinedButton.icon(
-      onPressed: _answerBusy ? null : _requestAnswerExtraction,
-      icon: _answerBusy
-          ? const SizedBox(
-              width: 12,
-              height: 12,
-              child: CircularProgressIndicator(
-                strokeWidth: 2,
-                color: _kInfo,
-              ),
-            )
-          : const Icon(Icons.auto_awesome, size: 14, color: _kInfo),
-      label: Text(
-        _answerStatus == null ? '정답 VLM 추출 시도 (베타)' : _answerStatus!,
-        style: const TextStyle(color: _kInfo, fontSize: 11),
-      ),
-      style: OutlinedButton.styleFrom(
-        side: const BorderSide(color: Color(0xFF2A3E5A)),
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       ),
     );
   }
@@ -1362,8 +1307,7 @@ class _TextbookUnitAuthoringDialogState
     final progress = state.progress;
     if (progress == null) return const SizedBox.shrink();
     final total = progress.total == 0 ? 1 : progress.total;
-    final ratio =
-        ((progress.done + progress.failed) / total).clamp(0.0, 1.0);
+    final ratio = ((progress.done + progress.failed) / total).clamp(0.0, 1.0);
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
       child: Column(
@@ -1411,179 +1355,363 @@ class _TextbookUnitAuthoringDialogState
     );
   }
 
-  Widget _buildResultsGrid(_SubRunState state) {
-    if (state.pageResults.isEmpty) {
-      return const Center(
-        child: Text(
-          '아직 분석 결과가 없습니다. "분석 시작" 버튼을 눌러 실행하세요.',
-          style: TextStyle(color: _kTextSub, fontSize: 12),
+  // ─── PDF viewer + overlays ──────────────────────────────────────────
+
+  Widget _buildViewerArea(_SubFocus focus, _SubRunState state) {
+    if (_bodyLocalPath == null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.picture_as_pdf_outlined,
+                  size: 32, color: _kTextSub),
+              const SizedBox(height: 8),
+              Text(
+                _pdfLoadError != null
+                    ? 'PDF 로드 실패\n$_pdfLoadError'
+                    : 'PDF가 아직 로드되지 않았어요.',
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: _kTextSub, fontSize: 12),
+              ),
+              const SizedBox(height: 10),
+              FilledButton.icon(
+                onPressed: _loadingPdf ? null : _ensurePdf,
+                icon: const Icon(Icons.file_download_outlined, size: 14),
+                label: const Text('PDF 로드'),
+                style: FilledButton.styleFrom(backgroundColor: _kInfo),
+              ),
+              if (state.pageResults.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.only(top: 10),
+                  child: Text(
+                    '"분석 시작" 을 누르면 PDF를 로드하고 문항 영역을 감지합니다.',
+                    style: TextStyle(color: _kTextSub, fontSize: 11),
+                  ),
+                ),
+            ],
+          ),
         ),
       );
     }
-    final cropEntries = <_FlatCropEntry>[];
-    final failureRows = <_PageAnalysisRow>[];
-    final sorted = [...state.pageResults]
-      ..sort((a, b) => a.rawPage.compareTo(b.rawPage));
-    for (final row in sorted) {
-      if (!row.ok) {
-        failureRows.add(row);
-        continue;
+    return Container(
+      color: _kBg,
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: PdfViewer.file(
+              _bodyLocalPath!,
+              controller: _viewerController,
+              params: PdfViewerParams(
+                backgroundColor: _kBg,
+                margin: 8,
+                layoutPages: _layoutTwoPageSpread,
+                pageAnchor: PdfPageAnchor.center,
+                viewerOverlayBuilder: (context, size, handleLinkTap) => [
+                  PdfViewerScrollThumb(
+                    controller: _viewerController,
+                    orientation: ScrollbarOrientation.right,
+                  ),
+                  PdfViewerScrollThumb(
+                    controller: _viewerController,
+                    orientation: ScrollbarOrientation.bottom,
+                  ),
+                ],
+                onViewerReady: (document, controller) {
+                  if (!mounted) return;
+                  _jumpViewerToFocusStart(focus);
+                },
+                pageOverlaysBuilder: (context, pageRect, page) {
+                  return _buildPageOverlays(
+                    focus: focus,
+                    state: state,
+                    pageNumber: page.pageNumber,
+                    pageRect: pageRect,
+                  );
+                },
+              ),
+            ),
+          ),
+          if (state.pageResults.any((r) => !r.ok))
+            Positioned(
+              left: 10,
+              top: 10,
+              child: _FailureChip(
+                count: state.pageResults.where((r) => !r.ok).length,
+              ),
+            ),
+          if (_selectedProblemKey != null)
+            Positioned(
+              right: 10,
+              bottom: 10,
+              child: _SelectedHintChip(
+                onDismiss: () => setState(() => _selectedProblemKey = null),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  PdfPageLayout _layoutTwoPageSpread(
+      List<PdfPage> pages, PdfViewerParams params) {
+    if (pages.isEmpty) {
+      return PdfPageLayout(
+        pageLayouts: const <Rect>[],
+        documentSize: Size.zero,
+      );
+    }
+    const colGap = 20.0;
+    const rowGap = 24.0;
+    final rowWidths = <double>[];
+    for (var i = 0; i < pages.length; i += 2) {
+      final left = pages[i];
+      final right = (i + 1) < pages.length ? pages[i + 1] : null;
+      final width =
+          right == null ? left.width : left.width + colGap + right.width;
+      rowWidths.add(width);
+    }
+    final maxRowWidth = rowWidths.fold<double>(0, (acc, w) => math.max(acc, w));
+    final totalWidth = maxRowWidth + params.margin * 2;
+    final layouts = <Rect>[];
+    var y = params.margin;
+    for (var i = 0; i < pages.length; i += 2) {
+      final left = pages[i];
+      final right = (i + 1) < pages.length ? pages[i + 1] : null;
+      final rowWidth =
+          right == null ? left.width : left.width + colGap + right.width;
+      final startX = (totalWidth - rowWidth) / 2;
+      layouts.add(Rect.fromLTWH(startX, y, left.width, left.height));
+      if (right != null) {
+        layouts.add(Rect.fromLTWH(
+            startX + left.width + colGap, y, right.width, right.height));
       }
-      for (final c in row.crops) {
-        cropEntries.add(_FlatCropEntry(row: row, entry: c));
+      final rowHeight = math.max(left.height, right?.height ?? 0);
+      y += rowHeight + rowGap;
+    }
+    return PdfPageLayout(
+      pageLayouts: layouts,
+      documentSize: Size(totalWidth, y + params.margin),
+    );
+  }
+
+  List<Widget> _buildPageOverlays({
+    required _SubFocus focus,
+    required _SubRunState state,
+    required int pageNumber,
+    required Rect pageRect,
+  }) {
+    final row = state.pageResults.firstWhere(
+      (r) => r.rawPage == pageNumber && r.ok,
+      orElse: () => _PageAnalysisRow.placeholder(),
+    );
+    if (row.items.isEmpty) {
+      if (row.isConceptPage) {
+        return const <Widget>[
+          Positioned(
+            left: 12,
+            top: 12,
+            child: _ConceptPageMarker(),
+          ),
+        ];
+      }
+      return const <Widget>[];
+    }
+    final pageSize = pageRect.size;
+    final widgets = <Widget>[];
+    for (var i = 0; i < row.items.length; i += 1) {
+      final item = row.items[i];
+      final region = _effectiveItemRegion(
+        focus: focus,
+        rawPage: pageNumber,
+        orderIndex: i,
+        item: item,
+      );
+      if (region == null || region.length != 4) continue;
+      final rect = _bboxToRect(region, pageSize);
+      if (rect == null) continue;
+      final key = _problemKey(pageNumber, i);
+      final isSelected = _selectedProblemKey == key;
+      final isEdited =
+          _manualEdits[_stateKeyFor(focus)]?.containsKey(key) == true;
+      widgets.add(_RegionBox(
+        rect: rect,
+        item: item,
+        selected: isSelected,
+        edited: isEdited,
+        onTap: () {
+          setState(() {
+            _selectedProblemKey = isSelected ? null : key;
+          });
+        },
+      ));
+    }
+    // Bottom pass: number bboxes (for context)
+    for (var i = 0; i < row.items.length; i += 1) {
+      final item = row.items[i];
+      final bbox = item.bbox;
+      if (bbox == null || bbox.length != 4) continue;
+      final rect = _bboxToRect(bbox, pageSize);
+      if (rect == null) continue;
+      widgets.add(_NumberBadge(rect: rect, item: item));
+    }
+    // Top pass: drag handles for the selected region. Drawn last so they
+    // stay clickable.
+    if (_selectedProblemKey != null) {
+      final parts = _selectedProblemKey!.split(':');
+      if (parts.length == 2) {
+        final selRawPage = int.tryParse(parts[0]);
+        final selIndex = int.tryParse(parts[1]);
+        if (selRawPage == pageNumber && selIndex != null) {
+          if (selIndex >= 0 && selIndex < row.items.length) {
+            final item = row.items[selIndex];
+            final region = _effectiveItemRegion(
+              focus: focus,
+              rawPage: pageNumber,
+              orderIndex: selIndex,
+              item: item,
+            );
+            if (region != null && region.length == 4) {
+              final rect = _bboxToRect(region, pageSize);
+              if (rect != null) {
+                widgets.addAll(_buildDragHandles(
+                  rect: rect,
+                  pageSize: pageSize,
+                  focus: focus,
+                  rawPage: pageNumber,
+                  orderIndex: selIndex,
+                  currentRegion: region,
+                ));
+              }
+            }
+          }
+        }
       }
     }
-
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
-      children: [
-        if (failureRows.isNotEmpty) _buildFailureList(failureRows),
-        const SizedBox(height: 8),
-        if (cropEntries.isEmpty)
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 24),
-            child: Center(
-              child: Text(
-                '탐지된 문항이 없습니다.',
-                style: TextStyle(color: _kTextSub, fontSize: 12),
-              ),
-            ),
-          )
-        else
-          GridView.builder(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-              maxCrossAxisExtent: 240,
-              mainAxisExtent: 280,
-              crossAxisSpacing: 8,
-              mainAxisSpacing: 8,
-            ),
-            itemCount: cropEntries.length,
-            itemBuilder: (_, i) => _buildCropCard(cropEntries[i]),
-          ),
-      ],
-    );
+    return widgets;
   }
 
-  Widget _buildFailureList(List<_PageAnalysisRow> failures) {
-    return Container(
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: const Color(0xFF2A1919),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: const Color(0xFF5A2A2A)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            '분석 실패 ${failures.length}건',
-            style: const TextStyle(
-              color: _kDanger,
-              fontSize: 12,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-          const SizedBox(height: 4),
-          for (final f in failures)
-            Padding(
-              padding: const EdgeInsets.only(top: 2),
-              child: Text(
-                'p${f.rawPage}: ${f.error}',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: Color(0xFFE0B5B5), fontSize: 11),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildCropCard(_FlatCropEntry flat) {
-    final entry = flat.entry;
-    final row = flat.row;
-    return Container(
-      decoration: BoxDecoration(
-        color: _kCard,
-        border: Border.all(color: _kBorder),
-        borderRadius: BorderRadius.circular(6),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(6),
-            child: Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 5, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: entry.item.isSetHeader
-                        ? const Color(0xFFFFB44A)
-                        : _kAccent,
-                    borderRadius: BorderRadius.circular(3),
-                  ),
-                  child: Text(
-                    entry.item.number,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 10,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 4),
-                if (entry.item.label.isNotEmpty)
-                  Text(
-                    entry.item.label,
-                    style: const TextStyle(
-                      color: _kText,
-                      fontSize: 10,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                const Spacer(),
-                Text(
-                  'p${row.rawPage}',
-                  style: const TextStyle(color: _kTextSub, fontSize: 10),
-                ),
-              ],
-            ),
-          ),
-          const Divider(height: 1, color: _kBorder),
-          Expanded(
+  List<Widget> _buildDragHandles({
+    required Rect rect,
+    required Size pageSize,
+    required _SubFocus focus,
+    required int rawPage,
+    required int orderIndex,
+    required List<int> currentRegion,
+  }) {
+    const handleSize = 14.0;
+    Widget makeHandle(Offset center, _HandleKind kind) {
+      return Positioned(
+        left: center.dx - handleSize / 2,
+        top: center.dy - handleSize / 2,
+        width: handleSize,
+        height: handleSize,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onPanUpdate: (details) {
+            _onHandleDrag(
+              kind: kind,
+              delta: details.delta,
+              pageSize: pageSize,
+              focus: focus,
+              rawPage: rawPage,
+              orderIndex: orderIndex,
+            );
+          },
+          child: MouseRegion(
+            cursor: SystemMouseCursors.resizeUpLeftDownRight,
             child: Container(
-              color: Colors.white,
-              alignment: Alignment.center,
-              child: entry.crop == null
-                  ? const Padding(
-                      padding: EdgeInsets.all(8),
-                      child: Text(
-                        '크롭 없음',
-                        style: TextStyle(
-                          color: Color(0xFF6A6A6A),
-                          fontSize: 10,
-                        ),
-                      ),
-                    )
-                  : Image.memory(
-                      entry.crop!.pngBytes,
-                      fit: BoxFit.contain,
-                      gaplessPlayback: true,
-                    ),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                border: Border.all(color: _kAccent, width: 2),
+                borderRadius: BorderRadius.circular(2),
+              ),
             ),
           ),
-        ],
-      ),
-    );
+        ),
+      );
+    }
+
+    return [
+      makeHandle(Offset(rect.left, rect.top), _HandleKind.topLeft),
+      makeHandle(Offset(rect.right, rect.top), _HandleKind.topRight),
+      makeHandle(Offset(rect.left, rect.bottom), _HandleKind.bottomLeft),
+      makeHandle(Offset(rect.right, rect.bottom), _HandleKind.bottomRight),
+    ];
   }
 
-  // ------------------------------------------------------------ widgets
+  void _onHandleDrag({
+    required _HandleKind kind,
+    required Offset delta,
+    required Size pageSize,
+    required _SubFocus focus,
+    required int rawPage,
+    required int orderIndex,
+  }) {
+    if (pageSize.width <= 0 || pageSize.height <= 0) return;
+    // The overlay is drawn on top of the already-zoomed page rect, so the
+    // delta is already in viewer-space pixels relative to the current
+    // zoom. Converting to normalised 0..1000 by the current pageSize gives
+    // the same effective step regardless of zoom.
+    final dxNorm = (delta.dx / pageSize.width * 1000).round();
+    final dyNorm = (delta.dy / pageSize.height * 1000).round();
 
-  Widget _pill({required String text, required Color color, required Color fg}) {
+    final edits = _ensureManualEdits(focus);
+    final key = _problemKey(rawPage, orderIndex);
+    final state = _ensureSubState(focus);
+    final row = state.pageResults.firstWhere(
+      (r) => r.rawPage == rawPage && r.ok,
+      orElse: () => _PageAnalysisRow.placeholder(),
+    );
+    if (orderIndex < 0 || orderIndex >= row.items.length) return;
+    final item = row.items[orderIndex];
+    final current = edits[key] ?? List<int>.from(item.itemRegion ?? const []);
+    if (current.length != 4) return;
+    // item_region format = [ymin, xmin, ymax, xmax] in 0..1000.
+    var ymin = current[0];
+    var xmin = current[1];
+    var ymax = current[2];
+    var xmax = current[3];
+    switch (kind) {
+      case _HandleKind.topLeft:
+        ymin = (ymin + dyNorm).clamp(0, ymax - 10);
+        xmin = (xmin + dxNorm).clamp(0, xmax - 10);
+        break;
+      case _HandleKind.topRight:
+        ymin = (ymin + dyNorm).clamp(0, ymax - 10);
+        xmax = (xmax + dxNorm).clamp(xmin + 10, 1000);
+        break;
+      case _HandleKind.bottomLeft:
+        ymax = (ymax + dyNorm).clamp(ymin + 10, 1000);
+        xmin = (xmin + dxNorm).clamp(0, xmax - 10);
+        break;
+      case _HandleKind.bottomRight:
+        ymax = (ymax + dyNorm).clamp(ymin + 10, 1000);
+        xmax = (xmax + dxNorm).clamp(xmin + 10, 1000);
+        break;
+    }
+    edits[key] = <int>[ymin, xmin, ymax, xmax];
+    if (mounted) setState(() {});
+  }
+
+  Rect? _bboxToRect(List<int> bbox, Size pageSize) {
+    final ymin = bbox[0] / 1000.0;
+    final xmin = bbox[1] / 1000.0;
+    final ymax = bbox[2] / 1000.0;
+    final xmax = bbox[3] / 1000.0;
+    final left = xmin * pageSize.width;
+    final top = ymin * pageSize.height;
+    final width = (xmax - xmin) * pageSize.width;
+    final height = (ymax - ymin) * pageSize.height;
+    if (width <= 0 || height <= 0) return null;
+    return Rect.fromLTWH(left, top, width, height);
+  }
+
+  // ─── widgets ────────────────────────────────────────────────────────
+
+  Widget _pill(
+      {required String text, required Color color, required Color fg}) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
@@ -1670,6 +1798,217 @@ class _TextbookUnitAuthoringDialogState
   }
 }
 
+// ────────────────────────────── overlays ──────────────────────────────
+
+class _ConceptPageMarker extends StatelessWidget {
+  const _ConceptPageMarker();
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: const Color(0xFF2A2A1E).withValues(alpha: 0.92),
+          border: Border.all(color: Color(0xFFE6C07A)),
+          borderRadius: BorderRadius.circular(999),
+          boxShadow: const [
+            BoxShadow(
+              color: Colors.black38,
+              blurRadius: 6,
+              offset: Offset(1, 2),
+            ),
+          ],
+        ),
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.lightbulb_outline, size: 13, color: Color(0xFFE6C07A)),
+            SizedBox(width: 5),
+            Text(
+              '개념 페이지',
+              style: TextStyle(
+                color: Color(0xFFE6C07A),
+                fontSize: 11,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _RegionBox extends StatelessWidget {
+  const _RegionBox({
+    required this.rect,
+    required this.item,
+    required this.selected,
+    required this.edited,
+    required this.onTap,
+  });
+
+  final Rect rect;
+  final TextbookVlmItem item;
+  final bool selected;
+  final bool edited;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final baseColor =
+        item.isSetHeader ? const Color(0xFFFFB44A) : const Color(0xFF5AA6FF);
+    final borderColor = selected
+        ? const Color(0xFF33A373)
+        : edited
+            ? const Color(0xFFEAB968)
+            : baseColor;
+    final fillColor = selected
+        ? const Color(0xFF33A373).withValues(alpha: 0.12)
+        : edited
+            ? const Color(0xFFEAB968).withValues(alpha: 0.08)
+            : baseColor.withValues(alpha: 0.05);
+    return Positioned(
+      left: rect.left,
+      top: rect.top,
+      width: rect.width,
+      height: rect.height,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: Container(
+          decoration: BoxDecoration(
+            color: fillColor,
+            border: Border.all(
+              color: borderColor,
+              width: selected ? 2.5 : 1.5,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _NumberBadge extends StatelessWidget {
+  const _NumberBadge({required this.rect, required this.item});
+  final Rect rect;
+  final TextbookVlmItem item;
+
+  @override
+  Widget build(BuildContext context) {
+    final color =
+        item.isSetHeader ? const Color(0xFFFFB44A) : const Color(0xFFFF4D4F);
+    return Positioned(
+      left: rect.left,
+      top: rect.top,
+      width: rect.width,
+      height: rect.height,
+      child: IgnorePointer(
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Container(
+              decoration: BoxDecoration(
+                border: Border.all(color: color, width: 2),
+                color: color.withValues(alpha: 0.08),
+              ),
+            ),
+            Positioned(
+              left: -2,
+              top: -18,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                color: color,
+                child: Text(
+                  item.label.isEmpty
+                      ? item.number
+                      : '${item.number} · ${item.label}',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _FailureChip extends StatelessWidget {
+  const _FailureChip({required this.count});
+  final int count;
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: const Color(0xFF5A2A2A),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: const Color(0xFF8A4A4A)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.warning_amber, size: 12, color: Color(0xFFE0B5B5)),
+          const SizedBox(width: 4),
+          Text(
+            '$count 페이지 분석 실패',
+            style: const TextStyle(
+              color: Color(0xFFE0B5B5),
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SelectedHintChip extends StatelessWidget {
+  const _SelectedHintChip({required this.onDismiss});
+  final VoidCallback onDismiss;
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onDismiss,
+        borderRadius: BorderRadius.circular(4),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: const Color(0xFF1B3A2A),
+            borderRadius: BorderRadius.circular(4),
+            border: Border.all(color: const Color(0xFF33A373)),
+          ),
+          child: const Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.pan_tool_alt, size: 12, color: Color(0xFF9FD49F)),
+              SizedBox(width: 4),
+              Text(
+                '모서리 핸들을 드래그해서 영역 조정 · 클릭하여 해제',
+                style: TextStyle(
+                  color: Color(0xFF9FD49F),
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 // ────────────────────────────── helpers ──────────────────────────────
 
 class _InfoTag extends StatelessWidget {
@@ -1695,6 +2034,115 @@ class _InfoTag extends StatelessWidget {
     );
   }
 }
+
+class _SubRowStats extends StatelessWidget {
+  const _SubRowStats({
+    required this.analyzed,
+    required this.uploaded,
+    required this.running,
+  });
+
+  final int analyzed;
+  final int uploaded;
+  final bool running;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!running && analyzed == 0 && uploaded == 0) {
+      return const SizedBox(width: 72);
+    }
+
+    final fullyUploaded = uploaded > 0 && uploaded >= analyzed;
+    final partiallyUploaded = uploaded > 0 && uploaded < analyzed;
+    final label = '$uploaded/$analyzed';
+    final Color bg;
+    final Color fg;
+    if (fullyUploaded) {
+      bg = const Color(0xFF1B3A2A);
+      fg = const Color(0xFF9FD49F);
+    } else if (partiallyUploaded) {
+      bg = const Color(0xFF3A2F18);
+      fg = const Color(0xFFEAB968);
+    } else if (analyzed > 0) {
+      bg = const Color(0xFF1B2A3A);
+      fg = const Color(0xFF7AA9E6);
+    } else {
+      bg = const Color(0xFF242424);
+      fg = const Color(0xFFB3B3B3);
+    }
+    return Tooltip(
+      message: fullyUploaded
+          ? '분석 $analyzed건 · 전부 서버 저장 완료 ($uploaded건)'
+          : partiallyUploaded
+              ? '분석 $analyzed건 · 서버 저장 $uploaded건 (일부)'
+              : analyzed > 0
+                  ? '분석 $analyzed건 · 서버 저장 아직 안 됨 — "영역 저장" 을 눌러주세요'
+                  : '분석 진행 중',
+      child: SizedBox(
+        width: 72,
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+              decoration: BoxDecoration(
+                color: bg,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    fullyUploaded
+                        ? Icons.cloud_done_outlined
+                        : analyzed > 0 && uploaded == 0
+                            ? Icons.cloud_upload_outlined
+                            : Icons.inventory_2_outlined,
+                    size: 11,
+                    color: fg,
+                  ),
+                  const SizedBox(width: 3),
+                  Text(
+                    label,
+                    style: TextStyle(
+                      color: fg,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (running)
+              const Positioned(
+                right: 0,
+                top: 0,
+                bottom: 0,
+                child: SizedBox(
+                  width: 10,
+                  height: 10,
+                  child: Center(
+                    child: SizedBox(
+                      width: 8,
+                      height: 8,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 1.2,
+                        color: Color(0xFFEAB968),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────── data classes ───────────
+
+enum _HandleKind { topLeft, topRight, bottomLeft, bottomRight }
 
 class _SubFocus {
   const _SubFocus({
@@ -1725,36 +2173,27 @@ class _PageAnalysisRow {
     this.error,
     this.displayPage = 0,
     this.section = 'unknown',
-    this.analysisPng,
-    this.deskewAngle = 0.0,
-    this.hiresLongEdgePx = 0,
-    this.hiresW = 0,
-    this.hiresH = 0,
-    List<_ProblemCropEntry>? crops,
-  }) : crops = crops ?? <_ProblemCropEntry>[];
+    this.pageKind = 'unknown',
+    this.notes = '',
+    List<TextbookVlmItem>? items,
+  }) : items = items ?? const <TextbookVlmItem>[];
 
   factory _PageAnalysisRow.success({
     required int rawPage,
     required int displayPage,
     required String section,
-    required Uint8List analysisPng,
-    required double deskewAngle,
-    required int hiresLongEdgePx,
-    required int hiresW,
-    required int hiresH,
-    required List<_ProblemCropEntry> crops,
+    required String pageKind,
+    required String notes,
+    required List<TextbookVlmItem> items,
   }) {
     return _PageAnalysisRow(
       rawPage: rawPage,
       ok: true,
       displayPage: displayPage,
       section: section,
-      analysisPng: analysisPng,
-      deskewAngle: deskewAngle,
-      hiresLongEdgePx: hiresLongEdgePx,
-      hiresW: hiresW,
-      hiresH: hiresH,
-      crops: crops,
+      pageKind: pageKind,
+      notes: notes,
+      items: items,
     );
   }
 
@@ -1765,34 +2204,27 @@ class _PageAnalysisRow {
     return _PageAnalysisRow(rawPage: rawPage, ok: false, error: error);
   }
 
+  /// Sentinel used by the overlay builder when the requested page has no
+  /// analysis yet. Every property is safe to read but `items` is empty so
+  /// the overlay list comes back empty.
+  factory _PageAnalysisRow.placeholder() {
+    return _PageAnalysisRow(rawPage: 0, ok: false);
+  }
+
   final int rawPage;
   final bool ok;
   final String? error;
   final int displayPage;
   final String section;
-  final Uint8List? analysisPng;
-  final double deskewAngle;
-  final int hiresLongEdgePx;
-  final int hiresW;
-  final int hiresH;
-  final List<_ProblemCropEntry> crops;
-}
+  final String pageKind;
+  final String notes;
+  final List<TextbookVlmItem> items;
 
-class _ProblemCropEntry {
-  const _ProblemCropEntry({
-    required this.orderIndex,
-    required this.item,
-    required this.crop,
-  });
-  final int orderIndex;
-  final TextbookVlmItem item;
-  final ProblemCrop? crop;
-}
-
-class _FlatCropEntry {
-  const _FlatCropEntry({required this.row, required this.entry});
-  final _PageAnalysisRow row;
-  final _ProblemCropEntry entry;
+  bool get isConceptPage =>
+      ok &&
+      items.isEmpty &&
+      (pageKind == 'concept_page' ||
+          notes.toLowerCase().contains('concept_page'));
 }
 
 // ─────────── reused unit-edit models (tree editor) ───────────
@@ -1848,45 +2280,4 @@ int? _positiveInt(String raw) {
   final n = int.tryParse(t);
   if (n == null || n <= 0) return null;
   return n;
-}
-
-// ─────────── isolate-bound batch cropping (same shape as crop dialog) ───────────
-
-class _BatchCropJob {
-  const _BatchCropJob({
-    required this.orderIndex,
-    required this.itemRegion,
-    required this.numberBbox,
-  });
-  final int orderIndex;
-  final List<int> itemRegion;
-  final List<int>? numberBbox;
-}
-
-class _BatchCropInput {
-  const _BatchCropInput({
-    required this.sourcePng,
-    required this.jobs,
-  });
-  final Uint8List sourcePng;
-  final List<_BatchCropJob> jobs;
-}
-
-Map<int, ProblemCrop?> _batchCropInIsolate(_BatchCropInput input) {
-  final out = <int, ProblemCrop?>{};
-  final decoded = img.decodePng(input.sourcePng);
-  if (decoded == null) {
-    for (final job in input.jobs) {
-      out[job.orderIndex] = null;
-    }
-    return out;
-  }
-  for (final job in input.jobs) {
-    out[job.orderIndex] = cropProblemRegionOnImage(
-      source: decoded,
-      itemRegion: job.itemRegion,
-      numberBbox: job.numberBbox,
-    );
-  }
-  return out;
 }

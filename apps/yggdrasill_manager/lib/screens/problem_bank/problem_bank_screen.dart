@@ -460,6 +460,32 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         .toList(growable: false);
   }
 
+  static final RegExp _stemFigureMarkerRegex =
+      RegExp(r'\[\[PB_FIG_[^\]]+\]\]|\[(그림|도형|도표)\]');
+
+  int _stemFigureMarkerCount(String stem) {
+    return _stemFigureMarkerRegex.allMatches(stem).length;
+  }
+
+  void _syncFigureMetaWithStem({
+    required String stem,
+    required Map<String, dynamic> meta,
+  }) {
+    if (_stemFigureMarkerCount(stem) > 0) return;
+    meta['figure_count'] = 0;
+    meta.remove('figure_assets');
+    meta.remove('figure_layout');
+    meta.remove('figure_render_scale');
+    meta.remove('figure_render_scales');
+    meta.remove('figure_horizontal_pairs');
+    meta.remove('figure_review_required');
+  }
+
+  List<String>? _figureRefsForSave(ProblemBankQuestion q) {
+    if (_stemFigureMarkerCount(q.stem) == 0) return const <String>[];
+    return null;
+  }
+
   Map<String, dynamic>? _latestFigureAssetOf(ProblemBankQuestion q) {
     final assets = _figureAssetsOf(q);
     if (assets.isEmpty) return null;
@@ -644,7 +670,6 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     return out;
   }
 
-
   double _figureRenderScaleOf(ProblemBankQuestion q) {
     final raw = q.meta['figure_render_scale'];
     final parsed = raw is num ? raw.toDouble() : double.tryParse('$raw');
@@ -757,8 +782,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     final allPairs = resolvedGroups.every((g) => g.length == 2);
     if (allPairs && resolvedGroups.isNotEmpty) {
       updatedMeta['figure_horizontal_pairs'] = <Map<String, String>>[
-        for (final g in resolvedGroups)
-          <String, String>{'a': g[0], 'b': g[1]},
+        for (final g in resolvedGroups) <String, String>{'a': g[0], 'b': g[1]},
       ];
     } else {
       updatedMeta.remove('figure_horizontal_pairs');
@@ -877,9 +901,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     if (academyId == null || academyId.isEmpty || questions.isEmpty) return;
     if (!_service.hasGateway) return;
 
-    final ordered = questions
-        .where((q) => q.id.trim().isNotEmpty)
-        .toList(growable: false);
+    final ordered =
+        questions.where((q) => q.id.trim().isNotEmpty).toList(growable: false);
     if (ordered.isEmpty) {
       if (mounted) {
         setState(() {
@@ -902,7 +925,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     }
 
     final questionIds = ordered
-        .map((q) => q.questionUid.trim().isNotEmpty ? q.questionUid.trim() : q.id.trim())
+        .map((q) => q.questionUid.trim().isNotEmpty
+            ? q.questionUid.trim()
+            : q.id.trim())
         .where((id) => id.isNotEmpty)
         .toList(growable: false);
     if (questionIds.isEmpty) return;
@@ -944,7 +969,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           if (id.isNotEmpty && !_questionPreviewUrls.containsKey(id)) {
             _questionPreviewStatus[id] = 'failed';
             _questionPreviewErrors[id] = '서버 미리보기 응답에서 누락되었습니다.';
-            missingNumbers.add('q${q.questionNumber}(id=${id.substring(0, 8)})');
+            missingNumbers
+                .add('q${q.questionNumber}(id=${id.substring(0, 8)})');
           }
         }
         _pendingPreviewQuestionIds.clear();
@@ -963,7 +989,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           final id = q.id.trim();
           if (id.isEmpty) continue;
           _questionPreviewStatus[id] = 'failed';
-          _questionPreviewErrors[id] = msg.isNotEmpty ? msg : '서버 미리보기에 실패했습니다.';
+          _questionPreviewErrors[id] =
+              msg.isNotEmpty ? msg : '서버 미리보기에 실패했습니다.';
         }
         _pendingPreviewQuestionIds.clear();
       });
@@ -989,9 +1016,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       if (scoreParts != null && scoreParts.isNotEmpty) {
         final total = sumScoreParts(scoreParts);
         if (total > 0) {
-          mergedMeta['score_point'] = total == total.roundToDouble()
-              ? total.toInt()
-              : total;
+          mergedMeta['score_point'] =
+              total == total.roundToDouble() ? total.toInt() : total;
         } else {
           mergedMeta.remove('score_point');
         }
@@ -1033,6 +1059,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         mergedMeta.remove('subjective_answer');
         mergedMeta.remove('answer_parts');
       }
+      _syncFigureMetaWithStem(stem: q.stem, meta: mergedMeta);
+      final saveFigureRefs = _figureRefsForSave(q);
 
       await _service.updateQuestionReview(
         questionId: qId,
@@ -1047,6 +1075,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         objectiveAnswerKey: saveObjectiveAnswerKey,
         subjectiveAnswer: saveSubjectiveAnswer,
         objectiveGenerated: q.allowObjective ? q.objectiveGenerated : false,
+        figureRefs: saveFigureRefs,
         equations: q.equations,
         meta: mergedMeta,
       );
@@ -1056,13 +1085,22 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       if (!mounted) return null;
       setState(() {
         _dirtyQuestionIds.remove(qId);
+        _questions = _questions
+            .map((item) => item.id == qId
+                ? item.copyWith(
+                    meta: mergedMeta,
+                    figureRefs: saveFigureRefs ?? item.figureRefs,
+                  )
+                : item)
+            .toList(growable: false);
         if (newUrl.isNotEmpty) {
           _questionPreviewUrls[qId] = newUrl;
         } else {
           _questionPreviewUrls.remove(qId);
         }
       });
-      unawaited(_offerRevisionReasonTagging(academyId: academyId, questionId: qId));
+      unawaited(
+          _offerRevisionReasonTagging(academyId: academyId, questionId: qId));
       return newUrl.isNotEmpty ? newUrl : null;
     } catch (e) {
       if (mounted) {
@@ -1196,8 +1234,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     await _prefetchFigurePreviewUrls(
       _questions.where((qq) => qq.id == q.id).toList(),
     );
-    _appendPipelineLog(
-        'figure', '${q.questionNumber}번 AI 그림 적용 완료');
+    _appendPipelineLog('figure', '${q.questionNumber}번 AI 그림 적용 완료');
     _showSnack('${q.questionNumber}번 AI 그림이 적용되었습니다.');
   }
 
@@ -1214,8 +1251,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       );
       await _reloadQuestions();
     } catch (e) {
-      _appendPipelineLog(
-          'figure', '${q.questionNumber}번 원본 복원 실패: $e', error: true);
+      _appendPipelineLog('figure', '${q.questionNumber}번 원본 복원 실패: $e',
+          error: true);
     }
   }
 
@@ -1592,8 +1629,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       _showSnack('파일 데이터를 읽지 못했습니다.', error: true);
       return;
     }
-    final fileName =
-        _basenameFromPath(pick.path).isEmpty ? 'document.hwpx' : _basenameFromPath(pick.path);
+    final fileName = _basenameFromPath(pick.path).isEmpty
+        ? 'document.hwpx'
+        : _basenameFromPath(pick.path);
     await _uploadHwpxBytes(bytes: bytes, fileName: fileName);
   }
 
@@ -1913,8 +1951,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           // 카드/확대 미리보기에 그림이 '업로드 후에도' 안 뜨는 증상이 난다.
           setState(() {
             _isFigurePolling = true;
-            _statusText =
-                '실패한 그림 $requeued건 재생성 중… (자동 새로고침됩니다)';
+            _statusText = '실패한 그림 $requeued건 재생성 중… (자동 새로고침됩니다)';
           });
           _ensurePolling();
         }
@@ -2026,7 +2063,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   }
 
   Future<void> _reextractCheckedQuestions() async {
-    final targets = _questions.where((q) => q.isChecked).toList(growable: false);
+    final targets =
+        _questions.where((q) => q.isChecked).toList(growable: false);
     if (targets.isEmpty) {
       _showSnack('체크된 문항이 없습니다.', error: true);
       return;
@@ -2432,7 +2470,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         final figureJobsQueuedHint =
             int.tryParse('${latest.resultSummary['figureJobsQueued'] ?? 0}') ??
                 0;
-        final partialReextract = latest.resultSummary['partialReextract'] == true;
+        final partialReextract =
+            latest.resultSummary['partialReextract'] == true;
         if (_lastExtractStatus != latest.status) {
           _appendPipelineLog(
             'extract',
@@ -2627,6 +2666,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           mergedMeta['score_point'] =
               rounded == parsedScore ? rounded.toInt() : parsedScore;
         }
+        _syncFigureMetaWithStem(stem: q.stem, meta: mergedMeta);
+        final saveFigureRefs = _figureRefsForSave(q);
         await _service.updateQuestionReview(
           questionId: q.id,
           isChecked: q.isChecked,
@@ -2640,6 +2681,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           objectiveAnswerKey: q.objectiveAnswerKey,
           subjectiveAnswer: q.subjectiveAnswer,
           objectiveGenerated: q.objectiveGenerated,
+          figureRefs: saveFigureRefs,
           equations: q.equations,
           curriculumCode: curriculumCode,
           sourceTypeCode: sourceTypeCode,
@@ -2904,67 +2946,60 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     // "객관식 허용 off→on" 토글은 AI 자동 생성 파이프라인 진입 신호.
     // setState 안에서는 async 호출을 할 수 없으므로 플래그만 남겨 두고,
     // setState 후에 비동기 생성을 트리거한다.
-    final shouldKickOffObjectiveGeneration =
-        !q.allowObjective && nextObjective;
+    final shouldKickOffObjectiveGeneration = !q.allowObjective && nextObjective;
     setState(() {
-      _questions = _questions
-          .map((e) {
-            if (e.id != q.id) return e;
+      _questions = _questions.map((e) {
+        if (e.id != q.id) return e;
 
-            // allow_objective 가 false 로 바뀌는 순간,
-            // "자동 생성된(또는 과거에 저장된) 객관식 보기/정답"은 의미가 없어진다.
-            // 이 문항을 다시 객관식으로 전환할 때는 사용자가 명시적으로 보기/정답을
-            // 재입력하도록 비워서 저장한다. (재추출 시점에도 재생성되지 않는다 —
-            // 재추출은 별도 버튼이라 사용자 의도로만 일어난다.)
-            //
-            // 단, 문항 원본 보기(`choices`)는 HWPX 에서 추출된 원본이므로 건드리지 않는다.
-            // 건드리는 건 "객관식 출제용 보기/정답" 쌍뿐이다.
-            final willDropObjectiveAssets =
-                e.allowObjective && !nextObjective;
-            final clearedObjectiveChoices = willDropObjectiveAssets
-                ? const <ProblemBankChoice>[]
-                : e.objectiveChoices;
-            final clearedObjectiveAnswer =
-                willDropObjectiveAssets ? '' : e.objectiveAnswerKey;
+        // allow_objective 가 false 로 바뀌는 순간,
+        // "자동 생성된(또는 과거에 저장된) 객관식 보기/정답"은 의미가 없어진다.
+        // 이 문항을 다시 객관식으로 전환할 때는 사용자가 명시적으로 보기/정답을
+        // 재입력하도록 비워서 저장한다. (재추출 시점에도 재생성되지 않는다 —
+        // 재추출은 별도 버튼이라 사용자 의도로만 일어난다.)
+        //
+        // 단, 문항 원본 보기(`choices`)는 HWPX 에서 추출된 원본이므로 건드리지 않는다.
+        // 건드리는 건 "객관식 출제용 보기/정답" 쌍뿐이다.
+        final willDropObjectiveAssets = e.allowObjective && !nextObjective;
+        final clearedObjectiveChoices = willDropObjectiveAssets
+            ? const <ProblemBankChoice>[]
+            : e.objectiveChoices;
+        final clearedObjectiveAnswer =
+            willDropObjectiveAssets ? '' : e.objectiveAnswerKey;
 
-            // allow_subjective 가 true → false 로 바뀔 때 객관식 쪽과 대칭으로
-            // 저장된 주관식 정답/세트형 answer_parts 를 모두 비운다.
-            // "객관식에만 체크" 케이스에서 이전에 적재됐던 주관식 답이
-            // DB 에 그대로 남아 있던 버그를 막는다.
-            final willDropSubjectiveAssets =
-                e.allowSubjective && !nextSubjective;
+        // allow_subjective 가 true → false 로 바뀔 때 객관식 쪽과 대칭으로
+        // 저장된 주관식 정답/세트형 answer_parts 를 모두 비운다.
+        // "객관식에만 체크" 케이스에서 이전에 적재됐던 주관식 답이
+        // DB 에 그대로 남아 있던 버그를 막는다.
+        final willDropSubjectiveAssets = e.allowSubjective && !nextSubjective;
 
-            final nextMeta = <String, dynamic>{
-              ...e.meta,
-              'allow_objective': nextObjective,
-              'allow_subjective': nextSubjective,
-              'allow_essay': nextEssay,
-            };
-            if (willDropObjectiveAssets) {
-              nextMeta['objective_answer_key'] = '';
-              nextMeta.remove('objective_generated');
-            }
-            if (willDropSubjectiveAssets) {
-              // meta 쪽 복제본(레거시 경로에서 meta 에도 저장됨) 과
-              // 세트형 구조(answer_parts) 모두 정리.
-              nextMeta.remove('subjective_answer');
-              nextMeta.remove('answer_parts');
-            }
+        final nextMeta = <String, dynamic>{
+          ...e.meta,
+          'allow_objective': nextObjective,
+          'allow_subjective': nextSubjective,
+          'allow_essay': nextEssay,
+        };
+        if (willDropObjectiveAssets) {
+          nextMeta['objective_answer_key'] = '';
+          nextMeta.remove('objective_generated');
+        }
+        if (willDropSubjectiveAssets) {
+          // meta 쪽 복제본(레거시 경로에서 meta 에도 저장됨) 과
+          // 세트형 구조(answer_parts) 모두 정리.
+          nextMeta.remove('subjective_answer');
+          nextMeta.remove('answer_parts');
+        }
 
-            return e.copyWith(
-              allowObjective: nextObjective,
-              allowSubjective: nextSubjective,
-              objectiveChoices: clearedObjectiveChoices,
-              objectiveAnswerKey: clearedObjectiveAnswer,
-              objectiveGenerated:
-                  willDropObjectiveAssets ? false : e.objectiveGenerated,
-              subjectiveAnswer: willDropSubjectiveAssets
-                  ? ''
-                  : e.subjectiveAnswer,
-              meta: nextMeta,
-            );
-          })
-          .toList(growable: false);
+        return e.copyWith(
+          allowObjective: nextObjective,
+          allowSubjective: nextSubjective,
+          objectiveChoices: clearedObjectiveChoices,
+          objectiveAnswerKey: clearedObjectiveAnswer,
+          objectiveGenerated:
+              willDropObjectiveAssets ? false : e.objectiveGenerated,
+          subjectiveAnswer: willDropSubjectiveAssets ? '' : e.subjectiveAnswer,
+          meta: nextMeta,
+        );
+      }).toList(growable: false);
       _dirtyQuestionIds.add(q.id);
     });
 
@@ -2973,7 +3008,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     // 클라이언트에서도 굳이 호출하지 않아 불필요한 네트워크/토큰 소비를 막는다.
     if (shouldKickOffObjectiveGeneration) {
       final existingUsable =
-          q.objectiveChoices.where((c) => c.text.trim().isNotEmpty).length >= 2 &&
+          q.objectiveChoices.where((c) => c.text.trim().isNotEmpty).length >=
+                  2 &&
               q.objectiveAnswerKey.trim().isNotEmpty;
       if (!existingUsable) {
         unawaited(_autoGenerateObjectiveChoices(q.id, force: false));
@@ -3162,8 +3198,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       if (!mounted) return;
       // 실패 시 이전 값으로 롤백.
       setState(() {
-        _questions =
-            _questions.map((e0) => e0.id == q.id ? prev : e0).toList(growable: false);
+        _questions = _questions
+            .map((e0) => e0.id == q.id ? prev : e0)
+            .toList(growable: false);
       });
       _showSnack('객관식 보기 저장 실패: $e', error: true);
     }
@@ -3579,7 +3616,6 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     );
   }
 
-
   Widget _buildSectionTitle(String title, {String? subtitle}) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -3969,7 +4005,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           const SizedBox(height: 12),
           _buildDocumentSelector(),
           const SizedBox(height: 12),
-          _buildHwpxUploadZone(commonBlockers: commonBlockers, hasHwpx: hasHwpx),
+          _buildHwpxUploadZone(
+              commonBlockers: commonBlockers, hasHwpx: hasHwpx),
           const SizedBox(height: 8),
           _buildPdfUploadZone(
             commonBlockers: commonBlockers,
@@ -4005,9 +4042,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
               label: Text(
                 _isExtracting
                     ? '추출 중...'
-                    : (hasHwpx && hasPdf
-                        ? '추출 시작'
-                        : 'HWPX + PDF 모두 업로드 시 활성화'),
+                    : (hasHwpx && hasPdf ? '추출 시작' : 'HWPX + PDF 모두 업로드 시 활성화'),
               ),
             ),
           ),
@@ -4256,8 +4291,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         children: [
           _buildSectionTitle(
             '2) 문서 분류',
-            subtitle:
-                '교육과정·출처·내신/모의 정보를 입력합니다. 반영은 우측 `업로드`로 저장합니다.',
+            subtitle: '교육과정·출처·내신/모의 정보를 입력합니다. 반영은 우측 `업로드`로 저장합니다.',
           ),
           const SizedBox(height: 12),
           SizedBox(
@@ -4514,7 +4548,6 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       ],
     );
   }
-
 
   String _normalizePreviewLine(String raw) {
     return raw.replaceAll(RegExp(r'\s+'), ' ').trim();
@@ -5083,8 +5116,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           child: TextFormField(
             key: ValueKey('score-${q.id}-${q.meta['score_point'] ?? ''}'),
             initialValue: scoreDraft,
-            keyboardType:
-                const TextInputType.numberWithOptions(decimal: true),
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
             inputFormatters: [
               FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
             ],
@@ -5125,7 +5157,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   /// 총점 표시 + 탭하면 [_openSetScoreDialog] 로 하위문항별 배점 편집.
   Widget _buildSetScoreSummary(ProblemBankQuestion q) {
     final parts = q.scoreParts ?? const <ScorePart>[];
-    final total = parts.isNotEmpty ? sumScoreParts(parts) : (_scorePointOf(q) ?? 0);
+    final total =
+        parts.isNotEmpty ? sumScoreParts(parts) : (_scorePointOf(q) ?? 0);
     final hasAny = parts.isNotEmpty || total > 0;
     final totalLabel = hasAny ? _scorePointInputText(total) : '-';
     return Row(
@@ -5243,8 +5276,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                     ),
                   ),
                   Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 10, vertical: 4),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                     decoration: BoxDecoration(
                       color: _accent.withOpacity(0.14),
                       borderRadius: BorderRadius.circular(8),
@@ -5313,9 +5346,10 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                     }
                     // score_point 는 총점으로 동기화 (파트가 비면 제거).
                     if (total > 0) {
-                      updatedMeta['score_point'] = total == total.roundToDouble()
-                          ? total.toInt()
-                          : total;
+                      updatedMeta['score_point'] =
+                          total == total.roundToDouble()
+                              ? total.toInt()
+                              : total;
                     } else {
                       updatedMeta.remove('score_point');
                     }
@@ -5324,13 +5358,11 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                     final updatedQ = question.copyWith(meta: updatedMeta);
                     setState(() {
                       _questions = _questions
-                          .map(
-                              (q) => q.id == question.id ? updatedQ : q)
+                          .map((q) => q.id == question.id ? updatedQ : q)
                           .toList(growable: false);
                       // score draft 도 총점으로 동기화(일반 인풋 표시 일관성용).
-                      _scoreDrafts[question.id] = total > 0
-                          ? _scorePointInputText(total)
-                          : '';
+                      _scoreDrafts[question.id] =
+                          total > 0 ? _scorePointInputText(total) : '';
                       _dirtyQuestionIds.add(question.id);
                     });
                     if (context.mounted) Navigator.of(context).pop(true);
@@ -5635,6 +5667,42 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     });
   }
 
+  List<String> _objectiveAnswerTokens(String value) {
+    final raw = _sanitizeAnswerText(value);
+    if (raw.isEmpty) return const <String>[];
+    final circled = RegExp(r'[①②③④⑤⑥⑦⑧⑨⑩]')
+        .allMatches(raw)
+        .map((m) => m.group(0)!)
+        .toList(growable: false);
+    if (circled.isNotEmpty) {
+      final leftover = raw
+          .replaceAll(RegExp(r'[①②③④⑤⑥⑦⑧⑨⑩]'), '')
+          .replaceAll(RegExp(r'[,\s/，、ㆍ·()（）.]'), '')
+          .replaceAll(RegExp(r'(번|와|과|및|그리고|또는)'), '');
+      if (leftover.trim().isEmpty) {
+        return circled.toSet().toList(growable: false);
+      }
+    }
+
+    final normalized = raw
+        .replaceAll(RegExp(r'[，、ㆍ·/]'), ',')
+        .replaceAll(RegExp(r'\s*(와|과|및|그리고|또는)\s*'), ',');
+    final parts = normalized.contains(',')
+        ? normalized.split(',')
+        : RegExp(r'^(10|[1-9])(?:\s+(10|[1-9]))+$').hasMatch(normalized)
+            ? normalized.split(RegExp(r'\s+'))
+            : <String>[normalized];
+    final out = <String>[];
+    for (final part in parts) {
+      final clean =
+          part.replaceAll(RegExp(r'[()（）.]'), '').replaceAll('번', '').trim();
+      final n = int.tryParse(clean);
+      if (n == null || n < 1 || n > 10) continue;
+      out.add(_choiceLabelByIndex(n - 1));
+    }
+    return out.toSet().toList(growable: false);
+  }
+
   String _choiceLabelByIndex(int index) {
     const labels = <String>['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩'];
     if (index >= 0 && index < labels.length) return labels[index];
@@ -5678,9 +5746,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   bool _looksLikeObjectiveKey(String value) {
     final normalized = _sanitizeAnswerText(value);
     if (normalized.isEmpty) return false;
-    return RegExp(
-      r'^(?:[①②③④⑤⑥⑦⑧⑨⑩]|[1-9]|10)(?:\s*[,/]\s*(?:[①②③④⑤⑥⑦⑧⑨⑩]|[1-9]|10))*$',
-    ).hasMatch(normalized);
+    return _objectiveAnswerTokens(normalized).isNotEmpty;
   }
 
   String _subjectiveFromObjectiveChoiceText(
@@ -5689,11 +5755,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   ) {
     final normalized = _sanitizeAnswerText(objectiveAnswer);
     if (normalized.isEmpty) return '';
-    final tokens = normalized
-        .split(RegExp(r'\s*[,/]\s*'))
-        .map((e) => e.trim())
-        .where((e) => e.isNotEmpty)
-        .toList(growable: false);
+    final tokens = _objectiveAnswerTokens(normalized);
     final unitTokens = tokens.isNotEmpty ? tokens : <String>[normalized];
     final converted = <String>[];
     for (final token in unitTokens) {
@@ -5916,8 +5978,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                     width: double.infinity,
                     errorBuilder: (_, __, ___) => const Text(
                       '이미지 로드 실패',
-                      style:
-                          TextStyle(color: Color(0xFF9C5A5A), fontSize: 12),
+                      style: TextStyle(color: Color(0xFF9C5A5A), fontSize: 12),
                     ),
                   ),
                 ),
@@ -7095,11 +7156,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     double? fixedHeight,
     bool compact = false,
   }) {
-    final double? outerHeight = expanded
-        ? null
-        : (compact
-            ? null
-            : (fixedHeight ?? 260));
+    final double? outerHeight =
+        expanded ? null : (compact ? null : (fixedHeight ?? 260));
     final BoxConstraints? innerConstraints = (!expanded && compact)
         ? const BoxConstraints(maxHeight: _kPdfPreviewCompactMaxHeight)
         : null;
@@ -7197,9 +7255,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     bool showSpinner = true,
     bool compact = false,
   }) {
-    final double? h = expanded
-        ? null
-        : (compact ? null : (fixedHeight ?? 260));
+    final double? h = expanded ? null : (compact ? null : (fixedHeight ?? 260));
     final placeholderInner = Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -7250,9 +7306,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     return Container(
       height: h,
       width: double.infinity,
-      constraints: expanded
-          ? const BoxConstraints(minHeight: 120)
-          : null,
+      constraints: expanded ? const BoxConstraints(minHeight: 120) : null,
       decoration: BoxDecoration(
         color: const Color(0xFF0E1518),
         borderRadius: BorderRadius.circular(8),
@@ -7447,8 +7501,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     final allPairs = resolvedGroups.every((g) => g.length == 2);
     if (allPairs && resolvedGroups.isNotEmpty) {
       updatedMeta['figure_horizontal_pairs'] = <Map<String, String>>[
-        for (final g in resolvedGroups)
-          <String, String>{'a': g[0], 'b': g[1]},
+        for (final g in resolvedGroups) <String, String>{'a': g[0], 'b': g[1]},
       ];
     } else {
       updatedMeta.remove('figure_horizontal_pairs');
@@ -7506,8 +7559,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     };
     var refreshing = false;
     final existingUrl = (_questionPreviewUrls[q.id.trim()] ?? '').trim();
-    String? serverPreviewUrl =
-        existingUrl.isNotEmpty ? existingUrl : null;
+    String? serverPreviewUrl = existingUrl.isNotEmpty ? existingUrl : null;
 
     await showDialog<void>(
       context: context,
@@ -7522,9 +7574,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                     positionMap: positionMap,
                     horizontalGroups: selectedGroups,
                     tableScales: hasTables ? tableScaleDrafts : null,
-                    tableScaleDefault: hasTables
-                        ? const TableScaleValue()
-                        : null,
+                    tableScaleDefault:
+                        hasTables ? const TableScaleValue() : null,
                   )
                 : q.meta;
             final previewQ =
@@ -7589,8 +7640,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  if (serverPreviewUrl != null &&
-                      serverPreviewUrl!.isNotEmpty)
+                  if (serverPreviewUrl != null && serverPreviewUrl!.isNotEmpty)
                     _buildServerPdfPreviewThumbnail(
                       previewQ,
                       previewUrl: serverPreviewUrl!,
@@ -7843,8 +7893,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         children: [
           Row(
             children: [
-              const Icon(Icons.table_chart_outlined,
-                  color: _textSub, size: 15),
+              const Icon(Icons.table_chart_outlined, color: _textSub, size: 15),
               const SizedBox(width: 6),
               const Text(
                 '표 크기 조절',
@@ -7899,10 +7948,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                         padding: const EdgeInsets.symmetric(
                             horizontal: 6, vertical: 2),
                         decoration: BoxDecoration(
-                          color: (t.type == 'raw'
-                                  ? Colors.orangeAccent
-                                  : _accent)
-                              .withValues(alpha: 0.15),
+                          color:
+                              (t.type == 'raw' ? Colors.orangeAccent : _accent)
+                                  .withValues(alpha: 0.15),
                           borderRadius: BorderRadius.circular(4),
                         ),
                         child: Text(
@@ -7910,9 +7958,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                           style: TextStyle(
                             fontSize: 10,
                             fontWeight: FontWeight.w700,
-                            color: t.type == 'raw'
-                                ? Colors.orangeAccent
-                                : _accent,
+                            color:
+                                t.type == 'raw' ? Colors.orangeAccent : _accent,
                           ),
                         ),
                       ),
@@ -7933,34 +7980,30 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                   const SizedBox(height: 4),
                   _buildTableScaleSlider(
                     title: '가로',
-                    value: (drafts[t.key] ?? const TableScaleValue())
-                        .widthScale,
+                    value:
+                        (drafts[t.key] ?? const TableScaleValue()).widthScale,
                     min: minS,
                     max: maxS,
                     divisions: divisions,
                     onChanged: (v) {
-                      final cur =
-                          drafts[t.key] ?? const TableScaleValue();
+                      final cur = drafts[t.key] ?? const TableScaleValue();
                       setLocalState(() {
-                        drafts[t.key] =
-                            cur.copyWith(widthScale: v);
+                        drafts[t.key] = cur.copyWith(widthScale: v);
                       });
                     },
                     onChangeEnd: (_) => onSettingChanged(),
                   ),
                   _buildTableScaleSlider(
                     title: '세로',
-                    value: (drafts[t.key] ?? const TableScaleValue())
-                        .heightScale,
+                    value:
+                        (drafts[t.key] ?? const TableScaleValue()).heightScale,
                     min: minS,
                     max: maxS,
                     divisions: divisions,
                     onChanged: (v) {
-                      final cur =
-                          drafts[t.key] ?? const TableScaleValue();
+                      final cur = drafts[t.key] ?? const TableScaleValue();
                       setLocalState(() {
-                        drafts[t.key] =
-                            cur.copyWith(heightScale: v);
+                        drafts[t.key] = cur.copyWith(heightScale: v);
                       });
                     },
                     onChangeEnd: (_) => onSettingChanged(),
@@ -8045,8 +8088,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                         onSettingChanged();
                       },
                 style: TextButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 6, vertical: 0),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 0),
                   minimumSize: const Size(0, 24),
                 ),
                 child: const Text(
@@ -8064,16 +8107,14 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
               max: maxS,
               divisions: divisions,
               onChanged: (v) {
-                final cur =
-                    drafts[entry.key] ?? const TableScaleValue();
-                final curList = cur.columnScales != null &&
-                        cur.columnScales!.length == n
-                    ? List<double>.from(cur.columnScales!)
-                    : List<double>.filled(n, 1.0);
+                final cur = drafts[entry.key] ?? const TableScaleValue();
+                final curList =
+                    cur.columnScales != null && cur.columnScales!.length == n
+                        ? List<double>.from(cur.columnScales!)
+                        : List<double>.filled(n, 1.0);
                 curList[i] = v;
                 setLocalState(() {
-                  drafts[entry.key] =
-                      cur.copyWith(columnScales: curList);
+                  drafts[entry.key] = cur.copyWith(columnScales: curList);
                 });
               },
               onChangeEnd: (_) => onSettingChanged(),
@@ -8113,10 +8154,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
             child: SliderTheme(
               data: SliderTheme.of(context).copyWith(
                 trackHeight: 3,
-                thumbShape:
-                    const RoundSliderThumbShape(enabledThumbRadius: 7),
-                overlayShape:
-                    const RoundSliderOverlayShape(overlayRadius: 14),
+                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
+                overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
               ),
               child: Slider(
                 value: clamped,
@@ -8240,8 +8279,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         if (layoutItem != null) {
           draftMap[key] = (layoutItem['widthEm'] as num?)?.toDouble() ??
               _figureWidthEmDefault;
-          positionMap[key] =
-              '${layoutItem['position'] ?? 'below-stem'}'.trim();
+          positionMap[key] = '${layoutItem['position'] ?? 'below-stem'}'.trim();
         } else {
           final scale = scaleMap[key] ??
               _figureRenderScaleForAsset(q, asset: asset, order: i + 1);
@@ -8275,9 +8313,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     Set<String> selectedPairKeys;
     final initialGroups = <List<String>>[];
     if (existingLayout != null) {
-      final groups = (existingLayout['groups'] as List?)
-              ?.cast<Map<String, dynamic>>() ??
-          const <Map<String, dynamic>>[];
+      final groups =
+          (existingLayout['groups'] as List?)?.cast<Map<String, dynamic>>() ??
+              const <Map<String, dynamic>>[];
       selectedPairKeys = <String>{};
       for (final g in groups) {
         if (g['type'] != 'horizontal') continue;
@@ -8298,8 +8336,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       selectedPairKeys = _figureHorizontalPairKeysOf(q).where((pairKey) {
         final parts = _figurePairParts(pairKey);
         if (parts.length != 2) return false;
-        return draftMap.containsKey(parts[0]) &&
-            draftMap.containsKey(parts[1]);
+        return draftMap.containsKey(parts[0]) && draftMap.containsKey(parts[1]);
       }).toSet();
       for (final pk in selectedPairKeys) {
         final parts = _figurePairParts(pk);
@@ -8346,8 +8383,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           final position = positionMap[key] ?? 'below-stem';
           final previewUrl = previewUrls[key] ?? '';
           return Container(
-            margin:
-                EdgeInsets.only(bottom: i == draftMap.length - 1 ? 0 : 10),
+            margin: EdgeInsets.only(bottom: i == draftMap.length - 1 ? 0 : 10),
             padding: const EdgeInsets.fromLTRB(10, 9, 10, 7),
             decoration: BoxDecoration(
               color: _field,
@@ -8398,8 +8434,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                   activeColor: _accent,
                   onChanged: (v) {
                     setLocalState(() {
-                      draftMap[key] =
-                          (v * 10).roundToDouble() / 10.0;
+                      draftMap[key] = (v * 10).roundToDouble() / 10.0;
                     });
                   },
                   onChangeEnd: (_) => onSettingChanged?.call(),
@@ -8655,8 +8690,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   /// 1) `\begin{tabular}{SPEC}` 이 있으면 SPEC 의 l/c/r/p/X/... 개수.
   /// 2) 없으면 첫 데이터 행의 `&` 개수 + 1.
   int _rawTabularMaxCols(String body) {
-    final specMatch =
-        RegExp(r'\\begin\{tabular\}\{([^}]*)\}').firstMatch(body);
+    final specMatch = RegExp(r'\\begin\{tabular\}\{([^}]*)\}').firstMatch(body);
     if (specMatch != null) {
       final spec = specMatch.group(1) ?? '';
       // `|`, 공백, `@{...}`, `!{...}` 제거 후 l/c/r/p/X/m/b 카운트.
@@ -8680,8 +8714,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       if (count > 0) return count;
     }
     // fallback: 첫 데이터 행의 & 개수 + 1.
-    final bodyMatch = RegExp(r'\\begin\{tabular\}\{[^}]*\}([\s\S]*?)\\end\{tabular\}')
-        .firstMatch(body);
+    final bodyMatch =
+        RegExp(r'\\begin\{tabular\}\{[^}]*\}([\s\S]*?)\\end\{tabular\}')
+            .firstMatch(body);
     final inside = bodyMatch?.group(1) ?? body;
     final rowsRaw = inside.split(r'\\');
     for (final r in rowsRaw) {
@@ -8839,8 +8874,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                           seedPartEntries(const <AnswerPart>[]);
                         }
                         if (v) {
-                          final parsed =
-                              parseAnswerParts(subjectiveCtrl.text);
+                          final parsed = parseAnswerParts(subjectiveCtrl.text);
                           if (parsed != null && parsed.isNotEmpty) {
                             seedPartEntries(parsed);
                           }
@@ -8874,18 +8908,15 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                     ],
                     Text(
                       isSetMode ? '주관식 정답 (하위문항별)' : '주관식 정답',
-                      style:
-                          const TextStyle(color: _textSub, fontSize: 12),
+                      style: const TextStyle(color: _textSub, fontSize: 12),
                     ),
                     const SizedBox(height: 6),
                     if (!isSetMode)
                       TextField(
                         controller: subjectiveCtrl,
                         maxLines: 2,
-                        style:
-                            const TextStyle(color: _text, fontSize: 14),
-                        decoration:
-                            _answerInputDecoration(hint: '예: 2 또는 x=3'),
+                        style: const TextStyle(color: _text, fontSize: 14),
+                        decoration: _answerInputDecoration(hint: '예: 2 또는 x=3'),
                       )
                     else
                       _buildAnswerPartsEditor(
@@ -8927,8 +8958,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                           if (sub.isEmpty || value.isEmpty) continue;
                           parts.add(AnswerPart(sub: sub, value: value));
                         }
-                        nextParts =
-                            parts.length >= 2 ? parts : null;
+                        nextParts = parts.length >= 2 ? parts : null;
                         subjectiveAnswer = parts.isEmpty
                             ? ''
                             : formatAnswerPartsDisplay(parts);
@@ -8943,8 +8973,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                       if (objectiveAnswer.isEmpty) {
                         updatedMeta.remove('objective_answer_key');
                       } else {
-                        updatedMeta['objective_answer_key'] =
-                            objectiveAnswer;
+                        updatedMeta['objective_answer_key'] = objectiveAnswer;
                       }
                       if (subjectiveAnswer.isEmpty) {
                         updatedMeta.remove('subjective_answer');
@@ -8990,8 +9019,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                         Navigator.of(context).pop(true);
                       }
                       if (!mounted) return;
-                      final previewUrl =
-                          await _saveAndRefreshPreview(updatedQ);
+                      final previewUrl = await _saveAndRefreshPreview(updatedQ);
                       if (!mounted) return;
                       if (previewUrl != null && previewUrl.isNotEmpty) {
                         _showSnack('저장했고 정답 미리보기를 갱신했습니다.');
@@ -9104,8 +9132,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           label: const Text('하위문항 추가'),
           onPressed: () {
             setLocalState(() {
-              final nextSub =
-                  (partEntries.length + 1).toString();
+              final nextSub = (partEntries.length + 1).toString();
               partEntries.add(_AnswerPartEntry.blank(nextSub));
             });
           },
@@ -9127,7 +9154,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     //   (2) 답이 구조화(meta.answer_parts)되어 있으면 세트형으로 본다.
     // 두 번째 조건은 사용자가 편집기에서 세트형 모드로 답을 나눠 저장했지만
     // stem 상 시그니처가 약해서 meta 플래그가 없는 경우에도 배지를 유지하기 위함이다.
-    final isSetQuestion = q.isSetQuestion || (q.answerParts?.isNotEmpty ?? false);
+    final isSetQuestion =
+        q.isSetQuestion || (q.answerParts?.isNotEmpty ?? false);
     final latestFigureAsset = _latestFigureAssetOf(q);
     final figureApproved = _isFigureAssetApproved(latestFigureAsset);
     final figureGenerating = _figureGenerating.contains(q.id);
@@ -9141,8 +9169,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         !_isExtracting &&
         !_isSavingQuestionChanges &&
         !_isDeletingCurrentQuestions;
-    final metaFooter =
-        'p.${q.sourcePage}'
+    final metaFooter = 'p.${q.sourcePage}'
         ' · 보기 $objectiveChoiceCount개'
         ' · 수식 ${q.equations.length}개'
         '${isViewBlock ? ' · 보기형' : ''}'
@@ -9293,8 +9320,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                         const SizedBox(width: 2),
                         const Text(
                           '객관식',
-                          style:
-                              TextStyle(color: _textSub, fontSize: 11.4),
+                          style: TextStyle(color: _textSub, fontSize: 11.4),
                         ),
                         // 객관식 허용 상태일 때만 "AI 보기 수정" 버튼 노출.
                         // 진행 중이면 disable + spinner, 아니면 아이콘.
@@ -9304,9 +9330,10 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                             height: 22,
                             width: 22,
                             child: IconButton(
-                              tooltip: _objectiveGenerationInFlight.contains(q.id)
-                                  ? 'AI 객관식 보기 생성 중...'
-                                  : '객관식 보기 수정',
+                              tooltip:
+                                  _objectiveGenerationInFlight.contains(q.id)
+                                      ? 'AI 객관식 보기 생성 중...'
+                                      : '객관식 보기 수정',
                               padding: EdgeInsets.zero,
                               visualDensity: const VisualDensity(
                                   horizontal: -4, vertical: -4),
@@ -9348,8 +9375,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                         const SizedBox(width: 2),
                         const Text(
                           '주관식',
-                          style:
-                              TextStyle(color: _textSub, fontSize: 11.4),
+                          style: TextStyle(color: _textSub, fontSize: 11.4),
                         ),
                       ],
                     ),
@@ -9373,8 +9399,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                         const SizedBox(width: 2),
                         const Text(
                           '서술형',
-                          style:
-                              TextStyle(color: _textSub, fontSize: 11.4),
+                          style: TextStyle(color: _textSub, fontSize: 11.4),
                         ),
                       ],
                     ),
@@ -9392,8 +9417,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           const SizedBox(height: 3),
           InkWell(
             onTap: () {
-              final status =
-                  (_questionPreviewStatus[q.id.trim()] ?? '').trim().toLowerCase();
+              final status = (_questionPreviewStatus[q.id.trim()] ?? '')
+                  .trim()
+                  .toLowerCase();
               if (status == 'failed' || status == 'cancelled') {
                 _retryQuestionPreview(q.id.trim());
                 return;
@@ -9957,9 +9983,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       if (!mounted) return true;
       final wasActive = _activeDocument?.id == doc.id;
       setState(() {
-        _documents = _documents
-            .where((d) => d.id != doc.id)
-            .toList(growable: false);
+        _documents =
+            _documents.where((d) => d.id != doc.id).toList(growable: false);
         if (wasActive) {
           _activeDocument = null;
           _questions = <ProblemBankQuestion>[];
@@ -10552,8 +10577,9 @@ class _UploadDropZone extends StatelessWidget {
         : isComplete
             ? accentColor.withValues(alpha: 0.06)
             : backgroundColor;
-    final cursor =
-        enabled && onTap != null ? SystemMouseCursors.click : SystemMouseCursors.basic;
+    final cursor = enabled && onTap != null
+        ? SystemMouseCursors.click
+        : SystemMouseCursors.basic;
     return MouseRegion(
       cursor: cursor,
       child: GestureDetector(

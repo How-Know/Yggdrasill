@@ -4143,9 +4143,10 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     final latexText = _normalizeAnswerForMathRendering(answerRaw);
     final cellWidth = isOverflow ? 75.0 : _resolveCellWidth(answerRaw);
     final isWideCell = cellWidth > 75.0;
+    final showsAnswer = state == 'correct' || state == 'wrong';
     final contentFontSize = _resolveCellFontSize(
       answerRaw: answerRaw,
-      isCorrect: state == 'correct',
+      isCorrect: showsAnswer,
       isWideCell: isWideCell,
     );
     Color borderColor = const Color(0xFF223131);
@@ -4154,10 +4155,10 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     String text = answerRaw;
     switch (state) {
       case 'wrong':
-        borderColor = const Color(0xFF3A2228);
-        backgroundColor = const Color(0xFF1F1518);
-        textColor = const Color(0xFFFBC6CF);
-        text = 'X';
+        borderColor = const Color(0xFFB34B61);
+        backgroundColor = const Color(0xFF3A1922);
+        textColor = const Color(0xFFFFD7DE);
+        text = answerRaw;
         break;
       case 'unsolved':
         borderColor = const Color(0xFF1E2C38);
@@ -4216,7 +4217,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                     border: Border.all(color: borderColor),
                   ),
                   child: Center(
-                    child: (state == 'correct' && isCircledChoice && !isOverflow)
+                    child: (showsAnswer && isCircledChoice && !isOverflow)
                   ? Container(
                       width: circledNumber >= 10 ? 33 : 30,
                       height: circledNumber >= 10 ? 33 : 30,
@@ -4239,11 +4240,11 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                         ),
                       ),
                     )
-                  : (state == 'correct' && isOverflow)
+                  : (showsAnswer && isOverflow)
                       ? FittedBox(
                           fit: BoxFit.scaleDown,
                           child: Text(
-                            '${cell.questionIndex}',
+                            '해설',
                             textAlign: TextAlign.center,
                             maxLines: 1,
                             overflow: TextOverflow.fade,
@@ -4256,7 +4257,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                             ),
                           ),
                         )
-                      : (state == 'correct')
+                      : showsAnswer
                           ? SizedBox(
                               width: cellWidth - 14,
                               height: 64,

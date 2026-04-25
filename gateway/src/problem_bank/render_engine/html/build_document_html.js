@@ -329,6 +329,9 @@ function buildStyles({
       font-weight: 400;
       line-height: var(--lc-line-normal);
     }
+    .bogi-item-label-placeholder {
+      visibility: hidden;
+    }
     .bogi-item-text {
       min-width: 0;
     }
@@ -352,6 +355,13 @@ function buildStyles({
     }
     .bogi-line.bogi-line-justify {
       text-align: justify;
+    }
+    .bogi-paragraph-gap {
+      height: 0.45em;
+    }
+    .pb-underline {
+      text-decoration: underline;
+      text-underline-offset: 0.12em;
     }
     .math-inline { position: relative; }
     .math-debug-dot {

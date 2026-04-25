@@ -824,17 +824,55 @@ String _normalizeAnswerKey(String value) {
   return value.trim().replaceAll(RegExp(r'\s+'), ' ');
 }
 
+List<String> _objectiveAnswerTokens(String value) {
+  final raw = _normalizeAnswerKey(value);
+  if (raw.isEmpty) return const <String>[];
+  final circled = RegExp(r'[①②③④⑤⑥⑦⑧⑨⑩]')
+      .allMatches(raw)
+      .map((m) => m.group(0)!)
+      .toList(growable: false);
+  if (circled.isNotEmpty) {
+    final leftover = raw
+        .replaceAll(RegExp(r'[①②③④⑤⑥⑦⑧⑨⑩]'), '')
+        .replaceAll(RegExp(r'[,\s/，、ㆍ·()（）.]'), '')
+        .replaceAll(RegExp(r'(번|와|과|및|그리고|또는)'), '');
+    if (leftover.trim().isEmpty) {
+      return circled.toSet().toList(growable: false);
+    }
+  }
+
+  final normalized = raw
+      .replaceAll(RegExp(r'[，、ㆍ·/]'), ',')
+      .replaceAll(RegExp(r'\s*(와|과|및|그리고|또는)\s*'), ',');
+  final parts = normalized.contains(',')
+      ? normalized.split(',')
+      : RegExp(r'^(10|[1-9])(?:\s+(10|[1-9]))+$').hasMatch(normalized)
+          ? normalized.split(RegExp(r'\s+'))
+          : <String>[normalized];
+  final out = <String>[];
+  for (final part in parts) {
+    final clean =
+        part.replaceAll(RegExp(r'[()（）.]'), '').replaceAll('번', '').trim();
+    final n = int.tryParse(clean);
+    if (n == null || n < 1 || n > 10) continue;
+    out.add(_choiceLabelByNumber(n));
+  }
+  return out.toSet().toList(growable: false);
+}
+
+String _choiceLabelByNumber(int n) {
+  const labels = <String>['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩'];
+  if (n < 1 || n > labels.length) return '$n';
+  return labels[n - 1];
+}
+
 String _objectiveAnswerToSubjective(
   String answerKey,
   List<ProblemBankChoice> choices,
 ) {
   final normalized = _normalizeAnswerKey(answerKey);
   if (normalized.isEmpty) return '';
-  final tokens = normalized
-      .split(RegExp(r'\s*[,/]\s*'))
-      .map((e) => _normalizeAnswerKey(e))
-      .where((e) => e.isNotEmpty)
-      .toList(growable: false);
+  final tokens = _objectiveAnswerTokens(normalized);
   final source = tokens.isNotEmpty ? tokens : <String>[normalized];
   final out = <String>[];
   for (final token in source) {
@@ -854,9 +892,7 @@ String _objectiveAnswerToSubjective(
 bool _looksLikeObjectiveKeyAnswer(String value) {
   final normalized = _normalizeAnswerKey(value);
   if (normalized.isEmpty) return false;
-  return RegExp(
-    r'^(?:[①②③④⑤⑥⑦⑧⑨⑩]|[1-9]|10)(?:\s*[,/]\s*(?:[①②③④⑤⑥⑦⑧⑨⑩]|[1-9]|10))*$',
-  ).hasMatch(normalized);
+  return _objectiveAnswerTokens(normalized).isNotEmpty;
 }
 
 int? _answerTokenToChoiceIndex(String token) {
@@ -1005,7 +1041,8 @@ extension ProblemBankQuestionSetExtension on ProblemBankQuestion {
   bool get isSetQuestion => meta['is_set_question'] == true;
 
   /// `meta['answer_parts']` 의 구조화된 답. 세트형이 아니거나 미저장이면 `null`.
-  List<AnswerPart>? get answerParts => answerPartsFromMetaRaw(meta['answer_parts']);
+  List<AnswerPart>? get answerParts =>
+      answerPartsFromMetaRaw(meta['answer_parts']);
 
   /// `meta['score_parts']` 의 하위문항별 배점. 세트형이 아니거나 미저장이면 `null`.
   /// 있을 경우, 카드의 배점 표시는 이들의 합(=총점)을 보여주고,

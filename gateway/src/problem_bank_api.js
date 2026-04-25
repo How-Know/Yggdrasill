@@ -45,6 +45,8 @@ import {
   createDownloadUrl as storageCreateDownloadUrl,
   statObject as storageStatObject,
   uploadBytes as storageUploadBytes,
+  removeObjectsByPrefix as storageRemoveByPrefix,
+  removeObjectsByPrefixInFolder as storageRemoveByNamePrefix,
   buildTextbookStorageKey,
   buildTextbookCropStorageKey,
   DEFAULT_TEXTBOOK_BUCKET,
@@ -55,6 +57,14 @@ import {
   detectProblemsOnPage,
   normalizeDetectResult,
 } from './textbook/vlm_detect_client.js';
+import {
+  extractAnswersOnPage,
+  normalizeAnswerResult,
+} from './textbook/vlm_answer_client.js';
+import {
+  detectSolutionRefsOnPage,
+  normalizeSolutionRefsResult,
+} from './textbook/vlm_solution_refs_client.js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -4253,6 +4263,7 @@ async function handleTextbookVlmDetectProblems(body, res) {
     page_offset: pageOffset,
     page_offset_found: offsetFound,
     section: normalized.section,
+    page_kind: normalized.page_kind,
     layout: normalized.page_layout,
     items: normalized.items,
     notes: normalized.notes,
@@ -4313,6 +4324,14 @@ async function handleTextbookCropsBatchUpsert(body, res) {
   const bigName = body?.big_name != null ? String(body.big_name) : null;
   const midName = body?.mid_name != null ? String(body.mid_name) : null;
   const crops = Array.isArray(body?.crops) ? body.crops : [];
+  // New: "regions only" mode. The manager app can now persist the VLM
+  // detection coordinates without uploading the PNG. The original crop
+  // pipeline (PNG -> Storage -> row) is a superset and still supported;
+  // regions_only just skips the Storage upload while reusing the same
+  // canonical key as a placeholder. This lets the student app's PDF
+  // viewer do tap-to-identify using the `item_region_1k` column without
+  // ever downloading images.
+  const regionsOnly = body?.regions_only === true;
 
   if (!academyId || !bookId || !gradeLabel) {
     sendJson(res, 400, {
@@ -4429,11 +4448,17 @@ async function handleTextbookCropsBatchUpsert(body, res) {
       uploadedKeys.push(storageKey);
     } else if (preUploadedKey) {
       storageKey = preUploadedKey;
+    } else if (regionsOnly) {
+      // Regions-only path: keep the canonical storage_key as a placeholder
+      // so a later image upload (if we ever resume the crop feature) can
+      // overwrite in place. No Storage write here. `file_size_bytes` stays
+      // null; the student app knows `storage_key` without file bytes means
+      // "coordinates present, image not stored".
     } else {
       sendJson(res, 400, {
         ok: false,
         error: `missing_png_and_key_at_${i}`,
-        hint: 'Provide either png_base64 or storage_key.',
+        hint: 'Provide either png_base64, storage_key, or set regions_only=true.',
       });
       return;
     }
@@ -4510,13 +4535,503 @@ async function handleTextbookCropsBatchUpsert(body, res) {
   });
 }
 
-async function handleTextbookVlmExtractAnswersStub(_body, res) {
-  sendJson(res, 501, {
-    ok: false,
-    error: 'not_implemented',
-    message:
-      'VLM 기반 정답지 추출은 다음 단계에서 구현될 예정입니다. 현재는 라우팅만 열려 있습니다.',
-    stage: 'planned',
+async function handleTextbookVlmExtractAnswers(body, res) {
+  const apiKey =
+    (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '').trim();
+  if (!apiKey) {
+    sendJson(res, 500, {
+      ok: false,
+      error: 'gemini_api_key_missing',
+      hint: 'Set GEMINI_API_KEY or GOOGLE_API_KEY in the gateway env.',
+    });
+    return;
+  }
+
+  const imageBase64 = String(body?.image_base64 || '').trim();
+  if (!imageBase64) {
+    sendJson(res, 400, { ok: false, error: 'missing_image_base64' });
+    return;
+  }
+  const mimeType = String(body?.mime_type || 'image/png').trim();
+  if (!TEXTBOOK_VLM_VALID_MIMES.has(mimeType)) {
+    sendJson(res, 400, {
+      ok: false,
+      error: `invalid_mime_type: ${mimeType}`,
+      allowed: Array.from(TEXTBOOK_VLM_VALID_MIMES),
+    });
+    return;
+  }
+
+  const rawPage = Number.parseInt(String(body?.raw_page ?? ''), 10);
+  if (!Number.isFinite(rawPage) || rawPage <= 0) {
+    sendJson(res, 400, { ok: false, error: 'invalid_raw_page' });
+    return;
+  }
+
+  const academyId = String(body?.academy_id || '').trim();
+  const bookId = String(body?.book_id || '').trim();
+  const gradeLabel = String(body?.grade_label || '').trim();
+
+  // expected_numbers can be either ["0001","12"] or [{problem_number:"0001", crop_id:"..."}, ...]
+  const expectedRaw = Array.isArray(body?.expected_numbers)
+    ? body.expected_numbers
+    : [];
+  const expectedNumbers = expectedRaw
+    .map((v) => {
+      if (v == null) return '';
+      if (typeof v === 'string') return v.trim();
+      if (typeof v === 'object')
+        return String(v.problem_number || v.number || '').trim();
+      return '';
+    })
+    .filter((s) => s.length > 0);
+
+  const { pageOffset, found: offsetFound } = await lookupTextbookPageOffset({
+    academyId,
+    bookId,
+    gradeLabel,
+  });
+  const displayPage = rawPage - pageOffset;
+
+  let result;
+  try {
+    result = await extractAnswersOnPage({
+      imageBase64,
+      mimeType,
+      rawPage,
+      displayPage,
+      pageOffset,
+      expectedNumbers,
+      model: TEXTBOOK_VLM_MODEL,
+      apiKey,
+      timeoutMs: TEXTBOOK_VLM_TIMEOUT_MS,
+    });
+  } catch (err) {
+    sendJson(res, 502, {
+      ok: false,
+      error: 'vlm_answer_failed',
+      message: compact(err?.message || err),
+    });
+    return;
+  }
+
+  const normalized = normalizeAnswerResult(result.parsedJson);
+  sendJson(res, 200, {
+    ok: true,
+    raw_page: rawPage,
+    display_page: displayPage,
+    page_offset: pageOffset,
+    page_offset_found: offsetFound,
+    items: normalized.items,
+    notes: normalized.notes,
+    model: TEXTBOOK_VLM_MODEL,
+    elapsed_ms: result.elapsedMs,
+    usage: result.usageMetadata || null,
+    finish_reason: result.finishReason || '',
+  });
+}
+
+async function handleTextbookVlmDetectSolutionRefs(body, res) {
+  const apiKey =
+    (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '').trim();
+  if (!apiKey) {
+    sendJson(res, 500, {
+      ok: false,
+      error: 'gemini_api_key_missing',
+      hint: 'Set GEMINI_API_KEY or GOOGLE_API_KEY in the gateway env.',
+    });
+    return;
+  }
+
+  const imageBase64 = String(body?.image_base64 || '').trim();
+  if (!imageBase64) {
+    sendJson(res, 400, { ok: false, error: 'missing_image_base64' });
+    return;
+  }
+  const mimeType = String(body?.mime_type || 'image/png').trim();
+  if (!TEXTBOOK_VLM_VALID_MIMES.has(mimeType)) {
+    sendJson(res, 400, {
+      ok: false,
+      error: `invalid_mime_type: ${mimeType}`,
+      allowed: Array.from(TEXTBOOK_VLM_VALID_MIMES),
+    });
+    return;
+  }
+
+  const rawPage = Number.parseInt(String(body?.raw_page ?? ''), 10);
+  if (!Number.isFinite(rawPage) || rawPage <= 0) {
+    sendJson(res, 400, { ok: false, error: 'invalid_raw_page' });
+    return;
+  }
+
+  const academyId = String(body?.academy_id || '').trim();
+  const bookId = String(body?.book_id || '').trim();
+  const gradeLabel = String(body?.grade_label || '').trim();
+
+  const expectedRaw = Array.isArray(body?.expected_numbers)
+    ? body.expected_numbers
+    : [];
+  const expectedNumbers = expectedRaw
+    .map((v) => {
+      if (v == null) return '';
+      if (typeof v === 'string') return v.trim();
+      if (typeof v === 'object')
+        return String(v.problem_number || v.number || '').trim();
+      return '';
+    })
+    .filter((s) => s.length > 0);
+
+  const { pageOffset, found: offsetFound } = await lookupTextbookPageOffset({
+    academyId,
+    bookId,
+    gradeLabel,
+  });
+  const displayPage = rawPage - pageOffset;
+
+  let result;
+  try {
+    result = await detectSolutionRefsOnPage({
+      imageBase64,
+      mimeType,
+      rawPage,
+      displayPage,
+      pageOffset,
+      expectedNumbers,
+      model: TEXTBOOK_VLM_MODEL,
+      apiKey,
+      timeoutMs: TEXTBOOK_VLM_TIMEOUT_MS,
+    });
+  } catch (err) {
+    sendJson(res, 502, {
+      ok: false,
+      error: 'vlm_solref_failed',
+      message: compact(err?.message || err),
+    });
+    return;
+  }
+
+  const normalized = normalizeSolutionRefsResult(result.parsedJson);
+  sendJson(res, 200, {
+    ok: true,
+    raw_page: rawPage,
+    display_page: displayPage,
+    page_offset: pageOffset,
+    page_offset_found: offsetFound,
+    items: normalized.items,
+    notes: normalized.notes,
+    model: TEXTBOOK_VLM_MODEL,
+    elapsed_ms: result.elapsedMs,
+    usage: result.usageMetadata || null,
+    finish_reason: result.finishReason || '',
+  });
+}
+
+// ---------------------------------------------------------------------------
+// textbook_problem_answers batch upsert (Stage 2 sidecar)
+// ---------------------------------------------------------------------------
+//
+// Body shape:
+// {
+//   academy_id, book_id (optional, for log),
+//   answers: [
+//     {
+//       crop_id,                   // required — FK to textbook_problem_crops.id
+//       answer_kind: 'objective'|'subjective',
+//       answer_text,               // "①" or 1D LaTeX
+//       answer_latex_2d,           // optional 2D render LaTeX
+//       answer_source: 'vlm'|'manual',
+//       raw_page, display_page,    // where in 답지 PDF this answer was found
+//       bbox_1k,                   // optional
+//       note,                      // optional (e.g. VLM confidence)
+//     },
+//     ...
+//   ]
+// }
+
+const MAX_ANSWER_BATCH = 300;
+
+async function handleTextbookAnswersBatchUpsert(body, res) {
+  const academyId = String(body?.academy_id || '').trim();
+  if (!academyId) {
+    sendJson(res, 400, { ok: false, error: 'missing_academy_id' });
+    return;
+  }
+  const list = Array.isArray(body?.answers) ? body.answers : [];
+  if (list.length === 0) {
+    sendJson(res, 400, { ok: false, error: 'empty_answers' });
+    return;
+  }
+  if (list.length > MAX_ANSWER_BATCH) {
+    sendJson(res, 413, {
+      ok: false,
+      error: 'answer_batch_too_large',
+      limit: MAX_ANSWER_BATCH,
+      got: list.length,
+    });
+    return;
+  }
+
+  const rows = [];
+  for (let i = 0; i < list.length; i += 1) {
+    const a = list[i] || {};
+    const cropId = String(a.crop_id || '').trim();
+    if (!cropId) {
+      sendJson(res, 400, {
+        ok: false,
+        error: `missing_crop_id_at_${i}`,
+      });
+      return;
+    }
+    const kindRaw = String(a.answer_kind || '').trim().toLowerCase();
+    if (!['objective', 'subjective'].includes(kindRaw)) {
+      sendJson(res, 400, {
+        ok: false,
+        error: `invalid_answer_kind_at_${i}: ${kindRaw}`,
+      });
+      return;
+    }
+    const sourceRaw = String(a.answer_source || 'vlm').trim().toLowerCase();
+    if (!['vlm', 'manual'].includes(sourceRaw)) {
+      sendJson(res, 400, {
+        ok: false,
+        error: `invalid_answer_source_at_${i}: ${sourceRaw}`,
+      });
+      return;
+    }
+    const rawPage = Number.parseInt(String(a.raw_page ?? ''), 10);
+    const displayPage = Number.parseInt(String(a.display_page ?? ''), 10);
+    const bbox1k = parseIntArray(a.bbox_1k, 4);
+
+    const nowIso = new Date().toISOString();
+    const row = {
+      crop_id: cropId,
+      academy_id: academyId,
+      answer_kind: kindRaw,
+      answer_text: a.answer_text != null ? String(a.answer_text) : null,
+      answer_latex_2d:
+        a.answer_latex_2d != null ? String(a.answer_latex_2d) : null,
+      answer_source: sourceRaw,
+      raw_page: Number.isFinite(rawPage) ? rawPage : null,
+      display_page: Number.isFinite(displayPage) ? displayPage : null,
+      bbox_1k: bbox1k,
+      note: a.note != null ? String(a.note) : null,
+    };
+    if (sourceRaw === 'manual') {
+      row.edited_at = nowIso;
+    }
+    rows.push(row);
+  }
+
+  const { data, error } = await supa
+    .from('textbook_problem_answers')
+    .upsert(rows, { onConflict: 'crop_id' })
+    .select('crop_id, answer_kind, answer_source');
+  if (error) {
+    sendJson(res, 500, {
+      ok: false,
+      error: `db_upsert_failed: ${error.message || error}`,
+    });
+    return;
+  }
+
+  sendJson(res, 200, {
+    ok: true,
+    upserted: Array.isArray(data) ? data.length : 0,
+    rows: data || [],
+  });
+}
+
+// ---------------------------------------------------------------------------
+// textbook_problem_solution_refs batch upsert (Stage 3 sidecar)
+// ---------------------------------------------------------------------------
+//
+// Body shape:
+// {
+//   academy_id,
+//   solution_refs: [
+//     {
+//       crop_id,                   // required — FK to textbook_problem_crops.id
+//       raw_page, display_page,
+//       number_region_1k,          // required [ymin,xmin,ymax,xmax]
+//       content_region_1k,         // optional
+//     },
+//     ...
+//   ]
+// }
+
+const MAX_SOLREF_BATCH = 300;
+
+async function handleTextbookSolutionRefsBatchUpsert(body, res) {
+  const academyId = String(body?.academy_id || '').trim();
+  if (!academyId) {
+    sendJson(res, 400, { ok: false, error: 'missing_academy_id' });
+    return;
+  }
+  const list = Array.isArray(body?.solution_refs) ? body.solution_refs : [];
+  if (list.length === 0) {
+    sendJson(res, 400, { ok: false, error: 'empty_solution_refs' });
+    return;
+  }
+  if (list.length > MAX_SOLREF_BATCH) {
+    sendJson(res, 413, {
+      ok: false,
+      error: 'solref_batch_too_large',
+      limit: MAX_SOLREF_BATCH,
+      got: list.length,
+    });
+    return;
+  }
+
+  const rows = [];
+  for (let i = 0; i < list.length; i += 1) {
+    const r = list[i] || {};
+    const cropId = String(r.crop_id || '').trim();
+    if (!cropId) {
+      sendJson(res, 400, { ok: false, error: `missing_crop_id_at_${i}` });
+      return;
+    }
+    const rawPage = Number.parseInt(String(r.raw_page ?? ''), 10);
+    if (!Number.isFinite(rawPage) || rawPage <= 0) {
+      sendJson(res, 400, {
+        ok: false,
+        error: `invalid_raw_page_at_${i}: ${r.raw_page}`,
+      });
+      return;
+    }
+    const displayPage = Number.parseInt(String(r.display_page ?? ''), 10);
+    const numberRegion = parseIntArray(r.number_region_1k, 4);
+    if (!numberRegion) {
+      sendJson(res, 400, {
+        ok: false,
+        error: `invalid_number_region_1k_at_${i}`,
+      });
+      return;
+    }
+    const contentRegion = parseIntArray(r.content_region_1k, 4);
+
+    rows.push({
+      crop_id: cropId,
+      academy_id: academyId,
+      raw_page: rawPage,
+      display_page: Number.isFinite(displayPage) ? displayPage : null,
+      number_region_1k: numberRegion,
+      content_region_1k: contentRegion,
+      edited_at: r.source === 'manual' ? new Date().toISOString() : null,
+    });
+  }
+
+  const { data, error } = await supa
+    .from('textbook_problem_solution_refs')
+    .upsert(rows, { onConflict: 'crop_id' })
+    .select('crop_id, raw_page');
+  if (error) {
+    sendJson(res, 500, {
+      ok: false,
+      error: `db_upsert_failed: ${error.message || error}`,
+    });
+    return;
+  }
+
+  sendJson(res, 200, {
+    ok: true,
+    upserted: Array.isArray(data) ? data.length : 0,
+    rows: data || [],
+  });
+}
+
+/**
+ * Delete a textbook in three phases:
+ *   1) Remove every artifact in Storage:
+ *      - textbook-crops: `academies/<academy>/books/<book_id>/` (recursive)
+ *      - textbooks:      `academies/<academy>/files/<book_id>/` (recursive)
+ *      - resource-covers: `<academy>/resource-covers/<book_id>_*`
+ *   2) Delete the `resource_files` row. All related rows
+ *      (textbook_metadata, resource_file_links, textbook_problem_crops)
+ *      cascade via ON DELETE CASCADE.
+ *   3) Return counts for the UI to display.
+ */
+async function handleTextbookBookDelete(body, res) {
+  const academyId = String(body?.academy_id || '').trim();
+  const bookId = String(body?.book_id || '').trim();
+  if (!academyId || !bookId) {
+    sendJson(res, 400, {
+      ok: false,
+      error: 'missing_required_fields',
+      required: ['academy_id', 'book_id'],
+    });
+    return;
+  }
+
+  const driver = DEFAULT_TEXTBOOK_DRIVER;
+  const removed = { crops: 0, pdfs: 0, covers: 0 };
+  const warnings = [];
+
+  // (1) textbook-crops: academies/<academy>/books/<book_id>/
+  {
+    const prefix = `academies/${academyId}/books/${bookId}`;
+    const r = await storageRemoveByPrefix({
+      driver,
+      bucket: DEFAULT_TEXTBOOK_CROPS_BUCKET,
+      prefix,
+    });
+    if (!r.ok) {
+      warnings.push(`textbook-crops: ${r.error}`);
+    } else {
+      removed.crops = r.removed || 0;
+    }
+  }
+
+  // (2) textbooks: academies/<academy>/files/<book_id>/
+  {
+    const prefix = `academies/${academyId}/files/${bookId}`;
+    const r = await storageRemoveByPrefix({
+      driver,
+      bucket: DEFAULT_TEXTBOOK_BUCKET,
+      prefix,
+    });
+    if (!r.ok) {
+      warnings.push(`textbooks: ${r.error}`);
+    } else {
+      removed.pdfs = r.removed || 0;
+    }
+  }
+
+  // (3) resource-covers: <academy>/resource-covers/<book_id>_*
+  {
+    const r = await storageRemoveByNamePrefix({
+      driver,
+      bucket: 'resource-covers',
+      folder: `${academyId}/resource-covers`,
+      nameStartsWith: `${bookId}_`,
+    });
+    if (!r.ok) {
+      warnings.push(`resource-covers: ${r.error}`);
+    } else {
+      removed.covers = r.removed || 0;
+    }
+  }
+
+  // (4) Delete the DB row (cascade).
+  const { error: delErr } = await supa
+    .from('resource_files')
+    .delete()
+    .match({ id: bookId, academy_id: academyId });
+  if (delErr) {
+    sendJson(res, 500, {
+      ok: false,
+      error: 'resource_files_delete_failed',
+      detail: delErr.message || String(delErr),
+      removed,
+      warnings,
+    });
+    return;
+  }
+
+  sendJson(res, 200, {
+    ok: true,
+    book_id: bookId,
+    removed,
+    warnings,
   });
 }
 
@@ -4738,11 +5253,48 @@ async function handler(req, res) {
       return;
     }
 
-    // VLM answer-key extraction — stubbed for now; UI button is wired so the
-    // next milestone only needs to fill in the implementation.
+    // VLM answer-key extraction — Stage 2.
     if (method === 'POST' && url.pathname === '/textbook/vlm/extract-answers') {
       const body = await readJson(req);
-      await handleTextbookVlmExtractAnswersStub(body, res);
+      await handleTextbookVlmExtractAnswers(body, res);
+      return;
+    }
+
+    // VLM solution-reference detection — Stage 3.
+    if (
+      method === 'POST' &&
+      url.pathname === '/textbook/vlm/detect-solution-refs'
+    ) {
+      const body = await readJson(req);
+      await handleTextbookVlmDetectSolutionRefs(body, res);
+      return;
+    }
+
+    // Stage 2 sidecar upsert.
+    if (
+      method === 'POST' &&
+      url.pathname === '/textbook/answers/batch-upsert'
+    ) {
+      const body = await readJson(req);
+      await handleTextbookAnswersBatchUpsert(body, res);
+      return;
+    }
+
+    // Stage 3 sidecar upsert.
+    if (
+      method === 'POST' &&
+      url.pathname === '/textbook/solution-refs/batch-upsert'
+    ) {
+      const body = await readJson(req);
+      await handleTextbookSolutionRefsBatchUpsert(body, res);
+      return;
+    }
+
+    // Delete an entire textbook — sweeps Storage (textbooks, textbook-crops,
+    // resource-covers) and deletes the `resource_files` row (cascade).
+    if (method === 'POST' && url.pathname === '/textbook/book/delete') {
+      const body = await readJson(req);
+      await handleTextbookBookDelete(body, res);
       return;
     }
 

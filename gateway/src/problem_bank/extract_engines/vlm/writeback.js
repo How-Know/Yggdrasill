@@ -56,6 +56,49 @@ export function normalizeVlmQuestion(vlmQ) {
   return out;
 }
 
+function isBlankFigureDescriptor(figure) {
+  const text = [
+    figure?.description,
+    figure?.caption,
+    figure?.label,
+    figure?.text,
+  ]
+    .filter((v) => v !== undefined && v !== null)
+    .map((v) => String(v))
+    .join(' ');
+  return /(?:빈\s*(?:칸|네모|네모칸|사각형|박스|상자)|네모\s*칸|빈칸|□|▢|\\square|box\{~~\}|empty\s*(?:box|square|blank)|blank\s*(?:box|square))/i.test(
+    text,
+  );
+}
+
+function looksLikeInlineBlankMarker(source, markerOffset) {
+  const beforeText = source.slice(0, markerOffset);
+  const afterText = source.slice(markerOffset + '[그림]'.length);
+  const lineBefore = beforeText.slice(beforeText.lastIndexOf('\n') + 1).trimEnd();
+  const nextNewline = afterText.indexOf('\n');
+  const lineAfter = (nextNewline >= 0 ? afterText.slice(0, nextNewline) : afterText).trimStart();
+  if (!lineBefore || !lineAfter) return false;
+  const followsTerm = /(?:[0-9A-Za-z가-힣)}\]〉》」』]|[,，])$/.test(lineBefore);
+  const startsParticle = /^(?:의|이\/가|이|가|은|는|을|를|와|과|로|에|에서|도|만)(?:\s|$)/.test(
+    lineAfter,
+  );
+  return followsTerm && startsParticle;
+}
+
+function normalizeBlankFigureMarkers(stem, figures) {
+  const source = String(stem || '');
+  if (!source.includes('[그림]')) return source;
+  let markerIndex = 0;
+  return source.replace(/\[그림\]/g, (match, offset) => {
+    const figure = Array.isArray(figures) ? figures[markerIndex] : null;
+    markerIndex += 1;
+    if (isBlankFigureDescriptor(figure) || looksLikeInlineBlankMarker(source, offset)) {
+      return 'box{~~}';
+    }
+    return match;
+  });
+}
+
 const OBJ_LABELS = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩'];
 export function normalizeObjectiveLabel(raw, index) {
   const s = String(raw || '').trim();
@@ -67,6 +110,75 @@ export function normalizeObjectiveLabel(raw, index) {
     if (n >= 1 && n <= OBJ_LABELS.length) return OBJ_LABELS[n - 1];
   }
   return s;
+}
+
+export function objectiveAnswerTokens(answerKey) {
+  const raw = String(answerKey || '').replace(/\s+/g, ' ').trim();
+  if (!raw) return [];
+
+  const circled = raw.match(/[①②③④⑤⑥⑦⑧⑨⑩]/g);
+  if (circled && circled.length > 0) {
+    const leftover = raw
+      .replace(/[①②③④⑤⑥⑦⑧⑨⑩]/g, '')
+      .replace(/[,\s/，、ㆍ·()（）.]/g, '')
+      .replace(/(?:번|와|과|및|그리고|또는|or|OR)/g, '');
+    if (!leftover.trim()) return Array.from(new Set(circled));
+  }
+
+  const normalized = raw
+    .replace(/[，、ㆍ·]/g, ',')
+    .replace(/\s*(?:와|과|및|그리고|또는|or|OR)\s*/g, ',')
+    .replace(/\s*\/\s*/g, ',')
+    .trim();
+  const parts = /,/.test(normalized)
+    ? normalized.split(',')
+    : /^\d{1,2}(?:\s+\d{1,2})+$/.test(normalized)
+      ? normalized.split(/\s+/)
+      : [normalized];
+
+  const tokens = parts
+    .map((token) => String(token || '').replace(/[()（）.]/g, '').replace(/번/g, '').trim())
+    .filter(Boolean)
+    .map((token) => {
+      if (/^(10|[1-9])$/.test(token)) {
+        const n = Number.parseInt(token, 10);
+        return OBJ_LABELS[n - 1] || token;
+      }
+      return token;
+    })
+    .filter((token) => OBJ_LABELS.includes(token));
+  return Array.from(new Set(tokens));
+}
+
+export function normalizeObjectiveAnswerKey(answerKey) {
+  const raw = String(answerKey || '').replace(/\s+/g, ' ').trim();
+  if (!raw) return '';
+  const tokens = objectiveAnswerTokens(raw);
+  return tokens.length > 0 ? tokens.join(', ') : raw;
+}
+
+export function expectedObjectiveAnswerCount(vlmQ) {
+  const stem = String(vlmQ?.stem || '').replace(/\s+/g, ' ').trim();
+  if (!stem) return 0;
+  const digitCount = stem.match(/(?:정답|답|것|설명|보기|문장)?\s*(\d+)\s*개(?:를|을)?\s*(?:고르|찾|택|선택)/);
+  if (digitCount) {
+    const n = Number.parseInt(digitCount[1], 10);
+    if (Number.isFinite(n) && n > 1) return n;
+  }
+  const koreanCounts = [
+    ['두', 2],
+    ['둘', 2],
+    ['세', 3],
+    ['셋', 3],
+    ['네', 4],
+    ['넷', 4],
+  ];
+  for (const [word, count] of koreanCounts) {
+    const re = new RegExp(`${word}\\s*개(?:를|을)?\\s*(?:고르|찾|택|선택)`);
+    if (re.test(stem)) return count;
+  }
+  if (/(?:모두|전부)\s*(?:고르|찾|택|선택)/.test(stem)) return 2;
+  return 0;
 }
 
 // VLM 의 은닉 sub_questions 를 stem 본문에 마커와 함께 복원.
@@ -128,7 +240,21 @@ export function buildRowUpdate(existingRow, vlmQ, opts = {}) {
     : opts.keepTypeFromDb && existingType
       ? existingType
       : vlmType;
-  const stem = buildStemWithSubQuestions(vlmQ, existingFigureSlots);
+  const rawVlmFigures = Array.isArray(vlmQ.figures) ? vlmQ.figures : [];
+  const rawStemForFigureMarkers = [
+    vlmQ?.stem,
+    ...(Array.isArray(vlmQ?.sub_questions)
+      ? vlmQ.sub_questions.map((sq) => sq?.text)
+      : []),
+  ].join('\n');
+  const preserveExistingFigureSlots =
+    rawVlmFigures.length > 0 || /\[그림\]|\[\[PB_FIG_[^\]]+\]\]/.test(rawStemForFigureMarkers)
+      ? 0
+      : existingFigureSlots;
+  const stem = normalizeBlankFigureMarkers(
+    buildStemWithSubQuestions(vlmQ, preserveExistingFigureSlots),
+    rawVlmFigures,
+  );
 
   const vlmChoices = Array.isArray(vlmQ.choices) ? vlmQ.choices : [];
   const objectiveChoices = vlmChoices.map((c, idx) => ({
@@ -138,7 +264,7 @@ export function buildRowUpdate(existingRow, vlmQ, opts = {}) {
 
   const objectiveAnswerKeyRaw = String(vlmQ?.answer?.objective_key || '').trim();
   const objectiveAnswerKey = objectiveAnswerKeyRaw
-    ? normalizeObjectiveLabel(objectiveAnswerKeyRaw, -1)
+    ? normalizeObjectiveAnswerKey(objectiveAnswerKeyRaw)
     : '';
   const subjectiveAnswer = String(vlmQ?.answer?.subjective || '').trim();
   const answerParts = Array.isArray(vlmQ?.answer?.parts)
@@ -147,16 +273,29 @@ export function buildRowUpdate(existingRow, vlmQ, opts = {}) {
 
   const allowObjective = qType === '객관식' && objectiveChoices.length > 0;
   const allowSubjective = qType !== '객관식';
-
-  const vlmFigures = Array.isArray(vlmQ.figures) ? vlmQ.figures : [];
+  const expectedAnswerCount = allowObjective ? expectedObjectiveAnswerCount(vlmQ) : 0;
+  const actualAnswerCount = objectiveAnswerTokens(objectiveAnswerKey).length;
+  const incompleteMultiAnswer =
+    expectedAnswerCount > 1 && actualAnswerCount > 0 && actualAnswerCount < expectedAnswerCount;
+  const stemFigureMarkerCount = (String(stem).match(/\[그림\]/g) || []).length;
+  const vlmFigures = rawVlmFigures.filter((figure) => !isBlankFigureDescriptor(figure));
+  const nextFlags = Array.from(
+    new Set([
+      ...(Array.isArray(vlmQ.flags) ? vlmQ.flags : []),
+      ...(incompleteMultiAnswer ? ['objective_multi_answer_incomplete_suspected'] : []),
+    ]),
+  ).filter(
+    (flag) =>
+      flag !== 'contains_figure' || stemFigureMarkerCount > 0 || vlmFigures.length > 0,
+  );
   const vlmTables = Array.isArray(vlmQ.tables) ? vlmQ.tables : [];
 
   // figure_refs 재구축: 매니저 UI 는 figure_assets 가 비어 있을 때 figure_refs.length 로
   // "그림 개수" 를 대체 추정한다. 지저분한 기존 [표행]/[표셀] 마커가 섞여 있으면 쓰레기 카운트가
   // figure_layout 다이얼로그에 노출되므로 "stem 의 [그림] 마커 + 기존 figure_assets 수" 기준으로
   // 깨끗하게 재구성한다.
-  const stemFigureMarkerCount = (String(stem).match(/\[그림\]/g) || []).length;
-  const desiredRefCount = Math.max(stemFigureMarkerCount, figureAssets.length);
+  const desiredRefCount =
+    stemFigureMarkerCount > 0 ? Math.max(stemFigureMarkerCount, figureAssets.length) : 0;
   const newFigureRefs = Array.from({ length: desiredRefCount }, () => '[그림]');
 
   // figure worker(problem_bank_figure_worker.js)는 inferQuestionFigureCount 에서
@@ -248,6 +387,15 @@ export function buildRowUpdate(existingRow, vlmQ, opts = {}) {
         }))
       : [],
     answer_key: isSet ? subjectiveAnswer : existingMeta.answer_key || '',
+    objective_answer_key: allowObjective ? objectiveAnswerKey : '',
+    allow_objective: allowObjective,
+    allow_subjective: allowSubjective || isSet,
+    ...(incompleteMultiAnswer
+      ? {
+          objective_answer_expected_count: expectedAnswerCount,
+          objective_answer_key_count: actualAnswerCount,
+        }
+      : {}),
     score_point: nextScorePoint,
     figure_count: figureCountForMapping,
     vlm: {
@@ -259,7 +407,7 @@ export function buildRowUpdate(existingRow, vlmQ, opts = {}) {
         : [],
       figures_described: vlmFigures,
       tables_described: vlmTables,
-      flags: Array.isArray(vlmQ.flags) ? vlmQ.flags : [],
+      flags: nextFlags,
       overwritten_at: new Date().toISOString(),
     },
   };
@@ -282,7 +430,7 @@ export function buildRowUpdate(existingRow, vlmQ, opts = {}) {
     allow_objective: allowObjective,
     allow_subjective: allowSubjective || isSet,
     objective_generated: false,
-    flags: Array.isArray(vlmQ.flags) ? vlmQ.flags : [],
+    flags: nextFlags,
     figure_refs: newFigureRefs,
     meta: newMeta,
   };

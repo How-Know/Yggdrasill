@@ -55,14 +55,28 @@ function toPayloadQuestion({
     ? normalized.uncertain_fields.length
     : 0;
   const declaredConf = compact(normalized?.vlm_confidence || '');
-  const confidence =
+  let confidence =
     declaredConf === 'low'
       ? 0.4
       : uncertainCount > 0 || declaredConf === 'medium'
         ? Math.max(0, Number(reviewConfidenceThreshold || 0.6) - 0.05)
         : 0.9;
 
-  const flags = Array.isArray(normalized?.flags) ? normalized.flags : [];
+  const updateFlags = Array.isArray(update?.flags) ? update.flags : [];
+  const flags = Array.from(
+    new Set([
+      ...(Array.isArray(normalized?.flags) ? normalized.flags : []),
+      ...updateFlags,
+    ]),
+  ).filter(
+    (flag) => flag !== 'contains_figure' || updateFlags.includes('contains_figure'),
+  );
+  if (flags.includes('objective_multi_answer_incomplete_suspected')) {
+    confidence = Math.min(
+      confidence,
+      Math.max(0, Number(reviewConfidenceThreshold || 0.6) - 0.05),
+    );
+  }
   const sourcePage = Number.isFinite(Number(normalized?.source_page))
     ? Number(normalized.source_page)
     : null;

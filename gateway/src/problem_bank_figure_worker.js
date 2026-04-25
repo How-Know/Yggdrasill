@@ -562,6 +562,39 @@ async function loadQuestionForJob(job) {
   return data;
 }
 
+// HWPX 의 Contents/content.hpf 매니페스트에서 binaryItemIDRef ↔ BinData 경로 매핑을 복원한다.
+//   OPF 규약: <opf:manifest> 안에 <opf:item id="image1" href="BinData/bin1.png" media-type="..."/>
+//   또는 이름이 <item .../> 인 경우도 있으므로 defensive 하게 파싱한다.
+//   이 매핑이 있으면 extract 단계에서 본문에 박아둔 [[PB_FIG_<id>]] 토큰으로 이미지 바이트를
+//   문서 순서/파일명 추정 없이 "정확히" 집어올 수 있다.
+function parseBinItemManifest(zip) {
+  const manifest = new Map(); // itemID → BinData href (case-preserved)
+  try {
+    const hpfEntry = zip.getEntry('Contents/content.hpf')
+      || zip.getEntry('content.hpf');
+    if (!hpfEntry) return manifest;
+    const xml = hpfEntry.getData().toString('utf8');
+    const itemRe = /<(?:opf:)?(?:item|binItem)\b([^>]*?)\/?>/gi;
+    let m = null;
+    while ((m = itemRe.exec(xml)) !== null) {
+      const attrs = m[1] || '';
+      const idMatch = attrs.match(/\bid\s*=\s*"([^"]+)"/i)
+        || attrs.match(/\bid\s*=\s*'([^']+)'/i);
+      const hrefMatch = attrs.match(/\bhref\s*=\s*"([^"]+)"/i)
+        || attrs.match(/\bhref\s*=\s*'([^']+)'/i);
+      if (!idMatch || !hrefMatch) continue;
+      const id = String(idMatch[1] || '').trim();
+      const href = String(hrefMatch[1] || '').trim();
+      if (!id || !href) continue;
+      if (!/^BinData\//i.test(href)) continue;
+      manifest.set(id, href);
+    }
+  } catch (_err) {
+    // 매니페스트 파싱 실패는 치명적이지 않다 — count 기반 fallback 경로가 이어진다.
+  }
+  return manifest;
+}
+
 async function loadDocumentReferencePack(job) {
   const cacheKey = `${job.academy_id}:${job.document_id}`;
   if (referenceCacheByDocument.has(cacheKey)) {
@@ -583,7 +616,12 @@ async function loadDocumentReferencePack(job) {
     const bucket = normalizeWhitespace(docRow.source_storage_bucket);
     const sourcePath = normalizeWhitespace(docRow.source_storage_path);
     if (!bucket || !sourcePath) {
-      return { imageEntries: [], figureQuestions: [] };
+      return {
+        imageEntries: [],
+        imageByItemId: new Map(),
+        imageByPath: new Map(),
+        figureQuestions: [],
+      };
     }
     const { data: hwpxBlob, error: downloadErr } = await supa.storage
       .from(bucket)
@@ -614,6 +652,18 @@ async function loadDocumentReferencePack(job) {
       }))
       .filter((entry) => entry.bytes.length > 0);
 
+    // Case-insensitive path lookup (HWPX manifests occasionally differ in case).
+    const imageByPath = new Map();
+    for (const entry of imageEntries) {
+      imageByPath.set(entry.entryName.toLowerCase(), entry);
+    }
+    const manifest = parseBinItemManifest(zip);
+    const imageByItemId = new Map();
+    for (const [itemId, href] of manifest.entries()) {
+      const entry = imageByPath.get(String(href).toLowerCase());
+      if (entry) imageByItemId.set(itemId, entry);
+    }
+
     const { data: questionRows, error: qErr } = await supa
       .from('pb_questions')
       .select('id,source_order,figure_refs,stem,meta')
@@ -631,7 +681,7 @@ async function loadDocumentReferencePack(job) {
         figureCount: inferQuestionFigureCount(row),
       }));
 
-    return { imageEntries, figureQuestions };
+    return { imageEntries, imageByItemId, imageByPath, figureQuestions };
   })();
   referenceCacheByDocument.set(cacheKey, fetchPromise);
   try {
@@ -642,6 +692,25 @@ async function loadDocumentReferencePack(job) {
   }
 }
 
+// 문항 본문(stem + figure_refs) 안의 [[PB_FIG_<id>]] 토큰을 등장 순서대로 뽑는다.
+//   같은 ID가 여러 번 등장하면 원작자 의도상 같은 그림을 반복 사용한 것으로 보고 그대로 유지한다.
+function extractPbFigTokensFromQuestion(question) {
+  const parts = [];
+  if (typeof question?.stem === 'string') parts.push(question.stem);
+  if (Array.isArray(question?.figure_refs)) {
+    for (const r of question.figure_refs) parts.push(String(r || ''));
+  }
+  const haystack = parts.join('\n');
+  const tokens = [];
+  const re = /\[\[PB_FIG_([^\]]+)\]\]/g;
+  let m = null;
+  while ((m = re.exec(haystack)) !== null) {
+    const id = String(m[1] || '').trim();
+    if (id) tokens.push(id);
+  }
+  return tokens;
+}
+
 async function resolveReferenceImagesForQuestion(job, question) {
   if (FIGURE_REFERENCE_IMAGE_LIMIT <= 0) return [];
   try {
@@ -649,6 +718,47 @@ async function resolveReferenceImagesForQuestion(job, question) {
     if (!Array.isArray(pack.imageEntries) || pack.imageEntries.length === 0) {
       return [];
     }
+
+    // Primary path: [[PB_FIG_<id>]] 토큰 ↔ binItem 매니페스트로 직접 매칭.
+    //   이 경로는 BinData 파일명 순서·문항 경계·카운트 합 등 어떤 추측도 하지 않는다.
+    const imageByItemId = pack.imageByItemId instanceof Map
+      ? pack.imageByItemId
+      : new Map();
+    if (imageByItemId.size > 0) {
+      const tokens = extractPbFigTokensFromQuestion(question);
+      if (tokens.length > 0) {
+        const pickedByToken = [];
+        const seen = new Set();
+        for (const id of tokens) {
+          const entry = imageByItemId.get(id);
+          if (!entry) continue;
+          const key = entry.entryName;
+          // 같은 그림을 두 번 쓰더라도 Gemini 참조 리스트에는 한 번만 넣는다.
+          //   단, itemId 는 "이번에 쓰인 ID들" 을 모두 보존해 두어야 하는데, 여기서는
+          //   "고유한 picked 엔트리당 첫 번째 ID" 를 대표로 기록한다. 렌더 단계에서 같은
+          //   asset 을 여러 토큰이 참조하는 경우, lookup 에서 itemId -> asset 다대일 해결된다.
+          if (seen.has(key)) continue;
+          seen.add(key);
+          pickedByToken.push({ ...entry, itemId: id });
+        }
+        if (pickedByToken.length > 0) {
+          return pickedByToken
+            .filter((entry) => entry.bytes.length <= FIGURE_REFERENCE_MAX_BYTES)
+            .map((entry) => ({
+              bytes: entry.bytes,
+              mimeType: entry.mimeType,
+              entryName: entry.entryName,
+              itemId: entry.itemId,
+            }));
+        }
+        // 토큰이 있었지만 매니페스트에서 해결 실패 → count 기반으로 fallback.
+      }
+    }
+
+    // Fallback path: 기존 "figure_refs 카운트 누적 → BinData slice" 로직.
+    //   - 구버전 extract 결과(토큰 없음) 호환
+    //   - VLM 경로(토큰 생성 안 함) 호환
+    //   - 매니페스트 파싱 실패 시
     const figureQuestions = Array.isArray(pack.figureQuestions)
       ? pack.figureQuestions
       : [];
@@ -735,6 +845,7 @@ async function processOneJob(job) {
       mimeType: ref.mimeType || 'image/png',
       bytes: ref.bytes,
       referenceEntry: ref.entryName || '',
+      itemId: ref.itemId || '',
       figureIndex: idx + 1,
     }));
   } else if (referenceImages.length <= 1) {
@@ -743,6 +854,7 @@ async function processOneJob(job) {
       mimeType: generated.mimeType,
       bytes: generated.bytes,
       referenceEntry: referenceImages[0]?.entryName || '',
+      itemId: referenceImages[0]?.itemId || '',
       figureIndex: 1,
     });
   } else {
@@ -760,6 +872,7 @@ async function processOneJob(job) {
         mimeType: generated.mimeType,
         bytes: generated.bytes,
         referenceEntry: referenceImages[ri]?.entryName || '',
+        itemId: referenceImages[ri]?.itemId || '',
         figureIndex: ri + 1,
       });
     }
@@ -804,9 +917,6 @@ async function processOneJob(job) {
   const nowIso = new Date().toISOString();
   const prevMeta =
     question.meta && typeof question.meta === 'object' ? question.meta : {};
-  const prevAssets = Array.isArray(prevMeta.figure_assets)
-    ? prevMeta.figure_assets
-    : [];
   const newAssets = uploaded.map((output, idx) => ({
     id: uploaded.length > 1 ? `${job.id}:${idx + 1}` : job.id,
     source: generationMode,
@@ -820,21 +930,24 @@ async function processOneJob(job) {
     mime_type: output.mimeType,
     confidence: shouldPassthrough ? 0.98 : referenceImages.length > 0 ? 0.74 : 0.6,
     figure_index: output.figureIndex,
+    // HWPX binItem ID. 렌더 단계에서 본문의 [[PB_FIG_<id>]] 토큰을 이 asset 으로 직접
+    //   매칭한다. token 경로가 아닌 경우(구버전 extract, VLM 등)에는 빈 문자열로 남고,
+    //   렌더는 기존 figure_index 순차 매칭으로 자연스럽게 폴백한다.
+    item_id: output.itemId || '',
     reference_count: referenceImages.length,
     reference_entry: output.referenceEntry || '',
     requested_min_side_px: requestedMinSidePx,
     created_at: nowIso,
   }));
-  const nextAssets = [
-    ...newAssets,
-    ...prevAssets.filter((a) => {
-      const id = String(a?.id || '');
-      if (!id) return true;
-      if (id === String(job.id || '')) return false;
-      if (id.startsWith(`${job.id}:`)) return false;
-      return true;
-    }),
-  ];
+  // 이 figure_job 이 끝나면 해당 question 의 figure 세트는 newAssets 만으로 정의된다.
+  //   - 과거 구현은 "같은 job.id 만 제거" 로 이전 추출의 asset 을 누적해서 남겼고,
+  //     그 결과 재추출할 때마다 figure_assets 가 쌓여 동일 문항에 그림이 여러 번
+  //     붙는 중복 버그가 있었다 (관측: Q9/Q11 에 이전 4-token 오배정 잔재가 남음).
+  //   - 렌더러는 meta.figure_assets 를 해당 문항의 "전체 현재 그림 세트" 로 읽으므로
+  //     이 job 이 만든 것만 남겨야 stem 의 [[PB_FIG_<id>]] 토큰과 1:1 로 대응된다.
+  //   - storage 의 고아 파일은 수명이 다 되면 lifecycle 로 정리되거나 별도 청소 작업
+  //     에서 처리한다 (여기서는 DB 메타만 일관되게 유지).
+  const nextAssets = [...newAssets];
   const figureLayoutItems = newAssets.map((asset) => {
     const key = Number.isFinite(asset.figure_index) && asset.figure_index > 0
       ? `idx:${asset.figure_index}`
@@ -858,8 +971,17 @@ async function processOneJob(job) {
       gap: 0.5,
     });
   }
-  const figureLayout = prevMeta.figure_layout && typeof prevMeta.figure_layout === 'object'
+  // figure_layout 은 "수동 편집될 수 있는" 값이므로 기본은 이전 것을 유지.
+  //   단 items 개수가 새 asset 수와 다르면 그대로 두면 렌더러가 빈 슬롯을 그리거나
+  //   존재하지 않는 assetKey 를 참조해 터진다. 불일치 시에는 새로 계산해 덮어쓴다.
+  //   (Q9 에 과거 4-slot layout 이 남아있고 newAssets 가 1 개인 경우, 렌더러가 4
+  //    슬롯을 그리려다 중복/공백을 유발하던 증상을 차단.)
+  const prevLayout = prevMeta.figure_layout && typeof prevMeta.figure_layout === 'object'
     ? prevMeta.figure_layout
+    : null;
+  const prevItemsCount = Array.isArray(prevLayout?.items) ? prevLayout.items.length : -1;
+  const figureLayout = prevLayout && prevItemsCount === figureLayoutItems.length
+    ? prevLayout
     : { version: 1, items: figureLayoutItems, groups: figureLayoutGroups };
 
   const nextMeta = {

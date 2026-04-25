@@ -1,8 +1,3 @@
-// Radio 의 groupValue/onChanged 는 Flutter 3.32 에서 RadioGroup 도입과 함께 deprecated 되었지만,
-// 본 프로젝트의 다른 화면도 아직 동일 API 를 그대로 쓰고 있어 일관성 유지를 위해 이 파일만
-// 별도 마이그레이션하지 않는다. 프로젝트 전체 마이그레이션 시 함께 정리.
-// ignore_for_file: deprecated_member_use
-
 import 'package:flutter/material.dart';
 
 import '../problem_bank_models.dart';
@@ -63,7 +58,7 @@ class _ObjectiveChoicesEditDialogState
   static const List<String> _labels = <String>['①', '②', '③', '④', '⑤'];
 
   late List<TextEditingController> _controllers;
-  late String _answerKey;
+  late Set<String> _answerKeys;
   bool _regenerating = false;
 
   @override
@@ -82,8 +77,37 @@ class _ObjectiveChoicesEditDialogState
       final text = i < choices.length ? choices[i].text : '';
       _controllers[i].text = text;
     }
-    _answerKey = _labels.contains(answerKey) ? answerKey : _labels.first;
+    final parsed = _parseAnswerKeys(answerKey);
+    _answerKeys = parsed.isNotEmpty ? parsed : <String>{_labels.first};
   }
+
+  Set<String> _parseAnswerKeys(String value) {
+    final raw = value.trim();
+    if (raw.isEmpty) return <String>{};
+    final circled = RegExp(r'[①②③④⑤]').allMatches(raw).map((m) => m.group(0)!);
+    final out = <String>{...circled};
+    if (out.isNotEmpty) return out;
+    final normalized = raw
+        .replaceAll(RegExp(r'[，、ㆍ·/]'), ',')
+        .replaceAll(RegExp(r'\s*(와|과|및|그리고|또는)\s*'), ',');
+    final parts = normalized.contains(',')
+        ? normalized.split(',')
+        : RegExp(r'^\d(?:\s+\d)+$').hasMatch(normalized)
+            ? normalized.split(RegExp(r'\s+'))
+            : <String>[normalized];
+    for (final part in parts) {
+      final n = int.tryParse(
+        part.replaceAll(RegExp(r'[()（）.]'), '').replaceAll('번', '').trim(),
+      );
+      if (n != null && n >= 1 && n <= _labels.length) {
+        out.add(_labels[n - 1]);
+      }
+    }
+    return out;
+  }
+
+  String get _answerKey =>
+      _labels.where((label) => _answerKeys.contains(label)).join(', ');
 
   @override
   void dispose() {
@@ -129,6 +153,12 @@ class _ObjectiveChoicesEditDialogState
       );
       return;
     }
+    if (_answerKeys.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('정답을 1개 이상 선택해 주세요.')),
+      );
+      return;
+    }
     Navigator.of(context).pop(
       ObjectiveChoicesEditResult(
         choices: choices,
@@ -149,7 +179,7 @@ class _ObjectiveChoicesEditDialogState
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              '각 번호의 보기 문구를 다듬고, 정답을 고른 뒤 저장하세요. '
+              '각 번호의 보기 문구를 다듬고, 정답을 하나 이상 체크한 뒤 저장하세요. '
               '수식은 \$...\$ 또는 \\(...\\) 형태를 그대로 사용할 수 있습니다.',
               style: theme.textTheme.bodySmall,
             ),
@@ -160,15 +190,16 @@ class _ObjectiveChoicesEditDialogState
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
-                    Radio<String>(
-                      value: _labels[i],
-                      groupValue: _answerKey,
+                    Checkbox(
+                      value: _answerKeys.contains(_labels[i]),
                       onChanged: (v) {
-                        if (v != null) {
-                          setState(() {
-                            _answerKey = v;
-                          });
-                        }
+                        setState(() {
+                          if (v == true) {
+                            _answerKeys.add(_labels[i]);
+                          } else {
+                            _answerKeys.remove(_labels[i]);
+                          }
+                        });
                       },
                     ),
                     SizedBox(

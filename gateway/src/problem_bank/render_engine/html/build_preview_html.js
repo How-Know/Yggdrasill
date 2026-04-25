@@ -165,6 +165,7 @@ function buildPreviewStyles({ stemSizePt, lineHeightPt, choiceGapPt }) {
       align-items: baseline;
     }
     .bogi-item-label { white-space: nowrap; font-weight: 400; line-height: var(--lc-line-normal); }
+    .bogi-item-label-placeholder { visibility: hidden; }
     .bogi-item-text { min-width: 0; }
     .bogi-item .math-inline { transform: translateY(-1pt); }
     .bogi-item.bogi-item-center { text-align: center; }
@@ -175,6 +176,8 @@ function buildPreviewStyles({ stemSizePt, lineHeightPt, choiceGapPt }) {
     .bogi-line.bogi-line-center { text-align: center; }
     .bogi-line.bogi-line-right { text-align: right; }
     .bogi-line.bogi-line-justify { text-align: justify; }
+    .bogi-paragraph-gap { height: 0.45em; }
+    .pb-underline { text-decoration: underline; text-underline-offset: 0.12em; }
     .math-inline { position: relative; }
     .math-debug-dot {
       position: absolute; top: 50%; left: 50%;

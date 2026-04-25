@@ -7491,6 +7491,16 @@ class DataManager {
         bookId: bookId,
         gradeLabel: gradeLabel,
       );
+
+  /// Thin wrapper around [ResourceService.loadTextbookProblemRegions].
+  Future<List<Map<String, dynamic>>> loadTextbookProblemRegions({
+    required String bookId,
+    String? gradeLabel,
+  }) =>
+      ResourceService.instance.loadTextbookProblemRegions(
+        bookId: bookId,
+        gradeLabel: gradeLabel,
+      );
   Future<List<Map<String, dynamic>>> loadHomeworkUnitStats({
     required String bookId,
     required String gradeLabel,

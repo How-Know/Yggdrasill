@@ -14,13 +14,72 @@
  */
 
 import { resolveFigureLayout } from '../utils/figure_layout.js';
+import {
+  applyInlineAlignmentMarkers,
+  expandCasesEnvironmentToDisplayArray,
+  normalizeLineAlignValue,
+  splitBySpaceMarkers,
+  splitByUnderlineMarkers,
+  SPACE_MARKER_REGEX,
+} from '../utils/text.js';
 
-const PARAGRAPH_MARKER_RE = /\[문단\]/g;
+// -----------------------------------------------------------------------------
+// LaTeX 제어문자 복구 (렌더 시점 safety net).
+//   VLM 경로에서 Gemini 가 \frac / \bullet / \vec / \t... 를 single-escape(\f ..)
+//   로 내보내면 JSON.parse 가 이를 제어문자(Form Feed / Backspace / Vertical Tab /
+//   Tab)로 "정상 해석" 해서 문자열에 박아버린다. 이 경우 기존 repairLatexBackslashes
+//   는 파싱 실패가 아니므로 호출되지 않아 복구 기회를 놓친다.
+//   - 1차 방어선: vlm/client.js 의 recoverMangledLatexControls (추출 시점)
+//   - 2차 방어선(여기): 이미 DB 에 박혀 저장된 기존 데이터도 LaTeX 로 흘러가기 전에
+//                       무조건 복구해서 "! Missing $ inserted" / "^^L rac{...}"
+//                       컴파일 실패를 막는다.
+//   Form Feed (\x0c) / Backspace (\x08) / VT (\x0b) 는 합법 LaTeX 본문에 등장할
+//   이유가 없으므로 무조건 \f / \b / \v 로 되돌린다. Tab (\x09) 은 tabular 사이
+//   공백으로 쓰이므로 "뒤에 영문자" 인 경우에만 \t<cmd> 로 복구.
+//   CR (\x0d) / LF (\x0a) 는 자연 줄바꿈으로도 쓰이므로 "뒤에 LaTeX 명령 이름 패턴
+//   (소문자 영문자들 + `\`/`{`/`^`/`_`)" 인 경우에만 \r<cmd> / \n<cmd> 로 복구.
+//   대표 사례: \right\} → JSON.parse → \x0dight\} → "l.120 ight\}$" 컴파일 실패.
+function sanitizeLatexControlChars(value) {
+  if (typeof value === 'string') {
+    let s = value;
+    s = s.replace(/\x0c/g, '\\f');
+    s = s.replace(/\x08/g, '\\b');
+    s = s.replace(/\x0b/g, '\\v');
+    s = s.replace(/\x09(?=[A-Za-z])/g, '\\t');
+    // terminator 는 LaTeX 명령 뒤에 자주 오는 문자들 전부 커버: \ {} () [] ^ _
+    // 과거 실수: ")" terminator 를 빠뜨려 "\right)" 가 "ight)" 로 깨져 재발한 적 있음.
+    s = s.replace(/\x0d(?=[a-z][a-zA-Z]*[\\{}()\[\]^_])/g, '\\r');
+    s = s.replace(/\x0a(?=[a-z][a-zA-Z]*[\\{}()\[\]^_])/g, '\\n');
+    return s;
+  }
+  if (Array.isArray(value)) return value.map(sanitizeLatexControlChars);
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const k of Object.keys(value)) {
+      out[k] = sanitizeLatexControlChars(value[k]);
+    }
+    return out;
+  }
+  return value;
+}
+
+// `[문단]` + 속성부 포함 변형 `[문단:가운데]`, `[문단:center]` 등을 모두 매칭.
+// 전처리 단계(applyInlineAlignmentMarkers)에서 이미 plain `[문단]` 으로 정규화되지만,
+// safety net 으로 속성 변형도 strip/split 대상에 포함해 속성이 LaTeX 본문에 새어
+// 나가지 않도록 한다.
+const PARAGRAPH_MARKER_RE = /\[문단(?::[^\]]*)?\]/g;
+const BOX_ALIGN_MARKER_RE = /^\s*\[(?:정렬|align)\s*:\s*(왼쪽|좌측|left|가운데|중앙|center|오른쪽|우측|right)\]\s*$/i;
 const BOGI_MARKER_RE = /\[박스시작\]|\[박스끝\]/g;
+const BOX_PARAGRAPH_BREAK = '__PB_BOX_PARAGRAPH_BREAK__';
 // 세트형 문제에서 추출기가 주입하는 하위문항 경계 표식. 라인 하나를 단독으로 차지한다.
 // 렌더러는 이 마커를 "소비" 하되 화면에는 표시하지 않고, 마커 사이에 수직 간격만 주입한다.
 const SUBQ_MARKER_LINE_RE = /^\s*\[\s*소문항\s*\d+\s*\]\s*$/;
-const FIGURE_MARKER_RE = /\[(?:그림|도형|도표)\]/g;
+// 본문 그림 마커 정규식.
+//   - 기존 plain 마커: [그림], [도형], [도표]
+//   - HWPX binaryItemIDRef 를 보존한 토큰: [[PB_FIG_<itemID>]]
+//   두 형태 모두 하나의 "그림 한 장" 슬롯을 가리킨다.
+//   capture group 1: 값이 있으면 PB_FIG itemID, 없으면 plain 마커.
+const FIGURE_MARKER_RE = /\[\[PB_FIG_([^\]]+)\]\]|\[(?:그림|도형|도표)\]/g;
 
 // tabular 셀을 안전한 수식/텍스트 모드로 변환.
 //   - "\text{...}" 셀: 그대로 (LaTeX 가 tabular 바깥 mode 에서도 문제없이 처리)
@@ -220,6 +279,7 @@ function normalizeMathSegment(mathContent) {
 
   out = out.replace(/×/g, '\\times');
   out = out.replace(/÷/g, '\\div');
+  out = out.replace(/(?<!\\)%/g, '\\%');
 
   // 분수 크기 일관성: \frac 은 주변 math style(text/display) 에 따라 크기가 바뀐다.
   //   본문은 $\displaystyle ...$ 로 감싸지만, 중첩 분수(분자/분모 안의 \frac)는
@@ -228,8 +288,15 @@ function normalizeMathSegment(mathContent) {
   //   이미 \dfrac 또는 \tfrac 로 명시된 경우는 건드리지 않는다.
   out = out.replace(/\\frac(?![a-zA-Z])/g, '\\dfrac');
 
+  // 지수 자리에 들어간 빈칸은 일반 답안 빈칸보다 작은 정사각형으로 렌더링.
+  out = out.replace(/\^\s*\{\s*box\{~~\}\s*\}/g, '^{\\mtexponentemptybox{}}');
+  out = out.replace(/\^\s*box\{~~\}/g, '^{\\mtexponentemptybox{}}');
+  out = out.replace(/\^\s*\{\s*\\square\s*\}/g, '^{\\mtexponentemptybox{}}');
+  out = out.replace(/\^\s*\\square(?![a-zA-Z])/g, '^{\\mtexponentemptybox{}}');
+
   // box{~~} (빈 박스) → 3:2 비율 직사각형 빈칸 네모.
   out = out.replace(/box\{~~\}/g, '\\mtemptybox{}');
+  out = out.replace(/\\square(?![a-zA-Z])/g, '\\mtemptybox{}');
   // DB 에 이미 들어가 있는 \boxed{\phantom{...}} 형태도 3:2 빈칸 네모로 치환.
   out = out.replace(/\\boxed\s*\{\s*\\phantom\s*\{[^}]*\}\s*\}/g, '\\mtemptybox{}');
   // box{X} (내용이 있는 박스) → \boxed{X}. 빈 경우는 위 규칙이 이미 처리.
@@ -249,11 +316,125 @@ function normalizeMathSegment(mathContent) {
   out = out.replace(/\\left\|/g, '\\left|\\,');
   out = out.replace(/\\right\|/g, '\\,\\right|');
   out = out.replace(/(?<!\\left|\\right)\|([^|]+)\|/g, '\\left|\\,$1\\,\\right|');
+  out = expandCasesEnvironmentToDisplayArray(out, { thinBrace: true });
 
   return out;
 }
 
+/**
+ * `[공백:N]` 마커를 `\hspace*{Nem}` 로 치환.
+ *   - star 버전(`\hspace*`) 을 써서 줄 시작/끝에서도 collapse 되지 않도록 보장.
+ *   - `Nem` 은 em 단위 → 본문 폰트 크기에 비례해 한글 글자 폭과 일관.
+ */
+function spaceMarkerToTex(amount) {
+  const n = Number.isFinite(amount) ? amount : 1;
+  return `\\hspace*{${n}em}`;
+}
+
+/**
+ * 텍스트를 [공백:N] 마커로 분해한 뒤, 텍스트 조각은 smartTexLineCore 로,
+ * 공백 조각은 `\hspace*{Nem}` 로 각각 변환해 이어 붙인다.
+ *
+ * 마커를 smartTexLineCore 안쪽까지 흘려보내면 KOREAN_SEG_RE 가 `[` / `]` / 숫자에서
+ * 세그먼트를 끊어서 math 모드로 잘못 분류되거나 사라질 수 있다. 최상단에서 미리
+ * 분리해 처리하면 rendering hint 가 안전하게 LaTeX 공간 명령으로 치환된다.
+ */
 function smartTexLine(text, equations) {
+  const raw = String(text ?? '');
+  if (!raw) return '';
+
+  if (raw.includes('[밑줄]')) {
+    const pieces = splitByUnderlineMarkers(raw);
+    if (!pieces.some((piece) => piece.type === 'underline')) {
+      return smartTexLineCore(raw.replace(/\[\/?밑줄\]/g, ''), equations);
+    }
+    const rendered = [];
+    for (const piece of pieces) {
+      if (piece.type === 'underline') {
+        const inner = smartTexLine(piece.value, equations);
+        if (inner) rendered.push(`\\uline{${inner}}`);
+        continue;
+      }
+      const tex = smartTexLine(piece.value, equations);
+      if (tex) rendered.push(tex);
+    }
+    return rendered.join('');
+  }
+
+  // 공백 마커가 없는 일반 경로: 기존 동작과 완전히 동일.
+  if (!raw.includes('[공백:')) {
+    return smartTexLineCore(raw, equations);
+  }
+
+  const pieces = splitBySpaceMarkers(raw);
+  const parts = [];
+  for (const piece of pieces) {
+    if (piece.type === 'space') {
+      parts.push(spaceMarkerToTex(piece.amount));
+      continue;
+    }
+    const tex = smartTexLineCore(piece.value, equations);
+    if (tex) parts.push(tex);
+  }
+  return parts.join('');
+}
+
+function protectLatexTextBlocks(input) {
+  const source = String(input || '');
+  if (!source.includes('\\text{')) {
+    return {
+      text: source,
+      restore: (value) => value,
+    };
+  }
+
+  const blocks = [];
+  let out = '';
+  let cursor = 0;
+  while (cursor < source.length) {
+    const start = source.indexOf('\\text{', cursor);
+    if (start < 0) {
+      out += source.slice(cursor);
+      break;
+    }
+
+    let i = start + '\\text{'.length;
+    let depth = 1;
+    while (i < source.length && depth > 0) {
+      const ch = source[i];
+      if (ch === '\\') {
+        i += 2;
+        continue;
+      }
+      if (ch === '{') depth += 1;
+      if (ch === '}') depth -= 1;
+      i += 1;
+    }
+
+    if (depth !== 0) {
+      out += source.slice(cursor);
+      break;
+    }
+
+    const token = `\u0000LATEXTEXT${blocks.length}\u0000`;
+    blocks.push(source.slice(start, i));
+    out += source.slice(cursor, start) + token;
+    cursor = i;
+  }
+
+  return {
+    text: out,
+    restore(value) {
+      let restored = String(value || '');
+      for (let i = 0; i < blocks.length; i += 1) {
+        restored = restored.replaceAll(`\u0000LATEXTEXT${i}\u0000`, blocks[i]);
+      }
+      return restored;
+    },
+  };
+}
+
+function smartTexLineCore(text, equations) {
   // 외부 경로로 들어온 \(...\)/$...$ 이중 감싸기 방지를 위해 진입 시 한 번 벗긴다.
   const clean = stripMathDelimiters(stripMarkers(text)).trim();
   if (!clean) return '';
@@ -267,6 +448,8 @@ function smartTexLine(text, equations) {
     prefix = `\\text{(${subQMatch[1]})}\\;`;
     body = clean.substring(subQMatch[0].length);
   }
+  const protectedText = protectLatexTextBlocks(body);
+  body = protectedText.text;
 
   const parts = [];
   let lastEnd = 0;
@@ -308,9 +491,9 @@ function smartTexLine(text, equations) {
     .join('');
 
   if (prefix) {
-    return `$\\displaystyle ${prefix}$${result}`;
+    return protectedText.restore(`$\\displaystyle ${prefix}$${result}`);
   }
-  return result;
+  return protectedText.restore(result);
 }
 
 /**
@@ -387,26 +570,53 @@ function renderStemTextLine(sub, equations) {
 /*  Box parsing: [박스시작]/[박스끝] segment detection                  */
 /* ------------------------------------------------------------------ */
 
-function parseStemSegments(stem) {
+function parseStemSegments(stem, stemLineAligns = []) {
   // VLM 이 보내는 [보기시작]/[보기끝] 을 기존 [박스시작]+<보기> 표기로 정규화.
   //   [보기시작]          →  [박스시작]\n<보기>
   //   [보기끝]            →  [박스끝]
   // 이렇게 바꾸면 아래 기존 분기(BOGI_RE) 가 자연스럽게 bogi 세그먼트로 분류해 준다.
-  const normalizedStem = String(stem)
-    .replace(BOGI_MARKER_START_RE, '[박스시작]\n<보기>')
-    .replace(BOGI_MARKER_END_RE, '[박스끝]');
-  const lines = normalizedStem.split('\n');
+  //
+  // stemLineAligns 는 stem 을 "\n 기준" 으로 split 했을 때 각 라인의 문단 정렬값
+  // ('left'|'center'|'right'|'justify') 병렬 배열. 여기서는 BOGI 정규화로 라인 수가
+  // 변할 수 있으므로, 원본 라인 기준으로 정렬값을 한 번 매핑한 뒤 확장 라인에 전파.
+  const rawLines = String(stem).split('\n');
+  const rawAligns = Array.isArray(stemLineAligns) ? stemLineAligns.slice() : [];
+  while (rawAligns.length < rawLines.length) rawAligns.push('left');
+  rawAligns.length = rawLines.length;
+
+  const lines = [];
+  const lineAligns = [];
+  for (let i = 0; i < rawLines.length; i += 1) {
+    const one = rawLines[i];
+    const align = String(rawAligns[i] || 'left').toLowerCase();
+    const expanded = one
+      .replace(BOGI_MARKER_START_RE, '[박스시작]\n<보기>')
+      .replace(BOGI_MARKER_END_RE, '[박스끝]')
+      .split('\n');
+    for (const piece of expanded) {
+      lines.push(piece);
+      lineAligns.push(align);
+    }
+  }
   const segments = [];
   let inBox = false;
   let boxLines = [];
+  let boxLineAligns = [];
   let inRawTable = false;
   let rawTableLines = [];
+  let rawTableLineAligns = [];
   let textLines = [];
+  let textLineAligns = [];
 
   function flushText() {
     if (textLines.length > 0) {
-      segments.push({ type: 'text', lines: [...textLines] });
+      segments.push({
+        type: 'text',
+        lines: [...textLines],
+        lineAligns: [...textLineAligns],
+      });
       textLines = [];
+      textLineAligns = [];
     }
   }
 
@@ -414,21 +624,37 @@ function parseStemSegments(stem) {
     if (boxLines.length === 0) return;
     const hasTable = boxLines.some((l) => /^\[표행\]$/.test(l.trim()));
     if (hasTable) {
-      segments.push({ type: 'table', lines: [...boxLines] });
+      segments.push({
+        type: 'table',
+        lines: [...boxLines],
+        lineAligns: [...boxLineAligns],
+      });
     } else {
       const hasBogi = boxLines.some((l) => BOGI_RE.test(l));
-      segments.push({ type: hasBogi ? 'bogi' : 'deco', lines: [...boxLines] });
+      segments.push({
+        type: hasBogi ? 'bogi' : 'deco',
+        lines: [...boxLines],
+        lineAligns: [...boxLineAligns],
+      });
     }
     boxLines = [];
+    boxLineAligns = [];
   }
 
   function flushRawTable() {
     if (rawTableLines.length === 0) return;
-    segments.push({ type: 'raw_tabular', lines: [...rawTableLines] });
+    segments.push({
+      type: 'raw_tabular',
+      lines: [...rawTableLines],
+      lineAligns: [...rawTableLineAligns],
+    });
     rawTableLines = [];
+    rawTableLineAligns = [];
   }
 
-  for (const line of lines) {
+  for (let lineIdx = 0; lineIdx < lines.length; lineIdx += 1) {
+    const line = lines[lineIdx];
+    const lineAlign = lineAligns[lineIdx] || 'left';
     // [표시작]/[표끝] 은 "VLM 이 이미 LaTeX tabular 를 써 둔" 구간. 그대로 통과시킨다.
     if (!inRawTable && RAW_TABLE_START_RE.test(line)) {
       flushText();
@@ -439,7 +665,7 @@ function parseStemSegments(stem) {
       }
       inRawTable = true;
       const cleaned = line.replace(RAW_TABLE_START_RE, '').trim();
-      if (cleaned) rawTableLines.push(cleaned);
+      if (cleaned) { rawTableLines.push(cleaned); rawTableLineAligns.push(lineAlign); }
       if (RAW_TABLE_END_RE.test(cleaned)) {
         const idx = rawTableLines.length - 1;
         if (idx >= 0) rawTableLines[idx] = rawTableLines[idx].replace(RAW_TABLE_END_RE, '').trim();
@@ -451,11 +677,12 @@ function parseStemSegments(stem) {
     if (inRawTable) {
       if (RAW_TABLE_END_RE.test(line)) {
         const cleaned = line.replace(RAW_TABLE_END_RE, '').trim();
-        if (cleaned) rawTableLines.push(cleaned);
+        if (cleaned) { rawTableLines.push(cleaned); rawTableLineAligns.push(lineAlign); }
         inRawTable = false;
         flushRawTable();
       } else {
         rawTableLines.push(line);
+        rawTableLineAligns.push(lineAlign);
       }
       continue;
     }
@@ -467,7 +694,7 @@ function parseStemSegments(stem) {
       flushText();
       inBox = true;
       const cleaned = line.replace(/\[박스시작\]/g, '').trim();
-      if (cleaned) boxLines.push(cleaned);
+      if (cleaned) { boxLines.push(cleaned); boxLineAligns.push(lineAlign); }
 
       if (hasEnd) {
         const idx = boxLines.length - 1;
@@ -481,7 +708,7 @@ function parseStemSegments(stem) {
 
     if (hasEnd && inBox) {
       const cleaned = line.replace(/\[박스끝\]/g, '').trim();
-      if (cleaned) boxLines.push(cleaned);
+      if (cleaned) { boxLines.push(cleaned); boxLineAligns.push(lineAlign); }
       inBox = false;
       flushBox();
       continue;
@@ -489,21 +716,35 @@ function parseStemSegments(stem) {
 
     if (inBox) {
       boxLines.push(line);
+      boxLineAligns.push(lineAlign);
     } else {
       textLines.push(line);
+      textLineAligns.push(lineAlign);
     }
   }
 
   if (inRawTable && rawTableLines.length > 0) {
-    segments.push({ type: 'raw_tabular', lines: [...rawTableLines] });
+    segments.push({
+      type: 'raw_tabular',
+      lines: [...rawTableLines],
+      lineAligns: [...rawTableLineAligns],
+    });
   }
   if (inBox && boxLines.length > 0) {
     const hasTable = boxLines.some((l) => /^\[표행\]$/.test(l.trim()));
     if (hasTable) {
-      segments.push({ type: 'table', lines: [...boxLines] });
+      segments.push({
+        type: 'table',
+        lines: [...boxLines],
+        lineAligns: [...boxLineAligns],
+      });
     } else {
       const hasBogi = boxLines.some((l) => BOGI_RE.test(l));
-      segments.push({ type: hasBogi ? 'bogi' : 'deco', lines: [...boxLines] });
+      segments.push({
+        type: hasBogi ? 'bogi' : 'deco',
+        lines: [...boxLines],
+        lineAligns: [...boxLineAligns],
+      });
     }
   }
 
@@ -516,6 +757,7 @@ function parseStemSegments(stem) {
       const stripped = String(last || '').replace(PARAGRAPH_MARKER_RE, '').trim();
       if (stripped === '') {
         seg.lines.pop();
+        if (Array.isArray(seg.lineAligns)) seg.lineAligns.pop();
       } else {
         break;
       }
@@ -545,38 +787,51 @@ function parseStemSegments(stem) {
   //     - 원래 [그림] 마커는 한 개씩 다시 방출(여러 개 그림은 각각 별도 figure seg) →
   //       replaceFigureMarkers 가 기존대로 figIdx 를 순차 소비.
   //     - 마커가 없는 라인은 그대로 현재 text seg 에 누적.
-  const FIGURE_SPLIT_RE = /(\[(?:그림|도형|도표)\])/g;
+  // split 경계에는 plain [그림]/[도형]/[도표] 와 [[PB_FIG_id]] 두 형태 모두 포함.
+  //   split() 은 capture group 을 결과에 남기므로 단순 (그룹) 하나로 감쌌다.
+  const FIGURE_SPLIT_RE = /(\[\[PB_FIG_[^\]]+\]\]|\[(?:그림|도형|도표)\])/g;
+  const FIGURE_ANY_RE = /\[\[PB_FIG_[^\]]+\]\]|\[(?:그림|도형|도표)\]/;
+  const FIGURE_SINGLE_RE = /^\[\[PB_FIG_[^\]]+\]\]$|^\[(?:그림|도형|도표)\]$/;
   const out = [];
   for (const seg of segments) {
     if (seg.type !== 'text') { out.push(seg); continue; }
     let bufLines = [];
+    let bufAligns = [];
     const flushTextBuf = () => {
-      // 공백/[문단] 만 남은 버퍼는 무시. 그렇지 않으면 그대로 text seg 로 방출.
       const hasContent = bufLines.some((l) => {
         const s = String(l || '').replace(PARAGRAPH_MARKER_RE, '').trim();
         return s.length > 0;
       });
-      if (hasContent) out.push({ type: 'text', lines: bufLines.slice() });
+      if (hasContent) {
+        out.push({
+          type: 'text',
+          lines: bufLines.slice(),
+          lineAligns: bufAligns.slice(),
+        });
+      }
       bufLines = [];
+      bufAligns = [];
     };
-    for (const rawLine of seg.lines) {
+    const segAligns = Array.isArray(seg.lineAligns) ? seg.lineAligns : [];
+    for (let rawIdx = 0; rawIdx < seg.lines.length; rawIdx += 1) {
+      const rawLine = seg.lines[rawIdx];
+      const rawAlign = segAligns[rawIdx] || 'left';
       const line = String(rawLine || '');
-      // 해당 라인에 [그림] 마커가 없으면 그대로 누적.
-      if (!/\[(?:그림|도형|도표)\]/.test(line)) {
+      if (!FIGURE_ANY_RE.test(line)) {
         bufLines.push(line);
+        bufAligns.push(rawAlign);
         continue;
       }
-      // 마커 경계로 분리. split 결과 홀수 인덱스(1,3,...)가 마커, 짝수 인덱스가 텍스트.
       const pieces = line.split(FIGURE_SPLIT_RE);
       for (let i = 0; i < pieces.length; i += 1) {
         const piece = pieces[i];
         if (!piece) continue;
-        if (/^\[(?:그림|도형|도표)\]$/.test(piece)) {
-          // 그림 마커 직전까지의 text 를 flush.
+        if (FIGURE_SINGLE_RE.test(piece)) {
           flushTextBuf();
-          out.push({ type: 'figure', lines: [piece] });
+          out.push({ type: 'figure', lines: [piece], lineAligns: [rawAlign] });
         } else {
           bufLines.push(piece);
+          bufAligns.push(rawAlign);
         }
       }
     }
@@ -589,15 +844,40 @@ function parseStemSegments(stem) {
 /*  Box rendering: tcolorbox environments                              */
 /* ------------------------------------------------------------------ */
 
+function flattenBoxParagraphLines(lines, { stripBogi = false } = {}) {
+  const out = [];
+  for (const l of lines) {
+    let src = String(l || '');
+    if (stripBogi) src = src.replace(BOGI_RE, '');
+    if (!src.trim()) continue;
+    const pieces = src.split(PARAGRAPH_MARKER_RE);
+    const markers = src.match(PARAGRAPH_MARKER_RE) || [];
+    for (let i = 0; i < pieces.length; i += 1) {
+      const text = pieces[i].trim();
+      if (text) out.push(text);
+      if (i < markers.length) out.push(BOX_PARAGRAPH_BREAK);
+    }
+  }
+  return out;
+}
+
 function renderBogiItems(lines, equations, replaceFigureMarkers = null) {
-  const cleaned = lines
-    .map((l) => l.replace(BOGI_RE, '').trim())
-    .filter((l) => l);
-  const joined = cleaned.join(' ');
-  const items = joined.split(BOGI_ITEM_SPLIT_RE).filter((s) => s.trim());
+  const cleaned = flattenBoxParagraphLines(lines, { stripBogi: true });
+  const items = [];
+  for (const line of cleaned) {
+    if (line === BOX_PARAGRAPH_BREAK) {
+      items.push(line);
+      continue;
+    }
+    items.push(...line.split(BOGI_ITEM_SPLIT_RE).filter((s) => s.trim()));
+  }
 
   const rendered = [];
   for (const item of items) {
+    if (item === BOX_PARAGRAPH_BREAK) {
+      rendered.push('\\par\\vspace{0.45em}');
+      continue;
+    }
     const withFigs = replaceFigureMarkers ? replaceFigureMarkers(item) : item;
     // figure 마커만 있었던 항목은 \includegraphics 블록으로 바뀌어 내려온다.
     // smartTexLine을 거치면 백슬래시가 이스케이프되어 버리므로 그대로 삽입한다.
@@ -802,34 +1082,77 @@ function renderBulletLine(rawLine, equations, replaceFigureMarkers = null) {
   return `{\\setbox0=\\hbox{${labelTex}}\\hangindent=\\wd0\\hangafter=1\\noindent\\makebox[\\wd0][l]{${labelTex}}${contentTex}\\par}`;
 }
 
-function renderDecoBoxLatex(lines, equations, replaceFigureMarkers = null) {
-  // 1) 박스 내부의 "본문 라인" 목록을 평탄화해 한 번 미리 만들어둔다.
-  //    [문단] 마커로 쪼갠 뒤, 빈 라인은 빼고 순수 텍스트 라인만 남긴다.
-  const flatLines = [];
-  for (const l of lines) {
-    const trimmed = String(l || '').trim();
-    if (!trimmed) continue;
-    const subLines = trimmed.split(PARAGRAPH_MARKER_RE);
-    for (const sub of subLines) {
-      const s = sub.trim();
-      if (s) flatLines.push(s);
-    }
-  }
+function decoSectionLabelTex(rawLine) {
+  const line = String(rawLine || '').trim();
+  if (BULLET_LINE_RE.test(line)) return `$\\bullet$\\ `;
+  const labelMatch = line.match(BOGI_ITEM_RE);
+  if (!labelMatch) return '';
+  const label = labelMatch[1] || labelMatch[2];
+  const labelText = label.match(/^[ㄱ-ㅎ]$/) ? `${label}.` : `(${label})`;
+  return `${escapeLatexText(labelText)}\\ `;
+}
 
-  // 2) \bullet 로 시작하는 라인이 하나라도 있으면 "조건제시박스(bullet list) 모드":
-  //    - 각 bullet 라인은 renderBulletLine 으로 라벨+hangindent 적용 → 2행+ 들여쓰기 유지
-  //    - bullet 이 아닌 라인(예: 박스 상단 설명문)은 일반 renderDecoLine 처리
-  const hasBullet = flatLines.some((l) => BULLET_LINE_RE.test(l));
+function renderDecoContinuationLine(
+  rawLine,
+  labelTex,
+  equations,
+  replaceFigureMarkers = null,
+) {
+  if (!labelTex) return renderDecoLine(rawLine, equations, replaceFigureMarkers);
+  const withFigs = replaceFigureMarkers ? replaceFigureMarkers(rawLine) : rawLine;
+  // 그림 블록은 자체 center 환경을 포함하므로 라벨 폭 들여쓰기와 섞지 않는다.
+  if (/\\includegraphics/.test(withFigs)) {
+    return renderDecoLine(rawLine, equations, replaceFigureMarkers);
+  }
+  const contentTex = smartTexLine(withFigs, equations);
+  if (!contentTex.trim()) return '';
+  return `{\\setbox0=\\hbox{${labelTex}}\\leftskip=\\wd0\\relax\\noindent ${contentTex}\\par}`;
+}
+
+function renderDecoBoxLatex(lines, equations, replaceFigureMarkers = null) {
+  // 1) 박스 내부의 "본문 라인" 목록을 평탄화하되, [문단] 마커는 간격 sentinel 로 보존한다.
+  const rawFlatLines = flattenBoxParagraphLines(lines);
+  let forcedAlign = '';
+  const flatLines = rawFlatLines.filter((line) => {
+    const marker = String(line || '').match(BOX_ALIGN_MARKER_RE);
+    if (!marker) return true;
+    forcedAlign = normalizeLineAlignValue(marker[1]);
+    return false;
+  });
+
+  // 2) \bullet / (가) / ㄱ. 라벨은 구역 시작 신호다.
+  //    이후 새 라벨이 나오기 전까지의 라인은 같은 구역의 후속 줄로 보고,
+  //    라벨 폭만큼 들여써서 본문 시작 위치에 맞춘다.
+  const hasSectionLabels = flatLines.some((l) => decoSectionLabelTex(l));
   // 3) 가운데 정렬 여부: 한글/ㄱㄴㄷ/bullet/라벨 모두 없으면 가운데 정렬.
-  const centerMode = boxContentIsCenteredOnly(flatLines);
+  const centerMode = forcedAlign === 'left' ? false : boxContentIsCenteredOnly(flatLines);
 
   const contentParts = [];
-  if (hasBullet) {
+  if (hasSectionLabels) {
+    let activeLabelTex = '';
     for (const line of flatLines) {
+      if (line === BOX_PARAGRAPH_BREAK) {
+        contentParts.push('\\par\\vspace{0.45em}');
+        activeLabelTex = '';
+        continue;
+      }
       if (BULLET_LINE_RE.test(line)) {
+        activeLabelTex = decoSectionLabelTex(line);
         contentParts.push(
           renderBulletLine(line, equations, replaceFigureMarkers),
         );
+      } else if (BOGI_ITEM_RE.test(line)) {
+        activeLabelTex = decoSectionLabelTex(line);
+        const rendered = renderDecoLine(line, equations, replaceFigureMarkers);
+        if (rendered.trim()) contentParts.push(rendered);
+      } else if (activeLabelTex) {
+        const rendered = renderDecoContinuationLine(
+          line,
+          activeLabelTex,
+          equations,
+          replaceFigureMarkers,
+        );
+        if (rendered.trim()) contentParts.push(rendered);
       } else {
         const rendered = renderDecoLine(line, equations, replaceFigureMarkers);
         if (rendered.trim()) contentParts.push(rendered);
@@ -837,6 +1160,10 @@ function renderDecoBoxLatex(lines, equations, replaceFigureMarkers = null) {
     }
   } else {
     for (const line of flatLines) {
+      if (line === BOX_PARAGRAPH_BREAK) {
+        contentParts.push('\\par\\vspace{0.45em}');
+        continue;
+      }
       const rendered = renderDecoLine(line, equations, replaceFigureMarkers);
       if (rendered.trim()) {
         if (centerMode) {
@@ -1386,6 +1713,7 @@ function buildPreamble({
   // adjustbox: \includegraphics 에 'max width' 같은 확장 키 사용.
   lines.push('\\usepackage[export]{adjustbox}');
   lines.push('\\usepackage{xcolor}');
+  lines.push('\\usepackage[normalem]{ulem}');
   lines.push('\\usepackage{enumitem}');
   lines.push('\\usepackage{multicol}');
   lines.push('\\newlength{\\tblcellwd}');
@@ -1395,6 +1723,8 @@ function buildPreamble({
   // (한글 글리프 실제 높이가 약 1.0~1.05em 수준이라 0.9em 이면 작아 보임)
   // \ensuremath + \vcenter 로 수식축(math axis) 에 중앙이 오도록 → 인접 글자와 시각적 정렬.
   lines.push('\\newcommand{\\mtemptybox}{\\ensuremath{\\vcenter{\\hbox{\\setlength{\\fboxsep}{0pt}\\framebox[1.575em][c]{\\rule{0pt}{1.05em}}}}}}');
+  // 지수 전용 빈칸: 정사각형이며 일반 빈칸보다 작다.
+  lines.push('\\newcommand{\\mtexponentemptybox}{\\vcenter{\\hbox{\\scriptsize\\setlength{\\fboxsep}{0pt}\\framebox[0.72em][c]{\\rule{0pt}{0.72em}}}}}');
   lines.push('\\usepackage{fancyhdr}');
   lines.push('\\usepackage{setspace}');
   lines.push('\\usepackage[most]{tcolorbox}');
@@ -2019,8 +2349,27 @@ function renderOneQuestion(question, {
   // 비율을 바르게 평가하기 위해 필요. mock/csat 모드는 항상 2단.
   layoutColumns = 1,
 } = {}) {
+  // DB 에 form feed(^^L) 같은 제어문자가 박혀 저장된 경우(과거 VLM 파이프라인 버그)
+  // 렌더 시점에서 한 번 더 복구해서 XeLaTeX 컴파일 실패를 막는다.
+  // 새 추출은 vlm/client.js 에서 이미 정리되므로 이 단계는 no-op 이 된다.
+  // question 객체는 외부 공유 레퍼런스일 수 있으므로 반드시 새 객체로 복사.
+  // eslint-disable-next-line no-param-reassign
+  question = sanitizeLatexControlChars(question) || {};
   const qNum = question?.question_number || question?.questionNumber || '';
-  const stem = question?.stem || '';
+  // stem 과 stemLineAligns 를 함께 정규화: `[문단:가운데]` 같은 인라인 정렬 마커를
+  // plain `[문단]` 으로 바꾸고 속성은 stemLineAligns 에 이식한다. meta 경로(HWPX
+  // 추출기가 원본 HWPX textAlign 을 담아둔 값)도 함께 읽어 최종 정렬값을 결정한다.
+  const rawStem = question?.stem || '';
+  const metaAligns = (() => {
+    const meta = question?.meta && typeof question.meta === 'object' ? question.meta : {};
+    if (Array.isArray(meta.stem_line_aligns)) return meta.stem_line_aligns;
+    if (Array.isArray(meta.stemLineAligns)) return meta.stemLineAligns;
+    if (Array.isArray(question?.stemLineAligns)) return question.stemLineAligns;
+    return [];
+  })();
+  const normalizedAlign = applyInlineAlignmentMarkers(rawStem, metaAligns);
+  const stem = normalizedAlign.stem;
+  const stemLineAlignsResolved = normalizedAlign.stemLineAligns;
   const equations = question?.equations || [];
   const qMode = mode
     || question?.mode
@@ -2075,7 +2424,22 @@ function renderOneQuestion(question, {
   for (const it of layoutItems) {
     if (it?.assetKey) layoutByAssetKey.set(String(it.assetKey), it);
   }
+  // HWPX binaryItemIDRef → 이 문항의 local figure 인덱스(0-based) 룩업.
+  //   figure_worker 가 각 asset 에 item_id 를 박아두었고, hydrateFiguresForXeLatex 가
+  //   figure_local_infos[i].itemId 에 그대로 흘려준다. 본문의 [[PB_FIG_<id>]] 토큰은
+  //   이 맵으로 직접 해결되어 "토큰 → 파일" 이 1:1 로 확정된다.
+  //   - 같은 ID 가 여러 번 등장하면 같은 asset 을 반복 사용 (의도된 중복 참조).
+  //   - 매핑이 없으면 plain 마커처럼 positional fallback.
+  const itemIdToLocalIdx = new Map();
+  for (let i = 0; i < figureInfos.length; i += 1) {
+    const id = String(figureInfos[i]?.itemId || '').trim();
+    if (id && !itemIdToLocalIdx.has(id)) itemIdToLocalIdx.set(id, i);
+  }
   let figIdx = 0;
+  // 이미 방출한 local figure 인덱스 집합. positional fallback 이 token 경로로 이미 나간
+  //   figure 를 중복 방출하지 않도록 하고, trailing fallback 루프의 "누락된 figure" 재방출도
+  //   이 집합 기준으로 판단한다.
+  const emittedFigIdxs = new Set();
 
   // figIdx → assetKey 시퀀스를 미리 계산해 두어 그룹 매칭에 사용한다.
   //  - figure_local_infos 가 있으면 그쪽 assetKey 를 우선 사용
@@ -2209,13 +2573,34 @@ function renderOneQuestion(question, {
   }
 
   function replaceFigureMarkers(text) {
-    return text.replace(FIGURE_MARKER_RE, () => {
-      const i = figIdx;
-      figIdx += 1;
-      // 이미 그룹의 첫 멤버가 묶어 방출한 경우 → 현재 마커는 빈 치환으로 소비.
+    return text.replace(FIGURE_MARKER_RE, (_match, capturedItemId) => {
+      // capturedItemId 가 값이면 [[PB_FIG_<id>]] 토큰, null 이면 plain [그림] 마커.
+      //   토큰 경로: itemId → local idx 직접 해결. figIdx 는 마커 위치 카운터로만 소비.
+      //   plain 경로: 아직 방출되지 않은 figIdx 를 찾아 1개 소비.
+      const trimmedId = capturedItemId ? String(capturedItemId).trim() : '';
+      const resolvedIdx = trimmedId ? itemIdToLocalIdx.get(trimmedId) : undefined;
+
+      let i;
+      if (Number.isInteger(resolvedIdx)) {
+        i = resolvedIdx;
+        // 마커 위치 카운터(figIdx)는 "stem 상 마커 순서" 를 대변한다.
+        //   그룹/gap 로직이 이 카운터에 의존하므로 매 마커마다 1씩 증가.
+        figIdx += 1;
+      } else {
+        // 이미 token 경로로 먼저 방출된 idx 는 건너뛰어 중복 방지.
+        while (emittedFigIdxs.has(figIdx)) figIdx += 1;
+        i = figIdx;
+        figIdx += 1;
+      }
+
+      // 이미 이 idx 를 한 번 방출한 경우(같은 itemId 를 가진 두 번째 토큰 등) — 그대로 다시 방출.
+      //   단, 그룹 처리는 첫 번째 한 번만.
+      const alreadyEmitted = emittedFigIdxs.has(i);
+      emittedFigIdxs.add(i);
+
       if (figIdxConsumedByGroup.has(i)) return '';
       const group = groupByStartFigIdx.get(i);
-      if (group) return renderFigureGroupLatex(group);
+      if (group && !alreadyEmitted) return renderFigureGroupLatex(group);
       return renderFigureLatex(i);
     });
   }
@@ -2323,7 +2708,7 @@ function renderOneQuestion(question, {
   const partsMeta = new Map();
   let currentSubQ = 0;
 
-  const segments = parseStemSegments(stem);
+  const segments = parseStemSegments(stem, stemLineAlignsResolved);
 
   // 문항 내 표 등장 순서 카운터 (meta.table_scales 키: struct:N / raw:N 와 대응).
   let structTableIdx = 0;
@@ -2390,10 +2775,11 @@ function renderOneQuestion(question, {
       if (s.type === 'figure') {
         n += 1;
       } else if (s.type === 'text' || s.type === 'bogi' || s.type === 'deco') {
-        // 텍스트/박스 내부에도 [그림] 이 남아있을 수 있음 — parseStemSegments 는 text 만
-        // 승격하므로 text 안에는 사실상 [그림] 이 더 없지만(분할됐음), bogi/deco 는 남아있다.
+        // 텍스트/박스 내부에도 마커가 남아있을 수 있음 — parseStemSegments 는 text 만
+        // 승격하므로 text 안에는 사실상 더 없지만(분할됐음), bogi/deco 에는 남아있다.
+        // plain [그림]/[도형]/[도표] 와 [[PB_FIG_<id>]] 토큰 모두 동등하게 "마커 1개" 로 카운트.
         const joined = (s.lines || []).join('\n');
-        const m = joined.match(/\[(?:그림|도형|도표)\]/g);
+        const m = joined.match(/\[\[PB_FIG_[^\]]+\]\]|\[(?:그림|도형|도표)\]/g);
         if (m) n += m.length;
       }
     }
@@ -2401,12 +2787,22 @@ function renderOneQuestion(question, {
   };
   // 현재 seg 가 renderFigureLatex/Group 을 실제로 방출할지 판정.
   //   - consumed by group 의 2번째+ 멤버: 방출 안 함.
-  //   - figurePaths 에 대응 이미지가 없는 "고아 마커"(stem 에 [그림] 이 figurePaths 개수보다
-  //     많이 들어간 케이스, e.g. HWPX 원본에서 [그림] 중복/누락): 방출 안 함.
-  //   - 그 외 figure seg: 방출 함.
+  //   - [[PB_FIG_<id>]] 토큰: itemId 로 asset 해결 가능하면 방출 함.
+  //   - plain [그림] 마커: positional figIdx 가 figurePaths 범위 안이면 방출 함.
   const figureSegWillEmit = (sIdx) => {
     const s = segments[sIdx];
     if (!s || s.type !== 'figure') return false;
+    const segText = (s.lines || []).join('\n');
+    const tokenMatch = segText.match(/\[\[PB_FIG_([^\]]+)\]\]/);
+    if (tokenMatch) {
+      const id = String(tokenMatch[1] || '').trim();
+      const resolved = itemIdToLocalIdx.get(id);
+      if (Number.isInteger(resolved)) {
+        if (figIdxConsumedByGroup.has(resolved)) return false;
+        return resolved < figurePaths.length;
+      }
+      // itemId 해결 실패 → positional 로 폴백. 아래 로직으로 합류.
+    }
     const thisFigIdx = figMarkerCountUpTo(sIdx);
     if (figIdxConsumedByGroup.has(thisFigIdx)) return false;
     if (thisFigIdx >= figurePaths.length) return false;
@@ -2449,7 +2845,10 @@ function renderOneQuestion(question, {
       let subQEmittedAny = false;
       // rawLine 간 누적된 "빈 줄 + 단독 [문단] 라인" 수. 다음 실제 콘텐츠/마커 앞에 수직 간격으로 반영.
       let outerPendingEmpty = 0;
-      for (const rawLine of seg.lines) {
+      const segLineAligns = Array.isArray(seg.lineAligns) ? seg.lineAligns : [];
+      for (let rawIdx = 0; rawIdx < seg.lines.length; rawIdx += 1) {
+        const rawLine = seg.lines[rawIdx];
+        const rawLineAlign = normalizeLineAlignValue(segLineAligns[rawIdx]);
         // [소문항N] 은 독립 라인이므로 여기에서 가로챔. 마커 자체는 출력하지 않고
         // 마커 직전까지 누적된 [문단]/빈 줄 수를 수직 간격으로 반영한다.
         //
@@ -2522,11 +2921,32 @@ function renderOneQuestion(question, {
               const leading = piece.match(/^\s*[（(]\s*(\d+)\s*[)）]/);
               if (leading) currentSubQ = Number(leading[1]);
             }
+            const explicitSubQLabel = piece.match(/^\s*[（(]\s*(\d+)\s*[)）]/);
+            const isExplicitSubQBodyLine =
+              hasSubQMarker
+              && currentSubQ > 0
+              && explicitSubQLabel
+              && Number(explicitSubQLabel[1]) === currentSubQ;
             if (/\\includegraphics/.test(piece)) {
               parts.push(piece);
             } else {
-              const rendered = renderStemTextLine(piece, equations);
+              let rendered = renderStemTextLine(piece, equations);
               if (rendered.trim()) {
+                // 라인별 정렬값에 따라 center/right/justify 환경으로 감싼다.
+                //   - 원본 HWPX 문단 속성으로 center 가 기록되어 있거나,
+                //   - 사용자가 리뷰 UI 에서 `[문단:가운데]` 마커를 넣어 정규화된 경우,
+                //   두 경로 모두 seg.lineAligns 에 반영되어 여기로 흘러온다.
+                //   \begin{center} 환경은 앞뒤로 `\par` 를 추가하지 않아 본문 흐름을
+                //   유지하며, `\vspace`/outerPendingEmpty 기반 간격 계산과 독립적이다.
+                // 세트형 소문항 본문 `(N) ...` 은 HWPX 원본에서 우측 정렬 메타가 섞여
+                // 들어오는 사례가 있다. [소문항N] 마커로 경계가 확정된 경우 이 라인은
+                // 레이아웃용 소문항 텍스트이므로 기존 DB 메타와 무관하게 좌측 정렬한다.
+                const effectiveLineAlign = isExplicitSubQBodyLine ? 'left' : rawLineAlign;
+                if (effectiveLineAlign === 'center') {
+                  rendered = `\\begin{center}\n${rendered}\n\\end{center}`;
+                } else if (effectiveLineAlign === 'right') {
+                  rendered = `\\begin{flushright}\n${rendered}\n\\end{flushright}`;
+                }
                 parts.push(rendered);
                 // 현재 파트가 속한 소문항 인덱스를 기록.
                 partsMeta.set(parts.length - 1, { subQ: currentSubQ });
@@ -2585,18 +3005,23 @@ function renderOneQuestion(question, {
       ? segments[segments.length - 1].type
       : null;
   parts.push(`% DBG after-stem: figIdx=${figIdx}/${figurePaths.length} trailingBigType=${trailingBigType}`);
-  if (figurePaths.length > figIdx) {
-    let i = figIdx;
-    while (i < figurePaths.length) {
-      if (figIdxConsumedByGroup.has(i)) { i += 1; continue; }
+  // Trailing fallback: stem 마커 수가 figurePaths 개수보다 적어 누락된 figure 가 있으면 보충.
+  //   기존 로직은 figIdx(마커 카운터) 부터 순차 방출이었으나, token 경로에서 같은 itemId 를
+  //   반복 참조하거나 stem 마커가 순서를 뒤집는 케이스에서는 이 기준이 맞지 않는다.
+  //   따라서 실제로 "한 번도 방출되지 않은" local idx 만 순서대로 보충한다.
+  if (emittedFigIdxs.size < figurePaths.length) {
+    for (let i = 0; i < figurePaths.length; i += 1) {
+      if (emittedFigIdxs.has(i)) continue;
+      if (figIdxConsumedByGroup.has(i)) continue;
       const group = groupByStartFigIdx.get(i);
       let rendered;
       if (group) {
         rendered = renderFigureGroupLatex(group);
-        i = group.members[group.members.length - 1] + 1;
+        // group members 전체를 한 번에 방출 표시.
+        for (const m of group.members) emittedFigIdxs.add(m);
       } else {
         rendered = renderFigureLatex(i);
-        i += 1;
+        emittedFigIdxs.add(i);
       }
       if (rendered && rendered.trim()) {
         parts.push('% DBG trailing-fig push');
@@ -2706,12 +3131,14 @@ export function buildTexSource(question, options = {}) {
     // adjustbox: \includegraphics 에 'max width' 같은 확장 키 사용.
     '\\usepackage[export]{adjustbox}',
     '\\usepackage{xcolor}',
+    '\\usepackage[normalem]{ulem}',
     '\\usepackage{enumitem}',
     '\\usepackage{setspace}',
     '\\usepackage[most]{tcolorbox}',
     '\\newlength{\\tblcellwd}',
     '\\newlength{\\tblcellht}',
     '\\newcommand{\\mtemptybox}{\\ensuremath{\\vcenter{\\hbox{\\setlength{\\fboxsep}{0pt}\\framebox[1.35em][c]{\\rule{0pt}{0.9em}}}}}}',
+    '\\newcommand{\\mtexponentemptybox}{\\vcenter{\\hbox{\\scriptsize\\setlength{\\fboxsep}{0pt}\\framebox[0.72em][c]{\\rule{0pt}{0.72em}}}}}',
     '',
     `\\setmainfont{${fontFamily}}[`,
     `  BoldFont = ${fontBold},`,

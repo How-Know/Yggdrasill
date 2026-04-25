@@ -722,11 +722,18 @@ function hasSetQuestionSignature(stemLines, { answerKey = '' } = {}) {
 //  - 이미 [소문항N] 마커가 있는 라인은 건드리지 않는다(idempotent).
 //  - 마커는 독립된 라인으로 주입한다 ([문단]/[박스끝] 같은 기존 마커와 같은 스타일).
 //
-// 반환: { stem: patchedStemString, injected: N }
-function injectSubQuestionMarkers(stem) {
+// 반환: { stem: patchedStemString, stemLineAligns, injected: N, alignAdjusted: N }
+function injectSubQuestionMarkers(stem, stemLineAligns = null) {
   const text = String(stem || '');
-  if (!text) return { stem: text, injected: 0 };
+  if (!text) return { stem: text, stemLineAligns, injected: 0, alignAdjusted: 0 };
   const lines = text.split(/\r?\n/);
+  const aligns = Array.isArray(stemLineAligns)
+    ? stemLineAligns.map((value) => normalizeParagraphAlignSafe(value))
+    : null;
+  if (aligns) {
+    while (aligns.length < lines.length) aligns.push('left');
+    if (aligns.length > lines.length) aligns.length = lines.length;
+  }
   const SUB_LABEL_LINE_REGEX = /^\s*[\(（]\s*([1-9])\s*[\)）]\s*(.*)$/;
   const EXISTING_MARKER_REGEX = /^\s*\[소문항\s*\d+\]\s*$/;
 
@@ -741,29 +748,52 @@ function injectSubQuestionMarkers(stem) {
     if (!Number.isFinite(num) || num < 1) continue;
     candidates.push({ index: i, num });
   }
-  if (candidates.length < 2) return { stem: text, injected: 0 };
+  if (candidates.length < 2) {
+    return { stem: text, stemLineAligns: aligns || stemLineAligns, injected: 0, alignAdjusted: 0 };
+  }
 
   // 2) 번호가 단조 증가하는지 검사. (1)(2)(1) 같은 본문 인용 패턴은 제외.
   //    (1)(3) 처럼 건너뛰는 경우는 허용(parseAnswerParts 도 허용).
   for (let i = 1; i < candidates.length; i += 1) {
     if (candidates[i].num <= candidates[i - 1].num) {
-      return { stem: text, injected: 0 };
+      return { stem: text, stemLineAligns: aligns || stemLineAligns, injected: 0, alignAdjusted: 0 };
     }
   }
 
   // 3) 이미 바로 앞 라인에 [소문항N] 마커가 있으면 해당 후보는 스킵.
   let injected = 0;
+  let alignAdjusted = 0;
   // 뒤에서부터 삽입하면 인덱스 밀림 없음.
   for (let ci = candidates.length - 1; ci >= 0; ci -= 1) {
     const { index, num } = candidates[ci];
     const prev = index > 0 ? String(lines[index - 1] || '') : '';
-    if (EXISTING_MARKER_REGEX.test(prev)) continue;
+    if (EXISTING_MARKER_REGEX.test(prev)) {
+      if (aligns && aligns[index] !== 'left') {
+        aligns[index] = 'left';
+        alignAdjusted += 1;
+      }
+      continue;
+    }
     lines.splice(index, 0, `[소문항${num}]`);
+    if (aligns) {
+      aligns.splice(index, 0, 'left');
+      if (aligns[index + 1] !== 'left') {
+        aligns[index + 1] = 'left';
+        alignAdjusted += 1;
+      }
+    }
     injected += 1;
   }
 
-  if (injected === 0) return { stem: text, injected: 0 };
-  return { stem: lines.join('\n'), injected };
+  if (injected === 0 && alignAdjusted === 0) {
+    return { stem: text, stemLineAligns: aligns || stemLineAligns, injected: 0, alignAdjusted: 0 };
+  }
+  return {
+    stem: injected > 0 ? lines.join('\n') : text,
+    stemLineAligns: aligns || stemLineAligns,
+    injected,
+    alignAdjusted,
+  };
 }
 
 function parseChoiceLine(line) {
@@ -961,13 +991,49 @@ function answerTokenToChoiceIndex(token) {
   return -1;
 }
 
+function objectiveAnswerTokens(answerKey) {
+  const raw = normalizeWhitespace(String(answerKey || ''));
+  if (!raw) return [];
+
+  const circled = raw.match(/[①②③④⑤⑥⑦⑧⑨⑩]/g);
+  if (circled && circled.length > 0) {
+    const leftover = raw
+      .replace(/[①②③④⑤⑥⑦⑧⑨⑩]/g, '')
+      .replace(/[,\s/，、ㆍ·()（）.]/g, '')
+      .replace(/(?:번|와|과|및|그리고|또는|or|OR)/g, '');
+    if (!leftover.trim()) return Array.from(new Set(circled));
+  }
+
+  const normalized = raw
+    .replace(/[，、ㆍ·]/g, ',')
+    .replace(/\s*(?:와|과|및|그리고|또는|or|OR)\s*/g, ',')
+    .replace(/\s*\/\s*/g, ',')
+    .trim();
+  const hasExplicitSeparator = /,/.test(normalized);
+  const numericParts = hasExplicitSeparator
+    ? normalized.split(',')
+    : /^\d{1,2}(?:\s+\d{1,2})+$/.test(normalized)
+      ? normalized.split(/\s+/)
+      : [normalized];
+
+  const tokens = numericParts
+    .map((token) => normalizeWhitespace(token).replace(/[()（）.]/g, '').replace(/번/g, ''))
+    .filter(Boolean)
+    .map((token) => {
+      if (/^(10|[1-9])$/.test(token)) return toCircledNumber(token);
+      return token;
+    })
+    .filter((token) => /^[①②③④⑤⑥⑦⑧⑨⑩]$/.test(token));
+  return Array.from(new Set(tokens));
+}
+
 function objectiveAnswerToSubjective(answerKey, choices = []) {
   const raw = normalizeWhitespace(String(answerKey || ''));
   if (!raw) return '';
-  const tokens = raw
-    .split(/[,/]/)
-    .map((t) => normalizeWhitespace(t))
-    .filter(Boolean);
+  const tokens = objectiveAnswerTokens(raw);
+  if (tokens.length === 0) {
+    tokens.push(...raw.split(/[,/]/).map((t) => normalizeWhitespace(t)).filter(Boolean));
+  }
   if (tokens.length === 0) tokens.push(raw);
   const normalizedChoices = Array.isArray(choices) ? choices : [];
   const converted = tokens.map((token) => {
@@ -986,22 +1052,33 @@ function objectiveAnswerToSubjective(answerKey, choices = []) {
 function normalizeObjectiveAnswerKey(answerKey) {
   const raw = normalizeWhitespace(String(answerKey || ''));
   if (!raw) return '';
-  if (/^[①②③④⑤⑥⑦⑧⑨⑩]$/.test(raw)) return raw;
-  if (/^\d{1,2}$/.test(raw)) return toCircledNumber(raw);
-  if (/^\d{1,2}(\s*[,/]\s*\d{1,2})+$/.test(raw)) {
-    return raw
-      .split(/[,/]/)
-      .map((token) => toCircledNumber(token))
-      .join(', ');
-  }
-  if (/^[①②③④⑤⑥⑦⑧⑨⑩](\s*[,/]\s*[①②③④⑤⑥⑦⑧⑨⑩])+$/.test(raw)) {
-    return raw
-      .split(/[,/]/)
-      .map((token) => normalizeWhitespace(token))
-      .filter(Boolean)
-      .join(', ');
-  }
+  const tokens = objectiveAnswerTokens(raw);
+  if (tokens.length > 0) return tokens.join(', ');
   return raw;
+}
+
+function expectedObjectiveAnswerCount(question) {
+  const stem = normalizeWhitespace(String(question?.stem || ''));
+  if (!stem) return 0;
+  const digitCount = stem.match(/(?:정답|답|것|설명|보기|문장)?\s*(\d+)\s*개(?:를|을)?\s*(?:고르|찾|택|선택)/);
+  if (digitCount) {
+    const n = Number.parseInt(digitCount[1], 10);
+    if (Number.isFinite(n) && n > 1) return n;
+  }
+  const koreanCounts = [
+    ['두', 2],
+    ['둘', 2],
+    ['세', 3],
+    ['셋', 3],
+    ['네', 4],
+    ['넷', 4],
+  ];
+  for (const [word, count] of koreanCounts) {
+    const re = new RegExp(`${word}\\s*개(?:를|을)?\\s*(?:고르|찾|택|선택)`);
+    if (re.test(stem)) return count;
+  }
+  if (/(?:모두|전부)\s*(?:고르|찾|택|선택)/.test(stem)) return 2;
+  return 0;
 }
 
 function shuffleArray(values) {
@@ -1023,15 +1100,7 @@ function normalizeAnswerKeyForQuestion(answerKey, question) {
     choiceCount >= 2 ||
     String(question?.question_type || '').trim() === '객관식';
   if (!objectiveHint) return raw;
-  if (/^[①②③④⑤⑥⑦⑧⑨⑩]$/.test(raw)) return raw;
-  if (/^\d{1,2}$/.test(raw)) return toCircledNumber(raw);
-  if (/^\d{1,2}(\s*[,/]\s*\d{1,2})+$/.test(raw)) {
-    return raw
-      .split(/[,/]/)
-      .map((token) => toCircledNumber(token))
-      .join(', ');
-  }
-  return raw;
+  return normalizeObjectiveAnswerKey(raw);
 }
 
 function renderAnswerEquationTokens(input, equationTokenMap) {
@@ -1126,11 +1195,13 @@ function splitLineByQuestionStarts(line) {
 }
 
 function isFigureLine(line) {
+  if (/\[\[PB_FIG_[^\]]+\]\]/.test(line)) return true;
   return /(그림|도표|도형|표\s*\d*|자료|그래프|지도)/.test(line);
 }
 
 function isFigureReferenceLine(line) {
   const input = normalizeWhitespace(line);
+  if (/\[\[PB_FIG_[^\]]+\]\]/.test(input)) return true;
   if (/\[(그림|도표|도형|표\s*\d*|자료|그래프|지도)\]/.test(input)) return true;
   if (/^(그림|도표|도형|그래프|지도)\s*\d*\s*$/i.test(input)) return true;
   return input === '[그림]' || input === '[도형]' || input === '[표]';
@@ -1332,14 +1403,56 @@ function splitKoreanConditionMarkersInBoxText(text) {
   return out.join('\n');
 }
 
+// <hp:pic> 블록에서 binaryItemIDRef 속성을 추출해 PB_FIG 토큰으로 치환한다.
+//   HWPX(OWPML) 스펙: <hp:pic> 안 <hp:img binaryItemIDRef="imageN" .../> 가 해당 그림의
+//   BinData 아이템 ID를 지시한다. Contents/content.hpf 의 <opf:binItem id="imageN"
+//   href="BinData/binN.ext"/> 매니페스트와 연결되어 figure_worker 가 직접 바이트를 집어올 수 있다.
+//
+//   ID 추출에 성공하면 [[PB_FIG_<id>]] 토큰(영문 ID만 안전하게 유지) 으로,
+//   실패하면 기존 [그림] 문자열로 폴백한다. 문서에 같은 그림을 두 번 이상 쓸 수 있으므로
+//   ID 는 globally unique 하다는 보장은 없다 — 같은 그림의 중복 참조는 의도적이다.
+const PB_FIG_ID_SAFE_RE = /^[A-Za-z0-9_.-]{1,128}$/;
+function sanitizePbFigId(raw) {
+  const v = String(raw || '').trim();
+  if (!v) return '';
+  return PB_FIG_ID_SAFE_RE.test(v) ? v : '';
+}
+function replaceHwpPicsWithIdTokens(source) {
+  return String(source || '').replace(
+    /<hp:pic[\s\S]*?<\/hp:pic>/gi,
+    (block) => {
+      // 동일 <hp:pic> 블록 안에는 <hp:img binaryItemIDRef="..."> 가 최소 1개.
+      //   여러 이미지가 중첩된 복합 pic 은 드물지만, 있다면 첫 번째 ID 만 사용한다.
+      const m = block.match(/binaryItemIDRef\s*=\s*"([^"]+)"/i)
+        || block.match(/binaryItemIDRef\s*=\s*'([^']+)'/i);
+      const id = sanitizePbFigId(m?.[1]);
+      if (id) return ` [[PB_FIG_${id}]] `;
+      return ' [그림] ';
+    },
+  );
+}
+// <hp:shape> 역시 내부에 이미지(hp:img)가 포함되면 동일 ID 연결을 시도한다.
+function replaceHwpShapesWithIdTokens(source) {
+  return String(source || '').replace(
+    /<hp:shape[\s\S]*?<\/hp:shape>/gi,
+    (block) => {
+      const m = block.match(/binaryItemIDRef\s*=\s*"([^"]+)"/i)
+        || block.match(/binaryItemIDRef\s*=\s*'([^']+)'/i);
+      const id = sanitizePbFigId(m?.[1]);
+      if (id) return ` [[PB_FIG_${id}]] `;
+      return ' [도형] ';
+    },
+  );
+}
+
 function transformParagraphBodyToLines(body) {
   let s = String(body || '');
   s = s.replace(
     /<hp:autoNum[^>]*num="(\d+)"[^>]*>[\s\S]*?<\/hp:autoNum>/gi,
     ' $1 ',
   );
-  s = s.replace(/<hp:pic[\s\S]*?<\/hp:pic>/gi, ' [그림] ');
-  s = s.replace(/<hp:shape[\s\S]*?<\/hp:shape>/gi, ' [도형] ');
+  s = replaceHwpPicsWithIdTokens(s);
+  s = replaceHwpShapesWithIdTokens(s);
   s = replaceHwpSoftBreakElements(s);
   s = s.replace(
     /<\/(hp:run|hp:r|hp:span|hp:ctrl|hp:subList|hp:tc|hp:tr|tr|li)>/gi,
@@ -1441,9 +1554,9 @@ function flattenBoxXmlToRows(match, { table = false, alignResolver = null } = {}
     if (tableRows.length > 0) return tableRows;
   }
 
-  let inner = String(match || '')
-    .replace(/<hp:pic[\s\S]*?<\/hp:pic>/gi, ' [그림] ')
-    .replace(/<hp:shape[\s\S]*?<\/hp:shape>/gi, ' [도형] ');
+  let inner = replaceHwpShapesWithIdTokens(
+    replaceHwpPicsWithIdTokens(String(match || '')),
+  );
   if (table) {
     inner = inner.replace(/<\/hp:tr>/gi, '\n');
     inner = inner.replace(/<\/hp:tc>/gi, '\n');
@@ -2581,6 +2694,22 @@ async function enrichQuestionsWithDualMode({
         )
       : normalizeWhitespace(rawAnswer);
 
+    if (hasObjectiveChoices) {
+      const expectedCount = expectedObjectiveAnswerCount(q);
+      const actualCount = objectiveAnswerTokens(objectiveAnswerKey || rawAnswer).length;
+      if (expectedCount > 1 && actualCount > 0 && actualCount < expectedCount) {
+        q.flags = Array.from(
+          new Set([
+            ...(q.flags || []),
+            'objective_multi_answer_incomplete_suspected',
+          ]),
+        );
+        q.confidence = Math.min(Number(q.confidence || 1), 0.72);
+        q.objective_answer_expected_count = expectedCount;
+        q.objective_answer_key_count = actualCount;
+      }
+    }
+
     if (!hasObjectiveChoices) {
       targets.push({
         questionNumber: String(q.question_number || '').trim(),
@@ -2693,10 +2822,22 @@ async function enrichQuestionsWithDualMode({
     // 렌더러/편집 UI 가 소문항 경계를 명시적으로 인식할 수 있도록 한다.
     // (본문 중간의 "(1)을 이용하여" 같은 인용은 마커가 붙지 않아 영향 없음.)
     let subMarkerCount = 0;
+    let patchedStemLineAligns = null;
     if (isSetShape) {
-      const patched = injectSubQuestionMarkers(q.stem);
-      if (patched.injected > 0) {
+      const existingStemLineAligns = Array.isArray(q.meta?.stem_line_aligns)
+        ? q.meta.stem_line_aligns
+        : Array.isArray(q.meta?.stemLineAligns)
+          ? q.meta.stemLineAligns
+          : null;
+      const patched = injectSubQuestionMarkers(q.stem, existingStemLineAligns);
+      if (patched.injected > 0 || patched.alignAdjusted > 0) {
         q.stem = patched.stem;
+        if (Array.isArray(q.stem_lines)) {
+          q.stem_lines = q.stem.split(/\r?\n/);
+        }
+        if (Array.isArray(patched.stemLineAligns)) {
+          patchedStemLineAligns = patched.stemLineAligns;
+        }
         subMarkerCount = patched.injected;
       }
     }
@@ -2710,7 +2851,19 @@ async function enrichQuestionsWithDualMode({
       subjective_answer: rawSubjective,
       objective_generated: q.objective_generated === true,
       is_set_question: isSetShape === true,
+      ...(q.objective_answer_expected_count
+        ? { objective_answer_expected_count: q.objective_answer_expected_count }
+        : {}),
+      ...(q.objective_answer_key_count
+        ? { objective_answer_key_count: q.objective_answer_key_count }
+        : {}),
       ...(parts ? { answer_parts: parts } : {}),
+      ...(patchedStemLineAligns
+        ? {
+            stem_line_aligns: patchedStemLineAligns,
+            stemLineAligns: patchedStemLineAligns,
+          }
+        : {}),
       ...(subMarkerCount > 0 ? { sub_question_marker_count: subMarkerCount } : {}),
     };
   }
@@ -3068,7 +3221,7 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
     const hasAnyStemLine = (current.stemLines || []).some((raw) => {
       const c = normalizeWhitespace(String(raw || ''));
       if (!c) return false;
-      if (/^\[(문단|박스시작|박스끝|그림|도형|표행|표셀)\]$/.test(c)) return false;
+      if (/^(?:\[(?:문단|박스시작|박스끝|그림|도형|표행|표셀)\]|\[\[PB_FIG_[^\]]+\]\])$/.test(c)) return false;
       return true;
     });
     const isImplicitSeed = (current.sourcePatterns || []).some((p) =>
@@ -3220,7 +3373,7 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
           for (const raw of current.stemLines || []) {
             const c = normalizeWhitespace(String(raw || ''));
             if (!c) continue;
-            if (/^\[(문단|박스시작|박스끝|그림|도형|표행|표셀)\]$/.test(c)) continue;
+            if (/^(?:\[(?:문단|박스시작|박스끝|그림|도형|표행|표셀)\]|\[\[PB_FIG_[^\]]+\]\])$/.test(c)) continue;
             len += c.length;
             if (len >= 25) break;
           }
@@ -3229,7 +3382,7 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
         const lastNonStructuralStemLine = (() => {
           for (let si = (current.stemLines || []).length - 1; si >= 0; si -= 1) {
             const c = normalizeWhitespace(current.stemLines[si]);
-            if (c && !/^\[(문단|박스시작|박스끝|그림|도형|표행|표셀)\]$/.test(c)) return c;
+            if (c && !/^(?:\[(?:문단|박스시작|박스끝|그림|도형|표행|표셀)\]|\[\[PB_FIG_[^\]]+\]\])$/.test(c)) return c;
           }
           return '';
         })();
@@ -3296,7 +3449,7 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
       );
       const isStructuralOrEmpty =
         !peekCleaned ||
-        /^\[(문단|박스시작|박스끝|그림|도형|표행|표셀)\]$/.test(peekCleaned);
+        /^(?:\[(?:문단|박스시작|박스끝|그림|도형|표행|표셀)\]|\[\[PB_FIG_[^\]]+\]\])$/.test(peekCleaned);
       const isChoiceLike =
         Boolean(parseChoiceLine(peekCleaned)) ||
         parseInlineCircledChoices(peekCleaned).length >= 2;
@@ -3408,7 +3561,7 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
     const previousStemLine = (() => {
       for (let si = (current.stemLines || []).length - 1; si >= 0; si -= 1) {
         const candidate = normalizeWhitespace(current.stemLines[si]);
-        if (candidate && !/^\[(문단|박스시작|박스끝|그림|도형|표행|표셀)\]$/.test(candidate)) {
+        if (candidate && !/^(?:\[(?:문단|박스시작|박스끝|그림|도형|표행|표셀)\]|\[\[PB_FIG_[^\]]+\]\])$/.test(candidate)) {
           return candidate;
         }
       }
@@ -3436,8 +3589,14 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
     const insideSetQuestion = hasSetQuestionSignature(current.stemLines, {
       answerKey: current.answer_key || '',
     });
+    // 보기 박스/표/도형 박스 내부 라인을 새 문항의 리드 프롬프트로 오인하지 않도록
+    // 박스 안쪽에서는 암시 분할을 억제한다. 예: Q10 의 <보기> 박스 안 "A: 4-9≤-2…"
+    // 대화 라인이 질문 끝 "…고른 것은?" 뒤에 이어지면 canSplitAfterTerminal 이 true 가
+    // 되어 박스 내부 라인부터 새 문항 seed 가 열리는 오분할이 발생했다.
+    const insideBoxContext = isInsideBoxContext(current.stemLines);
     if (
       !insideSetQuestion &&
+      !insideBoxContext &&
       (canSplitAfterChoices || canSplitAfterTerminal)
     ) {
       const implicitQuestionNumber = reserveQuestionNumber('', {
@@ -3551,7 +3710,11 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
       current.flags.push('view_block');
       current.sourcePatterns.push('view_block');
     }
-    if (isFigureLine(cleanedLine) || /\[(그림|표|도형)\]/.test(cleanedLine)) {
+    if (
+      isFigureLine(cleanedLine)
+      || /\[(그림|표|도형)\]/.test(cleanedLine)
+      || /\[\[PB_FIG_[^\]]+\]\]/.test(cleanedLine)
+    ) {
       stats.figureLines += 1;
       current.figure_refs.push(cleanedLine);
       current.flags.push('contains_figure');
@@ -3596,7 +3759,7 @@ function buildQuestionRows({ academyId, documentId, extractJobId, parsed, thresh
         .filter(
           (l) =>
             l &&
-            !/^\[(문단|박스시작|박스끝|그림|도형|표행|표셀)\]$/.test(l),
+            !/^(?:\[(?:문단|박스시작|박스끝|그림|도형|표행|표셀)\]|\[\[PB_FIG_[^\]]+\]\])$/.test(l),
         )
         .join(' ');
       return joined.length;
@@ -3820,6 +3983,142 @@ function normalizeTargetQuestionIdsFromJob(job) {
     out.push(id);
   }
   return out;
+}
+
+// VLM 경로 (PDF 기반) 는 HWPX 의 <hp:pic binaryItemIDRef="..."/> 정보를 전혀 보지 않는다.
+// 그 결과 figure_worker 는 기존 positional fallback (BinData 파일명 순서 기반 slice) 으로
+// 떨어지는데, VLM 이 그림 개수를 복합 도형 등으로 오인식하면 (예: Q9 에 1개인 그림을 4개로
+// 세어버리면) 다음과 같은 체인 반응이 일어난다:
+//
+//   Q9: count=4 → imageEntries.slice(0,4) = 전체 4장 소진
+//   Q11: start=4, count=2 → slice(4,6)=[] → fallback 으로 imageEntries[1] (중복)
+//   Q20: start=6, count=1 → slice(6,7)=[] → fallback 으로 imageEntries[2] (중복)
+//
+// 이 함수는 VLM 경로에서 HWPX 원본을 "추가로" 파싱해 문항 번호별 PB_FIG 토큰 리스트를
+// 돌려준다. VLM payload 의 figure 관련 필드 (stem 의 [그림] 마커, figure_refs,
+// meta.figure_count) 를 HWPX 기준으로 덮어써 token-first 매칭 경로를 태우기 위함이다.
+function buildHwpxFigureMapByQuestionNumber(hwpxBuffer, { threshold, log }) {
+  const map = new Map();
+  try {
+    const hwpxParsed = parseHwpxBuffer(hwpxBuffer);
+    const hwpxBuilt = buildQuestionRows({
+      academyId: '',
+      documentId: '',
+      extractJobId: '',
+      parsed: { sections: hwpxParsed.sections || [] },
+      threshold,
+    });
+    for (const q of hwpxBuilt.questions || []) {
+      const qNo = normalizeWhitespace(q?.question_number || '');
+      if (!qNo) continue;
+      // figure_refs 에서 PB_FIG 토큰을 순서대로 수집한다.
+      //   - 같은 itemID 가 여러 번 쓰이면 (문항 내 같은 그림 재인용) 중복도 보존한다.
+      //   - plain [그림] / [도형] 은 폴백 count 에만 기여한다 (토큰이 없으면 넣지 않음).
+      const pbTokens = [];
+      let plainFigureMarkers = 0;
+      for (const raw of Array.isArray(q.figure_refs) ? q.figure_refs : []) {
+        const text = String(raw || '');
+        const tokenMatches = text.match(/\[\[PB_FIG_([^\]]+)\]\]/g) || [];
+        for (const tm of tokenMatches) {
+          const inner = tm.replace(/^\[\[PB_FIG_|\]\]$/g, '');
+          if (inner) pbTokens.push(inner);
+        }
+        const plainMatches = text.match(/\[(?:그림|도형)\]/g) || [];
+        plainFigureMarkers += plainMatches.length;
+      }
+      if (pbTokens.length === 0 && plainFigureMarkers === 0) continue;
+      // 같은 번호가 두 번 나오는 (HWPX 파서가 double-seed 한) 케이스는 첫 항목만 유지.
+      if (map.has(qNo)) continue;
+      map.set(qNo, {
+        pbTokens,
+        plainFigureMarkers,
+        figureRefs: Array.isArray(q.figure_refs) ? q.figure_refs.slice() : [],
+      });
+    }
+    if (typeof log === 'function') {
+      log('vlm_hwpx_figure_overlay_built', {
+        hwpxQuestionCount: (hwpxBuilt.questions || []).length,
+        mappedQuestionCount: map.size,
+      });
+    }
+  } catch (err) {
+    if (typeof log === 'function') {
+      log('vlm_hwpx_figure_overlay_parse_failed', {
+        message: String(err?.message || err || ''),
+      });
+    }
+  }
+  return map;
+}
+
+// VLM 이 내려준 단일 question payload 에 HWPX overlay 를 적용한다.
+//   - stem 의 [그림] / [도형] 마커와 기존 [[PB_FIG_...]] 토큰을 HWPX 의 토큰 순서로 교체
+//   - figure_refs 를 HWPX 버전으로 교체 (PB_FIG 토큰 포함)
+//   - meta.figure_count 를 HWPX 토큰 수로 덮어씀
+// HWPX overlay 가 "없으면" 원래 VLM payload 를 그대로 둔다 (HWPX-missing 문항 안전장치).
+function applyHwpxFigureOverlayToVlmPayload(payload, overlay) {
+  if (!overlay || !payload || typeof payload !== 'object') return payload;
+  const pbTokens = Array.isArray(overlay.pbTokens) ? overlay.pbTokens : [];
+  const hwpxFigureRefs = Array.isArray(overlay.figureRefs)
+    ? overlay.figureRefs
+    : [];
+  // HWPX 가 이 문항에 대해 어떤 figure 도 인식하지 못했다면 overlay 를 적용하지 않는다.
+  //   (VLM 이 본 PDF 에는 있는 그림을 HWPX 파서가 놓쳤을 수 있으므로 VLM 데이터를 살려둔다.)
+  if (pbTokens.length === 0 && hwpxFigureRefs.length === 0) return payload;
+
+  const next = { ...payload };
+
+  // stem 덮어쓰기: [그림]/[도형] 과 기존 [[PB_FIG_xxx]] 를 모두 HWPX 토큰 순서로 재배치.
+  //   - VLM 마커 수 > HWPX 토큰 수   : 남는 VLM 마커는 제거 (overflow drop)
+  //   - VLM 마커 수 < HWPX 토큰 수   : 부족분은 stem 끝에 [문단]\n[[PB_FIG_x]]... 로 append
+  if (pbTokens.length > 0) {
+    const markerRe = /\[\[PB_FIG_[^\]]+\]\]|\[(?:그림|도형)\]/g;
+    let cursor = 0;
+    const originalStem = String(next.stem || '');
+    const rewritten = originalStem.replace(markerRe, () => {
+      if (cursor < pbTokens.length) {
+        const id = pbTokens[cursor];
+        cursor += 1;
+        return `[[PB_FIG_${id}]]`;
+      }
+      return '';
+    });
+    let finalStem = rewritten;
+    if (cursor < pbTokens.length) {
+      const remaining = pbTokens.slice(cursor);
+      const appendLine = remaining.map((id) => `[[PB_FIG_${id}]]`).join(' ');
+      finalStem = finalStem
+        ? `${finalStem}\n[문단]\n${appendLine}`
+        : appendLine;
+    }
+    // 빈 줄 / 연속 공백 정리. 마커만 남아있던 라인을 지웠을 때 정리 목적.
+    finalStem = finalStem
+      .replace(/[ \t]+/g, ' ')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+    next.stem = finalStem;
+  }
+
+  // figure_refs 덮어쓰기: HWPX 원본 refs (PB_FIG 토큰 포함) 그대로 사용.
+  if (hwpxFigureRefs.length > 0) {
+    next.figure_refs = hwpxFigureRefs.slice();
+  }
+
+  // meta.figure_count 를 HWPX 기준으로 재계산. figure_worker.inferQuestionFigureCount 가
+  //   이 값을 최우선 참조하므로, positional fallback 이 쓰일 때도 올바른 count 가 간다.
+  //   - PB_FIG 토큰이 있으면 토큰 수를 우선 사용 (token-first path).
+  //   - 토큰은 없고 plain [그림]/[도형] 만 있으면 plain 마커 수를 사용 (fallback path).
+  const prevMeta = next.meta && typeof next.meta === 'object' ? next.meta : {};
+  const plainCount = Number.isFinite(overlay.plainFigureMarkers)
+    ? overlay.plainFigureMarkers
+    : 0;
+  const figureCountForMeta = pbTokens.length > 0 ? pbTokens.length : plainCount;
+  next.meta = {
+    ...prevMeta,
+    figure_count: figureCountForMeta,
+  };
+
+  return next;
 }
 
 function buildQuestionWritePayload({
@@ -4139,6 +4438,77 @@ async function processOneJob(job) {
     parsed = vlmResult.parsed;
     parseMode = 'vlm';
     engineMeta = vlmResult.meta || { engine: 'vlm' };
+
+    // HWPX overlay 를 VLM payload 에 적용. HWPX 원본의 <hp:pic binaryItemIDRef>
+    //   → PB_FIG 토큰 매핑을 ground truth 로 신뢰해, VLM 이 figure 를 오인식한 경우도
+    //   token-first 매칭 경로로 정확히 재배치되도록 한다.
+    //
+    //   - HWPX 가 없으면 (pdf-only) skip.
+    //   - HWPX 파싱 실패 시 overlay 생략 (VLM 원본 사용).
+    //   - 문항 번호가 매칭 안 되는 개별 문항은 VLM 원본 유지.
+    if (hasHwpxSource) {
+      try {
+        const hwpxBucket = String(
+          doc.source_storage_bucket || 'problem-documents',
+        ).trim();
+        const hwpxPath = String(doc.source_storage_path || '').trim();
+        if (hwpxBucket && hwpxPath) {
+          const { data: hwpxBlob, error: hwpxDlErr } = await supa.storage
+            .from(hwpxBucket)
+            .download(hwpxPath);
+          if (hwpxDlErr) {
+            throw new Error(
+              `vlm_hwpx_overlay_download_failed:${hwpxDlErr.message}`,
+            );
+          }
+          const hwpxBuffer = await toBufferFromStorageData(hwpxBlob);
+          if (hwpxBuffer && hwpxBuffer.length > 0) {
+            const overlayLog = (event, payload) => {
+              try {
+                console.log(
+                  `[pb-extract-worker] ${event}`,
+                  JSON.stringify({ jobId: job.id, ...payload }),
+                );
+              } catch (_) {
+                // logging 실패 무시.
+              }
+            };
+            const figureMap = buildHwpxFigureMapByQuestionNumber(hwpxBuffer, {
+              threshold: REVIEW_CONFIDENCE_THRESHOLD,
+              log: overlayLog,
+            });
+            if (figureMap.size > 0) {
+              let overlayApplied = 0;
+              let overlayUnmatched = 0;
+              const overlayedQuestions = (built.questions || []).map((q) => {
+                const qNo = normalizeWhitespace(q?.question_number || '');
+                const overlay = qNo ? figureMap.get(qNo) : null;
+                if (!overlay) {
+                  overlayUnmatched += 1;
+                  return q;
+                }
+                overlayApplied += 1;
+                return applyHwpxFigureOverlayToVlmPayload(q, overlay);
+              });
+              built.questions = overlayedQuestions;
+              overlayLog('vlm_hwpx_figure_overlay_applied', {
+                overlayApplied,
+                overlayUnmatched,
+                hwpxMappedCount: figureMap.size,
+              });
+            }
+          }
+        }
+      } catch (err) {
+        console.warn(
+          '[pb-extract-worker] vlm_hwpx_figure_overlay_skipped',
+          JSON.stringify({
+            jobId: job.id,
+            message: String(err?.message || err || ''),
+          }),
+        );
+      }
+    }
   } else {
     const bucket = String(doc.source_storage_bucket || 'problem-documents').trim();
     const path = String(doc.source_storage_path || '').trim();
@@ -4420,6 +4790,24 @@ async function processOneJob(job) {
     partialUpdatedQuestionIds = updateRows.map((row) => row.id);
   } else {
     await supa.from('pb_questions').delete().eq('document_id', job.document_id);
+    // 이 document 의 과거 figure_job 잔재 (queued / processing / succeeded / failed 모두)
+    // 까지 싹 지운다. 남아있으면:
+    //   1) queued/processing 상태의 dangling job 이 재추출 후 엉뚱한 question_id 를
+    //      가리킨 채 worker 에 다시 pick 될 수 있다.
+    //   2) figure_worker 는 이번 추출로 새로 생긴 question row 에 prev asset 이 없어도,
+    //      같은 document 내 question 간 이동이 생겼을 때 과거 upload 된 asset 이
+    //      다른 문항으로 옮겨가서 "Q9/Q11 에 그림이 중복" 되는 관측 증상의 온상이 된다.
+    // pb_figure_jobs 는 추출 직후 재생성되므로 (아래 AUTO_QUEUE_FIGURE_JOBS 분기) 선삭제는 안전.
+    const { error: figJobCleanupErr } = await supa
+      .from('pb_figure_jobs')
+      .delete()
+      .eq('document_id', job.document_id);
+    if (figJobCleanupErr) {
+      console.warn(
+        '[pb-extract-worker] figure_jobs_cleanup_skipped',
+        JSON.stringify({ jobId: job.id, message: compact(figJobCleanupErr.message) }),
+      );
+    }
 
     if (questions.length > 0) {
       const chunkSize = 300;
@@ -4463,12 +4851,22 @@ async function processOneJob(job) {
         // figure job은 "실제 그림/도형"(<hp:pic> 등)이 있는 문항에만 큐잉한다.
         // 표([표행]/[표셀])만 있는 문항까지 Gemini 이미지를 생성하면
         // 존재하지 않는 그림이 추론되어 엉뚱한 문항에 붙는 문제를 유발했다.
-        const REAL_FIGURE_MARKERS = ['[그림]', '[도형]'];
+        //
+        // 인식 대상:
+        //   - plain `[그림]` / `[도형]` (VLM/구버전 추출)
+        //   - `[[PB_FIG_<itemID>]]` 토큰 (HWPX binaryItemIDRef 보존 토큰; 현재 기본)
+        //   → 둘 중 하나라도 있으면 "실제 그림 있음" 으로 판정.
+        //
+        // 주의: `[표행]`/`[표셀]` 같은 표 전용 마커는 여기서 걸러져서 큐에 들어가지 않는다.
         const hasRealFigureMarker = (refs) => {
           if (!Array.isArray(refs)) return false;
           return refs.some((ref) => {
             const text = normalizeWhitespace(String(ref || ''));
-            return REAL_FIGURE_MARKERS.some((marker) => text.includes(marker));
+            if (!text) return false;
+            if (text.includes('[그림]')) return true;
+            if (text.includes('[도형]')) return true;
+            if (/\[\[PB_FIG_[^\]]+\]\]/.test(text)) return true;
+            return false;
           });
         };
         const figureJobRows = (insertedQuestions || [])
@@ -4876,4 +5274,6 @@ export {
   transformXmlToLines as _transformXmlToLines,
   extractEndNoteAnswerHints as _extractEndNoteAnswerHints,
   injectSubQuestionMarkers,
+  buildHwpxFigureMapByQuestionNumber as _buildHwpxFigureMapByQuestionNumber,
+  applyHwpxFigureOverlayToVlmPayload as _applyHwpxFigureOverlayToVlmPayload,
 };

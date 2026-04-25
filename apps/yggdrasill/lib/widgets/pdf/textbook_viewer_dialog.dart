@@ -5,10 +5,16 @@ import 'package:pdfrx/pdfrx.dart';
 
 import '../../services/textbook_pdf_service.dart';
 import '../dialog_tokens.dart';
+import 'textbook_problem_region.dart';
 
 /// Opens the in-app textbook viewer as a full-screen page. The viewer asks
 /// [TextbookPdfService] to resolve the ref into a local file (preferred) or
 /// a URL (legacy / remote fallback) and then renders it with `pdfrx`.
+///
+/// Pass [problemRegions] (optionally with [tapDetectionMode] left at its
+/// default `true`) to enable the problem-region overlay: the viewer then
+/// draws translucent tap targets for every VLM-detected region on each
+/// page and surfaces a `pN · 47번` badge when the user taps one.
 ///
 /// SECURITY TODO (pre-release):
 /// - Wrap the viewer in a watermark overlay (slot added below).
@@ -19,6 +25,8 @@ Future<void> openTextbookViewerDialog(
   required String title,
   String? cacheKey,
   int? initialPage,
+  List<TextbookProblemRegion>? problemRegions,
+  bool tapDetectionMode = true,
 }) async {
   await Navigator.of(context).push<void>(
     MaterialPageRoute<void>(
@@ -27,6 +35,8 @@ Future<void> openTextbookViewerDialog(
         title: title,
         cacheKey: cacheKey,
         initialPage: initialPage,
+        problemRegions: problemRegions,
+        tapDetectionMode: tapDetectionMode,
       ),
     ),
   );
@@ -39,12 +49,20 @@ class TextbookViewerPage extends StatefulWidget {
     required this.title,
     this.cacheKey,
     this.initialPage,
+    this.problemRegions,
+    this.tapDetectionMode = false,
   });
 
   final TextbookPdfRef ref;
   final String title;
   final String? cacheKey;
   final int? initialPage;
+
+  /// When non-null and [tapDetectionMode] is true, the viewer overlays a
+  /// thin outline + tap target per region so the operator can verify the
+  /// VLM detections by tapping directly on the PDF.
+  final List<TextbookProblemRegion>? problemRegions;
+  final bool tapDetectionMode;
 
   @override
   State<TextbookViewerPage> createState() => _TextbookViewerPageState();
@@ -61,11 +79,41 @@ class _TextbookViewerPageState extends State<TextbookViewerPage> {
   int _pageCount = 0;
   bool _chromeVisible = true;
 
+  /// Regions indexed by raw page number — built once in initState so the
+  /// pageOverlaysBuilder callback (invoked on every repaint) stays O(1).
+  late final Map<int, List<TextbookProblemRegion>> _regionsByPage;
+  TextbookProblemRegion? _lastTappedRegion;
+  DateTime? _lastTapAt;
+
+  bool get _hasRegions =>
+      widget.tapDetectionMode &&
+      widget.problemRegions != null &&
+      widget.problemRegions!.isNotEmpty;
+
   @override
   void initState() {
     super.initState();
     _pageNumber = widget.initialPage ?? 1;
+    _regionsByPage = _groupRegions(widget.problemRegions);
     unawaited(_resolve());
+  }
+
+  static Map<int, List<TextbookProblemRegion>> _groupRegions(
+    List<TextbookProblemRegion>? regions,
+  ) {
+    final out = <int, List<TextbookProblemRegion>>{};
+    if (regions == null) return out;
+    for (final r in regions) {
+      out.putIfAbsent(r.rawPage, () => <TextbookProblemRegion>[]).add(r);
+    }
+    return out;
+  }
+
+  void _onRegionTapped(TextbookProblemRegion region) {
+    setState(() {
+      _lastTappedRegion = region;
+      _lastTapAt = DateTime.now();
+    });
   }
 
   Future<void> _resolve() async {
@@ -175,6 +223,32 @@ class _TextbookViewerPageState extends State<TextbookViewerPage> {
         if (!mounted || page == null) return;
         setState(() => _pageNumber = page);
       },
+      // Per-page overlay: pdfrx places the widgets we return into a Stack
+      // whose size matches the drawn page. So we can use `Positioned`
+      // with local coordinates (0,0 = page top-left) to drop a tap target
+      // on every VLM-detected region. The rect scales naturally when the
+      // user pinch-zooms because `pageRect.size` tracks the visible page.
+      pageOverlaysBuilder: _hasRegions
+          ? (context, pageRect, page) {
+              final regions = _regionsByPage[page.pageNumber];
+              if (regions == null || regions.isEmpty) {
+                return const <Widget>[];
+              }
+              final w = pageRect.width;
+              final h = pageRect.height;
+              return regions
+                  .map((r) => _RegionOverlay(
+                        region: r,
+                        left: w * r.xminFraction,
+                        top: h * r.yminFraction,
+                        width: w * (r.xmaxFraction - r.xminFraction),
+                        height: h * (r.ymaxFraction - r.yminFraction),
+                        highlighted: identical(_lastTappedRegion, r),
+                        onTap: () => _onRegionTapped(r),
+                      ))
+                  .toList(growable: false);
+            }
+          : null,
       loadingBannerBuilder: (context, downloaded, total) {
         return const Center(
           child: CircularProgressIndicator(color: kDlgAccent),
@@ -238,6 +312,14 @@ class _TextbookViewerPageState extends State<TextbookViewerPage> {
   Widget build(BuildContext context) {
     final canPrev = !_loading && _source != null && _pageNumber > 1;
     final canNext = !_loading && _source != null && _pageNumber < _pageCount;
+    // When tap-detection is armed, a background tap toggling chrome would
+    // fight with the region tap targets (the outer GestureDetector wins on
+    // HitTestBehavior.opaque). Use a translucent detector so taps inside a
+    // region bubble up to the overlay; background taps still toggle chrome
+    // because the overlay only catches the region rects.
+    final tapBehavior = _hasRegions
+        ? HitTestBehavior.translucent
+        : HitTestBehavior.opaque;
     return Scaffold(
       backgroundColor: kDlgBg,
       body: SafeArea(
@@ -245,7 +327,7 @@ class _TextbookViewerPageState extends State<TextbookViewerPage> {
           children: [
             Positioned.fill(
               child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
+                behavior: tapBehavior,
                 onTap: () {
                   if (!mounted) return;
                   setState(() => _chromeVisible = !_chromeVisible);
@@ -344,6 +426,28 @@ class _TextbookViewerPageState extends State<TextbookViewerPage> {
                   ],
                 ),
               ),
+            if (_hasRegions && _chromeVisible && _pageCount > 0)
+              Positioned(
+                left: 16,
+                bottom: 16,
+                child: _RegionStatusChip(
+                  pageRegionCount:
+                      (_regionsByPage[_pageNumber] ?? const []).length,
+                  totalRegionCount: widget.problemRegions?.length ?? 0,
+                ),
+              ),
+            if (_lastTappedRegion != null)
+              Positioned(
+                top: 80,
+                left: 0,
+                right: 0,
+                child: Center(
+                  child: _TappedBadge(
+                    region: _lastTappedRegion!,
+                    shownAt: _lastTapAt ?? DateTime.now(),
+                  ),
+                ),
+              ),
           ],
         ),
       ),
@@ -420,6 +524,200 @@ class _CircleIconButton extends StatelessWidget {
               color: enabled ? kDlgText : kDlgTextSub.withOpacity(0.45),
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Thin coloured rectangle rendered inside a pdfrx page overlay. Each
+/// instance corresponds to one VLM-detected problem; tapping it calls
+/// back into the viewer which then surfaces a `pN · 47번` badge.
+class _RegionOverlay extends StatelessWidget {
+  const _RegionOverlay({
+    required this.region,
+    required this.left,
+    required this.top,
+    required this.width,
+    required this.height,
+    required this.onTap,
+    required this.highlighted,
+  });
+
+  final TextbookProblemRegion region;
+  final double left;
+  final double top;
+  final double width;
+  final double height;
+  final VoidCallback onTap;
+  final bool highlighted;
+
+  @override
+  Widget build(BuildContext context) {
+    final border = highlighted
+        ? const Color(0xFF7CC67C) // solid green when most recently tapped
+        : const Color(0x667AA9E6); // soft blue for idle regions
+    final fill = highlighted
+        ? const Color(0x337CC67C)
+        : Colors.transparent;
+    return Positioned(
+      left: left,
+      top: top,
+      width: width,
+      height: height,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: Container(
+          decoration: BoxDecoration(
+            color: fill,
+            border: Border.all(color: border, width: highlighted ? 2 : 1),
+            borderRadius: BorderRadius.circular(4),
+          ),
+          padding: const EdgeInsets.only(left: 4, top: 2),
+          alignment: Alignment.topLeft,
+          child: Text(
+            region.isSetHeader
+                ? '${region.setFrom ?? '?'}~${region.setTo ?? '?'}'
+                : region.problemNumber,
+            style: TextStyle(
+              color: highlighted
+                  ? const Color(0xFF1B2B1B)
+                  : const Color(0xCC7AA9E6),
+              fontSize: 10,
+              fontWeight: FontWeight.w800,
+              height: 1.0,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Bottom-left chip telling the operator how many regions the current
+/// page has and how many are loaded document-wide.
+class _RegionStatusChip extends StatelessWidget {
+  const _RegionStatusChip({
+    required this.pageRegionCount,
+    required this.totalRegionCount,
+  });
+
+  final int pageRegionCount;
+  final int totalRegionCount;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: kDlgPanelBg.withOpacity(0.92),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: kDlgBorder),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.crop_free, size: 14, color: Color(0xFF7AA9E6)),
+          const SizedBox(width: 6),
+          Text(
+            pageRegionCount > 0
+                ? '이 페이지 · $pageRegionCount개'
+                : '이 페이지에 문항 영역 없음',
+            style: const TextStyle(
+              color: kDlgText,
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Container(
+            width: 1,
+            height: 10,
+            color: kDlgBorder,
+          ),
+          const SizedBox(width: 8),
+          Text(
+            '총 $totalRegionCount개',
+            style: const TextStyle(
+              color: kDlgTextSub,
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Animated "pN · 47번" badge that appears at the top of the viewer
+/// whenever the operator taps a region. We rebuild on every tap (and on
+/// repeat taps of the same region) so the user gets a crisp confirmation.
+class _TappedBadge extends StatelessWidget {
+  const _TappedBadge({required this.region, required this.shownAt});
+
+  final TextbookProblemRegion region;
+  final DateTime shownAt;
+
+  @override
+  Widget build(BuildContext context) {
+    final setHint = region.isSetHeader ? ' · 세트 대표' : '';
+    final labelHint = region.label.isEmpty ? '' : ' · ${region.label}';
+    final sectionHint = region.section == null || region.section!.isEmpty
+        ? ''
+        : ' · ${region.section}';
+    return TweenAnimationBuilder<double>(
+      key: ValueKey(shownAt.microsecondsSinceEpoch),
+      tween: Tween(begin: 0, end: 1),
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOutBack,
+      builder: (context, t, child) => Transform.scale(
+        scale: 0.85 + 0.15 * t,
+        child: Opacity(opacity: t.clamp(0, 1), child: child),
+      ),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+        decoration: BoxDecoration(
+          color: const Color(0xE61B2B1B),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: const Color(0xFF7CC67C), width: 1.4),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x33000000),
+              blurRadius: 18,
+              offset: Offset(0, 6),
+            ),
+          ],
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.task_alt, size: 16, color: Color(0xFFB6E6B6)),
+            const SizedBox(width: 8),
+            Text(
+              region.badgeLabel(),
+              style: const TextStyle(
+                color: Color(0xFFEFFFEF),
+                fontSize: 15,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            if (setHint.isNotEmpty ||
+                labelHint.isNotEmpty ||
+                sectionHint.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(left: 8),
+                child: Text(
+                  '$sectionHint$labelHint$setHint'.trimLeft(),
+                  style: const TextStyle(
+                    color: Color(0xFFB6E6B6),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+          ],
         ),
       ),
     );

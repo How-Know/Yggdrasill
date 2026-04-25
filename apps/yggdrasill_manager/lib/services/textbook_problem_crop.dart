@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:image/image.dart' as img;
@@ -14,9 +15,19 @@ class ProblemCropOptions {
   const ProblemCropOptions({
     this.paddingRatio = 0.008,
     this.minPaddingPx = 6,
-    this.avoidNumber = false,
+    this.avoidNumber = true,
     this.maskRemainingNumber = false,
     this.numberMarginPx = 6,
+    // Default off: the per-crop Radon pass was over-rotating crops whose
+    // visible content was dominated by figures / tables rather than text
+    // lines (Radon picked up the long edges of the figure as if they were
+    // text baselines). The page-level deskew in textbook_page_deskew.dart
+    // already removes the bulk of the tilt — we keep this flag around so
+    // a future smarter implementation (text-line specific) can flip it on.
+    this.perCropDeskew = false,
+    this.perCropDeskewMaxAngleDeg = 2.5,
+    this.perCropDeskewStepDeg = 0.25,
+    this.perCropDeskewSearchLongEdgePx = 320,
   });
 
   /// Extra margin on each side of `item_region` before cropping, as a fraction
@@ -42,6 +53,26 @@ class ProblemCropOptions {
   /// Margin (px) around the number bbox when masking so we also cover the
   /// small gap between the number glyph and its shadow / aliasing.
   final int numberMarginPx;
+
+  /// If true, runs a second (tiny) deskew pass on the cropped image itself
+  /// after the page-level deskew. Scanned textbooks often have non-uniform
+  /// skew across a page (paper curl / binding bow), so a single page rotation
+  /// straightens the "average" while individual problems still end up 0.3° –
+  /// 1.0° tilted. This pass catches that residual tilt per problem.
+  final bool perCropDeskew;
+
+  /// Maximum angle (deg) searched by the per-crop deskew pass. Kept small
+  /// because the page-level deskew already removed the bulk of the tilt;
+  /// we're only cleaning up the residual here.
+  final double perCropDeskewMaxAngleDeg;
+
+  /// Angle step (deg) for the per-crop deskew search.
+  final double perCropDeskewStepDeg;
+
+  /// Long-edge (px) the crop is downsampled to for the per-crop Radon
+  /// search. Crops are small already, so 300 – 400 px is usually enough
+  /// signal for a reliable angle pick.
+  final int perCropDeskewSearchLongEdgePx;
 }
 
 /// Result from `cropProblemRegion`.
@@ -191,7 +222,7 @@ ProblemCrop? cropProblemRegionOnImage({
   final ch = (y1 - y0).round();
   if (cw < 2 || ch < 2) return null;
 
-  final cropped = img.copyCrop(
+  var cropped = img.copyCrop(
     source,
     x: cx,
     y: cy,
@@ -200,7 +231,8 @@ ProblemCrop? cropProblemRegionOnImage({
   );
 
   // If we couldn't push an edge past the number, white-mask it out so the
-  // printed crop doesn't carry the number glyph.
+  // printed crop doesn't carry the number glyph. Runs BEFORE the per-crop
+  // deskew so the mask coordinates are in the pre-rotation frame.
   var maskedNumber = false;
   if (hasNumber && options.maskRemainingNumber && avoidedEdge == 'none') {
     final margin = options.numberMarginPx;
@@ -221,6 +253,28 @@ ProblemCrop? cropProblemRegionOnImage({
     }
   }
 
+  // Per-problem residual-skew cleanup. Runs AFTER masking so mask rect
+  // coordinates are still valid, and AFTER the main crop so we don't pay
+  // for rotating pixels we're about to throw away. Search angle stays
+  // small (±~2.5°) because the page-level deskew already removed the
+  // dominant tilt and we only want to clean up the residual that varies
+  // from problem to problem on bowed scans.
+  if (options.perCropDeskew) {
+    final angle = _estimateCropSkewDeg(
+      cropped,
+      maxAngleDeg: options.perCropDeskewMaxAngleDeg,
+      stepDeg: options.perCropDeskewStepDeg,
+      searchLongEdgePx: options.perCropDeskewSearchLongEdgePx,
+    );
+    if (angle.abs() > 1e-3) {
+      cropped = img.copyRotate(
+        cropped,
+        angle: angle,
+        interpolation: img.Interpolation.cubic,
+      );
+    }
+  }
+
   final pngBytes = Uint8List.fromList(img.encodePng(cropped));
   return ProblemCrop(
     pngBytes: pngBytes,
@@ -229,4 +283,262 @@ ProblemCrop? cropProblemRegionOnImage({
     avoidedNumberEdge: avoidedEdge,
     maskedNumber: maskedNumber,
   );
+}
+
+/// Radon-style residual-skew estimator for a single problem crop.
+///
+/// Mirrors `textbook_page_deskew._deskewIsolate` but works on a pre-decoded
+/// `img.Image` so it can run inside the same isolate that builds the crops.
+/// Returns an angle in degrees that matches `img.copyRotate(angle: …)` — i.e.
+/// positive = clockwise in screen (y-down) coordinates.
+double _estimateCropSkewDeg(
+  img.Image src, {
+  required double maxAngleDeg,
+  required double stepDeg,
+  required int searchLongEdgePx,
+}) {
+  final w = src.width;
+  final h = src.height;
+  if (w <= 4 || h <= 4) return 0.0;
+
+  final longEdge = w > h ? w : h;
+  final scale = longEdge > searchLongEdgePx ? searchLongEdgePx / longEdge : 1.0;
+  final searchImg = scale < 1.0
+      ? img.copyResize(
+          src,
+          width: (w * scale).round(),
+          height: (h * scale).round(),
+          interpolation: img.Interpolation.linear,
+        )
+      : src;
+  final gray = img.grayscale(searchImg);
+  final sw = gray.width;
+  final sh = gray.height;
+  final cx = sw / 2.0;
+  final cy = sh / 2.0;
+
+  // Collect ink pixel coordinates (centred at image centre).
+  final xs = <double>[];
+  final ys = <double>[];
+  for (var y = 0; y < sh; y += 1) {
+    for (var x = 0; x < sw; x += 1) {
+      final lum = gray.getPixel(x, y).luminance;
+      if (lum < 170) {
+        xs.add(x - cx);
+        ys.add(y - cy);
+      }
+    }
+  }
+  // A crop that's mostly figure / white space won't have enough ink to
+  // produce a reliable variance peak — bail out with 0.
+  if (xs.length < 120) return 0.0;
+
+  final candidates = <double>[0.0];
+  for (var a = stepDeg; a <= maxAngleDeg + 1e-9; a += stepDeg) {
+    candidates
+      ..add(a)
+      ..add(-a);
+  }
+
+  final binCount = sw + sh;
+  final halfBin = binCount / 2.0;
+
+  var bestAngleMath = 0.0;
+  var bestScore = double.negativeInfinity;
+  for (final angleDeg in candidates) {
+    final theta = angleDeg * _degToRad;
+    final s = _sin(theta);
+    final c = _cos(theta);
+    final bins = List<int>.filled(binCount, 0);
+    for (var i = 0; i < xs.length; i += 1) {
+      final yRot = s * xs[i] + c * ys[i];
+      final idx = (yRot + halfBin).round();
+      if (idx >= 0 && idx < binCount) bins[idx] += 1;
+    }
+    var sum = 0.0;
+    for (final b in bins) {
+      sum += b;
+    }
+    final mean = sum / binCount;
+    var vsum = 0.0;
+    for (final b in bins) {
+      final d = b - mean;
+      vsum += d * d;
+    }
+    if (vsum > bestScore) {
+      bestScore = vsum;
+      bestAngleMath = angleDeg;
+    }
+  }
+
+  // Our Radon search uses y-down coords (see textbook_page_deskew.dart for
+  // the derivation), so to visually straighten we apply -bestAngleMath.
+  return -bestAngleMath;
+}
+
+const double _degToRad = math.pi / 180.0;
+double _sin(double x) => math.sin(x);
+double _cos(double x) => math.cos(x);
+
+// ─────────── Column-aware region normalization ───────────
+//
+// The VLM fits each `item_region` tightly around that one problem's content,
+// which means two problems in the same column can end up with visibly
+// different widths (one 440 wide, the next 470 wide) and very uneven top /
+// bottom gaps. When those crops are laid out side-by-side the result looks
+// unbalanced even though the detection is correct.
+//
+// `normalizeItemRegionsByColumn` rewrites the regions so that:
+//   • every item in the same column shares the same `xmin` / `xmax`
+//     (taken from the union of the column's regions — the widest problem
+//     sets the width for everyone), and
+//   • the vertical padding is pushed out to a fixed target (`targetPaddingY1k`)
+//     as long as the midpoint with the adjacent item still leaves a safety
+//     gap. No edge is moved outward by more than `maxExpandY1k`, so the VLM
+//     always has the final say when it was already generous.
+//
+// The function never *shrinks* a region — only pushes an edge outward — so it
+// can't accidentally cut off content the VLM already captured. If everything
+// is off the same way on a page it simply becomes "off the same way" on
+// every item, which is exactly what the operator wants when eyeballing the
+// crop grid.
+
+/// Per-item input for [normalizeItemRegionsByColumn].
+class ColumnRegionInput {
+  const ColumnRegionInput({required this.itemRegion, required this.column});
+
+  /// `[ymin, xmin, ymax, xmax]` in the VLM's 0..1000 space. May be `null` /
+  /// wrong length when the detector didn't produce a region for this item —
+  /// in that case the function returns the original value unchanged.
+  final List<int>? itemRegion;
+
+  /// `1` for the left column, `2` for the right column, `null` for
+  /// single-column or unknown layouts. Items with the same non-null column
+  /// are normalised together; items with `null` are normalised as their own
+  /// bucket.
+  final int? column;
+}
+
+/// Produces one adjusted region per input, in the same order. When an input
+/// has a malformed / missing region the matching slot in the result is the
+/// untouched original (or `null` if it was `null`).
+List<List<int>?> normalizeItemRegionsByColumn({
+  required List<ColumnRegionInput> items,
+  double targetPaddingY1k = 10,
+  double maxExpandY1k = 24,
+  double pairSafetyGapY1k = 2,
+}) {
+  final result = <List<int>?>[];
+  for (final it in items) {
+    final r = it.itemRegion;
+    if (r == null || r.length != 4) {
+      result.add(r == null ? null : List<int>.from(r));
+    } else {
+      result.add(List<int>.from(r));
+    }
+  }
+
+  // Group by column. `null` goes into its own bucket keyed by -1 so it never
+  // collides with real columns 1 / 2.
+  final buckets = <int, List<int>>{};
+  for (var i = 0; i < items.length; i++) {
+    final r = items[i].itemRegion;
+    if (r == null || r.length != 4) continue;
+    final key = items[i].column ?? -1;
+    buckets.putIfAbsent(key, () => <int>[]).add(i);
+  }
+
+  final targetPad = targetPaddingY1k.round();
+  final maxExpand = maxExpandY1k.round();
+  final safety = pairSafetyGapY1k.round();
+
+  for (final entry in buckets.entries) {
+    final indices = entry.value;
+    if (indices.isEmpty) continue;
+
+    // ── Column x-snap ────────────────────────────────────────────────
+    // Use the column's widest left/right edges. Outliers here almost always
+    // mean "this problem really is the widest in the column" (a figure or
+    // a long formula), so we keep the union instead of a percentile.
+    var colXMin = 1001;
+    var colXMax = -1;
+    for (final idx in indices) {
+      final r = items[idx].itemRegion!;
+      colXMin = math.min(colXMin, r[1]);
+      colXMax = math.max(colXMax, r[3]);
+    }
+    if (colXMin < colXMax) {
+      for (final idx in indices) {
+        final r = result[idx]!;
+        r[1] = colXMin;
+        r[3] = colXMax;
+      }
+    }
+
+    // ── Vertical normalisation ──────────────────────────────────────
+    // Sort by original ymin so "previous" / "next" stays a meaningful notion
+    // even if the VLM returned the items in reading order that does not
+    // quite match top-down order for this column.
+    indices.sort((a, b) =>
+        items[a].itemRegion![0].compareTo(items[b].itemRegion![0]));
+
+    for (var k = 0; k < indices.length; k++) {
+      final idx = indices[k];
+      final origTop = items[idx].itemRegion![0];
+      final origBot = items[idx].itemRegion![2];
+
+      // Start by attempting the full target padding.
+      var newTop = origTop - targetPad;
+      var newBot = origBot + targetPad;
+
+      // Cap the outward movement so we never drift far from the VLM's idea.
+      newTop = math.max(newTop, origTop - maxExpand);
+      newBot = math.min(newBot, origBot + maxExpand);
+
+      // Never go outside the image.
+      newTop = math.max(newTop, 0);
+      newBot = math.min(newBot, 1000);
+
+      // Midpoint with the previous item — we must not cross into it.
+      if (k > 0) {
+        final prevIdx = indices[k - 1];
+        final prevOrigBot = items[prevIdx].itemRegion![2];
+        if (prevOrigBot < origTop) {
+          final mid = (prevOrigBot + origTop) ~/ 2;
+          newTop = math.max(newTop, mid + safety);
+        } else {
+          // Overlap in the VLM output — don't expand upward at all.
+          newTop = origTop;
+        }
+      }
+
+      // Midpoint with the next item.
+      if (k < indices.length - 1) {
+        final nextIdx = indices[k + 1];
+        final nextOrigTop = items[nextIdx].itemRegion![0];
+        if (origBot < nextOrigTop) {
+          final mid = (origBot + nextOrigTop) ~/ 2;
+          newBot = math.min(newBot, mid - safety);
+        } else {
+          newBot = origBot;
+        }
+      }
+
+      // Never shrink below the original tight box (so we keep every glyph).
+      newTop = math.min(newTop, origTop);
+      newBot = math.max(newBot, origBot);
+
+      if (newBot <= newTop) {
+        // Degenerate — fall back to the VLM's original box.
+        newTop = origTop;
+        newBot = origBot;
+      }
+
+      final r = result[idx]!;
+      r[0] = newTop;
+      r[2] = newBot;
+    }
+  }
+
+  return result;
 }
