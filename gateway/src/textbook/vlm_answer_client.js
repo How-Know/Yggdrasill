@@ -61,7 +61,7 @@ export async function extractAnswersOnPage({
     generationConfig: {
       temperature: 0.1,
       responseMimeType: 'application/json',
-      maxOutputTokens: 8192,
+      maxOutputTokens: 32768,
       thinkingConfig: { thinkingLevel: 'low' },
     },
   };
@@ -171,6 +171,53 @@ function compactErrMsg(err) {
 
 const ALLOWED_KINDS = new Set(['objective', 'subjective', 'image']);
 
+function normalizeCompactFractionCommands(input) {
+  let out = String(input || '');
+  for (let i = 0; i < 4; i += 1) {
+    const next = out
+      .replace(
+        /\\(?:dfrac|tfrac|frac)\s*\{([^{}]+)\}\s*\{([^{}]+)\}/g,
+        (_, a, b) => `\\frac{${String(a).trim()}}{${String(b).trim()}}`,
+      )
+      .replace(
+        /\\(?:dfrac|tfrac|frac)\s*\{([^{}]+)\}\s*([A-Za-z0-9])/g,
+        (_, a, b) => `\\frac{${String(a).trim()}}{${b}}`,
+      )
+      .replace(
+        /\\(?:dfrac|tfrac|frac)\s*([A-Za-z0-9])\s*\{([^{}]+)\}/g,
+        (_, a, b) => `\\frac{${a}}{${String(b).trim()}}`,
+      )
+      .replace(
+        /\\(?:dfrac|tfrac|frac)\s*([A-Za-z0-9])\s*([A-Za-z0-9])/g,
+        (_, a, b) => `\\frac{${a}}{${b}}`,
+      );
+    if (next === out) break;
+    out = next;
+  }
+  return out;
+}
+
+function stripLatexTextWrappers(input) {
+  let out = String(input || '');
+  for (let i = 0; i < 6; i += 1) {
+    const next = out
+      .replace(/\\(?:text|mathrm)\s*\{([^{}]*)\}/g, '$1')
+      .replace(/\\textstyle\b/g, '')
+      .replace(/\\displaystyle\b/g, '');
+    if (next === out) break;
+    out = next;
+  }
+  return out;
+}
+
+function normalizeAnswerText(input) {
+  return normalizeCompactFractionCommands(stripLatexTextWrappers(input))
+    .replace(/\(\s*image\s*\)/gi, '[image]')
+    .replace(/\[\s*image\s*\]/gi, '[image]')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export function normalizeAnswerResult(parsedJson) {
   const out = { items: [], notes: '' };
   if (!parsedJson || typeof parsedJson !== 'object') return out;
@@ -181,12 +228,21 @@ export function normalizeAnswerResult(parsedJson) {
     const problemNumber = String(raw.problem_number ?? '').trim();
     if (!problemNumber) continue;
     const kindRaw = String(raw.kind ?? '').trim().toLowerCase();
-    const kind = ALLOWED_KINDS.has(kindRaw) ? kindRaw : 'subjective';
+    const rawAnswerText = normalizeAnswerText(raw.answer_text);
+    const rawAnswerLatex2d = normalizeAnswerText(raw.answer_latex_2d);
+    const imageMarker = /(?:\[\s*image\s*\]|\(\s*image\s*\)|\bimage\b)/i.test(
+      `${rawAnswerText} ${rawAnswerLatex2d}`,
+    );
+    const kind = kindRaw === 'image' || imageMarker
+      ? 'image'
+      : ALLOWED_KINDS.has(kindRaw)
+        ? kindRaw
+        : 'subjective';
     const answerText =
       kind === 'image'
-        ? String(raw.answer_text ?? '[image]').trim() || '[image]'
-        : String(raw.answer_text ?? '').trim();
-    const answerLatex2d = String(raw.answer_latex_2d ?? '').trim();
+        ? rawAnswerText || '[image]'
+        : rawAnswerText;
+    const answerLatex2d = rawAnswerLatex2d;
     const bbox = parseBbox4(raw.bbox);
     out.items.push({
       problem_number: problemNumber,

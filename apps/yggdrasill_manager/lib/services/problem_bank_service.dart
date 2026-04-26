@@ -224,6 +224,7 @@ class ProblemBankService {
     if (bucket.isEmpty || key.isEmpty) {
       throw Exception('교재 본문 PDF 스토리지 경로가 없습니다');
     }
+    const pipelineSourceVersion = 'textbook_pdf_only_v2_answers';
 
     final scope = <String, dynamic>{
       'mode': 'textbook_pdf_only',
@@ -254,8 +255,19 @@ class ProblemBankService {
     final existingDocId = '${existingRun?['pb_document_id'] ?? ''}'.trim();
     final existingJobId = '${existingRun?['extract_job_id'] ?? ''}'.trim();
     final existingStatus = '${existingRun?['status'] ?? ''}'.trim();
+    var existingSourceVersion = '';
+    if (existingJobId.isNotEmpty) {
+      final existingJob = await _client
+          .from('pb_extract_jobs')
+          .select('source_version')
+          .eq('academy_id', academyId)
+          .eq('id', existingJobId)
+          .maybeSingle();
+      existingSourceVersion = '${existingJob?['source_version'] ?? ''}'.trim();
+    }
     if (existingDocId.isNotEmpty &&
         existingJobId.isNotEmpty &&
+        existingSourceVersion == pipelineSourceVersion &&
         existingStatus != 'failed' &&
         existingStatus != 'cancelled') {
       return TextbookProblemBankExtractRunResult(
@@ -281,48 +293,59 @@ class ProblemBankService {
         'sub_name': subName,
       },
     };
-    final document = await _client
-        .from('pb_documents')
-        .insert(<String, dynamic>{
-          'academy_id': academyId,
-          'created_by': _client.auth.currentUser?.id,
-          'source_filename':
-              '$bookName · $gradeLabel · ${midName.isEmpty ? '중${midOrder + 1}' : midName} · $subName',
-          'source_storage_bucket': 'problem-documents',
-          'source_storage_path': '',
-          'source_sha256': '',
-          'source_size_bytes': 0,
-          'source_pdf_storage_bucket': bucket,
-          'source_pdf_storage_path': key,
-          'source_pdf_filename': '$bookName-$gradeLabel-$subKey.pdf',
-          'source_pdf_sha256': '${link['content_hash'] ?? ''}',
-          'source_pdf_size_bytes':
-              int.tryParse('${link['file_size_bytes'] ?? 0}') ?? 0,
-          'status': 'extract_queued',
-          'exam_profile': 'naesin',
-          'curriculum_code': 'rev_2022',
-          'source_type_code': 'market_book',
-          'course_label': '',
-          'grade_label': gradeLabel,
-          'exam_year': null,
-          'semester_label': '',
-          'exam_term_label': '',
-          'school_name': '',
-          'publisher_name': '',
-          'material_name': bookName,
-          'classification_detail': <String, dynamic>{
-            'textbook_scope': scope,
-          },
-          'meta': <String, dynamic>{
-            'source_classification': sourceClassification,
-            'textbook_scope': scope,
-            'extract_mode': 'textbook_pdf_only',
-            'created_at': now,
-          },
-        })
-        .select('id')
-        .maybeSingle();
-    final documentId = '${document?['id'] ?? ''}'.trim();
+    String documentId = existingDocId;
+    if (documentId.isEmpty) {
+      final document = await _client
+          .from('pb_documents')
+          .insert(<String, dynamic>{
+            'academy_id': academyId,
+            'created_by': _client.auth.currentUser?.id,
+            'source_filename':
+                '$bookName · $gradeLabel · ${midName.isEmpty ? '중${midOrder + 1}' : midName} · $subName',
+            'source_storage_bucket': 'problem-documents',
+            'source_storage_path': '',
+            'source_sha256': '',
+            'source_size_bytes': 0,
+            'source_pdf_storage_bucket': bucket,
+            'source_pdf_storage_path': key,
+            'source_pdf_filename': '$bookName-$gradeLabel-$subKey.pdf',
+            'source_pdf_sha256': '${link['content_hash'] ?? ''}',
+            'source_pdf_size_bytes':
+                int.tryParse('${link['file_size_bytes'] ?? 0}') ?? 0,
+            'status': 'extract_queued',
+            'curriculum_code': 'rev_2022',
+            'source_type_code': 'market_book',
+            'course_label': '',
+            'grade_label': gradeLabel,
+            'exam_year': null,
+            'semester_label': '',
+            'exam_term_label': '',
+            'school_name': '',
+            'publisher_name': '',
+            'material_name': bookName,
+            'classification_detail': <String, dynamic>{
+              'textbook_scope': scope,
+            },
+            'meta': <String, dynamic>{
+              'source_classification': sourceClassification,
+              'textbook_scope': scope,
+              'extract_mode': 'textbook_pdf_only',
+              'created_at': now,
+            },
+          })
+          .select('id')
+          .maybeSingle();
+      documentId = '${document?['id'] ?? ''}'.trim();
+    } else {
+      await _client
+          .from('pb_documents')
+          .update(<String, dynamic>{
+            'status': 'extract_queued',
+            'updated_at': now,
+          })
+          .eq('academy_id', academyId)
+          .eq('id', documentId);
+    }
     if (documentId.isEmpty) throw Exception('pb_document_create_failed');
 
     final job = await _client
@@ -332,7 +355,7 @@ class ProblemBankService {
           'document_id': documentId,
           'created_by': _client.auth.currentUser?.id,
           'status': 'queued',
-          'source_version': 'textbook_pdf_only_v1',
+          'source_version': pipelineSourceVersion,
           'result_summary': <String, dynamic>{
             'engine': 'vlm_pdf_only',
             'textbook_scope': scope,
@@ -1172,7 +1195,7 @@ class ProblemBankService {
 
   Future<List<ProblemBankDocument>> listRecentDocuments({
     required String academyId,
-    int limit = 50,
+    int limit = 200,
   }) async {
     final rows = await _client
         .from('pb_documents')
@@ -2501,6 +2524,7 @@ class ProblemBankService {
         body: <String, dynamic>{
           'academyId': academyId,
           'questionIds': questionIds,
+          'mathEngine': 'xelatex',
           if (force) 'force': true,
         },
       );
@@ -2631,6 +2655,7 @@ class ProblemBankService {
         body: <String, dynamic>{
           'academyId': academyId,
           'questionIds': questionIds,
+          'mathEngine': 'xelatex',
         },
       );
 
@@ -2654,6 +2679,7 @@ class ProblemBankService {
         final body = <String, dynamic>{
           'academyId': academyId,
           'questionIds': missing,
+          'mathEngine': 'xelatex',
         };
         if (layout != null && layout.isNotEmpty) body['layout'] = layout;
         final generated = await _gatewayPost(

@@ -221,12 +221,20 @@ class _TextbookAuthoringStageDialogState
   bool _savingSolRefs = false;
   bool _loadingPbRuns = false;
   final Map<String, String> _pbRunStatusByKey = <String, String>{};
+  final Map<String, String> _pbRunDocumentByKey = <String, String>{};
+  final Map<String, String> _pbRunErrorByKey = <String, String>{};
 
   @override
   void initState() {
     super.initState();
     _tab = TabController(length: 2, vsync: this);
+    _tab.addListener(() {
+      if (_tab.index == 1) {
+        unawaited(_ensureSolutionPdf());
+      }
+    });
     unawaited(_loadCrops());
+    unawaited(_ensureAnswerPdf());
     unawaited(_refreshPbRunStatuses());
   }
 
@@ -257,6 +265,7 @@ class _TextbookAuthoringStageDialogState
       // Pre-load existing answer/solref rows so revisits show saved state.
       await _loadExistingAnswers();
       await _loadExistingSolRefs();
+      _refreshSavedStageStatus();
 
       setState(() {
         _loadingCrops = false;
@@ -266,6 +275,9 @@ class _TextbookAuthoringStageDialogState
         _crops
           ..clear()
           ..addAll(widget.initialCrops.map(_StageCrop.fromSeed));
+        await _loadExistingAnswers();
+        await _loadExistingSolRefs();
+        _refreshSavedStageStatus();
         setState(() {
           _loadingCrops = false;
           _cropsError = null;
@@ -276,6 +288,19 @@ class _TextbookAuthoringStageDialogState
         _loadingCrops = false;
         _cropsError = '$e';
       });
+    }
+  }
+
+  void _refreshSavedStageStatus() {
+    final savedAnswers = _answersByCropId.values
+        .where((d) => d.answerText.trim().isNotEmpty)
+        .length;
+    final savedSolRefs = _solRefsByCropId.length;
+    if (savedAnswers > 0) {
+      _answerStatus = '저장된 정답 $savedAnswers개 로드됨';
+    }
+    if (savedSolRefs > 0) {
+      _solRefStatus = '저장된 해설 좌표 $savedSolRefs개 로드됨';
     }
   }
 
@@ -512,6 +537,7 @@ class _TextbookAuthoringStageDialogState
     final totalPages = doc.pages.length;
     final aggregated = <TextbookVlmAnswerItem>[];
     final imageByNumber = <String, _ImageAnswerCrop>{};
+    final pageByNumber = <String, ({int rawPage, int displayPage})>{};
 
     try {
       for (var page = 1; page <= totalPages; page += 1) {
@@ -542,6 +568,10 @@ class _TextbookAuthoringStageDialogState
           for (final it in res.items) {
             if (it.answerText.trim().isEmpty) continue;
             aggregated.add(it);
+            pageByNumber.putIfAbsent(
+              it.problemNumber,
+              () => (rawPage: res.rawPage, displayPage: res.displayPage),
+            );
             if (it.isImage && it.bbox != null) {
               final crop = _cropAnswerImage(png, it.bbox!);
               if (crop != null) {
@@ -570,6 +600,7 @@ class _TextbookAuthoringStageDialogState
           final cropId = byNumber[entry.key];
           if (cropId == null) continue;
           final vlm = entry.value;
+          final answerPage = pageByNumber[entry.key];
           _answersByCropId[cropId] = _AnswerDraft(
             cropId: cropId,
             problemNumber: entry.key,
@@ -578,7 +609,7 @@ class _TextbookAuthoringStageDialogState
             answerLatex2d:
                 vlm.answerLatex2d.isEmpty ? vlm.answerText : vlm.answerLatex2d,
             source: 'vlm',
-            rawPage: null,
+            rawPage: answerPage?.rawPage,
             bbox1k: vlm.bbox,
             answerImageBytes: imageByNumber[entry.key]?.pngBytes,
             answerImageRegion1k: vlm.isImage ? vlm.bbox : null,
@@ -731,7 +762,7 @@ class _TextbookAuthoringStageDialogState
                             borderRadius: BorderRadius.circular(6),
                           ),
                           child: LatexTextRenderer(
-                            '\\(${ctrl.text.trim()}\\)',
+                            _answerPreviewMarkup(ctrl.text.trim()),
                             style: const TextStyle(color: _kText),
                           ),
                         ),
@@ -830,19 +861,30 @@ class _TextbookAuthoringStageDialogState
       _solRefStatus = '해설 PDF 분석 중…';
     });
 
+    final solRefCrops = _crops.where((c) => !c.isSetHeader).toList();
     final expected = <String>[
-      for (final c in _crops)
+      for (final c in solRefCrops)
         if (c.problemNumber.isNotEmpty) c.problemNumber,
     ];
+    if (expected.isEmpty) {
+      setState(() {
+        _runningSolRefVlm = false;
+        _solRefStatus = '해설 좌표 탐지 대상이 없습니다';
+      });
+      return;
+    }
+    final remaining = expected.toSet();
     final totalPages = doc.pages.length;
     final aggregated =
         <String, _SolutionRefWithPage>{}; // problem_number -> draft
 
     try {
       for (var page = 1; page <= totalPages; page += 1) {
+        if (remaining.isEmpty) break;
         if (!mounted) return;
         setState(() {
-          _solRefStatus = '해설 $page / $totalPages 페이지 분석…';
+          _solRefStatus =
+              '해설 $page / $totalPages 페이지 분석… · 남은 번호 ${remaining.length}개';
         });
         Uint8List png;
         try {
@@ -862,9 +904,10 @@ class _TextbookAuthoringStageDialogState
             academyId: widget.academyId,
             bookId: widget.bookId,
             gradeLabel: widget.gradeLabel,
-            expectedNumbers: expected,
+            expectedNumbers: remaining.toList(),
           );
           for (final it in res.items) {
+            if (!remaining.contains(it.problemNumber)) continue;
             aggregated.putIfAbsent(
               it.problemNumber,
               () => _SolutionRefWithPage(
@@ -873,6 +916,7 @@ class _TextbookAuthoringStageDialogState
                 displayPage: res.displayPage,
               ),
             );
+            remaining.remove(it.problemNumber);
           }
         } catch (e) {
           debugPrint('[stage3] vlm failed page=$page err=$e');
@@ -884,11 +928,11 @@ class _TextbookAuthoringStageDialogState
       }
 
       final byNumber = <String, String>{
-        for (final c in _crops) c.problemNumber: c.id,
+        for (final c in solRefCrops) c.problemNumber: c.id,
       };
       final missing = <String>[];
       setState(() {
-        for (final c in _crops) {
+        for (final c in solRefCrops) {
           final found = aggregated[c.problemNumber];
           final cropId = byNumber[c.problemNumber];
           if (cropId == null) continue;
@@ -1184,7 +1228,12 @@ class _TextbookAuthoringStageDialogState
                 ),
                 const Spacer(),
                 OutlinedButton.icon(
-                  onPressed: _runningAnswerVlm ? null : () => _tab.animateTo(1),
+                  onPressed: _runningAnswerVlm
+                      ? null
+                      : () {
+                          _tab.animateTo(1);
+                          unawaited(_ensureSolutionPdf());
+                        },
                   icon: const Icon(Icons.arrow_forward, size: 14),
                   label: const Text('다음: 해설 좌표'),
                   style: OutlinedButton.styleFrom(
@@ -1298,7 +1347,7 @@ class _TextbookAuthoringStageDialogState
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           SizedBox(
-            width: 56,
+            width: 168,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -1385,7 +1434,7 @@ class _TextbookAuthoringStageDialogState
                   )
                 else if (hasAnswer)
                   LatexTextRenderer(
-                    '\\(${draft.answerText}\\)',
+                    _answerPreviewMarkup(draft.answerText),
                     style: const TextStyle(color: _kText, fontSize: 13),
                   )
                 else
@@ -1406,16 +1455,86 @@ class _TextbookAuthoringStageDialogState
     );
   }
 
+  String _normalizeCompactFractionsForAnswerPreview(String raw) {
+    var out = raw;
+    for (var i = 0; i < 4; i += 1) {
+      final next = out
+          .replaceAllMapped(
+            RegExp(r'\\(?:dfrac|tfrac|frac)\s*\{([^{}]+)\}\s*\{([^{}]+)\}'),
+            (m) => '\\frac{${m.group(1)!.trim()}}{${m.group(2)!.trim()}}',
+          )
+          .replaceAllMapped(
+            RegExp(r'\\(?:dfrac|tfrac|frac)\s*\{([^{}]+)\}\s*([A-Za-z0-9])'),
+            (m) => '\\frac{${m.group(1)!.trim()}}{${m.group(2)}}',
+          )
+          .replaceAllMapped(
+            RegExp(r'\\(?:dfrac|tfrac|frac)\s*([A-Za-z0-9])\s*\{([^{}]+)\}'),
+            (m) => '\\frac{${m.group(1)}}{${m.group(2)!.trim()}}',
+          )
+          .replaceAllMapped(
+            RegExp(r'\\(?:dfrac|tfrac|frac)\s*([A-Za-z0-9])\s*([A-Za-z0-9])'),
+            (m) => '\\frac{${m.group(1)}}{${m.group(2)}}',
+          );
+      if (next == out) break;
+      out = next;
+    }
+    return out;
+  }
+
+  String _stripLatexTextWrappersForAnswerPreview(String raw) {
+    var out = raw;
+    for (var i = 0; i < 6; i += 1) {
+      final next = out
+          .replaceAllMapped(
+            RegExp(r'\\(?:text|mathrm)\s*\{([^{}]*)\}'),
+            (m) => m.group(1) ?? '',
+          )
+          .replaceAll(RegExp(r'\\(?:textstyle|displaystyle)\b'), '');
+      if (next == out) break;
+      out = next;
+    }
+    return out.replaceAll(RegExp(r'\s+'), ' ').trim();
+  }
+
+  String _answerPreviewMarkup(String raw) {
+    final normalized = _normalizeCompactFractionsForAnswerPreview(
+      _stripLatexTextWrappersForAnswerPreview(raw),
+    );
+    if (normalized.isEmpty) return '';
+    final hasHangul = RegExp(r'[가-힣]').hasMatch(normalized);
+    final hasLatexCommand = RegExp(
+      r'\\(?:left|right|frac|dfrac|tfrac|sqrt|times|div|cdot|leq?|geq?|neq|pm)',
+    ).hasMatch(normalized);
+    if (!hasHangul) {
+      return hasLatexCommand || RegExp(r'[=^_{}\\]').hasMatch(normalized)
+          ? '\\($normalized\\)'
+          : normalized;
+    }
+    if (!hasLatexCommand) return normalized;
+    final mathSegment = RegExp(
+      r'\\left[\s\S]*?\\right(?:\^\{[^{}]+\})?|\\(?:frac|dfrac|tfrac)\s*\{[^{}]+\}\s*\{[^{}]+\}|\\sqrt\s*\{[^{}]+\}|\\(?:times|div|cdot|leq?|geq?|neq|pm)\b',
+    );
+    return normalized.replaceAllMapped(
+        mathSegment, (m) => '\\(${m.group(0)}\\)');
+  }
+
   Widget _buildAnswerImagePreview(_AnswerDraft? draft) {
     final bytes = draft?.answerImageBytes;
     final url = draft?.answerImageUrl?.trim() ?? '';
-    Widget child;
+    final answerText = draft?.answerText.trim() ?? '';
+    final textPart = _stripLatexTextWrappersForAnswerPreview(answerText)
+        .replaceAll(
+            RegExp(r'(\[\s*image\s*\]|\(\s*image\s*\)|\bimage\b)',
+                caseSensitive: false),
+            '')
+        .trim();
+    Widget imageChild;
     if (bytes != null && bytes.isNotEmpty) {
-      child = Image.memory(bytes, fit: BoxFit.contain);
+      imageChild = Image.memory(bytes, fit: BoxFit.contain);
     } else if (url.isNotEmpty) {
-      child = Image.network(url, fit: BoxFit.contain);
+      imageChild = Image.network(url, fit: BoxFit.contain);
     } else {
-      child = const Center(
+      imageChild = const Center(
         child: Text(
           '그림 정답 미리보기 없음',
           style: TextStyle(color: _kTextSub, fontSize: 11),
@@ -1431,7 +1550,21 @@ class _TextbookAuthoringStageDialogState
         border: Border.all(color: _kBorder),
         borderRadius: BorderRadius.circular(6),
       ),
-      child: child,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(child: Center(child: imageChild)),
+          if (textPart.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text(
+              textPart,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: _kTextSub, fontSize: 11),
+            ),
+          ],
+        ],
+      ),
     );
   }
 
@@ -1829,7 +1962,16 @@ class _TextbookAuthoringStageDialogState
     for (final status in _pbRunStatusByKey.values) {
       counts[status] = (counts[status] ?? 0) + 1;
     }
-    return counts.entries.map((e) => '${e.key} ${e.value}').join(' · ');
+    final base = counts.entries.map((e) => '${e.key} ${e.value}').join(' · ');
+    final docs =
+        _pbRunDocumentByKey.values.where((id) => id.trim().isNotEmpty).length;
+    final failed = _pbRunErrorByKey.values
+        .where((msg) => msg.trim().isNotEmpty)
+        .take(1)
+        .join('');
+    final docText = docs > 0 ? ' · 문서 $docs개' : '';
+    final errorText = failed.isNotEmpty ? ' · 오류: $failed' : '';
+    return '$base$docText$errorText';
   }
 
   Future<void> _refreshPbRunStatuses() async {
@@ -1838,10 +1980,12 @@ class _TextbookAuthoringStageDialogState
     setState(() => _loadingPbRuns = true);
     try {
       final next = <String, String>{};
+      final nextDocs = <String, String>{};
+      final nextErrors = <String, String>{};
       for (final scope in _activeScopes) {
         final row = await _supa
             .from('textbook_pb_extract_runs')
-            .select('status')
+            .select('status, pb_document_id, extract_job_id, error_message')
             .eq('academy_id', widget.academyId)
             .eq('book_id', widget.bookId)
             .eq('grade_label', widget.gradeLabel)
@@ -1849,13 +1993,22 @@ class _TextbookAuthoringStageDialogState
             .eq('mid_order', scope.midOrder)
             .eq('sub_key', scope.subKey)
             .maybeSingle();
-        next[_scopeKey(scope)] = '${row?['status'] ?? ''}'.trim();
+        final key = _scopeKey(scope);
+        next[key] = '${row?['status'] ?? ''}'.trim();
+        nextDocs[key] = '${row?['pb_document_id'] ?? ''}'.trim();
+        nextErrors[key] = '${row?['error_message'] ?? ''}'.trim();
       }
       if (!mounted) return;
       setState(() {
         _pbRunStatusByKey
           ..clear()
           ..addAll(next);
+        _pbRunDocumentByKey
+          ..clear()
+          ..addAll(nextDocs);
+        _pbRunErrorByKey
+          ..clear()
+          ..addAll(nextErrors);
       });
     } catch (_) {
       // 신규 마이그레이션 전 환경에서는 완료 버튼을 막지 않는다.
@@ -1865,11 +2018,33 @@ class _TextbookAuthoringStageDialogState
   }
 
   Future<void> _completeIfReady() async {
+    final hasDirtyAnswers = _answersByCropId.values.any((d) => d.dirty);
+    final hasDirtySolRefs = _solRefsByCropId.values.any((d) => d.dirty);
+    if (hasDirtyAnswers) {
+      await _saveAnswers();
+    }
+    if (!mounted) return;
+    if (hasDirtySolRefs) {
+      await _saveSolutionRefs();
+    }
+    if (!mounted) return;
+    if (_answersByCropId.values.any((d) => d.dirty) ||
+        _solRefsByCropId.values.any((d) => d.dirty)) {
+      _toast('저장되지 않은 정답/해설 좌표가 있습니다', error: true);
+      return;
+    }
     await _refreshPbRunStatuses();
     if (!mounted) return;
     if (!_allPbRunsFinished) {
       _toast('본문 문제 추출이 아직 진행 중입니다: $_pbRunStatusText', error: true);
       return;
+    }
+    final docs = _pbRunDocumentByKey.values
+        .where((id) => id.trim().isNotEmpty)
+        .toSet()
+        .length;
+    if (docs > 0) {
+      _toast('문제은행 PDF-only 문서 $docs개 상태 확인 완료');
     }
     Navigator.of(context).maybePop();
   }
@@ -1903,6 +2078,12 @@ class _StageCrop {
   final String scopeLabel;
 
   String get contentGroupDisplay {
+    final normalizedSection = section.trim().toLowerCase();
+    final normalizedScope = scopeLabel.trim().toUpperCase();
+    final isMastery = normalizedSection == 'mastery' ||
+        normalizedScope.contains('/C') ||
+        scopeLabel.contains('만점');
+    if (isMastery || contentGroupKind == 'none') return '';
     final label = contentGroupLabel.trim();
     final title = contentGroupTitle.trim();
     if (label.isEmpty && title.isEmpty) return '';
@@ -1946,7 +2127,7 @@ class _StageCrop {
       contentGroupLabel: seed.contentGroupLabel,
       contentGroupTitle: seed.contentGroupTitle,
       contentGroupOrder: seed.contentGroupOrder,
-      scopeLabel: '',
+      scopeLabel: seed.scopeLabel,
     );
   }
 }

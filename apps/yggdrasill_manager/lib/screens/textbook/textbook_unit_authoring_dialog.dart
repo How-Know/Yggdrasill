@@ -28,6 +28,7 @@ import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:pdfrx/pdfrx.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../services/textbook_book_registry.dart';
 import '../../services/textbook_crop_uploader.dart';
@@ -100,6 +101,7 @@ class _TextbookUnitAuthoringDialogState
   final _vlmService = TextbookVlmTestService();
   final _cropUploader = TextbookCropUploader();
   final _pbService = ProblemBankService();
+  final _supa = Supabase.instance.client;
 
   PdfDocument? _bodyDocument;
   String? _bodyLocalPath;
@@ -209,6 +211,8 @@ class _TextbookUnitAuthoringDialogState
         _focus = null;
       });
       unawaited(_loadPbExtractRuns());
+      unawaited(_loadExistingCrops());
+      unawaited(_ensurePdf());
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -241,6 +245,186 @@ class _TextbookUnitAuthoringDialogState
       });
     } catch (_) {
       // 상태 배지는 보조 정보라 로딩 실패가 오서링 흐름을 막으면 안 된다.
+    }
+  }
+
+  Future<void> _loadExistingCrops() async {
+    try {
+      final rows = await _supa
+          .from('textbook_problem_crops')
+          .select('id, raw_page, display_page, section, problem_number, label, '
+              'is_set_header, set_from, set_to, content_group_kind, '
+              'content_group_label, content_group_title, content_group_order, '
+              'column_index, bbox_1k, item_region_1k, big_order, mid_order, '
+              'sub_key')
+          .eq('academy_id', widget.academyId)
+          .eq('book_id', widget.bookId)
+          .eq('grade_label', widget.gradeLabel)
+          .order('big_order', ascending: true)
+          .order('mid_order', ascending: true)
+          .order('sub_key', ascending: true)
+          .order('raw_page', ascending: true)
+          .order('problem_number', ascending: true);
+      final byFocus = <String, List<Map<String, dynamic>>>{};
+      for (final row in (rows as List).cast<Map<String, dynamic>>()) {
+        final focus = _SubFocus(
+          bigIndex: int.tryParse('${row['big_order'] ?? ''}') ?? -1,
+          midIndex: int.tryParse('${row['mid_order'] ?? ''}') ?? -1,
+          subKey: '${row['sub_key'] ?? ''}',
+        );
+        if (focus.bigIndex < 0 || focus.midIndex < 0) continue;
+        byFocus
+            .putIfAbsent(_stateKeyFor(focus), () => <Map<String, dynamic>>[])
+            .add(row);
+      }
+      if (!mounted) return;
+      setState(() {
+        for (final entry in byFocus.entries) {
+          final focus = _focusFromStateKey(entry.key);
+          if (focus == null) continue;
+          final state = _ensureSubState(focus);
+          if (state.running ||
+              state.uploading ||
+              state.pageResults.isNotEmpty) {
+            continue;
+          }
+          state.uploadResult = TextbookCropBatchResult(
+            upserted: entry.value.length,
+            bucket: 'textbook-crops',
+            rows: entry.value,
+          );
+          state.pageResults
+            ..clear()
+            ..addAll(_pageRowsFromSavedCrops(entry.value, focus));
+          state.phase = '저장된 영역 ${entry.value.length}건';
+          state.error = null;
+        }
+      });
+    } catch (_) {
+      // 저장된 영역 복원은 보조 기능이다. 실패해도 신규 분석 흐름은 유지한다.
+    }
+  }
+
+  _SubFocus? _focusFromStateKey(String key) {
+    final parts = key.split('/');
+    if (parts.length != 3) return null;
+    final bigIndex = int.tryParse(parts[0]);
+    final midIndex = int.tryParse(parts[1]);
+    if (bigIndex == null || midIndex == null) return null;
+    if (bigIndex < 0 || bigIndex >= _bigUnits.length) return null;
+    if (midIndex < 0 || midIndex >= _bigUnits[bigIndex].middles.length) {
+      return null;
+    }
+    return _SubFocus(
+      bigIndex: bigIndex,
+      midIndex: midIndex,
+      subKey: parts[2],
+    );
+  }
+
+  List<_PageAnalysisRow> _pageRowsFromSavedCrops(
+    List<Map<String, dynamic>> rows,
+    _SubFocus focus,
+  ) {
+    int? asIntN(dynamic v) {
+      if (v == null) return null;
+      if (v is int) return v;
+      if (v is num) return v.toInt();
+      return int.tryParse('$v');
+    }
+
+    final byPage = <int, List<Map<String, dynamic>>>{};
+    for (final row in rows) {
+      final rawPage = asIntN(row['raw_page']);
+      if (rawPage == null || rawPage <= 0) continue;
+      byPage.putIfAbsent(rawPage, () => <Map<String, dynamic>>[]).add(row);
+    }
+    final out = <_PageAnalysisRow>[];
+    for (final entry in byPage.entries) {
+      final first = entry.value.first;
+      out.add(_PageAnalysisRow.success(
+        rawPage: entry.key,
+        displayPage: asIntN(first['display_page']) ?? entry.key,
+        section: '${first['section'] ?? _sectionForSubKey(focus.subKey)}',
+        pageKind: 'problem_page',
+        notes: 'saved_crops',
+        items: [
+          for (final row in entry.value)
+            _vlmItemFromSavedCrop(row, focus.subKey),
+        ],
+      ));
+    }
+    out.sort((a, b) => a.rawPage.compareTo(b.rawPage));
+    return out;
+  }
+
+  TextbookVlmItem _vlmItemFromSavedCrop(
+    Map<String, dynamic> row,
+    String subKey,
+  ) {
+    final section = '${row['section'] ?? _sectionForSubKey(subKey)}';
+    final isMastery = subKey == 'C' || section == 'mastery';
+    final rawKind = '${row['content_group_kind'] ?? 'none'}'.trim();
+    final groupKind =
+        isMastery || rawKind != 'type' && rawKind != 'basic_subtopic'
+            ? 'none'
+            : rawKind;
+    return TextbookVlmItem.fromMap(<String, dynamic>{
+      'number': row['problem_number'],
+      'label': row['label'],
+      'is_set_header': row['is_set_header'],
+      'set_range': <String, dynamic>{
+        'from': row['set_from'],
+        'to': row['set_to'],
+      },
+      'content_group_kind': groupKind,
+      'content_group_label':
+          groupKind == 'none' ? '' : row['content_group_label'],
+      'content_group_title':
+          groupKind == 'none' ? '' : row['content_group_title'],
+      'content_group_order':
+          groupKind == 'none' ? null : row['content_group_order'],
+      'column': row['column_index'],
+      'bbox': row['bbox_1k'],
+      'item_region': row['item_region_1k'],
+    });
+  }
+
+  _ResolvedContentGroup _rawContentGroupForItem(
+    TextbookVlmItem item,
+    String subKey,
+    String section,
+  ) {
+    if (subKey == 'C' || section == 'mastery') {
+      return const _ResolvedContentGroup.none();
+    }
+    final kind = item.contentGroupKind.trim();
+    if (kind != 'type' && kind != 'basic_subtopic') {
+      return const _ResolvedContentGroup.none();
+    }
+    final label = item.contentGroupLabel.trim();
+    final title = item.contentGroupTitle.trim();
+    if (label.isEmpty && title.isEmpty) {
+      return const _ResolvedContentGroup.none();
+    }
+    return _ResolvedContentGroup(
+      kind: kind,
+      label: label,
+      title: title,
+      order: item.contentGroupOrder,
+    );
+  }
+
+  String _sectionForSubKey(String subKey) {
+    switch (subKey) {
+      case 'A':
+        return 'basic_drill';
+      case 'B':
+        return 'type_practice';
+      case 'C':
+        return 'mastery';
+      default:
+        return 'unknown';
     }
   }
 
@@ -696,12 +880,23 @@ class _TextbookUnitAuthoringDialogState
     final mid = big.middles[focus.midIndex];
     final edits = _manualEdits[_stateKeyFor(focus)];
     final items = <TextbookCropUploadItem>[];
-    for (final row in state.pageResults.where((r) => r.ok)) {
+    _ResolvedContentGroup? lastBGroup;
+    final pageRows = state.pageResults.where((r) => r.ok).toList()
+      ..sort((a, b) => a.rawPage.compareTo(b.rawPage));
+    for (final row in pageRows) {
       for (var i = 0; i < row.items.length; i += 1) {
         final vlm = row.items[i];
         final edited = edits?[_problemKey(row.rawPage, i)];
         final region = edited ?? vlm.itemRegion;
         if (region == null || region.length != 4) continue;
+        final rawGroup =
+            _rawContentGroupForItem(vlm, focus.subKey, row.section);
+        final group = focus.subKey == 'B' && rawGroup.kind == 'none'
+            ? (lastBGroup ?? rawGroup)
+            : rawGroup;
+        if (focus.subKey == 'B' && rawGroup.kind == 'type') {
+          lastBGroup = rawGroup;
+        }
         items.add(TextbookCropUploadItem(
           rawPage: row.rawPage,
           displayPage: row.displayPage,
@@ -711,10 +906,10 @@ class _TextbookUnitAuthoringDialogState
           isSetHeader: vlm.isSetHeader,
           setFrom: vlm.setFrom,
           setTo: vlm.setTo,
-          contentGroupKind: vlm.contentGroupKind,
-          contentGroupLabel: vlm.contentGroupLabel,
-          contentGroupTitle: vlm.contentGroupTitle,
-          contentGroupOrder: vlm.contentGroupOrder,
+          contentGroupKind: group.kind,
+          contentGroupLabel: group.label,
+          contentGroupTitle: group.title,
+          contentGroupOrder: group.order,
           columnIndex: vlm.column,
           bbox1k: vlm.bbox,
           itemRegion1k: region,
@@ -803,27 +998,18 @@ class _TextbookUnitAuthoringDialogState
         }
 
         if (!mounted) return;
-        setState(() => _batchStatus = '$label · 영역 저장 중...');
-        await _uploadFocused(focus);
-        if ((state.uploadResult?.rows ?? const []).isEmpty) {
-          failed.add('$label(영역 저장)');
-          if (mounted) setState(() => _batchDone = i + 1);
-          continue;
-        }
-
-        if (!mounted) return;
         setState(() {
           _batchDone = i + 1;
-          _batchStatus = '$label · 크롭 저장 완료';
+          _batchStatus = '$label · Stage 1 분석 완료';
         });
       }
       if (!mounted) return;
       final failText = failed.isEmpty ? '' : ' · 실패 ${failed.length}개';
-      _toast('크롭 일괄 분석/저장 완료$failText');
+      _toast('선택 분석 완료$failText');
       setState(() {
         _batchRunning = false;
         _batchStatus = failed.isEmpty
-            ? '크롭 확인 후 다음 버튼을 눌러 정답 VLM 단계로 진행하세요'
+            ? '크롭 확인 후 다음 버튼을 누르면 영역을 저장하고 정답 VLM 단계로 진행합니다'
             : failed.join('\n');
       });
     } catch (e) {
@@ -885,6 +1071,35 @@ class _TextbookUnitAuthoringDialogState
   }
 
   // ------------------------------------------------------------ next stage
+
+  Future<void> _saveTargetsAndOpenStage(List<_SubFocus> targets) async {
+    if (targets.isEmpty) return;
+    for (final focus in targets) {
+      final state = _ensureSubState(focus);
+      final hasRows = (state.uploadResult?.rows ?? const []).isNotEmpty;
+      if (hasRows) continue;
+      if (_totalRegionsFor(state, focus) == 0) {
+        _toast('${_subFocusLabel(focus)} 분석된 문항 영역이 없습니다', error: true);
+        return;
+      }
+      if (!mounted) return;
+      setState(() {
+        _focus = focus;
+        _selectedProblemKey = null;
+        _batchStatus = '${_subFocusLabel(focus)} · 다음 단계 진입 전 영역 저장 중...';
+      });
+      await _uploadFocused(focus);
+      if ((state.uploadResult?.rows ?? const []).isEmpty) {
+        _toast('${_subFocusLabel(focus)} 영역 저장 실패', error: true);
+        return;
+      }
+    }
+    if (!mounted) return;
+    setState(() {
+      _batchStatus = '영역 저장 완료 · 정답 VLM 단계로 이동합니다';
+    });
+    _openStageDialogForTargets(targets);
+  }
 
   void _openStageDialogForTargets(List<_SubFocus> targets) {
     if (targets.isEmpty) return;
@@ -948,6 +1163,9 @@ class _TextbookUnitAuthoringDialogState
     final uploadRows =
         state.uploadResult?.rows ?? const <Map<String, dynamic>>[];
     if (uploadRows.isEmpty) return const <TextbookAuthoringStageCropSeed>[];
+    final scope = _stageScopeFor(focus);
+    final seedScopeLabel =
+        '${scope.midName.trim().isEmpty ? '중${scope.midOrder + 1}' : scope.midName}/${scope.subName.trim().isEmpty ? scope.subKey : scope.subName}';
     final idByNumber = <String, String>{};
     for (final row in uploadRows) {
       final id = '${row['id'] ?? ''}'.trim();
@@ -959,10 +1177,21 @@ class _TextbookUnitAuthoringDialogState
     if (idByNumber.isEmpty) return const <TextbookAuthoringStageCropSeed>[];
 
     final seeds = <TextbookAuthoringStageCropSeed>[];
-    for (final row in state.pageResults.where((r) => r.ok)) {
+    _ResolvedContentGroup? lastBGroup;
+    final pageRows = state.pageResults.where((r) => r.ok).toList()
+      ..sort((a, b) => a.rawPage.compareTo(b.rawPage));
+    for (final row in pageRows) {
       for (final item in row.items) {
         final id = idByNumber[item.number];
         if (id == null) continue;
+        final rawGroup =
+            _rawContentGroupForItem(item, focus.subKey, row.section);
+        final group = focus.subKey == 'B' && rawGroup.kind == 'none'
+            ? (lastBGroup ?? rawGroup)
+            : rawGroup;
+        if (focus.subKey == 'B' && rawGroup.kind == 'type') {
+          lastBGroup = rawGroup;
+        }
         seeds.add(TextbookAuthoringStageCropSeed(
           id: id,
           problemNumber: item.number,
@@ -970,10 +1199,11 @@ class _TextbookUnitAuthoringDialogState
           displayPage: row.displayPage,
           section: row.section,
           isSetHeader: item.isSetHeader,
-          contentGroupKind: item.contentGroupKind,
-          contentGroupLabel: item.contentGroupLabel,
-          contentGroupTitle: item.contentGroupTitle,
-          contentGroupOrder: item.contentGroupOrder,
+          contentGroupKind: group.kind,
+          contentGroupLabel: group.label,
+          contentGroupTitle: group.title,
+          contentGroupOrder: group.order,
+          scopeLabel: seedScopeLabel,
         ));
       }
     }
@@ -1487,10 +1717,6 @@ class _TextbookUnitAuthoringDialogState
       0,
       (sum, focus) => sum + _totalRegionsFor(_ensureSubState(focus), focus),
     );
-    final allSaved = selected.every(
-      (focus) =>
-          (_ensureSubState(focus).uploadResult?.rows ?? const []).isNotEmpty,
-    );
     return Center(
       child: Container(
         width: 520,
@@ -1532,9 +1758,9 @@ class _TextbookUnitAuthoringDialogState
             const SizedBox(height: 14),
             Row(
               children: [
-                if (totalReady > 0 && allSaved && !_batchRunning)
+                if (totalReady > 0 && !_batchRunning)
                   FilledButton.icon(
-                    onPressed: () => _openStageDialogForTargets(selected),
+                    onPressed: () => _saveTargetsAndOpenStage(selected),
                     icon: const Icon(Icons.arrow_forward, size: 16),
                     label: Text(
                       selected.length > 1 ? '다음 (${selected.length}개)' : '다음',
@@ -1572,19 +1798,17 @@ class _TextbookUnitAuthoringDialogState
       0,
       (sum, f) => sum + _totalRegionsFor(_ensureSubState(f), f),
     );
-    final hasSavedRows = targets.every(
-      (f) => (_ensureSubState(f).uploadResult?.rows ?? const []).isNotEmpty,
-    );
-    final enabled =
-        total > 0 && hasSavedRows && !state.running && !state.uploading;
+    final busy = targets.any((f) {
+      final s = _ensureSubState(f);
+      return s.running || s.uploading;
+    });
+    final enabled = total > 0 && !busy;
     return Tooltip(
       message: total == 0
           ? '먼저 이 소단원에서 문항 영역을 분석하세요.'
-          : !hasSavedRows
-              ? '다음 단계로 가기 전에 "영역 저장"을 먼저 눌러 주세요.'
-              : '$total개 문항을 기반으로 정답·해설 좌표 단계로 이동합니다.',
+          : '$total개 문항을 저장한 뒤 정답·해설 좌표 단계로 이동합니다.',
       child: FilledButton.icon(
-        onPressed: enabled ? () => _openStageDialogForTargets(targets) : null,
+        onPressed: enabled ? () => _saveTargetsAndOpenStage(targets) : null,
         icon: const Icon(Icons.arrow_forward, size: 14),
         label: Text(targets.length > 1 ? '다음 (${targets.length}개)' : '다음'),
         style: FilledButton.styleFrom(
@@ -2631,6 +2855,26 @@ class _SubRunState {
   RangeProgress? progress;
   final List<_PageAnalysisRow> pageResults = <_PageAnalysisRow>[];
   TextbookCropBatchResult? uploadResult;
+}
+
+class _ResolvedContentGroup {
+  const _ResolvedContentGroup({
+    required this.kind,
+    required this.label,
+    required this.title,
+    required this.order,
+  });
+
+  const _ResolvedContentGroup.none()
+      : kind = 'none',
+        label = '',
+        title = '',
+        order = null;
+
+  final String kind;
+  final String label;
+  final String title;
+  final int? order;
 }
 
 class _PageAnalysisRow {

@@ -274,12 +274,52 @@ function splitMathAtTopLevelCommaSpace(math) {
   return chunks;
 }
 
+function normalizeCompactFractionCommands(input) {
+  let out = String(input || '');
+  for (let i = 0; i < 4; i += 1) {
+    const next = out
+      .replace(
+        /\\(?:dfrac|tfrac|frac)\s*\{([^{}]+)\}\s*\{([^{}]+)\}/g,
+        (_, a, b) => `\\frac{${String(a).trim()}}{${String(b).trim()}}`,
+      )
+      .replace(
+        /\\(?:dfrac|tfrac|frac)\s*\{([^{}]+)\}\s*([A-Za-z0-9])/g,
+        (_, a, b) => `\\frac{${String(a).trim()}}{${b}}`,
+      )
+      .replace(
+        /\\(?:dfrac|tfrac|frac)\s*([A-Za-z0-9])\s*\{([^{}]+)\}/g,
+        (_, a, b) => `\\frac{${a}}{${String(b).trim()}}`,
+      )
+      .replace(
+        /\\(?:dfrac|tfrac|frac)\s*([A-Za-z0-9])\s*([A-Za-z0-9])/g,
+        (_, a, b) => `\\frac{${a}}{${b}}`,
+      );
+    if (next === out) break;
+    out = next;
+  }
+  return out;
+}
+
+function stripLatexTextWrappers(input) {
+  let out = String(input || '');
+  for (let i = 0; i < 6; i += 1) {
+    const next = out
+      .replace(/\\(?:text|mathrm)\s*\{([^{}]*)\}/g, '$1')
+      .replace(/\\textstyle\b/g, '')
+      .replace(/\\displaystyle\b/g, '');
+    if (next === out) break;
+    out = next;
+  }
+  return out.replace(/\s+/g, ' ').trim();
+}
+
 function normalizeMathSegment(mathContent) {
   let out = String(mathContent || '');
 
   out = out.replace(/×/g, '\\times');
   out = out.replace(/÷/g, '\\div');
   out = out.replace(/(?<!\\)%/g, '\\%');
+  out = normalizeCompactFractionCommands(out);
 
   // 분수 크기 일관성: \frac 은 주변 math style(text/display) 에 따라 크기가 바뀐다.
   //   본문은 $\displaystyle ...$ 로 감싸지만, 중첩 분수(분자/분모 안의 \frac)는
@@ -289,14 +329,18 @@ function normalizeMathSegment(mathContent) {
   out = out.replace(/\\frac(?![a-zA-Z])/g, '\\dfrac');
 
   // 지수 자리에 들어간 빈칸은 일반 답안 빈칸보다 작은 정사각형으로 렌더링.
-  out = out.replace(/\^\s*\{\s*box\{~~\}\s*\}/g, '^{\\mtexponentemptybox{}}');
-  out = out.replace(/\^\s*box\{~~\}/g, '^{\\mtexponentemptybox{}}');
+  out = out.replace(/\^\s*\{\s*box\s*\{\s*~~\s*\}\s*\}/gi, '^{\\mtexponentemptybox{}}');
+  out = out.replace(/\^\s*box\s*\{\s*~~\s*\}/gi, '^{\\mtexponentemptybox{}}');
   out = out.replace(/\^\s*\{\s*\\square\s*\}/g, '^{\\mtexponentemptybox{}}');
-  out = out.replace(/\^\s*\\square(?![a-zA-Z])/g, '^{\\mtexponentemptybox{}}');
+  out = out.replace(/\^\s*\\square(?!\s*[A-Za-z가-힣])(?![a-zA-Z])/g, '^{\\mtexponentemptybox{}}');
 
   // box{~~} (빈 박스) → 3:2 비율 직사각형 빈칸 네모.
-  out = out.replace(/box\{~~\}/g, '\\mtemptybox{}');
-  out = out.replace(/\\square(?![a-zA-Z])/g, '\\mtemptybox{}');
+  out = out.replace(/\[(?:BOX|box|blank|빈칸|네모)\]/g, '\\mtemptybox{}');
+  out = out.replace(/\bBOX\b/g, '\\mtemptybox{}');
+  out = out.replace(/box\s*\{\s*~~\s*\}/gi, '\\mtemptybox{}');
+  out = out.replace(/[□▢◻]/g, '\\mtemptybox{}');
+  // \square ABCD 처럼 도형 이름 앞에 붙은 사각형 기호는 빈칸이 아니라 일반 도형 기호다.
+  out = out.replace(/\\square(?!\s*[A-Za-z가-힣])(?![a-zA-Z])/g, '\\mtemptybox{}');
   // DB 에 이미 들어가 있는 \boxed{\phantom{...}} 형태도 3:2 빈칸 네모로 치환.
   out = out.replace(/\\boxed\s*\{\s*\\phantom\s*\{[^}]*\}\s*\}/g, '\\mtemptybox{}');
   // box{X} (내용이 있는 박스) → \boxed{X}. 빈 경우는 위 규칙이 이미 처리.
@@ -334,6 +378,21 @@ function normalizeMathSegment(mathContent) {
 function spaceMarkerToTex(amount) {
   const n = Number.isFinite(amount) ? amount : 1;
   return `\\hspace*{${n}em}`;
+}
+
+function normalizeBlankBoxNotation(input) {
+  return String(input || '')
+    .replace(/\[(?:BOX|box|blank|빈칸|네모)\]/g, 'box{~~}')
+    .replace(/\bBOX\b/g, 'box{~~}')
+    .replace(/\bbox\s*\{\s*~~\s*\}/gi, 'box{~~}')
+    .replace(/[□▢◻]/g, 'box{~~}');
+}
+
+function bogiLabelFullTex(labelTex) {
+  // A TeX control space at the end of an hbox can visually collapse before
+  // a following pure-math segment. Use explicit hspace so "(ㄱ) x^2" never
+  // renders as "(ㄱ)x^2" in <보기> boxes.
+  return `${escapeLatexText(labelTex)}\\hspace{0.45em}`;
 }
 
 /**
@@ -441,7 +500,9 @@ function protectLatexTextBlocks(input) {
 
 function smartTexLineCore(text, equations) {
   // 외부 경로로 들어온 \(...\)/$...$ 이중 감싸기 방지를 위해 진입 시 한 번 벗긴다.
-  const clean = stripMathDelimiters(stripMarkers(text)).trim();
+  const clean = normalizeBlankBoxNotation(
+    stripMathDelimiters(stripMarkers(text)).trim(),
+  );
   if (!clean) return '';
 
   const lookup = buildEquationLookup(equations);
@@ -898,7 +959,7 @@ function renderBogiItems(lines, equations, replaceFigureMarkers = null) {
         ? `${label}.`
         : `(${label})`;
       // 대화형/조건제시박스와 동일한 \wd0 측정 방식으로 통일 → 정확히 "라벨 + 1공백" 폭.
-      const labelFull = `${escapeLatexText(labelTex)}\\ `;
+      const labelFull = bogiLabelFullTex(labelTex);
       rendered.push(
         `{\\setbox0=\\hbox{${labelFull}}\\hangindent=\\wd0\\hangafter=1\\noindent\\makebox[\\wd0][l]{${labelFull}}${smartTexLine(text, equations)}\\par}`,
       );
@@ -1025,7 +1086,7 @@ function renderDecoLine(text, equations, replaceFigureMarkers = null) {
     const content = smartTexLine(rest, equations);
     // 레이블 + 1공백 폭(\wd0) 을 측정해 hangindent/첫줄 label 영역에 동일 적용 →
     // 내용 1행의 좌단과 2행+의 좌단이 정확히 일치.
-    const labelFull = `${escapeLatexText(labelTex)}\\ `;
+    const labelFull = bogiLabelFullTex(labelTex);
     return `{\\setbox0=\\hbox{${labelFull}}\\hangindent=\\wd0\\hangafter=1\\noindent\\makebox[\\wd0][l]{${labelFull}}${content}\\par}`;
   }
 
@@ -1094,7 +1155,7 @@ function decoSectionLabelTex(rawLine) {
   if (!labelMatch) return '';
   const label = labelMatch[1] || labelMatch[2];
   const labelText = label.match(/^[ㄱ-ㅎ]$/) ? `${label}.` : `(${label})`;
-  return `${escapeLatexText(labelText)}\\ `;
+  return bogiLabelFullTex(labelText);
 }
 
 function renderDecoContinuationLine(
@@ -1520,21 +1581,55 @@ function blankChoiceCells(text, columnCount) {
   return parts.slice(0, columnCount);
 }
 
+function blankChoiceWidthScale(question) {
+  const meta = question?.meta && typeof question.meta === 'object' ? question.meta : {};
+  const scales = meta.table_scales && typeof meta.table_scales === 'object'
+    ? meta.table_scales
+    : {};
+  const raw = scales['blank_choice:1'] || meta.blank_choice_scale || null;
+  const parsed = Number(raw?.widthScale ?? raw?.w ?? raw);
+  return clampTableScale(Number.isFinite(parsed) ? parsed : 1.0);
+}
+
+function blankChoiceColumnScales(question, columnCount) {
+  const meta = question?.meta && typeof question.meta === 'object' ? question.meta : {};
+  const scales = meta.table_scales && typeof meta.table_scales === 'object'
+    ? meta.table_scales
+    : {};
+  const raw = scales['blank_choice:1'] || null;
+  const values = Array.isArray(raw?.columnScales) ? raw.columnScales : [];
+  return Array.from({ length: columnCount }, (_, idx) => {
+    const parsed = Number(values[idx]);
+    return clampTableScale(Number.isFinite(parsed) ? parsed : 1.0);
+  });
+}
+
 function renderBlankChoicesLatex(question, choices, equations) {
   if (!Array.isArray(choices) || choices.length !== 5) return renderChoicesLatex(choices, equations);
   const labels = blankChoiceLabels(question);
-  const header = [''].concat(labels.map(escapeLatexText)).join(' & ');
+  const widthScale = blankChoiceWidthScale(question);
+  const columnScales = blankChoiceColumnScales(question, labels.length);
+  const hasCustomColumns = columnScales.some((v) => Math.abs(v - 1.0) > 0.001);
+  const tabColSepPt = hasCustomColumns ? '2.00' : (6 * widthScale).toFixed(2);
+  const baseEm = [4.4, 4.4, 9.2];
+  const boxCell = (content, idx) => {
+    if (!hasCustomColumns) return content;
+    const w = ((baseEm[idx] || 5.0) * widthScale * columnScales[idx]).toFixed(2);
+    return `\\makebox[${w}em][c]{${content}}`;
+  };
+  const header = [''].concat(labels.map((label, idx) => boxCell(escapeLatexText(label), idx))).join(' & ');
   const rows = choices.map((choice, idx) => {
     const label = typeof choice === 'string'
       ? (CIRCLED_DIGITS[idx] || String(idx + 1))
       : (String(choice?.label || '').trim() || CIRCLED_DIGITS[idx] || String(idx + 1));
     const rawText = typeof choice === 'string' ? choice : choice?.text || '';
     const cells = blankChoiceCells(rawText, labels.length)
-      .map((cell) => smartTexLine(cell, equations));
+      .map((cell, cellIdx) => boxCell(smartTexLine(cell, equations), cellIdx));
     return [label].concat(cells).join(' & ');
   });
   return [
     '{\\setstretch{1.7}\\parskip=0pt\\lineskiplimit=0.4em\\lineskip=1.2em',
+    `\\setlength{\\tabcolsep}{${tabColSepPt}pt}`,
     '\\noindent\\begin{tabular}{@{}lccc@{}}',
     header + ' \\\\',
     rows.join(' \\\\\n'),
@@ -3746,6 +3841,8 @@ function renderQuickAnswerTableLatex(questions) {
   };
   function normalizeSpecialTokens(s) {
     let out = s.replace(/\b(TIMES|DIV|PM|LEQ|GEQ|NEQ)\b/g, (m) => SPECIAL_TOKEN_MAP[m] || m);
+    out = stripLatexTextWrappers(out);
+    out = normalizeCompactFractionCommands(out);
     // 본문 normalizeMathSegment 와 동일 규칙: 모든 \frac → \dfrac (강제 displaystyle 분수).
     out = out.replace(/\\frac(?![a-zA-Z])/g, '\\dfrac');
     return out;
@@ -3894,9 +3991,9 @@ function renderQuickAnswerTableLatex(questions) {
   }
 
   function formatAnswerTex(ans, question) {
-    const raw = String(ans || '').trim();
+    const raw = stripLatexTextWrappers(String(ans || '').trim());
     if (!raw) return '-';
-    const markerRe = /(\[\[PB_ANSWER_FIG_[^\]]+\]\]|\[그림\])/g;
+    const markerRe = /(\[\[PB_ANSWER_FIG_[^\]]+\]\]|\[그림\]|\[\s*image\s*\])/gi;
     if (!markerRe.test(raw)) return formatAnswerTextTex(raw);
     markerRe.lastIndex = 0;
     const out = [];

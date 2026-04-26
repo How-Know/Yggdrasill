@@ -197,13 +197,14 @@ export async function getStoredPreviewUrls({
   questions,
   academyId,
   supabaseClient,
+  mathEngine = 'xelatex',
 }) {
   if (!supabaseClient || !Array.isArray(questions) || questions.length === 0) return [];
   const results = [];
   for (const question of questions) {
     const qId = String(question?.id || question?.question_id || '');
     if (!qId) { results.push({ questionId: qId, imageUrl: null }); continue; }
-    const hash = questionContentHash(question);
+    const hash = questionContentHash(question, mathEngine);
     const storagePath = `${academyId || 'global'}/q_${qId}_${hash}.png`;
     try {
       const { data } = await supabaseClient.storage

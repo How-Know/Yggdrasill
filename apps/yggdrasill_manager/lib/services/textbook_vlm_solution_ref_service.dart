@@ -80,9 +80,15 @@ class TextbookVlmSolutionRefService {
     );
     final json = _decode(res.body);
     if (res.statusCode < 200 || res.statusCode >= 300 || json['ok'] != true) {
+      final details = <String>[
+        if (json['error'] != null) '${json['error']}',
+        if (json['message'] != null) '${json['message']}',
+        if (json['fallback_message'] != null)
+          'fallback=${json['fallback_message']}',
+      ];
       throw Exception(
         'vlm_detect_solution_refs_failed(${res.statusCode}): '
-        '${json['error'] ?? json['message'] ?? res.body}',
+        '${details.isEmpty ? res.body : details.join(' / ')}',
       );
     }
     return TextbookVlmSolutionRefPageResult.fromMap(json);

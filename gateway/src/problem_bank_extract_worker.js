@@ -4990,6 +4990,7 @@ async function processOneJob(job) {
           academyId: job.academy_id,
           layout: {},
           supabaseClient: supa,
+          mathEngine: 'xelatex',
         });
         previewScreenshotCount = results.filter((r) => r.imageUrl).length;
         console.log(

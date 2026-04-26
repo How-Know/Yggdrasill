@@ -11,6 +11,7 @@
 // DB write, 잡 상태 전이, figure-job 큐잉 같은 후처리는 호출 측(processOneJob) 이
 // 이미 가진 공통 코드로 처리하도록 맡긴다. 즉 이 runner 는 "파서 교체 판" 역할만 함.
 
+import { PDFDocument } from 'pdf-lib';
 import { callGeminiWithPdf } from './client.js';
 import { normalizeVlmQuestion, buildRowUpdate } from './writeback.js';
 
@@ -18,17 +19,292 @@ function compact(v) {
   return String(v || '').trim();
 }
 
+const TEXTBOOK_ANSWER_IMAGE_BUCKET = 'textbook-answer-images';
+const ANSWER_IMAGE_MARKER_RE = /(?:\[\s*image\s*\]|\(\s*image\s*\)|\[그림\]|\[\[PB_ANSWER_FIG_[^\]]+\]\])/i;
+
+function parsePositiveInt(v) {
+  const n = Number.parseInt(String(v ?? '').trim(), 10);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function problemNumberKey(v) {
+  const n = Number.parseInt(String(v ?? '').trim(), 10);
+  return Number.isFinite(n) && n > 0 ? String(n) : '';
+}
+
+function normalizeCompactFractionCommands(input) {
+  let out = String(input || '');
+  for (let i = 0; i < 4; i += 1) {
+    const next = out
+      .replace(
+        /\\(?:dfrac|tfrac|frac)\s*\{([^{}]+)\}\s*\{([^{}]+)\}/g,
+        (_, a, b) => `\\frac{${String(a).trim()}}{${String(b).trim()}}`,
+      )
+      .replace(
+        /\\(?:dfrac|tfrac|frac)\s*\{([^{}]+)\}\s*([A-Za-z0-9])/g,
+        (_, a, b) => `\\frac{${String(a).trim()}}{${b}}`,
+      )
+      .replace(
+        /\\(?:dfrac|tfrac|frac)\s*([A-Za-z0-9])\s*\{([^{}]+)\}/g,
+        (_, a, b) => `\\frac{${a}}{${String(b).trim()}}`,
+      )
+      .replace(
+        /\\(?:dfrac|tfrac|frac)\s*([A-Za-z0-9])\s*([A-Za-z0-9])/g,
+        (_, a, b) => `\\frac{${a}}{${b}}`,
+      );
+    if (next === out) break;
+    out = next;
+  }
+  return out;
+}
+
+function normalizeSidecarAnswerText(input) {
+  let out = String(input || '');
+  for (let i = 0; i < 6; i += 1) {
+    const next = out
+      .replace(/\\(?:text|mathrm)\s*\{([^{}]*)\}/g, '$1')
+      .replace(/\\textstyle\b/g, '')
+      .replace(/\\displaystyle\b/g, '');
+    if (next === out) break;
+    out = next;
+  }
+  return normalizeCompactFractionCommands(out)
+    .replace(/\(\s*image\s*\)/gi, '[image]')
+    .replace(/\[\s*image\s*\]/gi, '[image]')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function resolveTextbookPageRange(textbookScope, pageCount) {
+  const from = parsePositiveInt(textbookScope?.raw_page_from);
+  const to = parsePositiveInt(textbookScope?.raw_page_to);
+  if (!from || !to || !Number.isFinite(pageCount) || pageCount <= 0) {
+    return null;
+  }
+  const start = Math.min(Math.max(from, 1), pageCount);
+  const end = Math.min(Math.max(to, 1), pageCount);
+  if (end < start) return null;
+  return { start, end };
+}
+
+async function slicePdfPages(pdfBuffer, pageRange) {
+  if (!pageRange) {
+    return {
+      buffer: pdfBuffer,
+      originalPageCount: null,
+      slicedPageCount: null,
+      pageRange: null,
+    };
+  }
+  const src = await PDFDocument.load(pdfBuffer);
+  const originalPageCount = src.getPageCount();
+  const resolved = resolveTextbookPageRange(pageRange, originalPageCount);
+  if (!resolved) {
+    return {
+      buffer: pdfBuffer,
+      originalPageCount,
+      slicedPageCount: originalPageCount,
+      pageRange: null,
+    };
+  }
+  if (resolved.start === 1 && resolved.end === originalPageCount) {
+    return {
+      buffer: pdfBuffer,
+      originalPageCount,
+      slicedPageCount: originalPageCount,
+      pageRange: resolved,
+    };
+  }
+
+  // copyPages preserves the source page contents/resources; it does not rasterize.
+  const out = await PDFDocument.create();
+  const indices = [];
+  for (let p = resolved.start; p <= resolved.end; p += 1) {
+    indices.push(p - 1);
+  }
+  const pages = await out.copyPages(src, indices);
+  for (const page of pages) out.addPage(page);
+  const sliced = Buffer.from(await out.save({ useObjectStreams: false }));
+  return {
+    buffer: sliced,
+    originalPageCount,
+    slicedPageCount: pages.length,
+    pageRange: resolved,
+  };
+}
+
+function rebaseSourcePageToOriginal(sourcePage, pageRange, slicedPageCount) {
+  const page = Number(sourcePage);
+  if (!Number.isFinite(page) || page <= 0 || !pageRange) return sourcePage;
+  if (page >= pageRange.start && page <= pageRange.end) return page;
+  if (Number.isFinite(slicedPageCount) && page >= 1 && page <= slicedPageCount) {
+    return pageRange.start + page - 1;
+  }
+  return page;
+}
+
 // 기존 pb_questions 행 리스트를 "question_number → row" 맵으로 구성.
 // 같은 번호가 여러 개 있으면 첫 번째만 사용 (메타 보존 목적).
 function indexExistingByQuestionNumber(rows) {
   const map = new Map();
   for (const r of rows || []) {
-    const n = Number.parseInt(String(r?.question_number || '').trim(), 10);
-    if (!Number.isFinite(n) || n <= 0) continue;
-    const key = String(n);
+    const key = problemNumberKey(r?.question_number);
+    if (!key) continue;
     if (!map.has(key)) map.set(key, r);
   }
   return map;
+}
+
+async function fetchTextbookAnswerSidecars({ supa, academyId, textbookScope, log = null }) {
+  if (!supa || !textbookScope || typeof textbookScope !== 'object') return new Map();
+  const bookId = compact(textbookScope.book_id || textbookScope.bookId);
+  const gradeLabel = compact(textbookScope.grade_label || textbookScope.gradeLabel);
+  const subKey = compact(textbookScope.sub_key || textbookScope.subKey);
+  const bigOrder = Number.parseInt(String(textbookScope.big_order ?? ''), 10);
+  const midOrder = Number.parseInt(String(textbookScope.mid_order ?? ''), 10);
+  if (
+    !academyId ||
+    !bookId ||
+    !gradeLabel ||
+    !subKey ||
+    !Number.isFinite(bigOrder) ||
+    !Number.isFinite(midOrder)
+  ) {
+    return new Map();
+  }
+
+  try {
+    const { data: crops, error: cropErr } = await supa
+      .from('textbook_problem_crops')
+      .select('id,problem_number')
+      .eq('academy_id', academyId)
+      .eq('book_id', bookId)
+      .eq('grade_label', gradeLabel)
+      .eq('big_order', bigOrder)
+      .eq('mid_order', midOrder)
+      .eq('sub_key', subKey);
+    if (cropErr || !Array.isArray(crops) || crops.length === 0) {
+      if (typeof log === 'function') {
+        log('vlm_textbook_answer_sidecar_skip', {
+          reason: cropErr?.message || 'no_crops',
+          bookId,
+          gradeLabel,
+          subKey,
+        });
+      }
+      return new Map();
+    }
+
+    const cropById = new Map();
+    const cropIds = [];
+    for (const crop of crops) {
+      const cropId = compact(crop?.id);
+      const key = problemNumberKey(crop?.problem_number);
+      if (!cropId || !key) continue;
+      cropIds.push(cropId);
+      cropById.set(cropId, { key, problemNumber: compact(crop.problem_number) });
+    }
+    if (cropIds.length === 0) return new Map();
+
+    const { data: answers, error: answerErr } = await supa
+      .from('textbook_problem_answers')
+      .select(
+        'crop_id,answer_kind,answer_text,answer_latex_2d,answer_source,' +
+          'answer_image_bucket,answer_image_path,answer_image_width_px,' +
+          'answer_image_height_px,answer_image_size_bytes,answer_image_content_hash,' +
+          'raw_page,display_page,updated_at',
+      )
+      .in('crop_id', cropIds);
+    if (answerErr || !Array.isArray(answers) || answers.length === 0) {
+      if (typeof log === 'function') {
+        log('vlm_textbook_answer_sidecar_skip', {
+          reason: answerErr?.message || 'no_answers',
+          cropCount: cropIds.length,
+        });
+      }
+      return new Map();
+    }
+
+    const out = new Map();
+    for (const answer of answers) {
+      const crop = cropById.get(compact(answer?.crop_id));
+      if (!crop) continue;
+      out.set(crop.key, answer);
+    }
+    if (typeof log === 'function') {
+      log('vlm_textbook_answer_sidecar_loaded', {
+        cropCount: cropIds.length,
+        answerCount: out.size,
+      });
+    }
+    return out;
+  } catch (err) {
+    if (typeof log === 'function') {
+      log('vlm_textbook_answer_sidecar_skip', {
+        reason: compact(err?.message || err),
+      });
+    }
+    return new Map();
+  }
+}
+
+function applyTextbookAnswerSidecar(vlmQ, sidecar) {
+  if (!sidecar || typeof sidecar !== 'object') return vlmQ;
+  const kindRaw = compact(sidecar.answer_kind).toLowerCase();
+  const rawText = normalizeSidecarAnswerText(sidecar.answer_text);
+  const rawLatex = normalizeSidecarAnswerText(sidecar.answer_latex_2d);
+  // answer_text is the canonical human-facing answer. answer_latex_2d may carry
+  // renderer-only wrappers such as \text{...}, so keep it as fallback only.
+  const text = rawText || rawLatex;
+  const hasImageMarker = ANSWER_IMAGE_MARKER_RE.test(`${rawText} ${rawLatex}`);
+  const kind = kindRaw === 'image' || hasImageMarker ? 'image' : kindRaw;
+  const next = { ...(vlmQ || {}) };
+  const answer = {
+    ...(next.answer && typeof next.answer === 'object' ? next.answer : {}),
+  };
+  if (kind === 'objective' && text) {
+    answer.objective_key = text;
+  } else if (kind === 'subjective' && text) {
+    answer.subjective = text;
+  } else if (kind === 'image') {
+    const marker = '[[PB_ANSWER_FIG_1]]';
+    const withMarker = text
+      ? text
+          .replace(/\[\s*image\s*\]/gi, marker)
+          .replace(/\(\s*image\s*\)/gi, marker)
+          .replace(/\[그림\]/g, marker)
+          .replace(/\[\[PB_ANSWER_FIG_[^\]]+\]\]/g, marker)
+      : marker;
+    answer.subjective = withMarker.includes(marker) ? withMarker : `${withMarker} ${marker}`.trim();
+    const imagePath = compact(sidecar.answer_image_path);
+    if (imagePath) {
+      next.answer_figure_assets = [
+        {
+          figure_index: 1,
+          bucket: compact(sidecar.answer_image_bucket) || TEXTBOOK_ANSWER_IMAGE_BUCKET,
+          path: imagePath,
+          mime_type: 'image/png',
+          approved: true,
+          source: 'textbook_answer_vlm',
+          created_at: compact(sidecar.updated_at) || new Date().toISOString(),
+          width_px: sidecar.answer_image_width_px || undefined,
+          height_px: sidecar.answer_image_height_px || undefined,
+          size_bytes: sidecar.answer_image_size_bytes || undefined,
+          content_hash: sidecar.answer_image_content_hash || undefined,
+        },
+      ];
+    }
+  }
+  next.answer = answer;
+  next.textbook_answer_sidecar = {
+    kind,
+    source: compact(sidecar.answer_source) || 'vlm',
+    raw_page: sidecar.raw_page ?? null,
+    display_page: sidecar.display_page ?? null,
+    updated_at: compact(sidecar.updated_at),
+    has_image_asset: !!compact(sidecar.answer_image_path),
+  };
+  return next;
 }
 
 // VLM question 하나를 "buildQuestionWritePayload" 가 먹을 수 있는 형태로 변환한다.
@@ -40,8 +316,18 @@ function toPayloadQuestion({
   modelName,
   reviewConfidenceThreshold,
   textbookScope = null,
+  sourcePageRange = null,
+  slicedPageCount = null,
 }) {
-  const normalized = normalizeVlmQuestion(vlmQ);
+  const rebasedVlmQ = {
+    ...(vlmQ || {}),
+    source_page: rebaseSourcePageToOriginal(
+      vlmQ?.source_page,
+      sourcePageRange,
+      slicedPageCount,
+    ),
+  };
+  const normalized = normalizeVlmQuestion(rebasedVlmQ);
   const update = buildRowUpdate(existingRow || null, normalized, {
     modelName,
     keepTypeFromDb: false,
@@ -138,26 +424,32 @@ export async function runVlmExtraction({
     throw new Error(`vlm_pdf_download_failed:${dlErr?.message || 'no_data'}`);
   }
   const pdfArrayBuf = await fileData.arrayBuffer();
-  const pdfBuffer = Buffer.from(pdfArrayBuf);
-  if (!pdfBuffer.length) {
+  const originalPdfBuffer = Buffer.from(pdfArrayBuf);
+  if (!originalPdfBuffer.length) {
     throw new Error('vlm_pdf_buffer_empty');
-  }
-
-  if (typeof log === 'function') {
-    log('vlm_call_start', {
-      jobId: job.id,
-      documentId: job.document_id,
-      pdfBytes: pdfBuffer.length,
-      model,
-    });
   }
 
   const textbookScope =
     doc?.meta?.textbook_scope && typeof doc.meta.textbook_scope === 'object'
       ? doc.meta.textbook_scope
       : null;
+  const scopedPdf = await slicePdfPages(originalPdfBuffer, textbookScope);
+
+  if (typeof log === 'function') {
+    log('vlm_call_start', {
+      jobId: job.id,
+      documentId: job.document_id,
+      originalPdfBytes: originalPdfBuffer.length,
+      pdfBytes: scopedPdf.buffer.length,
+      originalPageCount: scopedPdf.originalPageCount,
+      slicedPageCount: scopedPdf.slicedPageCount,
+      pageRange: scopedPdf.pageRange,
+      model,
+    });
+  }
+
   const geminiResult = await callGeminiWithPdf({
-    pdfBuffer,
+    pdfBuffer: scopedPdf.buffer,
     model,
     apiKey,
     timeoutMs,
@@ -183,6 +475,12 @@ export async function runVlmExtraction({
     throw new Error(`vlm_existing_fetch_failed:${existingErr.message}`);
   }
   const existingByNum = indexExistingByQuestionNumber(existingRows || []);
+  const answerSidecars = await fetchTextbookAnswerSidecars({
+    supa,
+    academyId: job.academy_id,
+    textbookScope,
+    log,
+  });
 
   // 문항 번호 기준 오름차순으로 source_order 부여. 번호가 비어있는 케이스는 맨 뒤로 밀어낸다.
   const ordered = vlmQuestions.slice().sort((a, b) => {
@@ -196,17 +494,20 @@ export async function runVlmExtraction({
 
   let lowConfidenceCount = 0;
   const payloadQuestions = ordered.map((vlmQ, idx) => {
-    const qKey = String(
-      Number.parseInt(String(vlmQ?.question_number || '').trim(), 10) || '',
-    );
+    const qKey = problemNumberKey(vlmQ?.question_number);
     const existingRow = qKey ? existingByNum.get(qKey) || null : null;
+    const enrichedVlmQ = qKey
+      ? applyTextbookAnswerSidecar(vlmQ, answerSidecars.get(qKey))
+      : vlmQ;
     const payload = toPayloadQuestion({
-      vlmQ,
+      vlmQ: enrichedVlmQ,
       existingRow,
       sourceOrder: idx + 1,
       modelName: model,
       reviewConfidenceThreshold,
       textbookScope,
+      sourcePageRange: scopedPdf.pageRange,
+      slicedPageCount: scopedPdf.slicedPageCount,
     });
     if (Number(payload.confidence || 0) < Number(reviewConfidenceThreshold || 0.6)) {
       lowConfidenceCount += 1;
@@ -244,6 +545,14 @@ export async function runVlmExtraction({
       engine: 'vlm',
       model,
       documentMeta: parsedJson?.document_meta || null,
+      pdfInput: {
+        originalBytes: originalPdfBuffer.length,
+        sentBytes: scopedPdf.buffer.length,
+        originalPageCount: scopedPdf.originalPageCount,
+        sentPageCount: scopedPdf.slicedPageCount,
+        pageRange: scopedPdf.pageRange,
+        preservesOriginalPages: true,
+      },
       usage: geminiResult?.usageMetadata || null,
       elapsedMs: geminiResult?.elapsedMs || 0,
       finishReason: geminiResult?.finishReason || '',

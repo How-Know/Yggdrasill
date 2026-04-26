@@ -11,17 +11,17 @@ function makeQuestion(overrides = {}) {
   return {
     id: 'q-1',
     question_number: '1',
-    question_type: '?????,
-    stem: '??',
+    question_type: '\uAC1D\uAD00\uC2DD',
+    stem: '\uBCF8\uBB38',
     choices: [
-      { label: '??, text: '?' },
-      { label: '??, text: '?? },
+      { label: '\u2460', text: '1' },
+      { label: '\u2461', text: '2' },
     ],
     objective_choices: [],
     allow_objective: true,
     allow_subjective: true,
-    objective_answer_key: '??,
-    subjective_answer: '??,
+    objective_answer_key: '\u2460',
+    subjective_answer: '\uC815\uB2F5',
     reviewer_notes: '',
     figure_refs: [],
     equations: [],
@@ -38,9 +38,9 @@ test('render config: legacy key alias and ordered ids', () => {
     include_explanation: false,
     selected_question_ids: ['q-2', 'q-1', 'q-3'],
     options: {
-      layout_columns: '2??,
+      layout_columns: '2\uB2E8',
       perPage: '6',
-      mode: '?????,
+      mode: '\uC8FC\uAD00\uC2DD',
       selectedQuestionIdsOrdered: ['q-3', 'q-1', 'q-2'],
       questionModeByQuestionId: {
         'q-1': 'objective',
@@ -84,25 +84,25 @@ test('render hash: deterministic for same semantic payload', () => {
 });
 
 test('question mode map: per-question override is applied', () => {
-  const q1 = makeQuestion({ id: 'q-1', question_type: '????? });
+  const q1 = makeQuestion({ id: 'q-1', question_type: '\uAC1D\uAD00\uC2DD' });
   const q2 = makeQuestion({
     id: 'q-2',
-    question_type: '?????,
+    question_type: '\uC8FC\uAD00\uC2DD',
     choices: [],
     objective_choices: [],
     allow_objective: false,
     allow_subjective: true,
-    subjective_answer: '??,
+    subjective_answer: '\uC815\uB2F5',
   });
   const applied = applyQuestionModesForExport(
     [q1, q2],
     { 'q-1': 'objective', 'q-2': 'subjective' },
     'original',
   );
-  assert.equal(applied.modeByQuestionId['q-1'], 'objective');
-  assert.equal(applied.modeByQuestionId['q-2'], 'subjective');
-  assert.equal(applied.questions[0].question_type, '?????);
+  assert.equal(applied.modeByQuestionUid['q-1'], 'objective');
+  assert.equal(applied.modeByQuestionUid['q-2'], 'subjective');
+  assert.equal(applied.questions[0].question_type, '\uAC1D\uAD00\uC2DD');
   assert.equal(applied.questions[0].choices.length >= 2, true);
-  assert.equal(applied.questions[1].question_type, '?????);
+  assert.equal(applied.questions[1].question_type, '\uC8FC\uAD00\uC2DD');
   assert.equal(applied.questions[1].choices.length, 0);
 });

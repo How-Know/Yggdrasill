@@ -132,10 +132,43 @@ export function isBlankChoiceQuestion(question) {
   return meta.is_blank_choice_question === true || meta.choice_layout === 'blank_table';
 }
 
+function blankChoiceWidthScale(question) {
+  const meta = question?.meta && typeof question.meta === 'object' ? question.meta : {};
+  const scales = meta.table_scales && typeof meta.table_scales === 'object'
+    ? meta.table_scales
+    : {};
+  const raw = scales['blank_choice:1'] || meta.blank_choice_scale || null;
+  const parsed = Number(raw?.widthScale ?? raw?.w ?? raw);
+  if (!Number.isFinite(parsed)) return 1;
+  return Math.max(0.5, Math.min(2.0, parsed));
+}
+
+function blankChoiceColumnScales(question, columnCount) {
+  const meta = question?.meta && typeof question.meta === 'object' ? question.meta : {};
+  const scales = meta.table_scales && typeof meta.table_scales === 'object'
+    ? meta.table_scales
+    : {};
+  const raw = scales['blank_choice:1'] || null;
+  const values = Array.isArray(raw?.columnScales) ? raw.columnScales : [];
+  return Array.from({ length: columnCount }, (_, idx) => {
+    const parsed = Number(values[idx]);
+    if (!Number.isFinite(parsed)) return 1;
+    return Math.max(0.5, Math.min(2.0, parsed));
+  });
+}
+
 export function renderBlankChoiceContainer(question, choices, mathRenderer, equations, opts) {
   if (!Array.isArray(choices) || choices.length !== 5) return '';
   const meta = question?.meta && typeof question.meta === 'object' ? question.meta : {};
   const labels = normalizeBlankChoiceLabels(meta.blank_choice_labels);
+  const widthScale = blankChoiceWidthScale(question);
+  const columnScales = blankChoiceColumnScales(question, labels.length);
+  const baseEm = [4.4, 4.4, 9.2];
+  const gridColumns = [
+    '2.2em',
+    ...columnScales.map((scale, idx) =>
+      `minmax(calc(${baseEm[idx] || 5.0}em * ${widthScale * scale}), max-content)`),
+  ].join(' ');
   const header = [''].concat(labels)
     .map((label) => `<div class="blank-choice-header">${escapeHtml(label)}</div>`)
     .join('');
@@ -149,5 +182,5 @@ export function renderBlankChoiceContainer(question, choices, mathRenderer, equa
       .join('');
     return `<div class="blank-choice-label">${escapeHtml(label)}</div>${cells}`;
   }).join('');
-  return `<div class="blank-choice-table" style="--blank-choice-cols:${labels.length + 1};">${header}${rows}</div>`;
+  return `<div class="blank-choice-table" style="--blank-choice-cols:${labels.length + 1};--blank-choice-width-scale:${widthScale};grid-template-columns:${gridColumns};">${header}${rows}</div>`;
 }

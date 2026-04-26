@@ -248,7 +248,7 @@ function buildStyles({
       margin-top: calc(var(--line-height-pt) * 0.3 * 1pt);
       display: grid;
       grid-template-columns: 2.2em repeat(3, max-content);
-      column-gap: 2.4em;
+      column-gap: calc(2.4em * var(--blank-choice-width-scale, 1));
       row-gap: calc(var(--choice-gap-pt) * 0.8 * 1pt);
       align-items: center;
       width: fit-content;

@@ -88,9 +88,15 @@ class TextbookVlmAnswerService {
     );
     final json = _decode(res.body);
     if (res.statusCode < 200 || res.statusCode >= 300 || json['ok'] != true) {
+      final details = <String>[
+        if (json['error'] != null) '${json['error']}',
+        if (json['message'] != null) '${json['message']}',
+        if (json['fallback_message'] != null)
+          'fallback=${json['fallback_message']}',
+      ];
       throw Exception(
         'vlm_extract_answers_failed(${res.statusCode}): '
-        '${json['error'] ?? json['message'] ?? res.body}',
+        '${details.isEmpty ? res.body : details.join(' / ')}',
       );
     }
     return TextbookVlmAnswerPageResult.fromMap(json);
@@ -186,17 +192,74 @@ class TextbookVlmAnswerItem {
       return out;
     }
 
+    String normalizeCompactFractions(String raw) {
+      var out = raw;
+      for (var i = 0; i < 4; i += 1) {
+        final next = out
+            .replaceAllMapped(
+              RegExp(r'\\(?:dfrac|tfrac|frac)\s*\{([^{}]+)\}\s*\{([^{}]+)\}'),
+              (m) => '\\frac{${m.group(1)!.trim()}}{${m.group(2)!.trim()}}',
+            )
+            .replaceAllMapped(
+              RegExp(r'\\(?:dfrac|tfrac|frac)\s*\{([^{}]+)\}\s*([A-Za-z0-9])'),
+              (m) => '\\frac{${m.group(1)!.trim()}}{${m.group(2)}}',
+            )
+            .replaceAllMapped(
+              RegExp(r'\\(?:dfrac|tfrac|frac)\s*([A-Za-z0-9])\s*\{([^{}]+)\}'),
+              (m) => '\\frac{${m.group(1)}}{${m.group(2)!.trim()}}',
+            )
+            .replaceAllMapped(
+              RegExp(r'\\(?:dfrac|tfrac|frac)\s*([A-Za-z0-9])\s*([A-Za-z0-9])'),
+              (m) => '\\frac{${m.group(1)}}{${m.group(2)}}',
+            );
+        if (next == out) break;
+        out = next;
+      }
+      return out;
+    }
+
+    String stripLatexTextWrappers(String raw) {
+      var out = raw;
+      for (var i = 0; i < 6; i += 1) {
+        final next = out
+            .replaceAllMapped(
+              RegExp(r'\\(?:text|mathrm)\s*\{([^{}]*)\}'),
+              (m) => m.group(1) ?? '',
+            )
+            .replaceAll(RegExp(r'\\(?:textstyle|displaystyle)\b'), '');
+        if (next == out) break;
+        out = next;
+      }
+      return out.replaceAll(RegExp(r'\s+'), ' ').trim();
+    }
+
+    String normalizeAnswer(String raw) {
+      return normalizeCompactFractions(stripLatexTextWrappers(raw))
+          .replaceAll(
+              RegExp(r'\(\s*image\s*\)', caseSensitive: false), '[image]')
+          .replaceAll(
+              RegExp(r'\[\s*image\s*\]', caseSensitive: false), '[image]')
+          .trim();
+    }
+
+    final rawAnswerText = normalizeAnswer('${map['answer_text'] ?? ''}');
+    final rawAnswerLatex2d = normalizeAnswer('${map['answer_latex_2d'] ?? ''}');
     final kindRaw = '${map['kind'] ?? ''}'.toLowerCase();
-    final kind = const {'objective', 'subjective', 'image'}.contains(kindRaw)
-        ? kindRaw
-        : 'subjective';
+    final imageMarker = RegExp(r'(\[\s*image\s*\]|\(\s*image\s*\)|\bimage\b)',
+            caseSensitive: false)
+        .hasMatch('$rawAnswerText $rawAnswerLatex2d');
+    final kind = kindRaw == 'image' || imageMarker
+        ? 'image'
+        : const {'objective', 'subjective', 'image'}.contains(kindRaw)
+            ? kindRaw
+            : 'subjective';
     return TextbookVlmAnswerItem(
       problemNumber: '${map['problem_number'] ?? ''}'.trim(),
       kind: kind,
       answerText: kind == 'image'
-          ? '${map['answer_text'] ?? '[image]'}'
-          : '${map['answer_text'] ?? ''}',
-      answerLatex2d: '${map['answer_latex_2d'] ?? ''}',
+          ? (rawAnswerText.isEmpty ? '[image]' : rawAnswerText)
+          : rawAnswerText,
+      answerLatex2d: rawAnswerLatex2d,
       bbox: parseBbox(map['bbox']),
     );
   }

@@ -3135,7 +3135,7 @@ async function previewQuestions(res, req) {
   const questionIds = Array.isArray(body?.questionIds) ? body.questionIds.map(String) : [];
   const layout = body?.layout || {};
   const force = body?.force === true;
-  const mathEngine = body?.mathEngine || undefined;
+  const mathEngine = body?.mathEngine || 'xelatex';
 
   if (!academyId || questionIds.length === 0) {
     sendJson(res, 400, { ok: false, error: 'academyId and questionIds[] required' });
@@ -3266,6 +3266,7 @@ async function previewUrls(res, req) {
       questions: rows || [],
       academyId,
       supabaseClient: supa,
+      mathEngine: body?.mathEngine || 'xelatex',
     });
     sendJson(res, 200, { ok: true, previews });
   } catch (err) {
@@ -4812,6 +4813,45 @@ async function handleTextbookVlmDetectSolutionRefs(body, res) {
 const MAX_ANSWER_BATCH = 300;
 const MAX_ANSWER_IMAGE_BYTES = 10 * 1024 * 1024;
 const TEXTBOOK_ANSWER_IMAGE_BUCKET = 'textbook-answer-images';
+const TEXTBOOK_ANSWER_IMAGE_MARKER_RE = /(?:\[\s*image\s*\]|\(\s*image\s*\)|\[그림\])/i;
+
+function normalizeTextbookAnswerValue(input) {
+  let out = String(input ?? '');
+  for (let i = 0; i < 6; i += 1) {
+    const next = out
+      .replace(/\\(?:text|mathrm)\s*\{([^{}]*)\}/g, '$1')
+      .replace(/\\textstyle\b/g, '')
+      .replace(/\\displaystyle\b/g, '');
+    if (next === out) break;
+    out = next;
+  }
+  for (let i = 0; i < 4; i += 1) {
+    const next = out
+      .replace(
+        /\\(?:dfrac|tfrac|frac)\s*\{([^{}]+)\}\s*\{([^{}]+)\}/g,
+        (_, a, b) => `\\frac{${String(a).trim()}}{${String(b).trim()}}`,
+      )
+      .replace(
+        /\\(?:dfrac|tfrac|frac)\s*\{([^{}]+)\}\s*([A-Za-z0-9])/g,
+        (_, a, b) => `\\frac{${String(a).trim()}}{${b}}`,
+      )
+      .replace(
+        /\\(?:dfrac|tfrac|frac)\s*([A-Za-z0-9])\s*\{([^{}]+)\}/g,
+        (_, a, b) => `\\frac{${a}}{${String(b).trim()}}`,
+      )
+      .replace(
+        /\\(?:dfrac|tfrac|frac)\s*([A-Za-z0-9])\s*([A-Za-z0-9])/g,
+        (_, a, b) => `\\frac{${a}}{${b}}`,
+      );
+    if (next === out) break;
+    out = next;
+  }
+  return out
+    .replace(/\(\s*image\s*\)/gi, '[image]')
+    .replace(/\[\s*image\s*\]/gi, '[image]')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
 
 async function handleTextbookAnswersBatchUpsert(body, res) {
   const academyId = String(body?.academy_id || '').trim();
@@ -4845,7 +4885,15 @@ async function handleTextbookAnswersBatchUpsert(body, res) {
       });
       return;
     }
-    const kindRaw = String(a.answer_kind || '').trim().toLowerCase();
+    let kindRaw = String(a.answer_kind || '').trim().toLowerCase();
+    const normalizedAnswerText = normalizeTextbookAnswerValue(a.answer_text);
+    const normalizedAnswerLatex2d = normalizeTextbookAnswerValue(a.answer_latex_2d);
+    if (
+      kindRaw !== 'objective' &&
+      TEXTBOOK_ANSWER_IMAGE_MARKER_RE.test(`${normalizedAnswerText} ${normalizedAnswerLatex2d}`)
+    ) {
+      kindRaw = 'image';
+    }
     if (!['objective', 'subjective', 'image'].includes(kindRaw)) {
       sendJson(res, 400, {
         ok: false,
@@ -4935,9 +4983,9 @@ async function handleTextbookAnswersBatchUpsert(body, res) {
       crop_id: cropId,
       academy_id: academyId,
       answer_kind: kindRaw,
-      answer_text: a.answer_text != null ? String(a.answer_text) : null,
+      answer_text: a.answer_text != null ? normalizedAnswerText : null,
       answer_latex_2d:
-        a.answer_latex_2d != null ? String(a.answer_latex_2d) : null,
+        a.answer_latex_2d != null ? normalizedAnswerLatex2d : null,
       answer_source: sourceRaw,
       raw_page: Number.isFinite(rawPage) ? rawPage : null,
       display_page: Number.isFinite(displayPage) ? displayPage : null,

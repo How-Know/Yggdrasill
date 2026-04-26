@@ -16,6 +16,8 @@ export function buildPrompt({ textbookScope = null } = {}) {
         `범위: 대단원 ${scope.big_order ?? ''}, 중단원 ${scope.mid_order ?? ''}, 소단원 ${scope.sub_key ?? ''}`,
         `이름: ${scope.big_name || ''} / ${scope.mid_name || ''} / ${scope.sub_name || ''}`,
         `페이지 범위(raw/display): ${scope.raw_page_from ?? ''}~${scope.raw_page_to ?? ''} / ${scope.display_page_from ?? ''}~${scope.display_page_to ?? ''}`,
+        '첨부된 PDF는 위 raw page 범위만 잘라낸 사본일 수 있다.',
+        'questions[].source_page 는 첨부 사본 기준이 아니라 원본 본문 PDF 의 raw page 번호로 적어라.',
         '위 범위 밖의 문항은 questions 에 넣지 마라.',
         '',
       ]
@@ -56,6 +58,8 @@ export function buildPrompt({ textbookScope = null } = {}) {
     '}',
     '',
     '=== STEM 포맷 규칙 (매우 중요) ===',
+    '아래 stem/choices/answer 포맷은 문제은행 카드, 서버 PDF 미리보기, 최종 PDF 출력이 공통으로 사용하는 XeLaTeX 렌더러 규약이다.',
+    '따라서 화면 표시용 임의 마크다운이나 자연어 설명을 섞지 말고, 렌더러가 그대로 소비할 수 있는 구조만 남겨라.',
     '[S1] 수식은 LaTeX 명령만 사용하되 "delimiter 를 쓰지 마라" (\\( \\) / \\[ \\] / $ / $$ 전부 금지).',
     '     예) 올바른: "a + \\frac{b}{c} = 3"     잘못된: "\\(a + \\frac{b}{c}\\) = 3"  /  "$a+\\frac{b}{c}$"',
     '[S2] 곱셈 기호는 "\\times", 나눗셈은 "\\div", ±는 "\\pm", ≤≥≠는 "\\leq","\\geq","\\neq" 로만 표기. 알파벳 x / ÷ / ± 문자 직접 사용 금지.',

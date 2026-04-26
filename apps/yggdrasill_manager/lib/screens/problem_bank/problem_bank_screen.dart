@@ -2833,6 +2833,72 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     }
   }
 
+  Future<void> _deactivateActiveDocument() async {
+    if (_isSavingQuestionChanges || _isDeletingCurrentQuestions) return;
+    final doc = _activeDocument;
+    if (doc == null) return;
+    if (doc.status.trim().toLowerCase() != 'ready') {
+      _showSnack('이미 업로드 대기 상태입니다.');
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            backgroundColor: _panel,
+            title: const Text(
+              '문서 비활성화',
+              style: TextStyle(color: _text, fontWeight: FontWeight.w800),
+            ),
+            content: Text(
+              '"${doc.sourceFilename}" 문서를 학습 앱/문제 섞기 대상에서 제외할까요?\n'
+              '문항 데이터는 유지되고, 다시 `업로드`하면 사용준비됨으로 되돌릴 수 있습니다.',
+              style: const TextStyle(color: _textSub, height: 1.45),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(false),
+                child: const Text('취소'),
+              ),
+              FilledButton(
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFFE3B341),
+                  foregroundColor: Colors.black,
+                ),
+                onPressed: () => Navigator.of(ctx).pop(true),
+                child: const Text('비활성화'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+    if (!confirmed) return;
+    setState(() => _isSavingQuestionChanges = true);
+    try {
+      final nextMeta = <String, dynamic>{
+        ...doc.meta,
+        'deactivated_at': DateTime.now().toUtc().toIso8601String(),
+      };
+      await _service.updateDocumentMeta(
+        documentId: doc.id,
+        meta: nextMeta,
+        status: 'draft_ready',
+      );
+      if (!mounted) return;
+      setState(() {
+        _needsPublish = true;
+        _dirtyDocumentMeta = false;
+      });
+      _showSnack('문서를 비활성화했습니다. 다시 사용하려면 `업로드`를 누르세요.');
+      await _loadDocumentContext(doc.id);
+    } catch (e) {
+      _showSnack('문서 비활성화 실패: $e', error: true);
+    } finally {
+      if (mounted) {
+        setState(() => _isSavingQuestionChanges = false);
+      }
+    }
+  }
+
   Future<void> _deleteCurrentDocumentQuestions() async {
     if (_isDeletingCurrentQuestions || _isSavingQuestionChanges) return;
     final academyId = _academyId;
@@ -4826,9 +4892,53 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     return sb.toString();
   }
 
+  String _normalizeCompactFractionCommandsForPreview(String raw) {
+    var out = raw;
+    for (var i = 0; i < 4; i += 1) {
+      final next = out
+          .replaceAllMapped(
+            RegExp(r'\\(?:dfrac|tfrac|frac)\s*\{([^{}]+)\}\s*\{([^{}]+)\}'),
+            (m) => '\\frac{${m.group(1)!.trim()}}{${m.group(2)!.trim()}}',
+          )
+          .replaceAllMapped(
+            RegExp(r'\\(?:dfrac|tfrac|frac)\s*\{([^{}]+)\}\s*([A-Za-z0-9])'),
+            (m) => '\\frac{${m.group(1)!.trim()}}{${m.group(2)}}',
+          )
+          .replaceAllMapped(
+            RegExp(r'\\(?:dfrac|tfrac|frac)\s*([A-Za-z0-9])\s*\{([^{}]+)\}'),
+            (m) => '\\frac{${m.group(1)}}{${m.group(2)!.trim()}}',
+          )
+          .replaceAllMapped(
+            RegExp(r'\\(?:dfrac|tfrac|frac)\s*([A-Za-z0-9])\s*([A-Za-z0-9])'),
+            (m) => '\\frac{${m.group(1)}}{${m.group(2)}}',
+          );
+      if (next == out) break;
+      out = next;
+    }
+    return out;
+  }
+
+  String _stripLatexTextWrappersForPreview(String raw) {
+    var out = raw;
+    for (var i = 0; i < 6; i += 1) {
+      final next = out
+          .replaceAllMapped(
+            RegExp(r'\\(?:text|mathrm)\s*\{([^{}]*)\}'),
+            (m) => m.group(1) ?? '',
+          )
+          .replaceAll(RegExp(r'\\(?:textstyle|displaystyle)\b'), '');
+      if (next == out) break;
+      out = next;
+    }
+    return out.replaceAll(RegExp(r'\s+'), ' ').trim();
+  }
+
   String _normalizeLatexPreview(String raw) {
-    String out =
-        _normalizeUnicodeScriptTokens(raw.replaceAll(RegExp(r'`+'), ' '));
+    String out = _normalizeCompactFractionCommandsForPreview(
+      _stripLatexTextWrappersForPreview(
+        _normalizeUnicodeScriptTokens(raw.replaceAll(RegExp(r'`+'), ' ')),
+      ),
+    );
     out = out
         // 유니코드 수학 기호를 LaTeX 명령으로 정규화 (파싱 실패 방지)
         .replaceAll('×', r'\times ')
@@ -5013,10 +5123,12 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   }
 
   String _latexToPlainPreview(String raw) {
-    var out = raw;
+    var out = _normalizeCompactFractionCommandsForPreview(
+      _stripLatexTextWrappersForPreview(raw),
+    );
     for (int i = 0; i < 4; i += 1) {
       final next = out.replaceAllMapped(
-        RegExp(r'\\frac\s*\{([^{}]+)\}\s*\{([^{}]+)\}'),
+        RegExp(r'\\(?:dfrac|tfrac|frac)\s*\{([^{}]+)\}\s*\{([^{}]+)\}'),
         (m) => '${m.group(1)}/${m.group(2)}',
       );
       if (next == out) break;
@@ -5070,7 +5182,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   }
 
   String _promoteFractionsForPreview(String latex) {
-    var out = latex;
+    var out = _normalizeCompactFractionCommandsForPreview(latex);
     // \frac, \tfrac를 \dfrac로 승격해 분수 내부 숫자만 확대
     out = out.replaceAllMapped(
       RegExp(r'\\(?:dfrac|tfrac|frac)\s*(?=\{)'),
@@ -5763,6 +5875,21 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     }, growable: false);
   }
 
+  double _blankChoiceWidthScaleOf(ProblemBankQuestion q) {
+    final raw = q.meta['table_scales'];
+    if (raw is Map) {
+      final blank = raw['blank_choice:1'];
+      if (blank is Map) {
+        final parsed =
+            double.tryParse('${blank['widthScale'] ?? blank['w'] ?? ''}');
+        if (parsed != null) return parsed.clamp(0.5, 2.0).toDouble();
+      }
+    }
+    final legacy = double.tryParse('${q.meta['blank_choice_scale'] ?? ''}');
+    if (legacy != null) return legacy.clamp(0.5, 2.0).toDouble();
+    return 1.0;
+  }
+
   static final _structuralMarkerRegex = RegExp(r'\[(박스시작|박스끝|문단)\]');
 
   List<String> _viewBlockPreviewLines(ProblemBankQuestion q, {int max = 6}) {
@@ -6111,7 +6238,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     String text, {
     required bool expanded,
   }) {
-    final marker = RegExp(r'\[\[PB_ANSWER_FIG_[^\]]+\]\]|\[그림\]');
+    final marker = RegExp(
+        r'\[\[PB_ANSWER_FIG_[^\]]+\]\]|\[그림\]|\[\s*image\s*\]',
+        caseSensitive: false);
     if (!marker.hasMatch(text)) {
       return _buildStemTextPreviewLine(
         text,
@@ -7306,6 +7435,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     bool expanded = false,
   }) {
     final labels = _blankChoiceLabelsOf(q);
+    final widthScale = _blankChoiceWidthScaleOf(q);
     final fontSize = expanded ? 13.6 : 13.4;
     final headerStyle = TextStyle(
       color: const Color(0xFF232323),
@@ -7322,7 +7452,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     Widget cell(String value, {bool header = false}) {
       return Padding(
         padding: EdgeInsets.symmetric(
-          horizontal: expanded ? 14 : 11,
+          horizontal: (expanded ? 14 : 11) * widthScale,
           vertical: expanded ? 4 : 3,
         ),
         child: header
@@ -7602,11 +7732,12 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           width: width,
           fit: fillCompact ? BoxFit.cover : BoxFit.fitWidth,
           alignment: Alignment.topCenter,
-          errorBuilder: (_, __, ___) => _buildPreviewPlaceholder(
+          errorBuilder: (_, __, ___) => _buildLocalPdfPreviewFallback(
+            q,
             expanded: expanded,
             fixedHeight: fixedHeight,
             compact: compact,
-            message: '서버 PDF 썸네일 로드 실패',
+            message: '서버 PDF 썸네일 로드 실패 · 임시 로컬 미리보기',
             showSpinner: false,
           ),
         );
@@ -7755,6 +7886,85 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     );
   }
 
+  Widget _buildLocalPdfPreviewFallback(
+    ProblemBankQuestion q, {
+    bool expanded = false,
+    double? fixedHeight,
+    bool compact = false,
+    String message = '서버 XeLaTeX 미리보기 준비 중 · 임시 로컬 미리보기',
+    bool showSpinner = true,
+  }) {
+    final double? outerHeight = expanded
+        ? null
+        : (compact ? _kPdfPreviewCompactMaxHeight : fixedHeight ?? 260);
+    final status = Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF7E5),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: const Color(0xFFE8D4A4)),
+      ),
+      child: Row(
+        children: [
+          if (showSpinner) ...[
+            const SizedBox(
+              width: 12,
+              height: 12,
+              child: CircularProgressIndicator(
+                strokeWidth: 1.6,
+                color: Color(0xFF7A5B1F),
+              ),
+            ),
+            const SizedBox(width: 6),
+          ],
+          Expanded(
+            child: Text(
+              message,
+              maxLines: compact ? 1 : 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Color(0xFF6A4D18),
+                fontSize: 10.8,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+    final paper = _buildPdfPreviewPaperContent(
+      q,
+      expanded: expanded,
+      scrollable: true,
+      bordered: true,
+      shadow: !compact,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 9, vertical: 7),
+    );
+    final body = Container(
+      height: outerHeight,
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: const Color(0xFF0E1518),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: _border),
+      ),
+      padding: const EdgeInsets.all(8.5),
+      child: Column(
+        mainAxisSize: expanded ? MainAxisSize.min : MainAxisSize.max,
+        children: [
+          status,
+          const SizedBox(height: 6),
+          if (expanded) paper else Expanded(child: paper),
+        ],
+      ),
+    );
+    if (compact && !expanded) {
+      return ClipRRect(borderRadius: BorderRadius.circular(8), child: body);
+    }
+    return body;
+  }
+
   Widget _buildPdfPreviewThumbnail(
     ProblemBankQuestion q, {
     bool expanded = false,
@@ -7778,43 +7988,48 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       );
     }
     if (dirty) {
-      return _buildPreviewPlaceholder(
+      return _buildLocalPdfPreviewFallback(
+        q,
         expanded: expanded,
         fixedHeight: fixedHeight,
-        message: '변경사항이 있습니다.\n업로드 후 미리보기가 갱신됩니다.',
+        message: '변경사항 있음 · 저장 후 XeLaTeX 썸네일 갱신',
         showSpinner: false,
         compact: compact,
       );
     }
     if (status == 'failed' || status == 'cancelled') {
-      return _buildPreviewPlaceholder(
+      return _buildLocalPdfPreviewFallback(
+        q,
         expanded: expanded,
         fixedHeight: fixedHeight,
         compact: compact,
         message: previewError.isNotEmpty
-            ? previewError
-            : '서버 PDF 미리보기에 실패했습니다.\n탭해서 다시 시도하세요.',
+            ? '$previewError · 탭해서 재시도'
+            : '서버 PDF 미리보기 실패 · 탭해서 재시도',
         showSpinner: false,
       );
     }
-    if (status == 'queued' || status == 'running') {
-      return _buildPreviewPlaceholder(
+    if (status == 'queued' || status == 'running' || status == 'rendering') {
+      return _buildLocalPdfPreviewFallback(
+        q,
         expanded: expanded,
         fixedHeight: fixedHeight,
         compact: compact,
-        message: '서버 PDF 미리보기 생성 중...',
+        message: '서버 XeLaTeX 미리보기 생성 중 · 임시 로컬 미리보기',
       );
     }
     if (status == 'completed') {
-      return _buildPreviewPlaceholder(
+      return _buildLocalPdfPreviewFallback(
+        q,
         expanded: expanded,
         fixedHeight: fixedHeight,
         compact: compact,
-        message: '미리보기 생성 완료 (썸네일 없음)',
+        message: '서버 미리보기 완료 응답에 썸네일 없음 · 임시 로컬 미리보기',
         showSpinner: false,
       );
     }
-    return _buildPreviewPlaceholder(
+    return _buildLocalPdfPreviewFallback(
+      q,
       expanded: expanded,
       fixedHeight: fixedHeight,
       compact: compact,
@@ -8555,28 +8770,40 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                         padding: const EdgeInsets.symmetric(
                             horizontal: 6, vertical: 2),
                         decoration: BoxDecoration(
-                          color:
-                              (t.type == 'raw' ? Colors.orangeAccent : _accent)
-                                  .withValues(alpha: 0.15),
+                          color: (t.type == 'raw'
+                                  ? Colors.orangeAccent
+                                  : t.type == 'blank_choice'
+                                      ? const Color(0xFF9ED9C3)
+                                      : _accent)
+                              .withValues(alpha: 0.15),
                           borderRadius: BorderRadius.circular(4),
                         ),
                         child: Text(
-                          t.type == 'raw' ? 'raw tabular' : '구조화 표',
+                          t.type == 'raw'
+                              ? 'raw tabular'
+                              : t.type == 'blank_choice'
+                                  ? '빈칸형'
+                                  : '구조화 표',
                           style: TextStyle(
                             fontSize: 10,
                             fontWeight: FontWeight.w700,
-                            color:
-                                t.type == 'raw' ? Colors.orangeAccent : _accent,
+                            color: t.type == 'raw'
+                                ? Colors.orangeAccent
+                                : t.type == 'blank_choice'
+                                    ? const Color(0xFF9ED9C3)
+                                    : _accent,
                           ),
                         ),
                       ),
                     ],
                   ),
-                  if (t.type == 'raw')
-                    const Padding(
-                      padding: EdgeInsets.only(top: 2),
+                  if (t.type == 'raw' || t.type == 'blank_choice')
+                    Padding(
+                      padding: const EdgeInsets.only(top: 2),
                       child: Text(
-                        '* 글자 크기는 본문에 동기화됩니다.',
+                        t.type == 'blank_choice'
+                            ? '* 높이와 글자 크기는 고정하고, 가로 간격만 조정합니다.'
+                            : '* 글자 크기는 본문에 동기화됩니다.',
                         style: TextStyle(
                           color: _textSub,
                           fontSize: 10.6,
@@ -8600,21 +8827,22 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                     },
                     onChangeEnd: (_) => onSettingChanged(),
                   ),
-                  _buildTableScaleSlider(
-                    title: '세로',
-                    value:
-                        (drafts[t.key] ?? const TableScaleValue()).heightScale,
-                    min: minS,
-                    max: maxS,
-                    divisions: divisions,
-                    onChanged: (v) {
-                      final cur = drafts[t.key] ?? const TableScaleValue();
-                      setLocalState(() {
-                        drafts[t.key] = cur.copyWith(heightScale: v);
-                      });
-                    },
-                    onChangeEnd: (_) => onSettingChanged(),
-                  ),
+                  if (t.type != 'blank_choice')
+                    _buildTableScaleSlider(
+                      title: '세로',
+                      value: (drafts[t.key] ?? const TableScaleValue())
+                          .heightScale,
+                      min: minS,
+                      max: maxS,
+                      divisions: divisions,
+                      onChanged: (v) {
+                        final cur = drafts[t.key] ?? const TableScaleValue();
+                        setLocalState(() {
+                          drafts[t.key] = cur.copyWith(heightScale: v);
+                        });
+                      },
+                      onChangeEnd: (_) => onSettingChanged(),
+                    ),
                   if (t.maxCols >= 2)
                     _buildColumnScalesRow(
                       entry: t,
@@ -9132,7 +9360,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   /// 외부에는 등장 순서대로 `표 1 / 표 2 / ...` 라벨을 단다.
   List<TableScaleEntry> _parseTableEntries(ProblemBankQuestion q) {
     final stem = q.stem;
-    if (stem.isEmpty) return const <TableScaleEntry>[];
+    if (stem.isEmpty && !_isBlankChoiceQuestion(q))
+      return const <TableScaleEntry>[];
     final lines = stem.split('\n');
     final entries = <_PartialTableEntry>[];
     var structIdx = 0;
@@ -9289,6 +9518,13 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           label: '표 ${i + 1}',
           type: entries[i].type,
           maxCols: entries[i].maxCols,
+        ),
+      if (_isBlankChoiceQuestion(q) && _previewChoicesOf(q).length == 5)
+        const TableScaleEntry(
+          key: 'blank_choice:1',
+          label: '빈칸형 보기',
+          type: 'blank_choice',
+          maxCols: 3,
         ),
     ];
   }
@@ -9818,6 +10054,11 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     final previewChoices = _previewChoicesOf(q);
     final objectiveChoiceCount = previewChoices.length;
     final isReextractingThisQuestion = _reextractingQuestionIds.contains(q.id);
+    final docStatus = (_activeDocument?.status ?? '').trim().toLowerCase();
+    final isPublished = docStatus == 'ready';
+    final publishBadgeColor =
+        isPublished ? const Color(0xFF41B883) : const Color(0xFFE3B341);
+    final publishBadgeText = isPublished ? '사용준비됨' : '미업로드';
     final canReextractThisQuestion = !isReextractingThisQuestion &&
         (_activeDocument?.hasHwpxSource ?? false) &&
         (_activeDocument?.hasPdfSource ?? false) &&
@@ -9863,6 +10104,23 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                   color: _text,
                   fontSize: 13,
                   fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(width: 6),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                decoration: BoxDecoration(
+                  color: publishBadgeColor.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(color: publishBadgeColor),
+                ),
+                child: Text(
+                  publishBadgeText,
+                  style: TextStyle(
+                    color: publishBadgeColor,
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w800,
+                  ),
                 ),
               ),
               const Spacer(),
@@ -10405,6 +10663,24 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                       )
                     : const Icon(Icons.cloud_upload_outlined, size: 16),
                 label: const Text('업로드'),
+              ),
+              const SizedBox(width: 8),
+              OutlinedButton.icon(
+                onPressed: _activeDocument == null ||
+                        _activeDocument?.status.trim().toLowerCase() !=
+                            'ready' ||
+                        _isSavingQuestionChanges ||
+                        _isDeletingCurrentQuestions ||
+                        _isUploading ||
+                        _isExtracting
+                    ? null
+                    : () => unawaited(_deactivateActiveDocument()),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFFE3B341),
+                  side: const BorderSide(color: Color(0xFFE3B341)),
+                ),
+                icon: const Icon(Icons.visibility_off_outlined, size: 16),
+                label: const Text('비활성화'),
               ),
               const SizedBox(width: 8),
               OutlinedButton.icon(

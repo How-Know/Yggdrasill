@@ -23,6 +23,45 @@ export function normalizeMathDelimiters(input) {
   return s;
 }
 
+function normalizeCompactFractionCommands(input) {
+  let out = String(input || '');
+  for (let i = 0; i < 4; i += 1) {
+    const next = out
+      .replace(
+        /\\(?:dfrac|tfrac|frac)\s*\{([^{}]+)\}\s*\{([^{}]+)\}/g,
+        (_, a, b) => `\\frac{${String(a).trim()}}{${String(b).trim()}}`,
+      )
+      .replace(
+        /\\(?:dfrac|tfrac|frac)\s*\{([^{}]+)\}\s*([A-Za-z0-9])/g,
+        (_, a, b) => `\\frac{${String(a).trim()}}{${b}}`,
+      )
+      .replace(
+        /\\(?:dfrac|tfrac|frac)\s*([A-Za-z0-9])\s*\{([^{}]+)\}/g,
+        (_, a, b) => `\\frac{${a}}{${String(b).trim()}}`,
+      )
+      .replace(
+        /\\(?:dfrac|tfrac|frac)\s*([A-Za-z0-9])\s*([A-Za-z0-9])/g,
+        (_, a, b) => `\\frac{${a}}{${b}}`,
+      );
+    if (next === out) break;
+    out = next;
+  }
+  return out;
+}
+
+function normalizeAnswerSurfaceText(input) {
+  let out = normalizeMathDelimiters(input || '');
+  for (let i = 0; i < 6; i += 1) {
+    const next = String(out)
+      .replace(/\\(?:text|mathrm)\s*\{([^{}]*)\}/g, '$1')
+      .replace(/\\textstyle\b/g, '')
+      .replace(/\\displaystyle\b/g, '');
+    if (next === out) break;
+    out = next;
+  }
+  return normalizeCompactFractionCommands(out).replace(/\s+/g, ' ').trim();
+}
+
 export function normalizeVlmQuestion(vlmQ) {
   if (!vlmQ || typeof vlmQ !== 'object') return vlmQ;
   const out = { ...vlmQ };
@@ -42,7 +81,7 @@ export function normalizeVlmQuestion(vlmQ) {
   if (out.answer && typeof out.answer === 'object') {
     const a = { ...out.answer };
     if (typeof a.subjective === 'string')
-      a.subjective = normalizeMathDelimiters(a.subjective);
+      a.subjective = normalizeAnswerSurfaceText(a.subjective);
     if (typeof a.objective_key === 'string')
       a.objective_key = normalizeMathDelimiters(a.objective_key);
     if (Array.isArray(a.parts)) {
@@ -100,6 +139,96 @@ function normalizeBlankFigureMarkers(stem, figures) {
 }
 
 const OBJ_LABELS = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩'];
+
+function stripLatexTextWrapper(value) {
+  return String(value || '')
+    .replace(/\\text\{([^{}]*)\}/g, '$1')
+    .replace(/[{}]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function splitTopLevelAmpersands(row) {
+  const cells = [];
+  let depth = 0;
+  let buf = '';
+  for (let i = 0; i < row.length; i += 1) {
+    const ch = row[i];
+    if (ch === '{') depth += 1;
+    else if (ch === '}') depth = Math.max(0, depth - 1);
+    if (ch === '&' && depth === 0) {
+      cells.push(buf);
+      buf = '';
+    } else {
+      buf += ch;
+    }
+  }
+  cells.push(buf);
+  return cells;
+}
+
+function extractBlankChoiceLabelsFromTabular(block) {
+  const bodyMatch = String(block || '').match(
+    /\\begin\{tabular\}\{[^}]*\}([\s\S]*?)\\end\{tabular\}/,
+  );
+  const body = bodyMatch ? bodyMatch[1] : String(block || '');
+  const rows = body
+    .split(/\\\\/)
+    .map((row) => row.replace(/\\hline/g, '').trim())
+    .filter((row) => row && row.includes('&'));
+  const header = rows.find((row) => !/[①②③④⑤⑥⑦⑧⑨⑩]/.test(row));
+  if (!header) return ['(가)', '(나)', '(다)'];
+  const cells = splitTopLevelAmpersands(header)
+    .map(stripLatexTextWrapper)
+    .filter(Boolean);
+  return (cells.length >= 4 ? cells.slice(1) : cells)
+    .slice(0, 3)
+    .map((label, idx) => label || ['(가)', '(나)', '(다)'][idx]);
+}
+
+function looksLikeBlankChoiceTabular(block, choices) {
+  if (!Array.isArray(choices) || choices.length !== 5) return false;
+  const source = String(block || '');
+  if (!/\\begin\{tabular\}/.test(source) || !/\\end\{tabular\}/.test(source)) {
+    return false;
+  }
+  const expectedLabels = choices
+    .slice(0, 5)
+    .map((choice, idx) => normalizeObjectiveLabel(choice?.label, idx));
+  return expectedLabels.every((label) => source.includes(label));
+}
+
+function normalizeBlankChoiceTableStem(stem, choices) {
+  const source = String(stem || '');
+  if (!source.includes('[표시작]') || !Array.isArray(choices) || choices.length !== 5) {
+    return { stem: source, isBlankChoice: false, labels: [] };
+  }
+
+  let isBlankChoice = false;
+  let labels = [];
+  const tableBlockRe =
+    /(\[표시작\]\s*\\begin\{tabular\}\{[^}]*\}[\s\S]*?\\end\{tabular\}\s*\[표끝\])(\s*\[문단\]\s*\[그림\])?/g;
+  const nextStem = source.replace(
+    tableBlockRe,
+    (match, tableBlock, figureTail, offset) => {
+      if (!looksLikeBlankChoiceTabular(tableBlock, choices)) return match;
+      isBlankChoice = true;
+      if (labels.length === 0) {
+        labels = extractBlankChoiceLabelsFromTabular(tableBlock);
+      }
+      const before = source.slice(0, offset);
+      const hasFigureBefore = /\[그림\]|\[\[PB_FIG_[^\]]+\]\]/.test(before);
+      return figureTail && !hasFigureBefore ? figureTail : '';
+    },
+  );
+
+  return {
+    stem: nextStem.replace(/\n{3,}/g, '\n\n').trim(),
+    isBlankChoice,
+    labels,
+  };
+}
+
 export function normalizeObjectiveLabel(raw, index) {
   const s = String(raw || '').trim();
   if (!s) return OBJ_LABELS[index] || '';
@@ -155,6 +284,48 @@ export function normalizeObjectiveAnswerKey(answerKey) {
   if (!raw) return '';
   const tokens = objectiveAnswerTokens(raw);
   return tokens.length > 0 ? tokens.join(', ') : raw;
+}
+
+function objectiveAnswerToSubjective(answerKey, choices) {
+  const tokens = objectiveAnswerTokens(answerKey);
+  if (tokens.length === 0 || !Array.isArray(choices) || choices.length === 0) {
+    return '';
+  }
+  const byLabel = new Map();
+  for (const choice of choices) {
+    const label = String(choice?.label || '').trim();
+    const text = String(choice?.text || '').trim();
+    if (label && text) byLabel.set(label, text);
+  }
+  return tokens
+    .map((label) => byLabel.get(label) || '')
+    .filter(Boolean)
+    .join(', ');
+}
+
+function normalizeAnswerFigureAssets(rawAssets) {
+  if (!Array.isArray(rawAssets)) return [];
+  return rawAssets
+    .map((asset, idx) => {
+      const bucket = String(asset?.bucket || '').trim();
+      const path = String(asset?.path || '').trim();
+      if (!bucket || !path) return null;
+      const figureIndex = Number.parseInt(String(asset?.figure_index ?? idx + 1), 10);
+      return {
+        figure_index: Number.isFinite(figureIndex) && figureIndex > 0 ? figureIndex : idx + 1,
+        bucket,
+        path,
+        mime_type: String(asset?.mime_type || 'image/png').trim() || 'image/png',
+        approved: asset?.approved !== false,
+        source: String(asset?.source || 'textbook_answer_vlm').trim(),
+        created_at: String(asset?.created_at || new Date().toISOString()),
+        ...(asset?.width_px ? { width_px: asset.width_px } : {}),
+        ...(asset?.height_px ? { height_px: asset.height_px } : {}),
+        ...(asset?.size_bytes ? { size_bytes: asset.size_bytes } : {}),
+        ...(asset?.content_hash ? { content_hash: asset.content_hash } : {}),
+      };
+    })
+    .filter(Boolean);
 }
 
 export function expectedObjectiveAnswerCount(vlmQ) {
@@ -251,7 +422,7 @@ export function buildRowUpdate(existingRow, vlmQ, opts = {}) {
     rawVlmFigures.length > 0 || /\[그림\]|\[\[PB_FIG_[^\]]+\]\]/.test(rawStemForFigureMarkers)
       ? 0
       : existingFigureSlots;
-  const stem = normalizeBlankFigureMarkers(
+  const stemWithFigures = normalizeBlankFigureMarkers(
     buildStemWithSubQuestions(vlmQ, preserveExistingFigureSlots),
     rawVlmFigures,
   );
@@ -261,18 +432,36 @@ export function buildRowUpdate(existingRow, vlmQ, opts = {}) {
     label: normalizeObjectiveLabel(c?.label, idx),
     text: String(c?.text || '').trim(),
   }));
+  const blankChoiceNormalization = normalizeBlankChoiceTableStem(
+    stemWithFigures,
+    objectiveChoices,
+  );
+  const stem = blankChoiceNormalization.stem;
 
   const objectiveAnswerKeyRaw = String(vlmQ?.answer?.objective_key || '').trim();
   const objectiveAnswerKey = objectiveAnswerKeyRaw
     ? normalizeObjectiveAnswerKey(objectiveAnswerKeyRaw)
     : '';
-  const subjectiveAnswer = String(vlmQ?.answer?.subjective || '').trim();
+  let subjectiveAnswer = normalizeAnswerSurfaceText(vlmQ?.answer?.subjective || '');
   const answerParts = Array.isArray(vlmQ?.answer?.parts)
     ? vlmQ.answer.parts
     : [];
+  const answerFigureAssets = normalizeAnswerFigureAssets(vlmQ?.answer_figure_assets);
 
   const allowObjective = qType === '객관식' && objectiveChoices.length > 0;
-  const allowSubjective = qType !== '객관식';
+  if (!subjectiveAnswer && allowObjective && objectiveAnswerKey) {
+    subjectiveAnswer = normalizeAnswerSurfaceText(
+      objectiveAnswerToSubjective(objectiveAnswerKey, objectiveChoices),
+    );
+  }
+  if (!subjectiveAnswer && !allowObjective && objectiveAnswerKey) {
+    subjectiveAnswer = objectiveAnswerKey;
+  }
+  const hasSubjectiveAnswerPayload =
+    subjectiveAnswer.trim().length > 0 ||
+    answerParts.length > 0 ||
+    answerFigureAssets.length > 0;
+  const allowSubjective = true;
   const expectedAnswerCount = allowObjective ? expectedObjectiveAnswerCount(vlmQ) : 0;
   const actualAnswerCount = objectiveAnswerTokens(objectiveAnswerKey).length;
   const incompleteMultiAnswer =
@@ -283,6 +472,7 @@ export function buildRowUpdate(existingRow, vlmQ, opts = {}) {
     new Set([
       ...(Array.isArray(vlmQ.flags) ? vlmQ.flags : []),
       ...(incompleteMultiAnswer ? ['objective_multi_answer_incomplete_suspected'] : []),
+      ...(blankChoiceNormalization.isBlankChoice ? ['blank_choice_question'] : []),
     ]),
   ).filter(
     (flag) =>
@@ -386,10 +576,31 @@ export function buildRowUpdate(existingRow, vlmQ, opts = {}) {
           value: String(p.value ?? ''),
         }))
       : [],
-    answer_key: isSet ? subjectiveAnswer : existingMeta.answer_key || '',
+    answer_key: subjectiveAnswer || objectiveAnswerKey || existingMeta.answer_key || '',
     objective_answer_key: allowObjective ? objectiveAnswerKey : '',
     allow_objective: allowObjective,
     allow_subjective: allowSubjective || isSet,
+    subjective_answer: subjectiveAnswer,
+    ...(answerFigureAssets.length > 0
+      ? {
+          answer_figure_assets: answerFigureAssets,
+          answer_figure_layout:
+            existingMeta.answer_figure_layout &&
+            typeof existingMeta.answer_figure_layout === 'object'
+              ? existingMeta.answer_figure_layout
+              : {
+                  version: 1,
+                  verticalAlign: 'top',
+                  items: answerFigureAssets.map((asset, idx) => ({
+                    assetKey: `idx:${asset.figure_index || idx + 1}`,
+                    widthEm: 10,
+                    verticalAlign: 'top',
+                    topOffsetEm: 0.55,
+                  })),
+                },
+        }
+      : {}),
+    ...(hasSubjectiveAnswerPayload ? { answer_source: 'vlm' } : {}),
     ...(incompleteMultiAnswer
       ? {
           objective_answer_expected_count: expectedAnswerCount,
@@ -398,6 +609,22 @@ export function buildRowUpdate(existingRow, vlmQ, opts = {}) {
       : {}),
     score_point: nextScorePoint,
     figure_count: figureCountForMapping,
+    ...(blankChoiceNormalization.isBlankChoice
+      ? {
+          is_blank_choice_question: true,
+          choice_layout: 'blank_table',
+          blank_choice_labels:
+            blankChoiceNormalization.labels.length > 0
+              ? blankChoiceNormalization.labels
+              : ['(가)', '(나)', '(다)'],
+          table_scales: undefined,
+          table_scale_default: undefined,
+        }
+      : {
+          is_blank_choice_question: undefined,
+          choice_layout: undefined,
+          blank_choice_labels: undefined,
+        }),
     vlm: {
       model: opts.modelName || 'gemini-3.1-pro-preview',
       source_page: vlmQ.source_page ?? null,
@@ -407,6 +634,10 @@ export function buildRowUpdate(existingRow, vlmQ, opts = {}) {
         : [],
       figures_described: vlmFigures,
       tables_described: vlmTables,
+      answer_sidecar:
+        vlmQ.textbook_answer_sidecar && typeof vlmQ.textbook_answer_sidecar === 'object'
+          ? vlmQ.textbook_answer_sidecar
+          : null,
       flags: nextFlags,
       overwritten_at: new Date().toISOString(),
     },

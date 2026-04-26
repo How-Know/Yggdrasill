@@ -234,7 +234,10 @@ export function normalizeDetectResult(parsedJson) {
       colRaw === 1 || colRaw === 2 ? colRaw : colRaw == null ? null : null;
     const bbox = parseBbox4(raw.bbox);
     const itemRegion = parseBbox4(raw.item_region);
-    const group = normalizeContentGroup(raw.content_group);
+    const group =
+      out.section === 'mastery'
+        ? { kind: 'none', label: '', title: '', order: null }
+        : normalizeContentGroup(raw.content_group);
     out.items.push({
       number,
       label,
