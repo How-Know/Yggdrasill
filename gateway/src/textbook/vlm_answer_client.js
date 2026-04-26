@@ -7,6 +7,13 @@
 import { buildExtractAnswersPrompt } from './vlm_answer_prompt.js';
 import { repairLatexBackslashes } from '../problem_bank/extract_engines/vlm/client.js';
 
+const ANSWER_TRANSIENT_STATUSES = new Set([429, 500, 502, 503, 504]);
+const ANSWER_DEFAULT_MAX_RETRIES = 3;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export async function extractAnswersOnPage({
   imageBase64,
   mimeType = 'image/png',
@@ -17,6 +24,7 @@ export async function extractAnswersOnPage({
   model,
   apiKey,
   timeoutMs = 90000,
+  maxRetries = ANSWER_DEFAULT_MAX_RETRIES,
 }) {
   const key = String(apiKey || '').trim();
   if (!key) throw new Error('vlm_answer_api_key_missing');
@@ -58,76 +66,110 @@ export async function extractAnswersOnPage({
     },
   };
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  const t0 = Date.now();
-  let res;
-  try {
-    res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-  } finally {
-    clearTimeout(timer);
-  }
-  const elapsedMs = Date.now() - t0;
-  const textBody = await res.text();
-  if (!res.ok) {
-    throw new Error(
-      `vlm_answer_http_${res.status}: ${String(textBody).slice(0, 500)}`,
-    );
-  }
-  let payload;
-  try {
-    payload = JSON.parse(textBody);
-  } catch (_) {
-    throw new Error(
-      `vlm_answer_non_json_response: ${String(textBody).slice(0, 500)}`,
-    );
-  }
-  const candidate = (payload?.candidates || [])[0];
-  const modelText = (candidate?.content?.parts || [])
-    .map((p) => p?.text || '')
-    .join('\n')
-    .trim();
-  let parsedJson = null;
-  try {
-    parsedJson = JSON.parse(modelText);
-  } catch (_) {
-    const repaired = repairLatexBackslashes(modelText);
+  let lastStatus = 0;
+  let lastBody = '';
+  let lastErr = null;
+  const attempts = Math.max(1, Number(maxRetries) || 1);
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const t0 = Date.now();
+    let res;
     try {
-      parsedJson = JSON.parse(repaired);
+      res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      clearTimeout(timer);
+      lastErr = err;
+      if (attempt + 1 < attempts) {
+        await sleep(800 * Math.pow(2, attempt));
+        continue;
+      }
+      throw new Error(
+        `vlm_answer_fetch_error: ${compactErrMsg(err)} (attempts=${attempt + 1})`,
+      );
+    } finally {
+      clearTimeout(timer);
+    }
+    const elapsedMs = Date.now() - t0;
+    const textBody = await res.text();
+    if (!res.ok) {
+      lastStatus = res.status;
+      lastBody = textBody;
+      if (ANSWER_TRANSIENT_STATUSES.has(res.status) && attempt + 1 < attempts) {
+        await sleep(800 * Math.pow(2, attempt));
+        continue;
+      }
+      throw new Error(
+        `vlm_answer_http_${res.status}: ${String(textBody).slice(0, 500)} (attempts=${attempt + 1})`,
+      );
+    }
+    let payload;
+    try {
+      payload = JSON.parse(textBody);
     } catch (_) {
-      const m = repaired.match(/\{[\s\S]*\}/);
-      if (m) {
-        try {
-          parsedJson = JSON.parse(m[0]);
-        } catch (_) {
-          // leave null
+      throw new Error(
+        `vlm_answer_non_json_response: ${String(textBody).slice(0, 500)}`,
+      );
+    }
+    const candidate = (payload?.candidates || [])[0];
+    const modelText = (candidate?.content?.parts || [])
+      .map((p) => p?.text || '')
+      .join('\n')
+      .trim();
+    let parsedJson = null;
+    try {
+      parsedJson = JSON.parse(modelText);
+    } catch (_) {
+      const repaired = repairLatexBackslashes(modelText);
+      try {
+        parsedJson = JSON.parse(repaired);
+      } catch (_) {
+        const m = repaired.match(/\{[\s\S]*\}/);
+        if (m) {
+          try {
+            parsedJson = JSON.parse(m[0]);
+          } catch (_) {
+            // leave null
+          }
         }
       }
     }
+    if (!parsedJson) {
+      throw new Error(
+        `vlm_answer_parse_failed: finish=${candidate?.finishReason || '-'} text_head="${modelText.slice(
+          0,
+          180,
+        )}"`,
+      );
+    }
+    return {
+      rawPayload: payload,
+      parsedJson,
+      elapsedMs,
+      usageMetadata: payload?.usageMetadata || null,
+      finishReason: candidate?.finishReason || '',
+      attempts: attempt + 1,
+    };
   }
-  if (!parsedJson) {
-    throw new Error(
-      `vlm_answer_parse_failed: finish=${candidate?.finishReason || '-'} text_head="${modelText.slice(
-        0,
-        180,
-      )}"`,
-    );
-  }
-  return {
-    rawPayload: payload,
-    parsedJson,
-    elapsedMs,
-    usageMetadata: payload?.usageMetadata || null,
-    finishReason: candidate?.finishReason || '',
-  };
+  throw new Error(
+    `vlm_answer_exhausted: status=${lastStatus} lastErr=${compactErrMsg(lastErr)} body=${String(
+      lastBody,
+    ).slice(0, 300)}`,
+  );
 }
 
-const ALLOWED_KINDS = new Set(['objective', 'subjective']);
+function compactErrMsg(err) {
+  if (!err) return '';
+  const name = err?.name ? `${err.name}: ` : '';
+  return `${name}${String(err?.message || err).slice(0, 300)}`;
+}
+
+const ALLOWED_KINDS = new Set(['objective', 'subjective', 'image']);
 
 export function normalizeAnswerResult(parsedJson) {
   const out = { items: [], notes: '' };
@@ -140,7 +182,10 @@ export function normalizeAnswerResult(parsedJson) {
     if (!problemNumber) continue;
     const kindRaw = String(raw.kind ?? '').trim().toLowerCase();
     const kind = ALLOWED_KINDS.has(kindRaw) ? kindRaw : 'subjective';
-    const answerText = String(raw.answer_text ?? '').trim();
+    const answerText =
+      kind === 'image'
+        ? String(raw.answer_text ?? '[image]').trim() || '[image]'
+        : String(raw.answer_text ?? '').trim();
     const answerLatex2d = String(raw.answer_latex_2d ?? '').trim();
     const bbox = parseBbox4(raw.bbox);
     out.items.push({

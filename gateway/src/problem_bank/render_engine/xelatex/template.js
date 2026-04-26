@@ -1497,6 +1497,51 @@ function chooseChoiceLayout(choices, equations, layoutColumns = 1) {
   return 'row1';
 }
 
+function isBlankChoiceQuestion(question) {
+  const meta = question?.meta && typeof question.meta === 'object' ? question.meta : {};
+  return meta.is_blank_choice_question === true || meta.choice_layout === 'blank_table';
+}
+
+function blankChoiceLabels(question) {
+  const meta = question?.meta && typeof question.meta === 'object' ? question.meta : {};
+  const raw = Array.isArray(meta.blank_choice_labels) ? meta.blank_choice_labels : [];
+  const fallback = ['(가)', '(나)', '(다)'];
+  return fallback.map((label, idx) => {
+    const value = String(raw[idx] || '').trim();
+    return value || label;
+  });
+}
+
+function blankChoiceCells(text, columnCount) {
+  const parts = String(text || '')
+    .split(/\s*,\s*/)
+    .map((v) => v.trim());
+  while (parts.length < columnCount) parts.push('');
+  return parts.slice(0, columnCount);
+}
+
+function renderBlankChoicesLatex(question, choices, equations) {
+  if (!Array.isArray(choices) || choices.length !== 5) return renderChoicesLatex(choices, equations);
+  const labels = blankChoiceLabels(question);
+  const header = [''].concat(labels.map(escapeLatexText)).join(' & ');
+  const rows = choices.map((choice, idx) => {
+    const label = typeof choice === 'string'
+      ? (CIRCLED_DIGITS[idx] || String(idx + 1))
+      : (String(choice?.label || '').trim() || CIRCLED_DIGITS[idx] || String(idx + 1));
+    const rawText = typeof choice === 'string' ? choice : choice?.text || '';
+    const cells = blankChoiceCells(rawText, labels.length)
+      .map((cell) => smartTexLine(cell, equations));
+    return [label].concat(cells).join(' & ');
+  });
+  return [
+    '{\\setstretch{1.7}\\parskip=0pt\\lineskiplimit=0.4em\\lineskip=1.2em',
+    '\\noindent\\begin{tabular}{@{}lccc@{}}',
+    header + ' \\\\',
+    rows.join(' \\\\\n'),
+    '\\end{tabular}\\par}',
+  ].join('\n');
+}
+
 function renderChoicesLatex(choices, equations, layoutColumns = 1) {
   if (!Array.isArray(choices) || choices.length === 0) return '';
 
@@ -3106,7 +3151,9 @@ function renderOneQuestion(question, {
     const choiceGap = trailingBigType ? gapAfter(trailingBigType) : BLOCK_GAP;
     parts.push(`% DBG choices-gap: trailingBigType=${trailingBigType} gap=${choiceGap.replace(/\\/g, '\\\\')}`);
     parts.push(choiceGap);
-    parts.push(renderChoicesLatex(choices, equations, layoutColumns));
+    parts.push(isBlankChoiceQuestion(question)
+      ? renderBlankChoicesLatex(question, choices, equations)
+      : renderChoicesLatex(choices, equations, layoutColumns));
   }
 
   parts.push('\\par');

@@ -22,6 +22,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:image/image.dart' as img;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:pdfrx/pdfrx.dart';
@@ -48,6 +49,7 @@ class TextbookAuthoringStageDialog extends StatefulWidget {
     this.bigName,
     this.midName,
     this.initialCrops = const <TextbookAuthoringStageCropSeed>[],
+    this.batchScopes = const <TextbookAuthoringStageScope>[],
   });
 
   final String academyId;
@@ -61,6 +63,7 @@ class TextbookAuthoringStageDialog extends StatefulWidget {
   final String? bigName;
   final String? midName;
   final List<TextbookAuthoringStageCropSeed> initialCrops;
+  final List<TextbookAuthoringStageScope> batchScopes;
 
   static Future<void> show(
     BuildContext context, {
@@ -76,6 +79,8 @@ class TextbookAuthoringStageDialog extends StatefulWidget {
     String? midName,
     List<TextbookAuthoringStageCropSeed> initialCrops =
         const <TextbookAuthoringStageCropSeed>[],
+    List<TextbookAuthoringStageScope> batchScopes =
+        const <TextbookAuthoringStageScope>[],
   }) {
     return showDialog<void>(
       context: context,
@@ -92,6 +97,7 @@ class TextbookAuthoringStageDialog extends StatefulWidget {
         bigName: bigName,
         midName: midName,
         initialCrops: initialCrops,
+        batchScopes: batchScopes,
       ),
     );
   }
@@ -99,6 +105,24 @@ class TextbookAuthoringStageDialog extends StatefulWidget {
   @override
   State<TextbookAuthoringStageDialog> createState() =>
       _TextbookAuthoringStageDialogState();
+}
+
+class TextbookAuthoringStageScope {
+  const TextbookAuthoringStageScope({
+    required this.bigOrder,
+    required this.midOrder,
+    required this.subKey,
+    this.bigName = '',
+    this.midName = '',
+    this.subName = '',
+  });
+
+  final int bigOrder;
+  final int midOrder;
+  final String subKey;
+  final String bigName;
+  final String midName;
+  final String subName;
 }
 
 /// Minimal crop row passed from Stage 1 immediately after a successful
@@ -113,6 +137,11 @@ class TextbookAuthoringStageCropSeed {
     this.displayPage,
     this.section = '',
     this.isSetHeader = false,
+    this.contentGroupKind = 'none',
+    this.contentGroupLabel = '',
+    this.contentGroupTitle = '',
+    this.contentGroupOrder,
+    this.scopeLabel = '',
   });
 
   final String id;
@@ -121,6 +150,11 @@ class TextbookAuthoringStageCropSeed {
   final int? displayPage;
   final String section;
   final bool isSetHeader;
+  final String contentGroupKind;
+  final String contentGroupLabel;
+  final String contentGroupTitle;
+  final int? contentGroupOrder;
+  final String scopeLabel;
 }
 
 class _TextbookAuthoringStageDialogState
@@ -185,12 +219,15 @@ class _TextbookAuthoringStageDialogState
   final List<String> _solRefMissing = <String>[];
 
   bool _savingSolRefs = false;
+  bool _loadingPbRuns = false;
+  final Map<String, String> _pbRunStatusByKey = <String, String>{};
 
   @override
   void initState() {
     super.initState();
     _tab = TabController(length: 2, vsync: this);
     unawaited(_loadCrops());
+    unawaited(_refreshPbRunStatuses());
   }
 
   @override
@@ -209,19 +246,7 @@ class _TextbookAuthoringStageDialogState
       _cropsError = null;
     });
     try {
-      final rows = await _supa
-          .from('textbook_problem_crops')
-          .select('id, problem_number, raw_page, display_page, section, '
-              'is_set_header, bbox_1k, item_region_1k')
-          .eq('academy_id', widget.academyId)
-          .eq('book_id', widget.bookId)
-          .eq('grade_label', widget.gradeLabel)
-          .eq('big_order', widget.bigOrder)
-          .eq('mid_order', widget.midOrder)
-          .eq('sub_key', widget.subKey)
-          .order('raw_page', ascending: true)
-          .order('problem_number', ascending: true);
-      final list = (rows as List).cast<Map<String, dynamic>>();
+      final list = await _loadCropRowsForScopes();
       _crops
         ..clear()
         ..addAll(list.map(_StageCrop.fromRow));
@@ -254,20 +279,85 @@ class _TextbookAuthoringStageDialogState
     }
   }
 
+  Future<List<Map<String, dynamic>>> _loadCropRowsForScopes() async {
+    const select = 'id, problem_number, raw_page, display_page, section, '
+        'is_set_header, content_group_kind, content_group_label, '
+        'content_group_title, content_group_order, bbox_1k, item_region_1k';
+    final scopes = widget.batchScopes.isNotEmpty
+        ? widget.batchScopes
+        : <TextbookAuthoringStageScope>[
+            TextbookAuthoringStageScope(
+              bigOrder: widget.bigOrder,
+              midOrder: widget.midOrder,
+              subKey: widget.subKey,
+              bigName: widget.bigName ?? '',
+              midName: widget.midName ?? '',
+            ),
+          ];
+    final out = <Map<String, dynamic>>[];
+    for (final scope in scopes) {
+      final rows = await _supa
+          .from('textbook_problem_crops')
+          .select(select)
+          .eq('academy_id', widget.academyId)
+          .eq('book_id', widget.bookId)
+          .eq('grade_label', widget.gradeLabel)
+          .eq('big_order', scope.bigOrder)
+          .eq('mid_order', scope.midOrder)
+          .eq('sub_key', scope.subKey)
+          .order('raw_page', ascending: true)
+          .order('problem_number', ascending: true);
+      for (final row in (rows as List).cast<Map<String, dynamic>>()) {
+        out.add(<String, dynamic>{
+          ...row,
+          'scope_label': _scopeLabel(scope),
+        });
+      }
+    }
+    return out;
+  }
+
+  String _scopeLabel(TextbookAuthoringStageScope scope) {
+    final mid =
+        scope.midName.trim().isEmpty ? '중${scope.midOrder + 1}' : scope.midName;
+    final sub = scope.subName.trim().isEmpty ? scope.subKey : scope.subName;
+    return '$mid/$sub';
+  }
+
   Future<void> _loadExistingAnswers() async {
     if (_crops.isEmpty) return;
     final ids = _crops.map((c) => c.id).toList();
     final rows = await _supa
         .from('textbook_problem_answers')
         .select('crop_id, answer_kind, answer_text, answer_latex_2d, '
-            'answer_source, raw_page, display_page, bbox_1k, note')
+            'answer_source, raw_page, display_page, bbox_1k, '
+            'answer_image_bucket, answer_image_path, answer_image_region_1k, '
+            'note')
         .inFilter('crop_id', ids);
     final list = (rows as List).cast<Map<String, dynamic>>();
     _answersByCropId.clear();
     for (final r in list) {
       final cropId = '${r['crop_id'] ?? ''}';
       if (cropId.isEmpty) continue;
-      _answersByCropId[cropId] = _AnswerDraft.fromRow(r);
+      final draft = _AnswerDraft.fromRow(r);
+      await _attachAnswerImageUrl(draft, r);
+      _answersByCropId[cropId] = draft;
+    }
+  }
+
+  Future<void> _attachAnswerImageUrl(
+    _AnswerDraft draft,
+    Map<String, dynamic> row,
+  ) async {
+    if (draft.kind != 'image') return;
+    final bucket = '${row['answer_image_bucket'] ?? ''}'.trim();
+    final path = '${row['answer_image_path'] ?? ''}'.trim();
+    if (bucket.isEmpty || path.isEmpty) return;
+    try {
+      draft.answerImageUrl =
+          await _supa.storage.from(bucket).createSignedUrl(path, 60 * 30);
+    } catch (_) {
+      // 미리보기 실패는 저장된 정답 자체를 막지 않는다.
     }
   }
 
@@ -407,12 +497,21 @@ class _TextbookAuthoringStageDialogState
       _answerStatus = '답지 PDF 정답 추출 중…';
     });
 
+    final answerCrops = _crops.where((c) => !c.isSetHeader).toList();
     final expected = <String>[
-      for (final c in _crops)
+      for (final c in answerCrops)
         if (c.problemNumber.isNotEmpty) c.problemNumber,
     ];
+    if (expected.isEmpty) {
+      setState(() {
+        _runningAnswerVlm = false;
+        _answerStatus = '정답 매칭 대상이 없습니다';
+      });
+      return;
+    }
     final totalPages = doc.pages.length;
     final aggregated = <TextbookVlmAnswerItem>[];
+    final imageByNumber = <String, _ImageAnswerCrop>{};
 
     try {
       for (var page = 1; page <= totalPages; page += 1) {
@@ -443,6 +542,12 @@ class _TextbookAuthoringStageDialogState
           for (final it in res.items) {
             if (it.answerText.trim().isEmpty) continue;
             aggregated.add(it);
+            if (it.isImage && it.bbox != null) {
+              final crop = _cropAnswerImage(png, it.bbox!);
+              if (crop != null) {
+                imageByNumber.putIfAbsent(it.problemNumber, () => crop);
+              }
+            }
           }
         } catch (e) {
           debugPrint('[stage2] vlm failed page=$page err=$e');
@@ -458,7 +563,7 @@ class _TextbookAuthoringStageDialogState
         items: aggregated,
       );
       final byNumber = <String, String>{
-        for (final c in _crops) c.problemNumber: c.id,
+        for (final c in answerCrops) c.problemNumber: c.id,
       };
       setState(() {
         for (final entry in report.matched.entries) {
@@ -475,6 +580,10 @@ class _TextbookAuthoringStageDialogState
             source: 'vlm',
             rawPage: null,
             bbox1k: vlm.bbox,
+            answerImageBytes: imageByNumber[entry.key]?.pngBytes,
+            answerImageRegion1k: vlm.isImage ? vlm.bbox : null,
+            answerImageWidthPx: imageByNumber[entry.key]?.width,
+            answerImageHeightPx: imageByNumber[entry.key]?.height,
             dirty: true,
           );
         }
@@ -508,6 +617,10 @@ class _TextbookAuthoringStageDialogState
         answerSource: entry.source,
         rawPage: entry.rawPage,
         bbox1k: entry.bbox1k,
+        answerImagePngBytes: entry.answerImageBytes,
+        answerImageRegion1k: entry.answerImageRegion1k,
+        answerImageWidthPx: entry.answerImageWidthPx,
+        answerImageHeightPx: entry.answerImageHeightPx,
       ));
     }
     if (uploads.isEmpty) {
@@ -675,6 +788,30 @@ class _TextbookAuthoringStageDialogState
         dirty: true,
       );
     });
+  }
+
+  _ImageAnswerCrop? _cropAnswerImage(Uint8List pagePng, List<int> bbox1k) {
+    final decoded = img.decodeImage(pagePng);
+    if (decoded == null || bbox1k.length != 4) return null;
+    final ymin = bbox1k[0].clamp(0, 1000);
+    final xmin = bbox1k[1].clamp(0, 1000);
+    final ymax = bbox1k[2].clamp(0, 1000);
+    final xmax = bbox1k[3].clamp(0, 1000);
+    var x = (xmin / 1000 * decoded.width).floor();
+    var y = (ymin / 1000 * decoded.height).floor();
+    var w = ((xmax - xmin) / 1000 * decoded.width).ceil();
+    var h = ((ymax - ymin) / 1000 * decoded.height).ceil();
+    if (w <= 0 || h <= 0) return null;
+    x = x.clamp(0, decoded.width - 1);
+    y = y.clamp(0, decoded.height - 1);
+    w = w.clamp(1, decoded.width - x);
+    h = h.clamp(1, decoded.height - y);
+    final cropped = img.copyCrop(decoded, x: x, y: y, width: w, height: h);
+    return _ImageAnswerCrop(
+      pngBytes: Uint8List.fromList(img.encodePng(cropped)),
+      width: cropped.width,
+      height: cropped.height,
+    );
   }
 
   // --------------------------------------------------------------- stage 3
@@ -885,6 +1022,9 @@ class _TextbookAuthoringStageDialogState
   Widget _buildHeader() {
     final bigPart = (widget.bigName ?? '').isEmpty ? '대단원' : widget.bigName!;
     final midPart = (widget.midName ?? '').isEmpty ? '중단원' : widget.midName!;
+    final scopeTitle = widget.batchScopes.isEmpty
+        ? '$bigPart / $midPart (${widget.subKey})'
+        : '선택 ${widget.batchScopes.length}개 소단원';
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: Row(
@@ -893,7 +1033,7 @@ class _TextbookAuthoringStageDialogState
           const SizedBox(width: 8),
           Expanded(
             child: Text(
-              '정답·해설 단계 · ${widget.bookName} · $bigPart / $midPart (${widget.subKey})',
+              '정답·해설 단계 · ${widget.bookName} · $scopeTitle',
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(
                 color: _kText,
@@ -1042,6 +1182,16 @@ class _TextbookAuthoringStageDialogState
                   style: FilledButton.styleFrom(
                       backgroundColor: const Color(0xFF3A4A5E)),
                 ),
+                const Spacer(),
+                OutlinedButton.icon(
+                  onPressed: _runningAnswerVlm ? null : () => _tab.animateTo(1),
+                  icon: const Icon(Icons.arrow_forward, size: 14),
+                  label: const Text('다음: 해설 좌표'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: _kTextSub,
+                    side: const BorderSide(color: _kBorder),
+                  ),
+                ),
               ],
             ),
           ),
@@ -1099,6 +1249,37 @@ class _TextbookAuthoringStageDialogState
   }
 
   Widget _buildAnswerRow(_StageCrop crop) {
+    if (crop.isSetHeader) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: _kCard,
+          border: Border.all(color: _kWarn.withValues(alpha: 0.5)),
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 56,
+              child: Text(
+                crop.problemNumber,
+                style: const TextStyle(
+                  color: _kWarn,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+            const Expanded(
+              child: Text(
+                '세트 공통문항 · 정답 VLM 제외',
+                style: TextStyle(color: _kWarn, fontSize: 12),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
     final draft = _answersByCropId[crop.id];
     final kind = draft?.kind ?? 'subjective';
     final hasAnswer = draft != null && draft.answerText.trim().isNotEmpty;
@@ -1129,6 +1310,19 @@ class _TextbookAuthoringStageDialogState
                     fontWeight: FontWeight.w800,
                   ),
                 ),
+                if (crop.scopeLabel.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    crop.scopeLabel,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: _kTextSub, fontSize: 10),
+                  ),
+                ],
+                if (crop.contentGroupDisplay.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  _GroupChip(text: crop.contentGroupDisplay),
+                ],
                 if (crop.displayPage != null)
                   Text(
                     'p.${crop.displayPage}',
@@ -1152,7 +1346,9 @@ class _TextbookAuthoringStageDialogState
                   ],
                 ),
                 const SizedBox(height: 6),
-                if (kind == 'objective')
+                if (kind == 'image')
+                  _buildAnswerImagePreview(draft)
+                else if (kind == 'objective')
                   Wrap(
                     spacing: 4,
                     children: [
@@ -1207,6 +1403,35 @@ class _TextbookAuthoringStageDialogState
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildAnswerImagePreview(_AnswerDraft? draft) {
+    final bytes = draft?.answerImageBytes;
+    final url = draft?.answerImageUrl?.trim() ?? '';
+    Widget child;
+    if (bytes != null && bytes.isNotEmpty) {
+      child = Image.memory(bytes, fit: BoxFit.contain);
+    } else if (url.isNotEmpty) {
+      child = Image.network(url, fit: BoxFit.contain);
+    } else {
+      child = const Center(
+        child: Text(
+          '그림 정답 미리보기 없음',
+          style: TextStyle(color: _kTextSub, fontSize: 11),
+        ),
+      );
+    }
+    return Container(
+      constraints: const BoxConstraints(maxHeight: 96, minHeight: 44),
+      width: double.infinity,
+      padding: const EdgeInsets.all(6),
+      decoration: BoxDecoration(
+        color: _kPanel,
+        border: Border.all(color: _kBorder),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: child,
     );
   }
 
@@ -1371,7 +1596,35 @@ class _TextbookAuthoringStageDialogState
                   style: FilledButton.styleFrom(
                       backgroundColor: const Color(0xFF3A4A5E)),
                 ),
+                const Spacer(),
+                FilledButton.icon(
+                  onPressed: (_runningSolRefVlm || _savingSolRefs)
+                      ? null
+                      : _completeIfReady,
+                  icon: _loadingPbRuns
+                      ? const SizedBox(
+                          width: 12,
+                          height: 12,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: _kText,
+                          ),
+                        )
+                      : const Icon(Icons.done_all, size: 14),
+                  label: const Text('완료'),
+                  style: FilledButton.styleFrom(backgroundColor: _kAccent),
+                ),
               ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Text(
+              '본문 문제 추출: $_pbRunStatusText',
+              style: TextStyle(
+                color: _allPbRunsFinished ? _kAccent : _kTextSub,
+                fontSize: 11,
+              ),
             ),
           ),
           if (_runningSolRefVlm || _solRefStatus.isNotEmpty)
@@ -1539,6 +1792,87 @@ class _TextbookAuthoringStageDialogState
       ),
     );
   }
+
+  List<TextbookAuthoringStageScope> get _activeScopes =>
+      widget.batchScopes.isNotEmpty
+          ? widget.batchScopes
+          : <TextbookAuthoringStageScope>[
+              TextbookAuthoringStageScope(
+                bigOrder: widget.bigOrder,
+                midOrder: widget.midOrder,
+                subKey: widget.subKey,
+                bigName: widget.bigName ?? '',
+                midName: widget.midName ?? '',
+              ),
+            ];
+
+  String _scopeKey(TextbookAuthoringStageScope scope) =>
+      '${scope.bigOrder}:${scope.midOrder}:${scope.subKey}';
+
+  bool get _allPbRunsFinished {
+    if (_activeScopes.isEmpty) return true;
+    for (final scope in _activeScopes) {
+      final status = _pbRunStatusByKey[_scopeKey(scope)] ?? '';
+      if (status != 'completed' &&
+          status != 'review_required' &&
+          status != 'failed' &&
+          status != 'cancelled') {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  String get _pbRunStatusText {
+    if (_pbRunStatusByKey.isEmpty) return '본문 추출 상태 확인 전';
+    final counts = <String, int>{};
+    for (final status in _pbRunStatusByKey.values) {
+      counts[status] = (counts[status] ?? 0) + 1;
+    }
+    return counts.entries.map((e) => '${e.key} ${e.value}').join(' · ');
+  }
+
+  Future<void> _refreshPbRunStatuses() async {
+    if (_loadingPbRuns) return;
+    if (!mounted) return;
+    setState(() => _loadingPbRuns = true);
+    try {
+      final next = <String, String>{};
+      for (final scope in _activeScopes) {
+        final row = await _supa
+            .from('textbook_pb_extract_runs')
+            .select('status')
+            .eq('academy_id', widget.academyId)
+            .eq('book_id', widget.bookId)
+            .eq('grade_label', widget.gradeLabel)
+            .eq('big_order', scope.bigOrder)
+            .eq('mid_order', scope.midOrder)
+            .eq('sub_key', scope.subKey)
+            .maybeSingle();
+        next[_scopeKey(scope)] = '${row?['status'] ?? ''}'.trim();
+      }
+      if (!mounted) return;
+      setState(() {
+        _pbRunStatusByKey
+          ..clear()
+          ..addAll(next);
+      });
+    } catch (_) {
+      // 신규 마이그레이션 전 환경에서는 완료 버튼을 막지 않는다.
+    } finally {
+      if (mounted) setState(() => _loadingPbRuns = false);
+    }
+  }
+
+  Future<void> _completeIfReady() async {
+    await _refreshPbRunStatuses();
+    if (!mounted) return;
+    if (!_allPbRunsFinished) {
+      _toast('본문 문제 추출이 아직 진행 중입니다: $_pbRunStatusText', error: true);
+      return;
+    }
+    Navigator.of(context).maybePop();
+  }
 }
 
 class _StageCrop {
@@ -1549,6 +1883,11 @@ class _StageCrop {
     required this.displayPage,
     required this.section,
     required this.isSetHeader,
+    this.contentGroupKind = 'none',
+    this.contentGroupLabel = '',
+    this.contentGroupTitle = '',
+    this.contentGroupOrder,
+    this.scopeLabel = '',
   });
 
   final String id;
@@ -1557,6 +1896,20 @@ class _StageCrop {
   final int? displayPage;
   final String section;
   final bool isSetHeader;
+  final String contentGroupKind;
+  final String contentGroupLabel;
+  final String contentGroupTitle;
+  final int? contentGroupOrder;
+  final String scopeLabel;
+
+  String get contentGroupDisplay {
+    final label = contentGroupLabel.trim();
+    final title = contentGroupTitle.trim();
+    if (label.isEmpty && title.isEmpty) return '';
+    if (label.isEmpty) return title;
+    if (title.isEmpty) return label;
+    return '$label $title';
+  }
 
   factory _StageCrop.fromRow(Map<String, dynamic> r) {
     int? asIntN(dynamic v) {
@@ -1573,6 +1926,11 @@ class _StageCrop {
       displayPage: asIntN(r['display_page']),
       section: '${r['section'] ?? ''}',
       isSetHeader: r['is_set_header'] == true,
+      contentGroupKind: '${r['content_group_kind'] ?? 'none'}',
+      contentGroupLabel: '${r['content_group_label'] ?? ''}'.trim(),
+      contentGroupTitle: '${r['content_group_title'] ?? ''}'.trim(),
+      contentGroupOrder: asIntN(r['content_group_order']),
+      scopeLabel: '${r['scope_label'] ?? ''}'.trim(),
     );
   }
 
@@ -1584,6 +1942,11 @@ class _StageCrop {
       displayPage: seed.displayPage,
       section: seed.section,
       isSetHeader: seed.isSetHeader,
+      contentGroupKind: seed.contentGroupKind,
+      contentGroupLabel: seed.contentGroupLabel,
+      contentGroupTitle: seed.contentGroupTitle,
+      contentGroupOrder: seed.contentGroupOrder,
+      scopeLabel: '',
     );
   }
 }
@@ -1598,17 +1961,28 @@ class _AnswerDraft {
     required this.source,
     this.rawPage,
     this.bbox1k,
+    this.answerImageBytes,
+    this.answerImageRegion1k,
+    this.answerImageWidthPx,
+    this.answerImageHeightPx,
+    this.answerImagePath,
     this.dirty = false,
   });
 
   final String cropId;
   final String problemNumber;
-  String kind; // 'objective' | 'subjective'
+  String kind; // 'objective' | 'subjective' | 'image'
   String answerText;
   String answerLatex2d;
   String source; // 'vlm' | 'manual'
   int? rawPage;
   List<int>? bbox1k;
+  Uint8List? answerImageBytes;
+  List<int>? answerImageRegion1k;
+  int? answerImageWidthPx;
+  int? answerImageHeightPx;
+  String? answerImagePath;
+  String? answerImageUrl;
   bool dirty;
 
   factory _AnswerDraft.fromRow(Map<String, dynamic> r) {
@@ -1639,8 +2013,22 @@ class _AnswerDraft {
       source: '${r['answer_source'] ?? 'vlm'}',
       rawPage: asIntN(r['raw_page']),
       bbox1k: parseBbox(r['bbox_1k']),
+      answerImageRegion1k: parseBbox(r['answer_image_region_1k']),
+      answerImagePath: '${r['answer_image_path'] ?? ''}',
     );
   }
+}
+
+class _ImageAnswerCrop {
+  const _ImageAnswerCrop({
+    required this.pngBytes,
+    required this.width,
+    required this.height,
+  });
+
+  final Uint8List pngBytes;
+  final int width;
+  final int height;
 }
 
 class _SolRefDraft {
@@ -1724,19 +2112,27 @@ class _KindChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isObj = kind == 'objective';
+    final isImage = kind == 'image';
+    final color = isObj
+        ? const Color(0xFF7AA9E6)
+        : isImage
+            ? const Color(0xFFE6C07A)
+            : const Color(0xFFE67AA9);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
-        color: isObj ? const Color(0xFF1E2A3A) : const Color(0xFF2A1E2A),
-        border: Border.all(
-          color: isObj ? const Color(0xFF7AA9E6) : const Color(0xFFE67AA9),
-        ),
+        color: color.withValues(alpha: 0.15),
+        border: Border.all(color: color),
         borderRadius: BorderRadius.circular(3),
       ),
       child: Text(
-        isObj ? '객관식' : '주관식',
+        isObj
+            ? '객관식'
+            : isImage
+                ? '그림'
+                : '주관식',
         style: TextStyle(
-          color: isObj ? const Color(0xFF7AA9E6) : const Color(0xFFE67AA9),
+          color: color,
           fontSize: 10,
           fontWeight: FontWeight.w700,
         ),
@@ -1763,6 +2159,34 @@ class _SourceChip extends StatelessWidget {
         text,
         style: TextStyle(
           color: color,
+          fontSize: 10,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+}
+
+class _GroupChip extends StatelessWidget {
+  const _GroupChip({required this.text});
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+      decoration: BoxDecoration(
+        color: const Color(0xFF242018),
+        border:
+            Border.all(color: const Color(0xFFEAB968).withValues(alpha: 0.6)),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(
+        text,
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(
+          color: Color(0xFFEAB968),
           fontSize: 10,
           fontWeight: FontWeight.w700,
         ),

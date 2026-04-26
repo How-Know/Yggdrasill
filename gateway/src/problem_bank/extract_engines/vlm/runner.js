@@ -39,6 +39,7 @@ function toPayloadQuestion({
   sourceOrder,
   modelName,
   reviewConfidenceThreshold,
+  textbookScope = null,
 }) {
   const normalized = normalizeVlmQuestion(vlmQ);
   const update = buildRowUpdate(existingRow || null, normalized, {
@@ -103,7 +104,10 @@ function toPayloadQuestion({
     objective_answer_key: update.objective_answer_key,
     subjective_answer: update.subjective_answer,
     objective_generated: update.objective_generated,
-    meta: update.meta,
+    meta: {
+      ...(update.meta || {}),
+      ...(textbookScope ? { textbook_scope: textbookScope } : {}),
+    },
   };
 }
 
@@ -148,11 +152,16 @@ export async function runVlmExtraction({
     });
   }
 
+  const textbookScope =
+    doc?.meta?.textbook_scope && typeof doc.meta.textbook_scope === 'object'
+      ? doc.meta.textbook_scope
+      : null;
   const geminiResult = await callGeminiWithPdf({
     pdfBuffer,
     model,
     apiKey,
     timeoutMs,
+    textbookScope,
   });
 
   const parsedJson = geminiResult?.parsedJson;
@@ -197,6 +206,7 @@ export async function runVlmExtraction({
       sourceOrder: idx + 1,
       modelName: model,
       reviewConfidenceThreshold,
+      textbookScope,
     });
     if (Number(payload.confidence || 0) < Number(reviewConfidenceThreshold || 0.6)) {
       lowConfidenceCount += 1;

@@ -8,6 +8,13 @@
 import { buildDetectProblemsPrompt } from './vlm_detect_prompt.js';
 import { repairLatexBackslashes } from '../problem_bank/extract_engines/vlm/client.js';
 
+const TRANSIENT_STATUSES = new Set([429, 500, 502, 503, 504]);
+const DEFAULT_MAX_RETRIES = 3;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export async function detectProblemsOnPage({
   imageBase64,
   mimeType = 'image/png',
@@ -17,6 +24,8 @@ export async function detectProblemsOnPage({
   model,
   apiKey,
   timeoutMs = 90000,
+  includeContentGroups = true,
+  maxRetries = DEFAULT_MAX_RETRIES,
 }) {
   const key = String(apiKey || '').trim();
   if (!key) throw new Error('vlm_detect_api_key_missing');
@@ -40,7 +49,12 @@ export async function detectProblemsOnPage({
             },
           },
           {
-            text: buildDetectProblemsPrompt({ rawPage, displayPage, pageOffset }),
+            text: buildDetectProblemsPrompt({
+              rawPage,
+              displayPage,
+              pageOffset,
+              includeContentGroups,
+            }),
           },
         ],
       },
@@ -53,73 +67,110 @@ export async function detectProblemsOnPage({
     },
   };
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  const t0 = Date.now();
-  let res;
-  try {
-    res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-  } finally {
-    clearTimeout(timer);
-  }
-  const elapsedMs = Date.now() - t0;
-  const textBody = await res.text();
-  if (!res.ok) {
-    throw new Error(
-      `vlm_detect_http_${res.status}: ${String(textBody).slice(0, 500)}`,
-    );
-  }
-  let payload;
-  try {
-    payload = JSON.parse(textBody);
-  } catch (_) {
-    throw new Error(
-      `vlm_detect_non_json_response: ${String(textBody).slice(0, 500)}`,
-    );
-  }
-  const candidate = (payload?.candidates || [])[0];
-  const modelText = (candidate?.content?.parts || [])
-    .map((p) => p?.text || '')
-    .join('\n')
-    .trim();
-  let parsedJson = null;
-  try {
-    parsedJson = JSON.parse(modelText);
-  } catch (_) {
-    const repaired = repairLatexBackslashes(modelText);
+  // Gemini 는 장시간 과부하 상태에서 간헐적으로 502/503/504 를 돌려주는 경우가 있다.
+  // 사용자 경험을 위해 짧은 지수 백오프로 몇 번 재시도한다.
+  let lastErr = null;
+  let lastStatus = 0;
+  let lastBody = '';
+  const attempts = Math.max(1, Number(maxRetries) || 1);
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const t0 = Date.now();
+    let res;
     try {
-      parsedJson = JSON.parse(repaired);
+      res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      clearTimeout(timer);
+      lastErr = err;
+      if (attempt + 1 < attempts) {
+        await sleep(800 * Math.pow(2, attempt));
+        continue;
+      }
+      throw new Error(
+        `vlm_detect_fetch_error: ${compactErrMsg(err)} (attempts=${attempt + 1})`,
+      );
+    } finally {
+      clearTimeout(timer);
+    }
+    const elapsedMs = Date.now() - t0;
+    const textBody = await res.text();
+    if (!res.ok) {
+      lastStatus = res.status;
+      lastBody = textBody;
+      if (TRANSIENT_STATUSES.has(res.status) && attempt + 1 < attempts) {
+        await sleep(800 * Math.pow(2, attempt));
+        continue;
+      }
+      throw new Error(
+        `vlm_detect_http_${res.status}: ${String(textBody).slice(0, 500)} (attempts=${attempt + 1})`,
+      );
+    }
+    let payload;
+    try {
+      payload = JSON.parse(textBody);
     } catch (_) {
-      const m = repaired.match(/\{[\s\S]*\}/);
-      if (m) {
-        try {
-          parsedJson = JSON.parse(m[0]);
-        } catch (_) {
-          // leave null
+      throw new Error(
+        `vlm_detect_non_json_response: ${String(textBody).slice(0, 500)}`,
+      );
+    }
+    const candidate = (payload?.candidates || [])[0];
+    const modelText = (candidate?.content?.parts || [])
+      .map((p) => p?.text || '')
+      .join('\n')
+      .trim();
+    let parsedJson = null;
+    try {
+      parsedJson = JSON.parse(modelText);
+    } catch (_) {
+      const repaired = repairLatexBackslashes(modelText);
+      try {
+        parsedJson = JSON.parse(repaired);
+      } catch (_) {
+        const m = repaired.match(/\{[\s\S]*\}/);
+        if (m) {
+          try {
+            parsedJson = JSON.parse(m[0]);
+          } catch (_) {
+            // leave null
+          }
         }
       }
     }
+    if (!parsedJson) {
+      throw new Error(
+        `vlm_detect_parse_failed: finish=${candidate?.finishReason || '-'} text_head="${modelText.slice(
+          0,
+          180,
+        )}"`,
+      );
+    }
+    return {
+      rawPayload: payload,
+      parsedJson,
+      elapsedMs,
+      usageMetadata: payload?.usageMetadata || null,
+      finishReason: candidate?.finishReason || '',
+      attempts: attempt + 1,
+    };
   }
-  if (!parsedJson) {
-    throw new Error(
-      `vlm_detect_parse_failed: finish=${candidate?.finishReason || '-'} text_head="${modelText.slice(
-        0,
-        180,
-      )}"`,
-    );
-  }
-  return {
-    rawPayload: payload,
-    parsedJson,
-    elapsedMs,
-    usageMetadata: payload?.usageMetadata || null,
-    finishReason: candidate?.finishReason || '',
-  };
+  // Should never reach here but keep the compiler happy.
+  throw new Error(
+    `vlm_detect_exhausted: status=${lastStatus} lastErr=${compactErrMsg(lastErr)} body=${String(
+      lastBody,
+    ).slice(0, 300)}`,
+  );
+}
+
+function compactErrMsg(err) {
+  if (!err) return '';
+  const name = err?.name ? `${err.name}: ` : '';
+  return `${name}${String(err?.message || err).slice(0, 300)}`;
 }
 
 export function normalizeDetectResult(parsedJson) {
@@ -183,17 +234,38 @@ export function normalizeDetectResult(parsedJson) {
       colRaw === 1 || colRaw === 2 ? colRaw : colRaw == null ? null : null;
     const bbox = parseBbox4(raw.bbox);
     const itemRegion = parseBbox4(raw.item_region);
+    const group = normalizeContentGroup(raw.content_group);
     out.items.push({
       number,
       label,
       is_set_header: isSet,
       set_range: setRange,
+      content_group: group,
+      content_group_kind: group.kind,
+      content_group_label: group.label,
+      content_group_title: group.title,
+      content_group_order: group.order,
       column,
       bbox,
       item_region: itemRegion,
     });
   }
   return out;
+}
+
+function normalizeContentGroup(raw) {
+  const src = raw && typeof raw === 'object' ? raw : {};
+  const kindRaw = String(src.kind || src.type || '').trim();
+  const kind = ['basic_subtopic', 'type', 'none'].includes(kindRaw)
+    ? kindRaw
+    : 'none';
+  const orderRaw = Number(src.order);
+  return {
+    kind,
+    label: kind === 'none' ? '' : String(src.label || '').trim(),
+    title: kind === 'none' ? '' : String(src.title || src.name || '').trim(),
+    order: Number.isFinite(orderRaw) && orderRaw > 0 ? Math.round(orderRaw) : null,
+  };
 }
 
 function parseBbox4(arr) {

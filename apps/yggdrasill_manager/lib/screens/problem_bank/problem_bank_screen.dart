@@ -3293,6 +3293,10 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     bool allowObjective = question.allowObjective;
     bool allowSubjective = question.allowSubjective;
     bool allowEssay = _allowEssayOf(question);
+    bool isBlankChoiceMode = _isBlankChoiceQuestion(question);
+    final blankChoiceLabelCtrls = _blankChoiceLabelsOf(question)
+        .map((label) => TextEditingController(text: label))
+        .toList(growable: false);
     await showDialog<bool>(
       context: context,
       builder: (context) {
@@ -3460,6 +3464,109 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                         ),
                       ),
                     ],
+                  ),
+                  const SizedBox(height: 10),
+                  StatefulBuilder(
+                    builder: (context, setInnerState) {
+                      return Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: _field,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: _border),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            CheckboxListTile(
+                              value: isBlankChoiceMode,
+                              dense: true,
+                              activeColor: _accent,
+                              contentPadding: EdgeInsets.zero,
+                              title: const Text(
+                                '빈칸형 보기',
+                                style: TextStyle(
+                                  color: _textSub,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                              subtitle: const Text(
+                                '5개 선택지를 행으로 두고, 위쪽에 열 라벨을 붙여 렌더링합니다.',
+                                style: TextStyle(color: _textSub, fontSize: 11),
+                              ),
+                              controlAffinity: ListTileControlAffinity.leading,
+                              onChanged: (v) {
+                                final next = v ?? false;
+                                if (next &&
+                                    _objectiveChoiceCountIgnoringMode(
+                                            question) !=
+                                        5) {
+                                  _showSnack(
+                                    '빈칸형 보기는 5개 선택지가 있을 때만 사용할 수 있습니다.',
+                                    error: true,
+                                  );
+                                  return;
+                                }
+                                setInnerState(() {
+                                  isBlankChoiceMode = next;
+                                });
+                              },
+                            ),
+                            if (isBlankChoiceMode) ...[
+                              const SizedBox(height: 8),
+                              Row(
+                                children: [
+                                  for (var i = 0;
+                                      i < blankChoiceLabelCtrls.length;
+                                      i += 1) ...[
+                                    if (i > 0) const SizedBox(width: 8),
+                                    Expanded(
+                                      child: TextField(
+                                        controller: blankChoiceLabelCtrls[i],
+                                        style: const TextStyle(
+                                          color: _text,
+                                          fontSize: 12,
+                                        ),
+                                        decoration: InputDecoration(
+                                          labelText: '열 ${i + 1}',
+                                          labelStyle: const TextStyle(
+                                            color: _textSub,
+                                            fontSize: 11,
+                                          ),
+                                          filled: true,
+                                          fillColor: _panel,
+                                          isDense: true,
+                                          border: OutlineInputBorder(
+                                            borderRadius:
+                                                BorderRadius.circular(8),
+                                            borderSide: const BorderSide(
+                                                color: _border),
+                                          ),
+                                          enabledBorder: OutlineInputBorder(
+                                            borderRadius:
+                                                BorderRadius.circular(8),
+                                            borderSide: const BorderSide(
+                                                color: _border),
+                                          ),
+                                          focusedBorder: OutlineInputBorder(
+                                            borderRadius:
+                                                BorderRadius.circular(8),
+                                            borderSide: const BorderSide(
+                                                color: _accent),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ],
+                          ],
+                        ),
+                      );
+                    },
                   ),
                   const SizedBox(height: 10),
                   const Text(
@@ -3635,6 +3742,36 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                     );
                   }).toList(growable: false);
                   if (!mounted) return;
+                  final updatedMeta = <String, dynamic>{
+                    ...question.meta,
+                    'allow_objective': allowObjective,
+                    'allow_subjective': allowSubjective,
+                    'allow_essay': allowEssay,
+                  };
+                  if (isBlankChoiceMode) {
+                    if (!allowObjective ||
+                        _objectiveChoiceCountIgnoringMode(question) != 5) {
+                      _showSnack(
+                        '빈칸형 보기는 객관식 5개 선택지가 있을 때만 저장할 수 있습니다.',
+                        error: true,
+                      );
+                      return;
+                    }
+                    const fallbackLabels = <String>['(가)', '(나)', '(다)'];
+                    final labels = <String>[
+                      for (var i = 0; i < blankChoiceLabelCtrls.length; i += 1)
+                        blankChoiceLabelCtrls[i].text.trim().isEmpty
+                            ? fallbackLabels[i]
+                            : blankChoiceLabelCtrls[i].text.trim(),
+                    ];
+                    updatedMeta['is_blank_choice_question'] = true;
+                    updatedMeta['choice_layout'] = 'blank_table';
+                    updatedMeta['blank_choice_labels'] = labels;
+                  } else {
+                    updatedMeta.remove('is_blank_choice_question');
+                    updatedMeta.remove('choice_layout');
+                    updatedMeta.remove('blank_choice_labels');
+                  }
                   final updatedQ = question.copyWith(
                     isChecked: checked,
                     reviewerNotes: noteCtrl.text.trim(),
@@ -3642,12 +3779,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                     stem: stemCtrl.text.trim(),
                     allowObjective: allowObjective,
                     allowSubjective: allowSubjective,
-                    meta: <String, dynamic>{
-                      ...question.meta,
-                      'allow_objective': allowObjective,
-                      'allow_subjective': allowSubjective,
-                      'allow_essay': allowEssay,
-                    },
+                    meta: updatedMeta,
                     equations: updatedEquations,
                   );
                   setState(() {
@@ -3676,6 +3808,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         );
       },
     );
+    for (final ctrl in blankChoiceLabelCtrls) {
+      ctrl.dispose();
+    }
   }
 
   Widget _buildSectionTitle(String title, {String? subtitle}) {
@@ -5612,6 +5747,22 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     return RegExp(r'(^|\n)\s*[ㄱ-ㅎ]\.').hasMatch(stem);
   }
 
+  bool _isBlankChoiceQuestion(ProblemBankQuestion q) {
+    return q.meta['is_blank_choice_question'] == true ||
+        '${q.meta['choice_layout'] ?? ''}' == 'blank_table';
+  }
+
+  List<String> _blankChoiceLabelsOf(ProblemBankQuestion q) {
+    const fallback = <String>['(가)', '(나)', '(다)'];
+    final raw = q.meta['blank_choice_labels'];
+    final values = raw is List ? raw : const <dynamic>[];
+    return List<String>.generate(fallback.length, (idx) {
+      if (idx >= values.length) return fallback[idx];
+      final value = '${values[idx]}'.trim();
+      return value.isEmpty ? fallback[idx] : value;
+    }, growable: false);
+  }
+
   static final _structuralMarkerRegex = RegExp(r'\[(박스시작|박스끝|문단)\]');
 
   List<String> _viewBlockPreviewLines(ProblemBankQuestion q, {int max = 6}) {
@@ -5794,6 +5945,16 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       out.add(ProblemBankChoice(label: label, text: text));
     }
     return out;
+  }
+
+  int _objectiveChoiceCountIgnoringMode(ProblemBankQuestion q) {
+    final source =
+        q.objectiveChoices.length >= 2 ? q.objectiveChoices : q.choices;
+    var count = 0;
+    for (final choice in source) {
+      if (_normalizePreviewLine(choice.text).isNotEmpty) count += 1;
+    }
+    return count;
   }
 
   int? _answerTokenToChoiceIndex(String token) {
@@ -7131,6 +7292,83 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     );
   }
 
+  List<String> _splitBlankChoiceCells(String text, int columnCount) {
+    final parts = text.split(RegExp(r'\s*,\s*')).map((e) => e.trim()).toList();
+    while (parts.length < columnCount) {
+      parts.add('');
+    }
+    return parts.take(columnCount).toList(growable: false);
+  }
+
+  Widget _buildBlankChoicePreviewBlock(
+    ProblemBankQuestion q,
+    List<ProblemBankChoice> choices, {
+    bool expanded = false,
+  }) {
+    final labels = _blankChoiceLabelsOf(q);
+    final fontSize = expanded ? 13.6 : 13.4;
+    final headerStyle = TextStyle(
+      color: const Color(0xFF232323),
+      fontSize: fontSize,
+      fontWeight: FontWeight.w600,
+      fontFamily: _previewKoreanFontFamily,
+    );
+    final bodyStyle = TextStyle(
+      color: const Color(0xFF232323),
+      fontSize: fontSize,
+      height: 1.45,
+      fontFamily: _previewKoreanFontFamily,
+    );
+    Widget cell(String value, {bool header = false}) {
+      return Padding(
+        padding: EdgeInsets.symmetric(
+          horizontal: expanded ? 14 : 11,
+          vertical: expanded ? 4 : 3,
+        ),
+        child: header
+            ? Text(value, textAlign: TextAlign.center, style: headerStyle)
+            : LatexTextRenderer(
+                _toPreviewMathMarkup(value, forceMathTokenWrap: true),
+                softWrap: false,
+                enableDisplayMath: true,
+                inlineMathScale: _previewMathScale,
+                fractionInlineMathScale: _previewFractionMathScale,
+                displayMathScale: _previewMathScale,
+                style: bodyStyle,
+              ),
+      );
+    }
+
+    final rows = <TableRow>[
+      TableRow(
+        children: <Widget>[
+          const SizedBox.shrink(),
+          for (final label in labels) cell(label, header: true),
+        ],
+      ),
+      for (final choice in choices.take(5))
+        TableRow(
+          children: <Widget>[
+            Padding(
+              padding: EdgeInsets.symmetric(
+                horizontal: expanded ? 10 : 8,
+                vertical: expanded ? 4 : 3,
+              ),
+              child: Text(choice.label, style: bodyStyle),
+            ),
+            for (final value
+                in _splitBlankChoiceCells(choice.text, labels.length))
+              cell(value),
+          ],
+        ),
+    ];
+    return Table(
+      defaultColumnWidth: const IntrinsicColumnWidth(),
+      defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+      children: rows,
+    );
+  }
+
   List<Widget> _buildChoicePreviewBlocks(
     ProblemBankQuestion q, {
     bool expanded = false,
@@ -7141,6 +7379,11 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         .take(expanded ? 10 : 5)
         .toList(growable: false);
     if (choices.isEmpty) return const <Widget>[];
+    if (_isBlankChoiceQuestion(q) && choices.length == 5) {
+      return <Widget>[
+        _buildBlankChoicePreviewBlock(q, choices, expanded: expanded),
+      ];
+    }
     final mode = _choiceLayoutMode(q, choices, availableWidth);
     if (mode == 'single') {
       return <Widget>[
@@ -9560,6 +9803,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
             : const Color(0xFFDE6A73));
     final typeText = q.questionType.trim().isEmpty ? '미분류' : q.questionType;
     final isViewBlock = _isViewBlockQuestion(q);
+    final isBlankChoice = _isBlankChoiceQuestion(q);
     // 세트형 배지 표시 조건:
     //   (1) 워커가 meta.is_set_question = true 로 표시했거나
     //   (2) 답이 구조화(meta.answer_parts)되어 있으면 세트형으로 본다.
@@ -9586,6 +9830,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         ' · 보기 $objectiveChoiceCount개'
         ' · 수식 ${q.equations.length}개'
         '${isViewBlock ? ' · 보기형' : ''}'
+        '${isBlankChoice ? ' · 빈칸형' : ''}'
         '${q.figureRefs.isNotEmpty ? ' · 그림 포함' : ''}';
 
     return Container(
@@ -9658,6 +9903,26 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                     '<보기>형',
                     style: TextStyle(
                       color: Color(0xFF9CC5E8),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
+              if (isBlankChoice) ...[
+                const SizedBox(width: 6),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF173D31),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: const Color(0xFF3E806A)),
+                  ),
+                  child: const Text(
+                    '빈칸형',
+                    style: TextStyle(
+                      color: Color(0xFF9ED9C3),
                       fontSize: 11,
                       fontWeight: FontWeight.w700,
                     ),

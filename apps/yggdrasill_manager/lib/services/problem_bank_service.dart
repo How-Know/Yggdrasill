@@ -88,6 +88,18 @@ class ProblemBankResetResult {
   final int storageObjectCount;
 }
 
+class TextbookProblemBankExtractRunResult {
+  const TextbookProblemBankExtractRunResult({
+    required this.documentId,
+    required this.extractJobId,
+    required this.status,
+  });
+
+  final String documentId;
+  final String extractJobId;
+  final String status;
+}
+
 class ProblemBankPdfPreviewArtifact {
   const ProblemBankPdfPreviewArtifact({
     required this.questionId,
@@ -166,6 +178,227 @@ class ProblemBankService {
   final String _gatewayApiKey;
 
   bool get hasGateway => _gatewayBaseUrl.isNotEmpty;
+
+  Future<List<Map<String, dynamic>>> listTextbookPdfExtractRuns({
+    required String academyId,
+    required String bookId,
+    required String gradeLabel,
+  }) async {
+    final rows = await _client
+        .from('textbook_pb_extract_runs')
+        .select()
+        .eq('academy_id', academyId)
+        .eq('book_id', bookId)
+        .eq('grade_label', gradeLabel);
+    return (rows as List)
+        .whereType<Map>()
+        .map((row) => row.map((k, dynamic v) => MapEntry('$k', v)))
+        .toList(growable: false);
+  }
+
+  Future<TextbookProblemBankExtractRunResult> createTextbookPdfOnlyExtractRun({
+    required String academyId,
+    required String bookId,
+    required String bookName,
+    required String gradeLabel,
+    required int bigOrder,
+    required int midOrder,
+    required String subKey,
+    String bigName = '',
+    String midName = '',
+    String subName = '',
+    int? rawPageFrom,
+    int? rawPageTo,
+    int? displayPageFrom,
+    int? displayPageTo,
+    int? bodyLinkId,
+  }) async {
+    final link = await _loadTextbookBodyLink(
+      academyId: academyId,
+      bookId: bookId,
+      gradeLabel: gradeLabel,
+      bodyLinkId: bodyLinkId,
+    );
+    final bucket = '${link['storage_bucket'] ?? ''}'.trim();
+    final key = '${link['storage_key'] ?? ''}'.trim();
+    if (bucket.isEmpty || key.isEmpty) {
+      throw Exception('교재 본문 PDF 스토리지 경로가 없습니다');
+    }
+
+    final scope = <String, dynamic>{
+      'mode': 'textbook_pdf_only',
+      'book_id': bookId,
+      'book_name': bookName,
+      'grade_label': gradeLabel,
+      'big_order': bigOrder,
+      'mid_order': midOrder,
+      'sub_key': subKey,
+      'big_name': bigName,
+      'mid_name': midName,
+      'sub_name': subName,
+      'raw_page_from': rawPageFrom,
+      'raw_page_to': rawPageTo,
+      'display_page_from': displayPageFrom,
+      'display_page_to': displayPageTo,
+    };
+    final existingRun = await _client
+        .from('textbook_pb_extract_runs')
+        .select('pb_document_id, extract_job_id, status')
+        .eq('academy_id', academyId)
+        .eq('book_id', bookId)
+        .eq('grade_label', gradeLabel)
+        .eq('big_order', bigOrder)
+        .eq('mid_order', midOrder)
+        .eq('sub_key', subKey)
+        .maybeSingle();
+    final existingDocId = '${existingRun?['pb_document_id'] ?? ''}'.trim();
+    final existingJobId = '${existingRun?['extract_job_id'] ?? ''}'.trim();
+    final existingStatus = '${existingRun?['status'] ?? ''}'.trim();
+    if (existingDocId.isNotEmpty &&
+        existingJobId.isNotEmpty &&
+        existingStatus != 'failed' &&
+        existingStatus != 'cancelled') {
+      return TextbookProblemBankExtractRunResult(
+        documentId: existingDocId,
+        extractJobId: existingJobId,
+        status: existingStatus.isEmpty ? 'queued' : existingStatus,
+      );
+    }
+    final now = DateTime.now().toUtc().toIso8601String();
+    final sourceClassification = <String, dynamic>{
+      'private_material': true,
+      'school_past_exam': false,
+      'mock_past_exam': false,
+      'textbook': <String, dynamic>{
+        'book_id': bookId,
+        'book_name': bookName,
+        'grade_label': gradeLabel,
+        'big_order': bigOrder,
+        'mid_order': midOrder,
+        'sub_key': subKey,
+        'big_name': bigName,
+        'mid_name': midName,
+        'sub_name': subName,
+      },
+    };
+    final document = await _client
+        .from('pb_documents')
+        .insert(<String, dynamic>{
+          'academy_id': academyId,
+          'created_by': _client.auth.currentUser?.id,
+          'source_filename':
+              '$bookName · $gradeLabel · ${midName.isEmpty ? '중${midOrder + 1}' : midName} · $subName',
+          'source_storage_bucket': 'problem-documents',
+          'source_storage_path': '',
+          'source_sha256': '',
+          'source_size_bytes': 0,
+          'source_pdf_storage_bucket': bucket,
+          'source_pdf_storage_path': key,
+          'source_pdf_filename': '$bookName-$gradeLabel-$subKey.pdf',
+          'source_pdf_sha256': '${link['content_hash'] ?? ''}',
+          'source_pdf_size_bytes':
+              int.tryParse('${link['file_size_bytes'] ?? 0}') ?? 0,
+          'status': 'extract_queued',
+          'exam_profile': 'naesin',
+          'curriculum_code': 'rev_2022',
+          'source_type_code': 'market_book',
+          'course_label': '',
+          'grade_label': gradeLabel,
+          'exam_year': null,
+          'semester_label': '',
+          'exam_term_label': '',
+          'school_name': '',
+          'publisher_name': '',
+          'material_name': bookName,
+          'classification_detail': <String, dynamic>{
+            'textbook_scope': scope,
+          },
+          'meta': <String, dynamic>{
+            'source_classification': sourceClassification,
+            'textbook_scope': scope,
+            'extract_mode': 'textbook_pdf_only',
+            'created_at': now,
+          },
+        })
+        .select('id')
+        .maybeSingle();
+    final documentId = '${document?['id'] ?? ''}'.trim();
+    if (documentId.isEmpty) throw Exception('pb_document_create_failed');
+
+    final job = await _client
+        .from('pb_extract_jobs')
+        .insert(<String, dynamic>{
+          'academy_id': academyId,
+          'document_id': documentId,
+          'created_by': _client.auth.currentUser?.id,
+          'status': 'queued',
+          'source_version': 'textbook_pdf_only_v1',
+          'result_summary': <String, dynamic>{
+            'engine': 'vlm_pdf_only',
+            'textbook_scope': scope,
+          },
+        })
+        .select('id,status')
+        .maybeSingle();
+    final jobId = '${job?['id'] ?? ''}'.trim();
+    if (jobId.isEmpty) throw Exception('pb_extract_job_create_failed');
+
+    await _client.from('textbook_pb_extract_runs').upsert(
+      <String, dynamic>{
+        'academy_id': academyId,
+        'book_id': bookId,
+        'grade_label': gradeLabel,
+        'big_order': bigOrder,
+        'mid_order': midOrder,
+        'sub_key': subKey,
+        'big_name': bigName,
+        'mid_name': midName,
+        'sub_name': subName,
+        'raw_page_from': rawPageFrom,
+        'raw_page_to': rawPageTo,
+        'display_page_from': displayPageFrom,
+        'display_page_to': displayPageTo,
+        'pb_document_id': documentId,
+        'extract_job_id': jobId,
+        'status': 'queued',
+        'error_code': '',
+        'error_message': '',
+        'result_summary': <String, dynamic>{
+          'textbook_scope': scope,
+        },
+      },
+      onConflict: 'academy_id,book_id,grade_label,big_order,mid_order,sub_key',
+    );
+
+    return TextbookProblemBankExtractRunResult(
+      documentId: documentId,
+      extractJobId: jobId,
+      status: '${job?['status'] ?? 'queued'}',
+    );
+  }
+
+  Future<Map<String, dynamic>> _loadTextbookBodyLink({
+    required String academyId,
+    required String bookId,
+    required String gradeLabel,
+    int? bodyLinkId,
+  }) async {
+    dynamic query = _client.from('resource_file_links').select(
+        'id, storage_bucket, storage_key, file_size_bytes, content_hash');
+    if (bodyLinkId != null) {
+      query = query.eq('id', bodyLinkId);
+    } else {
+      query = query
+          .eq('academy_id', academyId)
+          .eq('file_id', bookId)
+          .eq('grade', '$gradeLabel#body');
+    }
+    final row = await query.maybeSingle();
+    if (row is Map) {
+      return row.map((k, dynamic v) => MapEntry('$k', v));
+    }
+    throw Exception('교재 본문 PDF 링크를 찾지 못했습니다');
+  }
 
   static const List<String> _curriculumCodes = <String>[
     'legacy_1to6',

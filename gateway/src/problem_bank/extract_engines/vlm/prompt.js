@@ -5,11 +5,26 @@
 // ESM 모듈로 분리한 것이다. 출력 JSON 스키마와 stem 포맷 규약은 매니저/렌더러가
 // 이미 가정하는 규약이므로 여기서 변경하지 말 것.
 
-export function buildPrompt() {
+export function buildPrompt({ textbookScope = null } = {}) {
+  const scope = textbookScope && typeof textbookScope === 'object'
+    ? textbookScope
+    : null;
+  const scopeLines = scope
+    ? [
+        '=== 교재 소단원 추출 범위 ===',
+        `이 작업은 전체 PDF 중 한 소단원만 문제은행 문서로 추출한다.`,
+        `범위: 대단원 ${scope.big_order ?? ''}, 중단원 ${scope.mid_order ?? ''}, 소단원 ${scope.sub_key ?? ''}`,
+        `이름: ${scope.big_name || ''} / ${scope.mid_name || ''} / ${scope.sub_name || ''}`,
+        `페이지 범위(raw/display): ${scope.raw_page_from ?? ''}~${scope.raw_page_to ?? ''} / ${scope.display_page_from ?? ''}~${scope.display_page_to ?? ''}`,
+        '위 범위 밖의 문항은 questions 에 넣지 마라.',
+        '',
+      ]
+    : [];
   return [
     '당신은 한국 중·고등학교 수학 시험지 PDF 를 분석해 문항을 "Yggdrasill stem 포맷" 의 구조화 JSON 으로 추출하는 AI 입니다.',
     '반드시 다음 JSON 스키마만 출력합니다. 설명 문장·마크다운 금지. JSON 외 어떤 텍스트도 출력하지 마세요.',
     '',
+    ...scopeLines,
     '=== 출력 스키마 ===',
     '{',
     '  "document_meta": {',

@@ -1235,7 +1235,12 @@ async function createExtractJob(body, res) {
     sendJson(res, 404, { ok: false, error: 'document_not_found' });
     return;
   }
-  if (!String(doc.source_storage_path || '').trim()) {
+  const textbookPdfOnly =
+    body?.textbookPdfOnly === true ||
+    body?.textbook_pdf_only === true ||
+    String(doc?.meta?.extract_mode || '').trim() === 'textbook_pdf_only' ||
+    String(doc?.meta?.textbook_scope?.mode || '').trim() === 'textbook_pdf_only';
+  if (!textbookPdfOnly && !String(doc.source_storage_path || '').trim()) {
     sendJson(res, 400, { ok: false, error: 'hwpx_source_required' });
     return;
   }
@@ -4248,6 +4253,7 @@ async function handleTextbookVlmDetectProblems(body, res) {
   const displayPage = rawPage - pageOffset;
 
   let result;
+  let usedFallbackPrompt = false;
   try {
     result = await detectProblemsOnPage({
       imageBase64,
@@ -4260,12 +4266,28 @@ async function handleTextbookVlmDetectProblems(body, res) {
       timeoutMs: TEXTBOOK_VLM_TIMEOUT_MS,
     });
   } catch (err) {
-    sendJson(res, 502, {
-      ok: false,
-      error: 'vlm_detect_failed',
-      message: compact(err?.message || err),
-    });
-    return;
+    try {
+      result = await detectProblemsOnPage({
+        imageBase64,
+        mimeType,
+        rawPage,
+        displayPage,
+        pageOffset,
+        model: TEXTBOOK_VLM_MODEL,
+        apiKey,
+        timeoutMs: TEXTBOOK_VLM_TIMEOUT_MS,
+        includeContentGroups: false,
+      });
+      usedFallbackPrompt = true;
+    } catch (fallbackErr) {
+      sendJson(res, 502, {
+        ok: false,
+        error: 'vlm_detect_failed',
+        message: compact(err?.message || err),
+        fallback_message: compact(fallbackErr?.message || fallbackErr),
+      });
+      return;
+    }
   }
 
   const normalized = normalizeDetectResult(result.parsedJson);
@@ -4275,6 +4297,7 @@ async function handleTextbookVlmDetectProblems(body, res) {
     display_page: displayPage,
     page_offset: pageOffset,
     page_offset_found: offsetFound,
+    content_group_fallback: usedFallbackPrompt,
     section: normalized.section,
     page_kind: normalized.page_kind,
     layout: normalized.page_layout,
@@ -4299,6 +4322,7 @@ async function handleTextbookVlmDetectProblems(body, res) {
 //     {
 //       raw_page, display_page, section, problem_number, label,
 //       is_set_header, set_from, set_to, column_index,
+//       content_group_kind, content_group_label, content_group_title, content_group_order,
 //       bbox_1k, item_region_1k,
 //       crop_rect_px, padding_px, crop_long_edge_px, deskew_angle_deg,
 //       width_px, height_px,
@@ -4484,6 +4508,16 @@ async function handleTextbookCropsBatchUpsert(body, res) {
     const setFrom = Number.parseInt(String(c.set_from ?? ''), 10);
     const setTo = Number.parseInt(String(c.set_to ?? ''), 10);
     const columnIndex = Number.parseInt(String(c.column_index ?? ''), 10);
+    const contentGroupKindRaw = String(c.content_group_kind || '').trim();
+    const contentGroupKind = ['basic_subtopic', 'type', 'none'].includes(
+      contentGroupKindRaw,
+    )
+      ? contentGroupKindRaw
+      : 'none';
+    const contentGroupOrder = Number.parseInt(
+      String(c.content_group_order ?? ''),
+      10,
+    );
     const paddingPx = Number.parseInt(String(c.padding_px ?? ''), 10);
     const cropLongEdgePx = Number.parseInt(String(c.crop_long_edge_px ?? ''), 10);
     const widthPx = Number.parseInt(String(c.width_px ?? ''), 10);
@@ -4507,6 +4541,18 @@ async function handleTextbookCropsBatchUpsert(body, res) {
       is_set_header: Boolean(c.is_set_header),
       set_from: Number.isFinite(setFrom) ? setFrom : null,
       set_to: Number.isFinite(setTo) ? setTo : null,
+      content_group_kind: contentGroupKind,
+      content_group_label:
+        contentGroupKind === 'none'
+          ? ''
+          : String(c.content_group_label || '').trim(),
+      content_group_title:
+        contentGroupKind === 'none'
+          ? ''
+          : String(c.content_group_title || '').trim(),
+      content_group_order: Number.isFinite(contentGroupOrder)
+        ? contentGroupOrder
+        : null,
       column_index: Number.isFinite(columnIndex) ? columnIndex : null,
       bbox_1k: bbox1k,
       item_region_1k: itemRegion1k,
@@ -4749,9 +4795,11 @@ async function handleTextbookVlmDetectSolutionRefs(body, res) {
 //   answers: [
 //     {
 //       crop_id,                   // required — FK to textbook_problem_crops.id
-//       answer_kind: 'objective'|'subjective',
+//       answer_kind: 'objective'|'subjective'|'image',
 //       answer_text,               // "①" or 1D LaTeX
 //       answer_latex_2d,           // optional 2D render LaTeX
+//       answer_image_png_base64,    // optional when answer_kind='image'
+//       answer_image_region_1k,     // optional bbox of the image answer
 //       answer_source: 'vlm'|'manual',
 //       raw_page, display_page,    // where in 답지 PDF this answer was found
 //       bbox_1k,                   // optional
@@ -4762,6 +4810,8 @@ async function handleTextbookVlmDetectSolutionRefs(body, res) {
 // }
 
 const MAX_ANSWER_BATCH = 300;
+const MAX_ANSWER_IMAGE_BYTES = 10 * 1024 * 1024;
+const TEXTBOOK_ANSWER_IMAGE_BUCKET = 'textbook-answer-images';
 
 async function handleTextbookAnswersBatchUpsert(body, res) {
   const academyId = String(body?.academy_id || '').trim();
@@ -4796,7 +4846,7 @@ async function handleTextbookAnswersBatchUpsert(body, res) {
       return;
     }
     const kindRaw = String(a.answer_kind || '').trim().toLowerCase();
-    if (!['objective', 'subjective'].includes(kindRaw)) {
+    if (!['objective', 'subjective', 'image'].includes(kindRaw)) {
       sendJson(res, 400, {
         ok: false,
         error: `invalid_answer_kind_at_${i}: ${kindRaw}`,
@@ -4814,6 +4864,71 @@ async function handleTextbookAnswersBatchUpsert(body, res) {
     const rawPage = Number.parseInt(String(a.raw_page ?? ''), 10);
     const displayPage = Number.parseInt(String(a.display_page ?? ''), 10);
     const bbox1k = parseIntArray(a.bbox_1k, 4);
+    const imageRegion1k = parseIntArray(a.answer_image_region_1k, 4);
+    const imageWidthPx = Number.parseInt(String(a.answer_image_width_px ?? ''), 10);
+    const imageHeightPx = Number.parseInt(String(a.answer_image_height_px ?? ''), 10);
+    let imageBucket = '';
+    let imagePath = '';
+    let imageSizeBytes = null;
+    let imageHash = '';
+    if (kindRaw === 'image') {
+      const imageBase64 =
+        typeof a.answer_image_png_base64 === 'string'
+          ? a.answer_image_png_base64
+          : '';
+      const preUploadedPath =
+        typeof a.answer_image_path === 'string' ? a.answer_image_path.trim() : '';
+      if (imageBase64) {
+        let bytes;
+        try {
+          bytes = Buffer.from(imageBase64, 'base64');
+        } catch (e) {
+          sendJson(res, 400, {
+            ok: false,
+            error: `invalid_answer_image_base64_at_${i}: ${e?.message || e}`,
+          });
+          return;
+        }
+        if (!bytes || bytes.length === 0) {
+          sendJson(res, 400, { ok: false, error: `empty_answer_image_at_${i}` });
+          return;
+        }
+        if (bytes.length > MAX_ANSWER_IMAGE_BYTES) {
+          sendJson(res, 413, {
+            ok: false,
+            error: `answer_image_too_large_at_${i}`,
+            limit_bytes: MAX_ANSWER_IMAGE_BYTES,
+            got_bytes: bytes.length,
+          });
+          return;
+        }
+        imageHash = createHash('sha256').update(bytes).digest('hex');
+        imagePath = `academies/${academyId}/answers/${cropId}.png`;
+        const uploaded = await storageUploadBytes({
+          driver: DEFAULT_TEXTBOOK_DRIVER,
+          bucket: TEXTBOOK_ANSWER_IMAGE_BUCKET,
+          key: imagePath,
+          contentType: 'image/png',
+          bytes,
+        });
+        if (!uploaded.ok) {
+          sendJson(res, 502, {
+            ok: false,
+            error: `answer_image_upload_failed_at_${i}`,
+            detail: uploaded.error,
+          });
+          return;
+        }
+        imageBucket = TEXTBOOK_ANSWER_IMAGE_BUCKET;
+        imageSizeBytes = bytes.length;
+      } else if (preUploadedPath) {
+        imageBucket =
+          typeof a.answer_image_bucket === 'string'
+            ? a.answer_image_bucket.trim()
+            : TEXTBOOK_ANSWER_IMAGE_BUCKET;
+        imagePath = preUploadedPath;
+      }
+    }
 
     const nowIso = new Date().toISOString();
     const row = {
@@ -4827,6 +4942,15 @@ async function handleTextbookAnswersBatchUpsert(body, res) {
       raw_page: Number.isFinite(rawPage) ? rawPage : null,
       display_page: Number.isFinite(displayPage) ? displayPage : null,
       bbox_1k: bbox1k,
+      answer_image_bucket: imageBucket,
+      answer_image_path: imagePath,
+      answer_image_region_1k: imageRegion1k,
+      answer_image_width_px: Number.isFinite(imageWidthPx) ? imageWidthPx : null,
+      answer_image_height_px: Number.isFinite(imageHeightPx)
+        ? imageHeightPx
+        : null,
+      answer_image_size_bytes: imageSizeBytes,
+      answer_image_content_hash: imageHash,
       note: a.note != null ? String(a.note) : null,
     };
     if (sourceRaw === 'manual') {

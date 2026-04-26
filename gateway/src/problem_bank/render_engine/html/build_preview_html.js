@@ -41,7 +41,7 @@ function buildPreviewStyles({ stemSizePt, lineHeightPt, choiceGapPt }) {
     .stem-line.stem-line-right { text-align: right; }
     .stem-line.stem-line-justify { text-align: justify; }
     .debug-first { display: inline; position: relative; }
-    .bogi-box, .figure-container, .choice-list, .choice-grid-row1, .choice-grid-row2 {
+    .bogi-box, .figure-container, .choice-list, .choice-grid-row1, .choice-grid-row2, .blank-choice-table {
       text-indent: 0;
     }
     .choice-list {
@@ -98,6 +98,29 @@ function buildPreviewStyles({ stemSizePt, lineHeightPt, choiceGapPt }) {
       row-gap: calc(var(--choice-gap-pt) * 1pt);
       margin-top: calc(var(--choice-gap-pt) * 1pt);
       overflow: visible;
+    }
+    .blank-choice-table {
+      margin-top: calc(var(--line-height-pt) * 0.3 * 1pt);
+      display: grid;
+      grid-template-columns: 2.2em repeat(3, max-content);
+      column-gap: 2.4em;
+      row-gap: calc(var(--choice-gap-pt) * 0.8 * 1pt);
+      align-items: center;
+      width: fit-content;
+      max-width: 100%;
+    }
+    .blank-choice-header {
+      text-align: center;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .blank-choice-label {
+      white-space: nowrap;
+      font-weight: 500;
+    }
+    .blank-choice-cell {
+      white-space: nowrap;
+      word-break: keep-all;
     }
     .math-inline {
       display: inline-block;

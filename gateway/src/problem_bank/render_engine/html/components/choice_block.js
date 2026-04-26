@@ -109,3 +109,45 @@ export function renderChoiceContainer(items, layout) {
   const containerClass = anyFrac ? 'choice-list has-fraction' : 'choice-list';
   return `<div class="${containerClass}">${items.map(cell).join('')}</div>`;
 }
+
+function splitBlankChoiceCells(text, columnCount) {
+  const parts = String(text || '')
+    .split(/\s*,\s*/)
+    .map((v) => v.trim());
+  while (parts.length < columnCount) parts.push('');
+  return parts.slice(0, columnCount);
+}
+
+function normalizeBlankChoiceLabels(labels) {
+  const fallback = ['(가)', '(나)', '(다)'];
+  const raw = Array.isArray(labels) ? labels : [];
+  return fallback.map((label, idx) => {
+    const value = String(raw[idx] || '').trim();
+    return value || label;
+  });
+}
+
+export function isBlankChoiceQuestion(question) {
+  const meta = question?.meta && typeof question.meta === 'object' ? question.meta : {};
+  return meta.is_blank_choice_question === true || meta.choice_layout === 'blank_table';
+}
+
+export function renderBlankChoiceContainer(question, choices, mathRenderer, equations, opts) {
+  if (!Array.isArray(choices) || choices.length !== 5) return '';
+  const meta = question?.meta && typeof question.meta === 'object' ? question.meta : {};
+  const labels = normalizeBlankChoiceLabels(meta.blank_choice_labels);
+  const header = [''].concat(labels)
+    .map((label) => `<div class="blank-choice-header">${escapeHtml(label)}</div>`)
+    .join('');
+  const rows = choices.map((choice, rowIdx) => {
+    const label = String(choice?.label || '').trim() || String(rowIdx + 1);
+    const cells = splitBlankChoiceCells(choice?.text, labels.length)
+      .map((cellText) => {
+        const rendered = composeLineV1(cellText, mathRenderer, equations, opts);
+        return `<div class="blank-choice-cell">${rendered.html}</div>`;
+      })
+      .join('');
+    return `<div class="blank-choice-label">${escapeHtml(label)}</div>${cells}`;
+  }).join('');
+  return `<div class="blank-choice-table" style="--blank-choice-cols:${labels.length + 1};">${header}${rows}</div>`;
+}

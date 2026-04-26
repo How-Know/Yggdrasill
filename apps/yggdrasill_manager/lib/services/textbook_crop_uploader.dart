@@ -40,6 +40,10 @@ class TextbookCropUploadItem {
     this.isSetHeader = false,
     this.setFrom,
     this.setTo,
+    this.contentGroupKind = 'none',
+    this.contentGroupLabel = '',
+    this.contentGroupTitle = '',
+    this.contentGroupOrder,
     this.columnIndex,
     this.bbox1k,
     this.itemRegion1k,
@@ -60,6 +64,10 @@ class TextbookCropUploadItem {
   final bool isSetHeader;
   final int? setFrom;
   final int? setTo;
+  final String contentGroupKind;
+  final String contentGroupLabel;
+  final String contentGroupTitle;
+  final int? contentGroupOrder;
   final int? columnIndex;
   final List<int>? bbox1k; // [ymin, xmin, ymax, xmax] on 0..1000
   final List<int>? itemRegion1k;
@@ -208,7 +216,8 @@ class TextbookCropUploader {
         json = <String, dynamic>{};
       }
       if (json['ok'] != true) {
-        throw Exception('textbook_crops_upsert_error: ${json['error'] ?? res.body}');
+        throw Exception(
+            'textbook_crops_upsert_error: ${json['error'] ?? res.body}');
       }
       totalUpserted += _asInt(json['upserted']) ?? chunk.length;
       bucket = (json['bucket'] as String?) ?? bucket;
@@ -243,14 +252,20 @@ class TextbookCropUploader {
       'is_set_header': item.isSetHeader,
       if (item.setFrom != null) 'set_from': item.setFrom,
       if (item.setTo != null) 'set_to': item.setTo,
+      'content_group_kind': item.contentGroupKind,
+      if (item.contentGroupLabel.isNotEmpty)
+        'content_group_label': item.contentGroupLabel,
+      if (item.contentGroupTitle.isNotEmpty)
+        'content_group_title': item.contentGroupTitle,
+      if (item.contentGroupOrder != null)
+        'content_group_order': item.contentGroupOrder,
       if (item.columnIndex != null) 'column_index': item.columnIndex,
       if (item.bbox1k != null) 'bbox_1k': item.bbox1k,
       if (item.itemRegion1k != null) 'item_region_1k': item.itemRegion1k,
       if (item.cropRectPx != null) 'crop_rect_px': item.cropRectPx,
       if (item.paddingPx != null) 'padding_px': item.paddingPx,
       if (item.cropLongEdgePx != null) 'crop_long_edge_px': item.cropLongEdgePx,
-      if (item.deskewAngleDeg != null)
-        'deskew_angle_deg': item.deskewAngleDeg,
+      if (item.deskewAngleDeg != null) 'deskew_angle_deg': item.deskewAngleDeg,
       if (item.widthPx != null) 'width_px': item.widthPx,
       if (item.heightPx != null) 'height_px': item.heightPx,
     };

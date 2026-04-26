@@ -4313,6 +4313,12 @@ async function lockQueuedJob(row) {
     .select('*')
     .maybeSingle();
   if (error) throw new Error(`job_lock_failed:${error.message}`);
+  if (data) {
+    await updateTextbookExtractRunForJob({
+      jobId: data.id,
+      status: 'extracting',
+    });
+  }
   return data;
 }
 
@@ -4335,6 +4341,12 @@ async function markJobFailed({
       updated_at: nowIso,
     })
     .eq('id', jobId);
+  await updateTextbookExtractRunForJob({
+    jobId,
+    status: 'failed',
+    errorCode: errCode,
+    errorMessage: errMsg,
+  });
   if (documentId && !skipDocumentStatusUpdate) {
     await supa
       .from('pb_documents')
@@ -4343,6 +4355,33 @@ async function markJobFailed({
         updated_at: nowIso,
       })
       .eq('id', documentId);
+  }
+}
+
+async function updateTextbookExtractRunForJob({
+  jobId,
+  status,
+  errorCode = '',
+  errorMessage = '',
+  resultSummary = null,
+}) {
+  if (!jobId) return;
+  const patch = {
+    status,
+    error_code: errorCode,
+    error_message: errorMessage,
+    updated_at: new Date().toISOString(),
+  };
+  if (resultSummary) patch.result_summary = resultSummary;
+  const { error } = await supa
+    .from('textbook_pb_extract_runs')
+    .update(patch)
+    .eq('extract_job_id', jobId);
+  if (error && !/relation .* does not exist/i.test(String(error.message || ''))) {
+    console.warn(
+      '[pb-extract-worker] textbook_run_update_failed',
+      compact(error.message || error),
+    );
   }
 }
 
@@ -5066,6 +5105,11 @@ async function processOneJob(job) {
   if (jobUpdateErr) {
     throw new Error(`job_update_failed:${jobUpdateErr.message}`);
   }
+  await updateTextbookExtractRunForJob({
+    jobId: job.id,
+    status: jobStatus,
+    resultSummary,
+  });
 
   const { error: docUpdateErr } = await supa
     .from('pb_documents')

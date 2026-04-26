@@ -151,7 +151,7 @@ class TextbookVlmAnswerItem {
 
   final String problemNumber;
 
-  /// 'objective' | 'subjective'.
+  /// 'objective' | 'subjective' | 'image'.
   final String kind;
 
   /// Canonical form: 객관식은 "①" 같은 원문자, 주관식은 1D LaTeX 원문.
@@ -165,6 +165,7 @@ class TextbookVlmAnswerItem {
 
   bool get isObjective => kind == 'objective';
   bool get isSubjective => kind == 'subjective';
+  bool get isImage => kind == 'image';
 
   factory TextbookVlmAnswerItem.fromMap(Map<String, dynamic> map) {
     int? asIntN(dynamic v) {
@@ -186,10 +187,15 @@ class TextbookVlmAnswerItem {
     }
 
     final kindRaw = '${map['kind'] ?? ''}'.toLowerCase();
+    final kind = const {'objective', 'subjective', 'image'}.contains(kindRaw)
+        ? kindRaw
+        : 'subjective';
     return TextbookVlmAnswerItem(
       problemNumber: '${map['problem_number'] ?? ''}'.trim(),
-      kind: kindRaw == 'objective' ? 'objective' : 'subjective',
-      answerText: '${map['answer_text'] ?? ''}',
+      kind: kind,
+      answerText: kind == 'image'
+          ? '${map['answer_text'] ?? '[image]'}'
+          : '${map['answer_text'] ?? ''}',
       answerLatex2d: '${map['answer_latex_2d'] ?? ''}',
       bbox: parseBbox(map['bbox']),
     );
@@ -259,6 +265,10 @@ class TextbookAnswerUpload {
     this.rawPage,
     this.displayPage,
     this.bbox1k,
+    this.answerImagePngBytes,
+    this.answerImageRegion1k,
+    this.answerImageWidthPx,
+    this.answerImageHeightPx,
     this.note,
   });
 
@@ -270,6 +280,10 @@ class TextbookAnswerUpload {
   final int? rawPage;
   final int? displayPage;
   final List<int>? bbox1k;
+  final Uint8List? answerImagePngBytes;
+  final List<int>? answerImageRegion1k;
+  final int? answerImageWidthPx;
+  final int? answerImageHeightPx;
   final String? note;
 
   Map<String, dynamic> toJson() => <String, dynamic>{
@@ -281,6 +295,14 @@ class TextbookAnswerUpload {
         if (rawPage != null) 'raw_page': rawPage,
         if (displayPage != null) 'display_page': displayPage,
         if (bbox1k != null) 'bbox_1k': bbox1k,
+        if (answerImagePngBytes != null && answerImagePngBytes!.isNotEmpty)
+          'answer_image_png_base64': base64Encode(answerImagePngBytes!),
+        if (answerImageRegion1k != null)
+          'answer_image_region_1k': answerImageRegion1k,
+        if (answerImageWidthPx != null)
+          'answer_image_width_px': answerImageWidthPx,
+        if (answerImageHeightPx != null)
+          'answer_image_height_px': answerImageHeightPx,
         if (note != null) 'note': note,
       };
 }
@@ -331,8 +353,7 @@ class TextbookAnswerMatchReport {
     }
     final missing = <String>[
       for (final n in expectedSet)
-        if (!byNumber.containsKey(n) ||
-            byNumber[n]!.answerText.trim().isEmpty)
+        if (!byNumber.containsKey(n) || byNumber[n]!.answerText.trim().isEmpty)
           n,
     ];
     return TextbookAnswerMatchReport(

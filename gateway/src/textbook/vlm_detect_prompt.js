@@ -44,13 +44,18 @@ export const VLM_DETECT_PAGE_KINDS = Object.freeze([
   'unknown',
 ]);
 
-export function buildDetectProblemsPrompt({ displayPage, rawPage, pageOffset }) {
+export function buildDetectProblemsPrompt({
+  displayPage,
+  rawPage,
+  pageOffset,
+  includeContentGroups = true,
+}) {
   const pageLine =
     displayPage != null && Number.isFinite(displayPage)
       ? `이 이미지는 **책면 기준 ${displayPage}페이지** (PDF raw page ${rawPage}, page_offset=${pageOffset}) 이다.`
       : `이 이미지는 교재 스캔본의 한 페이지 (PDF raw page ${rawPage}) 이다.`;
 
-  return [
+  let lines = [
     '당신은 한국 중·고등 교재 스캔본에서 "문항 번호" 의 위치를 탐지하는 비전 AI 입니다.',
     '반드시 아래 JSON 스키마만 출력하세요. 설명·마크다운·주석·코드펜스 모두 금지.',
     '',
@@ -70,11 +75,15 @@ export function buildDetectProblemsPrompt({ displayPage, rawPage, pageOffset }) 
     '    - A 파트에는 문항이 전혀 없고 개념 설명만 있는 페이지도 있다.',
     '      이런 페이지는 반드시 page_kind="concept_page", items=[] 로 반환한다.',
     '      개념/예제/설명 박스를 문항처럼 억지로 감싸지 마라.',
+    '    - A 안에는 "01-1 소수와 합성수", "01-2 소인수분해" 같은 소주제 라벨이 있다.',
+    '      이 라벨은 문항을 묶는 기준이다. 문항마다 현재 속한 소주제 정보를 content_group_* 필드에 채워라.',
     '',
     '[B] 유형뽀개기 (section="type_practice")',
     '    - 번호 스타일: 일반 숫자 (예: 1, 12, 48). 보통 1자리~3자리.',
     '    - 번호 옆에 라벨이 자주 붙는다: "상", "중", "하", "대표문제", "창의문제".',
     '    - 번호 아래로 지문/보기/선택지(①~⑤) 가 세로로 길게 이어진다.',
+    '    - B 안에는 "유형 01 소수와 합성수" 같은 유형명이 있다. 밑의 설명/예제 내용은 추출하지 말고,',
+    '      문항마다 현재 속한 유형명만 content_group_* 필드에 채워라.',
     '',
     '[C] 만점도전하기 (section="mastery")',
     '    - 구조는 B 와 동일.',
@@ -95,6 +104,12 @@ export function buildDetectProblemsPrompt({ displayPage, rawPage, pageOffset }) 
     '      "label": "<라벨, 아래 집합 중 하나. 없으면 빈 문자열 \\"\\">",',
     '      "is_set_header": <bool — 범위 표기(예: \\"48~52\\") 이면 true>,',
     '      "set_range": {"from": <int>, "to": <int>} | null,',
+    '      "content_group": {',
+    '        "kind": "basic_subtopic" | "type" | "none",',
+    '        "label": "<예: \\"01-1\\" 또는 \\"유형 01\\", 없으면 빈 문자열>",',
+    '        "title": "<예: \\"소수와 합성수\\", 없으면 빈 문자열>",',
+    '        "order": <int> | null',
+    '      },',
     '      "column": 1 | 2 | null,',
     '      "bbox": [<ymin>, <xmin>, <ymax>, <xmax>],',
     '      "item_region": [<ymin>, <xmin>, <ymax>, <xmax>]',
@@ -118,6 +133,13 @@ export function buildDetectProblemsPrompt({ displayPage, rawPage, pageOffset }) 
     '     - "개념", "핵심", "예제", "정리", 번호 없는 설명 박스, 페이지 장식, 표/그림만 있는 블록은 절대 item_region 으로 만들지 마라.',
     '     - 문항번호 없이 본문처럼 보이는 텍스트가 있어도 추측해서 문항을 만들지 마라.',
     '[D1] 본문 안의 "(1), (2)" 같은 소문항 레이블, "①~⑤" 같은 선택지 기호, "풀이/해설/정답" 같은 섹션 헤더는 문항 번호가 아니다. items 에 넣지 마라.',
+    '[D1-Group] content_group 규칙:',
+    '     - A 기본다잡기: 가장 최근 위쪽/같은 영역에 보이는 "01-1 제목" 라벨을 적용한다.',
+    '       kind="basic_subtopic", label="01-1", title="소수와 합성수", order=1 처럼 채운다.',
+    '     - B 유형뽀개기: 가장 최근 위쪽/같은 영역에 보이는 "유형 01 제목" 라벨을 적용한다.',
+    '       kind="type", label="유형 01", title="소수와 합성수", order=1 처럼 채운다.',
+    '     - C 만점도전하기 또는 라벨을 못 찾은 경우: kind="none", label="", title="", order=null.',
+    '     - 유형명/소주제명 아래의 설명 문장이나 예제 본문은 content_group_title 에 넣지 마라. 제목 한 줄만 사용한다.',
     '[D2] 페이지 번호(쪽 번호) 는 문항 번호가 아니다. 페이지 번호는 페이지 하단/상단에 단독으로 위치한다. 넣지 마라.',
     '     - 4자리여도 페이지 번호처럼 모서리에 혼자 있고 주변에 본문이 없으면 제외.',
     '[D3] 세트형 도입(예: "48~52 다음 물음에 답하시오") 은 하나의 item 으로 기록한다.',
@@ -161,5 +183,38 @@ export function buildDetectProblemsPrompt({ displayPage, rawPage, pageOffset }) 
     '[N2] 없는 문항을 추측해서 만들지 마라. 보이는 것만 담는다.',
     '',
     '지금 첨부된 이미지를 분석해 위 스키마로만 출력하라.',
-  ].join('\n');
+  ];
+  if (!includeContentGroups) {
+    let skippingContentGroupSchema = false;
+    lines = lines.filter((line) => {
+      const text = String(line || '');
+      if (text.includes('"content_group": {')) {
+        skippingContentGroupSchema = true;
+        return false;
+      }
+      if (skippingContentGroupSchema) {
+        if (text.trim() === '},') {
+          skippingContentGroupSchema = false;
+        }
+        return false;
+      }
+      if (text.includes('content_group')) return false;
+      if (text.includes('01-1 소수와 합성수')) return false;
+      if (text.includes('유형 01 소수와 합성수')) return false;
+      if (text.startsWith('[D1-Group]')) return false;
+      if (text.includes('kind="basic_subtopic"')) return false;
+      if (text.includes('kind="type"')) return false;
+      if (text.includes('C 만점도전하기 또는 라벨을 못 찾은 경우')) {
+        return false;
+      }
+      if (text.includes('유형명/소주제명 아래의 설명')) return false;
+      return true;
+    });
+    lines.splice(
+      lines.indexOf('[D1] 본문 안의 "(1), (2)" 같은 소문항 레이블, "①~⑤" 같은 선택지 기호, "풀이/해설/정답" 같은 섹션 헤더는 문항 번호가 아니다. items 에 넣지 마라.') + 1,
+      0,
+      '[D1-Group] 문항 사이의 소주제/유형명은 이번 호출에서는 무시한다. 문항 번호와 item_region 정확도를 최우선으로 한다.',
+    );
+  }
+  return lines.join('\n');
 }

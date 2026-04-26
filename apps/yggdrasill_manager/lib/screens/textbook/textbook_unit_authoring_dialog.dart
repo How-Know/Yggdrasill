@@ -36,6 +36,7 @@ import '../../services/textbook_pdf_service.dart';
 import '../../services/textbook_series_catalog.dart';
 import '../../services/textbook_vlm_range_runner.dart';
 import '../../services/textbook_vlm_test_service.dart';
+import '../../services/problem_bank_service.dart';
 import 'textbook_authoring_stage_dialog.dart';
 
 class TextbookUnitAuthoringDialog extends StatefulWidget {
@@ -98,6 +99,7 @@ class _TextbookUnitAuthoringDialogState
   final _pdfService = TextbookPdfService();
   final _vlmService = TextbookVlmTestService();
   final _cropUploader = TextbookCropUploader();
+  final _pbService = ProblemBankService();
 
   PdfDocument? _bodyDocument;
   String? _bodyLocalPath;
@@ -121,6 +123,13 @@ class _TextbookUnitAuthoringDialogState
   // wins over the VLM's original `item.itemRegion`.
   final Map<String, Map<String, List<int>>> _manualEdits =
       <String, Map<String, List<int>>>{};
+
+  final Set<String> _batchSelection = <String>{};
+  final Map<String, String> _pbExtractStatusBySub = <String, String>{};
+  bool _batchRunning = false;
+  int _batchDone = 0;
+  int _batchTotal = 0;
+  String _batchStatus = '';
 
   // Single-selection for the corner-handle editor. Null ⇒ no handles drawn.
   String? _selectedProblemKey;
@@ -199,12 +208,39 @@ class _TextbookUnitAuthoringDialogState
         _loadingPayload = false;
         _focus = null;
       });
+      unawaited(_loadPbExtractRuns());
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _loadingPayload = false;
         _payloadError = '$e';
       });
+    }
+  }
+
+  Future<void> _loadPbExtractRuns() async {
+    try {
+      final rows = await _pbService.listTextbookPdfExtractRuns(
+        academyId: widget.academyId,
+        bookId: widget.bookId,
+        gradeLabel: widget.gradeLabel,
+      );
+      if (!mounted) return;
+      setState(() {
+        _pbExtractStatusBySub.clear();
+        for (final row in rows) {
+          final focus = _SubFocus(
+            bigIndex: int.tryParse('${row['big_order'] ?? ''}') ?? -1,
+            midIndex: int.tryParse('${row['mid_order'] ?? ''}') ?? -1,
+            subKey: '${row['sub_key'] ?? ''}',
+          );
+          if (focus.bigIndex < 0 || focus.midIndex < 0) continue;
+          _pbExtractStatusBySub[_stateKeyFor(focus)] =
+              '${row['status'] ?? 'idle'}';
+        }
+      });
+    } catch (_) {
+      // 상태 배지는 보조 정보라 로딩 실패가 오서링 흐름을 막으면 안 된다.
     }
   }
 
@@ -315,6 +351,93 @@ class _TextbookUnitAuthoringDialogState
 
   String _stateKeyFor(_SubFocus focus) =>
       '${focus.bigIndex}/${focus.midIndex}/${focus.subKey}';
+
+  List<_SubFocus> _selectedBatchFocuses() {
+    final out = <_SubFocus>[];
+    for (var b = 0; b < _bigUnits.length; b += 1) {
+      final big = _bigUnits[b];
+      for (var m = 0; m < big.middles.length; m += 1) {
+        for (final sub in big.middles[m].subs) {
+          final focus = _SubFocus(
+            bigIndex: b,
+            midIndex: m,
+            subKey: sub.preset.key,
+          );
+          if (_batchSelection.contains(_stateKeyFor(focus))) {
+            out.add(focus);
+          }
+        }
+      }
+    }
+    return out;
+  }
+
+  List<_SubFocus> _midBatchFocuses(int bigIndex, int midIndex) {
+    final mid = _bigUnits[bigIndex].middles[midIndex];
+    return [
+      for (final sub in mid.subs)
+        _SubFocus(
+          bigIndex: bigIndex,
+          midIndex: midIndex,
+          subKey: sub.preset.key,
+        ),
+    ];
+  }
+
+  void _toggleBatchSub(_SubFocus focus, bool selected) {
+    setState(() {
+      final key = _stateKeyFor(focus);
+      if (selected) {
+        _batchSelection.add(key);
+        _focus = focus;
+        _selectedProblemKey = null;
+      } else {
+        _batchSelection.remove(key);
+        if (_focus != null &&
+            _focus!.bigIndex == focus.bigIndex &&
+            _focus!.midIndex == focus.midIndex &&
+            _focus!.subKey == focus.subKey &&
+            _batchSelection.isNotEmpty) {
+          final next = _selectedBatchFocuses().first;
+          _focus = next;
+          _selectedProblemKey = null;
+        }
+      }
+    });
+  }
+
+  void _toggleBatchMid(int bigIndex, int midIndex, bool selected) {
+    final focuses = _midBatchFocuses(bigIndex, midIndex);
+    setState(() {
+      for (final focus in focuses) {
+        final key = _stateKeyFor(focus);
+        if (selected) {
+          _batchSelection.add(key);
+        } else {
+          _batchSelection.remove(key);
+        }
+      }
+      if (selected && focuses.isNotEmpty) {
+        _focus = focuses.first;
+        _selectedProblemKey = null;
+      } else if (_focus != null && _batchSelection.isNotEmpty) {
+        final next = _selectedBatchFocuses().first;
+        _focus = next;
+        _selectedProblemKey = null;
+      }
+    });
+  }
+
+  bool? _midBatchValue(int bigIndex, int midIndex) {
+    final focuses = _midBatchFocuses(bigIndex, midIndex);
+    if (focuses.isEmpty) return false;
+    final selected = focuses
+        .where((focus) => _batchSelection.contains(_stateKeyFor(focus)))
+        .length;
+    if (selected == 0) return false;
+    if (selected == focuses.length) return true;
+    return null;
+  }
 
   _SubRunState _ensureSubState(_SubFocus focus) {
     final key = _stateKeyFor(focus);
@@ -588,6 +711,10 @@ class _TextbookUnitAuthoringDialogState
           isSetHeader: vlm.isSetHeader,
           setFrom: vlm.setFrom,
           setTo: vlm.setTo,
+          contentGroupKind: vlm.contentGroupKind,
+          contentGroupLabel: vlm.contentGroupLabel,
+          contentGroupTitle: vlm.contentGroupTitle,
+          contentGroupOrder: vlm.contentGroupOrder,
           columnIndex: vlm.column,
           bbox1k: vlm.bbox,
           itemRegion1k: region,
@@ -643,24 +770,142 @@ class _TextbookUnitAuthoringDialogState
     }
   }
 
-  // ------------------------------------------------------------ next stage
+  Future<void> _runSelectedBatch() async {
+    if (_batchRunning) return;
+    final selected = _selectedBatchFocuses();
+    if (selected.isEmpty) {
+      _toast('중단원 또는 소단원 체크박스를 먼저 선택하세요', error: true);
+      return;
+    }
+    setState(() {
+      _batchRunning = true;
+      _batchDone = 0;
+      _batchTotal = selected.length;
+      _batchStatus = '일괄 실행 준비 중...';
+    });
+    final failed = <String>[];
+    try {
+      for (var i = 0; i < selected.length; i += 1) {
+        final focus = selected[i];
+        final label = _subFocusLabel(focus);
+        if (!mounted) return;
+        setState(() {
+          _focus = focus;
+          _selectedProblemKey = null;
+          _batchStatus = '$label · Stage 1 분석 중...';
+        });
+        await _runFocusedAnalysis(focus);
+        final state = _ensureSubState(focus);
+        if (state.error != null || _totalRegionsFor(state, focus) == 0) {
+          failed.add('$label(Stage 1)');
+          if (mounted) setState(() => _batchDone = i + 1);
+          continue;
+        }
 
-  void _openStageDialog(_SubFocus focus) {
-    final state = _ensureSubState(focus);
-    // Must have something to match against. A "다음" with zero regions just
-    // takes the operator to an empty second stage, which is confusing.
-    final total = _totalRegionsFor(state, focus);
-    if (total == 0) {
-      _toast('먼저 문항 영역을 분석하고 저장하세요', error: true);
-      return;
+        if (!mounted) return;
+        setState(() => _batchStatus = '$label · 영역 저장 중...');
+        await _uploadFocused(focus);
+        if ((state.uploadResult?.rows ?? const []).isEmpty) {
+          failed.add('$label(영역 저장)');
+          if (mounted) setState(() => _batchDone = i + 1);
+          continue;
+        }
+
+        if (!mounted) return;
+        setState(() {
+          _batchDone = i + 1;
+          _batchStatus = '$label · 크롭 저장 완료';
+        });
+      }
+      if (!mounted) return;
+      final failText = failed.isEmpty ? '' : ' · 실패 ${failed.length}개';
+      _toast('크롭 일괄 분석/저장 완료$failText');
+      setState(() {
+        _batchRunning = false;
+        _batchStatus = failed.isEmpty
+            ? '크롭 확인 후 다음 버튼을 눌러 정답 VLM 단계로 진행하세요'
+            : failed.join('\n');
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _batchRunning = false;
+        _batchStatus = '일괄 실행 실패: $e';
+      });
+      _toast('일괄 실행 실패: $e', error: true);
     }
-    final seedRows = _buildStageCropSeeds(focus, state);
-    if (seedRows.isEmpty) {
-      _toast('먼저 "영역 저장"을 눌러 문항 정보를 서버에 저장하세요', error: true);
-      return;
-    }
+  }
+
+  String _subFocusLabel(_SubFocus focus) {
     final big = _bigUnits[focus.bigIndex];
     final mid = big.middles[focus.midIndex];
+    final sub = mid.subs.firstWhere(
+      (s) => s.preset.key == focus.subKey,
+      orElse: () => mid.subs.first,
+    );
+    final bigName = big.nameCtrl.text.trim().isEmpty
+        ? '대${focus.bigIndex + 1}'
+        : big.nameCtrl.text.trim();
+    final midName = mid.nameCtrl.text.trim().isEmpty
+        ? '중${focus.midIndex + 1}'
+        : mid.nameCtrl.text.trim();
+    return '$bigName/$midName/${sub.preset.displayName}';
+  }
+
+  Future<void> _startPdfOnlyExtractForFocus(_SubFocus focus) async {
+    final big = _bigUnits[focus.bigIndex];
+    final mid = big.middles[focus.midIndex];
+    final sub = mid.subs.firstWhere(
+      (s) => s.preset.key == focus.subKey,
+      orElse: () => mid.subs.first,
+    );
+    final start = _positiveInt(sub.startCtrl.text);
+    final end = _positiveInt(sub.endCtrl.text);
+    await _pbService.createTextbookPdfOnlyExtractRun(
+      academyId: widget.academyId,
+      bookId: widget.bookId,
+      bookName: widget.bookName,
+      gradeLabel: widget.gradeLabel,
+      bigOrder: focus.bigIndex,
+      midOrder: focus.midIndex,
+      subKey: focus.subKey,
+      bigName: big.nameCtrl.text.trim(),
+      midName: mid.nameCtrl.text.trim(),
+      subName: sub.preset.displayName,
+      rawPageFrom: start,
+      rawPageTo: end,
+      displayPageFrom: start,
+      displayPageTo: end,
+      bodyLinkId: widget.linkId,
+    );
+    if (!mounted) return;
+    setState(() {
+      _pbExtractStatusBySub[_stateKeyFor(focus)] = 'queued';
+    });
+  }
+
+  // ------------------------------------------------------------ next stage
+
+  void _openStageDialogForTargets(List<_SubFocus> targets) {
+    if (targets.isEmpty) return;
+    final allSeeds = <TextbookAuthoringStageCropSeed>[];
+    final scopes = <TextbookAuthoringStageScope>[];
+    for (final focus in targets) {
+      final state = _ensureSubState(focus);
+      final seeds = _buildStageCropSeeds(focus, state);
+      if (seeds.isEmpty) {
+        _toast('${_subFocusLabel(focus)} 저장 문항이 없습니다', error: true);
+        return;
+      }
+      allSeeds.addAll(seeds);
+      scopes.add(_stageScopeFor(focus));
+      unawaited(_startPdfOnlyExtractForFocus(focus).catchError((Object e) {
+        debugPrint('[textbook-pb-extract] start failed: $e');
+      }));
+    }
+    final first = targets.first;
+    final big = _bigUnits[first.bigIndex];
+    final mid = big.middles[first.midIndex];
     TextbookAuthoringStageDialog.show(
       context,
       academyId: widget.academyId,
@@ -668,12 +913,31 @@ class _TextbookUnitAuthoringDialogState
       bookName: widget.bookName,
       gradeLabel: widget.gradeLabel,
       linkId: widget.linkId,
+      bigOrder: first.bigIndex,
+      midOrder: first.midIndex,
+      subKey: first.subKey,
+      bigName: big.nameCtrl.text.trim(),
+      midName: mid.nameCtrl.text.trim(),
+      initialCrops: allSeeds,
+      batchScopes:
+          scopes.length > 1 ? scopes : const <TextbookAuthoringStageScope>[],
+    );
+  }
+
+  TextbookAuthoringStageScope _stageScopeFor(_SubFocus focus) {
+    final big = _bigUnits[focus.bigIndex];
+    final mid = big.middles[focus.midIndex];
+    final sub = mid.subs.firstWhere(
+      (s) => s.preset.key == focus.subKey,
+      orElse: () => mid.subs.first,
+    );
+    return TextbookAuthoringStageScope(
       bigOrder: focus.bigIndex,
       midOrder: focus.midIndex,
       subKey: focus.subKey,
       bigName: big.nameCtrl.text.trim(),
       midName: mid.nameCtrl.text.trim(),
-      initialCrops: seedRows,
+      subName: sub.preset.displayName,
     );
   }
 
@@ -706,6 +970,10 @@ class _TextbookUnitAuthoringDialogState
           displayPage: row.displayPage,
           section: row.section,
           isSetHeader: item.isSetHeader,
+          contentGroupKind: item.contentGroupKind,
+          contentGroupLabel: item.contentGroupLabel,
+          contentGroupTitle: item.contentGroupTitle,
+          contentGroupOrder: item.contentGroupOrder,
         ));
       }
     }
@@ -867,6 +1135,29 @@ class _TextbookUnitAuthoringDialogState
             ),
           ),
           const Divider(height: 1, color: _kBorder),
+          if (_batchRunning || _batchStatus.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 12, 0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (_batchTotal > 0)
+                    LinearProgressIndicator(
+                      value: _batchRunning ? _batchDone / _batchTotal : 1,
+                      minHeight: 3,
+                      backgroundColor: const Color(0xFF24272D),
+                      color: _kAccent,
+                    ),
+                  const SizedBox(height: 6),
+                  Text(
+                    _batchStatus,
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: _kTextSub, fontSize: 11),
+                  ),
+                ],
+              ),
+            ),
           Expanded(
             child: ListView.separated(
               padding: const EdgeInsets.fromLTRB(10, 10, 10, 14),
@@ -960,6 +1251,19 @@ class _TextbookUnitAuthoringDialogState
         children: [
           Row(
             children: [
+              Checkbox(
+                value: _midBatchValue(bigIndex, midIndex),
+                tristate: true,
+                onChanged: _batchRunning
+                    ? null
+                    : (value) => _toggleBatchMid(
+                          bigIndex,
+                          midIndex,
+                          value != false,
+                        ),
+                visualDensity: VisualDensity.compact,
+                side: const BorderSide(color: _kTextSub),
+              ),
               _pill(
                 text: '중 ${midIndex + 1}',
                 color: const Color(0xFF1B2430),
@@ -1007,6 +1311,7 @@ class _TextbookUnitAuthoringDialogState
         _focus!.bigIndex == focus.bigIndex &&
         _focus!.midIndex == focus.midIndex &&
         _focus!.subKey == focus.subKey;
+    final batchSelected = _batchSelection.contains(_stateKeyFor(focus));
     final state = _subStates[_stateKeyFor(focus)];
     final analyzed = state == null
         ? 0
@@ -1020,6 +1325,7 @@ class _TextbookUnitAuthoringDialogState
             );
     final uploaded = state?.uploadResult?.upserted ?? 0;
     final isRunning = state?.running == true || state?.uploading == true;
+    final pbStatus = _pbExtractStatusBySub[_stateKeyFor(focus)] ?? '';
     return Container(
       margin: const EdgeInsets.only(top: 4),
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
@@ -1037,8 +1343,16 @@ class _TextbookUnitAuthoringDialogState
         },
         child: Row(
           children: [
+            Checkbox(
+              value: batchSelected,
+              onChanged: _batchRunning
+                  ? null
+                  : (value) => _toggleBatchSub(focus, value == true),
+              visualDensity: VisualDensity.compact,
+              side: const BorderSide(color: _kTextSub),
+            ),
             Container(
-              width: 80,
+              width: 72,
               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
               decoration: BoxDecoration(
                 color: const Color(0xFF1E1A12),
@@ -1081,6 +1395,10 @@ class _TextbookUnitAuthoringDialogState
               uploaded: uploaded,
               running: isRunning,
             ),
+            if (pbStatus.isNotEmpty) ...[
+              const SizedBox(width: 4),
+              _PbExtractStatusChip(status: pbStatus),
+            ],
           ],
         ),
       ),
@@ -1107,6 +1425,10 @@ class _TextbookUnitAuthoringDialogState
   Widget _buildRightPane() {
     final focus = _focus;
     if (focus == null) {
+      final selected = _selectedBatchFocuses();
+      if (selected.isNotEmpty) {
+        return _buildBatchSelectionPane(selected);
+      }
       return const Center(
         child: Padding(
           padding: EdgeInsets.all(24),
@@ -1146,7 +1468,6 @@ class _TextbookUnitAuthoringDialogState
                   ),
                 ),
               ),
-              _buildNextButton(focus, state),
             ],
           ),
         ),
@@ -1161,9 +1482,99 @@ class _TextbookUnitAuthoringDialogState
     );
   }
 
+  Widget _buildBatchSelectionPane(List<_SubFocus> selected) {
+    final totalReady = selected.fold<int>(
+      0,
+      (sum, focus) => sum + _totalRegionsFor(_ensureSubState(focus), focus),
+    );
+    final allSaved = selected.every(
+      (focus) =>
+          (_ensureSubState(focus).uploadResult?.rows ?? const []).isNotEmpty,
+    );
+    return Center(
+      child: Container(
+        width: 520,
+        padding: const EdgeInsets.all(18),
+        decoration: BoxDecoration(
+          color: _kCard,
+          border: Border.all(color: _kBorder),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              '선택된 소단원 ${selected.length}개',
+              style: const TextStyle(
+                color: _kText,
+                fontSize: 15,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              _batchStatus.isNotEmpty
+                  ? _batchStatus
+                  : '체크한 소단원을 한 번에 Stage 1 분석/저장합니다.',
+              style: const TextStyle(color: _kTextSub, fontSize: 12),
+            ),
+            if (_batchTotal > 0) ...[
+              const SizedBox(height: 10),
+              LinearProgressIndicator(
+                value: _batchRunning
+                    ? (_batchDone / _batchTotal).clamp(0.0, 1.0)
+                    : 1,
+                backgroundColor: const Color(0xFF2A2A2A),
+                color: _kAccent,
+              ),
+            ],
+            const SizedBox(height: 14),
+            Row(
+              children: [
+                if (totalReady > 0 && allSaved && !_batchRunning)
+                  FilledButton.icon(
+                    onPressed: () => _openStageDialogForTargets(selected),
+                    icon: const Icon(Icons.arrow_forward, size: 16),
+                    label: Text(
+                      selected.length > 1 ? '다음 (${selected.length}개)' : '다음',
+                    ),
+                    style: FilledButton.styleFrom(backgroundColor: _kInfo),
+                  )
+                else
+                  FilledButton.icon(
+                    onPressed: _batchRunning ? null : _runSelectedBatch,
+                    icon: _batchRunning
+                        ? const SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : const Icon(Icons.play_arrow, size: 16),
+                    label: Text(_batchRunning ? '선택 분석 중' : '선택 분석'),
+                    style: FilledButton.styleFrom(backgroundColor: _kAccent),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildNextButton(_SubFocus focus, _SubRunState state) {
-    final total = _totalRegionsFor(state, focus);
-    final hasSavedRows = (state.uploadResult?.rows ?? const []).isNotEmpty;
+    final selected = _selectedBatchFocuses();
+    final targets = selected.isEmpty ? <_SubFocus>[focus] : selected;
+    final total = targets.fold<int>(
+      0,
+      (sum, f) => sum + _totalRegionsFor(_ensureSubState(f), f),
+    );
+    final hasSavedRows = targets.every(
+      (f) => (_ensureSubState(f).uploadResult?.rows ?? const []).isNotEmpty,
+    );
     final enabled =
         total > 0 && hasSavedRows && !state.running && !state.uploading;
     return Tooltip(
@@ -1173,9 +1584,9 @@ class _TextbookUnitAuthoringDialogState
               ? '다음 단계로 가기 전에 "영역 저장"을 먼저 눌러 주세요.'
               : '$total개 문항을 기반으로 정답·해설 좌표 단계로 이동합니다.',
       child: FilledButton.icon(
-        onPressed: enabled ? () => _openStageDialog(focus) : null,
+        onPressed: enabled ? () => _openStageDialogForTargets(targets) : null,
         icon: const Icon(Icons.arrow_forward, size: 14),
-        label: const Text('다음'),
+        label: Text(targets.length > 1 ? '다음 (${targets.length}개)' : '다음'),
         style: FilledButton.styleFrom(
           backgroundColor: _kAccent,
           disabledBackgroundColor: const Color(0xFF2A2A2A),
@@ -1198,6 +1609,9 @@ class _TextbookUnitAuthoringDialogState
     final totalRegions = _totalRegionsFor(state, focus);
     final edits = _manualEdits[_stateKeyFor(focus)];
     final manualCount = edits?.length ?? 0;
+    final selectedCount = _selectedBatchFocuses().length;
+    final runSelection = selectedCount > 0;
+    final canRunAnalysis = runSelection ? !_batchRunning : readyRange;
 
     return Container(
       padding: const EdgeInsets.all(10),
@@ -1257,11 +1671,13 @@ class _TextbookUnitAuthoringDialogState
               const SizedBox(width: 6),
             ],
             FilledButton.icon(
-              onPressed: !readyRange || state.uploading
+              onPressed: !canRunAnalysis || state.uploading
                   ? null
-                  : () => _runFocusedAnalysis(focus),
+                  : () => runSelection
+                      ? _runSelectedBatch()
+                      : _runFocusedAnalysis(focus),
               icon: const Icon(Icons.play_arrow, size: 16),
-              label: const Text('분석 시작'),
+              label: Text(runSelection ? '선택 분석 ($selectedCount)' : '분석 시작'),
               style: FilledButton.styleFrom(backgroundColor: _kAccent),
             ),
           ],
@@ -1298,6 +1714,8 @@ class _TextbookUnitAuthoringDialogState
               ),
             ),
           ),
+          const SizedBox(width: 6),
+          _buildNextButton(focus, state),
         ],
       ),
     );
@@ -1900,6 +2318,11 @@ class _NumberBadge extends StatelessWidget {
   Widget build(BuildContext context) {
     final color =
         item.isSetHeader ? const Color(0xFFFFB44A) : const Color(0xFFFF4D4F);
+    final groupLabel = item.contentGroupLabel.trim();
+    final numberLabel =
+        item.label.isEmpty ? item.number : '${item.number} · ${item.label}';
+    final text =
+        groupLabel.isEmpty ? numberLabel : '$groupLabel · $numberLabel';
     return Positioned(
       left: rect.left,
       top: rect.top,
@@ -1922,9 +2345,7 @@ class _NumberBadge extends StatelessWidget {
                 padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
                 color: color,
                 child: Text(
-                  item.label.isEmpty
-                      ? item.number
-                      : '${item.number} · ${item.label}',
+                  text,
                   style: const TextStyle(
                     color: Colors.white,
                     fontSize: 10,
@@ -2134,6 +2555,52 @@ class _SubRowStats extends StatelessWidget {
                 ),
               ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PbExtractStatusChip extends StatelessWidget {
+  const _PbExtractStatusChip({required this.status});
+  final String status;
+
+  @override
+  Widget build(BuildContext context) {
+    final normalized = status.trim().toLowerCase();
+    final success = normalized == 'completed';
+    final failed = normalized == 'failed' || normalized == 'cancelled';
+    final running = normalized == 'queued' || normalized == 'extracting';
+    final Color color = success
+        ? const Color(0xFF9FD49F)
+        : failed
+            ? const Color(0xFFE68A8A)
+            : running
+                ? const Color(0xFF7AA9E6)
+                : const Color(0xFFB3B3B3);
+    final text = success
+        ? '본문 성공'
+        : failed
+            ? '본문 실패'
+            : running
+                ? '본문 진행'
+                : '본문 대기';
+    return Tooltip(
+      message: '문제은행 PDF-only 본문 추출: $status',
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.13),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: color.withValues(alpha: 0.45)),
+        ),
+        child: Text(
+          text,
+          style: TextStyle(
+            color: color,
+            fontSize: 10,
+            fontWeight: FontWeight.w800,
+          ),
         ),
       ),
     );

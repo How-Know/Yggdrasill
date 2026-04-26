@@ -106,9 +106,15 @@ class TextbookVlmTestService {
       json = <String, dynamic>{};
     }
     if (res.statusCode < 200 || res.statusCode >= 300 || json['ok'] != true) {
+      final detail = <String>[];
+      if (json['error'] != null) detail.add('${json['error']}');
+      if (json['message'] != null) detail.add('${json['message']}');
+      if (json['fallback_message'] != null) {
+        detail.add('fallback=${json['fallback_message']}');
+      }
+      final summary = detail.isEmpty ? res.body : detail.join(' / ');
       throw Exception(
-        'vlm_detect_failed(${res.statusCode}): '
-        '${json['error'] ?? json['message'] ?? res.body}',
+        'vlm_detect_failed(${res.statusCode}): $summary',
       );
     }
     return TextbookVlmDetectResult.fromMap(json);
@@ -210,6 +216,10 @@ class TextbookVlmItem {
     required this.isSetHeader,
     required this.setFrom,
     required this.setTo,
+    required this.contentGroupKind,
+    required this.contentGroupLabel,
+    required this.contentGroupTitle,
+    required this.contentGroupOrder,
     required this.column,
     required this.bbox,
     required this.itemRegion,
@@ -220,6 +230,10 @@ class TextbookVlmItem {
   final bool isSetHeader;
   final int? setFrom;
   final int? setTo;
+  final String contentGroupKind;
+  final String contentGroupLabel;
+  final String contentGroupTitle;
+  final int? contentGroupOrder;
 
   /// 1 = left column, 2 = right column, null = single-column or unknown.
   final int? column;
@@ -259,6 +273,16 @@ class TextbookVlmItem {
       from = asIntN(setRangeRaw['from']);
       to = asIntN(setRangeRaw['to']);
     }
+    final groupRaw = map['content_group'];
+    final group = groupRaw is Map
+        ? groupRaw.map((k, dynamic v) => MapEntry('$k', v))
+        : const <String, dynamic>{};
+    final groupKind =
+        '${map['content_group_kind'] ?? group['kind'] ?? 'none'}'.trim();
+    final safeGroupKind =
+        const {'basic_subtopic', 'type', 'none'}.contains(groupKind)
+            ? groupKind
+            : 'none';
 
     return TextbookVlmItem(
       number: '${map['number'] ?? ''}',
@@ -266,6 +290,14 @@ class TextbookVlmItem {
       isSetHeader: map['is_set_header'] == true,
       setFrom: from,
       setTo: to,
+      contentGroupKind: safeGroupKind,
+      contentGroupLabel: safeGroupKind == 'none'
+          ? ''
+          : '${map['content_group_label'] ?? group['label'] ?? ''}'.trim(),
+      contentGroupTitle: safeGroupKind == 'none'
+          ? ''
+          : '${map['content_group_title'] ?? group['title'] ?? ''}'.trim(),
+      contentGroupOrder: asIntN(map['content_group_order'] ?? group['order']),
       column: asIntN(map['column']),
       bbox: parseBbox(map['bbox']),
       itemRegion: parseBbox(map['item_region']),

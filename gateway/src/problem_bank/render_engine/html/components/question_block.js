@@ -1,5 +1,11 @@
 import { composeLineV1, composeLinesV1 } from '../line_composer.js';
-import { renderChoiceItem, chooseLayout, renderChoiceContainer } from './choice_block.js';
+import {
+  renderChoiceItem,
+  chooseLayout,
+  renderChoiceContainer,
+  isBlankChoiceQuestion,
+  renderBlankChoiceContainer,
+} from './choice_block.js';
 import {
   escapeHtml,
   isFractionLatex,
@@ -839,9 +845,13 @@ export function renderQuestionBlock(
   let choiceHtml = '';
   if (choices.length > 0) {
     const choiceOpts = debugDots ? { debugDots: true } : undefined;
-    const items = choices.map((ch) => renderChoiceItem(ch, mathRenderer, equations, choiceOpts));
-    const layout = chooseLayout(items);
-    choiceHtml = renderChoiceContainer(items, layout);
+    if (isBlankChoiceQuestion(question) && choices.length === 5) {
+      choiceHtml = renderBlankChoiceContainer(question, choices, mathRenderer, equations, choiceOpts);
+    } else {
+      const items = choices.map((ch) => renderChoiceItem(ch, mathRenderer, equations, choiceOpts));
+      const layout = chooseLayout(items);
+      choiceHtml = renderChoiceContainer(items, layout);
+    }
   }
 
   const inlineCount = stem.inlineCount || 0;
