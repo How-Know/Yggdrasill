@@ -1995,6 +1995,41 @@ class ProblemBankService {
     String? materialName,
     Map<String, dynamic>? classificationDetail,
   }) async {
+    var nextMeta = meta;
+    if (nextMeta != null) {
+      final isImageChoiceQuestion =
+          nextMeta['is_image_choice_question'] == true ||
+              '${nextMeta['choice_layout'] ?? ''}' == 'image_table';
+      final incomingAssets = nextMeta['figure_assets'];
+      final hasIncomingAssets =
+          incomingAssets is List && incomingAssets.isNotEmpty;
+      if (isImageChoiceQuestion && !hasIncomingAssets) {
+        try {
+          final row = await _client
+              .from('pb_questions')
+              .select('meta')
+              .eq('id', questionId)
+              .maybeSingle();
+          final currentMeta = _mapFromDynamic(row?['meta']);
+          final currentAssets = currentMeta['figure_assets'];
+          if (currentAssets is List && currentAssets.isNotEmpty) {
+            nextMeta = <String, dynamic>{
+              ...nextMeta,
+              'figure_assets': currentAssets,
+              'figure_count':
+                  currentMeta['figure_count'] ?? currentAssets.length,
+              if (currentMeta.containsKey('figure_review_required'))
+                'figure_review_required': currentMeta['figure_review_required'],
+              if (currentMeta.containsKey('figure_last_generated_at'))
+                'figure_last_generated_at':
+                    currentMeta['figure_last_generated_at'],
+            };
+          }
+        } catch (_) {
+          // Best-effort preservation only; normal update should still proceed.
+        }
+      }
+    }
     final payload = <String, dynamic>{
       'is_checked': isChecked,
       'reviewed_by': _client.auth.currentUser?.id,
@@ -2016,7 +2051,7 @@ class ProblemBankService {
       if (figureRefs != null) 'figure_refs': figureRefs,
       if (equations != null)
         'equations': equations.map((e) => e.toMap()).toList(growable: false),
-      if (meta != null) 'meta': meta,
+      if (nextMeta != null) 'meta': nextMeta,
     };
     if (curriculumCode != null ||
         sourceTypeCode != null ||

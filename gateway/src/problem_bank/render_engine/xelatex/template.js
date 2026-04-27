@@ -1563,6 +1563,26 @@ function isBlankChoiceQuestion(question) {
   return meta.is_blank_choice_question === true || meta.choice_layout === 'blank_table';
 }
 
+function isImageChoiceQuestion(question) {
+  const meta = question?.meta && typeof question.meta === 'object' ? question.meta : {};
+  const choices = Array.isArray(question?.choices) ? question.choices : [];
+  return meta.is_image_choice_question === true
+    || meta.choice_layout === 'image_table'
+    || (
+      choices.length === 5
+      && choices.every((choice) => /^\s*\[(?:그림|도형|도표)\]\s*$/.test(String(choice?.text || '')))
+    );
+}
+
+function stripImageChoiceFigureMarkers(stem) {
+  return String(stem || '')
+    .replace(FIGURE_MARKER_RE, '')
+    .replace(/^\s*\[문단(?::[^\]]*)?\]\s*$/gm, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{2,}/g, '\n')
+    .trim();
+}
+
 function blankChoiceLabels(question) {
   const meta = question?.meta && typeof question.meta === 'object' ? question.meta : {};
   const raw = Array.isArray(meta.blank_choice_labels) ? meta.blank_choice_labels : [];
@@ -2510,7 +2530,10 @@ function renderOneQuestion(question, {
   // stem 과 stemLineAligns 를 함께 정규화: `[문단:가운데]` 같은 인라인 정렬 마커를
   // plain `[문단]` 으로 바꾸고 속성은 stemLineAligns 에 이식한다. meta 경로(HWPX
   // 추출기가 원본 HWPX textAlign 을 담아둔 값)도 함께 읽어 최종 정렬값을 결정한다.
-  const rawStem = question?.stem || '';
+  const isImageChoice = isImageChoiceQuestion(question);
+  const rawStem = isImageChoice
+    ? stripImageChoiceFigureMarkers(question?.stem || '')
+    : (question?.stem || '');
   const metaAligns = (() => {
     const meta = question?.meta && typeof question.meta === 'object' ? question.meta : {};
     if (Array.isArray(meta.stem_line_aligns)) return meta.stem_line_aligns;
@@ -2721,6 +2744,47 @@ function renderOneQuestion(question, {
     if (pieces.length === 0) return '';
     // 한 줄 \hbox 안에서 hfill 로 수평 중앙 정렬.
     return `\\par\\noindent\\hbox to \\linewidth{\\hfill${pieces.join('%\n')}\\hfill\\null}\\par\n`;
+  }
+
+  function renderImageChoicesLatex() {
+    if (!Array.isArray(choices) || choices.length !== 5 || figurePaths.length === 0) return '';
+    const meta = question?.meta && typeof question.meta === 'object' ? question.meta : {};
+    const rowsPref = String(meta.image_choice_layout?.rows || '').trim();
+    const rowCount = rowsPref === '3' ? 3 : 2;
+    const columnCount = rowCount === 3 ? 2 : 3;
+    const groups = rowCount === 3
+      ? [[0, 1], [2, 3], [4]]
+      : [[0, 1, 2], [3, 4]];
+    const lines = ['{\\setstretch{1.25}\\parskip=0pt'];
+    for (const row of groups) {
+      const cellWidth = rowCount === 3 ? 0.47 : 0.31;
+      const imgWidth = rowCount === 3 ? '0.84\\linewidth' : '0.78\\linewidth';
+      const cells = Array.from({ length: columnCount }, (_, pos) => {
+        const idx = row[pos];
+        if (!Number.isInteger(idx)) {
+          return `\\begin{minipage}[t]{${cellWidth.toFixed(2)}\\linewidth}\\strut\\end{minipage}`;
+        }
+        const p = figurePaths[idx];
+        if (!p) return '';
+        const normalized = String(p).replace(/\\/g, '/');
+        const label = typeof choices[idx] === 'string'
+          ? (CIRCLED_DIGITS[idx] || String(idx + 1))
+          : (String(choices[idx]?.label || '').trim() || CIRCLED_DIGITS[idx] || String(idx + 1));
+        const include = `\\includegraphics[width=${imgWidth},keepaspectratio]{${normalized}}`;
+        return [
+          `\\begin{minipage}[t]{${cellWidth.toFixed(2)}\\linewidth}`,
+          `\\noindent ${escapeLatexText(label)}\\enspace`,
+          `\\raisebox{\\dimexpr\\ht\\strutbox-\\height-0.55em\\relax}{${include}}`,
+          '\\end{minipage}',
+        ].join('');
+      }).filter(Boolean);
+      if (cells.length > 0) {
+        lines.push(`\\noindent\\hbox to \\linewidth{${cells.join('\\hfill')}\\hfill\\null}\\par`);
+        lines.push('\\vspace{0.25\\baselineskip}');
+      }
+    }
+    lines.push('}');
+    return lines.join('\n');
   }
 
   function replaceFigureMarkers(text) {
@@ -3160,7 +3224,7 @@ function renderOneQuestion(question, {
   //   기존 로직은 figIdx(마커 카운터) 부터 순차 방출이었으나, token 경로에서 같은 itemId 를
   //   반복 참조하거나 stem 마커가 순서를 뒤집는 케이스에서는 이 기준이 맞지 않는다.
   //   따라서 실제로 "한 번도 방출되지 않은" local idx 만 순서대로 보충한다.
-  if (emittedFigIdxs.size < figurePaths.length) {
+  if (!isImageChoice && emittedFigIdxs.size < figurePaths.length) {
     for (let i = 0; i < figurePaths.length; i += 1) {
       if (emittedFigIdxs.has(i)) continue;
       if (figIdxConsumedByGroup.has(i)) continue;
@@ -3248,7 +3312,9 @@ function renderOneQuestion(question, {
     parts.push(choiceGap);
     parts.push(isBlankChoiceQuestion(question)
       ? renderBlankChoicesLatex(question, choices, equations)
-      : renderChoicesLatex(choices, equations, layoutColumns));
+      : (isImageChoice
+        ? renderImageChoicesLatex()
+        : renderChoicesLatex(choices, equations, layoutColumns)));
   }
 
   parts.push('\\par');

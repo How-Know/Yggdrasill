@@ -132,6 +132,17 @@ export function isBlankChoiceQuestion(question) {
   return meta.is_blank_choice_question === true || meta.choice_layout === 'blank_table';
 }
 
+export function isImageChoiceQuestion(question) {
+  const meta = question?.meta && typeof question.meta === 'object' ? question.meta : {};
+  const choices = Array.isArray(question?.choices) ? question.choices : [];
+  return meta.is_image_choice_question === true
+    || meta.choice_layout === 'image_table'
+    || (
+      choices.length === 5
+      && choices.every((choice) => /^\s*\[(?:그림|도형|도표)\]\s*$/.test(String(choice?.text || '')))
+    );
+}
+
 function blankChoiceWidthScale(question) {
   const meta = question?.meta && typeof question.meta === 'object' ? question.meta : {};
   const scales = meta.table_scales && typeof meta.table_scales === 'object'
@@ -183,4 +194,33 @@ export function renderBlankChoiceContainer(question, choices, mathRenderer, equa
     return `<div class="blank-choice-label">${escapeHtml(label)}</div>${cells}`;
   }).join('');
   return `<div class="blank-choice-table" style="--blank-choice-cols:${labels.length + 1};--blank-choice-width-scale:${widthScale};grid-template-columns:${gridColumns};">${header}${rows}</div>`;
+}
+
+export function renderImageChoiceContainer(question, choices, dataUrls) {
+  if (!Array.isArray(choices) || choices.length !== 5) return '';
+  const urls = Array.isArray(dataUrls) ? dataUrls.slice(0, 5) : [];
+  if (urls.length === 0) return '';
+  const meta = question?.meta && typeof question.meta === 'object' ? question.meta : {};
+  const rowsPref = String(meta.image_choice_layout?.rows || '').trim();
+  const rowCount = rowsPref === '3' ? 3 : 2;
+  const columnCount = rowCount === 3 ? 2 : 3;
+  const groups = rowCount === 3
+    ? [choices.slice(0, 2), choices.slice(2, 4), choices.slice(4, 5)]
+    : [choices.slice(0, 3), choices.slice(3, 5)];
+  let cursor = 0;
+  const rows = groups.map((rowChoices) => {
+    const cells = rowChoices.map((choice) => {
+      const url = urls[cursor];
+      cursor += 1;
+      const label = escapeHtml(String(choice?.label || '').trim() || String(cursor));
+      const img = url
+        ? `<img class="image-choice-img" src="${url}" />`
+        : '<span class="image-choice-missing">[그림]</span>';
+      return `<div class="image-choice-cell"><span class="choice-label">${label}</span>${img}</div>`;
+    }).join('');
+    const fillers = '<div class="image-choice-cell image-choice-empty"></div>'
+      .repeat(Math.max(0, columnCount - rowChoices.length));
+    return `<div class="image-choice-row">${cells}${fillers}</div>`;
+  }).join('');
+  return `<div class="image-choice-table image-choice-rows-${rowCount}" style="--image-choice-cols:${columnCount};">${rows}</div>`;
 }

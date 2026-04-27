@@ -242,7 +242,17 @@ class TextbookVlmAnswerItem {
           .trim();
     }
 
-    final rawAnswerText = normalizeAnswer('${map['answer_text'] ?? ''}');
+    var problemNumber = '${map['problem_number'] ?? ''}'.trim();
+    var rawAnswerText = normalizeAnswer('${map['answer_text'] ?? ''}');
+    final subNumberMatch =
+        RegExp(r'^(\d{1,5})\s*(\([0-9]+\))$').firstMatch(problemNumber);
+    if (subNumberMatch != null) {
+      problemNumber = subNumberMatch.group(1) ?? problemNumber;
+      final sub = subNumberMatch.group(2) ?? '';
+      if (sub.isNotEmpty && !rawAnswerText.startsWith(sub)) {
+        rawAnswerText = '$sub $rawAnswerText'.trim();
+      }
+    }
     final rawAnswerLatex2d = normalizeAnswer('${map['answer_latex_2d'] ?? ''}');
     final kindRaw = '${map['kind'] ?? ''}'.toLowerCase();
     final imageMarker = RegExp(r'(\[\s*image\s*\]|\(\s*image\s*\)|\bimage\b)',
@@ -254,7 +264,7 @@ class TextbookVlmAnswerItem {
             ? kindRaw
             : 'subjective';
     return TextbookVlmAnswerItem(
-      problemNumber: '${map['problem_number'] ?? ''}'.trim(),
+      problemNumber: problemNumber,
       kind: kind,
       answerText: kind == 'image'
           ? (rawAnswerText.isEmpty ? '[image]' : rawAnswerText)

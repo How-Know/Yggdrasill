@@ -225,10 +225,17 @@ export function normalizeAnswerResult(parsedJson) {
   const rawItems = Array.isArray(parsedJson.items) ? parsedJson.items : [];
   for (const raw of rawItems) {
     if (!raw || typeof raw !== 'object') continue;
-    const problemNumber = String(raw.problem_number ?? '').trim();
+    let problemNumber = String(raw.problem_number ?? '').trim();
     if (!problemNumber) continue;
     const kindRaw = String(raw.kind ?? '').trim().toLowerCase();
-    const rawAnswerText = normalizeAnswerText(raw.answer_text);
+    let rawAnswerText = normalizeAnswerText(raw.answer_text);
+    const subNumberMatch = problemNumber.match(/^(\d{1,5})\s*(\([0-9]+\))$/);
+    if (subNumberMatch) {
+      problemNumber = subNumberMatch[1];
+      if (!rawAnswerText.startsWith(subNumberMatch[2])) {
+        rawAnswerText = `${subNumberMatch[2]} ${rawAnswerText}`.trim();
+      }
+    }
     const rawAnswerLatex2d = normalizeAnswerText(raw.answer_latex_2d);
     const imageMarker = /(?:\[\s*image\s*\]|\(\s*image\s*\)|\bimage\b)/i.test(
       `${rawAnswerText} ${rawAnswerLatex2d}`,

@@ -229,6 +229,38 @@ function normalizeBlankChoiceTableStem(stem, choices) {
   };
 }
 
+function countFigureMarkers(text) {
+  return (String(text || '').match(/\[\[PB_FIG_[^\]]+\]\]|\[(?:그림|도형|도표)\]/g) || []).length;
+}
+
+function isImageOnlyChoiceText(text) {
+  return /^\s*(?:\[\[PB_FIG_[^\]]+\]\]|\[(?:그림|도형|도표)\])\s*$/.test(String(text || ''));
+}
+
+function looksLikeImageChoiceQuestion(stem, choices) {
+  if (!Array.isArray(choices) || choices.length !== 5) return false;
+  if (!choices.every((choice) => isImageOnlyChoiceText(choice?.text))) return false;
+  return countFigureMarkers(stem) >= 5;
+}
+
+function normalizeImageChoiceStem(stem, choices) {
+  const source = String(stem || '');
+  if (!looksLikeImageChoiceQuestion(source, choices)) {
+    return { stem: source, isImageChoice: false, count: 0 };
+  }
+  const nextStem = source
+    .replace(/\[\[PB_FIG_[^\]]+\]\]|\[(?:그림|도형|도표)\]/g, '')
+    .replace(/^\s*\[문단(?::[^\]]*)?\]\s*$/gm, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{2,}/g, '\n')
+    .trim();
+  return {
+    stem: nextStem,
+    isImageChoice: true,
+    count: Math.min(5, countFigureMarkers(source)),
+  };
+}
+
 export function normalizeObjectiveLabel(raw, index) {
   const s = String(raw || '').trim();
   if (!s) return OBJ_LABELS[index] || '';
@@ -436,7 +468,11 @@ export function buildRowUpdate(existingRow, vlmQ, opts = {}) {
     stemWithFigures,
     objectiveChoices,
   );
-  const stem = blankChoiceNormalization.stem;
+  const imageChoiceNormalization = normalizeImageChoiceStem(
+    blankChoiceNormalization.stem,
+    objectiveChoices,
+  );
+  const stem = imageChoiceNormalization.stem;
 
   const objectiveAnswerKeyRaw = String(vlmQ?.answer?.objective_key || '').trim();
   const objectiveAnswerKey = objectiveAnswerKeyRaw
@@ -451,7 +487,9 @@ export function buildRowUpdate(existingRow, vlmQ, opts = {}) {
   const allowObjective = qType === '객관식' && objectiveChoices.length > 0;
   if (!subjectiveAnswer && allowObjective && objectiveAnswerKey) {
     subjectiveAnswer = normalizeAnswerSurfaceText(
-      objectiveAnswerToSubjective(objectiveAnswerKey, objectiveChoices),
+      imageChoiceNormalization.isImageChoice
+        ? objectiveAnswerKey
+        : objectiveAnswerToSubjective(objectiveAnswerKey, objectiveChoices),
     );
   }
   if (!subjectiveAnswer && !allowObjective && objectiveAnswerKey) {
@@ -473,10 +511,14 @@ export function buildRowUpdate(existingRow, vlmQ, opts = {}) {
       ...(Array.isArray(vlmQ.flags) ? vlmQ.flags : []),
       ...(incompleteMultiAnswer ? ['objective_multi_answer_incomplete_suspected'] : []),
       ...(blankChoiceNormalization.isBlankChoice ? ['blank_choice_question'] : []),
+      ...(imageChoiceNormalization.isImageChoice ? ['image_choice_question'] : []),
     ]),
   ).filter(
     (flag) =>
-      flag !== 'contains_figure' || stemFigureMarkerCount > 0 || vlmFigures.length > 0,
+      flag !== 'contains_figure'
+      || stemFigureMarkerCount > 0
+      || vlmFigures.length > 0
+      || imageChoiceNormalization.isImageChoice,
   );
   const vlmTables = Array.isArray(vlmQ.tables) ? vlmQ.tables : [];
 
@@ -485,14 +527,18 @@ export function buildRowUpdate(existingRow, vlmQ, opts = {}) {
   // figure_layout 다이얼로그에 노출되므로 "stem 의 [그림] 마커 + 기존 figure_assets 수" 기준으로
   // 깨끗하게 재구성한다.
   const desiredRefCount =
-    stemFigureMarkerCount > 0 ? Math.max(stemFigureMarkerCount, figureAssets.length) : 0;
+    imageChoiceNormalization.isImageChoice
+      ? 0
+      : (stemFigureMarkerCount > 0 ? Math.max(stemFigureMarkerCount, figureAssets.length) : 0);
   const newFigureRefs = Array.from({ length: desiredRefCount }, () => '[그림]');
 
   // figure worker(problem_bank_figure_worker.js)는 inferQuestionFigureCount 에서
   // meta.figure_count 를 최우선으로 참조해 "이 문항이 HWPX BinData 몇 장을 소비할지"
   // 를 결정한다. stem 의 [그림] 마커 개수를 그대로 저장해 두면, HWPX+PDF 경로에서
   // VLM 이 시각적으로 판별한 그림 개수를 원본 HWPX 이미지에 정확히 나눠줄 수 있다.
-  const figureCountForMapping = stemFigureMarkerCount;
+  const figureCountForMapping = imageChoiceNormalization.isImageChoice
+    ? Math.max(imageChoiceNormalization.count, figureAssets.length)
+    : stemFigureMarkerCount;
 
   // VLM prompt [S10] 은 각 문항의 배점을 questions[i].score 에 실수 또는 null
   // 로 내려달라고 지시한다. 그런데 예전 구현에서는 이 값을 DB 에 연결해 두지
@@ -624,6 +670,22 @@ export function buildRowUpdate(existingRow, vlmQ, opts = {}) {
           is_blank_choice_question: undefined,
           choice_layout: undefined,
           blank_choice_labels: undefined,
+        }),
+    ...(imageChoiceNormalization.isImageChoice
+      ? {
+          is_image_choice_question: true,
+          choice_layout: 'image_table',
+          image_choice_count: imageChoiceNormalization.count,
+          image_choice_layout:
+            existingMeta.image_choice_layout &&
+            typeof existingMeta.image_choice_layout === 'object'
+              ? existingMeta.image_choice_layout
+              : { version: 1, rows: '2' },
+        }
+      : {
+          is_image_choice_question: undefined,
+          image_choice_count: undefined,
+          image_choice_layout: undefined,
         }),
     vlm: {
       model: opts.modelName || 'gemini-3.1-pro-preview',

@@ -41,7 +41,7 @@ function buildPreviewStyles({ stemSizePt, lineHeightPt, choiceGapPt }) {
     .stem-line.stem-line-right { text-align: right; }
     .stem-line.stem-line-justify { text-align: justify; }
     .debug-first { display: inline; position: relative; }
-    .bogi-box, .figure-container, .choice-list, .choice-grid-row1, .choice-grid-row2, .blank-choice-table {
+    .bogi-box, .figure-container, .choice-list, .choice-grid-row1, .choice-grid-row2, .blank-choice-table, .image-choice-table {
       text-indent: 0;
     }
     .choice-list {
@@ -121,6 +121,46 @@ function buildPreviewStyles({ stemSizePt, lineHeightPt, choiceGapPt }) {
     .blank-choice-cell {
       white-space: nowrap;
       word-break: keep-all;
+    }
+    .image-choice-table {
+      margin-top: calc(var(--line-height-pt) * 0.35 * 1pt);
+      display: flex;
+      flex-direction: column;
+      gap: calc(var(--choice-gap-pt) * 0.9 * 1pt);
+    }
+    .image-choice-row {
+      display: grid;
+      grid-template-columns: repeat(var(--image-choice-cols, 3), minmax(0, 1fr));
+      justify-items: start;
+      align-items: start;
+      gap: 8pt;
+    }
+    .image-choice-cell {
+      display: flex;
+      align-items: flex-start;
+      gap: 3pt;
+      min-width: 0;
+      width: 100%;
+    }
+    .image-choice-empty {
+      visibility: hidden;
+    }
+    .image-choice-cell .choice-label {
+      line-height: 1;
+      padding-top: 0;
+    }
+    .image-choice-img {
+      display: block;
+      max-width: 100%;
+      max-height: 4.8em;
+      object-fit: contain;
+    }
+    .image-choice-rows-3 .image-choice-img {
+      max-height: 6.2em;
+    }
+    .image-choice-missing {
+      color: #6b7280;
+      font-size: 0.9em;
     }
     .math-inline {
       display: inline-block;

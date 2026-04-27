@@ -50,6 +50,9 @@ class TextbookAuthoringStageDialog extends StatefulWidget {
     this.midName,
     this.initialCrops = const <TextbookAuthoringStageCropSeed>[],
     this.batchScopes = const <TextbookAuthoringStageScope>[],
+    this.embedded = false,
+    this.onBack,
+    this.onStageChanged,
   });
 
   final String academyId;
@@ -64,6 +67,9 @@ class TextbookAuthoringStageDialog extends StatefulWidget {
   final String? midName;
   final List<TextbookAuthoringStageCropSeed> initialCrops;
   final List<TextbookAuthoringStageScope> batchScopes;
+  final bool embedded;
+  final VoidCallback? onBack;
+  final VoidCallback? onStageChanged;
 
   static Future<void> show(
     BuildContext context, {
@@ -669,6 +675,7 @@ class _TextbookAuthoringStageDialogState
       }
       if (!mounted) return;
       _toast('$count개 정답 저장 완료');
+      widget.onStageChanged?.call();
       setState(() {});
     } catch (e) {
       if (!mounted) return;
@@ -996,6 +1003,7 @@ class _TextbookAuthoringStageDialogState
       }
       if (!mounted) return;
       _toast('$count개 해설 좌표 저장 완료');
+      widget.onStageChanged?.call();
       setState(() {});
     } catch (e) {
       if (!mounted) return;
@@ -1009,56 +1017,61 @@ class _TextbookAuthoringStageDialogState
 
   @override
   Widget build(BuildContext context) {
+    final child = _buildContent(context);
+    if (widget.embedded) return child;
     return Dialog(
       backgroundColor: _kBg,
       insetPadding: const EdgeInsets.all(20),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: SizedBox(
-        width: MediaQuery.of(context).size.width * 0.92,
-        height: MediaQuery.of(context).size.height * 0.92,
-        child: Column(
-          children: [
-            _buildHeader(),
-            const Divider(height: 1, color: _kBorder),
-            Container(
-              color: _kPanel,
-              child: TabBar(
-                controller: _tab,
-                indicatorColor: _kAccent,
-                labelColor: _kText,
-                unselectedLabelColor: _kTextSub,
-                labelStyle:
-                    const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
-                tabs: const [
-                  Tab(icon: Icon(Icons.check_circle_outline), text: '정답 매칭'),
-                  Tab(icon: Icon(Icons.location_searching), text: '해설 좌표'),
-                ],
-              ),
+      child: child,
+    );
+  }
+
+  Widget _buildContent(BuildContext context) {
+    return SizedBox(
+      width: MediaQuery.of(context).size.width * 0.92,
+      height: MediaQuery.of(context).size.height * 0.92,
+      child: Column(
+        children: [
+          _buildHeader(),
+          const Divider(height: 1, color: _kBorder),
+          Container(
+            color: _kPanel,
+            child: TabBar(
+              controller: _tab,
+              indicatorColor: _kAccent,
+              labelColor: _kText,
+              unselectedLabelColor: _kTextSub,
+              labelStyle:
+                  const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+              tabs: const [
+                Tab(icon: Icon(Icons.check_circle_outline), text: '정답 매칭'),
+                Tab(icon: Icon(Icons.location_searching), text: '해설 좌표'),
+              ],
             ),
-            Expanded(
-              child: _loadingCrops
-                  ? const Center(
-                      child: CircularProgressIndicator(color: _kAccent),
-                    )
-                  : _cropsError != null
-                      ? Center(
-                          child: Text(
-                            '문항 번호를 불러오지 못했습니다\n$_cropsError',
-                            textAlign: TextAlign.center,
-                            style:
-                                const TextStyle(color: _kDanger, fontSize: 13),
-                          ),
-                        )
-                      : TabBarView(
-                          controller: _tab,
-                          children: [
-                            _buildStage2Tab(),
-                            _buildStage3Tab(),
-                          ],
+          ),
+          Expanded(
+            child: _loadingCrops
+                ? const Center(
+                    child: CircularProgressIndicator(color: _kAccent),
+                  )
+                : _cropsError != null
+                    ? Center(
+                        child: Text(
+                          '문항 번호를 불러오지 못했습니다\n$_cropsError',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(color: _kDanger, fontSize: 13),
                         ),
-            ),
-          ],
-        ),
+                      )
+                    : TabBarView(
+                        controller: _tab,
+                        children: [
+                          _buildStage2Tab(),
+                          _buildStage3Tab(),
+                        ],
+                      ),
+          ),
+        ],
       ),
     );
   }
@@ -1092,7 +1105,7 @@ class _TextbookAuthoringStageDialogState
           ),
           const SizedBox(width: 10),
           OutlinedButton.icon(
-            onPressed: () => Navigator.of(context).maybePop(),
+            onPressed: widget.onBack ?? () => Navigator.of(context).maybePop(),
             icon: const Icon(Icons.arrow_back, size: 14),
             label: const Text('뒤로'),
             style: OutlinedButton.styleFrom(

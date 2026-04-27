@@ -75,6 +75,32 @@ function getKstDayStartUtcIso(nowMs = Date.now()) {
   return new Date(kstDayStartUtcMs).toISOString();
 }
 
+function getKstDateKey(value = Date.now()) {
+  if (value == null) return null;
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  const kst = new Date(d.getTime() + KST_OFFSET_MS);
+  const y = kst.getUTCFullYear();
+  const m = String(kst.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(kst.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+async function isAcademyNotificationPaused(academyId, eventDateKey) {
+  if (!academyId || !eventDateKey) return false;
+  const { data, error } = await supa
+    .from('academy_notification_pause_dates')
+    .select('id')
+    .eq('academy_id', academyId)
+    .eq('pause_date', eventDateKey)
+    .limit(1);
+  if (error) {
+    console.warn('[makeup-alimtalk-worker] pause-date check failed:', error.message);
+    return false;
+  }
+  return Boolean(data && data.length > 0);
+}
+
 async function fetchEgressIp() {
   const endpoints = [
     'https://api64.ipify.org?format=json',
@@ -198,6 +224,7 @@ async function fetchMakeupQueueRows(kstDayStartIso) {
 
 async function processBatch() {
   const kstDayStartIso = getKstDayStartUtcIso();
+  const todayKstDateKey = getKstDateKey();
   const summary = {
     processed: 0,
     sent: 0,
@@ -206,6 +233,7 @@ async function processBatch() {
     egressIp: await fetchEgressIp(),
     onlyTodayQueue: ONLY_TODAY_QUEUE,
     kstDayStartIso,
+    todayKstDateKey,
     enabled: true,
   };
 
@@ -256,6 +284,18 @@ async function processBatch() {
 
       if (ov.status === 'canceled') {
         await setQueueStatus(row.id, { status: 'skipped', last_error: 'override_canceled' });
+        summary.skipped += 1;
+        continue;
+      }
+
+      const eventDateKey = getKstDateKey(ov.replacement_class_datetime);
+      if (eventDateKey && eventDateKey < todayKstDateKey) {
+        await setQueueStatus(row.id, { status: 'skipped', last_error: 'expired_event_date' });
+        summary.skipped += 1;
+        continue;
+      }
+      if (await isAcademyNotificationPaused(ov.academy_id, eventDateKey)) {
+        await setQueueStatus(row.id, { status: 'skipped', last_error: 'academy_notification_paused' });
         summary.skipped += 1;
         continue;
       }

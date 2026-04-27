@@ -496,6 +496,19 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     required String stem,
     required Map<String, dynamic> meta,
   }) {
+    final isImageChoiceQuestion = meta['is_image_choice_question'] == true ||
+        '${meta['choice_layout'] ?? ''}' == 'image_table';
+    if (isImageChoiceQuestion) {
+      final assets = meta['figure_assets'];
+      final assetCount = assets is List ? assets.length : 0;
+      final configuredCount =
+          int.tryParse('${meta['image_choice_count'] ?? ''}') ?? 0;
+      final count = assetCount > 0 ? assetCount : configuredCount;
+      if (count > 0) {
+        meta['figure_count'] = count;
+      }
+      return;
+    }
     if (_stemFigureMarkerCount(stem) > 0) return;
     meta['figure_count'] = 0;
     meta.remove('figure_assets');
@@ -3835,7 +3848,10 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                     updatedMeta['blank_choice_labels'] = labels;
                   } else {
                     updatedMeta.remove('is_blank_choice_question');
-                    updatedMeta.remove('choice_layout');
+                    if ('${updatedMeta['choice_layout'] ?? ''}' ==
+                        'blank_table') {
+                      updatedMeta.remove('choice_layout');
+                    }
                     updatedMeta.remove('blank_choice_labels');
                   }
                   final updatedQ = question.copyWith(
@@ -5864,6 +5880,45 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         '${q.meta['choice_layout'] ?? ''}' == 'blank_table';
   }
 
+  bool _isImageChoiceQuestion(ProblemBankQuestion q) {
+    if (q.meta['is_image_choice_question'] == true ||
+        '${q.meta['choice_layout'] ?? ''}' == 'image_table') {
+      return true;
+    }
+    final choices = _previewChoicesOf(q);
+    return choices.length == 5 &&
+        choices.every((choice) =>
+            RegExp(r'^\s*\[(?:그림|도형|도표)\]\s*$').hasMatch(choice.text));
+  }
+
+  String _imageChoiceRowsOf(ProblemBankQuestion q) {
+    final raw = q.meta['image_choice_layout'];
+    if (raw is Map && '${raw['rows'] ?? ''}'.trim() == '3') return '3';
+    return '2';
+  }
+
+  void _writeImageChoiceRowsMeta(Map<String, dynamic> meta, String rows) {
+    final safeRows = rows == '3' ? '3' : '2';
+    meta['is_image_choice_question'] = true;
+    meta['choice_layout'] = 'image_table';
+    meta['image_choice_count'] = 5;
+    meta['image_choice_layout'] = <String, dynamic>{
+      'version': 1,
+      'rows': safeRows,
+    };
+  }
+
+  String _stripImageChoiceFigureMarkers(String stem) {
+    return stem
+        .replaceAll(_figureMarkerRegex, '')
+        .split('\n')
+        .map((line) => line.trim())
+        .where((line) =>
+            line.isNotEmpty && !RegExp(r'^\[문단(?::[^\]]*)?\]$').hasMatch(line))
+        .join('\n')
+        .trim();
+  }
+
   List<String> _blankChoiceLabelsOf(ProblemBankQuestion q) {
     const fallback = <String>['(가)', '(나)', '(다)'];
     final raw = q.meta['blank_choice_labels'];
@@ -5888,6 +5943,22 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     final legacy = double.tryParse('${q.meta['blank_choice_scale'] ?? ''}');
     if (legacy != null) return legacy.clamp(0.5, 2.0).toDouble();
     return 1.0;
+  }
+
+  List<double> _blankChoiceColumnScalesOf(ProblemBankQuestion q, int count) {
+    final raw = q.meta['table_scales'];
+    if (raw is Map) {
+      final blank = raw['blank_choice:1'];
+      if (blank is Map && blank['columnScales'] is List) {
+        final values = blank['columnScales'] as List;
+        return List<double>.generate(count, (idx) {
+          if (idx >= values.length) return 1.0;
+          final parsed = double.tryParse('${values[idx]}');
+          return (parsed ?? 1.0).clamp(0.5, 2.0).toDouble();
+        }, growable: false);
+      }
+    }
+    return List<double>.filled(count, 1.0, growable: false);
   }
 
   static final _structuralMarkerRegex = RegExp(r'\[(박스시작|박스끝|문단)\]');
@@ -6467,7 +6538,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   }
 
   static final RegExp _figureMarkerRegex =
-      RegExp(r'\[(?:그림|도형|도표|표)\]', caseSensitive: false);
+      RegExp(r'\[\[PB_FIG_[^\]]+\]\]|\[(?:그림|도형|도표|표)\]', caseSensitive: false);
 
   Widget _buildStemTextPreviewLine(
     String text, {
@@ -6875,7 +6946,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     final out = <Widget>[];
     final normalized = _normalizePreviewMultiline(stemPreview);
     if (normalized.isEmpty) return out;
-    final assets = _orderedFigureAssetsOf(q);
+    final assets = _isImageChoiceQuestion(q)
+        ? <Map<String, dynamic>>[]
+        : _orderedFigureAssetsOf(q);
 
     // [박스시작]/[박스끝] 마커가 있으면 마커 기반 렌더링
     if (_boxMarkerStartRegex.hasMatch(normalized)) {
@@ -7436,7 +7509,14 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   }) {
     final labels = _blankChoiceLabelsOf(q);
     final widthScale = _blankChoiceWidthScaleOf(q);
+    final columnScales = _blankChoiceColumnScalesOf(q, labels.length);
     final fontSize = expanded ? 13.6 : 13.4;
+    const baseColumnWidths = <double>[58, 58, 122];
+    final labelWidth = expanded ? 32.0 : 28.0;
+    final columnWidths = List<double>.generate(labels.length, (idx) {
+      final base = idx < baseColumnWidths.length ? baseColumnWidths[idx] : 72.0;
+      return base * widthScale * columnScales[idx];
+    }, growable: false);
     final headerStyle = TextStyle(
       color: const Color(0xFF232323),
       fontSize: fontSize,
@@ -7449,53 +7529,175 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       height: 1.45,
       fontFamily: _previewKoreanFontFamily,
     );
-    Widget cell(String value, {bool header = false}) {
-      return Padding(
-        padding: EdgeInsets.symmetric(
-          horizontal: (expanded ? 14 : 11) * widthScale,
-          vertical: expanded ? 4 : 3,
+    Widget cell(String value, int idx, {bool header = false}) {
+      final width = idx >= 0 && idx < columnWidths.length
+          ? columnWidths[idx]
+          : labelWidth;
+      return SizedBox(
+        width: width,
+        child: Padding(
+          padding: EdgeInsets.symmetric(
+            horizontal: expanded ? 6 : 4,
+            vertical: expanded ? 4 : 3,
+          ),
+          child: ClipRect(
+            child: header
+                ? Text(value, textAlign: TextAlign.center, style: headerStyle)
+                : LatexTextRenderer(
+                    _toPreviewMathMarkup(value, forceMathTokenWrap: true),
+                    softWrap: true,
+                    enableDisplayMath: true,
+                    inlineMathScale: _previewMathScale,
+                    fractionInlineMathScale: _previewFractionMathScale,
+                    displayMathScale: _previewMathScale,
+                    style: bodyStyle,
+                  ),
+          ),
         ),
-        child: header
-            ? Text(value, textAlign: TextAlign.center, style: headerStyle)
-            : LatexTextRenderer(
-                _toPreviewMathMarkup(value, forceMathTokenWrap: true),
-                softWrap: false,
-                enableDisplayMath: true,
-                inlineMathScale: _previewMathScale,
-                fractionInlineMathScale: _previewFractionMathScale,
-                displayMathScale: _previewMathScale,
-                style: bodyStyle,
-              ),
       );
     }
 
-    final rows = <TableRow>[
-      TableRow(
+    final rows = <Widget>[
+      Row(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: <Widget>[
-          const SizedBox.shrink(),
-          for (final label in labels) cell(label, header: true),
+          SizedBox(width: labelWidth),
+          for (var i = 0; i < labels.length; i += 1)
+            cell(labels[i], i, header: true),
         ],
       ),
       for (final choice in choices.take(5))
-        TableRow(
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: <Widget>[
-            Padding(
-              padding: EdgeInsets.symmetric(
-                horizontal: expanded ? 10 : 8,
-                vertical: expanded ? 4 : 3,
+            SizedBox(
+              width: labelWidth,
+              child: Padding(
+                padding: EdgeInsets.symmetric(
+                  horizontal: expanded ? 6 : 4,
+                  vertical: expanded ? 4 : 3,
+                ),
+                child: Text(choice.label, style: bodyStyle),
               ),
-              child: Text(choice.label, style: bodyStyle),
             ),
-            for (final value
-                in _splitBlankChoiceCells(choice.text, labels.length))
-              cell(value),
+            for (final entry
+                in _splitBlankChoiceCells(choice.text, labels.length)
+                    .asMap()
+                    .entries)
+              cell(entry.value, entry.key),
           ],
         ),
     ];
-    return Table(
-      defaultColumnWidth: const IntrinsicColumnWidth(),
-      defaultVerticalAlignment: TableCellVerticalAlignment.middle,
-      children: rows,
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: rows,
+      ),
+    );
+  }
+
+  Widget _buildImageChoicePreviewBlock(
+    ProblemBankQuestion q,
+    List<ProblemBankChoice> choices, {
+    bool expanded = false,
+  }) {
+    final assets = _orderedFigureAssetsOf(q).take(5).toList(growable: false);
+    final rowsPref =
+        '${q.meta['image_choice_layout'] is Map ? (q.meta['image_choice_layout'] as Map)['rows'] : ''}'
+            .trim();
+    final rowCount = rowsPref == '3' ? 3 : 2;
+    final columnCount = rowCount == 3 ? 2 : 3;
+    final rowGroups = rowCount == 3
+        ? <List<int>>[
+            <int>[0, 1],
+            <int>[2, 3],
+            <int>[4],
+          ]
+        : <List<int>>[
+            <int>[0, 1, 2],
+            <int>[3, 4],
+          ];
+    final imageHeight =
+        rowCount == 3 ? (expanded ? 94.0 : 68.0) : (expanded ? 72.0 : 54.0);
+
+    Widget cell(int idx) {
+      final choice = choices[idx];
+      final asset = idx < assets.length ? assets[idx] : null;
+      final path = '${asset?['path'] ?? ''}'.trim();
+      final url = _figurePreviewUrlForPath(q.id, path);
+      final labelStyle = TextStyle(
+        color: const Color(0xFF232323),
+        fontSize: expanded ? 15.0 : 14.4,
+        fontWeight: FontWeight.w500,
+        height: 1.0,
+        fontFamily: _previewKoreanFontFamily,
+      );
+      return Expanded(
+        child: Padding(
+          padding: EdgeInsets.symmetric(horizontal: expanded ? 5 : 4),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(choice.label, style: labelStyle),
+              const SizedBox(width: 4),
+              Flexible(
+                child: url.isEmpty
+                    ? Container(
+                        height: imageHeight * 0.72,
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFDFDFE),
+                          borderRadius: BorderRadius.circular(4),
+                          border: Border.all(color: const Color(0xFFE5E8EF)),
+                        ),
+                        child: const Text(
+                          '그림 미리보기 로딩 중...',
+                          style: TextStyle(
+                              color: Color(0xFF6F7C95), fontSize: 11.2),
+                        ),
+                      )
+                    : Image.network(
+                        url,
+                        fit: BoxFit.contain,
+                        alignment: Alignment.topLeft,
+                        height: imageHeight,
+                        errorBuilder: (_, __, ___) => const Text(
+                          '이미지 로드 실패',
+                          style: TextStyle(
+                              color: Color(0xFF906060), fontSize: 11.8),
+                        ),
+                      ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    Widget emptyCell() => const Expanded(child: SizedBox.shrink());
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (final row in rowGroups) ...[
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              for (var col = 0; col < columnCount; col += 1)
+                if (col < row.length && row[col] < choices.length)
+                  cell(row[col])
+                else
+                  emptyCell(),
+            ],
+          ),
+          if (row != rowGroups.last) SizedBox(height: expanded ? 9 : 7),
+        ],
+      ],
     );
   }
 
@@ -7512,6 +7714,11 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     if (_isBlankChoiceQuestion(q) && choices.length == 5) {
       return <Widget>[
         _buildBlankChoicePreviewBlock(q, choices, expanded: expanded),
+      ];
+    }
+    if (_isImageChoiceQuestion(q) && choices.length == 5) {
+      return <Widget>[
+        _buildImageChoicePreviewBlock(q, choices, expanded: expanded),
       ];
     }
     final mode = _choiceLayoutMode(q, choices, availableWidth);
@@ -7546,6 +7753,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   String _stemPreviewWithMarkers(ProblemBankQuestion q) {
     var out = _normalizePreviewMultiline(q.renderedStem);
     if (out.isEmpty) return '';
+    if (_isImageChoiceQuestion(q)) {
+      return _normalizePreviewMultiline(_stripImageChoiceFigureMarkers(out));
+    }
     out = out.replaceFirst(RegExp(r'^(\s*\[(문단|박스끝)\]\s*)+'), '');
     out = out.replaceFirst(RegExp(r'(\s*\[(문단|박스시작)\]\s*)+$'), '');
     final qn = q.questionNumber.trim();
@@ -8170,12 +8380,14 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   Future<void> _openPreviewZoomDialog(ProblemBankQuestion q) async {
     if (!mounted) return;
     final screen = MediaQuery.sizeOf(context);
+    final isImageChoice = _isImageChoiceQuestion(q);
     final hasFigures = q.figureRefs.isNotEmpty;
     final tableEntries = _parseTableEntries(q);
     final hasTables = tableEntries.isNotEmpty;
     final answerFigureAssets = _orderedAnswerFigureAssetsOf(q);
     final hasAnswerFigures = answerFigureAssets.isNotEmpty;
-    final hasSidebar = hasFigures || hasTables || hasAnswerFigures;
+    final hasSidebar =
+        hasFigures || hasTables || hasAnswerFigures || isImageChoice;
 
     // 다이얼로그 사이즈:
     // - 세로는 화면 높이의 최대 92% 까지 확보하되, 문항 세로 높이 필요에 따라 유연.
@@ -8208,6 +8420,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       for (var i = 0; i < answerFigureAssets.length; i += 1)
         'idx:${i + 1}': _answerFigureWidthEm(q, i),
     };
+    var imageChoiceRowsDraft = _imageChoiceRowsOf(q);
     var refreshing = false;
     final existingUrl = (_questionPreviewUrls[q.id.trim()] ?? '').trim();
     String? serverPreviewUrl = existingUrl.isNotEmpty ? existingUrl : null;
@@ -8231,13 +8444,17 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                     )
                   : q.meta,
             );
+            if (isImageChoice) {
+              _writeImageChoiceRowsMeta(draftMeta, imageChoiceRowsDraft);
+            }
             if (hasAnswerFigures) {
               draftMeta['answer_figure_layout'] =
                   _buildAnswerFigureLayoutPayload(answerFigureWidthDrafts);
             }
-            final previewQ = (hasFigures || hasTables || hasAnswerFigures)
-                ? q.copyWith(meta: draftMeta)
-                : q;
+            final previewQ =
+                (hasFigures || hasTables || hasAnswerFigures || isImageChoice)
+                    ? q.copyWith(meta: draftMeta)
+                    : q;
 
             // 그림 편집 변경사항을 _questions 에 반영한다. 표 편집 결과는 이어지는
             // _applyTableScalesLocal 호출에서 같이 반영돼야 한다.
@@ -8285,11 +8502,29 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
               });
             }
 
+            void persistImageChoiceChanges() {
+              if (!isImageChoice) return;
+              final idx = _questions.indexWhere((item) => item.id == q.id);
+              if (idx < 0) return;
+              final current = _questions[idx];
+              final updatedMeta = Map<String, dynamic>.from(current.meta);
+              _writeImageChoiceRowsMeta(updatedMeta, imageChoiceRowsDraft);
+              final updatedQ = current.copyWith(meta: updatedMeta);
+              setState(() {
+                _questions = <ProblemBankQuestion>[
+                  for (var i = 0; i < _questions.length; i += 1)
+                    i == idx ? updatedQ : _questions[i],
+                ];
+                _dirtyQuestionIds.add(updatedQ.id);
+              });
+            }
+
             // 그림/표 편집 양쪽 모두 반영 후 서버 미리보기를 재발급한다.
             void applyAndRefresh() {
               persistFigureChanges();
               persistTableChanges();
               persistAnswerFigureChanges();
+              persistImageChoiceChanges();
               setLocalState(() {
                 refreshing = true;
               });
@@ -8366,7 +8601,20 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                         setLocalState: setLocalState,
                         onSettingChanged: applyAndRefresh,
                       ),
-                    if (hasFigures && (hasTables || hasAnswerFigures))
+                    if (hasFigures &&
+                        (hasTables || hasAnswerFigures || isImageChoice))
+                      const SizedBox(height: 12),
+                    if (isImageChoice)
+                      _buildImageChoiceEditSection(
+                        rows: imageChoiceRowsDraft,
+                        setRows: (rows) {
+                          setLocalState(() {
+                            imageChoiceRowsDraft = rows;
+                          });
+                        },
+                        onSettingChanged: applyAndRefresh,
+                      ),
+                    if (isImageChoice && (hasTables || hasAnswerFigures))
                       const SizedBox(height: 12),
                     if (hasAnswerFigures)
                       _buildAnswerFigureEditSection(
@@ -8477,6 +8725,100 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           },
         );
       },
+    );
+  }
+
+  /// 확대 미리보기 다이얼로그용 "그림선지형 배치" 인라인 편집 섹션.
+  Widget _buildImageChoiceEditSection({
+    required String rows,
+    required ValueChanged<String> setRows,
+    required VoidCallback onSettingChanged,
+  }) {
+    Widget option(String value, String title, String subtitle) {
+      final selected = rows == value;
+      return Expanded(
+        child: InkWell(
+          borderRadius: BorderRadius.circular(8),
+          onTap: () {
+            if (selected) return;
+            setRows(value);
+            onSettingChanged();
+          },
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+            decoration: BoxDecoration(
+              color: selected
+                  ? _accent.withValues(alpha: 0.16)
+                  : const Color(0xFF1F1F23),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: selected ? _accent : _border),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(
+                    color: selected ? _accent : _text,
+                    fontSize: 12.2,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  subtitle,
+                  style: const TextStyle(
+                    color: _textSub,
+                    fontSize: 10.8,
+                    height: 1.25,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      decoration: BoxDecoration(
+        color: _field,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: _border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.grid_view_rounded, color: _textSub, size: 15),
+              SizedBox(width: 6),
+              Text(
+                '그림선지형 배치',
+                style: TextStyle(
+                  color: _text,
+                  fontSize: 12.6,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              option('2', '2줄', '3 + 2\n기본 5지선다 정렬'),
+              const SizedBox(width: 8),
+              option('3', '3줄', '2 + 2 + 1\n그림을 더 크게'),
+            ],
+          ),
+          const SizedBox(height: 7),
+          const Text(
+            '아래 줄도 가운데 정렬하지 않고 왼쪽 칸부터 채웁니다.',
+            style: TextStyle(color: _textSub, fontSize: 10.8, height: 1.35),
+          ),
+        ],
+      ),
     );
   }
 
@@ -10040,6 +10382,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     final typeText = q.questionType.trim().isEmpty ? '미분류' : q.questionType;
     final isViewBlock = _isViewBlockQuestion(q);
     final isBlankChoice = _isBlankChoiceQuestion(q);
+    final isImageChoice = _isImageChoiceQuestion(q);
     // 세트형 배지 표시 조건:
     //   (1) 워커가 meta.is_set_question = true 로 표시했거나
     //   (2) 답이 구조화(meta.answer_parts)되어 있으면 세트형으로 본다.
@@ -10072,6 +10415,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         ' · 수식 ${q.equations.length}개'
         '${isViewBlock ? ' · 보기형' : ''}'
         '${isBlankChoice ? ' · 빈칸형' : ''}'
+        '${isImageChoice ? ' · 그림선지형' : ''}'
         '${q.figureRefs.isNotEmpty ? ' · 그림 포함' : ''}';
 
     return Container(
@@ -10181,6 +10525,26 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                     '빈칸형',
                     style: TextStyle(
                       color: Color(0xFF9ED9C3),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
+              if (isImageChoice) ...[
+                const SizedBox(width: 6),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF21334D),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: const Color(0xFF506F9E)),
+                  ),
+                  child: const Text(
+                    '그림선지형',
+                    style: TextStyle(
+                      color: Color(0xFFB9D3FF),
                       fontSize: 11,
                       fontWeight: FontWeight.w700,
                     ),

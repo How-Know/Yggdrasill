@@ -274,6 +274,70 @@ class TextbookPdfService {
     );
   }
 
+  Future<List<TextbookStageScopeStatus>> fetchStageStatuses({
+    required String academyId,
+    required String bookId,
+    required String gradeLabel,
+    required List<Map<String, dynamic>> scopes,
+  }) async {
+    if (scopes.isEmpty) return const <TextbookStageScopeStatus>[];
+    final res = await _http.post(
+      _uri('/textbook/stage/status'),
+      headers: _headers(),
+      body: jsonEncode(<String, dynamic>{
+        'academy_id': academyId,
+        'book_id': bookId,
+        'grade_label': gradeLabel,
+        'scopes': scopes,
+      }),
+    );
+    final json = _decode(res.body);
+    if (res.statusCode < 200 || res.statusCode >= 300 || json['ok'] != true) {
+      throw Exception(
+        'stage_status_failed(${res.statusCode}): ${json['error'] ?? res.body}',
+      );
+    }
+    final rows = (json['statuses'] as List?) ?? const [];
+    return [
+      for (final row in rows)
+        if (row is Map)
+          TextbookStageScopeStatus.fromMap(
+            row.map((k, dynamic v) => MapEntry('$k', v)),
+          ),
+    ];
+  }
+
+  Future<TextbookStageDeleteResult> deleteStageData({
+    required String academyId,
+    required String bookId,
+    required String gradeLabel,
+    required int bigOrder,
+    required int midOrder,
+    required String subKey,
+    required String stage,
+  }) async {
+    final res = await _http.post(
+      _uri('/textbook/stage/delete'),
+      headers: _headers(),
+      body: jsonEncode(<String, dynamic>{
+        'academy_id': academyId,
+        'book_id': bookId,
+        'grade_label': gradeLabel,
+        'big_order': bigOrder,
+        'mid_order': midOrder,
+        'sub_key': subKey,
+        'stage': stage,
+      }),
+    );
+    final json = _decode(res.body);
+    if (res.statusCode < 200 || res.statusCode >= 300 || json['ok'] != true) {
+      throw Exception(
+        'stage_delete_failed(${res.statusCode}): ${json['error'] ?? res.body}',
+      );
+    }
+    return TextbookStageDeleteResult.fromMap(json);
+  }
+
   /// Convenience helper that hashes the bytes client-side. The gateway also
   /// stores the hash so future work (content-addressable dedup, integrity
   /// checks) has a canonical identifier to compare against.
@@ -336,6 +400,92 @@ class TextbookDeleteResult {
   final int removedPdfs;
   final int removedCovers;
   final List<String> warnings;
+}
+
+class TextbookStageScopeStatus {
+  const TextbookStageScopeStatus({
+    required this.bigOrder,
+    required this.midOrder,
+    required this.subKey,
+    required this.bodyDone,
+    required this.bodyTotal,
+    required this.answerDone,
+    required this.answerTotal,
+    required this.solutionDone,
+    required this.solutionTotal,
+  });
+
+  final int bigOrder;
+  final int midOrder;
+  final String subKey;
+  final int bodyDone;
+  final int bodyTotal;
+  final int answerDone;
+  final int answerTotal;
+  final int solutionDone;
+  final int solutionTotal;
+
+  int get completedStages =>
+      (bodyDone > 0 ? 1 : 0) +
+      (answerTotal > 0 && answerDone >= answerTotal ? 1 : 0) +
+      (solutionTotal > 0 && solutionDone >= solutionTotal ? 1 : 0);
+
+  static int _asInt(dynamic v) {
+    if (v == null) return 0;
+    if (v is int) return v;
+    if (v is num) return v.toInt();
+    return int.tryParse('$v') ?? 0;
+  }
+
+  factory TextbookStageScopeStatus.fromMap(Map<String, dynamic> map) {
+    final scope = (map['scope'] as Map?)?.cast<String, dynamic>() ??
+        const <String, dynamic>{};
+    final body = (map['body'] as Map?)?.cast<String, dynamic>() ??
+        const <String, dynamic>{};
+    final answer = (map['answer'] as Map?)?.cast<String, dynamic>() ??
+        const <String, dynamic>{};
+    final solution = (map['solution'] as Map?)?.cast<String, dynamic>() ??
+        const <String, dynamic>{};
+    return TextbookStageScopeStatus(
+      bigOrder: _asInt(scope['big_order'] ?? map['big_order']),
+      midOrder: _asInt(scope['mid_order'] ?? map['mid_order']),
+      subKey: '${scope['sub_key'] ?? map['sub_key'] ?? ''}',
+      bodyDone: _asInt(body['done']),
+      bodyTotal: _asInt(body['total']),
+      answerDone: _asInt(answer['done']),
+      answerTotal: _asInt(answer['total']),
+      solutionDone: _asInt(solution['done']),
+      solutionTotal: _asInt(solution['total']),
+    );
+  }
+}
+
+class TextbookStageDeleteResult {
+  const TextbookStageDeleteResult({
+    required this.stage,
+    required this.removed,
+    required this.warnings,
+  });
+
+  final String stage;
+  final Map<String, int> removed;
+  final List<String> warnings;
+
+  factory TextbookStageDeleteResult.fromMap(Map<String, dynamic> map) {
+    final rawRemoved = (map['removed'] as Map?) ?? const <String, dynamic>{};
+    return TextbookStageDeleteResult(
+      stage: '${map['stage'] ?? ''}',
+      removed: rawRemoved.map(
+        (k, dynamic v) => MapEntry(
+          '$k',
+          v is num ? v.toInt() : int.tryParse('$v') ?? 0,
+        ),
+      ),
+      warnings: ((map['warnings'] as List?) ?? const [])
+          .map((e) => '$e')
+          .toList(growable: false),
+    );
+  }
 }
 
 class TextbookDownloadTarget {

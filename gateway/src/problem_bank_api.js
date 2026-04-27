@@ -5124,6 +5124,295 @@ async function handleTextbookSolutionRefsBatchUpsert(body, res) {
   });
 }
 
+function parseStageScope(raw) {
+  const bigOrder = Number.parseInt(String(raw?.big_order ?? raw?.bigOrder ?? ''), 10);
+  const midOrder = Number.parseInt(String(raw?.mid_order ?? raw?.midOrder ?? ''), 10);
+  const subKey = String(raw?.sub_key ?? raw?.subKey ?? '').trim();
+  if (!Number.isFinite(bigOrder) || bigOrder < 0) return null;
+  if (!Number.isFinite(midOrder) || midOrder < 0) return null;
+  if (!subKey) return null;
+  return { big_order: bigOrder, mid_order: midOrder, sub_key: subKey };
+}
+
+async function fetchTextbookStageStatusRows({ academyId, bookId, gradeLabel, scopes }) {
+  const statuses = [];
+  for (const scope of scopes) {
+    const { data: crops, error: cropErr } = await supa
+      .from('textbook_problem_crops')
+      .select('id,is_set_header')
+      .eq('academy_id', academyId)
+      .eq('book_id', bookId)
+      .eq('grade_label', gradeLabel)
+      .eq('big_order', scope.big_order)
+      .eq('mid_order', scope.mid_order)
+      .eq('sub_key', scope.sub_key);
+    if (cropErr) throw new Error(`stage_status_crops_failed: ${cropErr.message || cropErr}`);
+    const cropRows = Array.isArray(crops) ? crops : [];
+    const cropIds = cropRows.map((r) => String(r?.id || '').trim()).filter(Boolean);
+    const answerTargetIds = cropRows
+      .filter((r) => r?.is_set_header !== true)
+      .map((r) => String(r?.id || '').trim())
+      .filter(Boolean);
+
+    let answerDone = 0;
+    let solutionDone = 0;
+    if (answerTargetIds.length > 0) {
+      const { count: answerCount, error: answerErr } = await supa
+        .from('textbook_problem_answers')
+        .select('crop_id', { count: 'exact', head: true })
+        .in('crop_id', answerTargetIds);
+      if (answerErr) throw new Error(`stage_status_answers_failed: ${answerErr.message || answerErr}`);
+      answerDone = answerCount || 0;
+
+      const { count: solutionCount, error: solutionErr } = await supa
+        .from('textbook_problem_solution_refs')
+        .select('crop_id', { count: 'exact', head: true })
+        .in('crop_id', answerTargetIds);
+      if (solutionErr) {
+        throw new Error(`stage_status_solution_refs_failed: ${solutionErr.message || solutionErr}`);
+      }
+      solutionDone = solutionCount || 0;
+    }
+
+    statuses.push({
+      scope,
+      crop_ids: cropIds,
+      body: { done: cropRows.length, total: cropRows.length },
+      answer: { done: answerDone, total: answerTargetIds.length },
+      solution: { done: solutionDone, total: answerTargetIds.length },
+      completed_stages:
+        (cropRows.length > 0 ? 1 : 0) +
+        (answerTargetIds.length > 0 && answerDone >= answerTargetIds.length ? 1 : 0) +
+        (answerTargetIds.length > 0 && solutionDone >= answerTargetIds.length ? 1 : 0),
+      total_stages: 3,
+    });
+  }
+  return statuses;
+}
+
+async function handleTextbookStageStatus(body, res) {
+  const academyId = String(body?.academy_id || '').trim();
+  const bookId = String(body?.book_id || '').trim();
+  const gradeLabel = String(body?.grade_label || '').trim();
+  const rawScopes = Array.isArray(body?.scopes) ? body.scopes : [];
+  const scopes = rawScopes.map(parseStageScope).filter(Boolean);
+  if (!academyId || !bookId || !gradeLabel) {
+    sendJson(res, 400, { ok: false, error: 'missing_scope_identity' });
+    return;
+  }
+  if (scopes.length === 0) {
+    sendJson(res, 200, { ok: true, statuses: [] });
+    return;
+  }
+  try {
+    const statuses = await fetchTextbookStageStatusRows({
+      academyId,
+      bookId,
+      gradeLabel,
+      scopes,
+    });
+    sendJson(res, 200, { ok: true, statuses });
+  } catch (err) {
+    sendJson(res, 500, { ok: false, error: compact(err?.message || err, 500) });
+  }
+}
+
+async function removeStoragePaths(bucket, paths, warnings, label) {
+  const unique = Array.from(new Set((paths || []).map((p) => String(p || '').trim()).filter(Boolean)));
+  if (!bucket || unique.length === 0) return 0;
+  let removed = 0;
+  for (let i = 0; i < unique.length; i += 200) {
+    const chunk = unique.slice(i, i + 200);
+    // eslint-disable-next-line no-await-in-loop
+    const { error } = await supa.storage.from(bucket).remove(chunk);
+    if (error) {
+      warnings.push(`${label}: ${error.message || error}`);
+    } else {
+      removed += chunk.length;
+    }
+  }
+  return removed;
+}
+
+async function deleteTextbookPdfOnlyDocumentsForScope({
+  academyId,
+  bookId,
+  gradeLabel,
+  scope,
+  warnings,
+}) {
+  const contains = {
+    textbook_scope: {
+      book_id: bookId,
+      grade_label: gradeLabel,
+      big_order: scope.big_order,
+      mid_order: scope.mid_order,
+      sub_key: scope.sub_key,
+    },
+  };
+  const { data: docs, error: docErr } = await supa
+    .from('pb_documents')
+    .select('id')
+    .eq('academy_id', academyId)
+    .contains('meta', contains);
+  if (docErr) {
+    warnings.push(`pb_documents_lookup: ${docErr.message || docErr}`);
+    return 0;
+  }
+  const ids = (docs || []).map((d) => String(d?.id || '').trim()).filter(Boolean);
+  if (ids.length === 0) return 0;
+  const { data: deleted, error: delErr } = await supa
+    .from('pb_documents')
+    .delete()
+    .eq('academy_id', academyId)
+    .in('id', ids)
+    .select('id');
+  if (delErr) {
+    warnings.push(`pb_documents_delete: ${delErr.message || delErr}`);
+    return 0;
+  }
+  return Array.isArray(deleted) ? deleted.length : ids.length;
+}
+
+async function handleTextbookStageDelete(body, res) {
+  const academyId = String(body?.academy_id || '').trim();
+  const bookId = String(body?.book_id || '').trim();
+  const gradeLabel = String(body?.grade_label || '').trim();
+  const scope = parseStageScope(body);
+  const stage = String(body?.stage || '').trim().toLowerCase();
+  if (!academyId || !bookId || !gradeLabel || !scope) {
+    sendJson(res, 400, { ok: false, error: 'missing_scope_identity' });
+    return;
+  }
+  if (!['body', 'answer', 'solution'].includes(stage)) {
+    sendJson(res, 400, { ok: false, error: `invalid_stage: ${stage}` });
+    return;
+  }
+
+  const removed = {
+    crops: 0,
+    answers: 0,
+    solution_refs: 0,
+    answer_images: 0,
+    crop_images: 0,
+    pb_documents: 0,
+    pb_extract_runs: 0,
+  };
+  const warnings = [];
+  try {
+    const { data: crops, error: cropErr } = await supa
+      .from('textbook_problem_crops')
+      .select('id,storage_bucket,storage_key')
+      .eq('academy_id', academyId)
+      .eq('book_id', bookId)
+      .eq('grade_label', gradeLabel)
+      .eq('big_order', scope.big_order)
+      .eq('mid_order', scope.mid_order)
+      .eq('sub_key', scope.sub_key);
+    if (cropErr) throw new Error(`stage_delete_crops_lookup_failed: ${cropErr.message || cropErr}`);
+    const cropRows = Array.isArray(crops) ? crops : [];
+    const cropIds = cropRows.map((r) => String(r?.id || '').trim()).filter(Boolean);
+    if (cropIds.length === 0) {
+      sendJson(res, 200, { ok: true, stage, removed, warnings });
+      return;
+    }
+
+    if (stage === 'body' || stage === 'answer') {
+      const { data: answers } = await supa
+        .from('textbook_problem_answers')
+        .select('answer_image_bucket,answer_image_path')
+        .in('crop_id', cropIds);
+      const byBucket = new Map();
+      for (const answer of answers || []) {
+        const bucket = String(answer?.answer_image_bucket || '').trim();
+        const imagePath = String(answer?.answer_image_path || '').trim();
+        if (!bucket || !imagePath) continue;
+        if (!byBucket.has(bucket)) byBucket.set(bucket, []);
+        byBucket.get(bucket).push(imagePath);
+      }
+      for (const [bucket, paths] of byBucket.entries()) {
+        // eslint-disable-next-line no-await-in-loop
+        removed.answer_images += await removeStoragePaths(
+          bucket,
+          paths,
+          warnings,
+          'textbook-answer-images',
+        );
+      }
+    }
+
+    if (stage === 'body' || stage === 'answer' || stage === 'solution') {
+      const { data: deletedRefs, error: refErr } = await supa
+        .from('textbook_problem_solution_refs')
+        .delete()
+        .in('crop_id', cropIds)
+        .select('crop_id');
+      if (refErr) throw new Error(`solution_refs_delete_failed: ${refErr.message || refErr}`);
+      removed.solution_refs = Array.isArray(deletedRefs) ? deletedRefs.length : 0;
+    }
+
+    if (stage === 'body' || stage === 'answer') {
+      const { data: deletedAnswers, error: ansErr } = await supa
+        .from('textbook_problem_answers')
+        .delete()
+        .in('crop_id', cropIds)
+        .select('crop_id');
+      if (ansErr) throw new Error(`answers_delete_failed: ${ansErr.message || ansErr}`);
+      removed.answers = Array.isArray(deletedAnswers) ? deletedAnswers.length : 0;
+    }
+
+    if (stage === 'body') {
+      const cropPathsByBucket = new Map();
+      for (const crop of cropRows) {
+        const bucket = String(crop?.storage_bucket || '').trim();
+        const key = String(crop?.storage_key || '').trim();
+        if (!bucket || !key) continue;
+        if (!cropPathsByBucket.has(bucket)) cropPathsByBucket.set(bucket, []);
+        cropPathsByBucket.get(bucket).push(key);
+      }
+      for (const [bucket, paths] of cropPathsByBucket.entries()) {
+        // eslint-disable-next-line no-await-in-loop
+        removed.crop_images += await removeStoragePaths(bucket, paths, warnings, 'textbook-crops');
+      }
+      removed.pb_documents = await deleteTextbookPdfOnlyDocumentsForScope({
+        academyId,
+        bookId,
+        gradeLabel,
+        scope,
+        warnings,
+      });
+      const { data: deletedRuns, error: runDelErr } = await supa
+        .from('textbook_pb_extract_runs')
+        .delete()
+        .eq('academy_id', academyId)
+        .eq('book_id', bookId)
+        .eq('grade_label', gradeLabel)
+        .eq('big_order', scope.big_order)
+        .eq('mid_order', scope.mid_order)
+        .eq('sub_key', scope.sub_key)
+        .select('id');
+      if (runDelErr) warnings.push(`textbook_pb_extract_runs_delete: ${runDelErr.message || runDelErr}`);
+      removed.pb_extract_runs = Array.isArray(deletedRuns) ? deletedRuns.length : 0;
+      const { data: deletedCrops, error: cropDelErr } = await supa
+        .from('textbook_problem_crops')
+        .delete()
+        .in('id', cropIds)
+        .select('id');
+      if (cropDelErr) throw new Error(`crops_delete_failed: ${cropDelErr.message || cropDelErr}`);
+      removed.crops = Array.isArray(deletedCrops) ? deletedCrops.length : 0;
+    }
+
+    sendJson(res, 200, { ok: true, stage, removed, warnings });
+  } catch (err) {
+    sendJson(res, 500, {
+      ok: false,
+      error: compact(err?.message || err, 500),
+      removed,
+      warnings,
+    });
+  }
+}
+
 /**
  * Delete a textbook in three phases:
  *   1) Remove every artifact in Storage:
@@ -5472,6 +5761,18 @@ async function handler(req, res) {
     ) {
       const body = await readJson(req);
       await handleTextbookSolutionRefsBatchUpsert(body, res);
+      return;
+    }
+
+    // Textbook authoring Stage 1/2/3 status and hard-delete operations.
+    if (method === 'POST' && url.pathname === '/textbook/stage/status') {
+      const body = await readJson(req);
+      await handleTextbookStageStatus(body, res);
+      return;
+    }
+    if (method === 'POST' && url.pathname === '/textbook/stage/delete') {
+      const body = await readJson(req);
+      await handleTextbookStageDelete(body, res);
       return;
     }
 

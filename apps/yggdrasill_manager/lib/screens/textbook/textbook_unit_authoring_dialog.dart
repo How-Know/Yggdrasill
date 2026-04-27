@@ -128,6 +128,10 @@ class _TextbookUnitAuthoringDialogState
 
   final Set<String> _batchSelection = <String>{};
   final Map<String, String> _pbExtractStatusBySub = <String, String>{};
+  final Map<String, TextbookStageScopeStatus> _stageStatusBySub =
+      <String, TextbookStageScopeStatus>{};
+  bool _loadingStageStatuses = false;
+  _EmbeddedStageArgs? _embeddedStage;
   bool _batchRunning = false;
   int _batchDone = 0;
   int _batchTotal = 0;
@@ -212,6 +216,7 @@ class _TextbookUnitAuthoringDialogState
       });
       unawaited(_loadPbExtractRuns());
       unawaited(_loadExistingCrops());
+      unawaited(_loadStageStatuses());
       unawaited(_ensurePdf());
     } catch (e) {
       if (!mounted) return;
@@ -245,6 +250,61 @@ class _TextbookUnitAuthoringDialogState
       });
     } catch (_) {
       // 상태 배지는 보조 정보라 로딩 실패가 오서링 흐름을 막으면 안 된다.
+    }
+  }
+
+  List<_SubFocus> _allSubFocuses() {
+    final out = <_SubFocus>[];
+    for (var b = 0; b < _bigUnits.length; b += 1) {
+      final big = _bigUnits[b];
+      for (var m = 0; m < big.middles.length; m += 1) {
+        for (final sub in big.middles[m].subs) {
+          out.add(_SubFocus(
+            bigIndex: b,
+            midIndex: m,
+            subKey: sub.preset.key,
+          ));
+        }
+      }
+    }
+    return out;
+  }
+
+  Map<String, dynamic> _stageScopePayload(_SubFocus focus) => <String, dynamic>{
+        'big_order': focus.bigIndex,
+        'mid_order': focus.midIndex,
+        'sub_key': focus.subKey,
+      };
+
+  Future<void> _loadStageStatuses() async {
+    final focuses = _allSubFocuses();
+    if (focuses.isEmpty) return;
+    setState(() => _loadingStageStatuses = true);
+    try {
+      final statuses = await _pdfService.fetchStageStatuses(
+        academyId: widget.academyId,
+        bookId: widget.bookId,
+        gradeLabel: widget.gradeLabel,
+        scopes: [for (final focus in focuses) _stageScopePayload(focus)],
+      );
+      if (!mounted) return;
+      setState(() {
+        _stageStatusBySub
+          ..clear()
+          ..addEntries(statuses.map((s) {
+            final focus = _SubFocus(
+              bigIndex: s.bigOrder,
+              midIndex: s.midOrder,
+              subKey: s.subKey,
+            );
+            return MapEntry(_stateKeyFor(focus), s);
+          }));
+        _loadingStageStatuses = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _loadingStageStatuses = false);
+      debugPrint('[textbook-stage-status] load failed: $e');
     }
   }
 
@@ -955,6 +1015,7 @@ class _TextbookUnitAuthoringDialogState
       _toast(
         '${focus.subKey} 영역 ${result.upserted}건을 서버에 저장했습니다',
       );
+      unawaited(_loadStageStatuses());
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -1121,22 +1182,18 @@ class _TextbookUnitAuthoringDialogState
     final first = targets.first;
     final big = _bigUnits[first.bigIndex];
     final mid = big.middles[first.midIndex];
-    TextbookAuthoringStageDialog.show(
-      context,
-      academyId: widget.academyId,
-      bookId: widget.bookId,
-      bookName: widget.bookName,
-      gradeLabel: widget.gradeLabel,
-      linkId: widget.linkId,
-      bigOrder: first.bigIndex,
-      midOrder: first.midIndex,
-      subKey: first.subKey,
-      bigName: big.nameCtrl.text.trim(),
-      midName: mid.nameCtrl.text.trim(),
-      initialCrops: allSeeds,
-      batchScopes:
-          scopes.length > 1 ? scopes : const <TextbookAuthoringStageScope>[],
-    );
+    setState(() {
+      _embeddedStage = _EmbeddedStageArgs(
+        bigOrder: first.bigIndex,
+        midOrder: first.midIndex,
+        subKey: first.subKey,
+        bigName: big.nameCtrl.text.trim(),
+        midName: mid.nameCtrl.text.trim(),
+        initialCrops: allSeeds,
+        batchScopes:
+            scopes.length > 1 ? scopes : const <TextbookAuthoringStageScope>[],
+      );
+    });
   }
 
   TextbookAuthoringStageScope _stageScopeFor(_SubFocus focus) {
@@ -1221,31 +1278,70 @@ class _TextbookUnitAuthoringDialogState
       child: SizedBox(
         width: MediaQuery.of(context).size.width * 0.92,
         height: MediaQuery.of(context).size.height * 0.92,
-        child: Column(
-          children: [
-            _buildHeader(),
-            const Divider(height: 1, color: _kBorder),
-            Expanded(
-              child: _loadingPayload
-                  ? const Center(
-                      child: CircularProgressIndicator(color: _kAccent),
-                    )
-                  : _payloadError != null
-                      ? Center(
-                          child: Text(
-                            '단원 정보를 불러오지 못했습니다\n${_payloadError!}',
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(
-                              color: _kDanger,
-                              fontSize: 13,
-                            ),
-                          ),
-                        )
-                      : _buildMain(),
-            ),
-          ],
+        child: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 260),
+          switchInCurve: Curves.easeOutCubic,
+          switchOutCurve: Curves.easeInCubic,
+          transitionBuilder: (child, animation) {
+            final offset = Tween<Offset>(
+              begin: const Offset(1, 0),
+              end: Offset.zero,
+            ).animate(animation);
+            return SlideTransition(position: offset, child: child);
+          },
+          child: _embeddedStage == null
+              ? _buildStage1Shell()
+              : TextbookAuthoringStageDialog(
+                  key: ValueKey('stage:${_embeddedStage!.subKey}'),
+                  academyId: widget.academyId,
+                  bookId: widget.bookId,
+                  bookName: widget.bookName,
+                  gradeLabel: widget.gradeLabel,
+                  linkId: widget.linkId,
+                  bigOrder: _embeddedStage!.bigOrder,
+                  midOrder: _embeddedStage!.midOrder,
+                  subKey: _embeddedStage!.subKey,
+                  bigName: _embeddedStage!.bigName,
+                  midName: _embeddedStage!.midName,
+                  initialCrops: _embeddedStage!.initialCrops,
+                  batchScopes: _embeddedStage!.batchScopes,
+                  embedded: true,
+                  onBack: () {
+                    setState(() => _embeddedStage = null);
+                    unawaited(_loadStageStatuses());
+                  },
+                  onStageChanged: () => unawaited(_loadStageStatuses()),
+                ),
         ),
       ),
+    );
+  }
+
+  Widget _buildStage1Shell() {
+    return Column(
+      key: const ValueKey('stage1'),
+      children: [
+        _buildHeader(),
+        const Divider(height: 1, color: _kBorder),
+        Expanded(
+          child: _loadingPayload
+              ? const Center(
+                  child: CircularProgressIndicator(color: _kAccent),
+                )
+              : _payloadError != null
+                  ? Center(
+                      child: Text(
+                        '단원 정보를 불러오지 못했습니다\n${_payloadError!}',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: _kDanger,
+                          fontSize: 13,
+                        ),
+                      ),
+                    )
+                  : _buildMain(),
+        ),
+      ],
     );
   }
 
@@ -1555,7 +1651,9 @@ class _TextbookUnitAuthoringDialogState
             );
     final uploaded = state?.uploadResult?.upserted ?? 0;
     final isRunning = state?.running == true || state?.uploading == true;
-    final pbStatus = _pbExtractStatusBySub[_stateKeyFor(focus)] ?? '';
+    final key = _stateKeyFor(focus);
+    final pbStatus = _pbExtractStatusBySub[key] ?? '';
+    final stageStatus = _stageStatusBySub[key];
     return Container(
       margin: const EdgeInsets.only(top: 4),
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
@@ -1571,68 +1669,224 @@ class _TextbookUnitAuthoringDialogState
           });
           _jumpViewerToFocusStart(focus);
         },
-        child: Row(
+        child: Column(
           children: [
-            Checkbox(
-              value: batchSelected,
-              onChanged: _batchRunning
-                  ? null
-                  : (value) => _toggleBatchSub(focus, value == true),
-              visualDensity: VisualDensity.compact,
-              side: const BorderSide(color: _kTextSub),
-            ),
-            Container(
-              width: 72,
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-              decoration: BoxDecoration(
-                color: const Color(0xFF1E1A12),
-                borderRadius: BorderRadius.circular(4),
-              ),
-              alignment: Alignment.center,
-              child: Text(
-                sub.preset.displayName,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: Color(0xFFEAB968),
-                  fontSize: 10,
-                  fontWeight: FontWeight.w800,
+            Row(
+              children: [
+                Checkbox(
+                  value: batchSelected,
+                  onChanged: _batchRunning
+                      ? null
+                      : (value) => _toggleBatchSub(focus, value == true),
+                  visualDensity: VisualDensity.compact,
+                  side: const BorderSide(color: _kTextSub),
                 ),
-              ),
+                Container(
+                  constraints: const BoxConstraints(minWidth: 72),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1E1A12),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  alignment: Alignment.center,
+                  child: Text(
+                    sub.preset.displayName,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Color(0xFFEAB968),
+                      fontSize: 10,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: _StageProgressChip(
+                    status: stageStatus,
+                    loading: _loadingStageStatuses,
+                    onTap: () => _showStageStatusDialog(focus),
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(width: 6),
-            Expanded(
-              child: _textInput(
-                sub.startCtrl,
-                hint: '시작',
-                dense: true,
-                keyboardType: TextInputType.number,
-                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-              ),
+            const SizedBox(height: 4),
+            Row(
+              children: [
+                const SizedBox(width: 38),
+                Expanded(
+                  child: _textInput(
+                    sub.startCtrl,
+                    hint: '시작',
+                    dense: true,
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                  ),
+                ),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: _textInput(
+                    sub.endCtrl,
+                    hint: '끝',
+                    dense: true,
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                  ),
+                ),
+                const SizedBox(width: 6),
+                _SubRowStats(
+                  analyzed: analyzed,
+                  uploaded: uploaded,
+                  running: isRunning,
+                ),
+                if (pbStatus.isNotEmpty) ...[
+                  const SizedBox(width: 4),
+                  _PbExtractStatusChip(status: pbStatus),
+                ],
+              ],
             ),
-            const SizedBox(width: 4),
-            Expanded(
-              child: _textInput(
-                sub.endCtrl,
-                hint: '끝',
-                dense: true,
-                keyboardType: TextInputType.number,
-                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-              ),
-            ),
-            const SizedBox(width: 6),
-            _SubRowStats(
-              analyzed: analyzed,
-              uploaded: uploaded,
-              running: isRunning,
-            ),
-            if (pbStatus.isNotEmpty) ...[
-              const SizedBox(width: 4),
-              _PbExtractStatusChip(status: pbStatus),
-            ],
           ],
         ),
       ),
     );
+  }
+
+  Future<void> _showStageStatusDialog(_SubFocus focus) async {
+    await _loadStageStatuses();
+    if (!mounted) return;
+    final status = _stageStatusBySub[_stateKeyFor(focus)];
+    final title = _subFocusLabel(focus);
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          backgroundColor: _kPanel,
+          title: Text(
+            '$title 추출 상태',
+            style: const TextStyle(color: _kText, fontWeight: FontWeight.w800),
+          ),
+          content: SizedBox(
+            width: 440,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _StageStatusDialogRow(
+                  label: '본문',
+                  description: '문항 영역 좌표',
+                  done: status?.bodyDone ?? 0,
+                  total: status?.bodyTotal ?? 0,
+                  dangerHint: '본문 삭제 시 정답·해설·문제은행 문서도 함께 삭제',
+                  onDelete: () {
+                    Navigator.of(ctx).pop();
+                    _confirmDeleteStage(focus, 'body');
+                  },
+                ),
+                const SizedBox(height: 8),
+                _StageStatusDialogRow(
+                  label: '정답',
+                  description: '정답 VLM 및 이미지 크롭',
+                  done: status?.answerDone ?? 0,
+                  total: status?.answerTotal ?? 0,
+                  dangerHint: '정답 삭제 시 해설도 함께 삭제',
+                  onDelete: (status?.bodyDone ?? 0) == 0
+                      ? null
+                      : () {
+                          Navigator.of(ctx).pop();
+                          _confirmDeleteStage(focus, 'answer');
+                        },
+                ),
+                const SizedBox(height: 8),
+                _StageStatusDialogRow(
+                  label: '해설',
+                  description: '해설 번호/본문 좌표',
+                  done: status?.solutionDone ?? 0,
+                  total: status?.solutionTotal ?? 0,
+                  dangerHint: '해설 좌표만 삭제',
+                  onDelete: (status?.bodyDone ?? 0) == 0
+                      ? null
+                      : () {
+                          Navigator.of(ctx).pop();
+                          _confirmDeleteStage(focus, 'solution');
+                        },
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('닫기'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _confirmDeleteStage(_SubFocus focus, String stage) async {
+    final label = switch (stage) {
+      'body' => '본문',
+      'answer' => '정답',
+      'solution' => '해설',
+      _ => stage,
+    };
+    final detail = switch (stage) {
+      'body' => '본문 영역, 정답, 해설, 연결된 문제은행 문서를 모두 서버에서 영구 삭제합니다.',
+      'answer' => '정답과 해설 좌표를 서버에서 영구 삭제합니다.',
+      'solution' => '해설 좌표만 서버에서 영구 삭제합니다.',
+      _ => '선택한 데이터를 서버에서 영구 삭제합니다.',
+    };
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _kPanel,
+        title: Text(
+          '$label 삭제',
+          style: const TextStyle(color: _kText, fontWeight: FontWeight.w800),
+        ),
+        content: Text(
+          '$detail\n되돌릴 수 없습니다.',
+          style: const TextStyle(color: _kTextSub, fontSize: 13),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            style: FilledButton.styleFrom(backgroundColor: _kDanger),
+            child: const Text('영구 삭제'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      final result = await _pdfService.deleteStageData(
+        academyId: widget.academyId,
+        bookId: widget.bookId,
+        gradeLabel: widget.gradeLabel,
+        bigOrder: focus.bigIndex,
+        midOrder: focus.midIndex,
+        subKey: focus.subKey,
+        stage: stage,
+      );
+      if (!mounted) return;
+      if (stage == 'body') {
+        _subStates.remove(_stateKeyFor(focus));
+        _manualEdits.remove(_stateKeyFor(focus));
+      }
+      _toast('$label 삭제 완료');
+      if (result.warnings.isNotEmpty) {
+        debugPrint('[textbook-stage-delete] warnings: ${result.warnings}');
+      }
+      await _loadExistingCrops();
+      await _loadStageStatuses();
+    } catch (e) {
+      if (!mounted) return;
+      _toast('$label 삭제 실패: $e', error: true);
+    }
   }
 
   void _jumpViewerToFocusStart(_SubFocus focus) {
@@ -2785,6 +3039,158 @@ class _SubRowStats extends StatelessWidget {
   }
 }
 
+class _StageProgressChip extends StatelessWidget {
+  const _StageProgressChip({
+    required this.status,
+    required this.loading,
+    required this.onTap,
+  });
+
+  final TextbookStageScopeStatus? status;
+  final bool loading;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final completed = status?.completedStages ?? 0;
+    final ready = completed == 3;
+    final label = loading ? '확인 중...' : '$completed/3 완료';
+    final color = ready
+        ? const Color(0xFF9FD49F)
+        : completed > 0
+            ? const Color(0xFFEAB968)
+            : const Color(0xFF9FB3B3);
+    return Tooltip(
+      message: '본문 → 정답 → 해설 추출 상태를 확인합니다',
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(10),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: color.withValues(alpha: 0.45)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              if (loading)
+                const SizedBox(
+                  width: 10,
+                  height: 10,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 1.3,
+                    color: Color(0xFF9FB3B3),
+                  ),
+                )
+              else
+                Icon(
+                  ready ? Icons.task_alt : Icons.fact_check_outlined,
+                  size: 11,
+                  color: color,
+                ),
+              const SizedBox(width: 4),
+              Text(
+                label,
+                style: TextStyle(
+                  color: color,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _StageStatusDialogRow extends StatelessWidget {
+  const _StageStatusDialogRow({
+    required this.label,
+    required this.description,
+    required this.done,
+    required this.total,
+    required this.dangerHint,
+    required this.onDelete,
+  });
+
+  final String label;
+  final String description;
+  final int done;
+  final int total;
+  final String dangerHint;
+  final VoidCallback? onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final exists = total > 0 || done > 0;
+    final complete = total > 0 && done >= total;
+    final color = complete
+        ? const Color(0xFF9FD49F)
+        : exists
+            ? const Color(0xFFEAB968)
+            : const Color(0xFF8A8A8A);
+    final countText = total > 0 ? '$done/$total' : '$done';
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF15171C),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFF2A2A2A)),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            complete
+                ? Icons.check_circle_outline
+                : Icons.radio_button_unchecked,
+            color: color,
+            size: 18,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '$label · $countText',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '$description · $dangerHint',
+                  style: const TextStyle(
+                    color: Color(0xFF9FB3B3),
+                    fontSize: 11,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          TextButton.icon(
+            onPressed: exists ? onDelete : null,
+            icon: const Icon(Icons.delete_outline, size: 14),
+            label: const Text('삭제'),
+            style: TextButton.styleFrom(
+              foregroundColor: const Color(0xFFE68A8A),
+              disabledForegroundColor: const Color(0xFF4A4A4A),
+              visualDensity: VisualDensity.compact,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _PbExtractStatusChip extends StatelessWidget {
   const _PbExtractStatusChip({required this.status});
   final String status;
@@ -2844,6 +3250,26 @@ class _SubFocus {
   final int bigIndex;
   final int midIndex;
   final String subKey;
+}
+
+class _EmbeddedStageArgs {
+  const _EmbeddedStageArgs({
+    required this.bigOrder,
+    required this.midOrder,
+    required this.subKey,
+    required this.bigName,
+    required this.midName,
+    required this.initialCrops,
+    required this.batchScopes,
+  });
+
+  final int bigOrder;
+  final int midOrder;
+  final String subKey;
+  final String bigName;
+  final String midName;
+  final List<TextbookAuthoringStageCropSeed> initialCrops;
+  final List<TextbookAuthoringStageScope> batchScopes;
 }
 
 class _SubRunState {

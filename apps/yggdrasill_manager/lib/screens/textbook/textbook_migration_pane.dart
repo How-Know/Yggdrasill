@@ -91,25 +91,22 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
             .order('name');
         rows = (data as List).cast<Map<String, dynamic>>();
       }
-      final books = rows
-          .where((r) {
-            final rawCategory = r['category'];
-            final category =
-                rawCategory is String ? rawCategory.trim().toLowerCase() : '';
-            return category.isEmpty || category == 'textbook';
-          })
-          .map((r) {
-            final rawPub = r['is_published'];
-            final pub = rawPub is bool ? rawPub : true;
-            return _MigBook(
-              id: r['id'] as String,
-              academyId: r['academy_id'] as String?,
-              name: (r['name'] as String?)?.trim() ?? '(이름 없음)',
-              orderIndex: r['order_index'] as int?,
-              isPublished: pub,
-            );
-          })
-          .toList();
+      final books = rows.where((r) {
+        final rawCategory = r['category'];
+        final category =
+            rawCategory is String ? rawCategory.trim().toLowerCase() : '';
+        return category.isEmpty || category == 'textbook';
+      }).map((r) {
+        final rawPub = r['is_published'];
+        final pub = rawPub is bool ? rawPub : true;
+        return _MigBook(
+          id: r['id'] as String,
+          academyId: r['academy_id'] as String?,
+          name: (r['name'] as String?)?.trim() ?? '(이름 없음)',
+          orderIndex: r['order_index'] as int?,
+          isPublished: pub,
+        );
+      }).toList();
       books.sort((a, b) {
         final ai = a.orderIndex ?? 1 << 30;
         final bi = b.orderIndex ?? 1 << 30;
@@ -197,7 +194,8 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
 
   // ---------------- upload + status helpers ----------------
 
-  Future<void> _pickAndUpload(_MigLink? existing, {
+  Future<void> _pickAndUpload(
+    _MigLink? existing, {
     String? gradeOverride,
     String? kindOverride,
   }) async {
@@ -230,8 +228,7 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
       _toast('파일 경로를 읽을 수 없습니다', error: true);
       return;
     }
-    final busyKey =
-        '${existing?.id ?? 'new'}|$gradeLabel|$kind';
+    final busyKey = '${existing?.id ?? 'new'}|$gradeLabel|$kind';
     setState(() => _busy.add(busyKey));
     try {
       final bytes = await File(path).readAsBytes();
@@ -478,9 +475,8 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
                   child: Container(
                     padding: const EdgeInsets.symmetric(
                         horizontal: 14, vertical: 10),
-                    color: selected
-                        ? const Color(0xFF1B2B1B)
-                        : Colors.transparent,
+                    color:
+                        selected ? const Color(0xFF1B2B1B) : Colors.transparent,
                     child: Row(
                       children: [
                         Icon(
@@ -504,9 +500,8 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
                                   ? Colors.white
                                   : const Color(0xFFD8E0E0),
                               fontSize: 13,
-                              fontWeight: selected
-                                  ? FontWeight.w800
-                                  : FontWeight.w500,
+                              fontWeight:
+                                  selected ? FontWeight.w800 : FontWeight.w500,
                             ),
                           ),
                         ),
@@ -556,8 +551,7 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
               const SizedBox(width: 10),
               Text(
                 'academy_id: ${book.academyId ?? "-"}',
-                style: const TextStyle(
-                    color: Color(0xFF8A8A8A), fontSize: 11),
+                style: const TextStyle(color: Color(0xFF8A8A8A), fontSize: 11),
               ),
             ],
           ),
@@ -642,8 +636,7 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
             ),
             style: OutlinedButton.styleFrom(
               side: const BorderSide(color: Color(0xFF5A2323)),
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             ),
           ),
         ],
@@ -769,9 +762,8 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
         bookId: book.id,
       );
       if (!mounted) return;
-      final removed = result.removedCrops +
-          result.removedPdfs +
-          result.removedCovers;
+      final removed =
+          result.removedCrops + result.removedPdfs + result.removedCovers;
       _toast(
         '교재 삭제 완료 (PDF ${result.removedPdfs}, 크롭 ${result.removedCrops}, 표지 ${result.removedCovers}, 총 $removed개)',
       );
@@ -871,7 +863,7 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
         SizedBox(width: 84, child: Text('상태', style: style)),
         Expanded(child: Text('파일', style: style)),
         SizedBox(width: 72, child: Text('크기', style: style)),
-        SizedBox(width: 560, child: Text('조작', style: style)),
+        SizedBox(width: 390, child: Text('조작', style: style)),
       ],
     );
   }
@@ -915,7 +907,8 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
           SizedBox(
               width: 84,
               child: _StatusBadge(
-                  status: hasLegacy || hasStorage ? link.migrationStatus : 'none')),
+                  status:
+                      hasLegacy || hasStorage ? link.migrationStatus : 'none')),
           Expanded(
             child: Text(
               hasStorage ? link.storageKey : link.url,
@@ -935,7 +928,7 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
             ),
           ),
           SizedBox(
-            width: 560,
+            width: 390,
             child: isBusy
                 ? const Row(
                     mainAxisSize: MainAxisSize.min,
@@ -997,18 +990,6 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
           label: '단원·분석',
           onPressed: () => _openUnitAuthoring(link),
         ));
-        widgets.add(const SizedBox(width: 6));
-        widgets.add(_ActionButton(
-          icon: Icons.visibility_outlined,
-          label: 'VLM 테스트',
-          onPressed: () => _openVlmTestDialog(link),
-        ));
-        widgets.add(const SizedBox(width: 6));
-        widgets.add(_ActionButton(
-          icon: Icons.content_cut,
-          label: '크롭 추출',
-          onPressed: () => _openCropExtractDialog(link),
-        ));
       }
     }
     return widgets;
@@ -1027,6 +1008,8 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
     );
   }
 
+  // Kept as an internal maintenance hook; the main list no longer exposes it.
+  // ignore: unused_element
   void _openVlmTestDialog(_MigLink link) {
     final book = _resolveBookForLink(link);
     TextbookVlmTestDialog.show(
@@ -1040,6 +1023,8 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
     );
   }
 
+  // Kept as an internal maintenance hook; the main list no longer exposes it.
+  // ignore: unused_element
   void _openCropExtractDialog(_MigLink link) {
     final book = _resolveBookForLink(link);
     TextbookCropExtractDialog.show(
@@ -1274,8 +1259,7 @@ class _NewRowPickerState extends State<_NewRowPicker> {
               hintText: '학년 라벨 (예: 고1)',
               hintStyle: TextStyle(color: Color(0xFF6A6A6A), fontSize: 12),
               isDense: true,
-              contentPadding:
-                  EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
               filled: true,
               fillColor: Color(0xFF15171C),
               border: OutlineInputBorder(
