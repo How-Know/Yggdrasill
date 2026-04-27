@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="620" height="950" viewBox="0 0 620 950">
+  <style>
+    text {
+      font-family: "Times New Roman", "Nimbus Roman", "Liberation Serif", serif;
+      fill: #000;
+      dominant-baseline: alphabetic;
+    }
+    line {
+      shape-rendering: crispEdges;
+    }
+  </style>
+  <rect x="0" y="0" width="620" height="950" fill="#fff" />
+  <text x="292" y="84" text-anchor="middle" font-size="47" font-weight="400">12345</text>
+  <line x1="160" y1="104" x2="578" y2="104" stroke="#000" stroke-width="2.2" />
+  <text x="50" y="158" text-anchor="start" font-size="47" font-weight="400">1665</text>
+  <text x="178" y="158" text-anchor="start" font-size="58" font-weight="400">)</text>
+  <text x="210" y="158" text-anchor="start" font-size="47" font-weight="400">2057</text>
+  <text x="190" y="234" text-anchor="start" font-size="47" font-weight="400">1665</text>
+  <text x="190" y="310" text-anchor="start" font-size="47" font-weight="400">3920</text>
+  <text x="190" y="386" text-anchor="start" font-size="47" font-weight="700">3330</text>
+  <line x1="160" y1="406" x2="578" y2="406" stroke="#000" stroke-width="2.2" />
+  <text x="190" y="461" text-anchor="start" font-size="47" font-weight="400">5900</text>
+  <text x="190" y="536" text-anchor="start" font-size="47" font-weight="400">4995</text>
+  <line x1="160" y1="557" x2="578" y2="557" stroke="#000" stroke-width="2.2" />
+  <text x="190" y="611" text-anchor="start" font-size="47" font-weight="400">9050</text>
+  <text x="190" y="687" text-anchor="start" font-size="47" font-weight="400">8325</text>
+  <line x1="160" y1="707" x2="578" y2="707" stroke="#000" stroke-width="2.2" />
+  <text x="190" y="762" text-anchor="start" font-size="47" font-weight="400">7250</text>
+  <text x="190" y="837" text-anchor="start" font-size="47" font-weight="400">6660</text>
+  <line x1="160" y1="858" x2="578" y2="858" stroke="#000" stroke-width="2.2" />
+  <text x="190" y="912" text-anchor="start" font-size="47" font-weight="400">590</text>
+</svg>

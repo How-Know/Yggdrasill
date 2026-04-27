@@ -10,6 +10,7 @@ create table if not exists public.academy_notification_pause_dates (
   created_by uuid,
   updated_at timestamptz not null default now(),
   updated_by uuid,
+  version integer not null default 1,
   constraint uidx_academy_notification_pause_dates unique (academy_id, pause_date)
 );
 
@@ -29,6 +30,12 @@ create policy academy_notification_pause_dates_all
       where m.academy_id = academy_notification_pause_dates.academy_id
         and m.user_id = auth.uid()
     )
+    or exists (
+      select 1
+      from public.academies a
+      where a.id = academy_notification_pause_dates.academy_id
+        and a.owner_user_id = auth.uid()
+    )
   )
   with check (
     exists (
@@ -36,6 +43,12 @@ create policy academy_notification_pause_dates_all
       from public.memberships m
       where m.academy_id = academy_notification_pause_dates.academy_id
         and m.user_id = auth.uid()
+    )
+    or exists (
+      select 1
+      from public.academies a
+      where a.id = academy_notification_pause_dates.academy_id
+        and a.owner_user_id = auth.uid()
     )
   );
 
