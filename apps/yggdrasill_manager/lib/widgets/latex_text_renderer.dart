@@ -110,7 +110,7 @@ class LatexTextRenderer extends StatelessWidget {
       }
 
       final fullMatch = match.group(0) ?? '';
-      final formula = (match.group(1) ?? '').trim();
+      final formula = _normalizeFormulaForRender((match.group(1) ?? '').trim());
       if (formula.isEmpty) {
         spans.add(TextSpan(text: fullMatch));
       } else {
@@ -193,6 +193,8 @@ class LatexTextRenderer extends StatelessWidget {
     TextStyle mathTextStyle, {
     required MathStyle mathStyle,
   }) {
+    final textFraction = _buildTextFractionFallback(formula, mathTextStyle);
+    if (textFraction != null) return textFraction;
     final normalized = _normalizeFormulaForRetry(formula);
     if (normalized.isNotEmpty && normalized != formula) {
       return Math.tex(
@@ -206,33 +208,108 @@ class LatexTextRenderer extends StatelessWidget {
     return Text(_plainFallbackText(formula), style: mathTextStyle);
   }
 
+  String _normalizeFormulaForRender(String raw) {
+    final input = _normalizeElasticDelimitersForFlutter(raw.trim());
+    if (input.isEmpty) return input;
+    final match = RegExp(
+      r'^\(?\s*(\\(?:dfrac|tfrac|frac)\s*\{\s*(?:\\(?:text|mathrm)\s*\{[^{}]+\}|[^{}]+)\s*\}\s*\{\s*(?:\\(?:text|mathrm)\s*\{[^{}]+\}|[^{}]+)\s*\})\s*\)?$',
+    ).firstMatch(input);
+    if (match == null) return input;
+    final hasParens = input.startsWith('(') && input.endsWith(')');
+    final fraction = (match.group(1) ?? input).replaceFirst(
+      RegExp(r'^\\(?:dfrac|tfrac|frac)\b'),
+      r'\dfrac',
+    );
+    if (!hasParens) return fraction;
+    return '\\left($fraction\\right)';
+  }
+
+  Widget? _buildTextFractionFallback(String formula, TextStyle style) {
+    final input = formula.trim();
+    final match = RegExp(
+      r'^(?:\\left)?\(?\s*\\(?:dfrac|tfrac|frac)\s*\{\s*(?:\\(?:text|mathrm)\s*\{([^{}]+)\}|([^{}]+))\s*\}\s*\{\s*(?:\\(?:text|mathrm)\s*\{([^{}]+)\}|([^{}]+))\s*\}\s*(?:\\right)?\)?$',
+    ).firstMatch(input);
+    if (match == null) return null;
+    final numerator = (match.group(1) ?? match.group(2) ?? '').trim();
+    final denominator = (match.group(3) ?? match.group(4) ?? '').trim();
+    if (numerator.isEmpty || denominator.isEmpty) return null;
+    final showParens = input.startsWith('(') || input.startsWith(r'\left(');
+    final textStyle = style.copyWith(height: 1.05);
+    final fraction = IntrinsicWidth(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(numerator, textAlign: TextAlign.center, style: textStyle),
+          Container(
+            height: 1,
+            margin: const EdgeInsets.symmetric(vertical: 1.5),
+            color: textStyle.color ?? Colors.black,
+          ),
+          Text(denominator, textAlign: TextAlign.center, style: textStyle),
+        ],
+      ),
+    );
+    if (!showParens) return fraction;
+    final parenStyle = style.copyWith(fontSize: (style.fontSize ?? 14) * 2.35);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Text('(', style: parenStyle),
+        fraction,
+        Text(')', style: parenStyle),
+      ],
+    );
+  }
+
   String _normalizeFormulaForRetry(String raw) {
     if (raw.isEmpty) return raw;
-    var out = _normalizeUnicodeScript(raw)
-        .replaceAll('×', r'\times ')
-        .replaceAll('÷', r'\div ')
-        .replaceAll('·', r'\cdot ')
-        .replaceAll('∙', r'\cdot ')
-        .replaceAll('−', '-')
-        .replaceAll('≤', r'\le ')
-        .replaceAll('≥', r'\ge ')
-        .replaceAll('¼', r'\frac{1}{4}')
-        .replaceAll('½', r'\frac{1}{2}')
-        .replaceAll('¾', r'\frac{3}{4}')
-        .replaceAll('⅓', r'\frac{1}{3}')
-        .replaceAll('⅔', r'\frac{2}{3}')
-        .replaceAll('⅕', r'\frac{1}{5}')
-        .replaceAll('⅖', r'\frac{2}{5}')
-        .replaceAll('⅗', r'\frac{3}{5}')
-        .replaceAll('⅘', r'\frac{4}{5}')
-        .replaceAll('⅙', r'\frac{1}{6}')
-        .replaceAll('⅚', r'\frac{5}{6}')
-        .replaceAll('⅛', r'\frac{1}{8}')
-        .replaceAll('⅜', r'\frac{3}{8}')
-        .replaceAll('⅝', r'\frac{5}{8}')
-        .replaceAll('⅞', r'\frac{7}{8}');
+    var out =
+        _normalizeElasticDelimitersForFlutter(_normalizeUnicodeScript(raw))
+            .replaceAll('×', r'\times ')
+            .replaceAll('÷', r'\div ')
+            .replaceAll('·', r'\cdot ')
+            .replaceAll('∙', r'\cdot ')
+            .replaceAll('−', '-')
+            .replaceAll('≤', r'\le ')
+            .replaceAll('≥', r'\ge ')
+            .replaceAll('¼', r'\frac{1}{4}')
+            .replaceAll('½', r'\frac{1}{2}')
+            .replaceAll('¾', r'\frac{3}{4}')
+            .replaceAll('⅓', r'\frac{1}{3}')
+            .replaceAll('⅔', r'\frac{2}{3}')
+            .replaceAll('⅕', r'\frac{1}{5}')
+            .replaceAll('⅖', r'\frac{2}{5}')
+            .replaceAll('⅗', r'\frac{3}{5}')
+            .replaceAll('⅘', r'\frac{4}{5}')
+            .replaceAll('⅙', r'\frac{1}{6}')
+            .replaceAll('⅚', r'\frac{5}{6}')
+            .replaceAll('⅛', r'\frac{1}{8}')
+            .replaceAll('⅜', r'\frac{3}{8}')
+            .replaceAll('⅝', r'\frac{5}{8}')
+            .replaceAll('⅞', r'\frac{7}{8}');
     out = _dropUnmatchedCurlyBraces(out);
     return out.replaceAll(RegExp(r'\s+'), ' ').trim();
+  }
+
+  String _normalizeElasticDelimitersForFlutter(String raw) {
+    if (raw.isEmpty) return raw;
+    return raw.replaceAllMapped(
+      RegExp(r'\\left\s*([\[\]\(\)\{\}\|.])'),
+      (m) {
+        final delimiter = m.group(1) ?? '';
+        if (delimiter == '.') return '';
+        return delimiter;
+      },
+    ).replaceAllMapped(
+      RegExp(r'\\right\s*([\[\]\(\)\{\}\|.])'),
+      (m) {
+        final delimiter = m.group(1) ?? '';
+        if (delimiter == '.') return '';
+        return delimiter;
+      },
+    );
   }
 
   String _plainFallbackText(String raw) {

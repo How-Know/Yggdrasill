@@ -1298,16 +1298,68 @@ function buildStyles({
     }
     .answer-grid {
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      width: 43.333%;
+      max-width: 43.333%;
+      margin: 0 auto;
       gap: 6pt 12pt;
       font-size: calc((var(--stem-size-pt) - 0.6) * 1pt);
+      grid-auto-flow: row dense;
     }
     .answer-item {
-      white-space: nowrap;
-      display: inline-flex;
-      align-items: flex-start;
+      white-space: normal;
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      align-items: start;
       gap: 4.5pt;
       overflow: visible;
+      min-width: 0;
+    }
+    .answer-value {
+      min-width: 0;
+      white-space: normal;
+      overflow-wrap: anywhere;
+      word-break: keep-all;
+      line-height: 1.35;
+    }
+    .answer-item:has(.fraction),
+    .answer-item:has(.answer-figure) {
+      line-height: 1.5;
+      row-gap: 4pt;
+    }
+    .answer-sub-lines {
+      display: grid;
+      row-gap: 3.2pt;
+      padding-left: 0.15em;
+    }
+    .answer-sub-line {
+      display: grid;
+      grid-template-columns: 1.8em minmax(0, 1fr);
+      column-gap: 0.35em;
+      min-width: 0;
+    }
+    .answer-sub-label {
+      text-align: right;
+    }
+    .answer-sub-value {
+      min-width: 0;
+      overflow-wrap: anywhere;
+      word-break: keep-all;
+      line-height: 1.48;
+    }
+    .answer-sub-inline-lines {
+      display: inline-flex;
+      flex-wrap: wrap;
+      column-gap: 5em;
+      row-gap: 4pt;
+      align-items: baseline;
+    }
+    .answer-sub-inline {
+      display: inline-grid;
+      grid-template-columns: auto auto;
+      column-gap: 0.33em;
+      align-items: baseline;
+      white-space: nowrap;
     }
     .answer-figure {
       display: inline-block;
@@ -1323,6 +1375,7 @@ function buildStyles({
     }
     .answer-num {
       font-weight: 700;
+      white-space: nowrap;
     }
     .explain-item {
       margin-bottom: 8pt;
@@ -1364,26 +1417,64 @@ function renderAnswerSheet(questions, mathRenderer) {
       : 10;
     const topOffsetEm = Number.isFinite(item.topOffsetEm)
       ? Math.max(0, Math.min(2, Number(item.topOffsetEm)))
-      : 0.55;
+      : 0;
     return `<img class="answer-figure" src="${escapeHtml(src)}" style="width:${widthEm.toFixed(2)}em; transform: translateY(${topOffsetEm.toFixed(2)}em)" alt="정답 그림 ${index + 1}">`;
   };
-  const renderAnswerText = (q, rawText) => {
+  const renderAnswerTextBase = (q, rawText) => {
     const raw = String(rawText || '').trim();
     if (!raw) return '';
-    if (mathRenderer && raw !== '(미기입)' && !CIRCLED_RE.test(raw)) {
+    if (mathRenderer && raw !== '(미기입)' && !CIRCLED_RE.test(raw) && !/[가-힣ㄱ-ㅎㅏ-ㅣ]/.test(raw)) {
       const latex = normalizeMathLatex(raw) || raw;
       const result = mathRenderer.renderInline(latex);
       if (result.ok && result.svg) {
         const fraction = isFractionLatex(latex);
         const klass = fraction ? 'math-inline fraction' : 'math-inline';
-        answerHtml = `<span class="${klass}" data-latex="${escapeHtml(latex)}">${result.svg}</span>`;
+        return `<span class="${klass}" data-latex="${escapeHtml(latex)}">${result.svg}</span>`;
       } else {
         const composed = composeLineV1(raw, mathRenderer, q?.equations);
         return composed.html;
       }
+    } else if (mathRenderer && raw !== '(미기입)' && !CIRCLED_RE.test(raw)) {
+      const composed = composeLineV1(raw, mathRenderer, q?.equations);
+      return composed.html || escapeHtml(raw);
     } else {
       return escapeHtml(raw);
     }
+  };
+  const renderAnswerText = (q, rawText) => {
+    const raw = String(rawText || '').trim();
+    if (!/\(\d\)[\s\S]*\(\d\)/.test(raw)) return renderAnswerTextBase(q, raw);
+    const labelRe = /\((\d)\)/g;
+    const matches = [...raw.matchAll(labelRe)];
+    if (matches.length < 2) return renderAnswerTextBase(q, raw);
+    const compactText = raw
+      .replace(/\\(?:dfrac|tfrac|frac)\s*\{([^{}]+)\}\s*\{([^{}]+)\}/g, '$1/$2')
+      .replace(/\\[a-zA-Z]+/g, ' ')
+      .replace(/[{}$\\^_]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!/[가-힣ㄱ-ㅎㅏ-ㅣ]/.test(raw) && matches.length <= 3 && compactText.length <= 72) {
+      const parts = [];
+      for (let i = 0; i < matches.length; i += 1) {
+        const match = matches[i];
+        const label = match[0];
+        const start = match.index + label.length;
+        const end = i + 1 < matches.length ? matches[i + 1].index : raw.length;
+        const segment = raw.slice(start, end).trim();
+        parts.push(`<span class="answer-sub-inline"><span>${escapeHtml(label)}</span><span>${renderAnswerTextBase(q, segment)}</span></span>`);
+      }
+      return `<span class="answer-sub-inline-lines">${parts.join('')}</span>`;
+    }
+    const lines = [];
+    for (let i = 0; i < matches.length; i += 1) {
+      const match = matches[i];
+      const label = match[0];
+      const start = match.index + label.length;
+      const end = i + 1 < matches.length ? matches[i + 1].index : raw.length;
+      const segment = raw.slice(start, end).trim();
+      lines.push(`<span class="answer-sub-line"><span class="answer-sub-label">${escapeHtml(label)}</span><span class="answer-sub-value">${renderAnswerTextBase(q, segment)}</span></span>`);
+    }
+    return `<span class="answer-sub-lines">${lines.join('')}</span>`;
   };
   const renderAnswerValue = (q, raw) => {
     const text = String(raw || '').trim() || '(미기입)';
@@ -1405,10 +1496,28 @@ function renderAnswerSheet(questions, mathRenderer) {
     if (tail) parts.push(renderAnswerText(q, tail));
     return parts.join('<span class="answer-figure-gap"></span>');
   };
+  const answerSpan = (q, raw) => {
+    const text = String(raw || '')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\[\[PB_ANSWER_FIG_[^\]]+\]\]|\[그림\]|\[\s*image\s*\]/gi, ' 그림 ')
+      .replace(/\\(?:dfrac|tfrac|frac)\s*\{([^{}]+)\}\s*\{([^{}]+)\}/g, '$1/$2')
+      .replace(/\\[a-zA-Z]+/g, ' ')
+      .replace(/[{}$\\^_]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const subCount = (String(raw || '').match(/\(\d\)/g) || []).length;
+    const figCount = Array.isArray(q?.answer_figure_data_urls) ? q.answer_figure_data_urls.length : 0;
+    if (subCount >= 2) return 5;
+    if (text.length >= 54) return 5;
+    if (figCount >= 2 || text.length >= 32) return 3;
+    if (figCount >= 1 || text.length >= 17) return 2;
+    return 1;
+  };
   const rows = questions.map((q) => {
     const raw = String(q?.export_answer || '').trim() || '(미기입)';
     const answerHtml = renderAnswerValue(q, raw);
-    return `<div class="answer-item"><span class="answer-num">${escapeHtml(String(q?.question_number || '?'))}.</span>${answerHtml}</div>`;
+    const span = Math.max(1, Math.min(5, answerSpan(q, raw)));
+    return `<div class="answer-item" style="grid-column:span ${span};"><span class="answer-num">${escapeHtml(String(q?.question_number || '?'))}.</span><span class="answer-value">${answerHtml}</span></div>`;
   });
   return `
     <section class="page-break">

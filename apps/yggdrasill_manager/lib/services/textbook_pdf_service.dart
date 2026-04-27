@@ -465,11 +465,13 @@ class TextbookStageDeleteResult {
     required this.stage,
     required this.removed,
     required this.warnings,
+    required this.affectedSubKeys,
   });
 
   final String stage;
   final Map<String, int> removed;
   final List<String> warnings;
+  final List<String> affectedSubKeys;
 
   factory TextbookStageDeleteResult.fromMap(Map<String, dynamic> map) {
     final rawRemoved = (map['removed'] as Map?) ?? const <String, dynamic>{};
@@ -482,6 +484,9 @@ class TextbookStageDeleteResult {
         ),
       ),
       warnings: ((map['warnings'] as List?) ?? const [])
+          .map((e) => '$e')
+          .toList(growable: false),
+      affectedSubKeys: ((map['affected_sub_keys'] as List?) ?? const [])
           .map((e) => '$e')
           .toList(growable: false),
     );

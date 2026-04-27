@@ -4,6 +4,23 @@ import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
+String textbookAnswerNumberKey(String raw) {
+  final input = raw.trim();
+  if (input.isEmpty) return '';
+  final numbers = RegExp(r'\d+')
+      .allMatches(input)
+      .map((m) {
+        final n = int.tryParse(m.group(0) ?? '');
+        return n == null ? '' : '$n';
+      })
+      .where((s) => s.isNotEmpty)
+      .toList(growable: false);
+  if (numbers.isEmpty) return input.replaceAll(RegExp(r'\s+'), '');
+  final isRange = RegExp(r'(\d+)\s*(?:~|-|–|—|〜)\s*(\d+)').hasMatch(input);
+  if (isRange && numbers.length >= 2) return '${numbers[0]}-${numbers[1]}';
+  return numbers.first;
+}
+
 /// Thin client for the gateway's Stage-2 endpoints:
 /// - POST `/textbook/vlm/extract-answers` — per-page VLM extraction.
 /// - POST `/textbook/answers/batch-upsert` — persists 1:1 matched rows into
@@ -152,6 +169,7 @@ class TextbookVlmAnswerItem {
     required this.kind,
     required this.answerText,
     required this.answerLatex2d,
+    this.answerAssets = const <TextbookVlmAnswerAsset>[],
     this.bbox,
   });
 
@@ -165,6 +183,9 @@ class TextbookVlmAnswerItem {
 
   /// Optional 2D render LaTeX (주관식 전용). 객관식은 빈 문자열.
   final String answerLatex2d;
+
+  /// Image/table/grid assets the VLM marked inside [answerText].
+  final List<TextbookVlmAnswerAsset> answerAssets;
 
   /// Normalized [ymin, xmin, ymax, xmax] in 0..1000, if the VLM returned one.
   final List<int>? bbox;
@@ -242,6 +263,27 @@ class TextbookVlmAnswerItem {
           .trim();
     }
 
+    List<TextbookVlmAnswerAsset> parseAssets(dynamic raw) {
+      if (raw is! List) return const <TextbookVlmAnswerAsset>[];
+      final out = <TextbookVlmAnswerAsset>[];
+      for (final e in raw) {
+        if (e is! Map) continue;
+        final map = e.map((k, dynamic v) => MapEntry('$k', v));
+        final bbox = parseBbox(map['bbox']);
+        if (bbox == null) continue;
+        out.add(TextbookVlmAnswerAsset(
+          marker: '${map['marker'] ?? '[image]'}'.trim().isEmpty
+              ? '[image]'
+              : '${map['marker'] ?? '[image]'}'.trim(),
+          assetType: '${map['asset_type'] ?? 'image'}'.trim().isEmpty
+              ? 'image'
+              : '${map['asset_type'] ?? 'image'}'.trim(),
+          bbox: bbox,
+        ));
+      }
+      return out;
+    }
+
     var problemNumber = '${map['problem_number'] ?? ''}'.trim();
     var rawAnswerText = normalizeAnswer('${map['answer_text'] ?? ''}');
     final subNumberMatch =
@@ -254,11 +296,19 @@ class TextbookVlmAnswerItem {
       }
     }
     final rawAnswerLatex2d = normalizeAnswer('${map['answer_latex_2d'] ?? ''}');
+    final answerAssets = parseAssets(map['answer_assets']);
     final kindRaw = '${map['kind'] ?? ''}'.toLowerCase();
+    final generatedTableAnswer = RegExp(
+      r'(\\begin\{tabular\}|\\hline|\[표시작\]|\[표\])',
+      caseSensitive: false,
+    ).hasMatch('$rawAnswerText $rawAnswerLatex2d');
     final imageMarker = RegExp(r'(\[\s*image\s*\]|\(\s*image\s*\)|\bimage\b)',
             caseSensitive: false)
         .hasMatch('$rawAnswerText $rawAnswerLatex2d');
-    final kind = kindRaw == 'image' || imageMarker
+    final kind = kindRaw == 'image' ||
+            imageMarker ||
+            answerAssets.isNotEmpty ||
+            generatedTableAnswer
         ? 'image'
         : const {'objective', 'subjective', 'image'}.contains(kindRaw)
             ? kindRaw
@@ -267,12 +317,28 @@ class TextbookVlmAnswerItem {
       problemNumber: problemNumber,
       kind: kind,
       answerText: kind == 'image'
-          ? (rawAnswerText.isEmpty ? '[image]' : rawAnswerText)
+          ? (imageMarker
+              ? rawAnswerText
+              : '${rawAnswerText.trim()} [image]'.trim())
           : rawAnswerText,
       answerLatex2d: rawAnswerLatex2d,
-      bbox: parseBbox(map['bbox']),
+      answerAssets: answerAssets,
+      bbox: parseBbox(map['bbox']) ??
+          (answerAssets.isEmpty ? null : answerAssets.first.bbox),
     );
   }
+}
+
+class TextbookVlmAnswerAsset {
+  const TextbookVlmAnswerAsset({
+    required this.marker,
+    required this.assetType,
+    required this.bbox,
+  });
+
+  final String marker;
+  final String assetType;
+  final List<int> bbox;
 }
 
 /// Response of `/textbook/vlm/extract-answers`.
@@ -404,24 +470,32 @@ class TextbookAnswerMatchReport {
     required List<String> expectedNumbers,
     required List<TextbookVlmAnswerItem> items,
   }) {
-    final expectedSet = <String>{
-      for (final n in expectedNumbers)
-        if (n.trim().isNotEmpty) n.trim(),
-    };
+    final expectedSet = <String>{};
+    final expectedByKey = <String, String>{};
+    for (final n in expectedNumbers) {
+      final raw = n.trim();
+      if (raw.isEmpty) continue;
+      expectedSet.add(raw);
+      final key = textbookAnswerNumberKey(raw);
+      if (key.isNotEmpty) expectedByKey.putIfAbsent(key, () => raw);
+    }
     final byNumber = <String, TextbookVlmAnswerItem>{};
     final unexpected = <TextbookVlmAnswerItem>[];
     for (final it in items) {
-      final key = it.problemNumber.trim();
-      if (key.isEmpty) continue;
-      if (!expectedSet.contains(key)) {
+      final rawKey = it.problemNumber.trim();
+      if (rawKey.isEmpty) continue;
+      final expectedKey = expectedSet.contains(rawKey)
+          ? rawKey
+          : expectedByKey[textbookAnswerNumberKey(rawKey)];
+      if (expectedKey == null || expectedKey.isEmpty) {
         unexpected.add(it);
         continue;
       }
       // Keep the first non-empty answer; later duplicates win only if the
       // prior entry had an empty answer_text.
-      final prev = byNumber[key];
+      final prev = byNumber[expectedKey];
       if (prev == null || prev.answerText.trim().isEmpty) {
-        byNumber[key] = it;
+        byNumber[expectedKey] = it;
       }
     }
     final missing = <String>[

@@ -71,6 +71,7 @@ const PARAGRAPH_MARKER_RE = /\[문단(?::[^\]]*)?\]/g;
 const BOX_ALIGN_MARKER_RE = /^\s*\[(?:정렬|align)\s*:\s*(왼쪽|좌측|left|가운데|중앙|center|오른쪽|우측|right)\]\s*$/i;
 const BOGI_MARKER_RE = /\[박스시작\]|\[박스끝\]/g;
 const BOX_PARAGRAPH_BREAK = '__PB_BOX_PARAGRAPH_BREAK__';
+const RIGHT_TAIL_MARKER = '[우측꼬리]';
 // 세트형 문제에서 추출기가 주입하는 하위문항 경계 표식. 라인 하나를 단독으로 차지한다.
 // 렌더러는 이 마커를 "소비" 하되 화면에는 표시하지 않고, 마커 사이에 수직 간격만 주입한다.
 const SUBQ_MARKER_LINE_RE = /^\s*\[\s*소문항\s*\d+\s*\]\s*$/;
@@ -346,6 +347,10 @@ function normalizeMathSegment(mathContent) {
   // box{X} (내용이 있는 박스) → \boxed{X}. 빈 경우는 위 규칙이 이미 처리.
   out = out.replace(/(?<!\\)box\{([^}]+)\}/g, '\\boxed{$1}');
 
+  // 한국식 평행기호: slash 두 개를 쓰되 줄 높이에 영향을 주지 않게 격리한다.
+  out = out.replace(/∥/g, '\\mtparallel{}');
+  out = out.replace(/\\parallel(?![a-zA-Z])/g, '\\mtparallel{}');
+
   out = out.replace(/\\left\s*\{/g, '\\left\\{');
   out = out.replace(/\\left\s*\}/g, '\\left\\}');
   out = out.replace(/\\right\s*\{/g, '\\right\\{');
@@ -406,6 +411,13 @@ function bogiLabelFullTex(labelTex) {
 function smartTexLine(text, equations) {
   const raw = String(text ?? '');
   if (!raw) return '';
+
+  if (raw.includes(RIGHT_TAIL_MARKER)) {
+    const markerIdx = raw.indexOf(RIGHT_TAIL_MARKER);
+    const left = smartTexLine(raw.slice(0, markerIdx), equations);
+    const right = smartTexLine(raw.slice(markerIdx + RIGHT_TAIL_MARKER.length), equations);
+    return `${left}\\hfill ${right}`;
+  }
 
   if (raw.includes('[밑줄]')) {
     const pieces = splitByUnderlineMarkers(raw);
@@ -1890,6 +1902,7 @@ function buildPreamble({
   lines.push('\\newcommand{\\mtemptybox}{\\ensuremath{\\vcenter{\\hbox{\\setlength{\\fboxsep}{0pt}\\framebox[1.575em][c]{\\rule{0pt}{1.05em}}}}}}');
   // 지수 전용 빈칸: 정사각형이며 일반 빈칸보다 작다.
   lines.push('\\newcommand{\\mtexponentemptybox}{\\vcenter{\\hbox{\\scriptsize\\setlength{\\fboxsep}{0pt}\\framebox[0.72em][c]{\\rule{0pt}{0.72em}}}}}');
+  lines.push('\\newcommand{\\mtparallel}{\\mathbin{\\smash{\\raisebox{0.06em}{$/\\mkern-2mu/$}}}}');
   lines.push('\\usepackage{fancyhdr}');
   lines.push('\\usepackage{setspace}');
   lines.push('\\usepackage[most]{tcolorbox}');
@@ -3263,7 +3276,7 @@ function renderOneQuestion(question, {
       if (typeof cur !== 'string' || cur.length === 0) return;
       // "\ [N점]" : \ = 고정폭 공백(hbox 내에서도 유지). \enspace 는 단락 종료 전에는 줄바꿈 허용이라
       // 한 줄 끝에서 점수가 다음 줄로 내려가 보일 수 있음 → \ 를 사용해 마지막 어절과 밀착.
-      const suffix = `\\ {\\small [${escapeLatexText(scoreText)}점]}`;
+      const suffix = `\\ {\\small\\mbox{[${escapeLatexText(scoreText)}점]}}`;
       // 세트형 소문항은 "(N) ..." 을 `{\setbox0=\hbox{...} ... \par}` 한 그룹으로 감싸 렌더한다.
       // 이 경우 `\par}` 바깥에 suffix 를 붙이면 그룹이 이미 paragraph 를 종료한 뒤라
       // 점수가 새 paragraph 로 떨어져 "줄바꿈된 상태"로 보이게 된다.
@@ -3358,6 +3371,7 @@ export function buildTexSource(question, options = {}) {
     '\\newlength{\\tblcellht}',
     '\\newcommand{\\mtemptybox}{\\ensuremath{\\vcenter{\\hbox{\\setlength{\\fboxsep}{0pt}\\framebox[1.35em][c]{\\rule{0pt}{0.9em}}}}}}',
     '\\newcommand{\\mtexponentemptybox}{\\vcenter{\\hbox{\\scriptsize\\setlength{\\fboxsep}{0pt}\\framebox[0.72em][c]{\\rule{0pt}{0.72em}}}}}',
+    '\\newcommand{\\mtparallel}{\\mathbin{\\smash{\\raisebox{0.06em}{$/\\mkern-2mu/$}}}}',
     '',
     `\\setmainfont{${fontFamily}}[`,
     `  BoldFont = ${fontBold},`,
@@ -3925,7 +3939,7 @@ function renderQuickAnswerTableLatex(questions) {
     return {
       widthEm: Math.max(2, Math.min(30, Number.isFinite(item.widthEm) ? Number(item.widthEm) : 10)),
       verticalAlign: String(item.verticalAlign || layout.verticalAlign || 'top').toLowerCase(),
-      topOffsetEm: Math.max(0, Math.min(2, Number.isFinite(item.topOffsetEm) ? Number(item.topOffsetEm) : 0.55)),
+      topOffsetEm: Math.max(0, Math.min(2, Number.isFinite(item.topOffsetEm) ? Number(item.topOffsetEm) : 0)),
     };
   }
 
@@ -3958,8 +3972,7 @@ function renderQuickAnswerTableLatex(questions) {
   // 한 개 세그먼트(라벨 없는 단순 답) 를 LaTeX 로 포매팅.
   //   - CJK 없음: 전체 $...$.
   //   - CJK 섞임: $ \text{한글} math \text{한글} ... $.
-  function formatAnswerSegment(raw) {
-    if (!raw) return '';
+  function formatAnswerPlainSegmentInner(raw) {
     const chunks = [];
     let buf = '';
     let curCJK = null;
@@ -3994,14 +4007,72 @@ function renderQuickAnswerTableLatex(questions) {
       }
     }
     flush();
-    // 본문(smartTexLine) 의 수식은 전부 $\displaystyle ...$ 로 감싸므로,
-    //   빠른정답 셀도 동일하게 displaystyle 로 맞춰 분수 크기 등이 일관되게 보이도록 한다.
-    if (!chunks.some((c) => c.cjk)) return `$\\displaystyle ${raw}$`;
     // CJK chunk 는 \text{...}, 비CJK chunk 는 math 그대로.
     //   \text{} 와 math 사이 경계에 math 공백(\,) 을 넣어 한글 단어와 수식 기호 사이 간격 보존.
     //   단, CJK chunk 내부(앞뒤) 에 이미 공백이 포함되어 있다면 별도 간격은 불필요.
-    const parts = chunks.map((c) => (c.cjk ? `\\text{${escapeLatexText(c.text)}}` : c.text));
-    return `$\\displaystyle ${parts.join('')}$`;
+    const parts = chunks.map((c) => (
+      c.cjk
+        ? `\\text{${escapeLatexText(c.text)}}`
+        : c.text.replace(/\s+/g, ' ')
+    ));
+    return parts.join('');
+  }
+
+  function textFractionLatex(raw) {
+    const src = String(raw || '').trim();
+    const hasParens = src.startsWith('(') && src.endsWith(')');
+    const body = hasParens ? src.slice(1, -1).trim() : src;
+    const m = body.match(/^\\(?:dfrac|tfrac|frac)\s*\{([^{}]+)\}\s*\{([^{}]+)\}$/);
+    if (!m) return '';
+    const wrap = (value) => {
+      const v = String(value || '').trim();
+      return /[가-힣ㄱ-ㅎㅏ-ㅣ]/.test(v) ? `\\text{${escapeLatexText(v)}}` : v;
+    };
+    const frac = `\\dfrac{${wrap(m[1])}}{${wrap(m[2])}}`;
+    return hasParens ? `\\left(${frac}\\right)` : frac;
+  }
+
+  function formatAnswerSegmentTextMode(raw) {
+    const src = String(raw || '');
+    const inlineMathRe = /\(?\\(?:dfrac|tfrac|frac)\s*\{[^{}]+\}\s*\{[^{}]+\}\s*\)?|[A-Za-z0-9]+(?:\s*(?:\\(?:leq?|geq?|neq?|times|div|cdot|pm|mp)|[=+\-*/^_<>])\s*[-A-Za-z0-9{}\\.]+)+/g;
+    const out = [];
+    let last = 0;
+    let match;
+    while ((match = inlineMathRe.exec(src)) !== null) {
+      const before = src.slice(last, match.index);
+      if (before) out.push(escapeLatexText(before));
+      const renderedFraction = textFractionLatex(match[0]);
+      out.push(renderedFraction
+        ? `$\\displaystyle ${renderedFraction}$`
+        : `$\\displaystyle ${match[0].trim()}$`);
+      last = match.index + match[0].length;
+    }
+    const tail = src.slice(last);
+    if (tail) out.push(escapeLatexText(tail));
+    return out.join('');
+  }
+
+  function formatAnswerSegment(raw) {
+    if (!raw) return '';
+    const src = String(raw || '');
+    if (/[가-힣ㄱ-ㅎㅏ-ㅣ]/.test(src)) {
+      return formatAnswerSegmentTextMode(src);
+    }
+    const fractionRe = /\(?\\(?:dfrac|tfrac|frac)\s*\{[^{}]+\}\s*\{[^{}]+\}\s*\)?/g;
+    const out = [];
+    let last = 0;
+    let match;
+    while ((match = fractionRe.exec(src)) !== null) {
+      const before = src.slice(last, match.index);
+      if (before) out.push(formatAnswerPlainSegmentInner(before));
+      const renderedFraction = textFractionLatex(match[0]);
+      out.push(renderedFraction || formatAnswerPlainSegmentInner(match[0]));
+      last = match.index + match[0].length;
+    }
+    const tail = src.slice(last);
+    if (tail) out.push(formatAnswerPlainSegmentInner(tail));
+    if (out.length > 0) return `$\\displaystyle ${out.join('')}$`;
+    return `$\\displaystyle ${formatAnswerPlainSegmentInner(src)}$`;
   }
 
   // 하위문제 라벨 `(N)` (N = 1~9) 이 하나 이상 들어있는 답을 처리한다.
@@ -4021,27 +4092,54 @@ function renderQuickAnswerTableLatex(questions) {
       matches.push({ idx: m.index, end: m.index + m[0].length, label: m[0] });
     }
     if (matches.length === 0) return formatAnswerSegment(raw.trim());
+    if (matches.length === 1) {
+      const { end, label } = matches[0];
+      const head = raw.slice(0, matches[0].idx).trim();
+      const segment = raw.slice(end).replace(/^\s+/, '').replace(/\s+$/, '');
+      return [
+        head ? `${formatAnswerSegment(head)}\\hspace{0.35em}` : '',
+        label,
+        '\\hspace{0.33em}',
+        segment ? formatAnswerSegment(segment) : '',
+      ].join('');
+    }
 
-    const out = [];
+    const segments = matches.map((match, i) => {
+      const nextIdx = i + 1 < matches.length ? matches[i + 1].idx : raw.length;
+      return {
+        label: match.label,
+        value: raw.slice(match.end, nextIdx).replace(/^\s+/, '').replace(/\s+$/, ''),
+      };
+    });
+    const compactMeasure = segments
+      .map((seg) => `${seg.label} ${seg.value}`)
+      .join(' ')
+      .replace(/\\(?:dfrac|tfrac|frac)\s*\{([^{}]+)\}\s*\{([^{}]+)\}/g, '$1/$2')
+      .replace(/\\[a-zA-Z]+/g, ' ')
+      .replace(/[{}$\\^_]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const compactSubAnswers = !/[가-힣ㄱ-ㅎㅏ-ㅣ]/.test(raw)
+      && !/\[\[PB_ANSWER_FIG_[^\]]+\]\]|\[그림\]|\[\s*image\s*\]/i.test(raw)
+      && matches.length <= 3
+      && compactMeasure.length <= 72;
+    if (compactSubAnswers) {
+      return segments
+        .map((seg) => `${seg.label}\\hspace{0.33em}${formatAnswerSegment(seg.value)}`)
+        .join('\\hspace{5em}');
+    }
+
+    const prefix = [];
     // 첫 라벨 이전 텍스트(거의 없지만 방어).
     if (matches[0].idx > 0) {
       const head = raw.slice(0, matches[0].idx).trim();
-      if (head) out.push(formatAnswerSegment(head));
+      if (head) prefix.push(formatAnswerSegment(head), '\\par\\vspace{0.2\\baselineskip}');
     }
-    for (let i = 0; i < matches.length; i += 1) {
-      const { end, label } = matches[i];
-      const nextIdx = i + 1 < matches.length ? matches[i + 1].idx : raw.length;
-      const segment = raw.slice(end, nextIdx).replace(/^\s+/, '').replace(/\s+$/, '');
-      // 라벨 간 간격: 두 번째 이후 라벨 앞에 "공백 3칸" 에 해당하는 수평 간격 삽입.
-      //   \ \ \  : 고정폭 공백 3개를 명시 → xelatex 에서 축약되지 않고 보장됨.
-      if (i > 0) out.push('\\ \\ \\ ');
-      out.push(label); // '(1)', '(2)' 는 text 모드 그대로.
-      // 라벨 뒤 공백: 단순 "\ " 는 후속 $...$ 의 경계에서 일부 조판기가 스왈로하는 사례가 있음.
-      //   → \hspace{0.33em} 로 폭을 물리적으로 고정해 "(1)" 과 수식 사이 1칸 간격을 보장한다.
-      out.push('\\hspace{0.33em}');
-      if (segment) out.push(formatAnswerSegment(segment));
-    }
-    return out.join('');
+    const rows = segments.map((seg) => `${seg.label} & ${seg.value ? formatAnswerSegment(seg.value) : ''}`);
+    const table = '\\hspace*{0.15em}\\begin{tabular}[t]{@{}r@{\\hspace{0.35em}}>{\\raggedright\\arraybackslash}p{\\dimexpr\\linewidth-5.4em\\relax}@{}}'
+      + rows.join(' \\\\[0.28\\baselineskip] ')
+      + '\\end{tabular}';
+    return prefix.join('') + table;
   }
 
   function formatAnswerTextTex(ans) {
@@ -4061,6 +4159,33 @@ function renderQuickAnswerTableLatex(questions) {
     if (!raw) return '-';
     const markerRe = /(\[\[PB_ANSWER_FIG_[^\]]+\]\]|\[그림\]|\[\s*image\s*\])/gi;
     if (!markerRe.test(raw)) return formatAnswerTextTex(raw);
+    const labelMatches = [...raw.matchAll(/\((\d)\)/g)];
+    if (labelMatches.length >= 2) {
+      const groups = [];
+      for (let i = 0; i < labelMatches.length; i += 1) {
+        const start = labelMatches[i].index;
+        const end = i + 1 < labelMatches.length ? labelMatches[i + 1].index : raw.length;
+        groups.push({ start, text: raw.slice(start, end).trim() });
+      }
+      return groups.map((group, groupIndex) => {
+        markerRe.lastIndex = 0;
+        const parts = [];
+        let last = 0;
+        let figIndex = (raw.slice(0, group.start).match(markerRe) || []).length;
+        let match;
+        while ((match = markerRe.exec(group.text)) !== null) {
+          const before = group.text.slice(last, match.index).trim();
+          if (before) parts.push(formatAnswerTextTex(before));
+          parts.push(renderAnswerFigureLatex(question, figIndex));
+          figIndex += 1;
+          last = match.index + match[0].length;
+        }
+        const tail = group.text.slice(last).trim();
+        if (tail) parts.push(formatAnswerTextTex(tail));
+        const rendered = parts.join('\\hspace{0.45em}');
+        return groupIndex === 0 ? rendered : `\\par\\vspace{0.55\\baselineskip}${rendered}`;
+      }).join('');
+    }
     markerRe.lastIndex = 0;
     const out = [];
     let last = 0;
@@ -4078,32 +4203,84 @@ function renderQuickAnswerTableLatex(questions) {
     return out.join('\\hspace{0.45em}');
   }
 
-  // 문항 수에 따라 표 컬럼 수 결정.
-  const n = qs.length;
-  const cols = n <= 10 ? 2 : n <= 20 ? 3 : 4;
-
-  // column spec: 각 컬럼은 [번호][정답] 한 쌍. 컬럼 사이 구분선 포함.
-  const colSpec = Array.from({ length: cols }, () => 'r@{\\;}l').join('|');
-
-  // 행 채우기: 위에서 아래로, 좌→우 순으로 각 컬럼을 채움 (모의고사 정답표 전통 배치).
-  const rowsPerCol = Math.ceil(n / cols);
-  const rows = [];
-  for (let r = 0; r < rowsPerCol; r += 1) {
-    const cells = [];
-    for (let c = 0; c < cols; c += 1) {
-      const idx = c * rowsPerCol + r;
-      const q = qs[idx];
-      if (q) {
-        const num = String(q?.question_number || '?');
-        cells.push(`${escapeLatexText(num)}.`);
-        cells.push(formatAnswerTex(resolveAnswer(q), q));
-      } else {
-        cells.push('');
-        cells.push('');
-      }
-    }
-    rows.push(cells.join(' & ') + ' \\\\');
+  const MAX_SLOTS = 5;
+  function answerTextForMeasure(q) {
+    return stripLatexTextWrappers(resolveAnswer(q))
+      .replace(/\[\[PB_ANSWER_FIG_[^\]]+\]\]|\[그림\]|\[\s*image\s*\]/gi, ' 그림 ')
+      .replace(/\\(?:dfrac|tfrac|frac)\s*\{([^{}]+)\}\s*\{([^{}]+)\}/g, '$1/$2')
+      .replace(/\\[a-zA-Z]+/g, ' ')
+      .replace(/[{}$\\^_]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
   }
+  function quickAnswerSpan(q) {
+    const answer = resolveAnswer(q);
+    const measure = answerTextForMeasure(q);
+    const subCount = (answer.match(/\(\d\)/g) || []).length;
+    const figCount = (answer.match(/\[\[PB_ANSWER_FIG_[^\]]+\]\]|\[그림\]|\[\s*image\s*\]/gi) || []).length;
+    let span = 1;
+    if (subCount >= 2) span = 5;
+    else if (figCount >= 2 || measure.length >= 32) span = 3;
+    else if (subCount >= 2 || figCount >= 1 || measure.length >= 17) span = 2;
+    if (measure.length >= 54) span = 5;
+    return Math.max(1, Math.min(MAX_SLOTS, span));
+  }
+  function quickAnswerHasTallContent(q) {
+    const answer = resolveAnswer(q);
+    return /\\(?:dfrac|tfrac|frac)\b|\\left|\\right|\[\[PB_ANSWER_FIG_[^\]]+\]\]|\[그림\]|\[\s*image\s*\]/i.test(answer);
+  }
+  function spanSpec(span) {
+    const extraTabColSep = Math.max(0, (span - 1) * 2);
+    return `>{\\raggedright\\arraybackslash}p{\\dimexpr ${span}\\quickanswercellwd+${extraTabColSep}\\tabcolsep\\relax}`;
+  }
+  function quickAnswerCell(q) {
+    const num = escapeLatexText(String(q?.question_number || '?'));
+    const answer = formatAnswerTex(resolveAnswer(q), q);
+    const stretch = quickAnswerHasTallContent(q) ? '1.55' : '1.18';
+    const lineSkip = quickAnswerHasTallContent(q) ? '1.25em' : '0.55em';
+    return `\\begin{minipage}[t]{\\linewidth}\\raggedright\\setstretch{${stretch}}\\lineskiplimit=0.25em\\lineskip=${lineSkip}\\setbox0=\\hbox{\\textbf{${num}.}\\enspace}\\hangindent=\\wd0\\hangafter=1\\noindent\\makebox[\\wd0][l]{\\textbf{${num}.}\\enspace}${answer}\\end{minipage}`;
+  }
+  function cellLatex(item) {
+    if (!item) return '';
+    const body = quickAnswerCell(item.q);
+    if (item.span <= 1) return body;
+    return `\\multicolumn{${item.span}}{${spanSpec(item.span)}}{${body}}`;
+  }
+
+  const rows = [];
+  let row = [];
+  let used = 0;
+  for (const q of qs) {
+    const span = quickAnswerSpan(q);
+    if (used > 0 && used + span > MAX_SLOTS) {
+      while (used < MAX_SLOTS) {
+        row.push(null);
+        used += 1;
+      }
+      rows.push(row);
+      row = [];
+      used = 0;
+    }
+    row.push({ q, span });
+    used += span;
+    if (used >= MAX_SLOTS) {
+      rows.push(row);
+      row = [];
+      used = 0;
+    }
+  }
+  if (row.length > 0) {
+    while (used < MAX_SLOTS) {
+      row.push(null);
+      used += 1;
+    }
+    rows.push(row);
+  }
+  const latexRows = rows.map((items) => {
+    const hasTall = items.some((item) => item && quickAnswerHasTallContent(item.q));
+    return items.map(cellLatex).join(' & ') + (hasTall ? ' \\\\[0.78\\baselineskip]' : ' \\\\');
+  });
+  const colSpec = Array.from({ length: MAX_SLOTS }, () => spanSpec(1)).join('');
 
   return [
     '\\clearpage',
@@ -4118,12 +4295,17 @@ function renderQuickAnswerTableLatex(questions) {
     '\\begin{center}',
     '{\\Large\\bfseries 빠른정답}\\par',
     '\\vspace{12pt}',
+    '\\setlength{\\tabcolsep}{2.5pt}',
+    '\\newlength{\\quickanswercellwd}',
     '\\renewcommand{\\arraystretch}{1.3}',
+    '\\begin{minipage}{0.433\\textwidth}',
+    '\\setlength{\\quickanswercellwd}{\\dimexpr\\linewidth/5-2\\tabcolsep\\relax}',
     `\\begin{tabular}{${colSpec}}`,
     '\\hline',
-    rows.join('\n'),
+    latexRows.join('\n'),
     '\\hline',
     '\\end{tabular}',
+    '\\end{minipage}',
     '\\end{center}',
   ].join('\n');
 }

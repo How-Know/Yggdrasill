@@ -499,6 +499,230 @@ function buildClassificationFromDocument(doc) {
   };
 }
 
+const PB_SET_TYPES = new Set(['independent_set', 'dependent_set', 'mixed_set']);
+
+function normalizePbSetType(raw, { hasPdfSource = false, meta = {} } = {}) {
+  const value = normalizeWhitespace(raw);
+  if (PB_SET_TYPES.has(value)) return value;
+  const scope = meta?.textbook_scope && typeof meta.textbook_scope === 'object'
+    ? meta.textbook_scope
+    : {};
+  const subKey = normalizeWhitespace(scope.sub_key || scope.subKey).toUpperCase();
+  if (hasPdfSource && subKey === 'A') return 'independent_set';
+  return 'dependent_set';
+}
+
+function collectSetSubLabels(row) {
+  const meta = row?.meta && typeof row.meta === 'object' ? row.meta : {};
+  const labels = [];
+  const push = (value) => {
+    const text = normalizeWhitespace(value);
+    if (!text) return;
+    const label = /^\(.+\)$/.test(text) ? text : `(${text})`;
+    if (!labels.includes(label)) labels.push(label);
+  };
+  for (const part of Array.isArray(meta.answer_parts) ? meta.answer_parts : []) {
+    push(part?.sub);
+  }
+  for (const part of Array.isArray(meta.score_parts) ? meta.score_parts : []) {
+    push(part?.sub);
+  }
+  const stem = String(row?.stem || '');
+  for (const match of stem.matchAll(/\(([0-9]+)\)/g)) {
+    push(match[1]);
+  }
+  return labels.length > 0 ? labels : [''];
+}
+
+async function reconcileQuestionSetDeliveryUnits({
+  academyId,
+  documentId,
+  rows,
+  hasPdfSource,
+}) {
+  if (!supa || !academyId || !documentId) {
+    return { sets: 0, items: 0, deliveryUnits: 0, skipped: true };
+  }
+  const allRows = Array.isArray(rows) ? rows : [];
+  try {
+    await supa.from('pb_delivery_units').delete().eq('source_document_id', documentId);
+    await supa.from('pb_question_sets').delete().eq('source_document_id', documentId);
+
+    let sets = 0;
+    let items = 0;
+    let deliveryUnits = 0;
+    const deliveryRows = [];
+
+    for (const row of allRows) {
+      const meta = row?.meta && typeof row.meta === 'object' ? row.meta : {};
+      const isSet = meta.is_set_question === true;
+      const questionId = normalizeWhitespace(row?.id || '');
+      const questionNumber = normalizeWhitespace(row?.question_number || '');
+      const questionUid = normalizeWhitespace(row?.question_uid || '');
+      if (!questionId) continue;
+
+      if (!isSet) {
+        deliveryRows.push({
+          academy_id: academyId,
+          source_document_id: documentId,
+          question_id: questionId,
+          delivery_key: `${documentId}:q:${questionId}`,
+          delivery_type: 'single',
+          title: questionNumber,
+          selectable: true,
+          item_refs: [{ question_id: questionId, question_uid: questionUid }],
+          render_policy: { version: 1, mode: 'single' },
+          source_meta: { question_number: questionNumber },
+        });
+        continue;
+      }
+
+      const setModel = meta.set_model && typeof meta.set_model === 'object' ? meta.set_model : {};
+      const setType = normalizePbSetType(setModel.set_type, { hasPdfSource, meta });
+      const setKey = normalizeWhitespace(setModel.set_key || questionNumber || questionId);
+      const { data: setRow, error: setErr } = await supa
+        .from('pb_question_sets')
+        .insert({
+          academy_id: academyId,
+          source_document_id: documentId,
+          set_key: setKey,
+          set_type: setType,
+          common_stem: String(row?.stem || ''),
+          render_policy: {
+            version: 1,
+            mode: setType === 'independent_set'
+              ? 'common_stem_with_selectable_items'
+              : 'bundle_only',
+          },
+          source_meta: {
+            question_id: questionId,
+            question_uid: questionUid,
+            question_number: questionNumber,
+            compatibility_row: true,
+          },
+        })
+        .select('id')
+        .single();
+      if (setErr || !setRow?.id) {
+        throw new Error(`pb_question_set_insert_failed:${setErr?.message || 'no_id'}`);
+      }
+      sets += 1;
+
+      const labels = collectSetSubLabels(row);
+      const itemRows = labels.map((label, idx) => ({
+        academy_id: academyId,
+        set_id: setRow.id,
+        question_id: questionId,
+        question_uid: questionUid || null,
+        sub_label: label,
+        item_order: idx + 1,
+        dependency_group_key: setType === 'independent_set'
+          ? `item:${idx + 1}`
+          : 'bundle:1',
+        item_role: labels.length > 1 ? 'subitem' : 'item',
+        meta: { compatibility_question_number: questionNumber },
+      }));
+      const { data: insertedItems, error: itemErr } = await supa
+        .from('pb_question_set_items')
+        .insert(itemRows)
+        .select('id,sub_label,item_order,dependency_group_key');
+      if (itemErr) {
+        throw new Error(`pb_question_set_items_insert_failed:${itemErr.message}`);
+      }
+      const realItems = Array.isArray(insertedItems) ? insertedItems : [];
+      items += realItems.length;
+
+      if (setType === 'independent_set') {
+        for (const item of realItems) {
+          deliveryRows.push({
+            academy_id: academyId,
+            source_document_id: documentId,
+            set_id: setRow.id,
+            question_id: questionId,
+            delivery_key: `${documentId}:set:${setRow.id}:item:${item.id}`,
+            delivery_type: 'independent_item',
+            title: `${questionNumber}${item.sub_label || ''}`,
+            selectable: true,
+            item_refs: [{
+              set_item_id: item.id,
+              question_id: questionId,
+              question_uid: questionUid,
+              sub_label: item.sub_label,
+            }],
+            render_policy: { version: 1, mode: 'common_stem_plus_item' },
+            source_meta: { set_type: setType, question_number: questionNumber },
+          });
+        }
+      } else if (setType === 'mixed_set') {
+        const byGroup = new Map();
+        for (const item of realItems) {
+          const group = normalizeWhitespace(item.dependency_group_key || 'bundle:1');
+          const bucket = byGroup.get(group) || [];
+          bucket.push(item);
+          byGroup.set(group, bucket);
+        }
+        for (const [group, groupItems] of byGroup.entries()) {
+          deliveryRows.push({
+            academy_id: academyId,
+            source_document_id: documentId,
+            set_id: setRow.id,
+            question_id: questionId,
+            delivery_key: `${documentId}:set:${setRow.id}:group:${group}`,
+            delivery_type: 'mixed_bundle',
+            title: `${questionNumber} ${group}`,
+            selectable: true,
+            item_refs: groupItems.map((item) => ({
+              set_item_id: item.id,
+              question_id: questionId,
+              question_uid: questionUid,
+              sub_label: item.sub_label,
+            })),
+            render_policy: { version: 1, mode: 'common_stem_plus_dependency_group' },
+            source_meta: { set_type: setType, question_number: questionNumber, group },
+          });
+        }
+      } else {
+        deliveryRows.push({
+          academy_id: academyId,
+          source_document_id: documentId,
+          set_id: setRow.id,
+          question_id: questionId,
+          delivery_key: `${documentId}:set:${setRow.id}:bundle`,
+          delivery_type: 'dependent_bundle',
+          title: questionNumber,
+          selectable: true,
+          item_refs: realItems.map((item) => ({
+            set_item_id: item.id,
+            question_id: questionId,
+            question_uid: questionUid,
+            sub_label: item.sub_label,
+          })),
+          render_policy: { version: 1, mode: 'bundle_only' },
+          source_meta: { set_type: setType, question_number: questionNumber },
+        });
+      }
+    }
+
+    if (deliveryRows.length > 0) {
+      const { error: deliveryErr } = await supa
+        .from('pb_delivery_units')
+        .insert(deliveryRows);
+      if (deliveryErr) {
+        throw new Error(`pb_delivery_units_insert_failed:${deliveryErr.message}`);
+      }
+      deliveryUnits = deliveryRows.length;
+    }
+    return { sets, items, deliveryUnits, skipped: false };
+  } catch (err) {
+    const msg = compact(err?.message || err);
+    console.warn('[pb-extract-worker] set_delivery_reconcile_skip', JSON.stringify({
+      documentId,
+      message: msg,
+    }));
+    return { sets: 0, items: 0, deliveryUnits: 0, skipped: true, error: msg };
+  }
+}
+
 function isLikelyKoreanPersonName(value) {
   const input = normalizeWhitespace(value);
   if (!input) return false;
@@ -4956,6 +5180,40 @@ async function processOneJob(job) {
     }
   }
 
+  let setDeliveryStats = { sets: 0, items: 0, deliveryUnits: 0, skipped: true };
+  if (questions.length > 0) {
+    try {
+      const { data: setModelRows, error: setModelErr } = await supa
+        .from('pb_questions')
+        .select('id,question_uid,question_number,stem,meta')
+        .eq('academy_id', job.academy_id)
+        .eq('document_id', job.document_id)
+        .order('source_order', { ascending: true });
+      if (setModelErr) {
+        throw new Error(`set_model_question_fetch_failed:${setModelErr.message}`);
+      }
+      setDeliveryStats = await reconcileQuestionSetDeliveryUnits({
+        academyId: job.academy_id,
+        documentId: job.document_id,
+        rows: setModelRows || [],
+        hasPdfSource,
+      });
+    } catch (err) {
+      const message = compact(err?.message || err);
+      setDeliveryStats = {
+        sets: 0,
+        items: 0,
+        deliveryUnits: 0,
+        skipped: true,
+        error: message,
+      };
+      console.warn('[pb-extract-worker] set_model_sync_skip', JSON.stringify({
+        jobId: job.id,
+        message,
+      }));
+    }
+  }
+
   let previewScreenshotCount = 0;
   let previewScreenshotError = '';
   if (questions.length > 0) {
@@ -5044,6 +5302,7 @@ async function processOneJob(job) {
     sourceLineCount: stats.sourceLineCount,
     segmentedLineCount: stats.segmentedLineCount,
     answerHintCount: Number(stats.answerHintCount || 0),
+    setDelivery: setDeliveryStats,
     scoreHeaderHint: Number(parsed?.hints?.scoreHeaderCount || 0),
     previewLineCount: Number(parsed?.hints?.previewLineCount || 0),
     parseMode,

@@ -8,6 +8,7 @@ import {
 
 const MATH_EXCEPTION_RE = /^[,?.]+$/;
 const BOGAGI_RE = /^<보기>$/;
+const RIGHT_TAIL_MARKER = '[우측꼬리]';
 
 function debugDotHtml() {
   return '<span class="math-debug-dot dot-forced"></span>';
@@ -23,6 +24,26 @@ function spaceMarkerHtml(amount) {
   return `<span class="stem-space" style="display:inline-block;width:${n}em;" aria-hidden="true"></span>`;
 }
 
+function stretchParenthesizedFractionTokens(tokens) {
+  const out = tokens.slice();
+  for (let i = 0; i < out.length; i += 1) {
+    const token = out[i];
+    if (!token || token.type !== 'math' || !/\\(?:frac|dfrac|tfrac)\b/.test(String(token.value || ''))) {
+      continue;
+    }
+    const prev = out[i - 1];
+    const next = out[i + 1];
+    if (!prev || prev.type !== 'text' || !next || next.type !== 'text') continue;
+    if (!/\(\s*$/.test(String(prev.value || '')) || !/^\s*\)/.test(String(next.value || ''))) {
+      continue;
+    }
+    prev.value = String(prev.value).replace(/\(\s*$/, '');
+    next.value = String(next.value).replace(/^\s*\)/, '');
+    token.value = `\\left(${String(token.value).replace(/^\\(?:frac|tfrac|dfrac)\b/, '\\dfrac')}\\right)`;
+  }
+  return out;
+}
+
 /**
  * Render mixed text+math content to HTML.
  *
@@ -33,6 +54,21 @@ function spaceMarkerHtml(amount) {
  */
 export function renderInlineMixedContent(input, mathRenderer, equations, opts) {
   const src = String(input ?? '');
+  if (src.includes(RIGHT_TAIL_MARKER)) {
+    const markerIdx = src.indexOf(RIGHT_TAIL_MARKER);
+    const left = renderInlineMixedContent(src.slice(0, markerIdx), mathRenderer, equations, opts);
+    const right = renderInlineMixedContent(
+      src.slice(markerIdx + RIGHT_TAIL_MARKER.length),
+      mathRenderer,
+      equations,
+      opts,
+    );
+    return {
+      html: '<span style="display:flex;width:100%;align-items:baseline;justify-content:space-between;gap:1em;">'
+        + `<span>${left.html}</span><span>${right.html}</span></span>`,
+      hasFraction: left.hasFraction || right.hasFraction,
+    };
+  }
   // `[공백:N]` 마커를 가장 바깥에서 먼저 분리한다. tokenizeWithEquations 의 text/math
   // 분류에 `[`, `]`, 숫자가 섞이면 오탐이 나므로, 마커 경계를 미리 끊는 게 안전하다.
   const pieces = src.includes('[공백:')
@@ -49,12 +85,13 @@ export function renderInlineMixedContent(input, mathRenderer, equations, opts) {
     for (const t of sub) tokens.push(t);
   }
   if (tokens.length === 0) return { html: '', hasFraction: false };
+  const renderTokens = stretchParenthesizedFractionTokens(tokens);
 
   const showDots = opts?.debugDots === true;
   let hasFraction = false;
   const chunks = [];
 
-  for (const token of tokens) {
+  for (const token of renderTokens) {
     if (token.type === 'newline') {
       chunks.push('<br/>');
       continue;

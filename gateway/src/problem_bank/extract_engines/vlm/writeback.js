@@ -139,6 +139,7 @@ function normalizeBlankFigureMarkers(stem, figures) {
 }
 
 const OBJ_LABELS = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩'];
+const ALLOWED_SET_TYPES = new Set(['independent_set', 'dependent_set', 'mixed_set']);
 
 function stripLatexTextWrapper(value) {
   return String(value || '')
@@ -438,6 +439,12 @@ export function buildRowUpdate(existingRow, vlmQ, opts = {}) {
   const vlmType = deriveQuestionType(vlmQ);
   const existingType = String(existingRow?.question_type || '').trim();
   const isSet = vlmQ.is_set_question === true;
+  const requestedSetType = String(vlmQ?.set_type || '').trim();
+  const setType = ALLOWED_SET_TYPES.has(requestedSetType)
+    ? requestedSetType
+    : isSet
+      ? 'dependent_set'
+      : '';
   const qType = isSet
     ? '주관식'
     : opts.keepTypeFromDb && existingType
@@ -616,6 +623,19 @@ export function buildRowUpdate(existingRow, vlmQ, opts = {}) {
   const newMeta = {
     ...existingMeta,
     is_set_question: isSet || existingMeta.is_set_question === true,
+    ...(isSet
+      ? {
+          set_model: {
+            version: 1,
+            set_type: setType || 'dependent_set',
+            set_key: String(vlmQ?.set_key || vlmQ?.question_number || '').trim(),
+            delivery_policy:
+              setType === 'independent_set'
+                ? 'independent_items_with_common_stem'
+                : 'bundle_only',
+          },
+        }
+      : {}),
     answer_parts: isSet
       ? answerParts.map((p, i) => ({
           sub: String(p.sub ?? i + 1),

@@ -1845,7 +1845,7 @@ class _TextbookUnitAuthoringDialogState
           style: const TextStyle(color: _kText, fontWeight: FontWeight.w800),
         ),
         content: Text(
-          '$detail\n되돌릴 수 없습니다.',
+          '$detail\n대상 소단원: ${focus.subKey}\n되돌릴 수 없습니다.',
           style: const TextStyle(color: _kTextSub, fontSize: 13),
         ),
         actions: [
@@ -1877,7 +1877,10 @@ class _TextbookUnitAuthoringDialogState
         _subStates.remove(_stateKeyFor(focus));
         _manualEdits.remove(_stateKeyFor(focus));
       }
-      _toast('$label 삭제 완료');
+      final affected = result.affectedSubKeys.isEmpty
+          ? focus.subKey
+          : result.affectedSubKeys.join(', ');
+      _toast('$label 삭제 완료 · 대상 $affected');
       if (result.warnings.isNotEmpty) {
         debugPrint('[textbook-stage-delete] warnings: ${result.warnings}');
       }

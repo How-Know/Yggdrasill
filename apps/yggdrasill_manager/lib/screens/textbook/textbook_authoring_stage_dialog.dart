@@ -198,6 +198,7 @@ class _TextbookAuthoringStageDialogState
   PdfDocument? _answerDocument;
   String? _answerLocalPath;
   final _answerViewerController = PdfViewerController();
+  final Map<int, Uint8List> _answerPagePngCache = <int, Uint8List>{};
 
   bool _runningAnswerVlm = false;
   double _answerProgress = 0;
@@ -449,6 +450,7 @@ class _TextbookAuthoringStageDialogState
       setState(() {
         _answerDocument = doc;
         _answerLocalPath = file.path;
+        _answerPagePngCache.clear();
         _loadingAnswerPdf = false;
       });
       return doc;
@@ -574,14 +576,24 @@ class _TextbookAuthoringStageDialogState
           for (final it in res.items) {
             if (it.answerText.trim().isEmpty) continue;
             aggregated.add(it);
+            final numberKey = textbookAnswerNumberKey(it.problemNumber);
             pageByNumber.putIfAbsent(
               it.problemNumber,
               () => (rawPage: res.rawPage, displayPage: res.displayPage),
             );
+            if (numberKey.isNotEmpty) {
+              pageByNumber.putIfAbsent(
+                numberKey,
+                () => (rawPage: res.rawPage, displayPage: res.displayPage),
+              );
+            }
             if (it.isImage && it.bbox != null) {
               final crop = _cropAnswerImage(png, it.bbox!);
               if (crop != null) {
                 imageByNumber.putIfAbsent(it.problemNumber, () => crop);
+                if (numberKey.isNotEmpty) {
+                  imageByNumber.putIfAbsent(numberKey, () => crop);
+                }
               }
             }
           }
@@ -606,7 +618,10 @@ class _TextbookAuthoringStageDialogState
           final cropId = byNumber[entry.key];
           if (cropId == null) continue;
           final vlm = entry.value;
-          final answerPage = pageByNumber[entry.key];
+          final answerPage = pageByNumber[entry.key] ??
+              pageByNumber[textbookAnswerNumberKey(vlm.problemNumber)];
+          final imageCrop = imageByNumber[entry.key] ??
+              imageByNumber[textbookAnswerNumberKey(vlm.problemNumber)];
           _answersByCropId[cropId] = _AnswerDraft(
             cropId: cropId,
             problemNumber: entry.key,
@@ -617,10 +632,10 @@ class _TextbookAuthoringStageDialogState
             source: 'vlm',
             rawPage: answerPage?.rawPage,
             bbox1k: vlm.bbox,
-            answerImageBytes: imageByNumber[entry.key]?.pngBytes,
+            answerImageBytes: imageCrop?.pngBytes,
             answerImageRegion1k: vlm.isImage ? vlm.bbox : null,
-            answerImageWidthPx: imageByNumber[entry.key]?.width,
-            answerImageHeightPx: imageByNumber[entry.key]?.height,
+            answerImageWidthPx: imageCrop?.width,
+            answerImageHeightPx: imageCrop?.height,
             dirty: true,
           );
         }
@@ -850,6 +865,89 @@ class _TextbookAuthoringStageDialogState
       width: cropped.width,
       height: cropped.height,
     );
+  }
+
+  Future<Uint8List?> _answerPagePng(int page) async {
+    final doc = await _ensureAnswerPdf();
+    if (doc == null) return null;
+    if (page < 1 || page > doc.pages.length) return null;
+    final cached = _answerPagePngCache[page];
+    if (cached != null) return cached;
+    final png = await renderPdfPageToPng(
+      document: doc,
+      pageNumber: page,
+      longEdgePx: _kVlmLongEdgePx,
+    );
+    _answerPagePngCache[page] = png;
+    return png;
+  }
+
+  Future<_ImageAnswerCrop?> _cropAnswerImageFromPage({
+    required int page,
+    required List<int> bbox1k,
+  }) async {
+    final png = await _answerPagePng(page);
+    if (png == null) return null;
+    return _cropAnswerImage(png, bbox1k);
+  }
+
+  Future<void> _editAnswerImageRegion(_StageCrop crop) async {
+    final doc = await _ensureAnswerPdf();
+    if (doc == null) return;
+    if (!mounted) return;
+    final existing = _answersByCropId[crop.id];
+    final initialPage = (existing?.rawPage ?? 1).clamp(1, doc.pages.length);
+    final initialBbox = existing?.answerImageRegion1k ??
+        existing?.bbox1k ??
+        const <int>[120, 120, 360, 620];
+    final result = await showDialog<_ManualImageAnswerResult>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => _AnswerImageCropDialog(
+        title: '${crop.problemNumber} 번 그림 정답 영역',
+        pageCount: doc.pages.length,
+        initialPage: initialPage,
+        initialBbox: initialBbox,
+        loadPage: _answerPagePng,
+      ),
+    );
+    if (result == null) return;
+    final cropped = await _cropAnswerImageFromPage(
+      page: result.page,
+      bbox1k: result.bbox1k,
+    );
+    if (cropped == null) {
+      _toast('그림 정답 영역을 크롭하지 못했습니다', error: true);
+      return;
+    }
+    final prevText = (existing?.answerText.trim().isNotEmpty == true
+            ? existing!.answerText.trim()
+            : '[image]')
+        .replaceAll(
+      RegExp(r'(\(\s*image\s*\)|\bimage\b)', caseSensitive: false),
+      '[image]',
+    );
+    final answerText =
+        RegExp(r'\[\s*image\s*\]', caseSensitive: false).hasMatch(prevText)
+            ? prevText
+            : '$prevText [image]'.trim();
+    setState(() {
+      _answersByCropId[crop.id] = _AnswerDraft(
+        cropId: crop.id,
+        problemNumber: crop.problemNumber,
+        kind: 'image',
+        answerText: answerText,
+        answerLatex2d: '',
+        source: 'manual',
+        rawPage: result.page,
+        bbox1k: result.bbox1k,
+        answerImageBytes: cropped.pngBytes,
+        answerImageRegion1k: result.bbox1k,
+        answerImageWidthPx: cropped.width,
+        answerImageHeightPx: cropped.height,
+        dirty: true,
+      );
+    });
   }
 
   // --------------------------------------------------------------- stage 3
@@ -1459,6 +1557,11 @@ class _TextbookAuthoringStageDialogState
             ),
           ),
           IconButton(
+            tooltip: '답지에서 그림/표 정답 영역 지정',
+            onPressed: () => _editAnswerImageRegion(crop),
+            icon: const Icon(Icons.crop_free, size: 14, color: _kWarn),
+          ),
+          IconButton(
             tooltip: '편집',
             onPressed: () => _editAnswerText(crop.id, crop.problemNumber),
             icon: const Icon(Icons.edit, size: 14, color: _kTextSub),
@@ -1509,9 +1612,29 @@ class _TextbookAuthoringStageDialogState
     return out.replaceAll(RegExp(r'\s+'), ' ').trim();
   }
 
+  String _normalizeElasticDelimitersForAnswerPreview(String raw) {
+    return raw.replaceAllMapped(
+      RegExp(r'\\left\s*([\[\]\(\)\{\}\|.])'),
+      (m) {
+        final delimiter = m.group(1) ?? '';
+        if (delimiter == '.') return '';
+        return delimiter;
+      },
+    ).replaceAllMapped(
+      RegExp(r'\\right\s*([\[\]\(\)\{\}\|.])'),
+      (m) {
+        final delimiter = m.group(1) ?? '';
+        if (delimiter == '.') return '';
+        return delimiter;
+      },
+    );
+  }
+
   String _answerPreviewMarkup(String raw) {
-    final normalized = _normalizeCompactFractionsForAnswerPreview(
-      _stripLatexTextWrappersForAnswerPreview(raw),
+    final normalized = _normalizeElasticDelimitersForAnswerPreview(
+      _normalizeCompactFractionsForAnswerPreview(
+        _stripLatexTextWrappersForAnswerPreview(raw),
+      ),
     );
     if (normalized.isEmpty) return '';
     final hasHangul = RegExp(r'[가-힣]').hasMatch(normalized);
@@ -2223,6 +2346,264 @@ class _ImageAnswerCrop {
   final Uint8List pngBytes;
   final int width;
   final int height;
+}
+
+class _ManualImageAnswerResult {
+  const _ManualImageAnswerResult({
+    required this.page,
+    required this.bbox1k,
+  });
+
+  final int page;
+  final List<int> bbox1k;
+}
+
+class _AnswerImageCropDialog extends StatefulWidget {
+  const _AnswerImageCropDialog({
+    required this.title,
+    required this.pageCount,
+    required this.initialPage,
+    required this.initialBbox,
+    required this.loadPage,
+  });
+
+  final String title;
+  final int pageCount;
+  final int initialPage;
+  final List<int> initialBbox;
+  final Future<Uint8List?> Function(int page) loadPage;
+
+  @override
+  State<_AnswerImageCropDialog> createState() => _AnswerImageCropDialogState();
+}
+
+class _AnswerImageCropDialogState extends State<_AnswerImageCropDialog> {
+  late int _page;
+  late List<int> _bbox;
+  Uint8List? _png;
+  Size _imageSize = Size.zero;
+  bool _loading = false;
+  String? _error;
+  Offset? _dragStart;
+
+  @override
+  void initState() {
+    super.initState();
+    _page = widget.initialPage.clamp(1, widget.pageCount).toInt();
+    _bbox = _normalizeBbox(widget.initialBbox);
+    _load();
+  }
+
+  static List<int> _normalizeBbox(List<int> raw) {
+    final box = raw.length == 4 ? raw : const <int>[120, 120, 360, 620];
+    final ymin = box[0].clamp(0, 999).toInt();
+    final xmin = box[1].clamp(0, 999).toInt();
+    final ymax = box[2].clamp(ymin + 1, 1000).toInt();
+    final xmax = box[3].clamp(xmin + 1, 1000).toInt();
+    return [ymin, xmin, ymax, xmax];
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final png = await widget.loadPage(_page);
+      if (!mounted) return;
+      if (png == null) {
+        setState(() {
+          _loading = false;
+          _error = '페이지 이미지를 불러오지 못했습니다';
+        });
+        return;
+      }
+      final decoded = img.decodeImage(png);
+      setState(() {
+        _png = png;
+        _imageSize = decoded == null
+            ? const Size(1, 1)
+            : Size(decoded.width.toDouble(), decoded.height.toDouble());
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = '$e';
+      });
+    }
+  }
+
+  void _setPage(int next) {
+    final clamped = next.clamp(1, widget.pageCount).toInt();
+    if (clamped == _page) return;
+    setState(() => _page = clamped);
+    _load();
+  }
+
+  Rect _rectFor(Size size) {
+    final ymin = _bbox[0] / 1000 * size.height;
+    final xmin = _bbox[1] / 1000 * size.width;
+    final ymax = _bbox[2] / 1000 * size.height;
+    final xmax = _bbox[3] / 1000 * size.width;
+    return Rect.fromLTRB(xmin, ymin, xmax, ymax);
+  }
+
+  List<int> _bboxFromPoints(Offset a, Offset b, Size size) {
+    final left = math.min(a.dx, b.dx).clamp(0.0, size.width);
+    final right = math.max(a.dx, b.dx).clamp(0.0, size.width);
+    final top = math.min(a.dy, b.dy).clamp(0.0, size.height);
+    final bottom = math.max(a.dy, b.dy).clamp(0.0, size.height);
+    final ymin = (top / size.height * 1000).round().clamp(0, 999).toInt();
+    final xmin = (left / size.width * 1000).round().clamp(0, 999).toInt();
+    final ymax =
+        (bottom / size.height * 1000).round().clamp(ymin + 1, 1000).toInt();
+    final xmax =
+        (right / size.width * 1000).round().clamp(xmin + 1, 1000).toInt();
+    return [ymin, xmin, ymax, xmax];
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: _TextbookAuthoringStageDialogState._kPanel,
+      title: Text(
+        widget.title,
+        style: const TextStyle(
+          color: _TextbookAuthoringStageDialogState._kText,
+          fontSize: 14,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+      content: SizedBox(
+        width: 760,
+        height: 560,
+        child: Column(
+          children: [
+            Row(
+              children: [
+                OutlinedButton(
+                  onPressed: _page <= 1 ? null : () => _setPage(_page - 1),
+                  child: const Text('이전'),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  '답지 $_page / ${widget.pageCount} 페이지',
+                  style: const TextStyle(
+                    color: _TextbookAuthoringStageDialogState._kTextSub,
+                    fontSize: 12,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                OutlinedButton(
+                  onPressed: _page >= widget.pageCount
+                      ? null
+                      : () => _setPage(_page + 1),
+                  child: const Text('다음'),
+                ),
+                const Spacer(),
+                const Text(
+                  '이미지/표 영역을 드래그해서 지정하세요',
+                  style: TextStyle(
+                    color: _TextbookAuthoringStageDialogState._kTextSub,
+                    fontSize: 11,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Expanded(
+              child: _loading
+                  ? const Center(
+                      child: CircularProgressIndicator(
+                        color: _TextbookAuthoringStageDialogState._kAccent,
+                      ),
+                    )
+                  : _error != null
+                      ? Center(
+                          child: Text(
+                            _error!,
+                            style: const TextStyle(
+                              color:
+                                  _TextbookAuthoringStageDialogState._kDanger,
+                              fontSize: 12,
+                            ),
+                          ),
+                        )
+                      : _buildImageSelector(),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('취소'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(
+            _ManualImageAnswerResult(page: _page, bbox1k: _bbox),
+          ),
+          style: FilledButton.styleFrom(
+            backgroundColor: _TextbookAuthoringStageDialogState._kAccent,
+          ),
+          child: const Text('영역 적용'),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildImageSelector() {
+    final png = _png;
+    if (png == null || _imageSize.width <= 0 || _imageSize.height <= 0) {
+      return const SizedBox.shrink();
+    }
+    return Center(
+      child: AspectRatio(
+        aspectRatio: _imageSize.width / _imageSize.height,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final size = Size(constraints.maxWidth, constraints.maxHeight);
+            final rect = _rectFor(size);
+            return GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onPanStart: (details) {
+                _dragStart = details.localPosition;
+              },
+              onPanUpdate: (details) {
+                final start = _dragStart;
+                if (start == null) return;
+                setState(() {
+                  _bbox = _bboxFromPoints(start, details.localPosition, size);
+                });
+              },
+              onPanEnd: (_) => _dragStart = null,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  Image.memory(png, fit: BoxFit.fill),
+                  Positioned.fromRect(
+                    rect: rect,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: _TextbookAuthoringStageDialogState._kWarn
+                            .withValues(alpha: 0.14),
+                        border: Border.all(
+                          color: _TextbookAuthoringStageDialogState._kWarn,
+                          width: 2,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
 }
 
 class _SolRefDraft {

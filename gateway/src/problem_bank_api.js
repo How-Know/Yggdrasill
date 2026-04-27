@@ -661,7 +661,7 @@ function normalizeFigureQuality(rawFigureQuality, options = {}) {
   return { targetDpi, minDpi };
 }
 
-const EXPORT_RENDER_CONFIG_VERSION = 'pb_render_v43_bogi_figure_lift_span';
+const EXPORT_RENDER_CONFIG_VERSION = 'pb_render_v55_compact_subanswers';
 const DEFAULT_TITLE_PAGE_TOP_TEXT = '2026학년도 대학수학능력시험 문제지';
 
 const QUESTION_COPY_SELECT_COLUMNS = [
@@ -1751,10 +1751,58 @@ async function createExportJob(body, res) {
   const selectedQuestionUidsRaw = normalizeUuidListOrdered(
     body.selectedQuestionUids || body.selectedQuestionIds,
   );
+  const selectedDeliveryUnitIdsRaw = normalizeUuidListOrdered(
+    body.selectedDeliveryUnitIdsOrdered || body.selectedDeliveryUnitIds,
+  );
   let selectedQuestionUids = selectedQuestionUidsRaw;
   let selectedQuestionIds = [];
   let sourceDocumentIds = [];
-  if (selectedQuestionUidsRaw.length > 0) {
+  if (selectedDeliveryUnitIdsRaw.length > 0) {
+    const { data: unitRows, error: unitErr } = await supa
+      .from('pb_delivery_units')
+      .select('id,source_document_id,question_id')
+      .eq('academy_id', academyId)
+      .in('id', selectedDeliveryUnitIdsRaw);
+    if (unitErr) {
+      sendJson(res, 500, {
+        ok: false,
+        error: `export_delivery_unit_lookup_failed:${unitErr.message}`,
+      });
+      return;
+    }
+    const unitById = new Map((unitRows || []).map((row) => [String(row.id || ''), row]));
+    const orderedUnits = selectedDeliveryUnitIdsRaw.map((id) => unitById.get(id)).filter(Boolean);
+    selectedQuestionIds = Array.from(new Set(
+      orderedUnits.map((row) => String(row?.question_id || '').trim()).filter((id) => isUuid(id)),
+    ));
+    if (selectedQuestionIds.length === 0) {
+      sendJson(res, 400, { ok: false, error: 'selected_delivery_units_invalid' });
+      return;
+    }
+    const { data: selectedRows, error: selectedErr } = await supa
+      .from('pb_questions')
+      .select('id,document_id,question_uid')
+      .eq('academy_id', academyId)
+      .in('id', selectedQuestionIds);
+    if (selectedErr) {
+      sendJson(res, 500, {
+        ok: false,
+        error: `export_delivery_unit_question_lookup_failed:${selectedErr.message}`,
+      });
+      return;
+    }
+    const rowById = new Map((selectedRows || []).map((row) => [String(row.id || ''), row]));
+    selectedQuestionUids = selectedQuestionIds
+      .map((id) => String(rowById.get(id)?.question_uid || '').trim())
+      .filter((uid) => isUuid(uid));
+    const seenDocIds = new Set();
+    for (const unit of orderedUnits) {
+      const docId = String(unit?.source_document_id || '').trim();
+      if (!isUuid(docId) || seenDocIds.has(docId)) continue;
+      seenDocIds.add(docId);
+      sourceDocumentIds.push(docId);
+    }
+  } else if (selectedQuestionUidsRaw.length > 0) {
     const { data: selectedRows, error: selectedErr } = await supa
       .from('pb_questions')
       .select('id,document_id,question_uid')
@@ -1849,6 +1897,7 @@ async function createExportJob(body, res) {
     figureQuality: renderConfig.figureQuality,
     selectedQuestionUidsOrdered: renderConfig.selectedQuestionUidsOrdered,
     selectedQuestionIdsOrdered: renderConfig.selectedQuestionUidsOrdered,
+    selectedDeliveryUnitIdsOrdered: selectedDeliveryUnitIdsRaw,
     questionModeByQuestionUid: renderConfig.questionModeByQuestionUid,
     questionModeByQuestionId: renderConfig.questionModeByQuestionUid,
     mathEngine: renderConfig.mathEngine,
@@ -1887,6 +1936,7 @@ async function createExportJob(body, res) {
     font: renderConfig.font,
     selectedQuestionUidsOrdered: renderConfig.selectedQuestionUidsOrdered,
     selectedQuestionIdsOrdered: renderConfig.selectedQuestionUidsOrdered,
+    selectedDeliveryUnitIdsOrdered: selectedDeliveryUnitIdsRaw,
     questionModeByQuestionUid: renderConfig.questionModeByQuestionUid,
     questionModeByQuestionId: renderConfig.questionModeByQuestionUid,
     mathEngine: renderConfig.mathEngine,
@@ -3117,9 +3167,41 @@ async function listQuestions(url, res) {
     return;
   }
 
+  let questions = data || [];
+  const includeDeliveryUnits =
+    String(url.searchParams.get('include_delivery_units') || '').trim() === '1' ||
+    String(url.searchParams.get('includeDeliveryUnits') || '').trim() === '1';
+  if (includeDeliveryUnits && questions.length > 0) {
+    try {
+      let unitQ = supa
+        .from('pb_delivery_units')
+        .select('id,source_document_id,set_id,question_id,delivery_key,delivery_type,title,selectable,item_refs,render_policy,source_meta')
+        .eq('academy_id', academyId);
+      if (documentId) unitQ = unitQ.eq('source_document_id', documentId);
+      else unitQ = unitQ.in('question_id', questions.map((qRow) => qRow.id).filter(Boolean));
+      const { data: units, error: unitErr } = await unitQ;
+      if (!unitErr && Array.isArray(units) && units.length > 0) {
+        const byQuestion = new Map();
+        for (const unit of units) {
+          const qid = String(unit?.question_id || '').trim();
+          if (!qid) continue;
+          const bucket = byQuestion.get(qid) || [];
+          bucket.push(unit);
+          byQuestion.set(qid, bucket);
+        }
+        questions = questions.map((qRow) => ({
+          ...qRow,
+          delivery_units: byQuestion.get(String(qRow.id || '').trim()) || [],
+        }));
+      }
+    } catch (_) {
+      // Delivery units are an additive model; never fail the legacy question list.
+    }
+  }
+
   sendJson(res, 200, {
     ok: true,
-    questions: data || [],
+    questions,
     paging: { offset, limit },
   });
 }
@@ -5302,7 +5384,7 @@ async function handleTextbookStageDelete(body, res) {
   try {
     const { data: crops, error: cropErr } = await supa
       .from('textbook_problem_crops')
-      .select('id,storage_bucket,storage_key')
+      .select('id,storage_bucket,storage_key,big_order,mid_order,sub_key')
       .eq('academy_id', academyId)
       .eq('book_id', bookId)
       .eq('grade_label', gradeLabel)
@@ -5311,9 +5393,31 @@ async function handleTextbookStageDelete(body, res) {
       .eq('sub_key', scope.sub_key);
     if (cropErr) throw new Error(`stage_delete_crops_lookup_failed: ${cropErr.message || cropErr}`);
     const cropRows = Array.isArray(crops) ? crops : [];
+    const affectedSubKeys = Array.from(
+      new Set(cropRows.map((r) => String(r?.sub_key || '').trim()).filter(Boolean)),
+    );
+    const expectedSubKey = String(scope.sub_key || '').trim();
+    if (affectedSubKeys.some((k) => k !== expectedSubKey)) {
+      sendJson(res, 409, {
+        ok: false,
+        error: 'stage_delete_scope_mismatch',
+        requested_scope: scope,
+        affected_sub_keys: affectedSubKeys,
+        removed,
+        warnings,
+      });
+      return;
+    }
     const cropIds = cropRows.map((r) => String(r?.id || '').trim()).filter(Boolean);
     if (cropIds.length === 0) {
-      sendJson(res, 200, { ok: true, stage, removed, warnings });
+      sendJson(res, 200, {
+        ok: true,
+        stage,
+        scope,
+        affected_sub_keys: [],
+        removed,
+        warnings,
+      });
       return;
     }
 
@@ -5402,7 +5506,14 @@ async function handleTextbookStageDelete(body, res) {
       removed.crops = Array.isArray(deletedCrops) ? deletedCrops.length : 0;
     }
 
-    sendJson(res, 200, { ok: true, stage, removed, warnings });
+    sendJson(res, 200, {
+      ok: true,
+      stage,
+      scope,
+      affected_sub_keys: affectedSubKeys,
+      removed,
+      warnings,
+    });
   } catch (err) {
     sendJson(res, 500, {
       ok: false,

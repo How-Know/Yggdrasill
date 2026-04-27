@@ -55,7 +55,7 @@ const FONT_PATH_QNUM =
   process.env.PB_PDF_FONT_QNUM_PATH || '';
 const FONT_PATH_SUBJECT =
   process.env.PB_PDF_FONT_SUBJECT_PATH || '';
-const RENDER_CONFIG_VERSION = 'pb_render_v43_bogi_figure_lift_span';
+const RENDER_CONFIG_VERSION = 'pb_render_v55_compact_subanswers';
 const PREVIEW_THUMB_BUCKET = process.env.PB_PREVIEW_THUMB_BUCKET || 'problem-previews';
 const PREVIEW_THUMB_WIDTH_PX = Math.max(
   420,
@@ -3732,17 +3732,41 @@ function drawExplanationPage({ pdfDoc, fonts, layout, questions, paperLabel }) {
 async function fetchQuestionsForJob(job, renderConfig) {
   const academyId = String(job.academy_id || '').trim();
   const documentId = String(job.document_id || '').trim();
+  const options = job.options && typeof job.options === 'object' ? job.options : {};
+  const selectedDeliveryUnitIds = Array.isArray(renderConfig?.selectedDeliveryUnitIdsOrdered)
+    ? renderConfig.selectedDeliveryUnitIdsOrdered.map((e) => String(e).trim()).filter(Boolean)
+    : (Array.isArray(options.selectedDeliveryUnitIdsOrdered)
+      ? options.selectedDeliveryUnitIdsOrdered.map((e) => String(e).trim()).filter(Boolean)
+      : []);
+  let deliveryUnits = [];
+  let deliveryQuestionIds = [];
+  if (selectedDeliveryUnitIds.length > 0) {
+    const { data: unitRows, error: unitErr } = await supa
+      .from('pb_delivery_units')
+      .select('id,question_id,set_id,delivery_key,delivery_type,title,selectable,item_refs,render_policy,source_meta')
+      .eq('academy_id', academyId)
+      .in('id', selectedDeliveryUnitIds);
+    if (unitErr) {
+      throw new Error(`delivery_unit_fetch_failed:${unitErr.message}`);
+    }
+    const byId = new Map((unitRows || []).map((row) => [String(row.id || ''), row]));
+    deliveryUnits = selectedDeliveryUnitIds.map((id) => byId.get(id)).filter(Boolean);
+    deliveryQuestionIds = Array.from(new Set(
+      deliveryUnits
+        .map((unit) => String(unit.question_id || '').trim())
+        .filter(Boolean),
+    ));
+  }
   const selectedUids = Array.isArray(renderConfig?.selectedQuestionUidsOrdered)
     ? renderConfig.selectedQuestionUidsOrdered
     : (Array.isArray(renderConfig?.selectedQuestionIdsOrdered)
       ? renderConfig.selectedQuestionIdsOrdered
-      : (Array.isArray(job?.options?.selectedQuestionUidsOrdered)
-        ? job.options.selectedQuestionUidsOrdered
+      : (Array.isArray(options.selectedQuestionUidsOrdered)
+        ? options.selectedQuestionUidsOrdered
         : (Array.isArray(job.selected_question_ids)
           ? job.selected_question_ids.map((e) => String(e).trim()).filter((e) => e.length > 0)
           : [])));
   const selectedUidSet = new Set(selectedUids);
-  const options = job.options && typeof job.options === 'object' ? job.options : {};
   const sourceDocumentIds = Array.isArray(options.sourceDocumentIds)
     ? options.sourceDocumentIds.map((e) => String(e).trim()).filter((e) => e.length > 0)
     : [];
@@ -3754,7 +3778,9 @@ async function fetchQuestionsForJob(job, renderConfig) {
     )
     .eq('academy_id', academyId);
 
-  if (selectedUidSet.size > 0) {
+  if (deliveryQuestionIds.length > 0) {
+    query = query.in('id', deliveryQuestionIds);
+  } else if (selectedUidSet.size > 0) {
     query = query.in('question_uid', Array.from(selectedUidSet));
   } else {
     query = query.eq('document_id', documentId).eq('is_checked', true);
@@ -3810,6 +3836,42 @@ async function fetchQuestionsForJob(job, renderConfig) {
   }));
 
   const missingQuestionUids = [];
+  if (deliveryUnits.length > 0) {
+    const byQuestionId = new Map(rows.map((row) => [row.id, row]));
+    const expanded = [];
+    const missingUnitIds = [];
+    for (const unit of deliveryUnits) {
+      const row = byQuestionId.get(String(unit.question_id || '').trim());
+      if (!row) {
+        missingUnitIds.push(String(unit.id || ''));
+        continue;
+      }
+      expanded.push({
+        ...row,
+        meta: {
+          ...(row.meta || {}),
+          delivery_unit: {
+            id: String(unit.id || ''),
+            set_id: String(unit.set_id || ''),
+            delivery_key: String(unit.delivery_key || ''),
+            delivery_type: String(unit.delivery_type || ''),
+            title: String(unit.title || ''),
+            item_refs: Array.isArray(unit.item_refs) ? unit.item_refs : [],
+            render_policy:
+              unit.render_policy && typeof unit.render_policy === 'object'
+                ? unit.render_policy
+                : {},
+            source_meta:
+              unit.source_meta && typeof unit.source_meta === 'object'
+                ? unit.source_meta
+                : {},
+          },
+        },
+      });
+    }
+    return { rows: expanded, missingQuestionUids: missingUnitIds };
+  }
+
   if (selectedUidSet.size > 0) {
     const fetchedUidSet = new Set(
       rows.map((row) => String(row.question_uid || '').trim()).filter((uid) => uid.length > 0),

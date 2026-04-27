@@ -285,6 +285,8 @@ export function normalizeMathLatex(value) {
     .replace(/≤/g, '\\le ')
     .replace(/≥/g, '\\ge ')
     .replace(/≠/g, '\\ne ')
+    .replace(/∥/g, '\\mathbin{/\\mkern-2mu/}')
+    .replace(/\\parallel(?![a-zA-Z])/g, '\\mathbin{/\\mkern-2mu/}')
     .replace(/π/g, '\\pi ')
     .replace(/\\left\s*\{/g, '\\left\\{')
     .replace(/\\right\s*\}/g, '\\right\\}')
@@ -436,6 +438,13 @@ function tokenizeFallback(src) {
     const line = lines[li];
     if (!line) continue;
     const trimmed = line.trim();
+    if (/[가-힣ㄱ-ㅎㅏ-ㅣ]/.test(trimmed) && looksLikeLatex(trimmed)) {
+      const mixed = tokenizeMixedTextLatexLine(line);
+      if (mixed.some((token) => token.type === 'math')) {
+        tokens.push(...mixed);
+        continue;
+      }
+    }
     if (looksLikeLatex(trimmed)) {
       tokens.push({ type: 'math', value: trimmed });
     } else {
@@ -452,4 +461,73 @@ function looksLikeLatex(text) {
   if (/_{/.test(text)) return true;
   if (/\\[a-zA-Z]+/.test(text)) return true;
   return false;
+}
+
+function tokenizeMixedTextLatexLine(line) {
+  const src = String(line || '');
+  const tokens = [];
+  let last = 0;
+  let i = 0;
+  while (i < src.length) {
+    if (src[i] !== '\\') {
+      i += 1;
+      continue;
+    }
+    const end = consumeLatexExpression(src, i);
+    if (end <= i) {
+      i += 1;
+      continue;
+    }
+    if (i > last) tokens.push({ type: 'text', value: src.slice(last, i) });
+    tokens.push({ type: 'math', value: src.slice(i, end) });
+    i = end;
+    last = end;
+  }
+  if (last < src.length) tokens.push({ type: 'text', value: src.slice(last) });
+  return tokens.length > 0 ? tokens : [{ type: 'text', value: src }];
+}
+
+function consumeLatexExpression(src, start) {
+  const cmd = src.slice(start).match(/^\\([a-zA-Z]+)/);
+  if (!cmd) return -1;
+  const name = cmd[1];
+  let pos = start + cmd[0].length;
+  const skipSpaces = () => {
+    while (pos < src.length && /\s/.test(src[pos])) pos += 1;
+  };
+  const consumeGroup = () => {
+    skipSpaces();
+    if (src[pos] !== '{') return false;
+    let depth = 0;
+    while (pos < src.length) {
+      const ch = src[pos];
+      if (ch === '\\') {
+        pos += 2;
+        continue;
+      }
+      if (ch === '{') depth += 1;
+      if (ch === '}') {
+        depth -= 1;
+        pos += 1;
+        if (depth === 0) return true;
+        continue;
+      }
+      pos += 1;
+    }
+    return false;
+  };
+
+  if (name === 'frac' || name === 'dfrac' || name === 'tfrac') {
+    return consumeGroup() && consumeGroup() ? pos : -1;
+  }
+  if (name === 'sqrt' || name === 'overline' || name === 'underline') {
+    return consumeGroup() ? pos : -1;
+  }
+  if (name === 'text' || name === 'mathrm') {
+    return consumeGroup() ? pos : -1;
+  }
+  return ['times', 'div', 'cdot', 'le', 'leq', 'ge', 'geq', 'ne', 'neq', 'pi']
+    .includes(name)
+    ? pos
+    : -1;
 }

@@ -218,6 +218,25 @@ function normalizeAnswerText(input) {
     .trim();
 }
 
+function normalizeAnswerAssets(rawAssets) {
+  if (!Array.isArray(rawAssets)) return [];
+  return rawAssets
+    .map((asset) => {
+      const bbox = parseBbox4(asset?.bbox);
+      if (!bbox) return null;
+      const assetTypeRaw = String(asset?.asset_type || 'image').trim().toLowerCase();
+      const assetType = ['image', 'table', 'grid', 'graph'].includes(assetTypeRaw)
+        ? assetTypeRaw
+        : 'image';
+      return {
+        marker: String(asset?.marker || '[image]').trim() || '[image]',
+        asset_type: assetType,
+        bbox,
+      };
+    })
+    .filter(Boolean);
+}
+
 export function normalizeAnswerResult(parsedJson) {
   const out = { items: [], notes: '' };
   if (!parsedJson || typeof parsedJson !== 'object') return out;
@@ -237,26 +256,31 @@ export function normalizeAnswerResult(parsedJson) {
       }
     }
     const rawAnswerLatex2d = normalizeAnswerText(raw.answer_latex_2d);
+    const answerAssets = normalizeAnswerAssets(raw.answer_assets);
+    const generatedTableAnswer = /\\begin\{tabular\}|\\hline|\[표시작\]|\[표\]/i.test(
+      `${rawAnswerText} ${rawAnswerLatex2d}`,
+    );
     const imageMarker = /(?:\[\s*image\s*\]|\(\s*image\s*\)|\bimage\b)/i.test(
       `${rawAnswerText} ${rawAnswerLatex2d}`,
     );
-    const kind = kindRaw === 'image' || imageMarker
+    const kind = kindRaw === 'image' || imageMarker || answerAssets.length > 0 || generatedTableAnswer
       ? 'image'
       : ALLOWED_KINDS.has(kindRaw)
         ? kindRaw
         : 'subjective';
     const answerText =
       kind === 'image'
-        ? rawAnswerText || '[image]'
+        ? (imageMarker ? rawAnswerText : `${rawAnswerText} [image]`.trim()) || '[image]'
         : rawAnswerText;
     const answerLatex2d = rawAnswerLatex2d;
-    const bbox = parseBbox4(raw.bbox);
+    const bbox = parseBbox4(raw.bbox) || answerAssets[0]?.bbox || null;
     out.items.push({
       problem_number: problemNumber,
       kind,
       answer_text: answerText,
       answer_latex_2d: answerLatex2d,
       bbox,
+      answer_assets: answerAssets,
     });
   }
   return out;

@@ -107,7 +107,11 @@ function buildSingleFigureHtml(url, layoutItem) {
   const position = layoutItem?.position || 'below-stem';
   const posClass = `figure-pos-${position}`;
   const anchorClass = `figure-anchor-${anchor}`;
-  const widthStyle = w ? `width:${w}em;max-width:100%;` : 'max-width:100%;';
+  const offsetX = Number.isFinite(layoutItem?.offsetXEm) ? layoutItem.offsetXEm : 0;
+  const offsetStyle = Math.abs(offsetX) > 1e-3 ? `transform:translateX(${offsetX}em);` : '';
+  const widthStyle = w
+    ? `width:${w}em;max-width:100%;${offsetStyle}`
+    : `max-width:100%;${offsetStyle}`;
   return `<div class="figure-inline-block ${posClass} ${anchorClass}">`
     + `<img class="figure-img" src="${url}" style="${widthStyle}" />`
     + `</div>`;
@@ -120,7 +124,11 @@ function buildGroupFigureHtml(members, dataUrls, layoutItems, gapEm) {
       if (!url) return '';
       const item = layoutItems ? layoutItems[idx] : null;
       const w = item?.widthEm;
-      const style = w ? `flex:0 0 ${w}em;max-width:${w}em;` : '';
+      const offsetX = Number.isFinite(item?.offsetXEm) ? item.offsetXEm : 0;
+      const offsetStyle = Math.abs(offsetX) > 1e-3
+        ? `transform:translateX(${offsetX}em);`
+        : '';
+      const style = w ? `flex:0 0 ${w}em;max-width:${w}em;${offsetStyle}` : offsetStyle;
       return `<div class="figure-layout-item" style="${style}">`
         + `<img class="figure-img" src="${url}" />`
         + `</div>`;
@@ -656,7 +664,11 @@ function renderFigures(question, { stemSizePt = 11, skipCount = 0 } = {}) {
     const innerHtml = memberEntries
       .map((e) => {
         const w = e.item.widthEm;
-        return `<div class="figure-layout-item" style="flex:0 0 ${w}em;max-width:${w}em;">`
+        const offsetX = Number.isFinite(e.item.offsetXEm) ? e.item.offsetXEm : 0;
+        const offsetStyle = Math.abs(offsetX) > 1e-3
+          ? `transform:translateX(${offsetX}em);`
+          : '';
+        return `<div class="figure-layout-item" style="flex:0 0 ${w}em;max-width:${w}em;${offsetStyle}">`
           + `<img class="figure-img" src="${e.url}" />`
           + `</div>`;
       })
@@ -671,7 +683,9 @@ function renderFigures(question, { stemSizePt = 11, skipCount = 0 } = {}) {
     const { url, item } = entry;
     const posClass = `figure-pos-${item.position}`;
     const anchorClass = `figure-anchor-${item.anchor}`;
-    const widthStyle = `width:${item.widthEm}em;max-width:100%;`;
+    const offsetX = Number.isFinite(item.offsetXEm) ? item.offsetXEm : 0;
+    const offsetStyle = Math.abs(offsetX) > 1e-3 ? `transform:translateX(${offsetX}em);` : '';
+    const widthStyle = `width:${item.widthEm}em;max-width:100%;${offsetStyle}`;
     parts.push(
       `<div class="figure-container ${posClass} ${anchorClass}">`
       + `<img class="figure-img" src="${url}" style="${widthStyle}" />`

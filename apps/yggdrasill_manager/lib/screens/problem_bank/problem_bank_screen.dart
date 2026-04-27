@@ -772,6 +772,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     ProblemBankQuestion q,
     Map<String, double> widthEmMap, {
     Map<String, String>? positionMap,
+    Map<String, double>? offsetXMap,
     Set<String>? horizontalPairKeys,
     List<List<String>>? horizontalGroups,
   }) {
@@ -783,12 +784,13 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       if (key.isEmpty) continue;
       final wEm = e.value.clamp(_figureWidthEmMin, _figureWidthEmMax);
       final pos = positionMap?[key] ?? 'below-stem';
+      final offsetX = (offsetXMap?[key] ?? 0.0).clamp(-8.0, 8.0).toDouble();
       items.add(<String, dynamic>{
         'assetKey': key,
         'widthEm': (wEm * 10).roundToDouble() / 10.0,
         'position': pos,
         'anchor': 'center',
-        'offsetXEm': 0,
+        'offsetXEm': (offsetX * 10).roundToDouble() / 10.0,
         'offsetYEm': 0,
       });
     }
@@ -4964,6 +4966,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         .replaceAll('−', '-')
         .replaceAll('≤', r'\le ')
         .replaceAll('≥', r'\ge ')
+        .replaceAll('∥', r'\mathbin{/\mkern-2mu/}')
         // 유니코드 단일 분수 문자도 LaTeX 분수로 통일
         .replaceAll('¼', r'\frac{1}{4}')
         .replaceAll('½', r'\frac{1}{2}')
@@ -5002,6 +5005,8 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         .replaceAll(RegExp(r'\bdiv\b', caseSensitive: false), r'\div ')
         .replaceAll(RegExp(r'\ble\b', caseSensitive: false), r'\le ')
         .replaceAll(RegExp(r'\bge\b', caseSensitive: false), r'\ge ')
+        .replaceAll(
+            RegExp(r'\\parallel(?![a-zA-Z])'), r'\mathbin{/\mkern-2mu/}')
         .replaceAll(RegExp(r'\bRARROW\b'), r'\Rightarrow ')
         .replaceAll(RegExp(r'\bLARROW\b'), r'\Leftarrow ')
         .replaceAll(RegExp(r'\bLRARROW\b'), r'\Leftrightarrow ')
@@ -5073,7 +5078,25 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     if (leftCount != rightCount) {
       out = out.replaceAll(r'\left', '').replaceAll(r'\right', '');
     }
-    return out.trim();
+    return _normalizeElasticDelimitersForFlutter(out).trim();
+  }
+
+  String _normalizeElasticDelimitersForFlutter(String raw) {
+    return raw.replaceAllMapped(
+      RegExp(r'\\left\s*([\[\]\(\)\{\}\|.])'),
+      (m) {
+        final delimiter = m.group(1) ?? '';
+        if (delimiter == '.') return '';
+        return delimiter;
+      },
+    ).replaceAllMapped(
+      RegExp(r'\\right\s*([\[\]\(\)\{\}\|.])'),
+      (m) {
+        final delimiter = m.group(1) ?? '';
+        if (delimiter == '.') return '';
+        return delimiter;
+      },
+    );
   }
 
   String _balanceCurlyBracesForPreview(String raw) {
@@ -5261,13 +5284,80 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     return tokenized.join(' ');
   }
 
+  static final RegExp _previewTextFractionRegex = RegExp(
+    r'\(?\\(?:dfrac|tfrac|frac)\s*\{\s*(?:\\(?:text|mathrm)\s*\{[^{}]+\}|[^{}]+)\s*\}\s*\{\s*(?:\\(?:text|mathrm)\s*\{[^{}]+\}|[^{}]+)\s*\}\s*\)?',
+  );
+
+  String _preserveKoreanSentenceSpacingForPreview(String raw) {
+    return raw.replaceAllMapped(
+      RegExp(r'([가-힣])([.!?])\s*(?=[가-힣])'),
+      (m) => '${m.group(1)}${m.group(2)}\u00A0',
+    );
+  }
+
+  String _stretchParenthesizedFractionForPreview(String raw) {
+    final input = raw.trim();
+    final hasParens = input.startsWith('(') && input.endsWith(')');
+    final body =
+        hasParens ? input.substring(1, input.length - 1).trim() : input;
+    final boosted = body.replaceFirst(
+      RegExp(r'^\\(?:dfrac|tfrac|frac)\b'),
+      r'\dfrac',
+    );
+    if (!hasParens) return boosted;
+    return '\\left($boosted\\right)';
+  }
+
   String _toPreviewMathMarkup(
     String raw, {
     bool forceMathTokenWrap = false,
     bool compactFractions = true,
   }) {
-    final input = raw;
+    final input = _preserveKoreanSentenceSpacingForPreview(raw);
     if (input.trim().isEmpty) return '';
+    final protected = StringBuffer();
+    var protectedCursor = 0;
+    var hasProtectedFraction = false;
+    for (final match in _previewTextFractionRegex.allMatches(input)) {
+      if (match.start > protectedCursor) {
+        protected.write(_toPreviewMathMarkupCore(
+          input.substring(protectedCursor, match.start),
+          forceMathTokenWrap: forceMathTokenWrap,
+          compactFractions: compactFractions,
+        ));
+      }
+      final fraction = match.group(0) ?? '';
+      final hasKorean = RegExp(r'[가-힣]').hasMatch(fraction);
+      _appendPreviewMathToken(
+        protected,
+        _stretchParenthesizedFractionForPreview(fraction),
+        compactFractions: hasKorean ? false : compactFractions,
+      );
+      protectedCursor = match.end;
+      hasProtectedFraction = true;
+    }
+    if (hasProtectedFraction) {
+      if (protectedCursor < input.length) {
+        protected.write(_toPreviewMathMarkupCore(
+          input.substring(protectedCursor),
+          forceMathTokenWrap: forceMathTokenWrap,
+          compactFractions: compactFractions,
+        ));
+      }
+      return protected.toString();
+    }
+    return _toPreviewMathMarkupCore(
+      input,
+      forceMathTokenWrap: forceMathTokenWrap,
+      compactFractions: compactFractions,
+    );
+  }
+
+  String _toPreviewMathMarkupCore(
+    String input, {
+    required bool forceMathTokenWrap,
+    required bool compactFractions,
+  }) {
     final buffer = StringBuffer();
     int lastIndex = 0;
     final nonKoreanSegments = RegExp(r'[^가-힣]+');
@@ -5897,6 +5987,24 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     return '2';
   }
 
+  Map<String, Map<String, dynamic>> _figureLayoutItemsByKey(
+      Map<String, dynamic> meta) {
+    final raw = meta['figure_layout'];
+    final layout = raw is Map ? raw : const <String, dynamic>{};
+    final items = layout['items'];
+    if (items is! List) return const <String, Map<String, dynamic>>{};
+    final out = <String, Map<String, dynamic>>{};
+    for (final item in items) {
+      if (item is! Map) continue;
+      final mapped = Map<String, dynamic>.from(
+        item.map((key, value) => MapEntry('$key', value)),
+      );
+      final key = '${mapped['assetKey'] ?? ''}'.trim();
+      if (key.isNotEmpty) out[key] = mapped;
+    }
+    return out;
+  }
+
   void _writeImageChoiceRowsMeta(Map<String, dynamic> meta, String rows) {
     final safeRows = rows == '3' ? '3' : '2';
     meta['is_image_choice_question'] = true;
@@ -5961,7 +6069,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     return List<double>.filled(count, 1.0, growable: false);
   }
 
-  static final _structuralMarkerRegex = RegExp(r'\[(박스시작|박스끝|문단)\]');
+  static final _structuralMarkerRegex = RegExp(r'\[(박스시작|박스끝|문단|우측꼬리)\]');
 
   List<String> _viewBlockPreviewLines(ProblemBankQuestion q, {int max = 6}) {
     final normalizedStem = _stripPreviewStemDecorations(
@@ -8268,6 +8376,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     Map<String, double> draftMap,
     Set<String> selectedPairKeys, {
     Map<String, String>? positionMap,
+    Map<String, double>? offsetXMap,
     List<List<String>>? horizontalGroups,
     Map<String, TableScaleValue>? tableScales,
     TableScaleValue? tableScaleDefault,
@@ -8299,12 +8408,13 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       if (key.isEmpty) continue;
       final wEm = e.value.clamp(_figureWidthEmMin, _figureWidthEmMax);
       final pos = positionMap?[key] ?? 'below-stem';
+      final offsetX = (offsetXMap?[key] ?? 0.0).clamp(-8.0, 8.0).toDouble();
       items.add(<String, dynamic>{
         'assetKey': key,
         'widthEm': (wEm * 10).roundToDouble() / 10.0,
         'position': pos,
         'anchor': 'center',
-        'offsetXEm': 0,
+        'offsetXEm': (offsetX * 10).roundToDouble() / 10.0,
         'offsetYEm': 0,
       });
     }
@@ -8381,7 +8491,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     if (!mounted) return;
     final screen = MediaQuery.sizeOf(context);
     final isImageChoice = _isImageChoiceQuestion(q);
-    final hasFigures = q.figureRefs.isNotEmpty;
+    final hasFigures = !isImageChoice && q.figureRefs.isNotEmpty;
     final tableEntries = _parseTableEntries(q);
     final hasTables = tableEntries.isNotEmpty;
     final answerFigureAssets = _orderedAnswerFigureAssetsOf(q);
@@ -8404,6 +8514,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     final figureData = hasFigures ? _prepareFigureScaleData(q) : null;
     final draftMap = figureData?.draftMap;
     final positionMap = figureData?.positionMap;
+    final offsetXMap = figureData?.offsetXMap;
     final selectedPairKeys = figureData?.selectedPairKeys;
     // 3개+ 그룹까지 지원하는 편집 상태. 초기값은 _prepareFigureScaleData 에서 해석한 그룹.
     final selectedGroups = <List<String>>[
@@ -8437,6 +8548,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                       draftMap ?? const <String, double>{},
                       selectedPairKeys ?? const <String>{},
                       positionMap: positionMap,
+                      offsetXMap: offsetXMap,
                       horizontalGroups: selectedGroups,
                       tableScales: hasTables ? tableScaleDrafts : null,
                       tableScaleDefault:
@@ -8462,6 +8574,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
               if (!hasFigures ||
                   draftMap == null ||
                   positionMap == null ||
+                  offsetXMap == null ||
                   selectedPairKeys == null) {
                 return;
               }
@@ -8469,6 +8582,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                 q,
                 Map<String, double>.from(draftMap),
                 positionMap: Map<String, String>.from(positionMap),
+                offsetXMap: Map<String, double>.from(offsetXMap),
                 horizontalGroups:
                     selectedGroups.map((g) => List<String>.from(g)).toList(),
               );
@@ -8595,6 +8709,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                       _buildFigureEditSection(
                         draftMap: draftMap!,
                         positionMap: positionMap!,
+                        offsetXMap: offsetXMap!,
                         selectedPairKeys: selectedPairKeys!,
                         selectedGroups: selectedGroups,
                         figureData: figureData!,
@@ -8826,11 +8941,13 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   Widget _buildFigureEditSection({
     required Map<String, double> draftMap,
     required Map<String, String> positionMap,
+    required Map<String, double> offsetXMap,
     required Set<String> selectedPairKeys,
     required List<List<String>> selectedGroups,
     required ({
       Map<String, double> draftMap,
       Map<String, String> positionMap,
+      Map<String, double> offsetXMap,
       Map<String, String> labels,
       Map<String, String> previewUrls,
       List<String> candidatePairKeys,
@@ -8874,6 +8991,9 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                     for (final key in positionMap.keys) {
                       positionMap[key] = 'below-stem';
                     }
+                    for (final key in offsetXMap.keys) {
+                      offsetXMap[key] = 0.0;
+                    }
                     selectedPairKeys.clear();
                     selectedGroups.clear();
                   });
@@ -8890,6 +9010,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           ..._buildFigureScaleSliders(
             draftMap: draftMap,
             positionMap: positionMap,
+            offsetXMap: offsetXMap,
             labels: figureData.labels,
             previewUrls: figureData.previewUrls,
             setLocalState: setLocalState,
@@ -9420,6 +9541,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   ({
     Map<String, double> draftMap,
     Map<String, String> positionMap,
+    Map<String, double> offsetXMap,
     Map<String, String> labels,
     Map<String, String> previewUrls,
     List<String> candidatePairKeys,
@@ -9433,9 +9555,11 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
         assets.isNotEmpty ? assets.length : math.max(1, q.figureRefs.length);
 
     final existingLayout = _parseFigureLayout(q);
+    final existingItemsByKey = _figureLayoutItemsByKey(q.meta);
     final scaleMap = _figureRenderScaleMapOf(q);
     final draftMap = <String, double>{};
     final positionMap = <String, String>{};
+    final offsetXMap = <String, double>{};
     final labels = <String, String>{};
     final previewUrls = <String, String>{};
 
@@ -9450,24 +9574,31 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
 
       if (existingLayout != null) {
         final layoutItem = (existingLayout['items'] as List?)
-            ?.cast<Map<String, dynamic>>()
-            .where((it) => it['assetKey'] == key)
-            .firstOrNull;
+                ?.cast<Map<String, dynamic>>()
+                .where((it) => it['assetKey'] == key)
+                .firstOrNull ??
+            existingItemsByKey['idx:${i + 1}'] ??
+            existingItemsByKey['ord:${i + 1}'];
         if (layoutItem != null) {
           draftMap[key] = (layoutItem['widthEm'] as num?)?.toDouble() ??
               _figureWidthEmDefault;
           positionMap[key] = '${layoutItem['position'] ?? 'below-stem'}'.trim();
+          final rawOffsetX =
+              double.tryParse('${layoutItem['offsetXEm'] ?? ''}');
+          offsetXMap[key] = (rawOffsetX ?? 0.0).clamp(-8.0, 8.0).toDouble();
         } else {
           final scale = scaleMap[key] ??
               _figureRenderScaleForAsset(q, asset: asset, order: i + 1);
           draftMap[key] = _scaleToWidthEm(scale);
           positionMap[key] = 'below-stem';
+          offsetXMap[key] = 0.0;
         }
       } else {
         final scale = scaleMap[key] ??
             _figureRenderScaleForAsset(q, asset: asset, order: i + 1);
         draftMap[key] = _scaleToWidthEm(scale);
         positionMap[key] = 'below-stem';
+        offsetXMap[key] = 0.0;
       }
       labels[key] = label;
       previewUrls[key] = previewUrl;
@@ -9524,6 +9655,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     return (
       draftMap: draftMap,
       positionMap: positionMap,
+      offsetXMap: offsetXMap,
       labels: labels,
       previewUrls: previewUrls,
       candidatePairKeys: candidatePairKeys,
@@ -9545,6 +9677,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
   List<Widget> _buildFigureScaleSliders({
     required Map<String, double> draftMap,
     required Map<String, String> positionMap,
+    required Map<String, double> offsetXMap,
     required Map<String, String> labels,
     required Map<String, String> previewUrls,
     required void Function(void Function()) setLocalState,
@@ -9558,6 +9691,7 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
           final widthEm = draftMap[key] ?? _figureWidthEmDefault;
           final label = labels[key] ?? '그림 ${i + 1}';
           final position = positionMap[key] ?? 'below-stem';
+          final offsetX = (offsetXMap[key] ?? 0.0).clamp(-8.0, 8.0).toDouble();
           final previewUrl = previewUrls[key] ?? '';
           return Container(
             margin: EdgeInsets.only(bottom: i == draftMap.length - 1 ? 0 : 10),
@@ -9617,6 +9751,48 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
                   onChangeEnd: (_) => onSettingChanged?.call(),
                 ),
                 const SizedBox(height: 4),
+                Row(
+                  children: [
+                    const Text(
+                      '좌우',
+                      style: TextStyle(
+                        color: _textSub,
+                        fontSize: 11.4,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Slider(
+                        value: offsetX.clamp(-4.0, 4.0).toDouble(),
+                        min: -4.0,
+                        max: 4.0,
+                        divisions: 32,
+                        activeColor: _accent,
+                        inactiveColor: _border,
+                        onChanged: (v) {
+                          setLocalState(() {
+                            offsetXMap[key] = (v * 10).roundToDouble() / 10.0;
+                          });
+                        },
+                        onChangeEnd: (_) => onSettingChanged?.call(),
+                      ),
+                    ),
+                    SizedBox(
+                      width: 48,
+                      child: Text(
+                        '${offsetX.toStringAsFixed(1)}em',
+                        textAlign: TextAlign.right,
+                        style: const TextStyle(
+                          color: _text,
+                          fontSize: 11.2,
+                          fontFeatures: [FontFeature.tabularFigures()],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 2),
                 Row(
                   children: [
                     const Text(

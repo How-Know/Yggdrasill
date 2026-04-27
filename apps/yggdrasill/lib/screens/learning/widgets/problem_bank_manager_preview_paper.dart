@@ -136,6 +136,7 @@ class ProblemBankManagerPreviewPaper extends StatelessWidget {
         .replaceAll('−', '-')
         .replaceAll('≤', r'\le ')
         .replaceAll('≥', r'\ge ')
+        .replaceAll('∥', r'\mathbin{/\mkern-2mu/}')
         .replaceAll('¼', r'\frac{1}{4}')
         .replaceAll('½', r'\frac{1}{2}')
         .replaceAll('¾', r'\frac{3}{4}')
@@ -173,6 +174,10 @@ class ProblemBankManagerPreviewPaper extends StatelessWidget {
         .replaceAll(RegExp(r'\bdiv\b', caseSensitive: false), r'\div ')
         .replaceAll(RegExp(r'\ble\b', caseSensitive: false), r'\le ')
         .replaceAll(RegExp(r'\bge\b', caseSensitive: false), r'\ge ');
+    out = out.replaceAll(
+      RegExp(r'\\parallel(?![a-zA-Z])'),
+      r'\mathbin{/\mkern-2mu/}',
+    );
 
     for (int i = 0; i < 4; i += 1) {
       final next = out
