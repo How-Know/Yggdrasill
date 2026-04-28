@@ -1445,7 +1445,7 @@ class ProblemBankService {
 
     final docRow = await _client
         .from('pb_documents')
-        .select('source_storage_path, source_pdf_storage_path')
+        .select('source_storage_path, source_pdf_storage_path, meta')
         .eq('academy_id', academyId)
         .eq('id', documentId)
         .maybeSingle();
@@ -1455,7 +1455,13 @@ class ProblemBankService {
     if (docMap.isEmpty) {
       throw Exception('document_not_found');
     }
-    if ('${docMap['source_storage_path'] ?? ''}'.trim().isEmpty) {
+    final docMeta = _mapFromDynamic(docMap['meta']);
+    final textbookScope = _mapFromDynamic(docMeta['textbook_scope']);
+    final isTextbookPdfOnly =
+        '${docMeta['extract_mode'] ?? ''}'.trim() == 'textbook_pdf_only' ||
+            '${textbookScope['mode'] ?? ''}'.trim() == 'textbook_pdf_only';
+    if (!isTextbookPdfOnly &&
+        '${docMap['source_storage_path'] ?? ''}'.trim().isEmpty) {
       throw Exception('hwpx_source_required');
     }
     if ('${docMap['source_pdf_storage_path'] ?? ''}'.trim().isEmpty) {
@@ -1753,10 +1759,29 @@ class ProblemBankService {
     final safeBucket = bucket.trim();
     final safePath = path.trim();
     if (safeBucket.isEmpty || safePath.isEmpty) return '';
-    final signed = await _client.storage
-        .from(safeBucket)
-        .createSignedUrl(safePath, expiresInSeconds);
-    return signed.trim();
+    try {
+      final signed = await _client.storage
+          .from(safeBucket)
+          .createSignedUrl(safePath, expiresInSeconds);
+      if (signed.trim().isNotEmpty) return signed.trim();
+    } catch (_) {
+      // Private buckets created by the gateway may not expose client-side
+      // signing policies; fall back to the gateway service-role signer below.
+    }
+    if (_gatewayBaseUrl.isEmpty) return '';
+    try {
+      final json = await _gatewayPost(
+        '/storage/signed-url',
+        body: <String, dynamic>{
+          'bucket': safeBucket,
+          'path': safePath,
+          'expires_in_seconds': expiresInSeconds,
+        },
+      );
+      return '${json['signed_url'] ?? ''}'.trim();
+    } catch (_) {
+      return '';
+    }
   }
 
   Future<List<ProblemBankQuestion>> listQuestions({

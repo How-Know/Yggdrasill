@@ -1132,6 +1132,31 @@ async function createSignedStorageUrl(bucket, objectPath, expiresInSeconds = 60 
   }
 }
 
+async function handleStorageSignedUrl(body, res) {
+  const bucket = String(body?.bucket || '').trim();
+  const objectPath = String(body?.path || body?.object_path || '').trim();
+  const ttl = Number.parseInt(String(body?.expires_in_seconds ?? body?.ttl_seconds ?? 3600), 10);
+  if (!bucket || !objectPath) {
+    sendJson(res, 400, { ok: false, error: 'missing_bucket_or_path' });
+    return;
+  }
+  const signedUrl = await createSignedStorageUrl(
+    bucket,
+    objectPath,
+    Number.isFinite(ttl) && ttl > 0 ? ttl : 3600,
+  );
+  if (!signedUrl) {
+    sendJson(res, 404, { ok: false, error: 'signed_url_unavailable' });
+    return;
+  }
+  sendJson(res, 200, {
+    ok: true,
+    bucket,
+    path: objectPath,
+    signed_url: signedUrl,
+  });
+}
+
 function extractPreviewThumbnailMeta(summaryRaw) {
   const summary = parseJsonObjectSafely(summaryRaw);
   const fromObject = parseJsonObjectSafely(summary.previewThumbnail);
@@ -4935,6 +4960,242 @@ function normalizeTextbookAnswerValue(input) {
     .trim();
 }
 
+function textbookProblemNumberKey(value) {
+  const n = Number.parseInt(String(value ?? '').trim(), 10);
+  return Number.isFinite(n) && n > 0 ? String(n) : '';
+}
+
+function parseTextbookAnswerPartsFromText(value) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!text) return [];
+  const matches = [...text.matchAll(/\((\d{1,2})\)\s*/g)];
+  if (matches.length < 2) return [];
+  const parts = [];
+  for (let i = 0; i < matches.length; i += 1) {
+    const match = matches[i];
+    const sub = String(match[1] || '').trim();
+    const start = match.index + match[0].length;
+    const end = i + 1 < matches.length ? matches[i + 1].index : text.length;
+    const partValue = text.slice(start, end).trim();
+    if (sub && partValue) {
+      parts.push({ sub, value: partValue });
+    }
+  }
+  return parts.length >= 2 ? parts : [];
+}
+
+function buildPbAnswerPatchFromSidecar(question, answer) {
+  const kindRaw = String(answer?.answer_kind || '').trim().toLowerCase();
+  const rawText = normalizeTextbookAnswerValue(answer?.answer_text);
+  const rawLatex = normalizeTextbookAnswerValue(answer?.answer_latex_2d);
+  const text = rawText || rawLatex;
+  const kind =
+    kindRaw === 'image' || TEXTBOOK_ANSWER_IMAGE_MARKER_RE.test(`${rawText} ${rawLatex}`)
+      ? 'image'
+      : kindRaw;
+  const meta =
+    question?.meta && typeof question.meta === 'object'
+      ? { ...question.meta }
+      : {};
+  const choices = Array.isArray(question?.objective_choices)
+    ? question.objective_choices
+    : [];
+  const canUseObjective =
+    kind === 'objective' &&
+    String(question?.question_type || '').includes('객관식') &&
+    choices.length > 0;
+
+  let objectiveAnswerKey = canUseObjective ? text : '';
+  let subjectiveAnswer = canUseObjective ? '' : text;
+  let answerAsset = null;
+
+  if (kind === 'image') {
+    const marker = '[[PB_ANSWER_FIG_1]]';
+    const withMarker = text
+      ? text
+          .replace(/\[\s*image\s*\]/gi, marker)
+          .replace(/\(\s*image\s*\)/gi, marker)
+          .replace(/\[그림\]/g, marker)
+          .replace(/\[\[PB_ANSWER_FIG_[^\]]+\]\]/g, marker)
+      : marker;
+    subjectiveAnswer = withMarker.includes(marker)
+      ? withMarker
+      : `${withMarker} ${marker}`.trim();
+    objectiveAnswerKey = '';
+    const imagePath = String(answer?.answer_image_path || '').trim();
+    if (imagePath) {
+      answerAsset = {
+        figure_index: 1,
+        bucket:
+          String(answer?.answer_image_bucket || '').trim() ||
+          TEXTBOOK_ANSWER_IMAGE_BUCKET,
+        path: imagePath,
+        mime_type: 'image/png',
+        approved: true,
+        source: String(answer?.answer_source || '').trim() || 'textbook_answer_vlm',
+        created_at: String(answer?.updated_at || '').trim() || new Date().toISOString(),
+        ...(answer?.answer_image_width_px
+          ? { width_px: answer.answer_image_width_px }
+          : {}),
+        ...(answer?.answer_image_height_px
+          ? { height_px: answer.answer_image_height_px }
+          : {}),
+        ...(answer?.answer_image_size_bytes
+          ? { size_bytes: answer.answer_image_size_bytes }
+          : {}),
+        ...(answer?.answer_image_content_hash
+          ? { content_hash: answer.answer_image_content_hash }
+          : {}),
+      };
+    }
+  }
+
+  meta.answer_key = subjectiveAnswer || objectiveAnswerKey || '';
+  meta.objective_answer_key = objectiveAnswerKey;
+  meta.subjective_answer = subjectiveAnswer;
+  meta.allow_objective = canUseObjective;
+  meta.allow_subjective = true;
+  meta.answer_source = String(answer?.answer_source || '').trim() || 'vlm';
+  const parsedAnswerParts = parseTextbookAnswerPartsFromText(subjectiveAnswer);
+  if (parsedAnswerParts.length > 0) {
+    meta.answer_parts = parsedAnswerParts;
+  } else if (kind === 'image') {
+    delete meta.answer_parts;
+  }
+  if (answerAsset) {
+    meta.answer_figure_assets = [answerAsset];
+    meta.answer_figure_layout =
+      meta.answer_figure_layout && typeof meta.answer_figure_layout === 'object'
+        ? meta.answer_figure_layout
+        : {
+            version: 1,
+            verticalAlign: 'top',
+            items: [
+              {
+                assetKey: 'idx:1',
+                widthEm: 10,
+                verticalAlign: 'top',
+                topOffsetEm: 0.55,
+              },
+            ],
+          };
+  }
+  meta.vlm = {
+    ...(meta.vlm && typeof meta.vlm === 'object' ? meta.vlm : {}),
+    answer_sidecar: {
+      kind,
+      source: meta.answer_source,
+      raw_page: answer?.raw_page ?? null,
+      display_page: answer?.display_page ?? null,
+      updated_at: String(answer?.updated_at || '').trim(),
+      has_image_asset: !!answerAsset,
+    },
+  };
+
+  return {
+    objective_answer_key: objectiveAnswerKey,
+    subjective_answer: subjectiveAnswer,
+    allow_objective: meta.allow_objective,
+    allow_subjective: true,
+    meta,
+  };
+}
+
+async function syncTextbookAnswersToProblemBankScope({
+  academyId,
+  bookId,
+  gradeLabel,
+  scope,
+}) {
+  const { data: run, error: runErr } = await supa
+    .from('textbook_pb_extract_runs')
+    .select('pb_document_id,status')
+    .eq('academy_id', academyId)
+    .eq('book_id', bookId)
+    .eq('grade_label', gradeLabel)
+    .eq('big_order', scope.big_order)
+    .eq('mid_order', scope.mid_order)
+    .eq('sub_key', scope.sub_key)
+    .maybeSingle();
+  if (runErr) throw new Error(`sync_pb_run_fetch_failed: ${runErr.message || runErr}`);
+  const documentId = String(run?.pb_document_id || '').trim();
+  if (!documentId) {
+    return { updated: 0, skipped: 'missing_pb_document' };
+  }
+
+  const { data: crops, error: cropErr } = await supa
+    .from('textbook_problem_crops')
+    .select('id,problem_number,is_set_header')
+    .eq('academy_id', academyId)
+    .eq('book_id', bookId)
+    .eq('grade_label', gradeLabel)
+    .eq('big_order', scope.big_order)
+    .eq('mid_order', scope.mid_order)
+    .eq('sub_key', scope.sub_key);
+  if (cropErr) throw new Error(`sync_pb_crops_fetch_failed: ${cropErr.message || cropErr}`);
+  const cropRows = Array.isArray(crops) ? crops : [];
+  const cropIds = cropRows
+    .map((crop) => String(crop?.id || '').trim())
+    .filter(Boolean);
+  if (cropIds.length === 0) return { updated: 0, skipped: 'missing_crops' };
+
+  const { data: answers, error: answerErr } = await supa
+    .from('textbook_problem_answers')
+    .select(
+      'crop_id,answer_kind,answer_text,answer_latex_2d,answer_source,' +
+        'answer_image_bucket,answer_image_path,answer_image_width_px,' +
+        'answer_image_height_px,answer_image_size_bytes,answer_image_content_hash,' +
+        'raw_page,display_page,updated_at',
+    )
+    .in('crop_id', cropIds);
+  if (answerErr) throw new Error(`sync_pb_answers_fetch_failed: ${answerErr.message || answerErr}`);
+  const answerByCropId = new Map();
+  for (const answer of answers || []) {
+    const cropId = String(answer?.crop_id || '').trim();
+    if (cropId) answerByCropId.set(cropId, answer);
+  }
+  if (answerByCropId.size === 0) return { updated: 0, skipped: 'missing_answers' };
+
+  const answerByNumber = new Map();
+  for (const crop of cropRows) {
+    if (crop?.is_set_header === true) continue;
+    const key = textbookProblemNumberKey(crop?.problem_number);
+    const answer = answerByCropId.get(String(crop?.id || '').trim());
+    if (key && answer) answerByNumber.set(key, answer);
+  }
+
+  const { data: questions, error: questionErr } = await supa
+    .from('pb_questions')
+    .select(
+      'id,question_number,question_type,objective_choices,objective_answer_key,' +
+        'subjective_answer,allow_objective,allow_subjective,meta',
+    )
+    .eq('academy_id', academyId)
+    .eq('document_id', documentId);
+  if (questionErr) {
+    throw new Error(`sync_pb_questions_fetch_failed: ${questionErr.message || questionErr}`);
+  }
+
+  let updated = 0;
+  for (const question of questions || []) {
+    const key = textbookProblemNumberKey(question?.question_number);
+    const answer = key ? answerByNumber.get(key) : null;
+    const questionId = String(question?.id || '').trim();
+    if (!answer || !questionId) continue;
+    const patch = buildPbAnswerPatchFromSidecar(question, answer);
+    const { error: updateErr } = await supa
+      .from('pb_questions')
+      .update(patch)
+      .eq('id', questionId);
+    if (updateErr) {
+      throw new Error(`sync_pb_question_update_failed: ${updateErr.message || updateErr}`);
+    }
+    updated += 1;
+  }
+
+  return { updated, documentId, status: String(run?.status || '').trim() };
+}
+
 async function handleTextbookAnswersBatchUpsert(body, res) {
   const academyId = String(body?.academy_id || '').trim();
   if (!academyId) {
@@ -5106,6 +5367,39 @@ async function handleTextbookAnswersBatchUpsert(body, res) {
     upserted: Array.isArray(data) ? data.length : 0,
     rows: data || [],
   });
+}
+
+async function handleTextbookAnswersSyncProblemBank(body, res) {
+  const academyId = String(body?.academy_id || '').trim();
+  const bookId = String(body?.book_id || '').trim();
+  const gradeLabel = String(body?.grade_label || '').trim();
+  const scope = parseStageScope(body);
+  if (!academyId || !bookId || !gradeLabel || !scope) {
+    sendJson(res, 400, { ok: false, error: 'missing_scope_identity' });
+    return;
+  }
+
+  try {
+    const result = await syncTextbookAnswersToProblemBankScope({
+      academyId,
+      bookId,
+      gradeLabel,
+      scope,
+    });
+    sendJson(res, 200, {
+      ok: true,
+      scope,
+      pb_document_id: result.documentId || '',
+      status: result.status || '',
+      updated_questions: result.updated || 0,
+      skipped: result.skipped || '',
+    });
+  } catch (err) {
+    sendJson(res, 500, {
+      ok: false,
+      error: compact(err?.message || err, 500),
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -5796,6 +6090,12 @@ async function handler(req, res) {
       return;
     }
 
+    if (method === 'POST' && url.pathname === '/storage/signed-url') {
+      const body = await readJson(req);
+      await handleStorageSignedUrl(body, res);
+      return;
+    }
+
     // ----- Textbook PDF dual-track endpoints -----
     // SECURITY TODO (pre-release): replace the shared `requireApiKey` gate on
     // these four routes with per-user JWT validation + academy membership
@@ -5862,6 +6162,12 @@ async function handler(req, res) {
     ) {
       const body = await readJson(req);
       await handleTextbookAnswersBatchUpsert(body, res);
+      return;
+    }
+
+    if (method === 'POST' && url.pathname === '/textbook/answers/sync-pb') {
+      const body = await readJson(req);
+      await handleTextbookAnswersSyncProblemBank(body, res);
       return;
     }
 

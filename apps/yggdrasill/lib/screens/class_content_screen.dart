@@ -3209,6 +3209,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
               gradingPages: payload.gradingPages,
               states: decoded,
             );
+            var savedGrading = true;
             if (action == 'complete' || action == 'confirm') {
               final targetItem = HomeworkStore.instance.getById(
                     studentId,
@@ -3226,17 +3227,19 @@ class _ClassContentScreenState extends State<ClassContentScreen>
               );
               if (!mounted) return;
               if (!saved) {
+                savedGrading = false;
                 _showHomeworkChipSnackBar(context, '채점 결과 저장에 실패했습니다.');
               } else {
                 _testGradingSavedHomeworkIds.add(payload.homeworkId);
               }
             }
-            if (!mounted) return;
+            if (!mounted || !savedGrading) return;
             setState(() {
               for (final key in keys) {
                 _pendingConfirms[key] = action == 'complete';
               }
             });
+            _batchConfirmService.syncPendingCount();
           },
         );
         blockRightSideSheetOpen.value = false;
@@ -3356,6 +3359,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           _pendingConfirms[key] = action == HomeworkAnswerViewerAction.complete;
         }
       });
+      _batchConfirmService.syncPendingCount();
       if (!suppressCombo && context.mounted) {
         await _maybeOfferSubmittedGradingCombo(
           context: context,
@@ -3439,12 +3443,14 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           _pendingConfirms[key] = true;
         }
       });
+      _batchConfirmService.syncPendingCount();
     } else if (action == HomeworkAnswerViewerAction.confirm) {
       setState(() {
         for (final key in keys) {
           _pendingConfirms[key] = false;
         }
       });
+      _batchConfirmService.syncPendingCount();
     }
     if (!suppressCombo && pdfActionCommitted && context.mounted) {
       await _maybeOfferSubmittedGradingCombo(

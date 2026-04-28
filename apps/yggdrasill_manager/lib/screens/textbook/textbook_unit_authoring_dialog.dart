@@ -112,6 +112,7 @@ class _TextbookUnitAuthoringDialogState
   bool _loadingPayload = true;
   String? _payloadError;
   String _seriesKey = kTextbookSeriesCatalog.first.key;
+  int _pageOffset = 0;
   final List<_BigUnitEdit> _bigUnits = <_BigUnitEdit>[];
 
   _SubFocus? _focus;
@@ -176,6 +177,7 @@ class _TextbookUnitAuthoringDialogState
       final series = (payload?['series'] as String?)?.trim().isNotEmpty == true
           ? (payload!['series'] as String).trim()
           : kTextbookSeriesCatalog.first.key;
+      final pageOffset = int.tryParse('${row?['page_offset'] ?? 0}') ?? 0;
       final entry = textbookSeriesByKey(series) ?? kTextbookSeriesCatalog.first;
       final loaded = bigUnitsFromPayload(payload, seriesKey: entry.key);
       final editable = <_BigUnitEdit>[];
@@ -208,6 +210,7 @@ class _TextbookUnitAuthoringDialogState
       if (!mounted) return;
       setState(() {
         _seriesKey = entry.key;
+        _pageOffset = pageOffset;
         _bigUnits
           ..clear()
           ..addAll(editable);
@@ -382,6 +385,10 @@ class _TextbookUnitAuthoringDialogState
     );
   }
 
+  int _rawPageForDisplayPage(int displayPage) => displayPage + _pageOffset;
+
+  int _displayPageForRawPage(int rawPage) => rawPage - _pageOffset;
+
   List<_PageAnalysisRow> _pageRowsFromSavedCrops(
     List<Map<String, dynamic>> rows,
     _SubFocus focus,
@@ -404,7 +411,8 @@ class _TextbookUnitAuthoringDialogState
       final first = entry.value.first;
       out.add(_PageAnalysisRow.success(
         rawPage: entry.key,
-        displayPage: asIntN(first['display_page']) ?? entry.key,
+        displayPage:
+            asIntN(first['display_page']) ?? _displayPageForRawPage(entry.key),
         section: '${first['section'] ?? _sectionForSubKey(focus.subKey)}',
         pageKind: 'problem_page',
         notes: 'saved_crops',
@@ -718,12 +726,16 @@ class _TextbookUnitAuthoringDialogState
       (s) => s.preset.key == focus.subKey,
       orElse: () => mid.subs.first,
     );
-    final startPage = _positiveInt(sub.startCtrl.text);
-    final endPage = _positiveInt(sub.endCtrl.text);
-    if (startPage == null || endPage == null || endPage < startPage) {
+    final displayStartPage = _positiveInt(sub.startCtrl.text);
+    final displayEndPage = _positiveInt(sub.endCtrl.text);
+    if (displayStartPage == null ||
+        displayEndPage == null ||
+        displayEndPage < displayStartPage) {
       _toast('시작/끝 페이지를 먼저 입력하세요', error: true);
       return;
     }
+    final rawStartPage = _rawPageForDisplayPage(displayStartPage);
+    final rawEndPage = _rawPageForDisplayPage(displayEndPage);
     final doc = await _ensurePdf();
     if (doc == null) return;
     final state = _ensureSubState(focus);
@@ -737,8 +749,8 @@ class _TextbookUnitAuthoringDialogState
       state.cancelled = false;
       state.pageResults.clear();
       state.progress = RangeProgress(
-        cursor: startPage,
-        total: endPage - startPage + 1,
+        cursor: rawStartPage,
+        total: rawEndPage - rawStartPage + 1,
         done: 0,
         failed: 0,
         failedPages: <int>{},
@@ -775,8 +787,8 @@ class _TextbookUnitAuthoringDialogState
 
     try {
       await runRangeAnalysis(
-        startPage: startPage,
-        endPage: endPage,
+        startPage: rawStartPage,
+        endPage: rawEndPage,
         analysisLongEdgePx: _kAnalysisLongEdgePx,
         renderer: render,
         detector: detect,
@@ -1106,8 +1118,12 @@ class _TextbookUnitAuthoringDialogState
       (s) => s.preset.key == focus.subKey,
       orElse: () => mid.subs.first,
     );
-    final start = _positiveInt(sub.startCtrl.text);
-    final end = _positiveInt(sub.endCtrl.text);
+    final displayStart = _positiveInt(sub.startCtrl.text);
+    final displayEnd = _positiveInt(sub.endCtrl.text);
+    final rawStart =
+        displayStart == null ? null : _rawPageForDisplayPage(displayStart);
+    final rawEnd =
+        displayEnd == null ? null : _rawPageForDisplayPage(displayEnd);
     await _pbService.createTextbookPdfOnlyExtractRun(
       academyId: widget.academyId,
       bookId: widget.bookId,
@@ -1119,10 +1135,10 @@ class _TextbookUnitAuthoringDialogState
       bigName: big.nameCtrl.text.trim(),
       midName: mid.nameCtrl.text.trim(),
       subName: sub.preset.displayName,
-      rawPageFrom: start,
-      rawPageTo: end,
-      displayPageFrom: start,
-      displayPageTo: end,
+      rawPageFrom: rawStart,
+      rawPageTo: rawEnd,
+      displayPageFrom: displayStart,
+      displayPageTo: displayEnd,
       bodyLinkId: widget.linkId,
     );
     if (!mounted) return;
@@ -1903,7 +1919,7 @@ class _TextbookUnitAuthoringDialogState
     if (start == null) return;
     if (!_viewerController.isReady) return;
     try {
-      _viewerController.goToPage(pageNumber: start);
+      _viewerController.goToPage(pageNumber: _rawPageForDisplayPage(start));
     } catch (_) {
       // Best-effort; pdfrx throws if the page number is out of range.
     }
@@ -2222,7 +2238,8 @@ class _TextbookUnitAuthoringDialogState
               Text(
                 '${progress.done}/${progress.total} 완료'
                 '${progress.failed > 0 ? " · 실패 ${progress.failed}" : ""}'
-                ' · 현재 ${progress.cursor}p',
+                ' · 현재 책면 ${_displayPageForRawPage(progress.cursor)}p'
+                ' (PDF ${progress.cursor}p)',
                 style: const TextStyle(color: _kTextSub, fontSize: 11),
               ),
             ],

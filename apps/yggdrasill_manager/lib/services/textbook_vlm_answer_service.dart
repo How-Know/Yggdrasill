@@ -150,6 +150,40 @@ class TextbookVlmAnswerService {
     return int.tryParse('$upserted') ?? 0;
   }
 
+  Future<int> syncAnswersToProblemBank({
+    required String academyId,
+    required String bookId,
+    required String gradeLabel,
+    required int bigOrder,
+    required int midOrder,
+    required String subKey,
+  }) async {
+    final body = <String, dynamic>{
+      'academy_id': academyId,
+      'book_id': bookId,
+      'grade_label': gradeLabel,
+      'big_order': bigOrder,
+      'mid_order': midOrder,
+      'sub_key': subKey,
+    };
+    final res = await _http.post(
+      _uri('/textbook/answers/sync-pb'),
+      headers: _headers(),
+      body: jsonEncode(body),
+    );
+    final json = _decode(res.body);
+    if (res.statusCode < 200 || res.statusCode >= 300 || json['ok'] != true) {
+      throw Exception(
+        'answers_sync_pb_failed(${res.statusCode}): '
+        '${json['error'] ?? json['message'] ?? res.body}',
+      );
+    }
+    final updated = json['updated_questions'];
+    if (updated is int) return updated;
+    if (updated is num) return updated.toInt();
+    return int.tryParse('$updated') ?? 0;
+  }
+
   Map<String, dynamic> _decode(String body) {
     try {
       final decoded = jsonDecode(body);

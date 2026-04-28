@@ -2176,8 +2176,10 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       _showSnack('먼저 HWPX를 업로드하고 문서를 선택해주세요.', error: true);
       return;
     }
-    if (!doc.hasHwpxSource || !doc.hasPdfSource) {
-      _showSnack('HWPX와 PDF를 모두 업로드한 뒤 재추출할 수 있습니다.', error: true);
+    final canUsePartialReextractSource =
+        doc.hasPdfSource && (doc.hasHwpxSource || doc.isTextbookPdfOnly);
+    if (!canUsePartialReextractSource) {
+      _showSnack('PDF 원본이 있거나 HWPX+PDF를 모두 업로드한 문서만 재추출할 수 있습니다.', error: true);
       return;
     }
     final targetIds = targets
@@ -5174,11 +5176,11 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
       out = next;
     }
     out = out
+        .replaceAll(RegExp(r'\\left|\\right'), '')
         .replaceAll(r'\times', '×')
         .replaceAll(r'\div', '÷')
         .replaceAll(r'\le', '≤')
         .replaceAll(r'\ge', '≥')
-        .replaceAll(RegExp(r'\\left|\\right'), '')
         .replaceAll(RegExp(r'\\mathrm\{([^{}]+)\}'), r'$1')
         .replaceAll(RegExp(r'[{}]'), '')
         .replaceAll(RegExp(r'\\'), '')
@@ -6327,6 +6329,18 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     // 파트별로 value 만 위생화하고 "(sub) value" 형태로 조립해 반환한다.
     final parts = q.answerParts;
     if (parts != null && parts.isNotEmpty) {
+      final directRaw = q.subjectiveAnswer.isNotEmpty
+          ? q.subjectiveAnswer
+          : '${q.meta['subjective_answer'] ?? ''}';
+      final directHasAnswerFigure = RegExp(
+              r'\[\[PB_ANSWER_FIG_[^\]]+\]\]|\[그림\]|\[\s*image\s*\]',
+              caseSensitive: false)
+          .hasMatch(directRaw);
+      final partsContainOmitted =
+          parts.any((p) => _sanitizeAnswerText(p.value) == '생략');
+      if (directHasAnswerFigure && partsContainOmitted) {
+        return _sanitizeAnswerText(directRaw);
+      }
       final rendered = parts
           .map((p) {
             final sub = p.sub.trim();
@@ -10573,14 +10587,16 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
     final previewChoices = _previewChoicesOf(q);
     final objectiveChoiceCount = previewChoices.length;
     final isReextractingThisQuestion = _reextractingQuestionIds.contains(q.id);
+    final doc = _activeDocument;
+    final canUsePartialReextractSource = (doc?.hasPdfSource ?? false) &&
+        ((doc?.hasHwpxSource ?? false) || (doc?.isTextbookPdfOnly ?? false));
     final docStatus = (_activeDocument?.status ?? '').trim().toLowerCase();
     final isPublished = docStatus == 'ready';
     final publishBadgeColor =
         isPublished ? const Color(0xFF41B883) : const Color(0xFFE3B341);
     final publishBadgeText = isPublished ? '사용준비됨' : '미업로드';
     final canReextractThisQuestion = !isReextractingThisQuestion &&
-        (_activeDocument?.hasHwpxSource ?? false) &&
-        (_activeDocument?.hasPdfSource ?? false) &&
+        canUsePartialReextractSource &&
         !_isResetting &&
         !_isUploading &&
         !_isExtracting &&
@@ -11225,8 +11241,10 @@ class _ProblemBankScreenState extends State<ProblemBankScreen>
               const SizedBox(width: 8),
               OutlinedButton.icon(
                 onPressed: _activeDocument == null ||
-                        !(_activeDocument?.hasHwpxSource ?? false) ||
-                        !(_activeDocument?.hasPdfSource ?? false) ||
+                        !((_activeDocument?.hasPdfSource ?? false) &&
+                            ((_activeDocument?.hasHwpxSource ?? false) ||
+                                (_activeDocument?.isTextbookPdfOnly ??
+                                    false))) ||
                         _checkedCount == 0 ||
                         _isSavingQuestionChanges ||
                         _isDeletingCurrentQuestions ||

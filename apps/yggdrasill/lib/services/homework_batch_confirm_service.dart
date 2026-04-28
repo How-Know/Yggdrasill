@@ -50,6 +50,17 @@ class HomeworkBatchConfirmService {
     );
   }
 
+  Future<void> executeBatchConfirmNow({
+    required BuildContext context,
+    required Map<HomeworkBatchConfirmKey, bool> pending,
+  }) async {
+    if (pending.isEmpty) return;
+    await _processBatchConfirmInBackground(
+      context: context,
+      pending: Map<HomeworkBatchConfirmKey, bool>.from(pending),
+    );
+  }
+
   Future<void> _processBatchConfirmInBackground({
     required BuildContext context,
     required Map<HomeworkBatchConfirmKey, bool> pending,

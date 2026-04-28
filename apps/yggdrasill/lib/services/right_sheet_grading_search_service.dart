@@ -31,6 +31,7 @@ class RightSheetGradingSearchService {
   final Map<String, List<Map<String, dynamic>>>
       _testGradingSerializedDraftByHomeworkId =
       <String, List<Map<String, dynamic>>>{};
+  final Set<String> _testGradingSavedHomeworkIds = <String>{};
 
   Future<List<RightSheetGradingSearchResult>> search(String query) async {
     final rawQuery = query.trim();
@@ -88,7 +89,7 @@ class RightSheetGradingSearchService {
               groupHomeworkTitle: resolvedGroupTitle,
               homeworkTitle: homeworkTitle,
               hasTextbookLink: _hasDirectHomeworkTextbookLink(hw),
-              isTestHomework: _isTestHomeworkType(hw.type),
+              isTestHomework: _hasProblemBankPreset(hw),
               isSubmitted: _isSubmittedHomeworkForGradingSearch(hw),
             ),
             score: score,
@@ -156,7 +157,7 @@ class RightSheetGradingSearchService {
               groupHomeworkTitle: resolvedGroupTitle,
               homeworkTitle: homeworkTitle,
               hasTextbookLink: _hasDirectHomeworkTextbookLink(hw),
-              isTestHomework: _isTestHomeworkType(hw.type),
+              isTestHomework: _hasProblemBankPreset(hw),
               isSubmitted: _isSubmittedHomeworkForGradingSearch(hw),
             ),
             at: hw.updatedAt ?? hw.createdAt ?? DateTime(1970),
@@ -197,7 +198,7 @@ class RightSheetGradingSearchService {
       return;
     }
 
-    if (_isTestHomeworkType(hw.type)) {
+    if (_hasProblemBankPreset(hw)) {
       if (!_isSubmittedHomeworkForGradingSearch(hw)) {
         await homeworkStore.submit(studentId, hw.id);
         await HomeworkAssignmentStore.instance.clearActiveAssignmentsForItems(
@@ -250,11 +251,25 @@ class RightSheetGradingSearchService {
     final cachedStates =
         _testGradingDraftStatesByHomeworkId[payload.homeworkId] ??
             const <String, HomeworkAnswerCellState>{};
+    final savedSession =
+        await _gradingResultService.loadLatestSavedSessionForHomework(
+      homeworkItemId: payload.homeworkId,
+    );
+    if (!context.mounted) return false;
+    final initialStates = savedSession?.states.isNotEmpty == true
+        ? savedSession!.states
+        : cachedStates;
+    final hasSavedGrading = savedSession != null ||
+        _testGradingSavedHomeworkIds.contains(payload.homeworkId);
     final studentName = _resolveHomeworkPrintStudentName(studentId);
     final groupHomeworkTitle = _resolveGroupHomeworkTitle(
       studentId: studentId,
       hw: hw,
       fallbackTitle: payload.title,
+    );
+    final assignmentCode = _formatHomeworkAssignmentCode(
+      hw.assignmentCode,
+      fallback: '',
     );
     final overlayEntries = _buildOverlayEntriesForHomework(hw);
 
@@ -263,10 +278,28 @@ class RightSheetGradingSearchService {
       title: payload.title,
       studentName: studentName,
       groupHomeworkTitle: groupHomeworkTitle,
+      assignmentCode: assignmentCode,
       gradingPages: _toRightSheetGradingPages(payload.gradingPages),
       scoreByQuestionKey: payload.scoreByQuestionKey,
       overlayEntries: overlayEntries,
-      initialStates: _toRightSheetStateMap(cachedStates),
+      initialStates: _toRightSheetStateMap(initialStates),
+      gradingLocked: hasSavedGrading,
+      onRequestEditReset: () async {
+        final reset = await _gradingResultService.resetAttemptsForHomework(
+          homeworkItemId: payload.homeworkId,
+        );
+        if (!context.mounted) return false;
+        if (!reset) {
+          _showSnackBar(context, '기존 채점 결과 리셋에 실패했습니다.');
+          return false;
+        }
+        _testGradingDraftStatesByHomeworkId.remove(payload.homeworkId);
+        _testGradingSerializedDraftByHomeworkId.remove(payload.homeworkId);
+        _testGradingSavedHomeworkIds.remove(payload.homeworkId);
+        _showSnackBar(context, '기존 채점 결과를 리셋했습니다. 다시 확인하면 새 결과로 저장됩니다.');
+        return true;
+      },
+      closeSheetOnAction: false,
       onStatesChanged: (states) {
         final decoded = _fromRightSheetStateMap(states);
         _testGradingDraftStatesByHomeworkId[payload.homeworkId] =
@@ -303,11 +336,22 @@ class RightSheetGradingSearchService {
             scoreByQuestionKey: payload.scoreByQuestionKey,
             groupHomeworkTitleSnapshot: groupHomeworkTitle,
           );
-          if (!saved && context.mounted) {
-            _showSnackBar(context, '채점 결과 저장에 실패했습니다.');
+          if (!saved) {
+            if (context.mounted) {
+              _showSnackBar(context, '채점 결과 저장에 실패했습니다.');
+            }
+            return;
           }
+          _testGradingSavedHomeworkIds.add(payload.homeworkId);
+          final pending = <HomeworkBatchConfirmKey, bool>{
+            for (final key in keys) key: action == 'complete',
+          };
+          await _batchConfirmService.executeBatchConfirmNow(
+            context: context,
+            pending: pending,
+          );
           for (final key in keys) {
-            _batchConfirmService.pending[key] = action == 'complete';
+            _batchConfirmService.pending.remove(key);
           }
           _batchConfirmService.syncPendingCount();
         }
@@ -407,9 +451,7 @@ class RightSheetGradingSearchService {
 
     final testPbItems = allItems
         .where(
-          (item) =>
-              _isTestHomeworkType(item.type) &&
-              (item.pbPresetId ?? '').trim().isNotEmpty,
+          (item) => _hasProblemBankPreset(item),
         )
         .toList(growable: false);
     if (testPbItems.isEmpty) return null;
@@ -458,9 +500,42 @@ class RightSheetGradingSearchService {
 
     final modeByUid = preset.questionModeByQuestionUid;
     final presetScoreByUid = preset.questionScoreByQuestionUid;
+
+    // 홈 채점모드와 동일하게 프리셋(renderConfig)의 실제 출력 레이아웃을 우선한다.
+    // sourcePage는 원본 문제은행 페이지라, 내보낸 PDF의 페이지별 문항 수와 다를 수 있다.
+    final pageCapacityByPage = <int, int>{};
+    final rawPageRows = preset.renderConfig['pageColumnQuestionCounts'];
+    if (rawPageRows is List) {
+      for (final row in rawPageRows) {
+        if (row is! Map) continue;
+        final map = Map<String, dynamic>.from(row);
+        final pageIdx = int.tryParse(
+              '${map['pageIndex'] ?? map['page'] ?? map['pageNo'] ?? ''}',
+            ) ??
+            0;
+        final left = int.tryParse(
+              '${map['left'] ?? map['leftCount'] ?? map['col1'] ?? 0}',
+            ) ??
+            0;
+        final right = int.tryParse(
+              '${map['right'] ?? map['rightCount'] ?? map['col2'] ?? 0}',
+            ) ??
+            0;
+        if (pageIdx <= 0) continue;
+        final int capacity = (left < 0 ? 0 : left) + (right < 0 ? 0 : right);
+        if (capacity <= 0) continue;
+        pageCapacityByPage[pageIdx] = capacity;
+      }
+    }
+    final orderedPageNumbers = pageCapacityByPage.keys.toList()..sort();
+
     final cellsByPage = <int, List<HomeworkAnswerGradingCell>>{};
     final scoreByQuestionKey = <String, double>{};
     var fallbackIndex = 0;
+    var layoutCursor = 0;
+    var layoutRemaining = orderedPageNumbers.isEmpty
+        ? 0
+        : pageCapacityByPage[orderedPageNumbers.first]!;
     for (final uid in selectedUids) {
       final question = questionByKey[uid];
       if (question == null) continue;
@@ -471,7 +546,25 @@ class RightSheetGradingSearchService {
           : (question.sourceOrder > 0 ? question.sourceOrder : fallbackIndex);
       final answer =
           previewAnswerForMode(question, modeByUid[uid] ?? '').trim();
-      final pageNumber = question.sourcePage > 0 ? question.sourcePage : 1;
+      int pageNumber;
+      if (orderedPageNumbers.isNotEmpty) {
+        while (
+            layoutCursor < orderedPageNumbers.length && layoutRemaining <= 0) {
+          layoutCursor += 1;
+          if (layoutCursor < orderedPageNumbers.length) {
+            layoutRemaining =
+                pageCapacityByPage[orderedPageNumbers[layoutCursor]] ?? 0;
+          }
+        }
+        if (layoutCursor < orderedPageNumbers.length) {
+          pageNumber = orderedPageNumbers[layoutCursor];
+          layoutRemaining -= 1;
+        } else {
+          pageNumber = orderedPageNumbers.last;
+        }
+      } else {
+        pageNumber = question.sourcePage > 0 ? question.sourcePage : 1;
+      }
       final key = '${baseItem.id}|$pageNumber|$questionIndex|$uid';
       final uidScore = presetScoreByUid[uid];
       if (uidScore != null && uidScore.isFinite && uidScore > 0) {
@@ -602,8 +695,9 @@ class RightSheetGradingSearchService {
         hw.completedAt == null;
   }
 
-  bool _isTestHomeworkType(String? typeLabel) =>
-      (typeLabel ?? '').trim() == '테스트';
+  bool _hasProblemBankPreset(HomeworkItem hw) {
+    return (hw.pbPresetId ?? '').trim().isNotEmpty;
+  }
 
   bool _hasDirectHomeworkTextbookLink(HomeworkItem hw) {
     final bookId = (hw.bookId ?? '').trim();

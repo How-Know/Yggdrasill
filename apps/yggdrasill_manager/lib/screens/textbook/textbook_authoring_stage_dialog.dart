@@ -2153,6 +2153,21 @@ class _TextbookAuthoringStageDialogState
     }
   }
 
+  Future<int> _syncAnswersToProblemBank() async {
+    var updated = 0;
+    for (final scope in _activeScopes) {
+      updated += await _answerService.syncAnswersToProblemBank(
+        academyId: widget.academyId,
+        bookId: widget.bookId,
+        gradeLabel: widget.gradeLabel,
+        bigOrder: scope.bigOrder,
+        midOrder: scope.midOrder,
+        subKey: scope.subKey,
+      );
+    }
+    return updated;
+  }
+
   Future<void> _completeIfReady() async {
     final hasDirtyAnswers = _answersByCropId.values.any((d) => d.dirty);
     final hasDirtySolRefs = _solRefsByCropId.values.any((d) => d.dirty);
@@ -2175,12 +2190,22 @@ class _TextbookAuthoringStageDialogState
       _toast('본문 문제 추출이 아직 진행 중입니다: $_pbRunStatusText', error: true);
       return;
     }
+    var synced = 0;
+    try {
+      synced = await _syncAnswersToProblemBank();
+    } catch (e) {
+      if (!mounted) return;
+      _toast('문제은행 정답 동기화 실패: $e', error: true);
+      return;
+    }
+    if (!mounted) return;
     final docs = _pbRunDocumentByKey.values
         .where((id) => id.trim().isNotEmpty)
         .toSet()
         .length;
     if (docs > 0) {
-      _toast('문제은행 PDF-only 문서 $docs개 상태 확인 완료');
+      final syncText = synced > 0 ? ' · 정답 $synced개 반영' : '';
+      _toast('문제은행 PDF-only 문서 $docs개 상태 확인 완료$syncText');
     }
     Navigator.of(context).maybePop();
   }

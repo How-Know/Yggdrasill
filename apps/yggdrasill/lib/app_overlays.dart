@@ -58,6 +58,7 @@ class RightSideSheetTestGradingSession {
   final RightSheetTestGradingAction? onAction;
   final bool gradingLocked;
   final RightSheetTestGradingEditResetAction? onRequestEditReset;
+  final bool closeSheetOnAction;
   final Map<String, double> scoreByQuestionKey;
 
   const RightSideSheetTestGradingSession({
@@ -73,6 +74,7 @@ class RightSideSheetTestGradingSession {
     this.onAction,
     this.gradingLocked = false,
     this.onRequestEditReset,
+    this.closeSheetOnAction = true,
     this.scoreByQuestionKey = const <String, double>{},
   });
 }

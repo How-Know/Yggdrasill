@@ -16,7 +16,6 @@ import 'package:uuid/uuid.dart';
 import 'file_shortcut_tab.dart';
 import '../latex_text_renderer.dart';
 import '../pill_tab_selector.dart';
-import '../main_fab_alternative.dart';
 import '../../app_overlays.dart';
 import '../../models/memo.dart';
 import '../../services/ai_summary.dart';
@@ -3460,6 +3459,12 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         Map<String, String>.from(_gradingStates),
       );
       widget.onClearSession();
+      if (session.closeSheetOnAction) {
+        final closeAction = closeRightSideSheetAction;
+        if (closeAction != null) {
+          await closeAction();
+        }
+      }
     } finally {
       if (!mounted) return;
       setState(() {
@@ -4612,12 +4617,12 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       mainAxisAlignment: MainAxisAlignment.end,
       children: [
         button(
-          label: '완료',
+          label: _actionBusy ? '완료중' : '완료',
           onTap: () => unawaited(_runAction('complete')),
         ),
         const SizedBox(width: 8),
         button(
-          label: _actionBusy ? '처리중' : '확인',
+          label: _actionBusy ? '확인중' : '확인',
           onTap: () => unawaited(_runAction('confirm')),
           filled: true,
         ),
@@ -4743,73 +4748,6 @@ class _AnswerKeyPdfShortcutExplorer extends StatefulWidget {
 class _AnswerKeyPdfShortcutExplorerState
     extends State<_AnswerKeyPdfShortcutExplorer> {
   final ScrollController _scrollCtrl = ScrollController();
-  bool _batchConfirmBusy = false;
-
-  Future<void> _runBatchConfirmAction() async {
-    if (_batchConfirmBusy) return;
-    final action = homeBatchConfirmAction;
-    if (action == null) return;
-    setState(() {
-      _batchConfirmBusy = true;
-    });
-    try {
-      await action();
-    } finally {
-      if (mounted) {
-        setState(() {
-          _batchConfirmBusy = false;
-        });
-      }
-    }
-  }
-
-  Widget _buildBatchProcessButton() {
-    return ValueListenableBuilder<int>(
-      valueListenable: homeBatchConfirmPendingCount,
-      builder: (context, count, _) {
-        final pendingCount = count < 0 ? 0 : count;
-        final actionReady = homeBatchConfirmAction != null;
-        final canRun = pendingCount > 0 && actionReady && !_batchConfirmBusy;
-        return Opacity(
-          opacity: canRun ? 1.0 : 0.45,
-          child: IgnorePointer(
-            ignoring: !canRun,
-            child: SizedBox(
-              width: 122,
-              height: 42,
-              child: FittedBox(
-                fit: BoxFit.contain,
-                alignment: Alignment.centerRight,
-                child: HomeBottomActionPill(
-                  backgroundColor: const Color(0xFF1B6B63),
-                  onTap: () => unawaited(_runBatchConfirmAction()),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(
-                        Icons.check_rounded,
-                        size: 21,
-                        color: Colors.white,
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        '처리 $pendingCount',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 17,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
 
   @override
   void dispose() {
@@ -4837,7 +4775,6 @@ class _AnswerKeyPdfShortcutExplorerState
                 padding: 3,
               ),
               const Spacer(),
-              _buildBatchProcessButton(),
             ],
           ),
           const SizedBox(height: 18),

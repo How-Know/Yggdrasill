@@ -55,6 +55,10 @@ class ProblemBankDocument {
 
   bool get hasHwpxSource => sourceStoragePath.trim().isNotEmpty;
   bool get hasPdfSource => sourcePdfStoragePath.trim().isNotEmpty;
+  bool get isTextbookPdfOnly =>
+      '${meta['extract_mode'] ?? ''}'.trim() == 'textbook_pdf_only' ||
+      (_mapOrEmpty(meta['textbook_scope'])['mode'] ?? '').toString().trim() ==
+          'textbook_pdf_only';
 
   factory ProblemBankDocument.fromMap(Map<String, dynamic> map) {
     final meta = _mapOrEmpty(map['meta']);

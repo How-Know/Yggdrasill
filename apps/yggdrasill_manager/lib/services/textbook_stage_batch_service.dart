@@ -179,6 +179,7 @@ class TextbookStageBatchService {
 
     final aggregated = <TextbookVlmAnswerItem>[];
     final imageByNumber = <String, _ImageAnswerCrop>{};
+    final pageByNumber = <String, ({int rawPage, int displayPage})>{};
     final totalPages = doc.pages.length;
     for (var page = 1; page <= totalPages; page += 1) {
       onStatus?.call('정답 VLM $page / $totalPages 페이지...');
@@ -204,10 +205,24 @@ class TextbookStageBatchService {
         for (final item in result.items) {
           if (item.answerText.trim().isEmpty) continue;
           aggregated.add(item);
+          final numberKey = textbookAnswerNumberKey(item.problemNumber);
+          pageByNumber.putIfAbsent(
+            item.problemNumber,
+            () => (rawPage: result.rawPage, displayPage: result.displayPage),
+          );
+          if (numberKey.isNotEmpty) {
+            pageByNumber.putIfAbsent(
+              numberKey,
+              () => (rawPage: result.rawPage, displayPage: result.displayPage),
+            );
+          }
           if (item.isImage && item.bbox != null) {
             final crop = _cropAnswerImage(png, item.bbox!);
             if (crop != null) {
               imageByNumber.putIfAbsent(item.problemNumber, () => crop);
+              if (numberKey.isNotEmpty) {
+                imageByNumber.putIfAbsent(numberKey, () => crop);
+              }
             }
           }
         }
@@ -228,6 +243,10 @@ class TextbookStageBatchService {
       final cropId = cropIdByNumber[entry.key];
       if (cropId == null) continue;
       final item = entry.value;
+      final answerPage = pageByNumber[entry.key] ??
+          pageByNumber[textbookAnswerNumberKey(item.problemNumber)];
+      final imageCrop = imageByNumber[entry.key] ??
+          imageByNumber[textbookAnswerNumberKey(item.problemNumber)];
       uploads.add(TextbookAnswerUpload(
         cropId: cropId,
         answerKind: item.kind,
@@ -235,11 +254,13 @@ class TextbookStageBatchService {
         answerLatex2d:
             item.answerLatex2d.isEmpty ? item.answerText : item.answerLatex2d,
         answerSource: 'vlm',
+        rawPage: answerPage?.rawPage,
+        displayPage: answerPage?.displayPage,
         bbox1k: item.bbox,
-        answerImagePngBytes: imageByNumber[entry.key]?.pngBytes,
+        answerImagePngBytes: imageCrop?.pngBytes,
         answerImageRegion1k: item.isImage ? item.bbox : null,
-        answerImageWidthPx: imageByNumber[entry.key]?.width,
-        answerImageHeightPx: imageByNumber[entry.key]?.height,
+        answerImageWidthPx: imageCrop?.width,
+        answerImageHeightPx: imageCrop?.height,
       ));
     }
     final saved = await _answerService.batchUpsertAnswers(
