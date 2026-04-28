@@ -493,6 +493,42 @@ class LearningProblemPdfPreviewArtifact {
   }
 }
 
+class LearningProblemAnswerRender {
+  const LearningProblemAnswerRender({
+    required this.key,
+    required this.url,
+    required this.width,
+    required this.height,
+    required this.pixelRatio,
+    required this.cached,
+    required this.error,
+  });
+
+  final String key;
+  final String url;
+  final int width;
+  final int height;
+  final double pixelRatio;
+  final bool cached;
+  final String error;
+
+  bool get hasImage => url.trim().isNotEmpty;
+
+  factory LearningProblemAnswerRender.fromMap(Map<String, dynamic> map) {
+    return LearningProblemAnswerRender(
+      key: '${map['key'] ?? ''}'.trim(),
+      url: '${map['url'] ?? ''}'.trim(),
+      width: _intOrZero(map['width']),
+      height: _intOrZero(map['height']),
+      pixelRatio: _doubleOrZero(map['pixelRatio']) <= 0
+          ? 3.0
+          : _doubleOrZero(map['pixelRatio']),
+      cached: map['cached'] == true,
+      error: '${map['error'] ?? ''}'.trim(),
+    );
+  }
+}
+
 class LearningProblemDocumentExportPreset {
   const LearningProblemDocumentExportPreset({
     required this.id,
@@ -2310,6 +2346,56 @@ class LearningProblemBankService {
       return out;
     } catch (_) {
       return <String, LearningProblemPdfPreviewArtifact>{};
+    }
+  }
+
+  Future<Map<String, LearningProblemAnswerRender>> batchRenderAnswerLatex({
+    required String academyId,
+    required Map<String, String> answersByKey,
+    String textColor = 'EAF2F7',
+    int fontSize = 19,
+  }) async {
+    if (!hasGateway || academyId.trim().isEmpty || answersByKey.isEmpty) {
+      return <String, LearningProblemAnswerRender>{};
+    }
+    try {
+      final items = <Map<String, String>>[];
+      answersByKey.forEach((key, answer) {
+        final safeKey = key.trim();
+        if (safeKey.isEmpty) return;
+        items.add(<String, String>{
+          'key': safeKey,
+          'answer': answer.trim().isEmpty ? '-' : answer.trim(),
+        });
+      });
+      if (items.isEmpty) return <String, LearningProblemAnswerRender>{};
+
+      final result = await _gatewayPost(
+        '/pb/preview/answer-renders',
+        body: <String, dynamic>{
+          'academyId': academyId.trim(),
+          'items': items,
+          'style': <String, dynamic>{
+            'textColor': textColor,
+            'fontSize': fontSize,
+            'transparent': true,
+          },
+        },
+      );
+      final rawRenders = result['renders'];
+      if (rawRenders is! List) return <String, LearningProblemAnswerRender>{};
+
+      final out = <String, LearningProblemAnswerRender>{};
+      for (final raw in rawRenders) {
+        if (raw is! Map) continue;
+        final render = LearningProblemAnswerRender.fromMap(
+          Map<String, dynamic>.from(raw),
+        );
+        if (render.key.isNotEmpty) out[render.key] = render;
+      }
+      return out;
+    } catch (_) {
+      return <String, LearningProblemAnswerRender>{};
     }
   }
 

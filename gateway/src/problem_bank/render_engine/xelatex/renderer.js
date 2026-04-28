@@ -11,8 +11,9 @@ import path from 'node:path';
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
+import sharp from 'sharp';
 import { checkXeLatexInstallation, getXeLatexBinary } from './check_installation.js';
-import { buildTexSource, buildDocumentTexSource } from './template.js';
+import { buildTexSource, buildDocumentTexSource, buildAnswerTexSource } from './template.js';
 
 /**
  * data:<mime>;base64,<...> 형태의 로고 이미지를 workDir 내 파일로 저장하고 경로를 돌려준다.
@@ -75,6 +76,32 @@ function runXeLatex(texPath, outDir) {
         } else {
           resolve({ stdout, stderr });
         }
+      },
+    );
+  });
+}
+
+function renderPdfPageWithPdftoppm(pdfPath, outDir, {
+  dpi = 220,
+  baseName = 'answer-page',
+} = {}) {
+  const pngBase = path.join(outDir, baseName);
+  return new Promise((resolve, reject) => {
+    execFile(
+      'pdftoppm',
+      ['-f', '1', '-singlefile', '-png', '-r', String(dpi), pdfPath, pngBase],
+      { timeout: 120_000, cwd: outDir },
+      (err) => {
+        if (err) {
+          reject(new Error(`pdftoppm failed: ${err.message}`));
+          return;
+        }
+        const pngPath = `${pngBase}.png`;
+        if (!fs.existsSync(pngPath)) {
+          reject(new Error('pdftoppm produced no PNG output.'));
+          return;
+        }
+        resolve(fs.readFileSync(pngPath));
       },
     );
   });
@@ -196,6 +223,77 @@ function countPdfPages(pdfPath) {
   return matches ? matches.length : 1;
 }
 
+function normalizeHexColor(raw, fallback = 'EAF2F7') {
+  const cleaned = String(raw || fallback).replace(/[^0-9A-Fa-f]/g, '').slice(0, 6);
+  return cleaned.length === 6 ? cleaned.toUpperCase() : fallback;
+}
+
+async function makeWhiteBackgroundTransparent(pngBuffer, {
+  textColor = 'EAF2F7',
+  paddingPx = 8,
+} = {}) {
+  const color = normalizeHexColor(textColor);
+  const rgb = [
+    Number.parseInt(color.slice(0, 2), 16),
+    Number.parseInt(color.slice(2, 4), 16),
+    Number.parseInt(color.slice(4, 6), 16),
+  ];
+  const { data, info } = await sharp(pngBuffer)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const { width, height, channels } = info;
+  let minX = width;
+  let minY = height;
+  let maxX = -1;
+  let maxY = -1;
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const idx = (y * width + x) * channels;
+      const r = data[idx];
+      const g = data[idx + 1];
+      const b = data[idx + 2];
+      const darkness = 255 - Math.min(r, g, b);
+      const alpha = Math.max(0, Math.min(255, Math.round(darkness * 2.2)));
+      data[idx] = rgb[0];
+      data[idx + 1] = rgb[1];
+      data[idx + 2] = rgb[2];
+      data[idx + 3] = alpha;
+      if (alpha > 8) {
+        if (x < minX) minX = x;
+        if (y < minY) minY = y;
+        if (x > maxX) maxX = x;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+
+  if (maxX < minX || maxY < minY) {
+    const empty = await sharp({
+      create: {
+        width: 16,
+        height: 16,
+        channels: 4,
+        background: { r: 0, g: 0, b: 0, alpha: 0 },
+      },
+    }).png({ compressionLevel: 9 }).toBuffer();
+    return { pngBuffer: empty, width: 16, height: 16 };
+  }
+
+  const left = Math.max(0, minX - paddingPx);
+  const top = Math.max(0, minY - paddingPx);
+  const right = Math.min(width - 1, maxX + paddingPx);
+  const bottom = Math.min(height - 1, maxY + paddingPx);
+  const cropWidth = Math.max(1, right - left + 1);
+  const cropHeight = Math.max(1, bottom - top + 1);
+  const output = await sharp(data, { raw: { width, height, channels } })
+    .extract({ left, top, width: cropWidth, height: cropHeight })
+    .png({ compressionLevel: 9 })
+    .toBuffer();
+  return { pngBuffer: output, width: cropWidth, height: cropHeight };
+}
+
 // --- Single question -> PNG ---
 
 export async function renderQuestionWithXeLatex({
@@ -251,6 +349,73 @@ export async function renderQuestionWithXeLatex({
     // } else {
       console.log('[pb-xelatex-doc] workDir kept for debug:', workDir);
     // }
+  }
+}
+
+// --- Answer fragment -> transparent PNG ---
+
+export async function renderAnswerWithXeLatex({
+  answer,
+  viewportWidth = 640,
+  deviceScaleFactor = 3,
+  fontFamily,
+  fontBold,
+  fontRegularPath = '',
+  fontSizePt = 19,
+  textColor = 'EAF2F7',
+}) {
+  await ensureInstalled();
+
+  const workDir = path.join(os.tmpdir(), `pb-xelatex-answer-${randomUUID()}`);
+  fs.mkdirSync(workDir, { recursive: true });
+
+  const texPath = path.join(workDir, 'answer.tex');
+  const pdfPath = path.join(workDir, 'answer.pdf');
+
+  try {
+    const texSource = buildAnswerTexSource(answer, {
+      fontFamily,
+      fontBold,
+      fontRegularPath,
+      fontSizePt,
+      // 내부 렌더는 검정으로 출력한 뒤 알파 마스크를 만들고 최종 색상을 입힌다.
+      textColor: '000000',
+    });
+    fs.writeFileSync(texPath, texSource, 'utf-8');
+    await runXeLatex(texPath, workDir);
+
+    if (!(await waitForFile(pdfPath))) {
+      throw new Error('XeLaTeX produced no PDF output.');
+    }
+
+    const dpi = Math.max(160, Math.round(72 * Number(deviceScaleFactor || 3)));
+    let whitePng;
+    try {
+      whitePng = await renderPdfPageWithPdftoppm(pdfPath, workDir, { dpi });
+    } catch (err) {
+      console.warn('[pb-xelatex-answer] pdftoppm failed, falling back to chrome:', err?.message || err);
+      const { renderHtmlToImageBuffer } = await import('../chrome/render_pdf.js');
+      const pdfData = fs.readFileSync(pdfPath);
+      const base64 = pdfData.toString('base64');
+      const html = `<!DOCTYPE html><html><head>
+<style>*{margin:0;padding:0}html,body{width:${viewportWidth}px;background:white;overflow:hidden}</style>
+</head><body>
+<embed src="data:application/pdf;base64,${base64}" type="application/pdf" width="100%">
+</body></html>`;
+      whitePng = await renderHtmlToImageBuffer(html, viewportWidth, deviceScaleFactor);
+    }
+    const transparent = await makeWhiteBackgroundTransparent(whitePng, { textColor });
+    return {
+      ...transparent,
+      pixelRatio: Number(deviceScaleFactor || 3),
+      texSource,
+    };
+  } finally {
+    if (!process.env.PB_XELATEX_KEEP_WORKDIR) {
+      fs.rmSync(workDir, { recursive: true, force: true });
+    } else {
+      console.log('[pb-xelatex-answer] workDir kept for debug:', workDir);
+    }
   }
 }
 

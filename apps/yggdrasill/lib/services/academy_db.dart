@@ -35,7 +35,7 @@ class AcademyDbService {
         mem ? inMemoryDatabasePath : await _resolveLocalDbPath();
     return await openDatabaseWithLog(
       path,
-      version: 56,
+      version: 57,
       onConfigure: (db) async {
         // 잠금 최소화를 위한 설정은 유지
         await db.execute('PRAGMA journal_mode=WAL');
@@ -584,6 +584,7 @@ class AcademyDbService {
             updated_at TEXT
           )
         ''');
+        await _createSeasonRoadmapTables(db);
       },
       onUpgrade: (Database db, int oldVersion, int newVersion) async {
         if (oldVersion < 32) {
@@ -1934,6 +1935,13 @@ class AcademyDbService {
             print('[DB][마이그레이션] v56 exam season_id / active_exam_season_id 실패: $e');
           }
         }
+        if (oldVersion < 57) {
+          try {
+            await _createSeasonRoadmapTables(db);
+          } catch (e) {
+            print('[DB][마이그레이션] v57 season_roadmap_entries 생성 실패: $e');
+          }
+        }
       },
     );
   }
@@ -2442,6 +2450,113 @@ class AcademyDbService {
         icon INTEGER
       )
     ''');
+  }
+
+  // ======== SEASON ROADMAP ========
+  Future<void> _createSeasonRoadmapTables(DatabaseExecutor dbClient) async {
+    await dbClient.execute('''
+      CREATE TABLE IF NOT EXISTS season_roadmap_entries (
+        id TEXT PRIMARY KEY,
+        season_year INTEGER NOT NULL,
+        season_code TEXT NOT NULL,
+        school TEXT,
+        education_level INTEGER NOT NULL,
+        grade INTEGER NOT NULL,
+        grade_key TEXT,
+        course_label_snapshot TEXT NOT NULL,
+        is_optional INTEGER NOT NULL DEFAULT 0,
+        order_index INTEGER NOT NULL DEFAULT 0,
+        note TEXT,
+        updated_at TEXT
+      )
+    ''');
+    await dbClient.execute('''
+      CREATE INDEX IF NOT EXISTS idx_season_roadmap_year_code
+      ON season_roadmap_entries(season_year, season_code)
+    ''');
+    await dbClient.execute('''
+      CREATE INDEX IF NOT EXISTS idx_season_roadmap_lookup
+      ON season_roadmap_entries(season_year, season_code, school, education_level, grade)
+    ''');
+  }
+
+  Future<void> ensureSeasonRoadmapTables() async {
+    final dbClient = await db;
+    await _createSeasonRoadmapTables(dbClient);
+  }
+
+  Future<List<Map<String, dynamic>>> loadSeasonRoadmapEntriesForYear(
+      int seasonYear) async {
+    final dbClient = await db;
+    await ensureSeasonRoadmapTables();
+    return await dbClient.query(
+      'season_roadmap_entries',
+      where: 'season_year = ?',
+      whereArgs: [seasonYear],
+      orderBy:
+          'season_code ASC, education_level ASC, grade ASC, order_index ASC',
+    );
+  }
+
+  Future<void> upsertSeasonRoadmapEntries(
+      List<Map<String, dynamic>> rows) async {
+    final dbClient = await db;
+    await ensureSeasonRoadmapTables();
+    await dbClient.transaction((txn) async {
+      for (final row in rows) {
+        await txn.insert(
+          'season_roadmap_entries',
+          row,
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+      }
+    });
+  }
+
+  Future<List<Map<String, dynamic>>> lookupSeasonRoadmapEntries({
+    required int seasonYear,
+    required String seasonCode,
+    required String? school,
+    required int educationLevel,
+    required int grade,
+  }) async {
+    final dbClient = await db;
+    await ensureSeasonRoadmapTables();
+    final schoolValue = (school ?? '').trim();
+    final rows = await dbClient.query(
+      'season_roadmap_entries',
+      where: '''
+        season_year = ?
+        AND season_code = ?
+        AND education_level = ?
+        AND grade = ?
+        AND (school IS NULL OR school = '' OR school = ?)
+      ''',
+      whereArgs: [
+        seasonYear,
+        seasonCode,
+        educationLevel,
+        grade,
+        schoolValue,
+      ],
+      orderBy: 'school DESC, order_index ASC',
+    );
+    if (schoolValue.isEmpty) {
+      return rows.where((row) {
+        final rowSchool = (row['school'] ?? '').toString().trim();
+        return rowSchool.isEmpty;
+      }).toList();
+    }
+    final schoolSpecific = rows.where((row) {
+      final rowSchool = (row['school'] ?? '').toString().trim();
+      return rowSchool == schoolValue;
+    }).toList();
+    return schoolSpecific.isNotEmpty
+        ? schoolSpecific
+        : rows.where((row) {
+            final rowSchool = (row['school'] ?? '').toString().trim();
+            return rowSchool.isEmpty;
+          }).toList();
   }
 
   // ======== ANSWER KEY (우측 사이드시트: 책 리스트) ========

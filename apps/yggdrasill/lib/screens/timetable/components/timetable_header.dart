@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:material_symbols_icons/symbols.dart';
 
+import '../../../models/academic_season.dart';
+
 class TimetableHeader extends StatefulWidget {
   final Function(DateTime) onDateChanged;
   final DateTime selectedDate;
@@ -10,6 +12,8 @@ class TimetableHeader extends StatefulWidget {
   final bool isClassListSheetOpen;
   final VoidCallback? onClassListSheetToggle;
   final VoidCallback? onExportPressed;
+  final bool showSeasonChip;
+  final VoidCallback? onRoadmapPressed;
 
   const TimetableHeader({
     Key? key,
@@ -21,6 +25,8 @@ class TimetableHeader extends StatefulWidget {
     this.isClassListSheetOpen = false,
     this.onClassListSheetToggle,
     this.onExportPressed,
+    this.showSeasonChip = false,
+    this.onRoadmapPressed,
   }) : super(key: key);
 
   @override
@@ -86,6 +92,12 @@ class _TimetableHeaderState extends State<TimetableHeader> {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
+              if (widget.showSeasonChip) ...[
+                _SeasonChip(
+                  season: AcademicSeason.fromDate(widget.selectedDate),
+                ),
+                const SizedBox(width: 12),
+              ],
               Text(
                 '${widget.selectedDate.month}월',
                 style: TextStyle(
@@ -95,6 +107,10 @@ class _TimetableHeaderState extends State<TimetableHeader> {
                 ),
               ),
               const Spacer(),
+              if (widget.onRoadmapPressed != null) ...[
+                _RoadmapButton(onPressed: widget.onRoadmapPressed),
+                const SizedBox(width: 8),
+              ],
               SizedBox(
                 width: 48,
                 height: 48,
@@ -240,6 +256,90 @@ class _TimetableHeaderState extends State<TimetableHeader> {
         ),
         const SizedBox(height: 8),
       ],
+    );
+  }
+}
+
+class _SeasonChip extends StatelessWidget {
+  final AcademicSeason season;
+
+  const _SeasonChip({required this.season});
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: season.displayName,
+      waitDuration: const Duration(milliseconds: 200),
+      child: Container(
+        height: 38,
+        padding: const EdgeInsets.symmetric(horizontal: 14),
+        decoration: BoxDecoration(
+          color: const Color(0xFF16201D),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+              color: const Color(0xFF33A373).withValues(alpha: 0.55)),
+        ),
+        alignment: Alignment.center,
+        child: Text(
+          season.shortLabel,
+          style: const TextStyle(
+            color: Color(0xFFEAF2F2),
+            fontSize: 16,
+            fontWeight: FontWeight.w800,
+            letterSpacing: 0.2,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _RoadmapButton extends StatelessWidget {
+  final VoidCallback? onPressed;
+
+  const _RoadmapButton({required this.onPressed});
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: '시즌 로드맵',
+      waitDuration: const Duration(milliseconds: 200),
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(20),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onPressed,
+          borderRadius: BorderRadius.circular(20),
+          hoverColor: Colors.white.withValues(alpha: 0.06),
+          highlightColor: Colors.white.withValues(alpha: 0.04),
+          splashColor: Colors.white.withValues(alpha: 0.10),
+          child: Container(
+            height: 40,
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            decoration: BoxDecoration(
+              color: const Color(0xFF2A2A2A),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+            ),
+            child: const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Symbols.route, color: Colors.white70, size: 20),
+                SizedBox(width: 6),
+                Text(
+                  '로드맵',
+                  style: TextStyle(
+                    color: Colors.white70,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

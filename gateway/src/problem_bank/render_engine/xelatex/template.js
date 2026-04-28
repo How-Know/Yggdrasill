@@ -3397,6 +3397,82 @@ export function buildTexSource(question, options = {}) {
   return lines.join('\n') + '\n' + renderOneQuestion(question, { stemSizePt }) + '\n\\end{document}\n';
 }
 
+function splitAnswerRenderLines(answer) {
+  const source = String(answer || '').trim();
+  if (!source) return ['-'];
+  const markerRe = /(?<![A-Za-z가-힣\\])\(\s*\d{1,2}\s*\)|[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]/g;
+  const matches = [...source.matchAll(markerRe)];
+  if (matches.length < 2) return [source];
+  const lines = [];
+  const firstIndex = matches[0].index ?? 0;
+  const prefix = source.slice(0, firstIndex).trim();
+  if (prefix) lines.push(prefix);
+  for (let i = 0; i < matches.length; i += 1) {
+    const start = matches[i].index ?? 0;
+    const end = i + 1 < matches.length ? (matches[i + 1].index ?? source.length) : source.length;
+    const line = source.slice(start, end).trim();
+    if (line) lines.push(line);
+  }
+  return lines.length > 0 ? lines : [source];
+}
+
+export function buildAnswerTexSource(answer, options = {}) {
+  const {
+    fontFamily = 'Malgun Gothic',
+    fontBold = 'Malgun Gothic Bold',
+    fontRegularPath = '',
+    fontSizePt = 18,
+    textColor = '000000',
+    maxWidthCm = 13.5,
+  } = options;
+
+  const safeFontSize = Math.max(8, Math.min(32, Number(fontSizePt) || 18));
+  const safeWidth = Math.max(4, Math.min(18, Number(maxWidthCm) || 13.5));
+  const colorHex = String(textColor || '000000').replace(/[^0-9A-Fa-f]/g, '').slice(0, 6) || '000000';
+  const bodyLines = splitAnswerRenderLines(answer)
+    .map((line) => smartTexLine(line, []))
+    .filter((line) => line && line.trim())
+    .map((line) => `{${line}\\par}`)
+    .join('\n');
+
+  const lines = [
+    `\\documentclass[12pt,varwidth=${safeWidth}cm]{standalone}`,
+    '\\usepackage{fontspec}',
+    '\\usepackage{amsmath,amssymb}',
+    '\\usepackage{array}',
+    '\\usepackage{kotex}',
+    '\\XeTeXlinebreaklocale ""',
+    '\\XeTeXlinebreakskip=0pt plus 0pt minus 0pt',
+    '\\tolerance=9999',
+    '\\emergencystretch=0pt',
+    '\\usepackage{xcolor}',
+    '\\usepackage{graphicx}',
+    '\\usepackage[normalem]{ulem}',
+    '\\usepackage{setspace}',
+    '\\newcommand{\\mtemptybox}{\\ensuremath{\\vcenter{\\hbox{\\setlength{\\fboxsep}{0pt}\\framebox[1.35em][c]{\\rule{0pt}{0.9em}}}}}}',
+    '\\newcommand{\\mtexponentemptybox}{\\vcenter{\\hbox{\\scriptsize\\setlength{\\fboxsep}{0pt}\\framebox[0.72em][c]{\\rule{0pt}{0.72em}}}}}',
+    '\\newcommand{\\mtparallel}{\\mathbin{\\smash{\\raisebox{0.06em}{$/\\mkern-2mu/$}}}}',
+    '',
+    fontSpecDirective(fontRegularPath, fontFamily, fontBold),
+    hangulFontDirective(fontRegularPath, fontFamily, fontBold),
+    '',
+    '\\pagestyle{empty}',
+    '\\setlength{\\parindent}{0pt}',
+    '\\setlength{\\parskip}{0.28em}',
+    '\\setstretch{1.55}',
+    '\\lineskiplimit=0.35em',
+    '\\lineskip=0.95em',
+    '\\begin{document}',
+    `\\color[HTML]{${colorHex}}`,
+    `\\fontsize{${safeFontSize}pt}{${(safeFontSize * 1.55).toFixed(2)}pt}\\selectfont`,
+    '\\raggedright',
+    bodyLines || '-',
+    '\\end{document}',
+    '',
+  ];
+  return lines.join('\n');
+}
+
 /* ------------------------------------------------------------------ */
 /*  Full document (multi-question, PDF)                                */
 /* ------------------------------------------------------------------ */

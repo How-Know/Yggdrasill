@@ -9,7 +9,10 @@ import { promisify } from 'node:util';
 import { URL, fileURLToPath } from 'node:url';
 import { createClient } from '@supabase/supabase-js';
 import sharp from 'sharp';
-import { renderPdfWithXeLatex } from './problem_bank/render_engine/xelatex/renderer.js';
+import {
+  renderPdfWithXeLatex,
+  renderAnswerWithXeLatex,
+} from './problem_bank/render_engine/xelatex/renderer.js';
 import { generateObjectiveDraftForQuestion } from './problem_bank_extract_worker.js';
 
 const __api_dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -3710,6 +3713,176 @@ async function previewPdfArtifacts(res, req) {
 const BATCH_THUMB_BUCKET = process.env.PB_PREVIEW_THUMB_BUCKET || 'problem-previews';
 const BATCH_THUMB_WIDTH_PX = 820;
 const BATCH_THUMB_EXPIRES_SEC = 60 * 60 * 24 * 7;
+const ANSWER_RENDER_BUCKET = process.env.PB_ANSWER_RENDER_BUCKET || 'problem-previews';
+const ANSWER_RENDER_EXPIRES_SEC = 60 * 60 * 24 * 7;
+const ANSWER_RENDER_STYLE_VERSION = 'answer-xelatex-v5-hires';
+const ANSWER_RENDER_PIXEL_RATIO = 5;
+const ANSWER_RENDER_CONCURRENCY = Math.max(
+  1,
+  Math.min(4, Number.parseInt(process.env.PB_ANSWER_RENDER_CONCURRENCY || '2', 10) || 2),
+);
+
+function normalizeAnswerRenderColor(raw, fallback = 'EAF2F7') {
+  const cleaned = String(raw || fallback).replace(/[^0-9A-Fa-f]/g, '').slice(0, 6);
+  return cleaned.length === 6 ? cleaned.toUpperCase() : fallback;
+}
+
+function normalizeAnswerRenderFontSize(raw) {
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return 19;
+  return Math.max(10, Math.min(30, Math.round(parsed)));
+}
+
+async function loadAnswerRenderStorageMeta(storagePath) {
+  try {
+    const { data, error } = await supa.storage
+      .from(ANSWER_RENDER_BUCKET)
+      .download(storagePath);
+    if (error || !data) return null;
+    const bytes = Buffer.from(await data.arrayBuffer());
+    const meta = await sharp(bytes).metadata();
+    return {
+      width: Number(meta.width || 0),
+      height: Number(meta.height || 0),
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
+async function createAnswerRenderSignedUrl(storagePath) {
+  const { data } = await supa.storage
+    .from(ANSWER_RENDER_BUCKET)
+    .createSignedUrl(storagePath, ANSWER_RENDER_EXPIRES_SEC);
+  return String(data?.signedUrl || '').trim();
+}
+
+async function previewAnswerRenders(res, req) {
+  console.log('[pb-api] POST /pb/preview/answer-renders');
+  let body;
+  try { body = await readJson(req); } catch (_) {
+    sendJson(res, 400, { ok: false, error: 'invalid_json' }); return;
+  }
+
+  const academyId = String(body?.academyId || '').trim();
+  const rawItems = Array.isArray(body?.items) ? body.items : [];
+  if (!isUuid(academyId) || rawItems.length === 0) {
+    sendJson(res, 400, { ok: false, error: 'academyId(uuid) and items[] required' });
+    return;
+  }
+
+  const style = normalizeJsonObject(body?.style, {});
+  const textColor = normalizeAnswerRenderColor(style.textColor || style.color || 'EAF2F7');
+  const fontSize = normalizeAnswerRenderFontSize(style.fontSize || style.fontSizePt || 19);
+  const transparent = style.transparent !== false;
+  const font = resolveBatchPreviewFont();
+  const fontFamily = String(style.fontFamily || font.family || 'Malgun Gothic').trim();
+  const fontRegularPath = String(style.fontFamily ? '' : font.path || '').trim();
+  const fontBold = String(style.fontBold || `${fontFamily} Bold`).trim();
+  const limit = Math.min(rawItems.length, 120);
+  const descriptors = [];
+  const renderByHash = new Map();
+
+  for (let i = 0; i < limit; i += 1) {
+    const rawItem = rawItems[i];
+    const key = String(rawItem?.key ?? '').trim();
+    const answer = String(rawItem?.answer ?? '').trim();
+    if (!key) continue;
+
+    const renderHash = createHash('sha256')
+      .update(JSON.stringify({
+        version: ANSWER_RENDER_STYLE_VERSION,
+        answer,
+        textColor,
+        fontSize,
+        transparent,
+        fontFamily,
+        fontRegularPath,
+      }))
+      .digest('hex');
+    const storagePath = `${academyId}/answer-renders/${renderHash}.png`;
+    const descriptor = { key, answer, renderHash, storagePath };
+    descriptors.push(descriptor);
+    if (!renderByHash.has(renderHash)) renderByHash.set(renderHash, descriptor);
+  }
+
+  const renderOne = async (descriptor) => {
+    try {
+      const cachedMeta = await loadAnswerRenderStorageMeta(descriptor.storagePath);
+      if (cachedMeta) {
+        const url = await createAnswerRenderSignedUrl(descriptor.storagePath);
+        return {
+          url,
+          width: cachedMeta.width || 0,
+          height: cachedMeta.height || 0,
+        pixelRatio: ANSWER_RENDER_PIXEL_RATIO,
+          cached: true,
+          storagePath: descriptor.storagePath,
+        };
+      }
+
+      const rendered = await renderAnswerWithXeLatex({
+        answer: descriptor.answer || '-',
+        viewportWidth: 640,
+        deviceScaleFactor: ANSWER_RENDER_PIXEL_RATIO,
+        fontFamily,
+        fontBold,
+        fontRegularPath,
+        fontSizePt: fontSize,
+        textColor,
+      });
+      const { error: upErr } = await supa.storage
+        .from(ANSWER_RENDER_BUCKET)
+        .upload(descriptor.storagePath, rendered.pngBuffer, {
+          contentType: 'image/png',
+          upsert: true,
+        });
+      if (upErr) throw upErr;
+      const url = await createAnswerRenderSignedUrl(descriptor.storagePath);
+      return {
+        url,
+        width: rendered.width || 0,
+        height: rendered.height || 0,
+        pixelRatio: rendered.pixelRatio || ANSWER_RENDER_PIXEL_RATIO,
+        cached: false,
+        storagePath: descriptor.storagePath,
+      };
+    } catch (err) {
+      return {
+        url: '',
+        width: 0,
+        height: 0,
+        cached: false,
+        error: compact(err?.message || err),
+      };
+    }
+  };
+
+  const byHashResult = new Map();
+  const uniqueDescriptors = Array.from(renderByHash.values());
+  let cursor = 0;
+  const workerCount = Math.min(ANSWER_RENDER_CONCURRENCY, uniqueDescriptors.length);
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (cursor < uniqueDescriptors.length) {
+      const descriptor = uniqueDescriptors[cursor];
+      cursor += 1;
+      byHashResult.set(descriptor.renderHash, await renderOne(descriptor));
+    }
+  }));
+
+  const renders = descriptors.map((descriptor) => ({
+    key: descriptor.key,
+    ...(byHashResult.get(descriptor.renderHash) || {
+      url: '',
+      width: 0,
+      height: 0,
+      cached: false,
+      error: 'render_unavailable',
+    }),
+  }));
+
+  sendJson(res, 200, { ok: true, renders });
+}
 
 async function batchRenderThumbnails(res, req) {
   console.log('[pb-api] POST /pb/preview/batch-render');
@@ -6082,6 +6255,11 @@ async function handler(req, res) {
 
     if (method === 'POST' && url.pathname === '/pb/preview/pdf-artifacts') {
       await previewPdfArtifacts(res, req);
+      return;
+    }
+
+    if (method === 'POST' && url.pathname === '/pb/preview/answer-renders') {
+      await previewAnswerRenders(res, req);
       return;
     }
 

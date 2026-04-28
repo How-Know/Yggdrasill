@@ -544,8 +544,8 @@ class RightSheetGradingSearchService {
       final questionIndex = rawIndex != null && rawIndex > 0
           ? rawIndex
           : (question.sourceOrder > 0 ? question.sourceOrder : fallbackIndex);
-      final answer =
-          previewAnswerForMode(question, modeByUid[uid] ?? '').trim();
+      final answerMode = (modeByUid[uid] ?? '').trim().toLowerCase();
+      final answer = previewAnswerForMode(question, answerMode).trim();
       int pageNumber;
       if (orderedPageNumbers.isNotEmpty) {
         while (
@@ -577,6 +577,7 @@ class RightSheetGradingSearchService {
               key: key,
               questionIndex: questionIndex,
               answer: answer.isEmpty ? '-' : answer,
+              answerMode: answerMode,
             ),
           );
     }
@@ -825,6 +826,7 @@ class RightSheetGradingSearchService {
                     'key': cell.key,
                     'questionIndex': cell.questionIndex,
                     'answer': cell.answer,
+                    'answerMode': cell.answerMode,
                   },
                 )
                 .toList(growable: false),

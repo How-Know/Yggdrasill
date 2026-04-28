@@ -20,11 +20,13 @@ class HomeworkAnswerGradingCell {
   final String key;
   final int questionIndex;
   final String answer;
+  final String answerMode;
 
   const HomeworkAnswerGradingCell({
     required this.key,
     required this.questionIndex,
     required this.answer,
+    this.answerMode = '',
   });
 }
 

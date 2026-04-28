@@ -18,6 +18,8 @@ import '../models/session_override.dart';
 import '../models/student_payment_info.dart';
 import '../models/student_pause_period.dart';
 import '../models/student_charge_point.dart';
+import '../models/academic_season.dart';
+import '../models/season_roadmap_entry.dart';
 import 'package:flutter/foundation.dart';
 import 'academy_db.dart';
 import 'runtime_flags.dart';
@@ -34,6 +36,7 @@ import 'tag_preset_service.dart';
 import 'memo_service.dart';
 import 'resource_service.dart';
 import 'answer_key_service.dart';
+import 'season_roadmap_service.dart';
 import 'attendance_service.dart';
 import 'homework_score_service.dart';
 import 'realtime_reconciler.dart';
@@ -7552,6 +7555,24 @@ class DataManager {
       AnswerKeyService.instance.loadAnswerKeyGrades();
   Future<void> saveAnswerKeyGrades(List<Map<String, dynamic>> rows) =>
       AnswerKeyService.instance.saveAnswerKeyGrades(rows);
+
+  Future<List<SeasonRoadmapEntry>> loadSeasonRoadmapForYear(int seasonYear) =>
+      SeasonRoadmapService.instance.loadRoadmapForYear(seasonYear);
+
+  Future<List<SeasonRoadmapEntry>> lookupSeasonRoadmap({
+    required int seasonYear,
+    required AcademicSeasonCode seasonCode,
+    required String? school,
+    required EducationLevel educationLevel,
+    required int grade,
+  }) =>
+      SeasonRoadmapService.instance.lookupRoadmap(
+        seasonYear: seasonYear,
+        seasonCode: seasonCode,
+        school: school,
+        educationLevel: educationLevel,
+        grade: grade,
+      );
 
   Future<List<Map<String, dynamic>>> loadAnswerKeyBooks() =>
       AnswerKeyService.instance.loadAnswerKeyBooks();

@@ -2885,6 +2885,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                     'key': cell.key,
                     'questionIndex': cell.questionIndex,
                     'answer': cell.answer,
+                    'answerMode': cell.answerMode,
                   },
                 )
                 .toList(growable: false),
@@ -3009,8 +3010,8 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       final questionIndex = rawIndex != null && rawIndex > 0
           ? rawIndex
           : (question.sourceOrder > 0 ? question.sourceOrder : fallbackIndex);
-      final answer =
-          previewAnswerForMode(question, modeByUid[uid] ?? '').trim();
+      final answerMode = (modeByUid[uid] ?? '').trim().toLowerCase();
+      final answer = previewAnswerForMode(question, answerMode).trim();
 
       int pageNumber;
       if (orderedPageNumbers.isNotEmpty) {
@@ -3044,6 +3045,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
               key: key,
               questionIndex: questionIndex,
               answer: answer.isEmpty ? '-' : answer,
+              answerMode: answerMode,
             ),
           );
     }

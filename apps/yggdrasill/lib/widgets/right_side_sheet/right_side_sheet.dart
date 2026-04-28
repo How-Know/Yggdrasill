@@ -15,13 +15,14 @@ import 'package:syncfusion_flutter_pdf/pdf.dart' as sf;
 import 'package:uuid/uuid.dart';
 import 'file_shortcut_tab.dart';
 import '../latex_text_renderer.dart';
-import '../pill_tab_selector.dart';
 import '../../app_overlays.dart';
 import '../../models/memo.dart';
 import '../../services/ai_summary.dart';
 import '../../services/data_manager.dart';
+import '../../services/learning_problem_bank_service.dart';
 import '../../services/runtime_flags.dart';
 import '../../services/tag_preset_service.dart';
+import '../../services/tenant_service.dart';
 import '../memo_dialogs.dart';
 
 const Color _rsBg = Color(0xFF0B1112);
@@ -32,7 +33,7 @@ const Color _rsText = Color(0xFFEAF2F2);
 const Color _rsTextSub = Color(0xFF9FB3B3);
 const Color _rsAccent = Color(0xFF33A373);
 
-enum RightSideSheetMode { none, answerKey, fileShortcut, pdfEdit, memo }
+enum RightSideSheetMode { none, grading, answerKey, fileShortcut, pdfEdit, memo }
 
 class RightSideSheet extends StatefulWidget {
   final VoidCallback onClose;
@@ -50,7 +51,7 @@ class RightSideSheet extends StatefulWidget {
 }
 
 class _RightSideSheetState extends State<RightSideSheet> {
-  // 기본 탭: 채점(안내). 교재 탭에서 답지 PDF(기존 textbook 흐름).
+  // 기본 화면은 답지 바로가기(교재)이며, 채점은 상단의 별도 버튼으로 독립시킨다.
   RightSideSheetMode _mode = RightSideSheetMode.answerKey;
   final List<_BookItem> _books = <_BookItem>[];
   Map<String, Map<String, String>> _pdfPathByBookAndGrade =
@@ -58,12 +59,8 @@ class _RightSideSheetState extends State<RightSideSheet> {
   int _bookSeq = 0;
   String? _selectedBookId;
 
-  /// 0: 채점(안내), 1: 교재(기존 textbook 답지 흐름)
-  int _answerKeyTabIndex = 0;
   Future<void>? _answerKeyLoadFuture;
-  static const List<String> _answerKeyTabs = ['채점', '교재'];
-  String get _answerKeyCategory =>
-      _answerKeyTabIndex == 1 ? 'textbook' : 'grading';
+  String get _answerKeyCategory => 'textbook';
   bool get _answerKeyReadOnly => true;
   static const List<String> _answerKeyGradeOrder = [
     '초1',
@@ -130,24 +127,25 @@ class _RightSideSheetState extends State<RightSideSheet> {
 
   void _onTestGradingSessionChanged() {
     if (!mounted) return;
-    final next = rightSideSheetTestGradingSession.value;
-    final hasSession = next != null;
-    setState(() {
-      _testGradingSession = next;
-      if (hasSession) {
-        _mode = RightSideSheetMode.answerKey;
-        _answerKeyTabIndex = 0;
-      }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final next = rightSideSheetTestGradingSession.value;
+      final hasSession = next != null;
+      setState(() {
+        _testGradingSession = next;
+        if (hasSession) {
+          _mode = RightSideSheetMode.grading;
+        }
+      });
+      _syncGradingTabActiveFlag();
     });
-    _syncGradingTabActiveFlag();
   }
 
-  /// 답지바로가기 > 채점 탭 활성 상태를 전역 notifier로 반영.
-  /// (채점 탭에 있을 때만 우측 시트 너비를 확장하기 위해 사용)
+  /// 독립 채점 화면 활성 상태를 전역 notifier로 반영.
+  /// (채점 화면에 있을 때만 우측 시트 너비를 확장하기 위해 사용)
   void _syncGradingTabActiveFlag() {
-    final bool active = _mode == RightSideSheetMode.answerKey &&
-        _answerKeyTabIndex == 0 &&
-        _testGradingSession != null;
+    final bool active =
+        _mode == RightSideSheetMode.grading && _testGradingSession != null;
     if (rightSideSheetGradingTabActive.value != active) {
       rightSideSheetGradingTabActive.value = active;
     }
@@ -410,18 +408,6 @@ class _RightSideSheetState extends State<RightSideSheet> {
     final category = _answerKeyCategory;
 
     try {
-      if (_answerKeyTabIndex != 1) {
-        if (!mounted) return;
-        setState(() {
-          _books.clear();
-          _pdfPathByBookAndGrade = <String, Map<String, String>>{};
-          _selectedBookId = null;
-        });
-        _booksLoaded = true;
-        _pdfsLoaded = true;
-        return;
-      }
-
       final rows =
           await DataManager.instance.loadResourceFilesForCategory(category);
       final nextBooks = <_BookItem>[];
@@ -456,7 +442,7 @@ class _RightSideSheetState extends State<RightSideSheet> {
         ));
       }
 
-      if (!mounted || _answerKeyTabIndex != 1) return;
+      if (!mounted) return;
       final derivedGrades = _grades.isNotEmpty
           ? _grades
           : _buildGradeOptionsFromNames(gradeNames);
@@ -1293,23 +1279,6 @@ class _RightSideSheetState extends State<RightSideSheet> {
     }
   }
 
-  void _onAnswerKeyTabSelected(int idx) {
-    if (idx == _answerKeyTabIndex) return;
-    setState(() {
-      _answerKeyTabIndex = idx;
-      _books.clear();
-      _pdfPathByBookAndGrade = <String, Map<String, String>>{};
-      _selectedBookId = null;
-      _booksLoaded = false;
-      _pdfsLoaded = false;
-      _booksLoading = false;
-      _pdfsLoading = false;
-    });
-    _answerKeyLoadFuture = null;
-    _syncGradingTabActiveFlag();
-    unawaited(_ensureGradesThenLoadAnswerKeyData());
-  }
-
   @override
   Widget build(BuildContext context) {
     return Material(
@@ -1347,18 +1316,22 @@ class _RightSideSheetState extends State<RightSideSheet> {
 
   Widget _buildBody() {
     switch (_mode) {
+      case RightSideSheetMode.grading:
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(10, 12, 10, 12),
+          child: _AnswerKeyGradingTabPanel(
+            session: _testGradingSession,
+            onClearSession: () {
+              rightSideSheetTestGradingSession.value = null;
+            },
+          ),
+        );
       case RightSideSheetMode.answerKey:
         // grades는 답지 기능의 핵심 의존성이라, 최초 진입 시 지연 로드 보장
         if (!_gradesLoaded && !_gradesLoading) {
           unawaited(_loadGrades());
         }
         return _AnswerKeyPdfShortcutExplorer(
-          tabIndex: _answerKeyTabIndex,
-          onTabSelected: _onAnswerKeyTabSelected,
-          testGradingSession: _testGradingSession,
-          onClearTestGradingSession: () {
-            rightSideSheetTestGradingSession.value = null;
-          },
           books: _books,
           grades: _grades,
           pdfPathByBookAndGrade: _pdfPathByBookAndGrade,
@@ -1784,6 +1757,12 @@ class _TopIconBar extends StatelessWidget {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
+                IconButton(
+                  tooltip: '채점',
+                  onPressed: () => onModeSelected(RightSideSheetMode.grading),
+                  icon: const Icon(Icons.fact_check_outlined),
+                  color: _colorFor(RightSideSheetMode.grading),
+                ),
                 IconButton(
                   tooltip: '답지 바로가기',
                   onPressed: () => onModeSelected(RightSideSheetMode.answerKey),
@@ -2647,11 +2626,13 @@ class _RightSheetGradingCellVm {
   final String key;
   final int questionIndex;
   final String answer;
+  final String answerMode;
 
   const _RightSheetGradingCellVm({
     required this.key,
     required this.questionIndex,
     required this.answer,
+    this.answerMode = '',
   });
 }
 
@@ -2663,16 +2644,6 @@ class _RightSheetGradingPageVm {
     required this.pageNumber,
     required this.cells,
   });
-}
-
-/// 세트형 문항의 소문항 덩어리.
-/// - [marker] : 소문항 번호(`(1)`, `①` 등). 선행 텍스트라 마커가 없으면 null.
-/// - [body]   : 소문항 정답 본문.
-class _RsSubChunk {
-  final String? marker;
-  final String body;
-
-  const _RsSubChunk({this.marker, required this.body});
 }
 
 class _AnswerKeyGradingTabPanel extends StatefulWidget {
@@ -2719,6 +2690,12 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
   bool _gradingEditLocked = false;
   bool _editResetBusy = false;
   bool _actionBusy = false;
+  final LearningProblemBankService _problemBankService =
+      LearningProblemBankService();
+  Map<String, LearningProblemAnswerRender> _answerRenders =
+      <String, LearningProblemAnswerRender>{};
+  Set<String> _answerRenderFailedKeys = <String>{};
+  int _answerRenderRequestSeq = 0;
 
   @override
   void initState() {
@@ -2841,9 +2818,12 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     _boundSessionRef = session;
     _boundSessionId = nextId;
     if (session == null) {
+      _answerRenderRequestSeq++;
       setState(() {
         _gradingStates = <String, String>{};
         _gradingEditLocked = false;
+        _answerRenders = <String, LearningProblemAnswerRender>{};
+        _answerRenderFailedKeys = <String>{};
       });
       return;
     }
@@ -2854,7 +2834,78 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     setState(() {
       _gradingStates = mapped;
       _gradingEditLocked = session.gradingLocked;
+      _answerRenders = <String, LearningProblemAnswerRender>{};
+      _answerRenderFailedKeys = <String>{};
     });
+    unawaited(_loadAnswerRendersForSession(session));
+  }
+
+  Future<String> _resolveActiveAcademyId() async {
+    var academyId =
+        (await TenantService.instance.getActiveAcademyId() ?? '').trim();
+    if (academyId.isEmpty) {
+      academyId = (await TenantService.instance.ensureActiveAcademy()).trim();
+    }
+    return academyId;
+  }
+
+  Future<void> _loadAnswerRendersForSession(
+    RightSideSheetTestGradingSession session,
+  ) async {
+    final requestSeq = ++_answerRenderRequestSeq;
+    final answersByKey = <String, String>{};
+    for (final rawPage in session.gradingPages) {
+      final rawCells = rawPage['cells'];
+      if (rawCells is! List) continue;
+      for (final rawCell in rawCells) {
+        if (rawCell is! Map) continue;
+        final key = '${rawCell['key'] ?? ''}'.trim();
+        if (key.isEmpty || answersByKey.containsKey(key)) continue;
+        final answer = '${rawCell['answer'] ?? ''}'.trim();
+        final answerMode = '${rawCell['answerMode'] ?? rawCell['mode'] ?? ''}'
+            .trim()
+            .toLowerCase();
+        if (_isObjectiveAnswer(answer: answer, answerMode: answerMode)) {
+          continue;
+        }
+        answersByKey[key] = answer.isEmpty ? '-' : answer;
+      }
+    }
+    if (answersByKey.isEmpty) return;
+    try {
+      final academyId = await _resolveActiveAcademyId();
+      if (academyId.isEmpty) return;
+      final renders = await _problemBankService.batchRenderAnswerLatex(
+        academyId: academyId,
+        answersByKey: answersByKey,
+        textColor: 'EAF2F7',
+        fontSize: 17,
+      );
+      if (!mounted ||
+          requestSeq != _answerRenderRequestSeq ||
+          widget.session?.sessionId != session.sessionId) {
+        return;
+      }
+      final failed = <String>{};
+      for (final entry in answersByKey.entries) {
+        final render = renders[entry.key];
+        if (render == null || !render.hasImage) failed.add(entry.key);
+      }
+      setState(() {
+        _answerRenders = renders;
+        _answerRenderFailedKeys = failed;
+      });
+    } catch (_) {
+      if (!mounted ||
+          requestSeq != _answerRenderRequestSeq ||
+          widget.session?.sessionId != session.sessionId) {
+        return;
+      }
+      setState(() {
+        _answerRenders = <String, LearningProblemAnswerRender>{};
+        _answerRenderFailedKeys = answersByKey.keys.toSet();
+      });
+    }
   }
 
   Future<void> _loadRecentSearches() async {
@@ -2970,41 +3021,6 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     });
     _emitStateChanged();
     return true;
-  }
-
-  String _normalizeAnswerForMathRendering(String raw) {
-    final trimmed = raw.trim();
-    if (trimmed.isEmpty) return '-';
-    if (trimmed == '-') return trimmed;
-    if (trimmed.contains(r'$$') || trimmed.contains(r'\(')) {
-      return trimmed;
-    }
-    var normalized = trimmed.replaceAll('\n', r' \\ ');
-    normalized = normalized.replaceAllMapped(
-      RegExp(r'(?<!\\)(\d+)\s*/\s*(\d+)'),
-      (match) =>
-          r'\frac{' +
-          (match.group(1) ?? '') +
-          '}{' +
-          (match.group(2) ?? '') +
-          '}',
-    );
-    final looksMath = normalized.contains(r'\') ||
-        RegExp(r'[\^\_\=\+\-\*\/]').hasMatch(normalized);
-    if (!looksMath) {
-      final escaped = trimmed
-          .replaceAll(r'\', r'\\')
-          .replaceAll('{', r'\{')
-          .replaceAll('}', r'\}')
-          .replaceAll(r'$', r'\$')
-          .replaceAll('%', r'\%')
-          .replaceAll('&', r'\&')
-          .replaceAll('_', r'\_')
-          .replaceAll('#', r'\#')
-          .replaceAll('\n', r' \\ ');
-      return '\$\$\\text{$escaped}\$\$';
-    }
-    return '\$\$$normalized\$\$';
   }
 
   /// 오버플로 정답 리스트 전용 변환.
@@ -3174,45 +3190,6 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     buffer.write(r'\(');
     buffer.write(latex);
     buffer.write(r'\)');
-  }
-
-  /// 세트형 소문항 구분자 `(1)`, `(2)`, `①` 등을 매칭하는 정규식.
-  /// - `(1)` ~ `(99)` 형태의 괄호번호. 단, `f(1)` 같이 함수 호출로 붙는 경우는 제외하기 위해
-  ///   직전 문자가 영문/백슬래시/한글이면 매칭하지 않는다.
-  /// - 원 번호 `①~⑳`
-  static final RegExp _rsSubQuestionMarkerRegex = RegExp(
-    r'(?<![A-Za-z가-힣\\])\(\s*\d{1,2}\s*\)|[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]',
-  );
-
-  /// 전처리된 답을 소문항 번호 단위로 잘라 `(marker, body)` 목록 반환.
-  /// - 첫 마커 앞에 선행 텍스트가 있으면 marker=null 로 포함.
-  /// - 마커가 하나도 없으면 전체가 한 덩어리.
-  List<_RsSubChunk> _rsSplitBySubQuestionMarker(String preprocessed) {
-    final matches = _rsSubQuestionMarkerRegex.allMatches(preprocessed).toList();
-    if (matches.isEmpty) {
-      final body = preprocessed.trim();
-      return body.isEmpty ? const [] : [_RsSubChunk(body: body)];
-    }
-    final out = <_RsSubChunk>[];
-    if (matches.first.start > 0) {
-      final leading = preprocessed.substring(0, matches.first.start).trim();
-      if (leading.isNotEmpty) {
-        out.add(_RsSubChunk(body: leading));
-      }
-    }
-    for (var i = 0; i < matches.length; i++) {
-      final m = matches[i];
-      final markerRaw = m.group(0) ?? '';
-      final marker = markerRaw.replaceAll(RegExp(r'\s+'), '');
-      final bodyStart = m.end;
-      final bodyEnd =
-          (i + 1 < matches.length) ? matches[i + 1].start : preprocessed.length;
-      var body = preprocessed.substring(bodyStart, bodyEnd);
-      body = body.replaceAll(RegExp(r'^[\s,;]+'), '');
-      body = body.replaceAll(RegExp(r'[\s,;]+$'), '');
-      out.add(_RsSubChunk(marker: marker, body: body));
-    }
-    return out;
   }
 
   /// 연속된 비한글 구간(`segment`) 을 토큰 단위로 인라인 `\(..\)` 로 감싼다.
@@ -3492,12 +3469,16 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
             ? rawCell['questionIndex'] as int
             : int.tryParse('${rawCell['questionIndex']}') ?? 0;
         final answer = '${rawCell['answer'] ?? ''}'.trim();
+        final answerMode = '${rawCell['answerMode'] ?? rawCell['mode'] ?? ''}'
+            .trim()
+            .toLowerCase();
         parsedCells.add(
           _RightSheetGradingCellVm(
             key: key,
             questionIndex:
                 questionIndex <= 0 ? (parsedCells.length + 1) : questionIndex,
             answer: answer,
+            answerMode: answerMode,
           ),
         );
       }
@@ -4115,13 +4096,52 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     );
   }
 
-  bool _isCircledChoiceAnswer(String raw) {
-    final normalized = raw.trim();
-    return RegExp(r'^[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]$').hasMatch(normalized);
+  ({
+    Color border,
+    Color background,
+    Color text,
+    String label,
+  }) _resolveAnswerRowStyle(String state) {
+    switch (_normalizeState(state)) {
+      case 'wrong':
+        return (
+          border: const Color(0xFFB34B61),
+          background: const Color(0xFF2A171D),
+          text: const Color(0xFFFFD7DE),
+          label: '오답',
+        );
+      case 'unsolved':
+        return (
+          border: const Color(0xFF1E2C38),
+          background: const Color(0xFF131A1F),
+          text: const Color(0xFFA9BAC4),
+          label: '미풀이',
+        );
+      default:
+        return (
+          border: const Color(0xFF223131),
+          background: const Color(0xFF151C21),
+          text: const Color(0xFFEAF2F7),
+          label: '정답',
+        );
+    }
   }
 
-  int? _circledChoiceToNumber(String raw) {
-    switch (raw.trim()) {
+  bool _isObjectiveAnswer({
+    required String answer,
+    required String answerMode,
+  }) {
+    final mode = answerMode.trim().toLowerCase();
+    if (mode == 'objective' || mode == 'choice' || mode == 'multiple_choice') {
+      return true;
+    }
+    final compact = answer.trim().replaceAll(RegExp(r'[\s,;/]+'), '');
+    return compact.isNotEmpty &&
+        RegExp(r'^[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]+$').hasMatch(compact);
+  }
+
+  int? _circledObjectiveNumber(String value) {
+    switch (value.trim()) {
       case '①':
         return 1;
       case '②':
@@ -4167,419 +4187,229 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     }
   }
 
-  double _resolveCellWidth(String raw) {
-    const base = 75.0;
-    final normalized = raw.trim();
-    if (normalized.isEmpty || _isCircledChoiceAnswer(normalized)) return base;
-    final compact = normalized.replaceAll(RegExp(r'\s+'), '');
-    final runesLength = compact.runes.length;
-    if (runesLength <= 3) return base;
-    if (runesLength <= 5) return 90;
-    if (runesLength <= 7) return 105;
-    if (runesLength <= 10) return 123;
-    return 130;
-  }
-
-  double _resolveCellFontSize({
-    required String answerRaw,
-    required bool isCorrect,
-    required bool isWideCell,
-  }) {
-    if (!isCorrect) return 18;
-    final normalized = answerRaw.trim();
-    final isCircled = _isCircledChoiceAnswer(normalized);
-    double size = isCircled ? 30 : (isWideCell ? 21 : 25);
-    if (size < 12) return 12;
-    return size;
-  }
-
-  /// 답이 기본 셀 너비(75px)를 넘는 "긴 정답"인지 판정.
-  /// 원문자(①~⑳)는 항상 기본 폭에 맞으므로 제외한다.
-  bool _isOverflowAnswer(String raw) {
-    final normalized = raw.trim();
-    if (normalized.isEmpty) return false;
-    if (_isCircledChoiceAnswer(normalized)) return false;
-    return _resolveCellWidth(normalized) > 75.0;
-  }
-
-  Widget _buildPageDivider() {
-    return Container(
-      height: 1,
-      color: const Color(0x664C5D68),
-    );
-  }
-
-  Widget _buildCell(_RightSheetGradingCellVm cell) {
-    final state = _normalizeState(_gradingStates[cell.key]);
-    final answerRaw = cell.answer.trim();
-    final circledNumber = _circledChoiceToNumber(answerRaw);
-    final isCircledChoice = circledNumber != null;
-    final isOverflow = _isOverflowAnswer(answerRaw);
-    final latexText = _normalizeAnswerForMathRendering(answerRaw);
-    final cellWidth = isOverflow ? 75.0 : _resolveCellWidth(answerRaw);
-    final isWideCell = cellWidth > 75.0;
-    final showsAnswer = state == 'correct' || state == 'wrong';
-    final contentFontSize = _resolveCellFontSize(
-      answerRaw: answerRaw,
-      isCorrect: showsAnswer,
-      isWideCell: isWideCell,
-    );
-    Color borderColor = const Color(0xFF223131);
-    Color backgroundColor = const Color(0xFF151C21);
-    Color textColor = const Color(0xFFEAF2F7);
-    String text = answerRaw;
-    switch (state) {
-      case 'wrong':
-        borderColor = const Color(0xFFB34B61);
-        backgroundColor = const Color(0xFF3A1922);
-        textColor = const Color(0xFFFFD7DE);
-        text = answerRaw;
-        break;
-      case 'unsolved':
-        borderColor = const Color(0xFF1E2C38);
-        backgroundColor = const Color(0xFF131A1F);
-        textColor = const Color(0xFFA9BAC4);
-        text = '-';
-        break;
-      case 'correct':
-        borderColor = const Color(0xFF223131);
-        backgroundColor = const Color(0xFF151C21);
-        textColor = const Color(0xFFEAF2F7);
-        text = answerRaw;
-        break;
-      default:
-        break;
+  List<int> _objectiveAnswerNumbers(String answer) {
+    final numbers = <int>[];
+    for (final rune in answer.runes) {
+      final parsed = _circledObjectiveNumber(String.fromCharCode(rune));
+      if (parsed != null) numbers.add(parsed);
     }
-    // 문항번호 라벨: 페이지 라벨(p.X)과 동일한 사이즈/굵기로 통일.
-    final indexLabel = Padding(
-      padding: const EdgeInsets.only(bottom: 4),
-      child: Text(
-        '${cell.questionIndex}',
-        textAlign: TextAlign.center,
-        maxLines: 1,
-        overflow: TextOverflow.fade,
-        softWrap: false,
-        style: const TextStyle(
-          color: Color(0xFF9FB3B3),
-          fontSize: 16.5,
-          fontWeight: FontWeight.w800,
-          height: 1.0,
-          letterSpacing: -0.2,
-        ),
-      ),
-    );
-    return SizedBox(
-      width: cellWidth,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          indexLabel,
-          Tooltip(
-            message: _gradingEditLocked
-                ? '${cell.questionIndex}번 · 저장된 채점 결과'
-                : '${cell.questionIndex}번',
-            child: InkWell(
-              borderRadius: BorderRadius.circular(8),
-              onTap: () => unawaited(_toggleCellState(cell.key)),
-              child: SizedBox(
-                width: cellWidth,
-                height: 75,
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: backgroundColor,
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: borderColor),
-                  ),
-                  child: Center(
-                    child: (showsAnswer && isCircledChoice && !isOverflow)
-                        ? Container(
-                            width: circledNumber >= 10 ? 33 : 30,
-                            height: circledNumber >= 10 ? 33 : 30,
-                            alignment: Alignment.center,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              border: Border.all(
-                                color: textColor,
-                                width: 1.2,
-                              ),
-                            ),
-                            child: Text(
-                              '$circledNumber',
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                color: textColor,
-                                fontWeight: FontWeight.w800,
-                                fontSize: circledNumber >= 10 ? 14.5 : 16.5,
-                                height: 1.0,
-                              ),
-                            ),
-                          )
-                        : (showsAnswer && isOverflow)
-                            ? FittedBox(
-                                fit: BoxFit.scaleDown,
-                                child: Text(
-                                  '해설',
-                                  textAlign: TextAlign.center,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.fade,
-                                  softWrap: false,
-                                  style: TextStyle(
-                                    color: textColor,
-                                    fontWeight: FontWeight.w800,
-                                    fontSize: contentFontSize,
-                                    height: 1.0,
-                                  ),
-                                ),
-                              )
-                            : showsAnswer
-                                ? SizedBox(
-                                    width: cellWidth - 14,
-                                    height: 64,
-                                    child: FittedBox(
-                                      fit: BoxFit.scaleDown,
-                                      alignment: Alignment.center,
-                                      child: LatexTextRenderer(
-                                        latexText,
-                                        textAlign: TextAlign.center,
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.center,
-                                        maxLines: 3,
-                                        softWrap: true,
-                                        style: TextStyle(
-                                          color: textColor,
-                                          fontWeight: FontWeight.w800,
-                                          fontSize: contentFontSize,
-                                          height: 1.0,
-                                        ),
-                                      ),
-                                    ),
-                                  )
-                                : FittedBox(
-                                    fit: BoxFit.scaleDown,
-                                    child: Text(
-                                      text,
-                                      textAlign: TextAlign.center,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.fade,
-                                      softWrap: false,
-                                      style: TextStyle(
-                                        color: textColor,
-                                        fontWeight: FontWeight.w800,
-                                        fontSize: contentFontSize,
-                                        height: 1.0,
-                                      ),
-                                    ),
-                                  ),
-                  ),
+    return numbers;
+  }
+
+  Widget _buildObjectiveAnswerFlutter(_RightSheetGradingCellVm cell) {
+    final answer = cell.answer.trim().isEmpty ? '-' : cell.answer.trim();
+    final numbers = _objectiveAnswerNumbers(answer);
+    if (numbers.isNotEmpty) {
+      return Align(
+        alignment: Alignment.centerRight,
+        child: Wrap(
+          alignment: WrapAlignment.end,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: 10,
+          runSpacing: 6,
+          children: [
+            for (final rune in answer.runes)
+              if (_circledObjectiveNumber(String.fromCharCode(rune)) != null)
+                Text(
+                  String.fromCharCode(rune),
+                  textAlign: TextAlign.right,
+                  style: const TextStyle(
+                    color: _rsText,
+                    fontFamily: 'ChosunNm',
+                    fontWeight: FontWeight.w400,
+                    fontSize: 40.5,
+                    height: 1.0,
                 ),
               ),
-            ),
-          ),
-        ],
+          ],
+        ),
+      );
+    }
+    return Align(
+      alignment: Alignment.centerRight,
+      child: Text(
+        answer,
+        textAlign: TextAlign.right,
+        style: const TextStyle(
+          color: _rsText,
+          fontWeight: FontWeight.w900,
+          fontSize: 33.75,
+          height: 1.15,
+        ),
       ),
     );
   }
 
-  Widget _buildPageRow(_RightSheetGradingPageVm page) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        Expanded(
-          child: LayoutBuilder(
-            builder: (context, constraints) => SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: ConstrainedBox(
-                constraints: BoxConstraints(minWidth: constraints.maxWidth),
-                child: Align(
-                  alignment: Alignment.centerRight,
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      for (int i = 0; i < page.cells.length; i++) ...[
-                        _buildCell(page.cells[i]),
-                        if (i != page.cells.length - 1)
-                          const SizedBox(width: 9),
-                      ],
-                    ],
+  Widget _buildAnswerImageOrFallback(_RightSheetGradingCellVm cell) {
+    if (_isObjectiveAnswer(
+      answer: cell.answer,
+      answerMode: cell.answerMode,
+    )) {
+      return _buildObjectiveAnswerFlutter(cell);
+    }
+    final render = _answerRenders[cell.key];
+    if (render != null && render.hasImage) {
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          const answerLogicalScale = 1.815;
+          final pixelRatio =
+              render.pixelRatio <= 0 ? 3.0 : render.pixelRatio;
+          final rawWidth = render.width <= 0 ? 1.0 : render.width.toDouble();
+          final rawHeight = render.height <= 0 ? 1.0 : render.height.toDouble();
+          var displayWidth = rawWidth / pixelRatio * answerLogicalScale;
+          var displayHeight = rawHeight / pixelRatio * answerLogicalScale;
+          if (displayWidth > constraints.maxWidth && displayWidth > 0) {
+            final downscale = constraints.maxWidth / displayWidth;
+            displayWidth *= downscale;
+            displayHeight *= downscale;
+          }
+          return Align(
+            alignment: Alignment.centerRight,
+            child: Image.network(
+              render.url,
+              width: displayWidth,
+              height: displayHeight,
+              fit: BoxFit.contain,
+              alignment: Alignment.centerRight,
+              filterQuality: FilterQuality.high,
+              errorBuilder: (_, __, ___) => _buildAnswerFallback(cell),
+            ),
+          );
+        },
+      );
+    }
+    return _buildAnswerFallback(cell);
+  }
+
+  Widget _buildAnswerFallback(_RightSheetGradingCellVm cell) {
+    final failed = _answerRenderFailedKeys.contains(cell.key);
+    return SizedBox(
+      height: 34,
+      child: Align(
+        alignment: Alignment.centerRight,
+        child: Text(
+          failed ? '렌더 실패' : 'XeLaTeX 렌더링 중...',
+          textAlign: TextAlign.right,
+          style: TextStyle(
+            color: failed ? const Color(0xFFFFD7DE) : _rsTextSub,
+            fontWeight: FontWeight.w800,
+            fontSize: 12,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAnswerListRow(_RightSheetGradingCellVm cell) {
+    final state = _normalizeState(_gradingStates[cell.key]);
+    final colors = _resolveAnswerRowStyle(state);
+    return Tooltip(
+      message: _gradingEditLocked
+          ? '${cell.questionIndex}번 · 저장된 채점 결과'
+          : '${cell.questionIndex}번',
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () => unawaited(_toggleCellState(cell.key)),
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+          decoration: BoxDecoration(
+            color: colors.background,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: colors.border),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Container(
+                width: 62,
+                height: 32,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: colors.border.withOpacity(0.18),
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(color: colors.border),
+                ),
+                child: Text(
+                  colors.label,
+                  maxLines: 1,
+                  overflow: TextOverflow.fade,
+                  softWrap: false,
+                  style: TextStyle(
+                    color: colors.text,
+                    fontWeight: FontWeight.w900,
+                    fontSize: 13.5,
+                    height: 1.0,
                   ),
                 ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(child: _buildAnswerImageOrFallback(cell)),
+              const SizedBox(width: 12),
+              SizedBox(
+                width: 48,
+                child: Text(
+                  '${cell.questionIndex}',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Color(0xFF9FB3B3),
+                    fontSize: 18,
+                    fontWeight: FontWeight.w900,
+                    height: 1.0,
+                    letterSpacing: -0.2,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAnswerPageSection(_RightSheetGradingPageVm page, {
+    required bool isFirst,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (!isFirst)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 12),
+            child: Divider(height: 1, thickness: 1, color: _rsBorder),
+          ),
+        Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: Align(
+            alignment: Alignment.centerRight,
+            child: Text(
+              'p.${page.pageNumber}',
+              style: const TextStyle(
+                color: _rsTextSub,
+                fontWeight: FontWeight.w800,
+                fontSize: 13,
+                height: 1.0,
               ),
             ),
           ),
         ),
-        const SizedBox(width: 12),
-        SizedBox(
-          width: 62,
-          child: Text(
-            'p.${page.pageNumber}',
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-              color: Color(0xFF9FB3B3),
-              fontSize: 16.5,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-        ),
+        for (int i = 0; i < page.cells.length; i++) ...[
+          _buildAnswerListRow(page.cells[i]),
+          if (i != page.cells.length - 1) const SizedBox(height: 8),
+        ],
       ],
     );
   }
 
-  /// 긴 정답(네모 셀 기본 폭을 넘는 답)을 번호+정답 리스트로 따로 렌더링.
-  /// 채점 상태와 무관하게 참조용으로 항상 표시하며, 탭 상호작용은 없다(읽기 전용).
-  Widget _buildOverflowAnswerList(List<_RightSheetGradingPageVm> pages) {
-    final rows = <_RightSheetGradingCellVm>[];
-    for (final page in pages) {
-      for (final cell in page.cells) {
-        if (_isOverflowAnswer(cell.answer)) {
-          rows.add(cell);
-        }
-      }
-    }
-    if (rows.isEmpty) return const SizedBox.shrink();
-
-    return Padding(
-      padding: const EdgeInsets.only(top: 14),
-      child: Container(
-        decoration: BoxDecoration(
-          color: _rsPanelBg,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: _rsBorder),
-        ),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            for (int i = 0; i < rows.length; i++) ...[
-              if (i != 0)
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 10),
-                  child: Divider(height: 1, color: _rsBorder),
-                ),
-              _buildOverflowAnswerRow(rows[i]),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildOverflowAnswerRow(_RightSheetGradingCellVm cell) {
-    // XELATEX 빠른정답과 동일한 인라인 `\displaystyle\dfrac` 방식 +
-    // 연산자 주변 공백 주입을 통한 토큰화 → RichText 가 토큰 경계에서 줄바꿈.
-    // 세트형: `(1)`, `(2)`, `①` 같은 소문항 마커가 2개 이상이면 마커 단위로
-    // 줄을 바꾸고, 마커 기준 들여쓰기(hanging indent)를 주어 본문이 길어
-    // 줄바꿈되더라도 후속 줄이 마커 오른쪽으로 자연스럽게 정렬되게 한다.
-    const contentStyle = TextStyle(
-      color: _rsText,
-      fontWeight: FontWeight.w700,
-      fontSize: 20,
-      height: 2.0,
-    );
-    const markerStyle = TextStyle(
-      color: _rsTextSub,
-      fontWeight: FontWeight.w800,
-      fontSize: 20,
-      height: 2.0,
-    );
-
-    final preprocessed = _rsPreprocessOverflowRaw(cell.answer);
-    final subChunks = _rsSplitBySubQuestionMarker(preprocessed);
-    final markerCount = subChunks.where((c) => c.marker != null).length;
-
-    Widget bodyArea;
-    if (markerCount < 2) {
-      // 소문항 마커가 없거나 1개 이하면 단순 줄바꿈 렌더러로.
-      bodyArea = LatexTextRenderer(
-        _normalizeAnswerForOverflowDisplay(cell.answer),
-        textAlign: TextAlign.left,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        softWrap: true,
-        enableDisplayMath: false,
-        inlineMathScale: 1.35,
-        fractionInlineMathScale: 1.5,
-        style: contentStyle,
-      );
-    } else {
-      bodyArea = Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          for (var i = 0; i < subChunks.length; i++)
-            Padding(
-              padding: EdgeInsets.only(top: i == 0 ? 0 : 6),
-              child: _buildOverflowSubChunkRow(
-                subChunks[i],
-                contentStyle: contentStyle,
-                markerStyle: markerStyle,
-              ),
-            ),
-        ],
-      );
-    }
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 62,
-            child: Padding(
-              padding: const EdgeInsets.only(top: 6),
-              child: Text(
-                '${cell.questionIndex}번',
-                style: const TextStyle(
-                  color: _rsTextSub,
-                  fontWeight: FontWeight.w800,
-                  fontSize: 20,
-                  height: 1.4,
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(child: bodyArea),
-        ],
-      ),
-    );
-  }
-
-  /// 세트형 소문항 한 줄 렌더링.
-  /// - 왼쪽: 고정 너비의 마커(`(1)` 등)
-  /// - 오른쪽: 본문 (Expanded + softWrap)
-  /// 본문이 가로 폭을 초과해 줄바꿈될 경우, 두번째 줄부터는 마커 오른쪽 영역에서
-  /// 이어지므로 자동으로 행잉 인덴트가 된다.
-  Widget _buildOverflowSubChunkRow(
-    _RsSubChunk chunk, {
-    required TextStyle contentStyle,
-    required TextStyle markerStyle,
-  }) {
-    const subMarkerWidth = 44.0; // `(10)` 까지 여유
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
+  Widget _buildAnswerList(List<_RightSheetGradingPageVm> pages) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        SizedBox(
-          width: subMarkerWidth,
-          child: Text(
-            chunk.marker ?? '',
-            style: markerStyle,
+        for (int i = 0; i < pages.length; i++)
+          _buildAnswerPageSection(
+            pages[i],
+            isFirst: i == 0,
           ),
-        ),
-        Expanded(
-          child: LatexTextRenderer(
-            chunk.body.isEmpty ? '-' : _overflowAnswerMarkup(chunk.body),
-            textAlign: TextAlign.left,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            softWrap: true,
-            enableDisplayMath: false,
-            inlineMathScale: 1.35,
-            fractionInlineMathScale: 1.5,
-            style: contentStyle,
-          ),
-        ),
       ],
     );
   }
@@ -4672,10 +4502,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                     children: [
                       _buildSessionHeader(session),
                       const SizedBox(height: 22),
-                      for (int i = 0; i < pages.length; i++) ...[
-                        _buildPageRow(pages[i]),
-                        if (i != pages.length - 1) const SizedBox(height: 6),
-                      ],
+                      if (pages.isNotEmpty) _buildAnswerList(pages),
                       if (pages.isEmpty)
                         const Padding(
                           padding: EdgeInsets.symmetric(vertical: 24),
@@ -4689,7 +4516,6 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                             ),
                           ),
                         ),
-                      _buildOverflowAnswerList(pages),
                       const SizedBox(height: 10),
                       _buildScoreCalculator(session),
                       const SizedBox(height: 24),
@@ -4705,10 +4531,6 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
 }
 
 class _AnswerKeyPdfShortcutExplorer extends StatefulWidget {
-  final int tabIndex;
-  final ValueChanged<int> onTabSelected;
-  final RightSideSheetTestGradingSession? testGradingSession;
-  final VoidCallback onClearTestGradingSession;
   final List<_BookItem> books;
   final List<_GradeOption> grades;
   final Map<String, Map<String, String>> pdfPathByBookAndGrade;
@@ -4723,10 +4545,6 @@ class _AnswerKeyPdfShortcutExplorer extends StatefulWidget {
   final void Function(int oldIndex, int newIndex) onReorderBooks;
 
   const _AnswerKeyPdfShortcutExplorer({
-    required this.tabIndex,
-    required this.onTabSelected,
-    required this.testGradingSession,
-    required this.onClearTestGradingSession,
     required this.books,
     required this.grades,
     required this.pdfPathByBookAndGrade,
@@ -4759,43 +4577,15 @@ class _AnswerKeyPdfShortcutExplorerState
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(10, 12, 10, 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              PillTabSelector(
-                selectedIndex: widget.tabIndex,
-                tabs: _RightSideSheetState._answerKeyTabs,
-                onTabSelected: widget.onTabSelected,
-                width: 220,
-                height: 36,
-                fontSize: 14,
-                padding: 3,
-              ),
-              const Spacer(),
-            ],
-          ),
-          const SizedBox(height: 18),
-          Expanded(
-            child: widget.tabIndex == 0
-                ? _AnswerKeyGradingTabPanel(
-                    session: widget.testGradingSession,
-                    onClearSession: widget.onClearTestGradingSession,
-                  )
-                : _BooksSection(
-                    books: widget.books,
-                    grades: widget.grades,
-                    pdfPathByBookAndGrade: widget.pdfPathByBookAndGrade,
-                    onBookGradeDelta: widget.onBookGradeDelta,
-                    onOpenBook: widget.onOpenBook,
-                    onReorderBooks: widget.onReorderBooks,
-                    onSelectBook: widget.onSelectBook,
-                    scrollController: _scrollCtrl,
-                  ),
-          ),
-        ],
+      child: _BooksSection(
+        books: widget.books,
+        grades: widget.grades,
+        pdfPathByBookAndGrade: widget.pdfPathByBookAndGrade,
+        onBookGradeDelta: widget.onBookGradeDelta,
+        onOpenBook: widget.onOpenBook,
+        onReorderBooks: widget.onReorderBooks,
+        onSelectBook: widget.onSelectBook,
+        scrollController: _scrollCtrl,
       ),
     );
   }

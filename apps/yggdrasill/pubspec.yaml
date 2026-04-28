@@ -155,6 +155,9 @@ flutter:
       fonts:
         - asset: assets/fonts/kopub/KoPubWorldBatangProLight.otf
           weight: 300
+    - family: ChosunNm
+      fonts:
+        - asset: assets/fonts/chosun/ChosunNm.ttf
     - family: KakaoBigSans
       fonts:
         - asset: assets/fonts/kakao/카카오큰글씨/TTF/KakaoBigSans-Regular.ttf

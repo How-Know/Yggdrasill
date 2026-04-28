@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import '../../models/group_info.dart';
 import '../../models/operating_hours.dart';
 import '../../models/student.dart';
+import '../../models/academic_season.dart';
+import '../../models/season_roadmap_entry.dart';
 import '../../services/data_manager.dart';
 import '../../widgets/student_search_dialog.dart';
 import '../../widgets/group_schedule_dialog.dart';
@@ -395,6 +397,18 @@ class _TimetableScreenState extends State<TimetableScreen> {
         );
         break;
     }
+  }
+
+  Future<void> _showSeasonRoadmapDialog() async {
+    final season = AcademicSeason.fromDate(_selectedDate);
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      builder: (context) => _SeasonRoadmapDialog(
+        seasonYear: season.year,
+        selectedSeasonCode: season.code,
+      ),
+    );
   }
 
   Future<_BlockRange?> _pickBlockEffectiveRange(BuildContext context) async {
@@ -2068,6 +2082,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
                     isRegistrationMode:
                         _isStudentRegistrationMode || _isClassRegistrationMode,
                     onExportPressed: _onExportPressed,
+                    showSeasonChip: true,
+                    onRoadmapPressed: _showSeasonRoadmapDialog,
                     isClassListSheetOpen: _isClassListSheetOpen,
                     onClassListSheetToggle: () {
                       setState(() {
@@ -2779,6 +2795,8 @@ class _TimetableScreenState extends State<TimetableScreen> {
           isRegistrationMode:
               _isStudentRegistrationMode || _isClassRegistrationMode,
           onExportPressed: _onExportPressed,
+          showSeasonChip: true,
+          onRoadmapPressed: _showSeasonRoadmapDialog,
         ),
         // 등록 안내문구/카운트
         if (_isStudentRegistrationMode && _selectedStudentWithInfo != null)
@@ -4067,6 +4085,304 @@ class _BouncyDropdownButtonState extends State<_BouncyDropdownButton>
     return ScaleTransition(
       scale: _scaleAnim,
       child: widget.child,
+    );
+  }
+}
+
+class _SeasonRoadmapDialog extends StatefulWidget {
+  final int seasonYear;
+  final AcademicSeasonCode selectedSeasonCode;
+
+  const _SeasonRoadmapDialog({
+    required this.seasonYear,
+    required this.selectedSeasonCode,
+  });
+
+  @override
+  State<_SeasonRoadmapDialog> createState() => _SeasonRoadmapDialogState();
+}
+
+class _SeasonRoadmapDialogState extends State<_SeasonRoadmapDialog> {
+  late final Future<List<SeasonRoadmapEntry>> _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = DataManager.instance.loadSeasonRoadmapForYear(widget.seasonYear);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final yearLabel = (widget.seasonYear % 100).toString().padLeft(2, '0');
+    return Dialog(
+      backgroundColor: const Color(0xFF0B1112),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 48, vertical: 36),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 860, maxHeight: 720),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 22, 24, 18),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Text(
+                    '$yearLabel 시즌 로드맵',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 22,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF16201D),
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(
+                          color:
+                              const Color(0xFF33A373).withValues(alpha: 0.45)),
+                    ),
+                    child: Text(
+                      AcademicSeason(
+                        year: widget.seasonYear,
+                        code: widget.selectedSeasonCode,
+                      ).shortLabel,
+                      style: const TextStyle(
+                        color: Color(0xFFEAF2F2),
+                        fontSize: 13,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                  const Spacer(),
+                  IconButton(
+                    tooltip: '닫기',
+                    onPressed: () => Navigator.of(context).pop(),
+                    icon: const Icon(Icons.close_rounded,
+                        color: Colors.white70, size: 22),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                '교재탭 과정과 연결된 시즌별 학습 계획입니다. 미연결 항목은 교재탭에서 같은 과정명을 만든 뒤 다시 열면 연결됩니다.',
+                style: TextStyle(color: Colors.white60, fontSize: 13),
+              ),
+              const SizedBox(height: 18),
+              SizedBox(
+                height: 470,
+                child: FutureBuilder<List<SeasonRoadmapEntry>>(
+                  future: _future,
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState != ConnectionState.done) {
+                      return const Center(
+                        child: CircularProgressIndicator(
+                          color: Color(0xFF33A373),
+                        ),
+                      );
+                    }
+                    if (snapshot.hasError) {
+                      return Center(
+                        child: Text(
+                          '로드맵을 불러오지 못했습니다.\n${snapshot.error}',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(color: Colors.white70),
+                        ),
+                      );
+                    }
+                    return _SeasonRoadmapContent(
+                      seasonYear: widget.seasonYear,
+                      selectedSeasonCode: widget.selectedSeasonCode,
+                      entries: snapshot.data ?? const <SeasonRoadmapEntry>[],
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                '저장된 연도/시즌/학교급/학년/학교 기준으로 나중에 “25년도 1학기에 대륜고 2학년은 무엇을 배웠는가?” 같은 조회에 사용할 수 있습니다.',
+                style: TextStyle(color: Colors.white38, fontSize: 12),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SeasonRoadmapContent extends StatelessWidget {
+  final int seasonYear;
+  final AcademicSeasonCode selectedSeasonCode;
+  final List<SeasonRoadmapEntry> entries;
+
+  const _SeasonRoadmapContent({
+    required this.seasonYear,
+    required this.selectedSeasonCode,
+    required this.entries,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      child: Wrap(
+        spacing: 12,
+        runSpacing: 12,
+        children: AcademicSeasonCode.values.map((code) {
+          final seasonEntries =
+              entries.where((entry) => entry.seasonCode == code).toList();
+          return _SeasonRoadmapCard(
+            season: AcademicSeason(year: seasonYear, code: code),
+            selected: selectedSeasonCode == code,
+            entries: seasonEntries,
+          );
+        }).toList(),
+      ),
+    );
+  }
+}
+
+class _SeasonRoadmapCard extends StatelessWidget {
+  final AcademicSeason season;
+  final bool selected;
+  final List<SeasonRoadmapEntry> entries;
+
+  const _SeasonRoadmapCard({
+    required this.season,
+    required this.selected,
+    required this.entries,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 400,
+      constraints: const BoxConstraints(minHeight: 150),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF15171C),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: selected
+              ? const Color(0xFF33A373)
+              : Colors.white.withValues(alpha: 0.08),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              Text(
+                season.shortLabel,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  season.displayName,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: Colors.white54, fontSize: 13),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          if (entries.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 16),
+              child: Text(
+                '방학/지정 과정 없음',
+                style: TextStyle(color: Colors.white54, fontSize: 14),
+              ),
+            )
+          else
+            ...entries.map((entry) => _SeasonRoadmapRow(entry: entry)),
+        ],
+      ),
+    );
+  }
+}
+
+class _SeasonRoadmapRow extends StatelessWidget {
+  final SeasonRoadmapEntry entry;
+
+  const _SeasonRoadmapRow({required this.entry});
+
+  @override
+  Widget build(BuildContext context) {
+    final courseText = entry.isOptional
+        ? '${entry.courseLabelSnapshot} (선택)'
+        : entry.courseLabelSnapshot;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 9),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 72,
+            child: Text(
+              entry.targetLabel,
+              style: const TextStyle(
+                color: Colors.white70,
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              courseText,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          if (!entry.hasLinkedCourse) ...[
+            const SizedBox(width: 8),
+            Tooltip(
+              message: '교재탭 과정 미연결',
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF4A3420),
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(color: const Color(0xFFE0A340)),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.warning_amber_rounded,
+                        color: Color(0xFFFFC66D), size: 14),
+                    SizedBox(width: 4),
+                    Text(
+                      '미연결',
+                      style: TextStyle(
+                        color: Color(0xFFFFDCA3),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
     );
   }
 }
