@@ -3,9 +3,12 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:uuid/uuid.dart';
+import '../models/homework_learning_track.dart';
+import 'data_manager.dart';
 import 'tenant_service.dart';
 import 'homework_assignment_store.dart';
 import 'learning_problem_bank_service.dart';
+import 'season_roadmap_service.dart';
 import 'attendance_service.dart';
 import 'realtime_reconciler.dart';
 
@@ -14,6 +17,7 @@ enum HomeworkStatus { inProgress, completed, homework }
 class HomeworkItem {
   final String id;
   String? assignmentCode;
+  String learningTrackCode;
   String title;
   String body;
   Color color;
@@ -55,6 +59,7 @@ class HomeworkItem {
   HomeworkItem({
     required this.id,
     this.assignmentCode,
+    String? learningTrackCode,
     required this.title,
     required this.body,
     this.color = const Color(0xFF1976D2),
@@ -88,7 +93,9 @@ class HomeworkItem {
     this.confirmedAt,
     this.waitingAt,
     this.version = 1,
-  }) : _cycleBaseAccumulatedMs = (cycleBaseAccumulatedMs ?? 0);
+  })  : learningTrackCode =
+            HomeworkLearningTrack.normalizeCode(learningTrackCode),
+        _cycleBaseAccumulatedMs = (cycleBaseAccumulatedMs ?? 0);
 }
 
 class HomeworkGroup {
@@ -96,6 +103,7 @@ class HomeworkGroup {
   final String studentId;
   String title;
   String? flowId;
+  String learningTrackCode;
   int orderIndex;
   String status;
   String? sourceHomeworkItemId;
@@ -114,6 +122,7 @@ class HomeworkGroup {
     required this.studentId,
     required this.title,
     this.flowId,
+    String? learningTrackCode,
     this.orderIndex = 0,
     this.status = 'active',
     this.sourceHomeworkItemId,
@@ -127,7 +136,8 @@ class HomeworkGroup {
     this.createdAt,
     this.updatedAt,
     this.version = 1,
-  });
+  }) : learningTrackCode =
+            HomeworkLearningTrack.normalizeCode(learningTrackCode);
 }
 
 class HomeworkGroupItem {
@@ -181,6 +191,7 @@ class HomeworkSplitPartInput {
 class HomeworkRecentTemplatePart {
   final String sourceItemId;
   final String? assignmentCode;
+  final String learningTrackCode;
   final String title;
   final String body;
   final Color color;
@@ -204,6 +215,7 @@ class HomeworkRecentTemplatePart {
   const HomeworkRecentTemplatePart({
     required this.sourceItemId,
     this.assignmentCode,
+    this.learningTrackCode = 'EL',
     required this.title,
     required this.body,
     required this.color,
@@ -304,9 +316,9 @@ class HomeworkStore {
   final LearningProblemBankService _problemBankService =
       LearningProblemBankService();
   final math.Random _assignmentCodeRandom = math.Random();
-  static final RegExp _assignmentCodePattern = RegExp(r'^[A-Z]{4}[0-9]{4}$');
   final Set<String> _assignmentCodeSyncInFlightItemIds = <String>{};
   bool _supportsAssignmentCodeColumn = true;
+  bool _supportsLearningTrackColumn = true;
   bool _supportsPbPresetIdColumn = true;
   bool _supportsTestOriginFlowIdColumn = true;
   // 간단 영속화 캐시 (앱 시작 시 한번 로드, 변경 시 저장)
@@ -351,6 +363,12 @@ class HomeworkStore {
   bool _isMissingAssignmentCodeColumnError(Object error) {
     final message = error.toString().toLowerCase();
     return message.contains('assignment_code') &&
+        (message.contains('does not exist') || message.contains('42703'));
+  }
+
+  bool _isMissingLearningTrackColumnError(Object error) {
+    final message = error.toString().toLowerCase();
+    return message.contains('learning_track_code') &&
         (message.contains('does not exist') || message.contains('42703'));
   }
 
@@ -470,6 +488,55 @@ class HomeworkStore {
       } catch (e) {
         if (_isMissingAssignmentCodeColumnError(e)) {
           _supportsAssignmentCodeColumn = false;
+          return baseRows;
+        }
+        rethrow;
+      }
+      return baseRows;
+    }
+
+    Future<List<Map<String, dynamic>>> attachLearningTrackCodes(
+      List<Map<String, dynamic>> baseRows,
+    ) async {
+      if (baseRows.isEmpty) return baseRows;
+      if (!_supportsLearningTrackColumn) return baseRows;
+      try {
+        final ids = <String>[];
+        for (final row in baseRows) {
+          final id = (row['id'] as String?)?.trim();
+          if (id != null && id.isNotEmpty) ids.add(id);
+        }
+        if (ids.isEmpty) return baseRows;
+        final byId = <String, String>{};
+        const batchSize = 300;
+        for (int offset = 0; offset < ids.length; offset += batchSize) {
+          final batch = ids.sublist(
+            offset,
+            offset + batchSize > ids.length ? ids.length : offset + batchSize,
+          );
+          final raw = await supa
+              .from('homework_items')
+              .select('id,learning_track_code')
+              .inFilter('id', batch);
+          final rows = (raw as List<dynamic>).cast<Map<String, dynamic>>();
+          for (final row in rows) {
+            final id = (row['id'] as String?)?.trim();
+            if (id == null || id.isEmpty) continue;
+            byId[id] = _normalizeLearningTrackCode(
+              row['learning_track_code'] as String?,
+            );
+          }
+        }
+        for (final row in baseRows) {
+          final id = (row['id'] as String?)?.trim();
+          if (id == null || id.isEmpty) continue;
+          if (byId.containsKey(id)) {
+            row['learning_track_code'] = byId[id];
+          }
+        }
+      } catch (e) {
+        if (_isMissingLearningTrackColumnError(e)) {
+          _supportsLearningTrackColumn = false;
           return baseRows;
         }
         rethrow;
@@ -621,6 +688,11 @@ class HomeworkStore {
         debugPrint('[HW] attachAssignmentCodes skipped: $e');
       }
       try {
+        rows = await attachLearningTrackCodes(rows);
+      } catch (e) {
+        debugPrint('[HW] attachLearningTrackCodes skipped: $e');
+      }
+      try {
         rows = await attachTimeLimitMinutes(rows);
       } catch (e) {
         debugPrint('[HW] attachTimeLimitMinutes skipped: $e');
@@ -717,18 +789,20 @@ class HomeworkStore {
   }
 
   String? _normalizeAssignmentCode(String? raw) {
-    final normalized = (raw ?? '').trim().toUpperCase();
-    if (normalized.isEmpty) return null;
-    if (!_assignmentCodePattern.hasMatch(normalized)) return null;
-    return normalized;
+    return HomeworkLearningTrack.normalizeAssignmentCode(raw);
   }
 
-  String _issueAssignmentCode() {
+  String _normalizeLearningTrackCode(String? raw) =>
+      HomeworkLearningTrack.normalizeCode(raw);
+
+  String _issueAssignmentCode([String? learningTrackCode]) {
     const letters = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
     const digits = '0123456789';
+    final trackCode = _normalizeLearningTrackCode(learningTrackCode);
     String nextCode() {
       final sb = StringBuffer();
-      for (int i = 0; i < 4; i++) {
+      sb.write(trackCode);
+      for (int i = 0; i < 2; i++) {
         sb.write(letters[_assignmentCodeRandom.nextInt(letters.length)]);
       }
       for (int i = 0; i < 4; i++) {
@@ -754,6 +828,73 @@ class HomeworkStore {
     return nextCode();
   }
 
+  String _ensureAssignmentCodeForTrack(String? raw, String learningTrackCode) {
+    final normalized = _normalizeAssignmentCode(raw);
+    if (normalized != null &&
+        HomeworkLearningTrack.assignmentCodeMatchesTrack(
+          normalized,
+          learningTrackCode,
+        )) {
+      return normalized;
+    }
+    return _issueAssignmentCode(learningTrackCode);
+  }
+
+  String? _groupLearningTrackCode(String studentId, String groupId) {
+    final group = groupById(studentId, groupId);
+    final groupCode = group?.learningTrackCode.trim();
+    if (HomeworkLearningTrack.isValidCode(groupCode)) {
+      return _normalizeLearningTrackCode(groupCode);
+    }
+    for (final item
+        in itemsInGroup(studentId, groupId, includeCompleted: true)) {
+      final code = item.learningTrackCode.trim();
+      if (HomeworkLearningTrack.isValidCode(code)) {
+        return _normalizeLearningTrackCode(code);
+      }
+    }
+    return null;
+  }
+
+  bool _groupAllowsLearningTrack({
+    required String studentId,
+    required String groupId,
+    required String learningTrackCode,
+  }) {
+    final existing = _groupLearningTrackCode(studentId, groupId);
+    if (existing == null) return true;
+    return existing == _normalizeLearningTrackCode(learningTrackCode);
+  }
+
+  String _inferLearningTrackCode({
+    required String studentId,
+    required String? explicitCode,
+    required String? courseLabel,
+    required DateTime referenceDate,
+  }) {
+    if (HomeworkLearningTrack.isValidCode(explicitCode)) {
+      return _normalizeLearningTrackCode(explicitCode);
+    }
+    final label = (courseLabel ?? '').trim();
+    if (label.isEmpty) return HomeworkLearningTrack.extra.code;
+    final students = DataManager.instance.students;
+    var matchedIndex = -1;
+    for (var i = 0; i < students.length; i++) {
+      if (students[i].student.id == studentId) {
+        matchedIndex = i;
+        break;
+      }
+    }
+    if (matchedIndex < 0) return HomeworkLearningTrack.extra.code;
+    final student = students[matchedIndex].student;
+    return SeasonRoadmapService.classifyDefaultLearningTrack(
+      referenceDate: referenceDate,
+      educationLevel: student.educationLevel,
+      grade: student.grade,
+      courseLabel: label,
+    ).code;
+  }
+
   Future<String?> _persistAssignmentCodeToServer({
     required String itemId,
     required String preferredCode,
@@ -764,6 +905,8 @@ class HomeworkStore {
     final supa = Supabase.instance.client;
     var candidate =
         _normalizeAssignmentCode(preferredCode) ?? _issueAssignmentCode();
+    final trackCode = HomeworkLearningTrack.codeFromAssignmentCode(candidate) ??
+        HomeworkLearningTrack.extra.code;
     for (int attempt = 0; attempt < 6; attempt++) {
       try {
         final raw = await supa
@@ -791,7 +934,7 @@ class HomeworkStore {
           return null;
         }
         if (_isAssignmentCodeConflictError(e)) {
-          candidate = _issueAssignmentCode();
+          candidate = _issueAssignmentCode(trackCode);
           continue;
         }
         debugPrint(
@@ -837,6 +980,8 @@ class HomeworkStore {
     return HomeworkItem(
       id: (r['id'] as String?) ?? const Uuid().v4(),
       assignmentCode: _normalizeAssignmentCode(r['assignment_code'] as String?),
+      learningTrackCode:
+          _normalizeLearningTrackCode(r['learning_track_code'] as String?),
       title: (r['title'] as String?) ?? '',
       body: (r['body'] as String?) ?? '',
       color: Color(_parseInt(r['color'], fallback: 0xFF1976D2)),
@@ -881,6 +1026,8 @@ class HomeworkStore {
       studentId: (r['student_id'] as String?) ?? '',
       title: ((r['title'] as String?) ?? '').trim(),
       flowId: (r['flow_id'] as String?)?.trim(),
+      learningTrackCode:
+          _normalizeLearningTrackCode(r['learning_track_code'] as String?),
       orderIndex: _parseInt(r['order_index']),
       status: ((r['status'] as String?) ?? 'active').trim(),
       sourceHomeworkItemId: (r['source_homework_item_id'] as String?)?.trim(),
@@ -961,6 +1108,7 @@ class HomeworkStore {
           studentId: studentId,
           title: item.title,
           flowId: item.flowId,
+          learningTrackCode: item.learningTrackCode,
           orderIndex: item.orderIndex,
           sourceHomeworkItemId: item.id,
           status: 'active',
@@ -1095,6 +1243,45 @@ class HomeworkStore {
         return (rowsRaw as List<dynamic>).cast<Map<String, dynamic>>();
       }
 
+      Future<List<Map<String, dynamic>>> attachGroupLearningTrackCodes(
+        List<Map<String, dynamic>> baseRows,
+      ) async {
+        if (baseRows.isEmpty) return baseRows;
+        if (!_supportsLearningTrackColumn) return baseRows;
+        try {
+          final ids = <String>[];
+          for (final row in baseRows) {
+            final id = (row['id'] as String?)?.trim();
+            if (id != null && id.isNotEmpty) ids.add(id);
+          }
+          if (ids.isEmpty) return baseRows;
+          final raw = await supa
+              .from('homework_groups')
+              .select('id,learning_track_code')
+              .inFilter('id', ids);
+          final rows = (raw as List<dynamic>).cast<Map<String, dynamic>>();
+          final byId = <String, String>{
+            for (final row in rows)
+              (row['id'] as String? ?? '').trim(): _normalizeLearningTrackCode(
+                row['learning_track_code'] as String?,
+              ),
+          }..remove('');
+          for (final row in baseRows) {
+            final id = (row['id'] as String?)?.trim();
+            if (id != null && byId.containsKey(id)) {
+              row['learning_track_code'] = byId[id];
+            }
+          }
+        } catch (e) {
+          if (_isMissingLearningTrackColumnError(e)) {
+            _supportsLearningTrackColumn = false;
+            return baseRows;
+          }
+          rethrow;
+        }
+        return baseRows;
+      }
+
       dynamic groupItemQuery = supa
           .from('homework_group_items')
           .select(_homeworkGroupItemSelect)
@@ -1116,6 +1303,7 @@ class HomeworkStore {
           rethrow;
         }
       }
+      groupRows = await attachGroupLearningTrackCodes(groupRows);
       final groupItemRowsRaw = await groupItemQuery;
       final groupItemRows =
           (groupItemRowsRaw as List<dynamic>).cast<Map<String, dynamic>>();
@@ -1358,6 +1546,7 @@ class HomeworkStore {
     return HomeworkRecentTemplatePart(
       sourceItemId: item.id,
       assignmentCode: _normalizeAssignmentCode(item.assignmentCode),
+      learningTrackCode: _normalizeLearningTrackCode(item.learningTrackCode),
       title: item.title.trim().isEmpty ? '(제목 없음)' : item.title.trim(),
       body: item.body,
       color: item.color,
@@ -1747,8 +1936,7 @@ class HomeworkStore {
             debugPrint('[HW][rt][RUNTIME] student=$sid');
             _scheduleRealtimeReload(sid);
           },
-        )
-        ;
+        );
       RealtimeReconciler.instance.attachResubscribe(
         _rt!,
         key: 'homework_items:$targetAcademyId',
@@ -1775,27 +1963,37 @@ class HomeworkStore {
     if (existingGroupId != null && !_isLegacyGroupId(existingGroupId)) return;
     try {
       final supa = Supabase.instance.client;
-      await supa.from('homework_groups').upsert({
-        'academy_id': academyId,
-        'student_id': studentId,
-        'title': item.title.trim().isEmpty ? '과제 그룹' : item.title.trim(),
-        'flow_id': item.flowId,
-        'order_index': item.orderIndex,
-        'status': 'active',
-        'source_homework_item_id': item.id,
-      }, onConflict: 'academy_id,source_homework_item_id');
-
-      final groupRows = await supa
+      final existingRows = await supa
           .from('homework_groups')
           .select('id')
           .eq('academy_id', academyId)
           .eq('source_homework_item_id', item.id)
           .limit(1);
-      final typedGroupRows =
-          (groupRows as List<dynamic>).cast<Map<String, dynamic>>();
-      final groupId = typedGroupRows.isNotEmpty
-          ? (typedGroupRows.first['id'] as String? ?? '')
+      final typedExistingRows =
+          (existingRows as List<dynamic>).cast<Map<String, dynamic>>();
+      var groupId = typedExistingRows.isNotEmpty
+          ? (typedExistingRows.first['id'] as String? ?? '').trim()
           : '';
+      if (groupId.isEmpty) {
+        final insertRows = await supa.from('homework_groups').insert({
+          'id': const Uuid().v4(),
+          'academy_id': academyId,
+          'student_id': studentId,
+          'title': item.title.trim().isEmpty ? '과제 그룹' : item.title.trim(),
+          'flow_id': item.flowId,
+          if (_supportsLearningTrackColumn)
+            'learning_track_code':
+                _normalizeLearningTrackCode(item.learningTrackCode),
+          'order_index': item.orderIndex,
+          'status': 'active',
+          'source_homework_item_id': item.id,
+        }).select('id');
+        final typedInsertRows =
+            (insertRows as List<dynamic>).cast<Map<String, dynamic>>();
+        groupId = typedInsertRows.isNotEmpty
+            ? (typedInsertRows.first['id'] as String? ?? '').trim()
+            : '';
+      }
       if (groupId.isEmpty) return;
 
       await supa.from('homework_group_items').upsert({
@@ -1812,6 +2010,16 @@ class HomeworkStore {
         bump: false,
       );
     } catch (e) {
+      if (_supportsLearningTrackColumn &&
+          _isMissingLearningTrackColumnError(e)) {
+        _supportsLearningTrackColumn = false;
+        await _ensureGroupForItem(
+          academyId: academyId,
+          studentId: studentId,
+          item: item,
+        );
+        return;
+      }
       if (_isMissingGroupTableError(e)) {
         _applyFallbackGroupsForStudent(studentId);
       }
@@ -1824,6 +2032,14 @@ class HomeworkStore {
           (await TenantService.instance.getActiveAcademyId()) ??
               await TenantService.instance.ensureActiveAcademy();
       final supa = Supabase.instance.client;
+      it.learningTrackCode = _inferLearningTrackCode(
+        studentId: studentId,
+        explicitCode: it.learningTrackCode,
+        courseLabel: it.gradeLabel,
+        referenceDate: it.waitingAt ?? it.createdAt ?? DateTime.now(),
+      );
+      it.assignmentCode = _ensureAssignmentCodeForTrack(
+          it.assignmentCode, it.learningTrackCode);
       final base = {
         'student_id': studentId,
         'title': it.title,
@@ -1836,6 +2052,9 @@ class HomeworkStore {
               : it.testOriginFlowId!.trim(),
         if (_supportsAssignmentCodeColumn)
           'assignment_code': _normalizeAssignmentCode(it.assignmentCode),
+        if (_supportsLearningTrackColumn)
+          'learning_track_code':
+              _normalizeLearningTrackCode(it.learningTrackCode),
         'type': it.type,
         'page': it.page,
         'count': it.count,
@@ -1864,8 +2083,11 @@ class HomeworkStore {
         'waiting_at': it.waitingAt?.toUtc().toIso8601String(),
       };
       // OCC update: 0행이면 예외 없이 빈 배열을 받도록 select() (list)로 처리
-      final selectColumns =
-          _supportsAssignmentCodeColumn ? 'version,assignment_code' : 'version';
+      final selectColumns = [
+        'version',
+        if (_supportsAssignmentCodeColumn) 'assignment_code',
+        if (_supportsLearningTrackColumn) 'learning_track_code',
+      ].join(',');
       final updatedRows = await supa
           .from('homework_items')
           .update(base)
@@ -1881,7 +2103,12 @@ class HomeworkStore {
           it.assignmentCode =
               _normalizeAssignmentCode(row['assignment_code'] as String?) ??
                   _normalizeAssignmentCode(it.assignmentCode) ??
-                  _issueAssignmentCode();
+                  _issueAssignmentCode(it.learningTrackCode);
+        }
+        if (_supportsLearningTrackColumn) {
+          it.learningTrackCode = _normalizeLearningTrackCode(
+            row['learning_track_code'] as String?,
+          );
         }
         await _syncUnitMappings(
           academyId: academyId,
@@ -1920,7 +2147,12 @@ class HomeworkStore {
           it.assignmentCode =
               _normalizeAssignmentCode(row['assignment_code'] as String?) ??
                   _normalizeAssignmentCode(it.assignmentCode) ??
-                  _issueAssignmentCode();
+                  _issueAssignmentCode(it.learningTrackCode);
+        }
+        if (_supportsLearningTrackColumn) {
+          it.learningTrackCode = _normalizeLearningTrackCode(
+            row['learning_track_code'] as String?,
+          );
         }
         await _syncUnitMappings(
           academyId: academyId,
@@ -1961,7 +2193,13 @@ class HomeworkStore {
         return;
       }
       if (_supportsAssignmentCodeColumn && _isAssignmentCodeConflictError(e)) {
-        it.assignmentCode = _issueAssignmentCode();
+        it.assignmentCode = _issueAssignmentCode(it.learningTrackCode);
+        await _upsertItem(studentId, it);
+        return;
+      }
+      if (_supportsLearningTrackColumn &&
+          _isMissingLearningTrackColumnError(e)) {
+        _supportsLearningTrackColumn = false;
         await _upsertItem(studentId, it);
         return;
       }
@@ -2219,8 +2457,83 @@ class HomeworkStore {
       if (pageRows.isNotEmpty) {
         await supa.from('homework_item_pages').insert(pageRows);
       }
+      await _syncProblemMappings(
+        academyId: academyId,
+        studentId: studentId,
+        item: item,
+      );
     } catch (e, st) {
       print('[HW][pageMappings][ERROR] $e\n$st');
+    }
+  }
+
+  Future<void> _syncProblemMappings({
+    required String academyId,
+    required String studentId,
+    required HomeworkItem item,
+  }) async {
+    final mappings = item.unitMappings ?? const <Map<String, dynamic>>[];
+    final bookId = (item.bookId ?? '').trim();
+    final gradeLabel = (item.gradeLabel ?? '').trim();
+    if (bookId.isEmpty || gradeLabel.isEmpty) return;
+    final supa = Supabase.instance.client;
+    try {
+      await supa.from('homework_item_problems').delete().match({
+        'academy_id': academyId,
+        'homework_item_id': item.id,
+      });
+      int? asIntOpt(dynamic v) {
+        if (v == null) return null;
+        if (v is int) return v;
+        if (v is num) return v.toInt();
+        if (v is String) return int.tryParse(v);
+        return null;
+      }
+
+      final rows = <Map<String, dynamic>>[];
+      final seen = <String>{};
+      for (final rawMapping in mappings) {
+        final mapping = Map<String, dynamic>.from(rawMapping);
+        final crops = mapping['problemCrops'];
+        if (crops is! List) continue;
+        final typeGroups = mapping['typeGroups'];
+        final typeGroupLabel = typeGroups is List && typeGroups.isNotEmpty
+            ? '${typeGroups.first}'
+            : '';
+        for (final rawCrop in crops) {
+          if (rawCrop is! Map) continue;
+          final crop = Map<String, dynamic>.from(rawCrop);
+          final cropId = '${crop['cropId'] ?? ''}'.trim();
+          final problemNumber = '${crop['problemNumber'] ?? ''}'.trim();
+          final pageNumber = asIntOpt(crop['displayPage']);
+          final key = cropId.isNotEmpty
+              ? cropId
+              : '$problemNumber|${pageNumber ?? ''}|${crop['subKey'] ?? ''}';
+          if (key.trim().isEmpty || !seen.add(key)) continue;
+          rows.add({
+            'academy_id': academyId,
+            'homework_item_id': item.id,
+            'student_id': studentId,
+            'book_id': bookId,
+            'grade_label': gradeLabel,
+            'crop_id': cropId.isEmpty ? null : cropId,
+            'problem_number': problemNumber,
+            'page_number': pageNumber,
+            'raw_page': asIntOpt(crop['rawPage']),
+            'type_group_key':
+                '${crop['typeKind'] ?? ''}|${crop['typeLabel'] ?? ''}|${crop['typeOrder'] ?? ''}',
+            'type_group_label': typeGroupLabel,
+            'bbox_1k': crop['bbox1k'],
+            'item_region_1k': crop['itemRegion1k'],
+          });
+        }
+      }
+      if (rows.isNotEmpty) {
+        await supa.from('homework_item_problems').insert(rows);
+      }
+    } catch (_) {
+      // Optional forward-compatible table. Page/unit mappings remain canonical
+      // until the per-problem tracking schema is deployed everywhere.
     }
   }
 
@@ -2269,6 +2582,7 @@ class HomeworkStore {
     required String title,
     required String body,
     String? assignmentCode,
+    String? learningTrackCode,
     Color color = const Color(0xFF1976D2),
     String? flowId,
     String? testOriginFlowId,
@@ -2290,11 +2604,19 @@ class HomeworkStore {
   }) {
     final id = const Uuid().v4();
     final orderIndex = _nextActiveOrderIndex(studentId);
-    final resolvedAssignmentCode =
-        _normalizeAssignmentCode(assignmentCode) ?? _issueAssignmentCode();
+    final now = DateTime.now();
+    final resolvedLearningTrackCode = _inferLearningTrackCode(
+      studentId: studentId,
+      explicitCode: learningTrackCode,
+      courseLabel: gradeLabel,
+      referenceDate: now,
+    );
+    final resolvedAssignmentCode = _ensureAssignmentCodeForTrack(
+        assignmentCode, resolvedLearningTrackCode);
     final item = HomeworkItem(
       id: id,
       assignmentCode: resolvedAssignmentCode,
+      learningTrackCode: resolvedLearningTrackCode,
       title: title,
       body: body,
       color: color,
@@ -2321,8 +2643,8 @@ class HomeworkStore {
       defaultSplitParts: defaultSplitParts.clamp(1, 4).toInt(),
       checkCount: 0,
       orderIndex: orderIndex,
-      createdAt: DateTime.now(),
-      updatedAt: DateTime.now(),
+      createdAt: now,
+      updatedAt: now,
       version: 1,
     );
     final list = _byStudentId.putIfAbsent(studentId, () => <HomeworkItem>[]);
@@ -2357,7 +2679,10 @@ class HomeworkStore {
       'test_origin_flow_id': (item.testOriginFlowId ?? '').trim().isEmpty
           ? null
           : item.testOriginFlowId!.trim(),
-      'assignment_code': _normalizeAssignmentCode(item.assignmentCode),
+      'learning_track_code':
+          _normalizeLearningTrackCode(item.learningTrackCode),
+      'assignment_code': _ensureAssignmentCodeForTrack(
+          item.assignmentCode, item.learningTrackCode),
       'type': item.type ?? '',
       'page': item.page ?? '',
       'count': item.count,
@@ -2420,6 +2745,8 @@ class HomeworkStore {
               'id': group.id,
               'title': group.title,
               'flow_id': group.flowId ?? '',
+              'learning_track_code':
+                  _normalizeLearningTrackCode(group.learningTrackCode),
               'order_index': group.orderIndex,
             };
       await supa.rpc(
@@ -2801,7 +3128,7 @@ class HomeworkStore {
     final idx = list.indexWhere((e) => e.id == id);
     if (idx == -1) return;
     final item = list[idx];
-    if (_isTestTypeLabel(item.type) && !isStudentInClassTime(studentId)) {
+    if (_isTestItem(item) && !isStudentInClassTime(studentId)) {
       return;
     }
     try {
@@ -3380,11 +3707,18 @@ class HomeworkStore {
 
   bool _isTestTypeLabel(String? type) => (type ?? '').trim() == '테스트';
 
+  bool _isTestItem(HomeworkItem item) {
+    return _isTestTypeLabel(item.type) ||
+        (item.testOriginFlowId ?? '').trim().isNotEmpty ||
+        ((item.sourceUnitLevel ?? '').trim() == 'naesin' &&
+            _normalizePositiveInt(item.timeLimitMinutes) != null);
+  }
+
   bool _isTimeoutEndedTestItem(
     HomeworkItem item, {
     DateTime? at,
   }) {
-    if (!_isTestTypeLabel(item.type)) return false;
+    if (!_isTestItem(item)) return false;
     final limit = _normalizePositiveInt(item.timeLimitMinutes);
     if (limit == null || limit <= 0) return false;
     final now = at ?? DateTime.now();
@@ -3418,7 +3752,7 @@ class HomeworkStore {
     final now = DateTime.now();
     for (final item in list) {
       if (item.status == HomeworkStatus.completed) continue;
-      if (!_isTestTypeLabel(item.type)) continue;
+      if (!_isTestItem(item)) continue;
       bool updated = false;
       final keepTimedOutTestAsHomework =
           item.status == HomeworkStatus.homework &&
@@ -3503,8 +3837,7 @@ class HomeworkStore {
       final String academyId =
           (await TenantService.instance.getActiveAcademyId()) ??
               await TenantService.instance.ensureActiveAcademy();
-      final String? updatedBy =
-          Supabase.instance.client.auth.currentUser?.id;
+      final String? updatedBy = Supabase.instance.client.auth.currentUser?.id;
       final supa = Supabase.instance.client;
       // 러닝 상태가 하나라도 있으면 학생 단위 pause_all로 일괄 정지(빠르고 안전).
       final bool hasRunning = targets.any((e) => e.runStart != null);
@@ -3772,14 +4105,14 @@ class HomeworkStore {
           }
           for (final it in targets) {
             try {
-              if (it.status == HomeworkStatus.completed || it.completedAt != null) {
+              if (it.status == HomeworkStatus.completed ||
+                  it.completedAt != null) {
                 // 완료 행은 homework_wait이 배제하므로 reopen RPC 사용.
-                await supa.rpc('homework_reopen_completed_to_waiting',
-                    params: {
-                      'p_item_id': it.id,
-                      'p_academy_id': academyId,
-                      'p_updated_by': updatedBy,
-                    });
+                await supa.rpc('homework_reopen_completed_to_waiting', params: {
+                  'p_item_id': it.id,
+                  'p_academy_id': academyId,
+                  'p_updated_by': updatedBy,
+                });
               } else {
                 await supa.rpc('homework_wait', params: {
                   'p_item_id': it.id,
@@ -3789,7 +4122,10 @@ class HomeworkStore {
               }
             } catch (e) {
               // ignore: avoid_print
-              print('[HW][restore][wait][ERROR] id=' + it.id + ' ' + e.toString());
+              print('[HW][restore][wait][ERROR] id=' +
+                  it.id +
+                  ' ' +
+                  e.toString());
             }
             // status는 RPC가 바꾸지 않으므로(= 0/inProgress 유지 또는 reopen이 0으로 복원),
             // 완료였던 행이 아닌 경우에만 status-only 보정은 생략한다(이미 inProgress).
@@ -3916,7 +4252,7 @@ class HomeworkStore {
         .where((e) => e.status != HomeworkStatus.completed)
         .toList(growable: false);
     final bool hasWaitingTestChild = groupChildren.any(
-      (child) => _isTestTypeLabel(child.type) && child.phase == 1,
+      (child) => _isTestItem(child) && child.phase == 1,
     );
     final bool hasRunningChild = groupChildren.any((child) => child.phase == 2);
     final bool hasSubmittedOrConfirmedChild = groupChildren.any(
@@ -4052,6 +4388,14 @@ class HomeworkStore {
         cleanedBeforeId == cleanedItemId) {
       return true;
     }
+    if (sourceGroupId != cleanedTargetGroupId &&
+        !_groupAllowsLearningTrack(
+          studentId: studentId,
+          groupId: cleanedTargetGroupId,
+          learningTrackCode: sourceItem.learningTrackCode,
+        )) {
+      throw StateError('MIXED_LEARNING_TRACK_GROUP');
+    }
 
     try {
       final academyId = (await TenantService.instance.getActiveAcademyId()) ??
@@ -4086,6 +4430,9 @@ class HomeworkStore {
     if (cleanedGroupId.isEmpty || cleanedSourceId.isEmpty || parts.isEmpty) {
       return const <String>[];
     }
+    final sourceItem = getById(studentId, cleanedSourceId);
+    final sourceTrackCode =
+        _normalizeLearningTrackCode(sourceItem?.learningTrackCode);
     if (await _hasActiveAssignmentForAny(studentId, [cleanedSourceId])) {
       throw StateError('ASSIGNMENT_EXISTS_FOR_SPLIT_ITEM');
     }
@@ -4111,10 +4458,20 @@ class HomeworkStore {
       await _reloadStudent(studentId);
       for (int i = 0; i < createdIds.length && i < payload.length; i++) {
         final memo = (payload[i]['memo'] as String?)?.trim() ?? '';
-        if (memo.isEmpty) continue;
         final item = getById(studentId, createdIds[i]);
-        if (item == null || (item.memo ?? '').trim() == memo) continue;
-        item.memo = memo;
+        if (item == null) continue;
+        var shouldUpsert = false;
+        if ((item.learningTrackCode).trim() != sourceTrackCode) {
+          item.learningTrackCode = sourceTrackCode;
+          item.assignmentCode = _ensureAssignmentCodeForTrack(
+              item.assignmentCode, sourceTrackCode);
+          shouldUpsert = true;
+        }
+        if (memo.isNotEmpty && (item.memo ?? '').trim() != memo) {
+          item.memo = memo;
+          shouldUpsert = true;
+        }
+        if (!shouldUpsert) continue;
         item.updatedAt = DateTime.now();
         await _upsertItem(studentId, item);
       }
@@ -4152,6 +4509,22 @@ class HomeworkStore {
         .toSet()
         .toList(growable: false);
     if (cleanedGroupId.isEmpty || cleanedIds.length < 2) return null;
+    final mergeTracks = <String>{};
+    for (final id in cleanedIds) {
+      final item = getById(studentId, id);
+      if (item != null) {
+        mergeTracks.add(_normalizeLearningTrackCode(item.learningTrackCode));
+      }
+    }
+    if (mergeTracks.length > 1) {
+      throw StateError('MIXED_LEARNING_TRACK_GROUP');
+    }
+    final mergeTrackCode = mergeTracks.isEmpty
+        ? _normalizeLearningTrackCode(_groupLearningTrackCode(
+            studentId,
+            cleanedGroupId,
+          ))
+        : mergeTracks.first;
     if (await _hasActiveAssignmentForAny(studentId, cleanedIds)) {
       throw StateError('ASSIGNMENT_EXISTS_FOR_MERGE_ITEMS');
     }
@@ -4185,9 +4558,21 @@ class HomeworkStore {
       if (mergedId != null && mergedId.isNotEmpty) {
         final mergedItem = getById(studentId, mergedId);
         if (mergedItem != null) {
+          var shouldUpsert = false;
+          if (mergedItem.learningTrackCode.trim() != mergeTrackCode) {
+            mergedItem.learningTrackCode = mergeTrackCode;
+            mergedItem.assignmentCode = _ensureAssignmentCodeForTrack(
+              mergedItem.assignmentCode,
+              mergeTrackCode,
+            );
+            shouldUpsert = true;
+          }
           if (normalizedMergedMemo.isNotEmpty &&
               (mergedItem.memo ?? '').trim() != normalizedMergedMemo) {
             mergedItem.memo = normalizedMergedMemo;
+            shouldUpsert = true;
+          }
+          if (shouldUpsert) {
             mergedItem.updatedAt = DateTime.now();
             await _upsertItem(studentId, mergedItem);
           }
@@ -4210,6 +4595,7 @@ class HomeworkStore {
     required String groupId,
     required String title,
     String? assignmentCode,
+    String? learningTrackCode,
     String? body,
     String? page,
     int? count,
@@ -4289,8 +4675,29 @@ class HomeworkStore {
             ? template!.pbPresetId!.trim()
             : null);
     final resolvedColor = color ?? template?.color ?? const Color(0xFF1976D2);
-    final resolvedAssignmentCode =
-        _normalizeAssignmentCode(assignmentCode) ?? _issueAssignmentCode();
+    final resolvedCourseLabel =
+        resolvedGradeLabel.isEmpty ? template?.gradeLabel : resolvedGradeLabel;
+    final resolvedLearningTrackCode = _inferLearningTrackCode(
+      studentId: studentId,
+      explicitCode: learningTrackCode ?? template?.learningTrackCode,
+      courseLabel: resolvedCourseLabel,
+      referenceDate: now,
+    );
+    if (!_groupAllowsLearningTrack(
+      studentId: studentId,
+      groupId: cleanedGroupId,
+      learningTrackCode: resolvedLearningTrackCode,
+    )) {
+      debugPrint(
+        '[HW][groups][learningTrack] mixed track blocked group=$cleanedGroupId',
+      );
+      return null;
+    }
+    if (group != null) {
+      group.learningTrackCode = resolvedLearningTrackCode;
+    }
+    final resolvedAssignmentCode = _ensureAssignmentCodeForTrack(
+        assignmentCode, resolvedLearningTrackCode);
     final resolvedSplitParts =
         (defaultSplitParts ?? template?.defaultSplitParts ?? 1)
             .clamp(1, 4)
@@ -4299,6 +4706,7 @@ class HomeworkStore {
     final item = HomeworkItem(
       id: const Uuid().v4(),
       assignmentCode: resolvedAssignmentCode,
+      learningTrackCode: resolvedLearningTrackCode,
       title: resolvedTitle,
       body: resolvedBody,
       color: resolvedColor,
@@ -4381,6 +4789,9 @@ class HomeworkStore {
               : item.testOriginFlowId!.trim(),
         if (_supportsAssignmentCodeColumn)
           'assignment_code': _normalizeAssignmentCode(item.assignmentCode),
+        if (_supportsLearningTrackColumn)
+          'learning_track_code':
+              _normalizeLearningTrackCode(item.learningTrackCode),
         'type': item.type,
         'page': item.page,
         'count': item.count,
@@ -4415,7 +4826,11 @@ class HomeworkStore {
         ...base,
         'version': item.version,
       }).select(
-        _supportsAssignmentCodeColumn ? 'version,assignment_code' : 'version',
+        [
+          'version',
+          if (_supportsAssignmentCodeColumn) 'assignment_code',
+          if (_supportsLearningTrackColumn) 'learning_track_code',
+        ].join(','),
       );
       final typedInsertRows =
           (insRows as List<dynamic>).cast<Map<String, dynamic>>();
@@ -4426,7 +4841,12 @@ class HomeworkStore {
                 typedInsertRows.first['assignment_code'] as String?,
               ) ??
               _normalizeAssignmentCode(item.assignmentCode) ??
-              _issueAssignmentCode();
+              _issueAssignmentCode(item.learningTrackCode);
+        }
+        if (_supportsLearningTrackColumn) {
+          item.learningTrackCode = _normalizeLearningTrackCode(
+            typedInsertRows.first['learning_track_code'] as String?,
+          );
         }
       }
 
@@ -4492,8 +4912,20 @@ class HomeworkStore {
           );
         }
       }
+      if (_supportsLearningTrackColumn &&
+          _isMissingLearningTrackColumnError(e)) {
+        _supportsLearningTrackColumn = false;
+        try {
+          await persistToServer();
+          return item.id;
+        } catch (retryError, retrySt) {
+          print(
+            '[HW][addWaitingItemToGroup][RETRY_LEARNING_TRACK_ERROR] $retryError\n$retrySt',
+          );
+        }
+      }
       if (_supportsAssignmentCodeColumn && _isAssignmentCodeConflictError(e)) {
-        item.assignmentCode = _issueAssignmentCode();
+        item.assignmentCode = _issueAssignmentCode(item.learningTrackCode);
         try {
           await persistToServer();
           return item.id;
@@ -4569,6 +5001,7 @@ class HomeworkStore {
       return parsed.clamp(1, 4).toInt();
     }
 
+    final classificationDate = DateTime.now();
     final normalized = <Map<String, dynamic>>[];
     for (final raw in items) {
       final entry = Map<String, dynamic>.from(raw);
@@ -4579,6 +5012,15 @@ class HomeworkStore {
       final testOriginFlowId = asNullableText(entry['testOriginFlowId']);
       final pbPresetId = asNullableText(entry['pbPresetId']);
       final content = asText(entry['content']);
+      final gradeLabel = asNullableText(entry['gradeLabel']);
+      final learningTrackCode = _inferLearningTrackCode(
+        studentId: studentId,
+        explicitCode: asNullableText(
+          entry['learningTrackCode'] ?? entry['learning_track_code'],
+        ),
+        courseLabel: gradeLabel,
+        referenceDate: classificationDate,
+      );
       final title = titleRaw.isEmpty ? '과제' : titleRaw;
       var body = asText(entry['body']);
       if (body.isEmpty) {
@@ -4598,12 +5040,24 @@ class HomeworkStore {
         ...entry,
         'title': title,
         'body': body,
+        'learningTrackCode': learningTrackCode,
         if (timeLimitMinutes != null) 'timeLimitMinutes': timeLimitMinutes,
         if (testOriginFlowId != null) 'testOriginFlowId': testOriginFlowId,
         if (pbPresetId != null) 'pbPresetId': pbPresetId,
       });
     }
     if (normalized.isEmpty) return const <HomeworkItem>[];
+    final groupTrackCodes = normalized
+        .map((entry) => _normalizeLearningTrackCode(
+              entry['learningTrackCode'] as String?,
+            ))
+        .toSet();
+    if (groupTrackCodes.length != 1) {
+      debugPrint(
+          '[HW][groups][learningTrack] mixed track group create blocked');
+      return const <HomeworkItem>[];
+    }
+    final groupLearningTrackCode = groupTrackCodes.first;
 
     final cleanedFlowId = (flowId ?? '').trim();
     final cleanedGroupTitle =
@@ -4615,6 +5069,7 @@ class HomeworkStore {
       studentId: studentId,
       title: cleanedGroupTitle,
       flowId: cleanedFlowId.isEmpty ? null : cleanedFlowId,
+      learningTrackCode: groupLearningTrackCode,
       orderIndex: _nextGroupOrderIndex(studentId),
       status: 'active',
       sourceHomeworkItemId: null,
@@ -4639,6 +5094,8 @@ class HomeworkStore {
           'student_id': studentId,
           'title': cleanedGroupTitle,
           'flow_id': cleanedFlowId.isEmpty ? null : cleanedFlowId,
+          if (_supportsLearningTrackColumn)
+            'learning_track_code': groupLearningTrackCode,
           'order_index': group.orderIndex,
           'status': 'active',
           'created_at': now.toUtc().toIso8601String(),
@@ -4658,6 +5115,7 @@ class HomeworkStore {
             assignmentCode: asNullableText(
               entry['assignmentCode'] ?? entry['assignment_code'],
             ),
+            learningTrackCode: asNullableText(entry['learningTrackCode']),
             body: asText(entry['body']),
             page: asText(entry['page']),
             count: asPositiveInt(entry['count']),

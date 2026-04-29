@@ -27,6 +27,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../services/textbook_book_registry.dart';
+import '../../services/textbook_course_catalog.dart';
 import '../../services/textbook_pdf_service.dart';
 import '../../services/textbook_series_catalog.dart';
 
@@ -82,7 +83,8 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
   String? _coverLocalPath;
   String? _coverExistingUrl;
   bool _loadingGrades = true;
-  List<String> _gradeOptions = const <String>[];
+  List<TextbookCourseOption> _courseOptions = kTextbookCourseOptions;
+  String _selectedCourseKey = kTextbookCourseOptions.first.courseKey;
   bool _loadingFolders = true;
   List<_ResourceFolderOption> _folderOptions = const <_ResourceFolderOption>[];
   String _selectedFolderId = _rootFolderValue;
@@ -122,26 +124,45 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
     try {
       final data = await _supabase
           .from('answer_key_grades')
-          .select('label,order_index')
+          .select('grade_key,label,order_index')
           .order('order_index');
       final rows = (data as List).cast<Map<String, dynamic>>();
-      final labels = <String>[];
+      final optionsByKey = <String, TextbookCourseOption>{
+        for (final option in kTextbookCourseOptions) option.courseKey: option,
+      };
+      final merged = <TextbookCourseOption>[];
+      final seen = <String>{};
       for (final r in rows) {
         final label = (r['label'] as String?)?.trim() ?? '';
         if (label.isEmpty) continue;
-        labels.add(label);
+        final key = (r['grade_key'] as String?)?.trim() ?? '';
+        final option = optionsByKey[key] ?? textbookCourseByLabel(label);
+        if (option == null) continue;
+        if (seen.add(option.courseKey)) merged.add(option);
       }
+      for (final option in kTextbookCourseOptions) {
+        if (seen.add(option.courseKey)) merged.add(option);
+      }
+      merged.sort((a, b) => a.orderIndex.compareTo(b.orderIndex));
       if (!mounted) return;
       setState(() {
-        _gradeOptions = labels;
+        _courseOptions = merged;
         _loadingGrades = false;
-        if (_gradeLabelCtrl.text.trim().isEmpty && labels.isNotEmpty) {
-          _gradeLabelCtrl.text = labels.first;
+        if (!_courseOptions.any((e) => e.courseKey == _selectedCourseKey)) {
+          _selectedCourseKey = _courseOptions.first.courseKey;
+        }
+        if (_gradeLabelCtrl.text.trim().isEmpty) {
+          _gradeLabelCtrl.text = _selectedCourse?.label ?? '';
         }
       });
     } catch (_) {
       if (!mounted) return;
-      setState(() => _loadingGrades = false);
+      setState(() {
+        _courseOptions = kTextbookCourseOptions;
+        _selectedCourseKey = kTextbookCourseOptions.first.courseKey;
+        _gradeLabelCtrl.text = kTextbookCourseOptions.first.label;
+        _loadingGrades = false;
+      });
     }
   }
 
@@ -164,7 +185,8 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
           .or('category.is.null,category.eq.textbook')
           .order('order_index')
           .order('name');
-      List<Map<String, dynamic>> rows = (data as List).cast<Map<String, dynamic>>();
+      List<Map<String, dynamic>> rows =
+          (data as List).cast<Map<String, dynamic>>();
       if (rows.isEmpty) {
         final all = await _supabase
             .from('resource_folders')
@@ -181,7 +203,10 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
       final children = <String?, List<Map<String, dynamic>>>{};
       for (final row in rows) {
         final parentId = (row['parent_id'] as String?)?.trim();
-        children.putIfAbsent(parentId?.isEmpty == true ? null : parentId, () => <Map<String, dynamic>>[]).add(row);
+        children
+            .putIfAbsent(parentId?.isEmpty == true ? null : parentId,
+                () => <Map<String, dynamic>>[])
+            .add(row);
       }
       for (final list in children.values) {
         list.sort((a, b) {
@@ -196,7 +221,8 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
 
       final options = <_ResourceFolderOption>[];
       void walk(String? parentId, int depth) {
-        for (final row in children[parentId] ?? const <Map<String, dynamic>>[]) {
+        for (final row
+            in children[parentId] ?? const <Map<String, dynamic>>[]) {
           final id = (row['id'] as String?)?.trim() ?? '';
           final name = (row['name'] as String?)?.trim() ?? '';
           if (id.isEmpty || name.isEmpty) continue;
@@ -267,6 +293,10 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
 
   TextbookSeriesCatalogEntry get _series =>
       textbookSeriesByKey(_seriesKey) ?? kTextbookSeriesCatalog.first;
+
+  TextbookCourseOption? get _selectedCourse =>
+      textbookCourseByKey(_selectedCourseKey) ??
+      (_courseOptions.isNotEmpty ? _courseOptions.first : null);
 
   void _addBigUnit({bool silent = false}) {
     final newUnit = _BigUnitEdit();
@@ -422,6 +452,9 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
             ? null
             : _bookDescCtrl.text.trim(),
         gradeLabel: _gradeLabelCtrl.text.trim(),
+        gradeKey: _selectedCourse?.gradeKey,
+        courseKey: _selectedCourse?.courseKey,
+        courseLabel: _selectedCourse?.label,
         textbookType: _textbookType,
         pageOffset: _pageOffsetValue,
         bigUnits: _buildBigUnitInputs(),
@@ -447,6 +480,9 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
         academyId: result.academyId,
         fileId: result.bookId,
         gradeLabel: result.gradeLabel,
+        gradeKey: _selectedCourse?.gradeKey,
+        courseKey: _selectedCourse?.courseKey,
+        courseLabel: _selectedCourse?.label,
         legacyUrl: registerInput.bodyLegacyUrl,
       );
       await _uploadPdfIfPicked(
@@ -455,6 +491,9 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
         academyId: result.academyId,
         fileId: result.bookId,
         gradeLabel: result.gradeLabel,
+        gradeKey: _selectedCourse?.gradeKey,
+        courseKey: _selectedCourse?.courseKey,
+        courseLabel: _selectedCourse?.label,
         legacyUrl: registerInput.answerLegacyUrl,
       );
       await _uploadPdfIfPicked(
@@ -463,6 +502,9 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
         academyId: result.academyId,
         fileId: result.bookId,
         gradeLabel: result.gradeLabel,
+        gradeKey: _selectedCourse?.gradeKey,
+        courseKey: _selectedCourse?.courseKey,
+        courseLabel: _selectedCourse?.label,
         legacyUrl: registerInput.solutionLegacyUrl,
       );
 
@@ -483,6 +525,9 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
     required String academyId,
     required String fileId,
     required String gradeLabel,
+    String? gradeKey,
+    String? courseKey,
+    String? courseLabel,
     String? legacyUrl,
   }) async {
     final path = filePath?.trim() ?? '';
@@ -505,6 +550,9 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
       academyId: academyId,
       fileId: fileId,
       gradeLabel: gradeLabel,
+      gradeKey: gradeKey,
+      courseKey: courseKey,
+      courseLabel: courseLabel,
       kind: kind,
       storageDriver: target.storageDriver,
       storageBucket: target.storageBucket,
@@ -709,7 +757,8 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
               const SizedBox(width: 16),
               Expanded(
                 flex: 3,
-                child: _labeled('책 이름', _buildTextField(_bookNameCtrl, hint: '예: 쎈 고1')),
+                child: _labeled(
+                    '책 이름', _buildTextField(_bookNameCtrl, hint: '예: 쎈 고1')),
               ),
             ],
           ),
@@ -728,7 +777,7 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
             children: [
               Expanded(
                 flex: 2,
-                child: _labeled('과정 라벨', _buildGradeLabelField()),
+                child: _labeled('과정', _buildGradeLabelField()),
               ),
               const SizedBox(width: 16),
               Expanded(
@@ -930,8 +979,7 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
           Row(
             children: [
               Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 8, vertical: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
                   color: const Color(0xFF1B2B1B),
                   borderRadius: BorderRadius.circular(4),
@@ -960,8 +1008,8 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
                 tooltip: '대단원 삭제',
                 visualDensity: VisualDensity.compact,
                 onPressed: () => _removeBigUnit(index),
-                icon: const Icon(Icons.close,
-                    size: 16, color: Color(0xFFB3B3B3)),
+                icon:
+                    const Icon(Icons.close, size: 16, color: Color(0xFFB3B3B3)),
               ),
             ],
           ),
@@ -990,8 +1038,7 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
           Row(
             children: [
               Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 7, vertical: 3),
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
                 decoration: BoxDecoration(
                   color: const Color(0xFF1B2430),
                   borderRadius: BorderRadius.circular(4),
@@ -1014,8 +1061,8 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
                 tooltip: '중단원 삭제',
                 visualDensity: VisualDensity.compact,
                 onPressed: () => _removeMidUnit(parent, midIndex),
-                icon: const Icon(Icons.close,
-                    size: 14, color: Color(0xFF9FB3B3)),
+                icon:
+                    const Icon(Icons.close, size: 14, color: Color(0xFF9FB3B3)),
               ),
             ],
           ),
@@ -1129,25 +1176,40 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
         ),
       );
     }
-    if (_gradeOptions.isEmpty) {
-      return _buildTextField(_gradeLabelCtrl, hint: '예: 고1');
+    if (_courseOptions.isEmpty) {
+      return _buildTextField(_gradeLabelCtrl, hint: '예: 1-1, 미적분1');
     }
     return _dropdownContainer(
       child: DropdownButtonHideUnderline(
         child: DropdownButton<String>(
-          value: _gradeOptions.contains(_gradeLabelCtrl.text.trim())
-              ? _gradeLabelCtrl.text.trim()
-              : _gradeOptions.first,
+          value: _courseOptions.any((e) => e.courseKey == _selectedCourseKey)
+              ? _selectedCourseKey
+              : _courseOptions.first.courseKey,
           dropdownColor: const Color(0xFF15171C),
           isExpanded: true,
           style: const TextStyle(color: Colors.white, fontSize: 13),
           items: [
-            for (final g in _gradeOptions)
-              DropdownMenuItem<String>(value: g, child: Text(g)),
+            for (final option in _courseOptions)
+              DropdownMenuItem<String>(
+                value: option.courseKey,
+                child: Text(option.displayLabel),
+              ),
           ],
           onChanged: (value) {
             if (value == null) return;
-            setState(() => _gradeLabelCtrl.text = value);
+            TextbookCourseOption? option = textbookCourseByKey(value);
+            if (option == null) {
+              for (final candidate in _courseOptions) {
+                if (candidate.courseKey == value) {
+                  option = candidate;
+                  break;
+                }
+              }
+            }
+            setState(() {
+              _selectedCourseKey = value;
+              _gradeLabelCtrl.text = option?.label ?? '';
+            });
           },
         ),
       ),
@@ -1222,16 +1284,15 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
   }
 
   Future<void> _openNewFolderDialog() async {
-    final parentId = _selectedFolderId == _rootFolderValue
-        ? null
-        : _selectedFolderId;
+    final parentId =
+        _selectedFolderId == _rootFolderValue ? null : _selectedFolderId;
     final parentName = parentId == null
         ? null
         : _folderOptions
             .firstWhere(
               (f) => f.id == parentId,
-              orElse: () => const _ResourceFolderOption(
-                id: '', name: '', depth: 0),
+              orElse: () =>
+                  const _ResourceFolderOption(id: '', name: '', depth: 0),
             )
             .name;
     final result = await showDialog<_NewFolderResult>(
@@ -1417,9 +1478,9 @@ class _TextbookRegisterWizardState extends State<TextbookRegisterWizard> {
                           fit: BoxFit.cover,
                           width: 80,
                           height: 110,
-                          errorBuilder: (_, __, ___) =>
-                              const Icon(Icons.image_not_supported,
-                                  color: Color(0xFF4A4A4A)),
+                          errorBuilder: (_, __, ___) => const Icon(
+                              Icons.image_not_supported,
+                              color: Color(0xFF4A4A4A)),
                         ),
                       )
                     : const Icon(Icons.image_outlined,
@@ -1844,8 +1905,7 @@ class _NewFolderDialogState extends State<_NewFolderDialog> {
       actions: [
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
-          child:
-              const Text('취소', style: TextStyle(color: Colors.white70)),
+          child: const Text('취소', style: TextStyle(color: Colors.white70)),
         ),
         FilledButton(
           onPressed: _save,

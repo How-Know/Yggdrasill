@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -33,7 +35,14 @@ const Color _rsText = Color(0xFFEAF2F2);
 const Color _rsTextSub = Color(0xFF9FB3B3);
 const Color _rsAccent = Color(0xFF33A373);
 
-enum RightSideSheetMode { none, grading, answerKey, fileShortcut, pdfEdit, memo }
+enum RightSideSheetMode {
+  none,
+  grading,
+  answerKey,
+  fileShortcut,
+  pdfEdit,
+  memo
+}
 
 class RightSideSheet extends StatefulWidget {
   final VoidCallback onClose;
@@ -2625,15 +2634,28 @@ class _MemoFilterPill extends StatelessWidget {
 class _RightSheetGradingCellVm {
   final String key;
   final int questionIndex;
+  final String questionLabel;
   final String answer;
   final String answerMode;
+  final String answerImageUrl;
+  final int? answerImageWidth;
+  final int? answerImageHeight;
 
   const _RightSheetGradingCellVm({
     required this.key,
     required this.questionIndex,
+    this.questionLabel = '',
     required this.answer,
     this.answerMode = '',
+    this.answerImageUrl = '',
+    this.answerImageWidth,
+    this.answerImageHeight,
   });
+
+  String get displayQuestionLabel {
+    final label = questionLabel.trim();
+    return label.isEmpty ? '$questionIndex' : label;
+  }
 }
 
 class _RightSheetGradingPageVm {
@@ -2665,6 +2687,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       'right_sheet_grading_recent_searches_v1';
   static const int _historyLimit = 10;
   static const int _suggestDebounceMs = 200;
+  static const double _answerSlotHeight = 46.0;
 
   final TextEditingController _searchCtrl = ImeAwareTextEditingController();
   final FocusNode _searchFocus = FocusNode();
@@ -2861,6 +2884,10 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         if (rawCell is! Map) continue;
         final key = '${rawCell['key'] ?? ''}'.trim();
         if (key.isEmpty || answersByKey.containsKey(key)) continue;
+        final answerImageUrl =
+            '${rawCell['answerImageUrl'] ?? rawCell['answer_image_url'] ?? ''}'
+                .trim();
+        if (answerImageUrl.isNotEmpty) continue;
         final answer = '${rawCell['answer'] ?? ''}'.trim();
         final answerMode = '${rawCell['answerMode'] ?? rawCell['mode'] ?? ''}'
             .trim()
@@ -2880,6 +2907,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         answersByKey: answersByKey,
         textColor: 'EAF2F7',
         fontSize: 17,
+        engine: 'mathjax',
       );
       if (!mounted ||
           requestSeq != _answerRenderRequestSeq ||
@@ -2928,6 +2956,116 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setStringList(_historyPrefKey, _recentSearches);
     } catch (_) {}
+  }
+
+  Map<String, String> _decodeRecentSearch(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) {
+      return const <String, String>{'query': '', 'label': ''};
+    }
+    if (trimmed.startsWith('{')) {
+      try {
+        final decoded = jsonDecode(trimmed);
+        if (decoded is Map) {
+          final query = '${decoded['query'] ?? ''}'.trim();
+          final label = '${decoded['label'] ?? ''}'.trim();
+          return <String, String>{
+            'query': query.isEmpty ? label : query,
+            'label': label.isEmpty ? query : label,
+          };
+        }
+      } catch (_) {}
+    }
+    return <String, String>{'query': trimmed, 'label': trimmed};
+  }
+
+  String _encodeRecentSearch({
+    required String query,
+    required String label,
+  }) {
+    return jsonEncode(<String, String>{
+      'query': query.trim(),
+      'label': label.trim(),
+    });
+  }
+
+  String _recentSearchQuery(String raw) {
+    return (_decodeRecentSearch(raw)['query'] ?? '').trim();
+  }
+
+  String _recentSearchLabel(String raw) {
+    return (_decodeRecentSearch(raw)['label'] ?? '').trim();
+  }
+
+  String _searchResultStudentName(RightSheetGradingSearchResult result) {
+    final studentName = result.studentName.trim();
+    return studentName.isEmpty ? '학생' : studentName;
+  }
+
+  String _searchResultTitle(RightSheetGradingSearchResult result) {
+    final groupTitle = result.groupHomeworkTitle.trim();
+    if (groupTitle.isNotEmpty) return groupTitle;
+    final homeworkTitle = result.homeworkTitle.trim();
+    return homeworkTitle.isEmpty ? '과제' : homeworkTitle;
+  }
+
+  String _searchResultRecentLabel(RightSheetGradingSearchResult result) {
+    return '${_searchResultStudentName(result)} ${_searchResultTitle(result)}'
+        .trim();
+  }
+
+  List<String> _mergeRecentSearch({
+    required String query,
+    required String label,
+    Set<String> dedupeTerms = const <String>{},
+  }) {
+    final normalizedQuery = query.trim();
+    final normalizedLabel = label.trim();
+    if (normalizedQuery.isEmpty && normalizedLabel.isEmpty) {
+      return _recentSearches;
+    }
+    final entryQuery =
+        normalizedQuery.isEmpty ? normalizedLabel : normalizedQuery;
+    final entryLabel =
+        normalizedLabel.isEmpty ? normalizedQuery : normalizedLabel;
+    final entry = _encodeRecentSearch(query: entryQuery, label: entryLabel);
+    final dedupeKeys = <String>{
+      entryQuery.toLowerCase(),
+      entryLabel.toLowerCase(),
+      ...dedupeTerms.map((e) => e.trim().toLowerCase()).where(
+            (e) => e.isNotEmpty,
+          ),
+    };
+    final next = <String>[entry];
+    for (final existing in _recentSearches) {
+      final existingQuery = _recentSearchQuery(existing).toLowerCase();
+      final existingLabel = _recentSearchLabel(existing).toLowerCase();
+      if (dedupeKeys.contains(existingQuery) ||
+          dedupeKeys.contains(existingLabel)) {
+        continue;
+      }
+      next.add(existing);
+      if (next.length >= _historyLimit) break;
+    }
+    return next;
+  }
+
+  Future<void> _rememberSearchResult(
+    RightSheetGradingSearchResult result,
+  ) async {
+    final title = _searchResultTitle(result);
+    final label = _searchResultRecentLabel(result);
+    final code = result.assignmentCode.trim();
+    final query = code.isEmpty ? label : code;
+    if (!mounted) return;
+    setState(() {
+      _recentSearches = _mergeRecentSearch(
+        query: query,
+        label: label,
+        dedupeTerms: <String>{title},
+      );
+    });
+    await _persistRecentSearches();
   }
 
   String _nextState(String current) {
@@ -3332,12 +3470,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       _scheduleSuggestionOverlaySync();
       return;
     }
-    final next = <String>[term];
-    for (final existing in _recentSearches) {
-      if (existing == term) continue;
-      next.add(existing);
-      if (next.length >= _historyLimit) break;
-    }
+    final next = _mergeRecentSearch(query: term, label: term);
     setState(() {
       _searchCtrl.text = term;
       _searchCtrl.selection = TextSelection.collapsed(offset: term.length);
@@ -3366,11 +3499,24 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     try {
       final results = await searchAction(term);
       if (!mounted) return;
+      final promotedRecent = results.length == 1
+          ? _mergeRecentSearch(
+              query: term,
+              label: _searchResultRecentLabel(results.single),
+              dedupeTerms: <String>{_searchResultTitle(results.single)},
+            )
+          : null;
       setState(() {
+        if (promotedRecent != null) {
+          _recentSearches = promotedRecent;
+        }
         _searchResults = results;
         _searchBusy = false;
         _searchError = null;
       });
+      if (promotedRecent != null) {
+        await _persistRecentSearches();
+      }
       _scheduleSuggestionOverlaySync();
     } catch (e) {
       if (!mounted) return;
@@ -3392,6 +3538,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     });
     _scheduleSuggestionOverlaySync();
     try {
+      await _rememberSearchResult(result);
       await openAction(result);
     } catch (e) {
       if (!mounted) return;
@@ -3468,17 +3615,36 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         final questionIndex = (rawCell['questionIndex'] is int)
             ? rawCell['questionIndex'] as int
             : int.tryParse('${rawCell['questionIndex']}') ?? 0;
+        final questionLabel =
+            '${rawCell['questionLabel'] ?? rawCell['question_label'] ?? ''}'
+                .trim();
         final answer = '${rawCell['answer'] ?? ''}'.trim();
         final answerMode = '${rawCell['answerMode'] ?? rawCell['mode'] ?? ''}'
             .trim()
             .toLowerCase();
+        final answerImageUrl =
+            '${rawCell['answerImageUrl'] ?? rawCell['answer_image_url'] ?? ''}'
+                .trim();
+        int? parsePositiveInt(dynamic raw) {
+          final value = raw is int ? raw : int.tryParse('$raw');
+          return value != null && value > 0 ? value : null;
+        }
+
         parsedCells.add(
           _RightSheetGradingCellVm(
             key: key,
             questionIndex:
                 questionIndex <= 0 ? (parsedCells.length + 1) : questionIndex,
+            questionLabel: questionLabel,
             answer: answer,
             answerMode: answerMode,
+            answerImageUrl: answerImageUrl,
+            answerImageWidth: parsePositiveInt(
+              rawCell['answerImageWidth'] ?? rawCell['answer_image_width_px'],
+            ),
+            answerImageHeight: parsePositiveInt(
+              rawCell['answerImageHeight'] ?? rawCell['answer_image_height_px'],
+            ),
           ),
         );
       }
@@ -3508,9 +3674,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         : result.assignmentCode.trim();
     final canOpen = result.isTestHomework || result.hasTextbookLink;
     final subtitle = [
-      result.groupHomeworkTitle.trim().isEmpty
-          ? result.homeworkTitle.trim()
-          : result.groupHomeworkTitle.trim(),
+      _searchResultTitle(result),
       if (code != '-') code,
     ].join(' · ');
     return InkWell(
@@ -3542,9 +3706,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    result.studentName.trim().isEmpty
-                        ? '학생'
-                        : result.studentName.trim(),
+                    _searchResultStudentName(result),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
@@ -3723,17 +3885,19 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                   ),
                 ),
               const SizedBox(width: 4),
-              InkWell(
-                borderRadius: BorderRadius.circular(999),
-                onTap: () {
-                  _searchFocus.unfocus();
-                  unawaited(_submitSearch());
-                },
-                child: const Padding(
-                  padding: EdgeInsets.all(4),
-                  child: Icon(Icons.search, size: 18, color: _rsTextSub),
+              if (_recentSearches.isNotEmpty)
+                InkWell(
+                  borderRadius: BorderRadius.circular(999),
+                  onTap: () => unawaited(_clearRecentSearches()),
+                  child: const Padding(
+                    padding: EdgeInsets.all(4),
+                    child: Icon(
+                      Icons.delete_outline_rounded,
+                      size: 18,
+                      color: Color(0xFFE06969),
+                    ),
+                  ),
                 ),
-              ),
             ],
           ),
         ),
@@ -3756,14 +3920,20 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       InkWell(
-                        onTap: () =>
-                            unawaited(_submitSearch(_recentSearches[i])),
-                        child: Text(
+                        onTap: () => unawaited(_submitSearch(_recentSearchQuery(
                           _recentSearches[i],
-                          style: const TextStyle(
-                            color: _rsText,
-                            fontSize: 13,
-                            fontWeight: FontWeight.w800,
+                        ))),
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 260),
+                          child: Text(
+                            _recentSearchLabel(_recentSearches[i]),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: _rsText,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w800,
+                            ),
                           ),
                         ),
                       ),
@@ -3781,31 +3951,6 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                 ),
             ],
           ),
-          if (_recentSearches.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            Align(
-              alignment: Alignment.centerRight,
-              child: TextButton.icon(
-                onPressed: () => unawaited(_clearRecentSearches()),
-                icon: const Icon(Icons.delete_outline_rounded,
-                    size: 16, color: Color(0xFFE06969)),
-                label: const Text(
-                  '검색이력 삭제',
-                  style: TextStyle(
-                    color: Color(0xFFE06969),
-                    fontSize: 13,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-                style: TextButton.styleFrom(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  minimumSize: Size.zero,
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                ),
-              ),
-            ),
-          ],
         ],
       ],
     );
@@ -3830,10 +3975,8 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     final openAction = canOpen && !_searchOpenBusy
         ? () => unawaited(_openSearchResult(result))
         : null;
+    final title = _searchResultTitle(result);
     final subtitleParts = <String>[
-      result.groupHomeworkTitle.trim().isEmpty
-          ? result.homeworkTitle.trim()
-          : result.groupHomeworkTitle.trim(),
       if (code != '-') code,
       if (result.isTestHomework) (result.isSubmitted ? '테스트 제출됨' : '테스트 미제출'),
     ];
@@ -3853,29 +3996,49 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    result.studentName.trim().isEmpty
-                        ? '학생'
-                        : result.studentName.trim(),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: _rsText,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w900,
-                    ),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          _searchResultStudentName(result),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: _rsText,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Flexible(
+                        child: Text(
+                          title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          textAlign: TextAlign.right,
+                          style: const TextStyle(
+                            color: _rsTextSub,
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 2),
-                  Text(
-                    subtitleParts.join(' · '),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: _rsTextSub,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
+                  if (subtitleParts.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitleParts.join(' · '),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: _rsTextSub,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
-                  ),
+                  ],
                 ],
               ),
             ),
@@ -4219,8 +4382,8 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                     fontWeight: FontWeight.w400,
                     fontSize: 40.5,
                     height: 1.0,
+                  ),
                 ),
-              ),
           ],
         ),
       );
@@ -4241,41 +4404,82 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
   }
 
   Widget _buildAnswerImageOrFallback(_RightSheetGradingCellVm cell) {
+    if (cell.answerImageUrl.trim().isNotEmpty) {
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          final rawWidth = cell.answerImageWidth?.toDouble() ?? 0;
+          final rawHeight = cell.answerImageHeight?.toDouble() ?? 0;
+          final aspect =
+              rawWidth > 0 && rawHeight > 0 ? rawWidth / rawHeight : 3.0;
+          const displayHeight = _answerSlotHeight;
+          final displayWidth = math.min(
+            constraints.maxWidth.isFinite ? constraints.maxWidth : 220.0,
+            displayHeight * aspect,
+          );
+          return SizedBox(
+            height: _answerSlotHeight,
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: Image.network(
+                cell.answerImageUrl,
+                width: displayWidth,
+                height: displayHeight,
+                fit: BoxFit.contain,
+                alignment: Alignment.centerRight,
+                filterQuality: FilterQuality.high,
+                errorBuilder: (_, __, ___) => _buildAnswerFallback(cell),
+              ),
+            ),
+          );
+        },
+      );
+    }
     if (_isObjectiveAnswer(
       answer: cell.answer,
       answerMode: cell.answerMode,
     )) {
-      return _buildObjectiveAnswerFlutter(cell);
+      return SizedBox(
+        height: _answerSlotHeight,
+        child: _buildObjectiveAnswerFlutter(cell),
+      );
     }
     final render = _answerRenders[cell.key];
     if (render != null && render.hasImage) {
-      return LayoutBuilder(
-        builder: (context, constraints) {
-          const answerLogicalScale = 1.815;
-          final pixelRatio =
-              render.pixelRatio <= 0 ? 3.0 : render.pixelRatio;
-          final rawWidth = render.width <= 0 ? 1.0 : render.width.toDouble();
-          final rawHeight = render.height <= 0 ? 1.0 : render.height.toDouble();
-          var displayWidth = rawWidth / pixelRatio * answerLogicalScale;
-          var displayHeight = rawHeight / pixelRatio * answerLogicalScale;
-          if (displayWidth > constraints.maxWidth && displayWidth > 0) {
-            final downscale = constraints.maxWidth / displayWidth;
-            displayWidth *= downscale;
-            displayHeight *= downscale;
-          }
-          return Align(
-            alignment: Alignment.centerRight,
-            child: Image.network(
-              render.url,
-              width: displayWidth,
-              height: displayHeight,
-              fit: BoxFit.contain,
+      return SizedBox(
+        height: _answerSlotHeight,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            const answerLogicalScale = 1.815;
+            final pixelRatio = render.pixelRatio <= 0 ? 3.0 : render.pixelRatio;
+            final rawWidth = render.width <= 0 ? 1.0 : render.width.toDouble();
+            final rawHeight =
+                render.height <= 0 ? 1.0 : render.height.toDouble();
+            var displayWidth = rawWidth / pixelRatio * answerLogicalScale;
+            var displayHeight = rawHeight / pixelRatio * answerLogicalScale;
+            final heightScale = _answerSlotHeight / displayHeight;
+            if (heightScale.isFinite && heightScale > 0 && heightScale < 1) {
+              displayWidth *= heightScale;
+              displayHeight *= heightScale;
+            }
+            if (displayWidth > constraints.maxWidth && displayWidth > 0) {
+              final downscale = constraints.maxWidth / displayWidth;
+              displayWidth *= downscale;
+              displayHeight *= downscale;
+            }
+            return Align(
               alignment: Alignment.centerRight,
-              filterQuality: FilterQuality.high,
-              errorBuilder: (_, __, ___) => _buildAnswerFallback(cell),
-            ),
-          );
-        },
+              child: Image.network(
+                render.url,
+                width: displayWidth,
+                height: displayHeight,
+                fit: BoxFit.contain,
+                alignment: Alignment.centerRight,
+                filterQuality: FilterQuality.high,
+                errorBuilder: (_, __, ___) => _buildAnswerFallback(cell),
+              ),
+            );
+          },
+        ),
       );
     }
     return _buildAnswerFallback(cell);
@@ -4284,11 +4488,11 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
   Widget _buildAnswerFallback(_RightSheetGradingCellVm cell) {
     final failed = _answerRenderFailedKeys.contains(cell.key);
     return SizedBox(
-      height: 34,
+      height: _answerSlotHeight,
       child: Align(
         alignment: Alignment.centerRight,
         child: Text(
-          failed ? '렌더 실패' : 'XeLaTeX 렌더링 중...',
+          failed ? '렌더 실패' : '정답 렌더링 중...',
           textAlign: TextAlign.right,
           style: TextStyle(
             color: failed ? const Color(0xFFFFD7DE) : _rsTextSub,
@@ -4303,95 +4507,126 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
   Widget _buildAnswerListRow(_RightSheetGradingCellVm cell) {
     final state = _normalizeState(_gradingStates[cell.key]);
     final colors = _resolveAnswerRowStyle(state);
+    final questionLabel = cell.displayQuestionLabel;
     return Tooltip(
       message: _gradingEditLocked
-          ? '${cell.questionIndex}번 · 저장된 채점 결과'
-          : '${cell.questionIndex}번',
-      child: InkWell(
-        borderRadius: BorderRadius.circular(12),
-        onTap: () => unawaited(_toggleCellState(cell.key)),
-        child: Container(
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-          decoration: BoxDecoration(
-            color: colors.background,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: colors.border),
-          ),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              Container(
-                width: 62,
-                height: 32,
-                alignment: Alignment.center,
+          ? '$questionLabel번 · 저장된 채점 결과'
+          : '$questionLabel번',
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Expanded(
+            child: InkWell(
+              borderRadius: BorderRadius.circular(12),
+              onTap: () => unawaited(_toggleCellState(cell.key)),
+              child: Container(
+                width: double.infinity,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
                 decoration: BoxDecoration(
-                  color: colors.border.withOpacity(0.18),
-                  borderRadius: BorderRadius.circular(999),
+                  color: colors.background,
+                  borderRadius: BorderRadius.circular(12),
                   border: Border.all(color: colors.border),
                 ),
-                child: Text(
-                  colors.label,
-                  maxLines: 1,
-                  overflow: TextOverflow.fade,
-                  softWrap: false,
-                  style: TextStyle(
-                    color: colors.text,
-                    fontWeight: FontWeight.w900,
-                    fontSize: 13.5,
-                    height: 1.0,
-                  ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Container(
+                      width: 62,
+                      height: 32,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: colors.border.withOpacity(0.18),
+                        borderRadius: BorderRadius.circular(999),
+                        border: Border.all(color: colors.border),
+                      ),
+                      child: Text(
+                        colors.label,
+                        maxLines: 1,
+                        overflow: TextOverflow.fade,
+                        softWrap: false,
+                        style: TextStyle(
+                          color: colors.text,
+                          fontWeight: FontWeight.w900,
+                          fontSize: 13.5,
+                          height: 1.0,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: SizedBox(
+                        height: _answerSlotHeight,
+                        child: _buildAnswerImageOrFallback(cell),
+                      ),
+                    ),
+                  ],
                 ),
               ),
-              const SizedBox(width: 14),
-              Expanded(child: _buildAnswerImageOrFallback(cell)),
-              const SizedBox(width: 12),
-              SizedBox(
-                width: 48,
-                child: Text(
-                  '${cell.questionIndex}',
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    color: Color(0xFF9FB3B3),
-                    fontSize: 18,
-                    fontWeight: FontWeight.w900,
-                    height: 1.0,
-                    letterSpacing: -0.2,
-                  ),
-                ),
-              ),
-            ],
+            ),
           ),
-        ),
+          const SizedBox(width: 8),
+          SizedBox(
+            width: 56,
+            child: Text(
+              questionLabel,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: Color(0xFF9FB3B3),
+                fontSize: 16,
+                fontWeight: FontWeight.w900,
+                height: 1.0,
+                letterSpacing: -0.2,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
 
-  Widget _buildAnswerPageSection(_RightSheetGradingPageVm page, {
+  Widget _buildPageDividerLabel(
+    _RightSheetGradingPageVm page, {
+    required bool isFirst,
+  }) {
+    return Padding(
+      padding: EdgeInsets.only(
+        top: isFirst ? 0 : 12,
+        bottom: 8,
+      ),
+      child: Row(
+        children: [
+          if (!isFirst)
+            const Expanded(
+              child: Divider(height: 1, thickness: 1, color: _rsBorder),
+            )
+          else
+            const Spacer(),
+          const SizedBox(width: 10),
+          Text(
+            'p.${page.pageNumber}',
+            style: const TextStyle(
+              color: _rsTextSub,
+              fontWeight: FontWeight.w800,
+              fontSize: 13,
+              height: 1.0,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAnswerPageSection(
+    _RightSheetGradingPageVm page, {
     required bool isFirst,
   }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (!isFirst)
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 12),
-            child: Divider(height: 1, thickness: 1, color: _rsBorder),
-          ),
-        Padding(
-          padding: const EdgeInsets.only(bottom: 8),
-          child: Align(
-            alignment: Alignment.centerRight,
-            child: Text(
-              'p.${page.pageNumber}',
-              style: const TextStyle(
-                color: _rsTextSub,
-                fontWeight: FontWeight.w800,
-                fontSize: 13,
-                height: 1.0,
-              ),
-            ),
-          ),
+        _buildPageDividerLabel(
+          page,
+          isFirst: isFirst,
         ),
         for (int i = 0; i < page.cells.length; i++) ...[
           _buildAnswerListRow(page.cells[i]),

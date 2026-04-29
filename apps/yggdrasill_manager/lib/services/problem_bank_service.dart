@@ -6,6 +6,7 @@ import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'textbook_course_catalog.dart';
 import '../screens/problem_bank/problem_bank_models.dart';
 
 class ProblemBankSchemaMissingException implements Exception {
@@ -225,12 +226,18 @@ class ProblemBankService {
       throw Exception('교재 본문 PDF 스토리지 경로가 없습니다');
     }
     const pipelineSourceVersion = 'textbook_pdf_only_v2_answers';
+    final course = textbookCourseByLabel(gradeLabel);
 
     final scope = <String, dynamic>{
       'mode': 'textbook_pdf_only',
       'book_id': bookId,
       'book_name': bookName,
       'grade_label': gradeLabel,
+      if (course != null) ...<String, dynamic>{
+        'grade_key': course.gradeKey,
+        'course_key': course.courseKey,
+        'course_label': course.label,
+      },
       'big_order': bigOrder,
       'mid_order': midOrder,
       'sub_key': subKey,
@@ -285,6 +292,11 @@ class ProblemBankService {
         'book_id': bookId,
         'book_name': bookName,
         'grade_label': gradeLabel,
+        if (course != null) ...<String, dynamic>{
+          'grade_key': course.gradeKey,
+          'course_key': course.courseKey,
+          'course_label': course.label,
+        },
         'big_order': bigOrder,
         'mid_order': midOrder,
         'sub_key': subKey,
@@ -325,10 +337,22 @@ class ProblemBankService {
             'material_name': bookName,
             'classification_detail': <String, dynamic>{
               'textbook_scope': scope,
+              if (course != null)
+                'textbook_course': <String, dynamic>{
+                  'grade_key': course.gradeKey,
+                  'course_key': course.courseKey,
+                  'course_label': course.label,
+                },
             },
             'meta': <String, dynamic>{
               'source_classification': sourceClassification,
               'textbook_scope': scope,
+              if (course != null)
+                'textbook_course': <String, dynamic>{
+                  'grade_key': course.gradeKey,
+                  'course_key': course.courseKey,
+                  'course_label': course.label,
+                },
               'extract_mode': 'textbook_pdf_only',
               'created_at': now,
             },
@@ -371,6 +395,11 @@ class ProblemBankService {
         'academy_id': academyId,
         'book_id': bookId,
         'grade_label': gradeLabel,
+        if (course != null) ...<String, dynamic>{
+          'grade_key': course.gradeKey,
+          'course_key': course.courseKey,
+          'course_label': course.label,
+        },
         'big_order': bigOrder,
         'mid_order': midOrder,
         'sub_key': subKey,

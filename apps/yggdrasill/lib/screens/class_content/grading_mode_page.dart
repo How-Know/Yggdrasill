@@ -723,6 +723,7 @@ class _GradingModePageState extends State<GradingModePage> {
     return HomeworkItem(
       id: (runningChild ?? first).id,
       assignmentCode: (runningChild ?? first).assignmentCode,
+      learningTrackCode: group.learningTrackCode,
       title: title.trim().isEmpty ? '(제목 없음)' : title.trim(),
       body: displaySeed.body,
       color: first.color,

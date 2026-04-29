@@ -2354,6 +2354,7 @@ class LearningProblemBankService {
     required Map<String, String> answersByKey,
     String textColor = 'EAF2F7',
     int fontSize = 19,
+    String engine = 'xelatex',
   }) async {
     if (!hasGateway || academyId.trim().isEmpty || answersByKey.isEmpty) {
       return <String, LearningProblemAnswerRender>{};
@@ -2375,6 +2376,7 @@ class LearningProblemBankService {
         body: <String, dynamic>{
           'academyId': academyId.trim(),
           'items': items,
+          'engine': engine.trim().isEmpty ? 'xelatex' : engine.trim(),
           'style': <String, dynamic>{
             'textColor': textColor,
             'fontSize': fontSize,

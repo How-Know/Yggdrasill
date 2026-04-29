@@ -13,6 +13,7 @@ import {
   renderPdfWithXeLatex,
   renderAnswerWithXeLatex,
 } from './problem_bank/render_engine/xelatex/renderer.js';
+import { createMathSvgRenderer } from './problem_bank/render_engine/math/mathjax_svg_renderer.js';
 import { generateObjectiveDraftForQuestion } from './problem_bank_extract_worker.js';
 
 const __api_dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -85,6 +86,7 @@ if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
 const supa = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false, autoRefreshToken: false },
 });
+const answerMathRenderer = createMathSvgRenderer();
 
 function sendJson(res, statusCode, body) {
   const payload = JSON.stringify(body);
@@ -3733,6 +3735,76 @@ function normalizeAnswerRenderFontSize(raw) {
   return Math.max(10, Math.min(30, Math.round(parsed)));
 }
 
+function normalizeAnswerRenderEngine(raw) {
+  const value = String(raw || '').trim().toLowerCase();
+  if (value === 'mathjax' || value === 'svg') return 'mathjax';
+  return 'xelatex';
+}
+
+function svgNumberAttr(svg, name) {
+  const match = String(svg || '').match(new RegExp(`${name}="([\\d.]+)(em|px)?"`, 'i'));
+  if (!match) return null;
+  const value = Number.parseFloat(match[1]);
+  if (!Number.isFinite(value) || value <= 0) return null;
+  return { value, unit: match[2] || '' };
+}
+
+async function renderAnswerWithMathJax({
+  answer,
+  deviceScaleFactor = 3,
+  fontSizePt = 19,
+  textColor = 'EAF2F7',
+}) {
+  const rendered = answerMathRenderer.renderInline(answer || '-');
+  if (!rendered?.ok || !rendered.svg) {
+    throw new Error('mathjax render failed');
+  }
+  const pixelRatio = Number(deviceScaleFactor || 3);
+  const fontPx = Math.max(1, Number(fontSizePt || 19) * (96 / 72));
+  const widthAttr = svgNumberAttr(rendered.svg, 'width');
+  const heightAttr = svgNumberAttr(rendered.svg, 'height');
+  const viewBoxMatch = rendered.svg.match(/viewBox="([^"]+)"/i);
+  const viewBoxParts = viewBoxMatch
+    ? viewBoxMatch[1].trim().split(/\s+/).map((v) => Number.parseFloat(v))
+    : [];
+  const viewBoxWidth = Number.isFinite(viewBoxParts[2]) && viewBoxParts[2] > 0
+    ? viewBoxParts[2]
+    : 1000;
+  const viewBoxHeight = Number.isFinite(viewBoxParts[3]) && viewBoxParts[3] > 0
+    ? viewBoxParts[3]
+    : 1000;
+  const widthCssPx = widthAttr?.unit === 'px'
+    ? widthAttr.value
+    : ((widthAttr?.value || (viewBoxWidth / 1000)) * fontPx);
+  const heightCssPx = heightAttr?.unit === 'px'
+    ? heightAttr.value
+    : ((heightAttr?.value || (viewBoxHeight / 1000)) * fontPx);
+  const width = Math.max(1, Math.ceil(widthCssPx * pixelRatio));
+  const height = Math.max(1, Math.ceil(heightCssPx * pixelRatio));
+  const color = normalizeAnswerRenderColor(textColor);
+  let svg = rendered.svg
+    .replace(/currentColor/g, `#${color}`)
+    .replace(
+      /<svg\b[^>]*>/i,
+      (tag) => tag
+        .replace(/\swidth="[^"]*"/i, '')
+        .replace(/\sheight="[^"]*"/i, '')
+        .replace(/\sstyle="[^"]*"/i, '')
+        .replace(/>$/, ` width="${width}" height="${height}">`),
+    );
+  if (!/xmlns=/.test(svg.slice(0, 200))) {
+    svg = svg.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"');
+  }
+  const pngBuffer = await sharp(Buffer.from(svg)).png().toBuffer();
+  return {
+    pngBuffer,
+    width,
+    height,
+    pixelRatio,
+    svg,
+  };
+}
+
 async function loadAnswerRenderStorageMeta(storagePath) {
   try {
     const { data, error } = await supa.storage
@@ -3775,6 +3847,7 @@ async function previewAnswerRenders(res, req) {
   const textColor = normalizeAnswerRenderColor(style.textColor || style.color || 'EAF2F7');
   const fontSize = normalizeAnswerRenderFontSize(style.fontSize || style.fontSizePt || 19);
   const transparent = style.transparent !== false;
+  const engine = normalizeAnswerRenderEngine(body?.engine || style.engine);
   const font = resolveBatchPreviewFont();
   const fontFamily = String(style.fontFamily || font.family || 'Malgun Gothic').trim();
   const fontRegularPath = String(style.fontFamily ? '' : font.path || '').trim();
@@ -3792,6 +3865,7 @@ async function previewAnswerRenders(res, req) {
     const renderHash = createHash('sha256')
       .update(JSON.stringify({
         version: ANSWER_RENDER_STYLE_VERSION,
+        engine,
         answer,
         textColor,
         fontSize,
@@ -3821,16 +3895,31 @@ async function previewAnswerRenders(res, req) {
         };
       }
 
-      const rendered = await renderAnswerWithXeLatex({
-        answer: descriptor.answer || '-',
-        viewportWidth: 640,
-        deviceScaleFactor: ANSWER_RENDER_PIXEL_RATIO,
-        fontFamily,
-        fontBold,
-        fontRegularPath,
-        fontSizePt: fontSize,
-        textColor,
-      });
+      let rendered;
+      if (engine === 'mathjax') {
+        try {
+          rendered = await renderAnswerWithMathJax({
+            answer: descriptor.answer || '-',
+            deviceScaleFactor: ANSWER_RENDER_PIXEL_RATIO,
+            fontSizePt: fontSize,
+            textColor,
+          });
+        } catch (err) {
+          console.warn('[answer-renders] mathjax failed, fallback to xelatex:', err?.message || err);
+        }
+      }
+      if (!rendered) {
+        rendered = await renderAnswerWithXeLatex({
+          answer: descriptor.answer || '-',
+          viewportWidth: 640,
+          deviceScaleFactor: ANSWER_RENDER_PIXEL_RATIO,
+          fontFamily,
+          fontBold,
+          fontRegularPath,
+          fontSizePt: fontSize,
+          textColor,
+        });
+      }
       const { error: upErr } = await supa.storage
         .from(ANSWER_RENDER_BUCKET)
         .upload(descriptor.storagePath, rendered.pngBuffer, {
@@ -4125,6 +4214,34 @@ function buildGradeComposite(gradeLabel, kind) {
   return `${String(gradeLabel || '').trim()}#${String(kind || '').trim().toLowerCase()}`;
 }
 
+function inferTextbookCourse(rawLabel) {
+  const label = String(rawLabel || '')
+    .trim()
+    .replace(/\s+/g, '')
+    .replace(/중등|고등|과정|학년/g, '');
+  const rows = [
+    ['M1', 'M1-1', '1-1'],
+    ['M1', 'M1-2', '1-2'],
+    ['M2', 'M2-1', '2-1'],
+    ['M2', 'M2-2', '2-2'],
+    ['M3', 'M3-1', '3-1'],
+    ['M3', 'M3-2', '3-2'],
+    ['H1', 'H1-c1', '공통수학1'],
+    ['H1', 'H1-c2', '공통수학2'],
+    ['H2', 'H-algebra', '대수'],
+    ['H2', 'H-calc1', '미적분1'],
+    ['H2', 'H-probstats', '확률과통계'],
+    ['H2', 'H-calc2', '미적분2'],
+    ['H2', 'H-geometry', '기하'],
+  ];
+  for (const [gradeKey, courseKey, courseLabel] of rows) {
+    if (label === courseLabel.replace(/\s+/g, '')) {
+      return { gradeKey, courseKey, courseLabel };
+    }
+  }
+  return { gradeKey: '', courseKey: '', courseLabel: String(rawLabel || '').trim() };
+}
+
 async function resolveTextbookLink({
   linkId,
   academyId,
@@ -4165,6 +4282,12 @@ async function handleTextbookUploadUrl(body, res) {
   const academyId = String(body?.academy_id || '').trim();
   const fileId = String(body?.file_id || '').trim();
   const gradeLabel = String(body?.grade_label || '').trim();
+  const inferredCourse = inferTextbookCourse(gradeLabel);
+  const gradeKey = String(body?.grade_key || inferredCourse.gradeKey || '').trim();
+  const courseKey = String(body?.course_key || inferredCourse.courseKey || '').trim();
+  const courseLabel = String(
+    body?.course_label || inferredCourse.courseLabel || gradeLabel,
+  ).trim();
   const kind = String(body?.kind || '').trim().toLowerCase();
   if (!academyId || !fileId || !gradeLabel || !kind) {
     sendJson(res, 400, {
@@ -4196,6 +4319,7 @@ async function handleTextbookUploadUrl(body, res) {
     driver,
     bucket,
     key: storageKey,
+    upsert: true,
     expiresIn: UPLOAD_URL_TTL_SEC,
   });
   if (!signed.ok) {
@@ -4237,6 +4361,12 @@ async function handleTextbookFinalize(body, res) {
   const contentHash = String(body?.content_hash || '').trim() || null;
   const rawDropboxUrl = body?.legacy_url != null ? String(body.legacy_url) : null;
   const desiredStatus = String(body?.migration_status || 'dual').trim();
+  const inferredCourse = inferTextbookCourse(gradeLabel);
+  const gradeKey = String(body?.grade_key || inferredCourse.gradeKey || '').trim();
+  const courseKey = String(body?.course_key || inferredCourse.courseKey || '').trim();
+  const courseLabel = String(
+    body?.course_label || inferredCourse.courseLabel || gradeLabel,
+  ).trim();
 
   if (!storageKey) {
     sendJson(res, 400, {
@@ -4291,6 +4421,9 @@ async function handleTextbookFinalize(body, res) {
     file_size_bytes: objectSize,
     content_hash: contentHash,
     uploaded_at: nowIso,
+    grade_key: gradeKey,
+    course_key: courseKey,
+    course_label: courseLabel,
   };
 
   let updatedRow = null;

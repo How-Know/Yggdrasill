@@ -15,6 +15,7 @@ import 'package:path/path.dart' as p;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:uuid/uuid.dart';
 
+import 'textbook_course_catalog.dart';
 import 'textbook_series_catalog.dart';
 
 class TextbookBookRegistryResult {
@@ -108,6 +109,9 @@ class TextbookRegistrationInput {
     required this.seriesKey,
     required this.bookName,
     required this.gradeLabel,
+    this.gradeKey,
+    this.courseKey,
+    this.courseLabel,
     required this.textbookType,
     required this.pageOffset,
     required this.bigUnits,
@@ -126,6 +130,9 @@ class TextbookRegistrationInput {
   final String seriesKey;
   final String bookName;
   final String gradeLabel;
+  final String? gradeKey;
+  final String? courseKey;
+  final String? courseLabel;
   final String textbookType; // '개념서' | '문제집'
   final int? pageOffset;
   final List<BigUnitInput> bigUnits;
@@ -188,6 +195,12 @@ class TextbookBookRegistry {
 
     final seriesEntry = textbookSeriesByKey(input.seriesKey);
     final bookId = input.existingBookId ?? _uuid.v4();
+    final courseInfo = _resolveCourseInfo(
+      gradeLabel: input.gradeLabel,
+      gradeKey: input.gradeKey,
+      courseKey: input.courseKey,
+      courseLabel: input.courseLabel,
+    );
 
     await _upsertResourceFileRow(
       bookId: bookId,
@@ -211,6 +224,9 @@ class TextbookBookRegistry {
       bookId: bookId,
       academyId: input.academyId,
       gradeLabel: input.gradeLabel,
+      gradeKey: courseInfo.gradeKey,
+      courseKey: courseInfo.courseKey,
+      courseLabel: courseInfo.courseLabel,
       bodyLegacyUrl: input.bodyLegacyUrl?.trim(),
       answerLegacyUrl: input.answerLegacyUrl?.trim(),
       solutionLegacyUrl: input.solutionLegacyUrl?.trim(),
@@ -221,6 +237,9 @@ class TextbookBookRegistry {
       bookId: bookId,
       academyId: input.academyId,
       gradeLabel: input.gradeLabel,
+      gradeKey: courseInfo.gradeKey,
+      courseKey: courseInfo.courseKey,
+      courseLabel: courseInfo.courseLabel,
       textbookType: input.textbookType,
       pageOffset: input.pageOffset,
       series: seriesEntry?.key ?? input.seriesKey,
@@ -253,7 +272,8 @@ class TextbookBookRegistry {
       final row = <String, dynamic>{
         'name': name,
         'category': 'textbook',
-        'folder_id': (parentFolderId ?? '').trim().isEmpty ? null : parentFolderId,
+        'folder_id':
+            (parentFolderId ?? '').trim().isEmpty ? null : parentFolderId,
       };
       if (descValue.isNotEmpty) {
         row['description'] = descValue;
@@ -267,7 +287,8 @@ class TextbookBookRegistry {
       'name': name,
       'description': descValue.isEmpty ? null : descValue,
       'category': 'textbook',
-      'folder_id': (parentFolderId ?? '').trim().isEmpty ? null : parentFolderId,
+      'folder_id':
+          (parentFolderId ?? '').trim().isEmpty ? null : parentFolderId,
       // Explicit so newly-registered books stay hidden until the operator
       // flips the switch in the migration pane.
       'is_published': isPublished,
@@ -281,10 +302,8 @@ class TextbookBookRegistry {
     required String bookId,
     required bool isPublished,
   }) async {
-    await _supa
-        .from('resource_files')
-        .update(<String, dynamic>{'is_published': isPublished})
-        .eq('id', bookId);
+    await _supa.from('resource_files').update(
+        <String, dynamic>{'is_published': isPublished}).eq('id', bookId);
   }
 
   /// Reads back the current is_published value. Used by the migration pane
@@ -343,6 +362,9 @@ class TextbookBookRegistry {
     required String bookId,
     required String academyId,
     required String gradeLabel,
+    required String gradeKey,
+    required String courseKey,
+    required String courseLabel,
     String? bodyLegacyUrl,
     String? answerLegacyUrl,
     String? solutionLegacyUrl,
@@ -366,16 +388,21 @@ class TextbookBookRegistry {
           .maybeSingle();
       if (existing != null && existing['id'] != null) {
         final linkId = (existing['id'] as num).toInt();
-        await _supa
-            .from('resource_file_links')
-            .update(<String, dynamic>{'url': url})
-            .eq('id', linkId);
+        await _supa.from('resource_file_links').update(<String, dynamic>{
+          'url': url,
+          'grade_key': gradeKey,
+          'course_key': courseKey,
+          'course_label': courseLabel,
+        }).eq('id', linkId);
       } else {
         await _supa.from('resource_file_links').insert(<String, dynamic>{
           'academy_id': academyId,
           'file_id': bookId,
           'grade': grade,
           'url': url,
+          'grade_key': gradeKey,
+          'course_key': courseKey,
+          'course_label': courseLabel,
         });
       }
     }
@@ -390,6 +417,9 @@ class TextbookBookRegistry {
     required String bookId,
     required String academyId,
     required String gradeLabel,
+    required String gradeKey,
+    required String courseKey,
+    required String courseLabel,
     required String textbookType,
     required int? pageOffset,
     required String series,
@@ -402,6 +432,9 @@ class TextbookBookRegistry {
       'series_name': seriesDisplayName,
       'book_id': bookId,
       'grade_label': gradeLabel,
+      'grade_key': gradeKey,
+      'course_key': courseKey,
+      'course_label': courseLabel,
       'units': bigUnits.map((u) => u.toPayload()).toList(),
     };
     await _supa.from('textbook_metadata').upsert(
@@ -409,11 +442,37 @@ class TextbookBookRegistry {
         'academy_id': academyId,
         'book_id': bookId,
         'grade_label': gradeLabel,
+        'grade_key': gradeKey,
+        'course_key': courseKey,
+        'course_label': courseLabel,
         'textbook_type': textbookType,
         'page_offset': pageOffset,
         'payload': payload,
       },
       onConflict: 'academy_id,book_id,grade_label',
+    );
+  }
+
+  ({String gradeKey, String courseKey, String courseLabel}) _resolveCourseInfo({
+    required String gradeLabel,
+    String? gradeKey,
+    String? courseKey,
+    String? courseLabel,
+  }) {
+    final byKey = textbookCourseByKey(courseKey);
+    final byLabel = byKey ??
+        textbookCourseByLabel(courseLabel) ??
+        textbookCourseByLabel(gradeLabel);
+    return (
+      gradeKey: (gradeKey ?? '').trim().isNotEmpty
+          ? gradeKey!.trim()
+          : (byLabel?.gradeKey ?? ''),
+      courseKey: (courseKey ?? '').trim().isNotEmpty
+          ? courseKey!.trim()
+          : (byLabel?.courseKey ?? ''),
+      courseLabel: (courseLabel ?? '').trim().isNotEmpty
+          ? courseLabel!.trim()
+          : (byLabel?.label ?? gradeLabel.trim()),
     );
   }
 
@@ -426,13 +485,13 @@ class TextbookBookRegistry {
   }) async {
     final row = await _supa
         .from('textbook_metadata')
-        .select('payload,textbook_type,page_offset')
+        .select(
+            'payload,textbook_type,page_offset,grade_key,course_key,course_label')
         .match(<String, Object>{
-          'academy_id': academyId,
-          'book_id': bookId,
-          'grade_label': gradeLabel,
-        })
-        .maybeSingle();
+      'academy_id': academyId,
+      'book_id': bookId,
+      'grade_label': gradeLabel,
+    }).maybeSingle();
     if (row == null) return null;
     return Map<String, dynamic>.from(row);
   }
@@ -448,27 +507,33 @@ class TextbookBookRegistry {
     required List<BigUnitInput> bigUnits,
   }) async {
     final seriesEntry = textbookSeriesByKey(seriesKey);
+    final courseInfo = _resolveCourseInfo(gradeLabel: gradeLabel);
     final payload = <String, dynamic>{
       'version': 2,
       'series': seriesEntry?.key ?? seriesKey,
       'series_name': seriesEntry?.displayName ?? seriesKey,
       'book_id': bookId,
       'grade_label': gradeLabel,
+      'grade_key': courseInfo.gradeKey,
+      'course_key': courseInfo.courseKey,
+      'course_label': courseInfo.courseLabel,
       'units': bigUnits.map((u) => u.toPayload()).toList(),
     };
     final existing = await _supa
         .from('textbook_metadata')
-        .select('textbook_type,page_offset')
+        .select('textbook_type,page_offset,grade_key,course_key,course_label')
         .match(<String, Object>{
-          'academy_id': academyId,
-          'book_id': bookId,
-          'grade_label': gradeLabel,
-        })
-        .maybeSingle();
+      'academy_id': academyId,
+      'book_id': bookId,
+      'grade_label': gradeLabel,
+    }).maybeSingle();
     final row = <String, dynamic>{
       'academy_id': academyId,
       'book_id': bookId,
       'grade_label': gradeLabel,
+      'grade_key': courseInfo.gradeKey,
+      'course_key': courseInfo.courseKey,
+      'course_label': courseInfo.courseLabel,
       'payload': payload,
     };
     if (existing != null) {
@@ -477,6 +542,21 @@ class TextbookBookRegistry {
       if (tt != null && tt.isNotEmpty) row['textbook_type'] = tt;
       final po = existingMap['page_offset'];
       if (po is int) row['page_offset'] = po;
+      final existingGradeKey = '${existingMap['grade_key'] ?? ''}'.trim();
+      final existingCourseKey = '${existingMap['course_key'] ?? ''}'.trim();
+      final existingCourseLabel = '${existingMap['course_label'] ?? ''}'.trim();
+      if (existingGradeKey.isNotEmpty) {
+        row['grade_key'] = existingGradeKey;
+        payload['grade_key'] = existingGradeKey;
+      }
+      if (existingCourseKey.isNotEmpty) {
+        row['course_key'] = existingCourseKey;
+        payload['course_key'] = existingCourseKey;
+      }
+      if (existingCourseLabel.isNotEmpty) {
+        row['course_label'] = existingCourseLabel;
+        payload['course_label'] = existingCourseLabel;
+      }
     }
     await _supa.from('textbook_metadata').upsert(
           row,

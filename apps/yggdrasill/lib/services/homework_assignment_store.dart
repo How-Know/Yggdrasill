@@ -528,6 +528,12 @@ class HomeworkAssignmentStore {
         msg.contains('live_release_locked_at');
   }
 
+  bool _isMissingLearningTrackSnapshotColumnError(Object error) {
+    final msg = error.toString().toLowerCase();
+    if (!msg.contains('column')) return false;
+    return msg.contains('learning_track_code_snapshot');
+  }
+
   Map<String, dynamic>? _extractJoinedMap(dynamic raw) {
     if (raw is Map) return Map<String, dynamic>.from(raw);
     if (raw is List && raw.isNotEmpty && raw.first is Map) {
@@ -1765,6 +1771,9 @@ class HomeworkAssignmentStore {
           'group_id': groupMeta?.groupId,
           'group_title_snapshot':
               titleSnapshot.isEmpty ? fallbackTitle : titleSnapshot,
+          'learning_track_code_snapshot': item.learningTrackCode.trim().isEmpty
+              ? 'EL'
+              : item.learningTrackCode.trim().toUpperCase(),
           'assigned_at': now.toUtc().toIso8601String(),
           'due_date': dueDateIso,
           'order_index': nextOrder++,
@@ -1793,7 +1802,11 @@ class HomeworkAssignmentStore {
       } catch (e) {
         final missingGroupColumns = _isMissingAssignmentGroupColumnsError(e);
         final missingLiveReleaseColumns = _isMissingLiveReleaseColumnsError(e);
-        if (!missingGroupColumns && !missingLiveReleaseColumns) rethrow;
+        final missingLearningTrackSnapshotColumn =
+            _isMissingLearningTrackSnapshotColumnError(e);
+        if (!missingGroupColumns &&
+            !missingLiveReleaseColumns &&
+            !missingLearningTrackSnapshotColumn) rethrow;
         final fallbackRows = rows.map((row) {
           final copy = Map<String, dynamic>.from(row);
           if (missingGroupColumns) {
@@ -1804,6 +1817,9 @@ class HomeworkAssignmentStore {
             copy.remove('live_release_id');
             copy.remove('release_export_job_id');
             copy.remove('live_release_locked_at');
+          }
+          if (missingLearningTrackSnapshotColumn) {
+            copy.remove('learning_track_code_snapshot');
           }
           return copy;
         }).toList(growable: false);

@@ -2,6 +2,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/academic_season.dart';
 import '../models/education_level.dart';
+import '../models/homework_learning_track.dart';
 import '../models/season_roadmap_entry.dart';
 import 'academy_db.dart';
 import 'answer_key_service.dart';
@@ -84,6 +85,73 @@ class SeasonRoadmapService {
         updatedAt: DateTime.now().toUtc(),
       );
     }).toList();
+  }
+
+  static HomeworkLearningTrack classifyLearningTrack({
+    required DateTime referenceDate,
+    required EducationLevel educationLevel,
+    required int grade,
+    required String courseLabel,
+    required Iterable<SeasonRoadmapEntry> roadmapEntries,
+  }) {
+    final label = _normalizeLabel(courseLabel);
+    if (label.isEmpty) return HomeworkLearningTrack.extra;
+    if (educationLevel == EducationLevel.elementary) {
+      return roadmapEntries.any((entry) {
+        return _normalizeLabel(entry.courseLabelSnapshot) == label;
+      })
+          ? HomeworkLearningTrack.preLearning
+          : HomeworkLearningTrack.extra;
+    }
+    if (educationLevel == EducationLevel.high && grade >= 3) {
+      final matches = roadmapEntries.where((entry) {
+        return _normalizeLabel(entry.courseLabelSnapshot) == label;
+      }).toList();
+      if (matches.isEmpty) return HomeworkLearningTrack.extra;
+      final isHighSecondGradeCourse = matches.any((entry) {
+        return entry.educationLevel == EducationLevel.high && entry.grade == 2;
+      });
+      return isHighSecondGradeCourse
+          ? HomeworkLearningTrack.current
+          : HomeworkLearningTrack.foundational;
+    }
+    final currentSeason = AcademicSeason.fromDate(referenceDate);
+    final currentOrder = _absoluteSeasonOrder(currentSeason);
+    final matches = roadmapEntries.where((entry) {
+      if (entry.educationLevel != educationLevel) return false;
+      if (entry.grade != grade) return false;
+      return _normalizeLabel(entry.courseLabelSnapshot) == label;
+    }).toList();
+    if (matches.isEmpty) return HomeworkLearningTrack.extra;
+
+    final sameSeason = matches.any((entry) {
+      return _absoluteSeasonOrder(entry.season) == currentOrder;
+    });
+    if (sameSeason) return HomeworkLearningTrack.current;
+
+    final hasFuture = matches.any((entry) {
+      return _absoluteSeasonOrder(entry.season) > currentOrder;
+    });
+    if (hasFuture) return HomeworkLearningTrack.preLearning;
+
+    return HomeworkLearningTrack.foundational;
+  }
+
+  static HomeworkLearningTrack classifyDefaultLearningTrack({
+    required DateTime referenceDate,
+    required EducationLevel educationLevel,
+    required int grade,
+    required String courseLabel,
+  }) {
+    final year = referenceDate.year;
+    final entries = buildDefaultEntriesForYear(year, const <String, String>{});
+    return classifyLearningTrack(
+      referenceDate: referenceDate,
+      educationLevel: educationLevel,
+      grade: grade,
+      courseLabel: courseLabel,
+      roadmapEntries: entries,
+    );
   }
 
   Future<List<SeasonRoadmapEntry>> loadRoadmapForYear(int seasonYear) async {
@@ -241,6 +309,10 @@ class SeasonRoadmapService {
   }
 
   static String _normalizeLabel(String value) => value.trim();
+
+  static int _absoluteSeasonOrder(AcademicSeason season) {
+    return season.year * AcademicSeasonCode.values.length + season.sortOrder;
+  }
 
   static String _defaultEntryId({
     required int seasonYear,

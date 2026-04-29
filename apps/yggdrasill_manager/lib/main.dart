@@ -49,6 +49,7 @@ void main() {
     } catch (e) {
       runApp(MaterialApp(
         debugShowCheckedModeBanner: false,
+        theme: _buildManagerTheme(),
         home: Scaffold(
           backgroundColor: const Color(0xFF1F1F1F),
           body: Center(
@@ -90,18 +91,39 @@ class YggdrasillManagerApp extends StatelessWidget {
     return MaterialApp(
       title: 'Yggdrasill Manager',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF33A373),
-          brightness: Brightness.dark,
-        ),
-        useMaterial3: true,
-        scaffoldBackgroundColor: const Color(0xFF1F1F1F),
-        fontFamily: 'HCRBatang',
-      ),
+      theme: _buildManagerTheme(),
       home: const AuthWrapper(),
     );
   }
+}
+
+ThemeData _buildManagerTheme() {
+  return ThemeData(
+    colorScheme: ColorScheme.fromSeed(
+      seedColor: const Color(0xFF33A373),
+      brightness: Brightness.dark,
+    ),
+    useMaterial3: true,
+    scaffoldBackgroundColor: const Color(0xFF1F1F1F),
+    fontFamily: 'KakaoSmallSans',
+    textTheme: const TextTheme(
+      displayLarge: TextStyle(fontFamily: 'KakaoBigSans'),
+      displayMedium: TextStyle(fontFamily: 'KakaoBigSans'),
+      displaySmall: TextStyle(fontFamily: 'KakaoBigSans'),
+      headlineLarge: TextStyle(fontFamily: 'KakaoBigSans'),
+      headlineMedium: TextStyle(fontFamily: 'KakaoBigSans'),
+      headlineSmall: TextStyle(fontFamily: 'KakaoBigSans'),
+      titleLarge: TextStyle(fontFamily: 'KakaoBigSans'),
+      titleMedium: TextStyle(fontFamily: 'KakaoBigSans'),
+      titleSmall: TextStyle(fontFamily: 'KakaoBigSans'),
+      bodyLarge: TextStyle(fontFamily: 'KakaoSmallSans'),
+      bodyMedium: TextStyle(fontFamily: 'KakaoSmallSans'),
+      bodySmall: TextStyle(fontFamily: 'KakaoSmallSans'),
+      labelLarge: TextStyle(fontFamily: 'KakaoSmallSans'),
+      labelMedium: TextStyle(fontFamily: 'KakaoSmallSans'),
+      labelSmall: TextStyle(fontFamily: 'KakaoSmallSans'),
+    ),
+  );
 }
 
 class AuthWrapper extends StatefulWidget {

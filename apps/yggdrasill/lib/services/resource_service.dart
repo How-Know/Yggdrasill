@@ -36,7 +36,8 @@ class ResourceService {
       return e.code == '42P01' || e.code == 'PGRST106';
     }
     final msg = e.toString();
-    return msg.contains('does not exist') && msg.contains('resource_file_orders');
+    return msg.contains('does not exist') &&
+        msg.contains('resource_file_orders');
   }
 
   int? _asInt(dynamic v) {
@@ -63,8 +64,10 @@ class ResourceService {
     if (row.containsKey('order_index')) up['order_index'] = row['order_index'];
     if (extended) {
       if (row.containsKey('icon_code')) up['icon_code'] = row['icon_code'];
-      if (row.containsKey('icon_image_path')) up['icon_image_path'] = row['icon_image_path'];
-      if (row.containsKey('description')) up['description'] = row['description'];
+      if (row.containsKey('icon_image_path'))
+        up['icon_image_path'] = row['icon_image_path'];
+      if (row.containsKey('description'))
+        up['description'] = row['description'];
       if (row.containsKey('text_color')) up['text_color'] = row['text_color'];
       if (row.containsKey('color')) up['color'] = row['color'];
       if (row.containsKey('grade')) up['grade'] = row['grade'];
@@ -168,22 +171,22 @@ class ResourceService {
     return rows;
   }
 
-  Future<List<Map<String, dynamic>>> _loadOrderOverrides(String category) async {
+  Future<List<Map<String, dynamic>>> _loadOrderOverrides(
+      String category) async {
     final scopeType = _scopeTypeForCategory(category);
     if (TagPresetService.preferSupabaseRead && _resourceFileOrdersAvailable) {
       try {
-        final academyId =
-            await TenantService.instance.getActiveAcademyId() ??
-                await TenantService.instance.ensureActiveAcademy();
+        final academyId = await TenantService.instance.getActiveAcademyId() ??
+            await TenantService.instance.ensureActiveAcademy();
         final supa = Supabase.instance.client;
         final data = await supa
             .from('resource_file_orders')
             .select('file_id,parent_id,order_index')
             .match({
-              'academy_id': academyId,
-              'scope_type': scopeType,
-              'category': category,
-            });
+          'academy_id': academyId,
+          'scope_type': scopeType,
+          'category': category,
+        });
         return (data as List).cast<Map<String, dynamic>>();
       } catch (e, st) {
         if (_isMissingTableError(e)) {
@@ -296,9 +299,8 @@ class ResourceService {
     await AcademyDbService.instance.saveResourceFolders(rows);
     if (TagPresetService.dualWrite) {
       try {
-        final academyId =
-            await TenantService.instance.getActiveAcademyId() ??
-                await TenantService.instance.ensureActiveAcademy();
+        final academyId = await TenantService.instance.getActiveAcademyId() ??
+            await TenantService.instance.ensureActiveAcademy();
         final supa = Supabase.instance.client;
         await _syncRemoteResourceFolders(
           supa: supa,
@@ -313,12 +315,12 @@ class ResourceService {
     String category,
     List<Map<String, dynamic>> rows,
   ) async {
-    await AcademyDbService.instance.saveResourceFoldersForCategory(category, rows);
+    await AcademyDbService.instance
+        .saveResourceFoldersForCategory(category, rows);
     if (TagPresetService.dualWrite) {
       try {
-        final academyId =
-            await TenantService.instance.getActiveAcademyId() ??
-                await TenantService.instance.ensureActiveAcademy();
+        final academyId = await TenantService.instance.getActiveAcademyId() ??
+            await TenantService.instance.ensureActiveAcademy();
         final supa = Supabase.instance.client;
         await _syncRemoteResourceFolders(
           supa: supa,
@@ -333,9 +335,8 @@ class ResourceService {
   Future<List<Map<String, dynamic>>> loadResourceFolders() async {
     if (TagPresetService.preferSupabaseRead) {
       try {
-        final academyId =
-            await TenantService.instance.getActiveAcademyId() ??
-                await TenantService.instance.ensureActiveAcademy();
+        final academyId = await TenantService.instance.getActiveAcademyId() ??
+            await TenantService.instance.ensureActiveAcademy();
         final supa = Supabase.instance.client;
         final data = await supa
             .from('resource_folders')
@@ -358,9 +359,8 @@ class ResourceService {
   ) async {
     if (TagPresetService.preferSupabaseRead) {
       try {
-        final academyId =
-            await TenantService.instance.getActiveAcademyId() ??
-                await TenantService.instance.ensureActiveAcademy();
+        final academyId = await TenantService.instance.getActiveAcademyId() ??
+            await TenantService.instance.ensureActiveAcademy();
         final supa = Supabase.instance.client;
         List<dynamic> data;
         if (category == 'textbook') {
@@ -376,21 +376,19 @@ class ResourceService {
                 .select('id,name,description,parent_id,order_index,category')
                 .eq('academy_id', academyId)
                 .order('order_index');
-            final filtered = (all as List)
-                .cast<Map<String, dynamic>>()
-                .where((r) {
-                  final c = (r['category'] as String?)?.trim();
-                  return c == null || c.isEmpty || c == 'textbook';
-                })
-                .toList();
+            final filtered =
+                (all as List).cast<Map<String, dynamic>>().where((r) {
+              final c = (r['category'] as String?)?.trim();
+              return c == null || c.isEmpty || c == 'textbook';
+            }).toList();
             return filtered;
           }
         } else {
           data = await supa
               .from('resource_folders')
               .select('id,name,description,parent_id,order_index,category')
-              .match({'academy_id': academyId, 'category': category})
-              .order('order_index');
+              .match({'academy_id': academyId, 'category': category}).order(
+                  'order_index');
         }
         return (data as List).cast<Map<String, dynamic>>();
       } catch (e, st) {
@@ -400,16 +398,16 @@ class ResourceService {
         }
       }
     }
-    return await AcademyDbService.instance.loadResourceFoldersForCategory(category);
+    return await AcademyDbService.instance
+        .loadResourceFoldersForCategory(category);
   }
 
   Future<void> saveResourceFile(Map<String, dynamic> row) async {
     await AcademyDbService.instance.saveResourceFile(row);
     if (TagPresetService.dualWrite) {
       try {
-        final academyId =
-            await TenantService.instance.getActiveAcademyId() ??
-                await TenantService.instance.ensureActiveAcademy();
+        final academyId = await TenantService.instance.getActiveAcademyId() ??
+            await TenantService.instance.ensureActiveAcademy();
         final supa = Supabase.instance.client;
         final up = _buildResourceFileUpsert(
           row,
@@ -419,14 +417,17 @@ class ResourceService {
         try {
           await supa.from('resource_files').upsert(up, onConflict: 'id');
         } on PostgrestException catch (e) {
-          if (_resourceFilesExtendedColumnsAvailable && _isMissingColumnError(e)) {
+          if (_resourceFilesExtendedColumnsAvailable &&
+              _isMissingColumnError(e)) {
             _resourceFilesExtendedColumnsAvailable = false;
             final fallback = _buildResourceFileUpsert(
               row,
               academyId: academyId,
               extended: false,
             );
-            await supa.from('resource_files').upsert(fallback, onConflict: 'id');
+            await supa
+                .from('resource_files')
+                .upsert(fallback, onConflict: 'id');
           } else {
             rethrow;
           }
@@ -449,16 +450,17 @@ class ResourceService {
   Future<List<Map<String, dynamic>>> loadResourceFiles() async {
     if (TagPresetService.preferSupabaseRead) {
       try {
-        final academyId =
-            await TenantService.instance.getActiveAcademyId() ??
-                await TenantService.instance.ensureActiveAcademy();
+        final academyId = await TenantService.instance.getActiveAcademyId() ??
+            await TenantService.instance.ensureActiveAcademy();
         final supa = Supabase.instance.client;
         List<dynamic> data;
         bool usedExtended = _resourceFilesExtendedColumnsAvailable;
         try {
           data = await supa
               .from('resource_files')
-              .select(usedExtended ? _resourceFileSelectExtended : _resourceFileSelectBase)
+              .select(usedExtended
+                  ? _resourceFileSelectExtended
+                  : _resourceFileSelectBase)
               .eq('academy_id', academyId)
               .order('order_index');
         } on PostgrestException catch (e) {
@@ -495,9 +497,8 @@ class ResourceService {
   ) async {
     if (TagPresetService.preferSupabaseRead) {
       try {
-        final academyId =
-            await TenantService.instance.getActiveAcademyId() ??
-                await TenantService.instance.ensureActiveAcademy();
+        final academyId = await TenantService.instance.getActiveAcademyId() ??
+            await TenantService.instance.ensureActiveAcademy();
         final supa = Supabase.instance.client;
         List<dynamic> data;
         bool usedExtended = _resourceFilesExtendedColumnsAvailable;
@@ -520,12 +521,14 @@ class ResourceService {
           return await supa
               .from('resource_files')
               .select(cols)
-              .match({'academy_id': academyId, 'category': category})
-              .order('order_index');
+              .match({'academy_id': academyId, 'category': category}).order(
+                  'order_index');
         }
 
         try {
-          data = await runSelect(usedExtended ? _resourceFileSelectExtended : _resourceFileSelectBase);
+          data = await runSelect(usedExtended
+              ? _resourceFileSelectExtended
+              : _resourceFileSelectBase);
         } on PostgrestException catch (e) {
           if (usedExtended && _isMissingColumnError(e)) {
             _resourceFilesExtendedColumnsAvailable = false;
@@ -541,7 +544,9 @@ class ResourceService {
           // respecting `is_published` so unpublished drafts stay hidden.
           final all = await supa
               .from('resource_files')
-              .select(usedExtended ? _resourceFileSelectExtended : _resourceFileSelectBase)
+              .select(usedExtended
+                  ? _resourceFileSelectExtended
+                  : _resourceFileSelectBase)
               .eq('academy_id', academyId)
               .or('is_published.is.null,is_published.eq.true')
               .order('order_index');
@@ -551,7 +556,8 @@ class ResourceService {
           }).toList();
         }
         if (!RuntimeFlags.serverOnly) {
-          final local = await AcademyDbService.instance.loadResourceFilesForCategory(category);
+          final local = await AcademyDbService.instance
+              .loadResourceFilesForCategory(category);
           if (local.isNotEmpty) {
             rows = _mergeResourceFileRows(rows, local);
           }
@@ -564,7 +570,8 @@ class ResourceService {
         }
       }
     }
-    final rows = await AcademyDbService.instance.loadResourceFilesForCategory(category);
+    final rows =
+        await AcademyDbService.instance.loadResourceFilesForCategory(category);
     return await _applyOrderOverrides(rows, category);
   }
 
@@ -582,9 +589,8 @@ class ResourceService {
     );
     if (TagPresetService.dualWrite && _resourceFileOrdersAvailable) {
       try {
-        final academyId =
-            await TenantService.instance.getActiveAcademyId() ??
-                await TenantService.instance.ensureActiveAcademy();
+        final academyId = await TenantService.instance.getActiveAcademyId() ??
+            await TenantService.instance.ensureActiveAcademy();
         final supa = Supabase.instance.client;
         final parent = (parentId ?? '').trim();
         final up = rows
@@ -613,13 +619,13 @@ class ResourceService {
     }
   }
 
-  Future<void> saveResourceFileLinks(String fileId, Map<String, String> links) async {
+  Future<void> saveResourceFileLinks(
+      String fileId, Map<String, String> links) async {
     await AcademyDbService.instance.saveResourceFileLinks(fileId, links);
     if (TagPresetService.dualWrite) {
       try {
-        final academyId =
-            await TenantService.instance.getActiveAcademyId() ??
-                await TenantService.instance.ensureActiveAcademy();
+        final academyId = await TenantService.instance.getActiveAcademyId() ??
+            await TenantService.instance.ensureActiveAcademy();
         final supa = Supabase.instance.client;
         await supa.from('resource_file_links').delete().match({
           'academy_id': academyId,
@@ -627,7 +633,8 @@ class ResourceService {
         });
         if (links.isNotEmpty) {
           final rows = links.entries
-              .where((e) => e.key.trim().isNotEmpty && e.value.trim().isNotEmpty)
+              .where(
+                  (e) => e.key.trim().isNotEmpty && e.value.trim().isNotEmpty)
               .map((e) => {
                     'academy_id': academyId,
                     'file_id': fileId,
@@ -648,19 +655,27 @@ class ResourceService {
   Future<Map<String, String>> loadResourceFileLinks(String fileId) async {
     if (TagPresetService.preferSupabaseRead) {
       try {
-        final academyId =
-            await TenantService.instance.getActiveAcademyId() ??
-                await TenantService.instance.ensureActiveAcademy();
+        final academyId = await TenantService.instance.getActiveAcademyId() ??
+            await TenantService.instance.ensureActiveAcademy();
         final supa = Supabase.instance.client;
         final data = await supa
             .from('resource_file_links')
-            .select('grade,url')
+            .select('grade,url,storage_key,migration_status')
             .match({'academy_id': academyId, 'file_id': fileId});
         final Map<String, String> result = {};
         for (final r in (data as List).cast<Map<String, dynamic>>()) {
           final grade = (r['grade'] as String?)?.trim() ?? '';
           final url = (r['url'] as String?)?.trim() ?? '';
-          if (grade.isNotEmpty && url.isNotEmpty) result[grade] = url;
+          final storageKey = (r['storage_key'] as String?)?.trim() ?? '';
+          final migrationStatus =
+              (r['migration_status'] as String?)?.trim() ?? '';
+          if (grade.isEmpty) continue;
+          if (url.isNotEmpty) {
+            result[grade] = url;
+          } else if (storageKey.isNotEmpty &&
+              (migrationStatus == 'dual' || migrationStatus == 'migrated')) {
+            result[grade] = 'storage://textbook/$storageKey';
+          }
         }
         return result;
       } catch (e, st) {
@@ -676,9 +691,8 @@ class ResourceService {
   // ======== FLOW <-> TEXTBOOK LINKS ========
   Future<List<Map<String, dynamic>>> loadTextbooksWithMetadata() async {
     try {
-      final academyId =
-          await TenantService.instance.getActiveAcademyId() ??
-              await TenantService.instance.ensureActiveAcademy();
+      final academyId = await TenantService.instance.getActiveAcademyId() ??
+          await TenantService.instance.ensureActiveAcademy();
       final supa = Supabase.instance.client;
 
       final metadataRows = await supa
@@ -687,7 +701,8 @@ class ResourceService {
           .eq('academy_id', academyId);
 
       final textbookFiles = await loadResourceFilesForCategory('textbook');
-      final Map<String, Map<String, dynamic>> fileById = <String, Map<String, dynamic>>{};
+      final Map<String, Map<String, dynamic>> fileById =
+          <String, Map<String, dynamic>>{};
       for (final row in textbookFiles) {
         final id = (row['id'] as String?) ?? '';
         if (id.isEmpty) continue;
@@ -695,7 +710,8 @@ class ResourceService {
       }
 
       final List<Map<String, dynamic>> out = <Map<String, dynamic>>[];
-      for (final row in (metadataRows as List<dynamic>).cast<Map<String, dynamic>>()) {
+      for (final row
+          in (metadataRows as List<dynamic>).cast<Map<String, dynamic>>()) {
         final bookId = (row['book_id'] as String?) ?? '';
         final gradeLabel = (row['grade_label'] as String?)?.trim() ?? '';
         if (bookId.isEmpty || gradeLabel.isEmpty) continue;
@@ -733,28 +749,34 @@ class ResourceService {
     }
   }
 
-  Future<List<Map<String, dynamic>>> loadFlowTextbookLinks(String flowId) async {
+  Future<List<Map<String, dynamic>>> loadFlowTextbookLinks(
+      String flowId) async {
     if (flowId.trim().isEmpty) return <Map<String, dynamic>>[];
     try {
-      final academyId =
-          await TenantService.instance.getActiveAcademyId() ??
-              await TenantService.instance.ensureActiveAcademy();
+      final academyId = await TenantService.instance.getActiveAcademyId() ??
+          await TenantService.instance.ensureActiveAcademy();
       final supa = Supabase.instance.client;
       try {
         final rows = await supa
             .from('flow_textbook_links')
-            .select('book_id,grade_label,order_index,resource_files(name,category)')
-            .match({'academy_id': academyId, 'flow_id': flowId})
-            .order('order_index');
+            .select(
+                'book_id,grade_label,order_index,resource_files(name,category)')
+            .match({'academy_id': academyId, 'flow_id': flowId}).order(
+                'order_index');
         final List<Map<String, dynamic>> out = <Map<String, dynamic>>[];
-        for (final row in (rows as List<dynamic>).cast<Map<String, dynamic>>()) {
+        for (final row
+            in (rows as List<dynamic>).cast<Map<String, dynamic>>()) {
           final bookId = (row['book_id'] as String?) ?? '';
           final gradeLabel = (row['grade_label'] as String?)?.trim() ?? '';
           if (bookId.isEmpty || gradeLabel.isEmpty) continue;
           final info = row['resource_files'];
-          final file = info is Map ? Map<String, dynamic>.from(info) : const <String, dynamic>{};
+          final file = info is Map
+              ? Map<String, dynamic>.from(info)
+              : const <String, dynamic>{};
           final category = (file['category'] as String?)?.trim();
-          if (category != null && category.isNotEmpty && category != 'textbook') {
+          if (category != null &&
+              category.isNotEmpty &&
+              category != 'textbook') {
             continue;
           }
           out.add({
@@ -769,8 +791,8 @@ class ResourceService {
         final rows = await supa
             .from('flow_textbook_links')
             .select('book_id,grade_label,order_index')
-            .match({'academy_id': academyId, 'flow_id': flowId})
-            .order('order_index');
+            .match({'academy_id': academyId, 'flow_id': flowId}).order(
+                'order_index');
         final textbookFiles = await loadResourceFilesForCategory('textbook');
         final Map<String, String> nameById = <String, String>{
           for (final row in textbookFiles)
@@ -778,7 +800,8 @@ class ResourceService {
               (row['id'] as String): ((row['name'] as String?)?.trim() ?? ''),
         };
         final List<Map<String, dynamic>> out = <Map<String, dynamic>>[];
-        for (final row in (rows as List<dynamic>).cast<Map<String, dynamic>>()) {
+        for (final row
+            in (rows as List<dynamic>).cast<Map<String, dynamic>>()) {
           final bookId = (row['book_id'] as String?) ?? '';
           final gradeLabel = (row['grade_label'] as String?)?.trim() ?? '';
           if (bookId.isEmpty || gradeLabel.isEmpty) continue;
@@ -802,9 +825,8 @@ class ResourceService {
     List<Map<String, dynamic>> links,
   ) async {
     if (flowId.trim().isEmpty) return;
-    final academyId =
-        await TenantService.instance.getActiveAcademyId() ??
-            await TenantService.instance.ensureActiveAcademy();
+    final academyId = await TenantService.instance.getActiveAcademyId() ??
+        await TenantService.instance.ensureActiveAcademy();
     final supa = Supabase.instance.client;
 
     await supa.from('flow_textbook_links').delete().match({
@@ -840,19 +862,17 @@ class ResourceService {
   }) async {
     if (bookId.trim().isEmpty || gradeLabel.trim().isEmpty) return null;
     try {
-      final academyId =
-          await TenantService.instance.getActiveAcademyId() ??
-              await TenantService.instance.ensureActiveAcademy();
+      final academyId = await TenantService.instance.getActiveAcademyId() ??
+          await TenantService.instance.ensureActiveAcademy();
       final supa = Supabase.instance.client;
       final row = await supa
           .from('textbook_metadata')
           .select('page_offset,payload,textbook_type')
           .match({
-            'academy_id': academyId,
-            'book_id': bookId,
-            'grade_label': gradeLabel,
-          })
-          .maybeSingle();
+        'academy_id': academyId,
+        'book_id': bookId,
+        'grade_label': gradeLabel,
+      }).maybeSingle();
       if (row == null) return null;
       return Map<String, dynamic>.from(row);
     } catch (e, st) {
@@ -875,16 +895,17 @@ class ResourceService {
   }) async {
     if (bookId.trim().isEmpty) return <Map<String, dynamic>>[];
     try {
-      final academyId =
-          await TenantService.instance.getActiveAcademyId() ??
-              await TenantService.instance.ensureActiveAcademy();
+      final academyId = await TenantService.instance.getActiveAcademyId() ??
+          await TenantService.instance.ensureActiveAcademy();
       final supa = Supabase.instance.client;
       var query = supa
           .from('textbook_problem_crops')
           .select(
-            'big_order, mid_order, sub_key, big_name, mid_name, '
+            'id, big_order, mid_order, sub_key, big_name, mid_name, '
             'raw_page, display_page, section, '
             'problem_number, label, is_set_header, set_from, set_to, '
+            'content_group_kind, content_group_label, content_group_title, '
+            'content_group_order, '
             'column_index, bbox_1k, item_region_1k',
           )
           .eq('academy_id', academyId)
@@ -911,6 +932,169 @@ class ResourceService {
     }
   }
 
+  /// Loads textbook problem rows with their Stage-2 answer sidecar attached.
+  ///
+  /// The result keeps the crop row fields at top-level and adds nullable
+  /// answer fields (`answer_kind`, `answer_text`, `answer_latex_2d`, ...).
+  Future<List<Map<String, dynamic>>> loadTextbookProblemRegionsForGrading({
+    required String bookId,
+    String? gradeLabel,
+    Iterable<String> cropIds = const <String>[],
+    Iterable<int> displayPages = const <int>[],
+  }) async {
+    final safeBookId = bookId.trim();
+    if (safeBookId.isEmpty) return <Map<String, dynamic>>[];
+    final safeCropIds = cropIds
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    final safeDisplayPages = displayPages
+        .where((e) => e > 0)
+        .toSet()
+        .toList(growable: false)
+      ..sort();
+    if (safeCropIds.isEmpty && safeDisplayPages.isEmpty) {
+      return <Map<String, dynamic>>[];
+    }
+
+    Iterable<List<T>> chunks<T>(List<T> values, int size) sync* {
+      for (var i = 0; i < values.length; i += size) {
+        final end = (i + size) > values.length ? values.length : i + size;
+        yield values.sublist(i, end);
+      }
+    }
+
+    try {
+      final academyId = await TenantService.instance.getActiveAcademyId() ??
+          await TenantService.instance.ensureActiveAcademy();
+      final supa = Supabase.instance.client;
+      final byCropId = <String, Map<String, dynamic>>{};
+
+      Future<void> collect({
+        List<String> ids = const <String>[],
+        List<int> pages = const <int>[],
+      }) async {
+        var query = supa
+            .from('textbook_problem_crops')
+            .select(
+              'id, big_order, mid_order, sub_key, big_name, mid_name, '
+              'raw_page, display_page, section, '
+              'problem_number, label, is_set_header, set_from, set_to, '
+              'content_group_kind, content_group_label, content_group_title, '
+              'content_group_order, pb_question_uid',
+            )
+            .eq('academy_id', academyId)
+            .eq('book_id', safeBookId);
+        final safeGrade = (gradeLabel ?? '').trim();
+        if (safeGrade.isNotEmpty) {
+          query = query.eq('grade_label', safeGrade);
+        }
+        if (ids.isNotEmpty) {
+          query = query.inFilter('id', ids);
+        }
+        if (pages.isNotEmpty) {
+          query = query.inFilter('display_page', pages);
+        }
+        final rows = await query
+            .order('big_order')
+            .order('mid_order')
+            .order('sub_key')
+            .order('display_page')
+            .order('problem_number');
+        for (final row in rows) {
+          final map = Map<String, dynamic>.from(row);
+          final id = '${map['id'] ?? ''}'.trim();
+          if (id.isEmpty) continue;
+          byCropId[id] = map;
+        }
+      }
+
+      for (final ids in chunks(safeCropIds, 250)) {
+        await collect(ids: ids);
+      }
+      for (final pages in chunks(safeDisplayPages, 250)) {
+        await collect(pages: pages);
+      }
+
+      if (byCropId.isEmpty) return <Map<String, dynamic>>[];
+      try {
+        for (final ids in chunks(byCropId.keys.toList(growable: false), 250)) {
+          final answerRows = await supa
+              .from('textbook_problem_answers')
+              .select(
+                'crop_id, answer_kind, answer_text, answer_latex_2d, '
+                'answer_source, raw_page, display_page, bbox_1k, note, '
+                'answer_image_bucket, answer_image_path, '
+                'answer_image_width_px, answer_image_height_px, '
+                'answer_image_size_bytes, answer_image_content_hash',
+              )
+              .inFilter('crop_id', ids);
+          for (final raw in answerRows) {
+            final answer = Map<String, dynamic>.from(raw);
+            final cropId = '${answer['crop_id'] ?? ''}'.trim();
+            final crop = byCropId[cropId];
+            if (crop == null) continue;
+            final imageBucket = '${answer['answer_image_bucket'] ?? ''}'.trim();
+            final imagePath = '${answer['answer_image_path'] ?? ''}'.trim();
+            var imageUrl = '';
+            if (imageBucket.isNotEmpty && imagePath.isNotEmpty) {
+              try {
+                imageUrl = await supa.storage
+                    .from(imageBucket)
+                    .createSignedUrl(imagePath, 60 * 30);
+              } catch (_) {
+                imageUrl = '';
+              }
+            }
+            crop.addAll({
+              'answer_kind': answer['answer_kind'],
+              'answer_text': answer['answer_text'],
+              'answer_latex_2d': answer['answer_latex_2d'],
+              'answer_source': answer['answer_source'],
+              'answer_raw_page': answer['raw_page'],
+              'answer_display_page': answer['display_page'],
+              'answer_bbox_1k': answer['bbox_1k'],
+              'answer_note': answer['note'],
+              'answer_image_bucket': answer['answer_image_bucket'],
+              'answer_image_path': answer['answer_image_path'],
+              'answer_image_url': imageUrl,
+              'answer_image_width_px': answer['answer_image_width_px'],
+              'answer_image_height_px': answer['answer_image_height_px'],
+              'answer_image_size_bytes': answer['answer_image_size_bytes'],
+              'answer_image_content_hash': answer['answer_image_content_hash'],
+            });
+          }
+        }
+      } catch (_) {
+        // Stage-2 answer sidecar can be absent while crop metadata is present.
+      }
+
+      final out = byCropId.values.toList(growable: false);
+      out.sort((a, b) {
+        final byBig = (_asInt(a['big_order']) ?? -1)
+            .compareTo(_asInt(b['big_order']) ?? -1);
+        if (byBig != 0) return byBig;
+        final byMid = (_asInt(a['mid_order']) ?? -1)
+            .compareTo(_asInt(b['mid_order']) ?? -1);
+        if (byMid != 0) return byMid;
+        final bySub =
+            '${a['sub_key'] ?? ''}'.compareTo('${b['sub_key'] ?? ''}');
+        if (bySub != 0) return bySub;
+        final byPage = (_asInt(a['display_page']) ?? _asInt(a['raw_page']) ?? 0)
+            .compareTo(_asInt(b['display_page']) ?? _asInt(b['raw_page']) ?? 0);
+        if (byPage != 0) return byPage;
+        return '${a['problem_number'] ?? ''}'
+            .compareTo('${b['problem_number'] ?? ''}');
+      });
+      return out;
+    } catch (e, st) {
+      // ignore: avoid_print
+      print('[RES][textbookProblemRegionsForGrading] load failed: $e\n$st');
+      return <Map<String, dynamic>>[];
+    }
+  }
+
   Future<List<Map<String, dynamic>>> loadHomeworkUnitStats({
     required String bookId,
     required String gradeLabel,
@@ -922,9 +1106,8 @@ class ResourceService {
       return <Map<String, dynamic>>[];
     }
     try {
-      final academyId =
-          await TenantService.instance.getActiveAcademyId() ??
-              await TenantService.instance.ensureActiveAcademy();
+      final academyId = await TenantService.instance.getActiveAcademyId() ??
+          await TenantService.instance.ensureActiveAcademy();
       final supa = Supabase.instance.client;
       final params = <String, dynamic>{
         'p_academy_id': academyId,
@@ -960,9 +1143,8 @@ class ResourceService {
     if (TagPresetService.dualWrite) {
       try {
         final supa = Supabase.instance.client;
-        final academyId =
-            await TenantService.instance.getActiveAcademyId() ??
-                await TenantService.instance.ensureActiveAcademy();
+        final academyId = await TenantService.instance.getActiveAcademyId() ??
+            await TenantService.instance.ensureActiveAcademy();
         await supa.from('resource_files').delete().eq('id', fileId);
         await supa.from('resource_file_orders').delete().match({
           'academy_id': academyId,
@@ -976,16 +1158,16 @@ class ResourceService {
   Future<Set<String>> loadResourceFavorites() async {
     if (TagPresetService.preferSupabaseRead) {
       try {
-        final academyId =
-            await TenantService.instance.getActiveAcademyId() ??
-                await TenantService.instance.ensureActiveAcademy();
+        final academyId = await TenantService.instance.getActiveAcademyId() ??
+            await TenantService.instance.ensureActiveAcademy();
         final userId = Supabase.instance.client.auth.currentUser?.id;
         if (userId != null) {
           final data = await Supabase.instance.client
               .from('resource_favorites')
               .select('file_id')
               .match({'academy_id': academyId, 'user_id': userId});
-          final set = (data as List).map((r) => (r['file_id'] as String)).toSet();
+          final set =
+              (data as List).map((r) => (r['file_id'] as String)).toSet();
           return set;
         }
       } catch (e, st) {
@@ -1011,9 +1193,8 @@ class ResourceService {
     );
     if (TagPresetService.dualWrite) {
       try {
-        final academyId =
-            await TenantService.instance.getActiveAcademyId() ??
-                await TenantService.instance.ensureActiveAcademy();
+        final academyId = await TenantService.instance.getActiveAcademyId() ??
+            await TenantService.instance.ensureActiveAcademy();
         final userId = Supabase.instance.client.auth.currentUser?.id;
         if (userId != null) {
           await Supabase.instance.client.from('resource_favorites').upsert({
@@ -1029,15 +1210,18 @@ class ResourceService {
   Future<void> removeResourceFavorite(String fileId) async {
     final dbClient = await AcademyDbService.instance.db;
     await AcademyDbService.instance.ensureResourceTables();
-    await dbClient.delete('resource_favorites', where: 'file_id = ?', whereArgs: [fileId]);
+    await dbClient.delete('resource_favorites',
+        where: 'file_id = ?', whereArgs: [fileId]);
     if (TagPresetService.dualWrite) {
       try {
-        final academyId =
-            await TenantService.instance.getActiveAcademyId() ??
-                await TenantService.instance.ensureActiveAcademy();
+        final academyId = await TenantService.instance.getActiveAcademyId() ??
+            await TenantService.instance.ensureActiveAcademy();
         final userId = Supabase.instance.client.auth.currentUser?.id;
         if (userId != null) {
-          await Supabase.instance.client.from('resource_favorites').delete().match({
+          await Supabase.instance.client
+              .from('resource_favorites')
+              .delete()
+              .match({
             'academy_id': academyId,
             'file_id': fileId,
             'user_id': userId,
@@ -1048,18 +1232,18 @@ class ResourceService {
   }
 
   // ======== RESOURCE FILE BOOKMARKS ========
-  Future<List<Map<String, dynamic>>> loadResourceFileBookmarks(String fileId) async {
+  Future<List<Map<String, dynamic>>> loadResourceFileBookmarks(
+      String fileId) async {
     if (TagPresetService.preferSupabaseRead) {
       try {
-        final academyId =
-            await TenantService.instance.getActiveAcademyId() ??
-                await TenantService.instance.ensureActiveAcademy();
+        final academyId = await TenantService.instance.getActiveAcademyId() ??
+            await TenantService.instance.ensureActiveAcademy();
         final supa = Supabase.instance.client;
         final data = await supa
             .from('resource_file_bookmarks')
             .select('name,description,path,order_index')
-            .match({'academy_id': academyId, 'file_id': fileId})
-            .order('order_index');
+            .match({'academy_id': academyId, 'file_id': fileId}).order(
+                'order_index');
         return (data as List).cast<Map<String, dynamic>>();
       } catch (e, st) {
         print('[RES][bookmarks load] server load failed: $e\n$st');
@@ -1085,7 +1269,8 @@ class ResourceService {
     final dbClient = await AcademyDbService.instance.db;
     await AcademyDbService.instance.ensureResourceTables();
     await dbClient.transaction((txn) async {
-      await txn.delete('resource_file_bookmarks', where: 'file_id = ?', whereArgs: [fileId]);
+      await txn.delete('resource_file_bookmarks',
+          where: 'file_id = ?', whereArgs: [fileId]);
       for (int i = 0; i < items.length; i++) {
         final it = Map<String, dynamic>.from(items[i]);
         it['file_id'] = fileId;
@@ -1095,9 +1280,8 @@ class ResourceService {
     });
     if (TagPresetService.dualWrite) {
       try {
-        final academyId =
-            await TenantService.instance.getActiveAcademyId() ??
-                await TenantService.instance.ensureActiveAcademy();
+        final academyId = await TenantService.instance.getActiveAcademyId() ??
+            await TenantService.instance.ensureActiveAcademy();
         final supa = Supabase.instance.client;
         await supa.from('resource_file_bookmarks').delete().match({
           'academy_id': academyId,
@@ -1146,31 +1330,3 @@ class ResourceService {
     await AcademyDbService.instance.deleteResourceGradeIcon(name);
   }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

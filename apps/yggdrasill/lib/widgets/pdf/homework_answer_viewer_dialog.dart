@@ -19,14 +19,22 @@ enum HomeworkAnswerCellState {
 class HomeworkAnswerGradingCell {
   final String key;
   final int questionIndex;
+  final String questionLabel;
   final String answer;
   final String answerMode;
+  final String answerImageUrl;
+  final int? answerImageWidth;
+  final int? answerImageHeight;
 
   const HomeworkAnswerGradingCell({
     required this.key,
     required this.questionIndex,
+    this.questionLabel = '',
     required this.answer,
     this.answerMode = '',
+    this.answerImageUrl = '',
+    this.answerImageWidth,
+    this.answerImageHeight,
   });
 }
 
@@ -211,9 +219,7 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
   String get _cacheKey => (widget.cacheKey ?? '').trim();
 
   bool get _useBaselineAsMinScale =>
-      !_hasCachedViewState &&
-      _baselineZoom != null &&
-      _baselineZoom!.isFinite;
+      !_hasCachedViewState && _baselineZoom != null && _baselineZoom!.isFinite;
 
   double get _effectiveMinScale {
     if (_useBaselineAsMinScale) {
@@ -525,8 +531,9 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
       pageRect,
       _viewerController.viewSize,
     ).clamp(baseline, _maxUserZoom).toDouble();
-    final targetZoom =
-        _isNearBaselineZoom(_viewerController.currentZoom) ? fitWidthZoom : baseline;
+    final targetZoom = _isNearBaselineZoom(_viewerController.currentZoom)
+        ? fitWidthZoom
+        : baseline;
     final matrix = _viewerController.calcMatrixFor(
       pageRect.center,
       zoom: targetZoom,
@@ -876,12 +883,11 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
           Offset? center;
           final panRangeRatio = _cachedInitialPanRangeRatio;
           final baseline = _baselineZoom;
-          final double targetZoom =
-              (_hasCachedViewState
-                      ? (_cachedInitialZoom ?? controller.currentZoom)
-                      : (baseline ?? controller.currentZoom))
-                  .clamp(_effectiveMinScale, _maxUserZoom)
-                  .toDouble();
+          final double targetZoom = (_hasCachedViewState
+                  ? (_cachedInitialZoom ?? controller.currentZoom)
+                  : (baseline ?? controller.currentZoom))
+              .clamp(_effectiveMinScale, _maxUserZoom)
+              .toDouble();
           if (panRangeRatio != null &&
               requested >= 1 &&
               requested <= controller.layout.pageLayouts.length) {
@@ -1052,36 +1058,36 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
               ),
               if (_chromeVisible)
                 Positioned(
-                left: 8,
-                top: 8,
-                right: 8,
-                child: Row(
-                  children: [
-                    _circleIconButton(
-                      icon: Icons.arrow_back_rounded,
-                      tooltip: '뒤로가기',
-                      onTap: () {
-                        _savePageCache();
-                        _emitGradingStates();
-                        Navigator.of(context).pop(null);
-                      },
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        widget.title,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: kDlgText,
-                          fontSize: 17,
-                          fontWeight: FontWeight.w800,
+                  left: 8,
+                  top: 8,
+                  right: 8,
+                  child: Row(
+                    children: [
+                      _circleIconButton(
+                        icon: Icons.arrow_back_rounded,
+                        tooltip: '뒤로가기',
+                        onTap: () {
+                          _savePageCache();
+                          _emitGradingStates();
+                          Navigator.of(context).pop(null);
+                        },
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          widget.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: kDlgText,
+                            fontSize: 17,
+                            fontWeight: FontWeight.w800,
+                          ),
                         ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
               if (_chromeVisible &&
                   _showDocument &&
                   widget.overlayEntries.isNotEmpty)
@@ -1237,87 +1243,87 @@ class _HomeworkAnswerViewerPageState extends State<HomeworkAnswerViewerPage> {
                 ),
               if (_chromeVisible)
                 Positioned(
-                right: controlsRightInset,
-                bottom: 16,
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (_showDocument && _hasSolution)
-                      _pillButton(
-                        label: _openingSolution ? '열기...' : '해설',
-                        icon: Icons.menu_book_rounded,
-                        enabled: !_openingSolution,
-                        onTap: () => unawaited(_openSolution()),
-                      ),
-                    if (_showDocument && _hasSolution)
-                      const SizedBox(width: 12),
-                    if (_showDocument) ...[
-                      _circleIconButton(
-                        icon: Icons.chevron_left_rounded,
-                        tooltip: '이전 페이지',
-                        enabled: canPrev,
-                        onTap: () => unawaited(_goPrev()),
-                      ),
-                      const SizedBox(width: 12),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 18, vertical: 14),
-                        decoration: BoxDecoration(
-                          color: kDlgPanelBg.withOpacity(0.92),
-                          borderRadius: BorderRadius.circular(999),
-                          border: Border.all(color: kDlgBorder),
+                  right: controlsRightInset,
+                  bottom: 16,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (_showDocument && _hasSolution)
+                        _pillButton(
+                          label: _openingSolution ? '열기...' : '해설',
+                          icon: Icons.menu_book_rounded,
+                          enabled: !_openingSolution,
+                          onTap: () => unawaited(_openSolution()),
                         ),
-                        child: Text(
-                          _pageCount > 0
-                              ? '$_pageNumber / $_pageCount'
-                              : '- / -',
-                          style: const TextStyle(
-                            color: kDlgTextSub,
-                            fontWeight: FontWeight.w800,
-                            fontSize: 19,
+                      if (_showDocument && _hasSolution)
+                        const SizedBox(width: 12),
+                      if (_showDocument) ...[
+                        _circleIconButton(
+                          icon: Icons.chevron_left_rounded,
+                          tooltip: '이전 페이지',
+                          enabled: canPrev,
+                          onTap: () => unawaited(_goPrev()),
+                        ),
+                        const SizedBox(width: 12),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 18, vertical: 14),
+                          decoration: BoxDecoration(
+                            color: kDlgPanelBg.withOpacity(0.92),
+                            borderRadius: BorderRadius.circular(999),
+                            border: Border.all(color: kDlgBorder),
+                          ),
+                          child: Text(
+                            _pageCount > 0
+                                ? '$_pageNumber / $_pageCount'
+                                : '- / -',
+                            style: const TextStyle(
+                              color: kDlgTextSub,
+                              fontWeight: FontWeight.w800,
+                              fontSize: 19,
+                            ),
                           ),
                         ),
-                      ),
-                      const SizedBox(width: 12),
-                      _circleIconButton(
-                        icon: Icons.chevron_right_rounded,
-                        tooltip: '다음 페이지',
-                        enabled: canNext,
-                        onTap: () => unawaited(_goNext()),
-                      ),
+                        const SizedBox(width: 12),
+                        _circleIconButton(
+                          icon: Icons.chevron_right_rounded,
+                          tooltip: '다음 페이지',
+                          enabled: canNext,
+                          onTap: () => unawaited(_goNext()),
+                        ),
+                      ],
+                      if (widget.enableConfirm) const SizedBox(width: 12),
+                      if (widget.enableConfirm)
+                        _pillButton(
+                          label: '완료',
+                          icon: Icons.task_alt_rounded,
+                          enabled: true,
+                          onTap: () {
+                            _savePageCache();
+                            _emitGradingStates();
+                            Navigator.of(context).pop(
+                              HomeworkAnswerViewerAction.complete,
+                            );
+                          },
+                        ),
+                      if (widget.enableConfirm) const SizedBox(width: 12),
+                      if (widget.enableConfirm)
+                        _pillButton(
+                          label: '확인',
+                          icon: Icons.check_rounded,
+                          enabled: true,
+                          onTap: () {
+                            _savePageCache();
+                            _emitGradingStates();
+                            Navigator.of(context).pop(
+                              HomeworkAnswerViewerAction.confirm,
+                            );
+                          },
+                          filled: true,
+                        ),
                     ],
-                    if (widget.enableConfirm) const SizedBox(width: 12),
-                    if (widget.enableConfirm)
-                      _pillButton(
-                        label: '완료',
-                        icon: Icons.task_alt_rounded,
-                        enabled: true,
-                        onTap: () {
-                          _savePageCache();
-                          _emitGradingStates();
-                          Navigator.of(context).pop(
-                            HomeworkAnswerViewerAction.complete,
-                          );
-                        },
-                      ),
-                    if (widget.enableConfirm) const SizedBox(width: 12),
-                    if (widget.enableConfirm)
-                      _pillButton(
-                        label: '확인',
-                        icon: Icons.check_rounded,
-                        enabled: true,
-                        onTap: () {
-                          _savePageCache();
-                          _emitGradingStates();
-                          Navigator.of(context).pop(
-                            HomeworkAnswerViewerAction.confirm,
-                          );
-                        },
-                        filled: true,
-                      ),
-                  ],
+                  ),
                 ),
-              ),
             ],
           ),
         ),

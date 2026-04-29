@@ -3,6 +3,7 @@ import AdmZip from 'adm-zip';
 import { XMLParser } from 'fast-xml-parser';
 import hePkg from 'he';
 import { createClient } from '@supabase/supabase-js';
+import { randomUUID } from 'node:crypto';
 import { generateQuestionPreviews } from './problem_bank_preview_service.js';
 import { runVlmExtraction } from './problem_bank/extract_engines/vlm/runner.js';
 
@@ -4190,7 +4191,7 @@ function toErrorCode(err) {
   if (/permission|forbidden|unauthorized|401|403/i.test(msg)) {
     return 'PERMISSION_DENIED';
   }
-  if (/timeout/i.test(msg)) return 'TIMEOUT';
+  if (/timeout|aborted|abort/i.test(msg)) return 'TIMEOUT';
   if (/parse|xml|hwpx|zip/i.test(msg)) return 'PARSE_FAILED';
   return 'UNKNOWN';
 }
@@ -4353,12 +4354,15 @@ function buildQuestionWritePayload({
   extractJobId,
   questionUid = '',
 }) {
-  const safeQuestionUid = normalizeWhitespace(questionUid);
+  const safeQuestionUid =
+    normalizeWhitespace(questionUid) ||
+    normalizeWhitespace(question?.question_uid || '') ||
+    randomUUID();
   return {
     academy_id: academyId,
     document_id: documentId,
     extract_job_id: extractJobId,
-    ...(safeQuestionUid ? { question_uid: safeQuestionUid } : {}),
+    question_uid: safeQuestionUid,
     source_page: question.source_page,
     source_order: question.source_order,
     question_number: question.question_number,

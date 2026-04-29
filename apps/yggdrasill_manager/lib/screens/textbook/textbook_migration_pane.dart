@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../services/textbook_book_registry.dart';
+import '../../services/textbook_course_catalog.dart';
 import '../../services/textbook_pdf_service.dart';
 import '../../widgets/latex_text_renderer.dart';
 import 'textbook_crop_extract_dialog.dart';
@@ -143,7 +144,7 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
       final data = await _supabase
           .from('resource_file_links')
           .select(
-            'id,academy_id,file_id,grade,url,storage_driver,storage_bucket,storage_key,migration_status,file_size_bytes,content_hash,uploaded_at',
+            'id,academy_id,file_id,grade,url,storage_driver,storage_bucket,storage_key,migration_status,file_size_bytes,content_hash,uploaded_at,grade_key,course_key,course_label',
           )
           .eq('file_id', bookId);
       final rows = (data as List).cast<Map<String, dynamic>>();
@@ -161,6 +162,9 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
           academyId: (r['academy_id'] as String?)?.trim() ?? '',
           fileId: (r['file_id'] as String?)?.trim() ?? '',
           gradeLabel: gradeLabel,
+          gradeKey: (r['grade_key'] as String?)?.trim() ?? '',
+          courseKey: (r['course_key'] as String?)?.trim() ?? '',
+          courseLabel: (r['course_label'] as String?)?.trim() ?? '',
           kind: kind,
           url: (r['url'] as String?)?.trim() ?? '',
           storageDriver: (r['storage_driver'] as String?)?.trim() ?? '',
@@ -210,6 +214,9 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
       return;
     }
     final gradeLabel = existing?.gradeLabel ?? gradeOverride ?? '';
+    final inferred = textbookCourseByKey(existing?.courseKey) ??
+        textbookCourseByLabel(existing?.courseLabel) ??
+        textbookCourseByLabel(gradeLabel);
     final kind = existing?.kind ?? kindOverride ?? 'body';
     if (gradeLabel.isEmpty) {
       _toast('학년 라벨이 비어있습니다', error: true);
@@ -248,6 +255,15 @@ class _TextbookMigrationPaneState extends State<TextbookMigrationPane> {
         academyId: academyId,
         fileId: book.id,
         gradeLabel: gradeLabel,
+        gradeKey: existing?.gradeKey.isNotEmpty == true
+            ? existing!.gradeKey
+            : inferred?.gradeKey,
+        courseKey: existing?.courseKey.isNotEmpty == true
+            ? existing!.courseKey
+            : inferred?.courseKey,
+        courseLabel: existing?.courseLabel.isNotEmpty == true
+            ? existing!.courseLabel
+            : inferred?.label,
         kind: kind,
         storageDriver: target.storageDriver,
         storageBucket: target.storageBucket,
@@ -1237,44 +1253,34 @@ class _NewRowPicker extends StatefulWidget {
 }
 
 class _NewRowPickerState extends State<_NewRowPicker> {
-  final TextEditingController _gradeCtrl = TextEditingController();
+  String _courseKey = kTextbookCourseOptions.first.courseKey;
   String _kind = 'body';
 
   @override
-  void dispose() {
-    _gradeCtrl.dispose();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
+    final course =
+        textbookCourseByKey(_courseKey) ?? kTextbookCourseOptions.first;
     return Row(
       children: [
         SizedBox(
-          width: 150,
-          child: TextField(
-            controller: _gradeCtrl,
+          width: 190,
+          child: DropdownButton<String>(
+            value: _courseKey,
+            dropdownColor: const Color(0xFF15171C),
+            isExpanded: true,
             style: const TextStyle(color: Colors.white, fontSize: 13),
-            decoration: const InputDecoration(
-              hintText: '학년 라벨 (예: 고1)',
-              hintStyle: TextStyle(color: Color(0xFF6A6A6A), fontSize: 12),
-              isDense: true,
-              contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-              filled: true,
-              fillColor: Color(0xFF15171C),
-              border: OutlineInputBorder(
-                borderSide: BorderSide(color: Color(0xFF2A2A2A)),
-                borderRadius: BorderRadius.all(Radius.circular(6)),
-              ),
-              focusedBorder: OutlineInputBorder(
-                borderSide: BorderSide(color: Color(0xFF33A373)),
-                borderRadius: BorderRadius.all(Radius.circular(6)),
-              ),
-              enabledBorder: OutlineInputBorder(
-                borderSide: BorderSide(color: Color(0xFF2A2A2A)),
-                borderRadius: BorderRadius.all(Radius.circular(6)),
-              ),
-            ),
+            underline: const SizedBox.shrink(),
+            items: [
+              for (final option in kTextbookCourseOptions)
+                DropdownMenuItem<String>(
+                  value: option.courseKey,
+                  child: Text(option.displayLabel),
+                ),
+            ],
+            onChanged: (v) {
+              if (v == null) return;
+              setState(() => _courseKey = v);
+            },
           ),
         ),
         const SizedBox(width: 8),
@@ -1298,9 +1304,7 @@ class _NewRowPickerState extends State<_NewRowPicker> {
           icon: Icons.upload_file,
           label: '새 행 업로드',
           onPressed: () {
-            final g = _gradeCtrl.text.trim();
-            if (g.isEmpty) return;
-            widget.onSubmit(g, _kind);
+            widget.onSubmit(course.label, _kind);
           },
         ),
       ],
@@ -1331,6 +1335,9 @@ class _MigLink {
     required this.academyId,
     required this.fileId,
     required this.gradeLabel,
+    required this.gradeKey,
+    required this.courseKey,
+    required this.courseLabel,
     required this.kind,
     required this.url,
     required this.storageDriver,
@@ -1346,6 +1353,9 @@ class _MigLink {
   final String academyId;
   final String fileId;
   final String gradeLabel;
+  final String gradeKey;
+  final String courseKey;
+  final String courseLabel;
   final String kind;
   final String url;
   final String storageDriver;

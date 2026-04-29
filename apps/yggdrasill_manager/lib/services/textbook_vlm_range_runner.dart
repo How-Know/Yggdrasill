@@ -101,7 +101,8 @@ bool isRetriableVlmError(Object err) {
       s.contains('httpexception') ||
       s.contains('socketexception') ||
       s.contains('os error: connection') ||
-      s.contains('timeoutexception');
+      s.contains('timeoutexception') ||
+      s.contains('missing item_region');
 }
 
 /// Render + detect a single page with retries. [isCancelled] is consulted
@@ -124,6 +125,15 @@ Future<PageAnalysisOutcome> analyzeSinglePageWithRetry({
         longEdgePx: analysisLongEdgePx,
       );
       final result = await detector(imageBytes: png, rawPage: rawPage);
+      final hasItems = result.items.isNotEmpty;
+      final hasAnyRegion =
+          result.items.any((item) => (item.itemRegion?.length ?? 0) == 4);
+      if (result.pageKind != 'concept_page' && hasItems && !hasAnyRegion) {
+        throw StateError(
+          'missing item_region for all ${result.items.length} VLM items '
+          'on page $rawPage',
+        );
+      }
       return PageAnalysisOutcome(
         rawPage: rawPage,
         result: result,

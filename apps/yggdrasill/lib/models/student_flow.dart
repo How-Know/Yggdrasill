@@ -1,6 +1,19 @@
 import 'dart:convert';
 
 class StudentFlow {
+  static const List<String> defaultNames = <String>[
+    '개념',
+    '문제',
+    '사고',
+    '테스트',
+    '서술',
+    '행동',
+  ];
+  static const Map<String, String> legacyNameMap = <String, String>{
+    '현행': '개념',
+    '선행': '문제',
+  };
+
   final String id;
   final String name;
   final bool enabled;
@@ -13,23 +26,46 @@ class StudentFlow {
     this.orderIndex = 0,
   });
 
-  StudentFlow copyWith({String? id, String? name, bool? enabled, int? orderIndex}) {
+  static String normalizeName(String raw) {
+    final trimmed = raw.trim();
+    return legacyNameMap[trimmed] ?? trimmed;
+  }
+
+  static int defaultPriority(String rawName) {
+    final name = normalizeName(rawName);
+    final idx = defaultNames.indexOf(name);
+    return idx < 0 ? defaultNames.length : idx;
+  }
+
+  static bool isDefaultName(String rawName) {
+    return defaultNames.contains(normalizeName(rawName));
+  }
+
+  StudentFlow copyWith({
+    String? id,
+    String? name,
+    bool? enabled,
+    int? orderIndex,
+  }) {
     return StudentFlow(
       id: id ?? this.id,
-      name: name ?? this.name,
-      enabled: enabled ?? this.enabled,
+      name: normalizeName(name ?? this.name),
+      enabled:
+          isDefaultName(name ?? this.name) ? true : (enabled ?? this.enabled),
       orderIndex: orderIndex ?? this.orderIndex,
     );
   }
 
   factory StudentFlow.fromJson(Map<String, dynamic> json) {
+    final normalizedName = normalizeName((json['name'] as String?) ?? '');
     return StudentFlow(
       id: (json['id'] as String?) ?? '',
-      name: (json['name'] as String?) ?? '',
-      enabled: (json['enabled'] as bool?) ?? false,
-      orderIndex: (json['orderIndex'] as int?) ??
-          (json['order_index'] as int?) ??
-          0,
+      name: normalizedName,
+      enabled: isDefaultName(normalizedName)
+          ? true
+          : ((json['enabled'] as bool?) ?? false),
+      orderIndex:
+          (json['orderIndex'] as int?) ?? (json['order_index'] as int?) ?? 0,
     );
   }
 
@@ -37,7 +73,7 @@ class StudentFlow {
     return {
       'id': id,
       'name': name,
-      'enabled': enabled,
+      'enabled': isDefaultName(name) ? true : enabled,
       'orderIndex': orderIndex,
     };
   }

@@ -17,6 +17,45 @@ class StudentFlowStore {
   final Map<String, Completer<void>> _loading = <String, Completer<void>>{};
   final ValueNotifier<int> revision = ValueNotifier<int>(0);
 
+  List<StudentFlow> _withDefaultFlows(List<StudentFlow> input) {
+    final normalized = input
+        .map(
+            (flow) => flow.copyWith(name: StudentFlow.normalizeName(flow.name)))
+        .toList(growable: true);
+    final names = normalized.map((flow) => flow.name.trim()).toSet();
+    for (final defaultName in StudentFlow.defaultNames) {
+      if (names.contains(defaultName)) continue;
+      normalized.add(
+        StudentFlow(
+          id: const Uuid().v4(),
+          name: defaultName,
+          enabled: true,
+          orderIndex: StudentFlow.defaultPriority(defaultName),
+        ),
+      );
+      names.add(defaultName);
+    }
+    return normalized.asMap().entries.map((entry) {
+      final flow = entry.value;
+      final priority = StudentFlow.defaultPriority(flow.name);
+      return flow.copyWith(
+        enabled:
+            priority < StudentFlow.defaultNames.length ? true : flow.enabled,
+        orderIndex: priority < StudentFlow.defaultNames.length
+            ? priority
+            : flow.orderIndex,
+      );
+    }).toList(growable: false)
+      ..sort((a, b) {
+        final pa = StudentFlow.defaultPriority(a.name);
+        final pb = StudentFlow.defaultPriority(b.name);
+        if (pa != pb) return pa.compareTo(pb);
+        final order = a.orderIndex.compareTo(b.orderIndex);
+        if (order != 0) return order;
+        return a.name.compareTo(b.name);
+      });
+  }
+
   List<StudentFlow> cached(String studentId) {
     return List<StudentFlow>.from(
         _byStudentId[studentId] ?? const <StudentFlow>[]);
@@ -50,12 +89,12 @@ class StudentFlowStore {
         if (id.isEmpty) continue;
         flows.add(StudentFlow(
           id: id,
-          name: (row['name'] as String?) ?? '',
+          name: StudentFlow.normalizeName((row['name'] as String?) ?? ''),
           enabled: (row['enabled'] as bool?) ?? false,
           orderIndex: (row['order_index'] as int?) ?? 0,
         ));
       }
-      _byStudentId[studentId] = flows;
+      _byStudentId[studentId] = _withDefaultFlows(flows);
       revision.value++;
       return cached(studentId);
     } catch (e, st) {
@@ -88,14 +127,14 @@ class StudentFlowStore {
         if (id.isEmpty || sid.isEmpty) continue;
         map.putIfAbsent(sid, () => <StudentFlow>[]).add(StudentFlow(
               id: id,
-              name: (row['name'] as String?) ?? '',
+              name: StudentFlow.normalizeName((row['name'] as String?) ?? ''),
               enabled: (row['enabled'] as bool?) ?? false,
               orderIndex: (row['order_index'] as int?) ?? 0,
             ));
       }
       for (final sid in studentIds) {
         _byStudentId[sid] =
-            List<StudentFlow>.from(map[sid] ?? const <StudentFlow>[]);
+            _withDefaultFlows(List<StudentFlow>.from(map[sid] ?? const []));
       }
       revision.value++;
     } catch (e, st) {
@@ -109,25 +148,23 @@ class StudentFlowStore {
       final academyId = await TenantService.instance.getActiveAcademyId() ??
           await TenantService.instance.ensureActiveAcademy();
       final supa = Supabase.instance.client;
-      final rows = flows.asMap().entries.map((e) {
+      final normalizedFlows = _withDefaultFlows(flows);
+      final rows = normalizedFlows.asMap().entries.map((e) {
         final flow = e.value;
+        final isDefault = StudentFlow.isDefaultName(flow.name);
         return {
           'id': flow.id,
           'academy_id': academyId,
           'student_id': studentId,
-          'name': flow.name,
-          'enabled': flow.enabled,
+          'name': StudentFlow.normalizeName(flow.name),
+          'enabled': isDefault ? true : flow.enabled,
           'order_index': e.key,
         };
       }).toList();
       if (rows.isNotEmpty) {
         await supa.from('student_flows').upsert(rows, onConflict: 'id');
       }
-      _byStudentId[studentId] = flows
-          .asMap()
-          .entries
-          .map((e) => e.value.copyWith(orderIndex: e.key))
-          .toList();
+      _byStudentId[studentId] = _withDefaultFlows(normalizedFlows);
       revision.value++;
     } catch (e, st) {
       // ignore: avoid_print

@@ -56,7 +56,8 @@ class _StudentProfilePageState extends State<StudentProfilePage> {
                   constraints: const BoxConstraints(
                     minWidth: 624,
                   ),
-                  padding: const EdgeInsets.only(left: 34, right: 24, top: 24, bottom: 24),
+                  padding: const EdgeInsets.only(
+                      left: 34, right: 24, top: 24, bottom: 24),
                   decoration: BoxDecoration(
                     color: const Color(0xFF0B1112),
                     borderRadius: BorderRadius.circular(16),
@@ -69,7 +70,8 @@ class _StudentProfilePageState extends State<StudentProfilePage> {
                       _StudentProfileHeader(
                         studentWithInfo: widget.studentWithInfo,
                         tabIndex: _tabIndex,
-                        onTabChanged: (next) => setState(() => _tabIndex = next),
+                        onTabChanged: (next) =>
+                            setState(() => _tabIndex = next),
                       ),
                       const SizedBox(height: 24),
                       // 메인 콘텐츠 영역
@@ -134,7 +136,8 @@ class _StudentProfileHeader extends StatelessWidget {
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: IconButton(
-                        icon: const Icon(Icons.arrow_back, color: Colors.white70, size: 20),
+                        icon: const Icon(Icons.arrow_back,
+                            color: Colors.white70, size: 20),
                         onPressed: () => Navigator.of(context).pop(),
                         tooltip: '뒤로',
                         padding: EdgeInsets.zero,
@@ -142,10 +145,14 @@ class _StudentProfileHeader extends StatelessWidget {
                     ),
                     CircleAvatar(
                       radius: 20,
-                      backgroundColor: student.groupInfo?.color ?? const Color(0xFF2C3A3A),
+                      backgroundColor:
+                          student.groupInfo?.color ?? const Color(0xFF2C3A3A),
                       child: Text(
                         student.name.characters.take(1).toString(),
-                        style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold),
                       ),
                     ),
                     const SizedBox(width: 16),
@@ -177,7 +184,7 @@ class _StudentProfileHeader extends StatelessWidget {
                 height: 40,
                 fontSize: 15,
                 selectedIndex: tabIndex,
-            tabs: const ['요약', '수업 일지', '스탯'],
+                tabs: const ['요약', '수업 일지', '스탯'],
                 onTabSelected: onTabChanged,
               ),
               const SizedBox(width: 12),
@@ -263,8 +270,10 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
     super.initState();
     _homeworkScoreFuture = _buildHomeworkScoreFuture();
     HomeworkStore.instance.revision.addListener(_onHomeworkSignalsChanged);
-    HomeworkAssignmentStore.instance.revision.addListener(_onHomeworkSignalsChanged);
-    DataManager.instance.studentsNotifier.addListener(_onHomeworkSignalsChanged);
+    HomeworkAssignmentStore.instance.revision
+        .addListener(_onHomeworkSignalsChanged);
+    DataManager.instance.studentsNotifier
+        .addListener(_onHomeworkSignalsChanged);
     unawaited(HomeworkStore.instance.loadAll());
     unawaited(_load());
   }
@@ -282,8 +291,10 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
   @override
   void dispose() {
     HomeworkStore.instance.revision.removeListener(_onHomeworkSignalsChanged);
-    HomeworkAssignmentStore.instance.revision.removeListener(_onHomeworkSignalsChanged);
-    DataManager.instance.studentsNotifier.removeListener(_onHomeworkSignalsChanged);
+    HomeworkAssignmentStore.instance.revision
+        .removeListener(_onHomeworkSignalsChanged);
+    DataManager.instance.studentsNotifier
+        .removeListener(_onHomeworkSignalsChanged);
     super.dispose();
   }
 
@@ -426,7 +437,8 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
         desiredLevelCode: _desiredLevelCode,
         targetLevelCode: _targetLevelCode,
       );
-      final readBack = await DataManager.instance.loadStudentLevelState(studentId);
+      final readBack =
+          await DataManager.instance.loadStudentLevelState(studentId);
       final rbCurrent = _asInt(readBack?['current_level_code']);
       final rbDesired = _asInt(readBack?['desired_level_code']);
       final rbTarget = _asInt(readBack?['target_level_code']);
@@ -561,13 +573,15 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
                     SizedBox(height: 4),
                     Text(
                       '최근 기록일수록 더 크게 반영되고, 수업량/재원기간 편향을 비율+스무딩으로 완화합니다.',
-                      style: TextStyle(color: kDlgTextSub, fontSize: 12.5, height: 1.35),
+                      style: TextStyle(
+                          color: kDlgTextSub, fontSize: 12.5, height: 1.35),
                     ),
                   ],
                 ),
               ),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 decoration: BoxDecoration(
                   color: const Color(0xFF1D473A),
                   borderRadius: BorderRadius.circular(10),
@@ -680,7 +694,8 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
       ),
       child: Text(
         '과제 점수 계산 중 오류가 발생했어요: $error',
-        style: const TextStyle(color: Color(0xFFEF6A6A), fontSize: 12.5, height: 1.35),
+        style: const TextStyle(
+            color: Color(0xFFEF6A6A), fontSize: 12.5, height: 1.35),
       ),
     );
   }
@@ -707,8 +722,9 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
     if (rawLastEventAt != null && rawLastEventAt.isNotEmpty) {
       lastEventAt = DateTime.tryParse(rawLastEventAt)?.toLocal();
     }
-    final String lastEventText =
-        lastEventAt == null ? '없음' : DateFormat('yyyy.MM.dd').format(lastEventAt);
+    final String lastEventText = lastEventAt == null
+        ? '없음'
+        : DateFormat('yyyy.MM.dd').format(lastEventAt);
 
     if (eventCount <= 0 || expDecayed <= 0) {
       return Container(
@@ -763,13 +779,15 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
                     SizedBox(height: 4),
                     Text(
                       '배정/검사/완료 이벤트를 누적하고, 오래된 기록은 약하게만 희석해 장기 성실도를 반영합니다.',
-                      style: TextStyle(color: kDlgTextSub, fontSize: 12.5, height: 1.35),
+                      style: TextStyle(
+                          color: kDlgTextSub, fontSize: 12.5, height: 1.35),
                     ),
                   ],
                 ),
               ),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 decoration: BoxDecoration(
                   color: const Color(0xFF1E3E63),
                   borderRadius: BorderRadius.circular(10),
@@ -852,7 +870,8 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
         return ValueListenableBuilder<List<StudentWithInfo>>(
           valueListenable: DataManager.instance.studentsNotifier,
           builder: (_, ____, _____) {
-            final scoreMap = DataManager.instance.calculateAttendanceScoreWithRank(
+            final scoreMap =
+                DataManager.instance.calculateAttendanceScoreWithRank(
               studentId: widget.studentWithInfo.student.id,
             );
             return SingleChildScrollView(
@@ -875,152 +894,165 @@ class _StudentStatsViewState extends State<_StudentStatsView> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                    Text(
-                      '등급(레벨) 입력',
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                            color: kDlgText,
-                            fontWeight: FontWeight.w700,
-                          ),
-                    ),
-                    const SizedBox(height: 6),
-                    const Text(
-                      '현재/희망/예상 등급은 수동으로 저장하며, 과제 완료 시점 스냅샷에 사용됩니다.',
-                      style: TextStyle(color: kDlgTextSub, fontSize: 13),
-                    ),
-                    const SizedBox(height: 18),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: DropdownButtonFormField<int?>(
-                            value: _currentLevelCode,
-                            items: _buildLevelItems(),
-                            decoration: _inputDecoration('현재 등급'),
-                            style: const TextStyle(color: kDlgText),
-                            dropdownColor: const Color(0xFF15171C),
-                            onChanged: (value) =>
-                                setState(() => _currentLevelCode = value),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: DropdownButtonFormField<int?>(
-                            value: _desiredLevelCode,
-                            items: _buildLevelItems(),
-                            decoration: _inputDecoration('희망 등급'),
-                            style: const TextStyle(color: kDlgText),
-                            dropdownColor: const Color(0xFF15171C),
-                            onChanged: (value) =>
-                                setState(() => _desiredLevelCode = value),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                    DropdownButtonFormField<int?>(
-                      value: _targetLevelCode,
-                      items: _buildLevelItems(),
-                      decoration: _inputDecoration('예상 등급'),
-                      style: const TextStyle(color: kDlgText),
-                      dropdownColor: const Color(0xFF15171C),
-                      onChanged: (value) =>
-                          setState(() => _targetLevelCode = value),
-                    ),
-                    const SizedBox(height: 12),
-                    Text(
-                      '현재: ${_labelForCode(_currentLevelCode)}   ·   희망: ${_labelForCode(_desiredLevelCode)}   ·   예상: ${_labelForCode(_targetLevelCode)}',
-                      style: const TextStyle(color: kDlgTextSub, fontSize: 12),
-                    ),
-                    if (_errorText != null) ...[
-                      const SizedBox(height: 10),
-                      Text(
-                        _errorText!,
-                        style: const TextStyle(color: Color(0xFFEF6A6A), fontSize: 12),
-                      ),
-                    ],
-                    const SizedBox(height: 18),
-                    Row(
-                      children: [
-                        OutlinedButton.icon(
-                          onPressed: _saving ? null : () => unawaited(_load()),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: kDlgTextSub,
-                            side: const BorderSide(color: kDlgBorder),
-                          ),
-                          icon: const Icon(Icons.refresh, size: 16),
-                          label: const Text('다시 불러오기'),
-                        ),
-                        const SizedBox(width: 8),
-                        FilledButton.icon(
-                          onPressed: _saving ? null : _save,
-                          style: FilledButton.styleFrom(
-                            backgroundColor: kDlgAccent,
-                            foregroundColor: Colors.white,
-                          ),
-                          icon: _saving
-                              ? const SizedBox(
-                                  width: 14,
-                                  height: 14,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                    color: Colors.white,
+                            Text(
+                              '등급(레벨) 입력',
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .titleMedium
+                                  ?.copyWith(
+                                    color: kDlgText,
+                                    fontWeight: FontWeight.w700,
                                   ),
-                                )
-                              : const Icon(Icons.save, size: 16),
-                          label: Text(_saving ? '저장 중...' : '저장'),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 24),
-                    const Divider(color: kDlgBorder),
-                    const SizedBox(height: 10),
-                    const YggDialogSectionHeader(
-                      icon: Icons.shield_outlined,
-                      title: '비개입 변수',
-                    ),
-                    const Text(
-                      '통제 어려운 변수를 별도 축으로 관리합니다. (마음/재능/운/학습 환경)',
-                      style: TextStyle(color: kDlgTextSub, fontSize: 12.5),
-                    ),
-                    const SizedBox(height: 10),
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF15171C),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: kDlgBorder),
-                      ),
-                      child: const Text(
-                        '이번 단계에서는 비개입 변수 세부 지표를 준비 중입니다.',
-                        style: TextStyle(color: kDlgTextSub, fontSize: 12.5),
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    const YggDialogSectionHeader(
-                      icon: Icons.tune,
-                      title: '개입 가능 변수',
-                    ),
-                    const Text(
-                      '의도적 훈련/설계로 바꿀 수 있는 변수입니다. 현재는 출석 점수와 과제 점수를 1단계로 반영합니다.',
-                      style: TextStyle(color: kDlgTextSub, fontSize: 12.5),
-                    ),
-                    const SizedBox(height: 10),
-                    _buildAttendanceScoreCard(scoreMap),
-                    const SizedBox(height: 12),
-                    FutureBuilder<Map<String, dynamic>>(
-                      future: _homeworkScoreFuture,
-                      builder: (context, snapshot) {
-                        if (snapshot.connectionState == ConnectionState.waiting) {
-                          return _buildHomeworkScoreLoadingCard();
-                        }
-                        if (snapshot.hasError) {
-                          return _buildHomeworkScoreErrorCard(snapshot.error);
-                        }
-                        return _buildHomeworkScoreCard(
-                          snapshot.data ?? const <String, dynamic>{},
-                        );
-                      },
-                    ),
+                            ),
+                            const SizedBox(height: 6),
+                            const Text(
+                              '현재/희망/예상 등급은 수동으로 저장하며, 과제 완료 시점 스냅샷에 사용됩니다.',
+                              style:
+                                  TextStyle(color: kDlgTextSub, fontSize: 13),
+                            ),
+                            const SizedBox(height: 18),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: DropdownButtonFormField<int?>(
+                                    value: _currentLevelCode,
+                                    items: _buildLevelItems(),
+                                    decoration: _inputDecoration('현재 등급'),
+                                    style: const TextStyle(color: kDlgText),
+                                    dropdownColor: const Color(0xFF15171C),
+                                    onChanged: (value) => setState(
+                                        () => _currentLevelCode = value),
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: DropdownButtonFormField<int?>(
+                                    value: _desiredLevelCode,
+                                    items: _buildLevelItems(),
+                                    decoration: _inputDecoration('희망 등급'),
+                                    style: const TextStyle(color: kDlgText),
+                                    dropdownColor: const Color(0xFF15171C),
+                                    onChanged: (value) => setState(
+                                        () => _desiredLevelCode = value),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            DropdownButtonFormField<int?>(
+                              value: _targetLevelCode,
+                              items: _buildLevelItems(),
+                              decoration: _inputDecoration('예상 등급'),
+                              style: const TextStyle(color: kDlgText),
+                              dropdownColor: const Color(0xFF15171C),
+                              onChanged: (value) =>
+                                  setState(() => _targetLevelCode = value),
+                            ),
+                            const SizedBox(height: 12),
+                            Text(
+                              '현재: ${_labelForCode(_currentLevelCode)}   ·   희망: ${_labelForCode(_desiredLevelCode)}   ·   예상: ${_labelForCode(_targetLevelCode)}',
+                              style: const TextStyle(
+                                  color: kDlgTextSub, fontSize: 12),
+                            ),
+                            if (_errorText != null) ...[
+                              const SizedBox(height: 10),
+                              Text(
+                                _errorText!,
+                                style: const TextStyle(
+                                    color: Color(0xFFEF6A6A), fontSize: 12),
+                              ),
+                            ],
+                            const SizedBox(height: 18),
+                            Row(
+                              children: [
+                                OutlinedButton.icon(
+                                  onPressed:
+                                      _saving ? null : () => unawaited(_load()),
+                                  style: OutlinedButton.styleFrom(
+                                    foregroundColor: kDlgTextSub,
+                                    side: const BorderSide(color: kDlgBorder),
+                                  ),
+                                  icon: const Icon(Icons.refresh, size: 16),
+                                  label: const Text('다시 불러오기'),
+                                ),
+                                const SizedBox(width: 8),
+                                FilledButton.icon(
+                                  onPressed: _saving ? null : _save,
+                                  style: FilledButton.styleFrom(
+                                    backgroundColor: kDlgAccent,
+                                    foregroundColor: Colors.white,
+                                  ),
+                                  icon: _saving
+                                      ? const SizedBox(
+                                          width: 14,
+                                          height: 14,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                            color: Colors.white,
+                                          ),
+                                        )
+                                      : const Icon(Icons.save, size: 16),
+                                  label: Text(_saving ? '저장 중...' : '저장'),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 24),
+                            const Divider(color: kDlgBorder),
+                            const SizedBox(height: 10),
+                            const YggDialogSectionHeader(
+                              icon: Icons.shield_outlined,
+                              title: '비개입 변수',
+                            ),
+                            const Text(
+                              '통제 어려운 변수를 별도 축으로 관리합니다. (마음/재능/운/학습 환경)',
+                              style:
+                                  TextStyle(color: kDlgTextSub, fontSize: 12.5),
+                            ),
+                            const SizedBox(height: 10),
+                            Container(
+                              width: double.infinity,
+                              padding:
+                                  const EdgeInsets.fromLTRB(14, 12, 14, 12),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF15171C),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: kDlgBorder),
+                              ),
+                              child: const Text(
+                                '이번 단계에서는 비개입 변수 세부 지표를 준비 중입니다.',
+                                style: TextStyle(
+                                    color: kDlgTextSub, fontSize: 12.5),
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            const YggDialogSectionHeader(
+                              icon: Icons.tune,
+                              title: '개입 가능 변수',
+                            ),
+                            const Text(
+                              '의도적 훈련/설계로 바꿀 수 있는 변수입니다. 현재는 출석 점수와 과제 점수를 1단계로 반영합니다.',
+                              style:
+                                  TextStyle(color: kDlgTextSub, fontSize: 12.5),
+                            ),
+                            const SizedBox(height: 10),
+                            _buildAttendanceScoreCard(scoreMap),
+                            const SizedBox(height: 12),
+                            FutureBuilder<Map<String, dynamic>>(
+                              future: _homeworkScoreFuture,
+                              builder: (context, snapshot) {
+                                if (snapshot.connectionState ==
+                                    ConnectionState.waiting) {
+                                  return _buildHomeworkScoreLoadingCard();
+                                }
+                                if (snapshot.hasError) {
+                                  return _buildHomeworkScoreErrorCard(
+                                      snapshot.error);
+                                }
+                                return _buildHomeworkScoreCard(
+                                  snapshot.data ?? const <String, dynamic>{},
+                                );
+                              },
+                            ),
                           ],
                         ),
                       ),
@@ -1059,7 +1091,8 @@ class _StudentTimelineViewState extends State<_StudentTimelineView> {
   final ScrollController _timelineScrollController = ScrollController();
   static const Color _attendanceColor = Color(0xFF33A373);
   static const Color _recordColor = Color(0xFF9AA0A6);
-  DateTime _anchorDate = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
+  DateTime _anchorDate =
+      DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
   int _daysLoaded = 31;
   bool _showAttendance = true;
   bool _showTags = true;
@@ -1097,10 +1130,9 @@ class _StudentTimelineViewState extends State<_StudentTimelineView> {
               _daysLoaded,
             );
             final items = _buildRenderableTimeline(entries);
-            final enabledFlows =
-                (widget.flows ?? const <StudentFlow>[])
-                    .where((f) => f.enabled)
-                    .toList();
+            final enabledFlows = (widget.flows ?? const <StudentFlow>[])
+                .where((f) => f.enabled)
+                .toList();
             const double timelineMaxWidth = 860 * 0.56;
             const double flowCardWidth = timelineMaxWidth;
             const double flowCardSpacing = 16;
@@ -1164,13 +1196,17 @@ class _StudentTimelineViewState extends State<_StudentTimelineView> {
                             final picked = await showDatePicker(
                               context: context,
                               initialDate: _anchorDate,
-                              firstDate: DateTime.now().subtract(const Duration(days: 365 * 2)),
-                              lastDate: DateTime.now().add(const Duration(days: 365)),
+                              firstDate: DateTime.now()
+                                  .subtract(const Duration(days: 365 * 2)),
+                              lastDate:
+                                  DateTime.now().add(const Duration(days: 365)),
                               builder: (context, child) {
                                 return Theme(
                                   data: Theme.of(context).copyWith(
-                                    colorScheme: const ColorScheme.dark(primary: Color(0xFF1B6B63)),
-                                    dialogBackgroundColor: const Color(0xFF0B1112),
+                                    colorScheme: const ColorScheme.dark(
+                                        primary: Color(0xFF1B6B63)),
+                                    dialogBackgroundColor:
+                                        const Color(0xFF0B1112),
                                   ),
                                   child: child!,
                                 );
@@ -1178,7 +1214,8 @@ class _StudentTimelineViewState extends State<_StudentTimelineView> {
                             );
                             if (picked != null) {
                               setState(() {
-                                _anchorDate = DateTime(picked.year, picked.month, picked.day);
+                                _anchorDate = DateTime(
+                                    picked.year, picked.month, picked.day);
                                 _daysLoaded = 31;
                               });
                               if (_timelineScrollController.hasClients) {
@@ -1206,12 +1243,15 @@ class _StudentTimelineViewState extends State<_StudentTimelineView> {
                     const SizedBox(height: 12),
                     Expanded(
                       child: items.isEmpty
-                          ? const Center(child: Text('기록이 없습니다.', style: TextStyle(color: Colors.white54)))
+                          ? const Center(
+                              child: Text('기록이 없습니다.',
+                                  style: TextStyle(color: Colors.white54)))
                           : ListView.separated(
                               controller: _timelineScrollController,
                               padding: const EdgeInsets.symmetric(vertical: 6),
                               itemCount: items.length,
-                              separatorBuilder: (_, __) => const SizedBox(height: 10),
+                              separatorBuilder: (_, __) =>
+                                  const SizedBox(height: 10),
                               itemBuilder: (context, index) {
                                 final item = items[index];
                                 if (item is _TimelineHeader) {
@@ -1283,16 +1323,14 @@ class _StudentTimelineViewState extends State<_StudentTimelineView> {
           color: selected ? const Color(0xFF1C2A2D) : const Color(0xFF151C21),
           borderRadius: BorderRadius.circular(999),
           border: Border.all(
-            color:
-                selected ? const Color(0xFF2A6D62) : const Color(0xFF223131),
+            color: selected ? const Color(0xFF2A6D62) : const Color(0xFF223131),
             width: 1.2,
           ),
         ),
         child: Text(
           label,
           style: TextStyle(
-            color:
-                selected ? const Color(0xFFD6ECEA) : const Color(0xFF9FB3B3),
+            color: selected ? const Color(0xFFD6ECEA) : const Color(0xFF9FB3B3),
             fontWeight: FontWeight.w700,
             fontSize: 13,
           ),
@@ -1328,7 +1366,8 @@ class _StudentTimelineViewState extends State<_StudentTimelineView> {
         const SizedBox(width: 8),
         Text(
           DateFormat('yyyy.MM.dd').format(date),
-          style: const TextStyle(color: Colors.white60, fontWeight: FontWeight.w700),
+          style: const TextStyle(
+              color: Colors.white60, fontWeight: FontWeight.w700),
         ),
         const SizedBox(width: 8),
         const Expanded(child: Divider(color: Color(0xFF223131))),
@@ -1354,18 +1393,26 @@ class _StudentTimelineViewState extends State<_StudentTimelineView> {
               const SizedBox(width: 8),
               Text(
                 entry.label,
-                style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700),
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700),
               ),
               if (entry.isTag) ...[
                 const SizedBox(width: 8),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                   decoration: BoxDecoration(
                     color: const Color(0xFF0F1518),
                     borderRadius: BorderRadius.circular(999),
                     border: Border.all(color: const Color(0xFF223131)),
                   ),
-                  child: const Text('태그', style: TextStyle(color: Colors.white60, fontSize: 12, fontWeight: FontWeight.w700)),
+                  child: const Text('태그',
+                      style: TextStyle(
+                          color: Colors.white60,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700)),
                 ),
               ],
             ],
@@ -1373,19 +1420,21 @@ class _StudentTimelineViewState extends State<_StudentTimelineView> {
           if (entry.note != null && entry.note!.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(top: 6),
-              child: Text(entry.note!, style: const TextStyle(color: Colors.white60, fontSize: 13)),
+              child: Text(entry.note!,
+                  style: const TextStyle(color: Colors.white60, fontSize: 13)),
             ),
         ],
       ),
     );
 
-    final wrappedCard = entry.isTag && entry.setId != null && entry.studentId != null
-        ? _wrapSwipeActions(
-            child: card,
-            onEdit: () => _editTimelineEntry(entry),
-            onDelete: () => _deleteTimelineEntry(entry),
-          )
-        : card;
+    final wrappedCard =
+        entry.isTag && entry.setId != null && entry.studentId != null
+            ? _wrapSwipeActions(
+                child: card,
+                onEdit: () => _editTimelineEntry(entry),
+                onDelete: () => _deleteTimelineEntry(entry),
+              )
+            : card;
 
     return IntrinsicHeight(
       child: Row(
@@ -1395,7 +1444,10 @@ class _StudentTimelineViewState extends State<_StudentTimelineView> {
             width: 54,
             child: Text(
               timeText,
-              style: const TextStyle(color: Colors.white54, fontSize: 13, fontWeight: FontWeight.w600),
+              style: const TextStyle(
+                  color: Colors.white54,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600),
             ),
           ),
           const SizedBox(width: 6),
@@ -1423,10 +1475,13 @@ class _StudentTimelineViewState extends State<_StudentTimelineView> {
     );
   }
 
-  List<_TimelineEntry> _collectTimelineEntries(StudentWithInfo student, DateTime anchor, int days) {
+  List<_TimelineEntry> _collectTimelineEntries(
+      StudentWithInfo student, DateTime anchor, int days) {
     final List<_TimelineEntry> all = [];
-    final DateTime normalizedAnchor = DateTime(anchor.year, anchor.month, anchor.day);
-    final records = DataManager.instance.getAttendanceRecordsForStudent(student.student.id);
+    final DateTime normalizedAnchor =
+        DateTime(anchor.year, anchor.month, anchor.day);
+    final records =
+        DataManager.instance.getAttendanceRecordsForStudent(student.student.id);
     for (int i = 0; i < days; i++) {
       final dayStart = normalizedAnchor.subtract(Duration(days: i));
       final dayEnd = dayStart.add(const Duration(days: 1));
@@ -1450,7 +1505,9 @@ class _StudentTimelineViewState extends State<_StudentTimelineView> {
       for (final record in records) {
         final arrival = record.arrivalTime?.toLocal();
         final departure = record.departureTime?.toLocal();
-        if (arrival != null && !arrival.isBefore(start) && arrival.isBefore(end)) {
+        if (arrival != null &&
+            !arrival.isBefore(start) &&
+            arrival.isBefore(end)) {
           final key = 'arr_${arrival.millisecondsSinceEpoch}';
           if (seen.add(key)) {
             entries.add(_TimelineEntry(
@@ -1462,7 +1519,9 @@ class _StudentTimelineViewState extends State<_StudentTimelineView> {
             ));
           }
         }
-        if (departure != null && !departure.isBefore(start) && departure.isBefore(end)) {
+        if (departure != null &&
+            !departure.isBefore(start) &&
+            departure.isBefore(end)) {
           final key = 'dep_${departure.millisecondsSinceEpoch}';
           if (seen.add(key)) {
             entries.add(_TimelineEntry(
@@ -1480,19 +1539,24 @@ class _StudentTimelineViewState extends State<_StudentTimelineView> {
     if (_showTags) {
       final dayIndex = start.weekday - 1;
       final blocks = DataManager.instance.studentTimeBlocks.where(
-        (block) => block.studentId == studentId && block.setId != null && block.dayIndex == dayIndex,
+        (block) =>
+            block.studentId == studentId &&
+            block.setId != null &&
+            block.dayIndex == dayIndex,
       );
       for (final block in blocks) {
         final events = TagStore.instance.getEventsForSet(block.setId!);
         for (final event in events) {
           final ts = event.timestamp.toLocal();
           if (ts.isAfter(start) && ts.isBefore(end)) {
-            final key = 'tag_${block.setId}_${event.tagName}_${ts.millisecondsSinceEpoch}_${event.note ?? ''}';
+            final key =
+                'tag_${block.setId}_${event.tagName}_${ts.millisecondsSinceEpoch}_${event.note ?? ''}';
             if (seen.add(key)) {
               final bool isRecord = event.tagName.trim() == '기록';
               entries.add(_TimelineEntry(
                 time: ts,
-                icon: IconData(event.iconCodePoint, fontFamily: 'MaterialIcons'),
+                icon:
+                    IconData(event.iconCodePoint, fontFamily: 'MaterialIcons'),
                 color: isRecord ? _recordColor : Color(event.colorValue),
                 label: event.tagName,
                 note: event.note,
@@ -1516,7 +1580,8 @@ class _StudentTimelineViewState extends State<_StudentTimelineView> {
     DateTime? currentDate;
     for (final entry in entries) {
       final date = DateTime(entry.time.year, entry.time.month, entry.time.day);
-      if (currentDate == null || currentDate.millisecondsSinceEpoch != date.millisecondsSinceEpoch) {
+      if (currentDate == null ||
+          currentDate.millisecondsSinceEpoch != date.millisecondsSinceEpoch) {
         currentDate = date;
         list.add(_TimelineHeader(date: date));
       }
@@ -1527,7 +1592,8 @@ class _StudentTimelineViewState extends State<_StudentTimelineView> {
 
   void _handleScroll() {
     if (!_timelineScrollController.hasClients) return;
-    if (_timelineScrollController.position.pixels >= _timelineScrollController.position.maxScrollExtent - 80) {
+    if (_timelineScrollController.position.pixels >=
+        _timelineScrollController.position.maxScrollExtent - 80) {
       setState(() {
         _daysLoaded += 31;
       });
@@ -1557,7 +1623,8 @@ class _StudentTimelineViewState extends State<_StudentTimelineView> {
                 hoverColor: Colors.white.withOpacity(0.03),
                 child: const SizedBox.expand(
                   child: Center(
-                    child: Icon(Icons.edit_outlined, color: Color(0xFFEAF2F2), size: 18),
+                    child: Icon(Icons.edit_outlined,
+                        color: Color(0xFFEAF2F2), size: 18),
                   ),
                 ),
               ),
@@ -1576,7 +1643,8 @@ class _StudentTimelineViewState extends State<_StudentTimelineView> {
                 hoverColor: Colors.white.withOpacity(0.04),
                 child: const SizedBox.expand(
                   child: Center(
-                    child: Icon(Icons.delete_outline_rounded, color: Colors.white, size: 18),
+                    child: Icon(Icons.delete_outline_rounded,
+                        color: Colors.white, size: 18),
                   ),
                 ),
               ),
@@ -1639,7 +1707,9 @@ class _StudentTimelineViewState extends State<_StudentTimelineView> {
         titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
         contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
         actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
-        title: const Text('기록 삭제', style: TextStyle(color: kDlgText, fontSize: 20, fontWeight: FontWeight.w900)),
+        title: const Text('기록 삭제',
+            style: TextStyle(
+                color: kDlgText, fontSize: 20, fontWeight: FontWeight.w900)),
         content: Text(
           '“$label” 기록을 삭제할까요?',
           style: const TextStyle(color: kDlgTextSub),
@@ -1652,7 +1722,8 @@ class _StudentTimelineViewState extends State<_StudentTimelineView> {
           ),
           FilledButton(
             onPressed: () => Navigator.of(ctx).pop(true),
-            style: FilledButton.styleFrom(backgroundColor: const Color(0xFFB74C4C)),
+            style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFFB74C4C)),
             child: const Text('삭제', style: TextStyle(color: Colors.white)),
           ),
         ],
@@ -1676,7 +1747,9 @@ class _StudentTimelineViewState extends State<_StudentTimelineView> {
         titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
         contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
         actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
-        title: Text(title, style: const TextStyle(color: kDlgText, fontSize: 20, fontWeight: FontWeight.w900)),
+        title: Text(title,
+            style: const TextStyle(
+                color: kDlgText, fontSize: 20, fontWeight: FontWeight.w900)),
         content: SizedBox(
           width: 520,
           child: TextField(
@@ -1709,7 +1782,8 @@ class _StudentTimelineViewState extends State<_StudentTimelineView> {
           FilledButton(
             onPressed: () {
               FocusScope.of(ctx).unfocus();
-              controller.value = controller.value.copyWith(composing: TextRange.empty);
+              controller.value =
+                  controller.value.copyWith(composing: TextRange.empty);
               Navigator.of(ctx).pop(controller.text);
             },
             style: FilledButton.styleFrom(backgroundColor: kDlgAccent),
@@ -1794,17 +1868,14 @@ class _FlowHomeworkSidebarState extends State<_FlowHomeworkSidebar> {
   }
 
   void _reloadAssignmentData() {
-    _assignmentsFuture =
-        HomeworkAssignmentStore.instance.loadAssignmentsForStudent(widget.studentId);
+    _assignmentsFuture = HomeworkAssignmentStore.instance
+        .loadAssignmentsForStudent(widget.studentId);
     _checksFuture =
         HomeworkAssignmentStore.instance.loadChecksForStudent(widget.studentId);
   }
 
   int _flowPriority(StudentFlow flow) {
-    final name = flow.name.trim();
-    if (name == '현행') return 0;
-    if (name == '선행') return 1;
-    return 2;
+    return StudentFlow.defaultPriority(flow.name);
   }
 
   List<StudentFlow> _sortedFlows(List<StudentFlow> input) {
@@ -1813,7 +1884,7 @@ class _FlowHomeworkSidebarState extends State<_FlowHomeworkSidebar> {
       final pa = _flowPriority(a);
       final pb = _flowPriority(b);
       if (pa != pb) return pa - pb;
-      if (pa == 2) {
+      if (pa == StudentFlow.defaultNames.length) {
         final oi = a.orderIndex.compareTo(b.orderIndex);
         if (oi != 0) return oi;
       }
@@ -1829,7 +1900,8 @@ class _FlowHomeworkSidebarState extends State<_FlowHomeworkSidebar> {
       builder: (_) => AlertDialog(
         backgroundColor: kDlgBg,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('플로우 이름 변경', style: TextStyle(color: kDlgText, fontWeight: FontWeight.w900)),
+        title: const Text('플로우 이름 변경',
+            style: TextStyle(color: kDlgText, fontWeight: FontWeight.w900)),
         content: TextField(
           controller: controller,
           style: const TextStyle(color: kDlgText, fontWeight: FontWeight.w600),
@@ -1846,7 +1918,8 @@ class _FlowHomeworkSidebarState extends State<_FlowHomeworkSidebar> {
               borderRadius: BorderRadius.circular(10),
               borderSide: const BorderSide(color: kDlgAccent, width: 1.4),
             ),
-            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
           ),
         ),
         actions: [
@@ -1867,8 +1940,8 @@ class _FlowHomeworkSidebarState extends State<_FlowHomeworkSidebar> {
     final trimmed = nextName?.trim() ?? '';
     if (trimmed.isEmpty || trimmed == flow.name) return;
     try {
-      final allFlows =
-          await StudentFlowStore.instance.loadForStudent(widget.studentId, force: true);
+      final allFlows = await StudentFlowStore.instance
+          .loadForStudent(widget.studentId, force: true);
       final base = allFlows.isNotEmpty ? allFlows : widget.flows;
       final updated = base
           .map((f) => f.id == flow.id ? f.copyWith(name: trimmed) : f)
@@ -1894,15 +1967,13 @@ class _FlowHomeworkSidebarState extends State<_FlowHomeworkSidebar> {
         return FutureBuilder<Map<String, List<HomeworkAssignmentBrief>>>(
           future: _assignmentsFuture,
           builder: (context, assignmentsSnapshot) {
-            final assignmentsByItem =
-                assignmentsSnapshot.data ??
-                    const <String, List<HomeworkAssignmentBrief>>{};
+            final assignmentsByItem = assignmentsSnapshot.data ??
+                const <String, List<HomeworkAssignmentBrief>>{};
             return FutureBuilder<Map<String, List<HomeworkAssignmentCheck>>>(
               future: _checksFuture,
               builder: (context, checksSnapshot) {
-                final checksByItem =
-                    checksSnapshot.data ??
-                        const <String, List<HomeworkAssignmentCheck>>{};
+                final checksByItem = checksSnapshot.data ??
+                    const <String, List<HomeworkAssignmentCheck>>{};
                 return ValueListenableBuilder<int>(
                   valueListenable: StudentFlowStore.instance.revision,
                   builder: (_, __, ___) {
@@ -1929,8 +2000,8 @@ class _FlowHomeworkSidebarState extends State<_FlowHomeworkSidebar> {
                                   studentId: widget.studentId,
                                   cardWidth: widget.cardWidth,
                                   items: allItems
-                                      .where((e) =>
-                                          e.flowId == sortedFlows[i].id)
+                                      .where(
+                                          (e) => e.flowId == sortedFlows[i].id)
                                       .toList(),
                                   assignmentsByItem: assignmentsByItem,
                                   checksByItem: checksByItem,
@@ -1972,7 +2043,8 @@ class _BehaviorAssignmentSidebar extends StatefulWidget {
       _BehaviorAssignmentSidebarState();
 }
 
-class _BehaviorAssignmentSidebarState extends State<_BehaviorAssignmentSidebar> {
+class _BehaviorAssignmentSidebarState
+    extends State<_BehaviorAssignmentSidebar> {
   late Future<List<StudentBehaviorAssignment>> _assignmentsFuture;
   int _lastRevision = -1;
 
@@ -1991,8 +2063,8 @@ class _BehaviorAssignmentSidebarState extends State<_BehaviorAssignmentSidebar> 
   }
 
   void _reloadAssignments() {
-    _assignmentsFuture =
-        StudentBehaviorAssignmentStore.instance.loadForStudent(widget.studentId);
+    _assignmentsFuture = StudentBehaviorAssignmentStore.instance
+        .loadForStudent(widget.studentId);
   }
 
   Future<void> _addBehavior() async {
@@ -2053,7 +2125,8 @@ class _BehaviorAssignmentSidebarState extends State<_BehaviorAssignmentSidebar> 
     final int levelNumber = item.safeSelectedLevelIndex + 1;
     final bool canLevelDown = levelNumber > 1;
     final bool canLevelUp = levelNumber < maxLevel;
-    final String repeatLabel = item.isIrregular ? '비정기' : '${item.repeatDays}일 주기';
+    final String repeatLabel =
+        item.isIrregular ? '비정기' : '${item.repeatDays}일 주기';
     return Container(
       padding: const EdgeInsets.fromLTRB(14, 12, 12, 10),
       decoration: BoxDecoration(
@@ -2180,7 +2253,8 @@ class _BehaviorAssignmentSidebarState extends State<_BehaviorAssignmentSidebar> 
           future: _assignmentsFuture,
           builder: (context, snapshot) {
             final assignments = snapshot.data ??
-                StudentBehaviorAssignmentStore.instance.cached(widget.studentId);
+                StudentBehaviorAssignmentStore.instance
+                    .cached(widget.studentId);
             return Container(
               padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
               decoration: BoxDecoration(
@@ -2260,7 +2334,8 @@ class _BehaviorAssignmentSidebarState extends State<_BehaviorAssignmentSidebar> 
                       child: Center(
                         child: Text(
                           '등록된 행동이 없습니다.',
-                          style: TextStyle(color: Color(0xFF9FB3B3), fontSize: 14),
+                          style:
+                              TextStyle(color: Color(0xFF9FB3B3), fontSize: 14),
                         ),
                       ),
                     )
@@ -2353,7 +2428,8 @@ Future<LearningBehaviorCardRecord?> _showBehaviorCatalogPicker(
                                 ),
                               ),
                               alignment: Alignment.center,
-                              child: Icon(card.icon, color: Colors.white, size: 18),
+                              child: Icon(card.icon,
+                                  color: Colors.white, size: 18),
                             ),
                             const SizedBox(width: 10),
                             Expanded(
@@ -2639,24 +2715,25 @@ class _FlowHomeworkCardState extends State<_FlowHomeworkCard> {
 
   Widget _buildHomeworkCard(HomeworkItem hw) {
     final bool isCompleted = hw.status == HomeworkStatus.completed;
-    final assignments = widget.assignmentsByItem[hw.id] ?? const <HomeworkAssignmentBrief>[];
-    final checks = widget.checksByItem[hw.id] ?? const <HomeworkAssignmentCheck>[];
+    final assignments =
+        widget.assignmentsByItem[hw.id] ?? const <HomeworkAssignmentBrief>[];
+    final checks =
+        widget.checksByItem[hw.id] ?? const <HomeworkAssignmentCheck>[];
     final int assignmentCount = assignments.length;
     final String homeworkLabel = assignmentCount > 0 ? 'H$assignmentCount' : '';
-    final int checkCount =
-        checks.isNotEmpty ? checks.length : hw.checkCount;
+    final int checkCount = checks.isNotEmpty ? checks.length : hw.checkCount;
     final DateTime? startTime =
         hw.firstStartedAt ?? hw.runStart ?? hw.createdAt ?? hw.updatedAt;
-    final DateTime? endTime = isCompleted
-        ? (hw.completedAt ?? hw.confirmedAt ?? hw.updatedAt)
-        : null;
+    final DateTime? endTime =
+        isCompleted ? (hw.completedAt ?? hw.confirmedAt ?? hw.updatedAt) : null;
     final String type = (hw.type ?? '').trim();
     final String title = hw.title.trim().isEmpty ? '(제목 없음)' : hw.title.trim();
     final String page = (hw.page ?? '').trim();
     final String count = hw.count != null ? hw.count.toString() : '';
     final String duration = _formatDuration(hw);
-    final String content =
-        (hw.content ?? '').trim().isNotEmpty ? (hw.content ?? '').trim() : hw.body.trim();
+    final String content = (hw.content ?? '').trim().isNotEmpty
+        ? (hw.content ?? '').trim()
+        : hw.body.trim();
 
     final List<HomeworkAssignmentBrief> sortedAssignments =
         List<HomeworkAssignmentBrief>.from(assignments)
@@ -2772,8 +2849,7 @@ class _FlowHomeworkCardState extends State<_FlowHomeworkCard> {
                     const SizedBox(height: 12),
                     const Divider(color: Color(0xFF223131), height: 1),
                     const SizedBox(height: 10),
-                    if (isCompleted)
-                      _detailRow('종료시간', _formatTime(endTime)),
+                    if (isCompleted) _detailRow('종료시간', _formatTime(endTime)),
                     _detailRow('내용', content),
                     const SizedBox(height: 12),
                     const Text(
@@ -2820,7 +2896,8 @@ class _FlowHomeworkCardState extends State<_FlowHomeworkCard> {
                                   const SizedBox(width: 10),
                                   Expanded(
                                     child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
                                       children: [
                                         Text(
                                           '${_formatTime(rounds[i].assignedAt)}  →  ${_formatTime(rounds[i].checkedAt)}',
@@ -2903,10 +2980,11 @@ class _FlowHomeworkCardState extends State<_FlowHomeworkCard> {
                     IconButton(
                       tooltip: '이름 변경',
                       onPressed: widget.onEditName,
-                      icon:
-                          const Icon(Icons.edit, size: 19, color: Color(0xFF9FB3B3)),
+                      icon: const Icon(Icons.edit,
+                          size: 19, color: Color(0xFF9FB3B3)),
                       padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                      constraints:
+                          const BoxConstraints(minWidth: 32, minHeight: 32),
                     ),
                 ],
               ),
@@ -2930,7 +3008,8 @@ class _FlowHomeworkCardState extends State<_FlowHomeworkCard> {
                   ),
                   const SizedBox(width: 8),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                     decoration: BoxDecoration(
                       color: const Color(0xFF151C21),
                       borderRadius: BorderRadius.circular(999),
@@ -3088,10 +3167,10 @@ class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
 
   static final Map<String, Set<int>> _metadataPagesCacheByBookKey =
       <String, Set<int>>{};
-  static final Map<String, Map<String, dynamic>?> _metadataPayloadCacheByBookKey =
-      <String, Map<String, dynamic>?>{};
-  static final Map<String, Map<String, Set<int>>> _metadataSmallPagesCacheByBookKey =
-      <String, Map<String, Set<int>>>{};
+  static final Map<String, Map<String, dynamic>?>
+      _metadataPayloadCacheByBookKey = <String, Map<String, dynamic>?>{};
+  static final Map<String, Map<String, Set<int>>>
+      _metadataSmallPagesCacheByBookKey = <String, Map<String, Set<int>>>{};
   static final Map<String, String> _textbookTypeCacheByBookKey =
       <String, String>{};
 
@@ -3232,7 +3311,8 @@ class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
         .map((e) => Map<String, dynamic>.from(e))
         .toList();
     units.sort(
-      (a, b) => _orderIndex(a['order_index']).compareTo(_orderIndex(b['order_index'])),
+      (a, b) => _orderIndex(a['order_index'])
+          .compareTo(_orderIndex(b['order_index'])),
     );
     for (final big in units) {
       final bigOrder = _orderIndex(big['order_index']);
@@ -3243,7 +3323,8 @@ class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
           .map((e) => Map<String, dynamic>.from(e))
           .toList();
       mids.sort(
-        (a, b) => _orderIndex(a['order_index']).compareTo(_orderIndex(b['order_index'])),
+        (a, b) => _orderIndex(a['order_index'])
+            .compareTo(_orderIndex(b['order_index'])),
       );
       for (final mid in mids) {
         final midOrder = _orderIndex(mid['order_index']);
@@ -3254,7 +3335,8 @@ class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
             .map((e) => Map<String, dynamic>.from(e))
             .toList();
         smalls.sort(
-          (a, b) => _orderIndex(a['order_index']).compareTo(_orderIndex(b['order_index'])),
+          (a, b) => _orderIndex(a['order_index'])
+              .compareTo(_orderIndex(b['order_index'])),
         );
         for (final small in smalls) {
           final smallOrder = _orderIndex(small['order_index']);
@@ -3499,7 +3581,8 @@ class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
     final id = ++_reqId;
     if (mounted) setState(() => _loading = true);
     try {
-      final rows = await DataManager.instance.loadFlowTextbookLinks(widget.flow.id);
+      final rows =
+          await DataManager.instance.loadFlowTextbookLinks(widget.flow.id);
       if (!mounted || id != _reqId) return;
       final list = List<Map<String, dynamic>>.from(rows);
       list.sort((a, b) {
@@ -3566,7 +3649,8 @@ class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
           builder: (ctx, setLocal) {
             return AlertDialog(
               backgroundColor: kDlgBg,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16)),
               title: const Text(
                 '교재 연결',
                 style: TextStyle(color: kDlgText, fontWeight: FontWeight.w900),
@@ -3748,7 +3832,8 @@ class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
         .map((e) => Map<String, dynamic>.from(e))
         .toList();
     units.sort(
-      (a, b) => _orderIndex(a['order_index']).compareTo(_orderIndex(b['order_index'])),
+      (a, b) => _orderIndex(a['order_index'])
+          .compareTo(_orderIndex(b['order_index'])),
     );
 
     final out = <_ChecklistBigNode>[];
@@ -3766,7 +3851,8 @@ class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
               .toList()
           : <Map<String, dynamic>>[];
       midsList.sort(
-        (a, b) => _orderIndex(a['order_index']).compareTo(_orderIndex(b['order_index'])),
+        (a, b) => _orderIndex(a['order_index'])
+            .compareTo(_orderIndex(b['order_index'])),
       );
 
       final mids = <_ChecklistMidNode>[];
@@ -3784,7 +3870,8 @@ class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
                 .toList()
             : <Map<String, dynamic>>[];
         smallsList.sort(
-          (a, b) => _orderIndex(a['order_index']).compareTo(_orderIndex(b['order_index'])),
+          (a, b) => _orderIndex(a['order_index'])
+              .compareTo(_orderIndex(b['order_index'])),
         );
 
         final smalls = <_ChecklistSmallNode>[];
@@ -3844,7 +3931,9 @@ class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
   }
 
   String _smallPageText(_ChecklistSmallNode small) {
-    if (small.startPage == null && small.endPage == null && small.pages.isEmpty) {
+    if (small.startPage == null &&
+        small.endPage == null &&
+        small.pages.isEmpty) {
       return '';
     }
     if (small.startPage != null && small.endPage != null) {
@@ -3874,8 +3963,8 @@ class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
     final grade = (row['grade_label'] as String?)?.trim() ?? '';
     if (bookId.isEmpty || grade.isEmpty) return <String, DateTime?>{};
     final bookKey = '$bookId|$grade';
-    final smallPagesByKey =
-        _metadataSmallPagesCacheByBookKey[bookKey] ?? const <String, Set<int>>{};
+    final smallPagesByKey = _metadataSmallPagesCacheByBookKey[bookKey] ??
+        const <String, Set<int>>{};
     if (smallPagesByKey.isEmpty) return <String, DateTime?>{};
 
     final issued = <String, DateTime?>{};
@@ -3898,7 +3987,8 @@ class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
           final bigOrder = _toInt(m['bigOrder'] ?? m['big_order']);
           final midOrder = _toInt(m['midOrder'] ?? m['mid_order']);
           final smallOrder = _toInt(m['smallOrder'] ?? m['small_order']);
-          if (bigOrder == null || midOrder == null || smallOrder == null) continue;
+          if (bigOrder == null || midOrder == null || smallOrder == null)
+            continue;
           touched.add(_smallKey(bigOrder, midOrder, smallOrder));
         }
       }
@@ -3946,7 +4036,8 @@ class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
           if (states.contains(MaterialState.selected)) return kDlgAccent;
           return null;
         }),
-        side: BorderSide(color: isDisabled ? const Color(0xFF3A4448) : kDlgBorder),
+        side: BorderSide(
+            color: isDisabled ? const Color(0xFF3A4448) : kDlgBorder),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
         visualDensity: const VisualDensity(horizontal: -2, vertical: -2),
       ),
@@ -3959,8 +4050,8 @@ class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
     await _ensureMetadataCachesForBook(row);
     final issuedLockedAtByKey = _issuedSmallFinishedAtByBook(row);
     final payload = _metadataPayloadCacheByBookKey[key];
-    final selectedBefore =
-        Set<String>.from(_acknowledgedSmallKeysByBookKey[key] ?? const <String>{});
+    final selectedBefore = Set<String>.from(
+        _acknowledgedSmallKeysByBookKey[key] ?? const <String>{});
     final nodes = _parseChecklistNodes(
       payload,
       selectedBefore,
@@ -3981,7 +4072,8 @@ class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
           builder: (ctx, setLocal) {
             return AlertDialog(
               backgroundColor: kDlgBg,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16)),
               title: const Text(
                 '진행률 체크',
                 style: TextStyle(color: kDlgText, fontWeight: FontWeight.w900),
@@ -4011,7 +4103,8 @@ class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
                           children: [
                             for (final big in nodes)
                               ExpansionTile(
-                                expansionAnimationStyle: _checklistExpansionStyle,
+                                expansionAnimationStyle:
+                                    _checklistExpansionStyle,
                                 tilePadding: const EdgeInsets.symmetric(
                                   horizontal: 2,
                                   vertical: 2,
@@ -4058,7 +4151,8 @@ class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
                                           vertical: 1,
                                         ),
                                         childrenPadding:
-                                            const EdgeInsets.fromLTRB(8, 0, 8, 8),
+                                            const EdgeInsets.fromLTRB(
+                                                8, 0, 8, 8),
                                         maintainState: true,
                                         iconColor: kDlgTextSub,
                                         collapsedIconColor: kDlgTextSub,
@@ -4066,17 +4160,18 @@ class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
                                           children: [
                                             _buildChecklistTreeCheckbox(
                                               value: mid.selected,
-                                              onChanged: _hasEditableSmallInMid(mid)
-                                                  ? (v) {
-                                                      setLocal(() {
-                                                        _toggleMidNode(
-                                                          big,
-                                                          mid,
-                                                          v ?? false,
-                                                        );
-                                                      });
-                                                    }
-                                                  : null,
+                                              onChanged:
+                                                  _hasEditableSmallInMid(mid)
+                                                      ? (v) {
+                                                          setLocal(() {
+                                                            _toggleMidNode(
+                                                              big,
+                                                              mid,
+                                                              v ?? false,
+                                                            );
+                                                          });
+                                                        }
+                                                      : null,
                                             ),
                                             const SizedBox(width: 8),
                                             Expanded(
@@ -4094,7 +4189,8 @@ class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
                                         children: [
                                           for (final small in mid.smalls)
                                             Padding(
-                                              padding: const EdgeInsets.fromLTRB(
+                                              padding:
+                                                  const EdgeInsets.fromLTRB(
                                                 4,
                                                 3,
                                                 4,
@@ -4122,20 +4218,23 @@ class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
                                                   duration: const Duration(
                                                     milliseconds: 140,
                                                   ),
-                                                  padding:
-                                                      const EdgeInsets.symmetric(
+                                                  padding: const EdgeInsets
+                                                      .symmetric(
                                                     horizontal: 8,
                                                     vertical: 7,
                                                   ),
                                                   decoration: BoxDecoration(
                                                     color: small.locked
-                                                        ? const Color(0x1F0F1518)
+                                                        ? const Color(
+                                                            0x1F0F1518)
                                                         : (small.selected
                                                             ? const Color(
                                                                 0x1A33A373)
-                                                            : Colors.transparent),
+                                                            : Colors
+                                                                .transparent),
                                                     borderRadius:
-                                                        BorderRadius.circular(8),
+                                                        BorderRadius.circular(
+                                                            8),
                                                     border: Border.all(
                                                       color: small.locked
                                                           ? const Color(
@@ -4171,8 +4270,7 @@ class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
                                                       Expanded(
                                                         child: Text(
                                                           small.name,
-                                                          style:
-                                                              TextStyle(
+                                                          style: TextStyle(
                                                             color: small.locked
                                                                 ? const Color(
                                                                     0xFF6D7777)
@@ -4190,13 +4288,17 @@ class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
                                                       if (small.locked) ...[
                                                         Text(
                                                           '완료 ${_fmtYmd(small.finishedAt)}',
-                                                          style: const TextStyle(
-                                                            color: Color(0xFF6D7777),
+                                                          style:
+                                                              const TextStyle(
+                                                            color: Color(
+                                                                0xFF6D7777),
                                                             fontSize: 11.2,
-                                                            fontWeight: FontWeight.w700,
+                                                            fontWeight:
+                                                                FontWeight.w700,
                                                           ),
                                                         ),
-                                                        const SizedBox(width: 8),
+                                                        const SizedBox(
+                                                            width: 8),
                                                       ],
                                                       Text(
                                                         _smallPageText(small),
@@ -4295,7 +4397,8 @@ class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
     final key = _keyOf(row);
     final totalPages = _totalPagesByKey[key] ?? 0;
     final donePagesRaw = _completedPagesByKey[key] ?? 0;
-    final donePages = totalPages > 0 ? donePagesRaw.clamp(0, totalPages) : donePagesRaw;
+    final donePages =
+        totalPages > 0 ? donePagesRaw.clamp(0, totalPages) : donePagesRaw;
     final ratio = (totalPages > 0) ? (donePages / totalPages) : 0.0;
     final typeLabel = _typeLabelByKey[key] ?? '미지정';
     final ackPages = _acknowledgedPageCountByKey[key] ?? 0;
@@ -4303,8 +4406,8 @@ class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
     final progressText = hasTotal
         ? '$donePages / $totalPages 페이지 완료${ackPages > 0 ? ' · 인정 ${ackPages}p' : ''}'
         : (donePages > 0
-              ? '$donePages 페이지 완료 · 메타데이터 전체 페이지 미설정'
-              : '메타데이터 전체 페이지 정보가 없습니다.');
+            ? '$donePages 페이지 완료 · 메타데이터 전체 페이지 미설정'
+            : '메타데이터 전체 페이지 정보가 없습니다.');
 
     return Material(
       color: Colors.transparent,
@@ -4482,8 +4585,7 @@ class _FlowTextbookSummaryState extends State<_FlowTextbookSummary> {
                 height: 18,
                 child: CircularProgressIndicator(
                   strokeWidth: 2,
-                  valueColor:
-                      AlwaysStoppedAnimation<Color>(Color(0xFF9FB3B3)),
+                  valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF9FB3B3)),
                 ),
               ),
             )

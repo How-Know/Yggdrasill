@@ -42,11 +42,11 @@ function isSupportedDriver(driver) {
 
 // ---------- Supabase implementation ----------------------------------------
 
-async function supabaseCreateUploadUrl({ bucket, key }) {
+async function supabaseCreateUploadUrl({ bucket, key, upsert = false }) {
   const supa = getSupabase();
   const { data, error } = await supa.storage
     .from(bucket)
-    .createSignedUploadUrl(key);
+    .createSignedUploadUrl(key, { upsert });
   if (error) {
     return { ok: false, error: `supabase_upload_url_failed: ${error.message || error}` };
   }
@@ -216,12 +216,13 @@ async function r2NotImplemented(op) {
 
 /**
  * Get a signed upload URL for a given object.
- * @param {{driver: 'supabase'|'r2', bucket: string, key: string, contentType?: string, expiresIn?: number}} opts
+ * @param {{driver: 'supabase'|'r2', bucket: string, key: string, contentType?: string, expiresIn?: number, upsert?: boolean}} opts
  */
 export async function createUploadUrl(opts) {
   const driver = sanitizeString(opts?.driver);
   const bucket = sanitizeString(opts?.bucket);
   const key = sanitizeString(opts?.key);
+  const upsert = opts?.upsert === true;
   if (!isSupportedDriver(driver)) {
     return { ok: false, error: `unsupported_driver: ${driver}` };
   }
@@ -229,7 +230,7 @@ export async function createUploadUrl(opts) {
     return { ok: false, error: 'missing_bucket_or_key' };
   }
   if (driver === 'supabase') {
-    return supabaseCreateUploadUrl({ bucket, key });
+    return supabaseCreateUploadUrl({ bucket, key, upsert });
   }
   return r2NotImplemented('upload_url');
 }

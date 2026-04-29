@@ -159,6 +159,7 @@ class DataManager {
   PaymentType _paymentType = PaymentType.monthly;
 
   AcademySettings get academySettings => _academySettings;
+
   /// 시험 일정 read/write에 사용하는 현재 시즌(학원 설정과 동기).
   int get activeExamSeasonId => _academySettings.activeExamSeasonId;
   PaymentType get paymentType => _paymentType;
@@ -909,6 +910,7 @@ class DataManager {
   final Map<String, Map<DateTime, List<String>>> _examTitlesBySg = {};
   final Map<String, Map<DateTime, String>> _examRangesBySg = {};
   final Map<String, Set<DateTime>> _examDaysBySg = {};
+
   /// `preloadAllExamData`가 현재 활성 시즌에 대해 벌크로 채운 뒤 설정됨. `loadExamFor` 메모리 히트에 사용.
   int? _examBulkHydratedSeasonId;
   Future<void>? _preloadAllExamDataInFlight;
@@ -933,7 +935,7 @@ class DataManager {
     final r = _examRangesBySg[key] ?? {};
     return (
       titles: Map<DateTime, List<String>>.fromEntries(
-        t.entries.map((e) => MapEntry(e.key, List<String>.from(e.value)))),
+          t.entries.map((e) => MapEntry(e.key, List<String>.from(e.value)))),
       ranges: Map<DateTime, String>.from(r),
     );
   }
@@ -987,8 +989,8 @@ class DataManager {
   }
 
   Future<void> _fillExamMapsFromSqlite(int seasonId) async {
-    final schedules = await AcademyDbService.instance
-        .loadAllExamSchedulesForSeason(seasonId);
+    final schedules =
+        await AcademyDbService.instance.loadAllExamSchedulesForSeason(seasonId);
     for (final r in schedules) {
       final school = (r['school'] as String?) ?? '';
       final level = EducationLevel.values[(r['level'] as int?) ?? 0];
@@ -2222,8 +2224,8 @@ class DataManager {
         }
       }
 
-      final canceled = target
-          .copyWith(status: OverrideStatus.canceled, updatedAt: DateTime.now());
+      final canceled = target.copyWith(
+          status: OverrideStatus.canceled, updatedAt: DateTime.now());
       await updateSessionOverride(canceled);
       await _regeneratePlannedAttendanceForOverride(canceled);
 
@@ -2238,7 +2240,8 @@ class DataManager {
             rawDuration > 0 ? rawDuration : _academySettings.lessonDuration;
         final originalEnd = original.add(Duration(minutes: safeDuration));
 
-        final originalRecord = getAttendanceRecord(canceled.studentId, original);
+        final originalRecord =
+            getAttendanceRecord(canceled.studentId, original);
         final replacementRecord = canceled.replacementClassDateTime == null
             ? null
             : getAttendanceRecord(
@@ -2255,7 +2258,8 @@ class DataManager {
         }
         if (className.isEmpty && resolvedSessionTypeId != null) {
           try {
-            final cls = _classes.firstWhere((c) => c.id == resolvedSessionTypeId);
+            final cls =
+                _classes.firstWhere((c) => c.id == resolvedSessionTypeId);
             if (cls.name.trim().isNotEmpty) className = cls.name.trim();
           } catch (_) {}
         }
@@ -7504,6 +7508,20 @@ class DataManager {
         bookId: bookId,
         gradeLabel: gradeLabel,
       );
+
+  /// Thin wrapper around [ResourceService.loadTextbookProblemRegionsForGrading].
+  Future<List<Map<String, dynamic>>> loadTextbookProblemRegionsForGrading({
+    required String bookId,
+    String? gradeLabel,
+    Iterable<String> cropIds = const <String>[],
+    Iterable<int> displayPages = const <int>[],
+  }) =>
+      ResourceService.instance.loadTextbookProblemRegionsForGrading(
+        bookId: bookId,
+        gradeLabel: gradeLabel,
+        cropIds: cropIds,
+        displayPages: displayPages,
+      );
   Future<List<Map<String, dynamic>>> loadHomeworkUnitStats({
     required String bookId,
     required String gradeLabel,
@@ -7871,14 +7889,14 @@ class DataManager {
   Future<Map<String, dynamic>?> buildExamSeasonSnapshotEntry(
       String school, EducationLevel level, int grade) async {
     final res = await loadExamFor(school, level, grade);
-    final schedules = (res['schedules'] as List?)?.cast<Map<String, dynamic>>() ??
-        const <Map<String, dynamic>>[];
+    final schedules =
+        (res['schedules'] as List?)?.cast<Map<String, dynamic>>() ??
+            const <Map<String, dynamic>>[];
     final ranges = (res['ranges'] as List?)?.cast<Map<String, dynamic>>() ??
         const <Map<String, dynamic>>[];
     final days = (res['days'] as List?)?.cast<Map<String, dynamic>>() ??
         const <Map<String, dynamic>>[];
-    final hasAny =
-        schedules.isNotEmpty || ranges.isNotEmpty || days.isNotEmpty;
+    final hasAny = schedules.isNotEmpty || ranges.isNotEmpty || days.isNotEmpty;
     if (!hasAny) return null;
     return {
       'school': school,
@@ -8015,12 +8033,12 @@ class DataManager {
         print('[exam_season_snapshots][restore fetch] $e\n$st');
       }
     } else {
-      final row = await AcademyDbService.instance
-          .getExamSeasonSnapshotById(snapshotId);
+      final row =
+          await AcademyDbService.instance.getExamSeasonSnapshotById(snapshotId);
       if (row != null) {
         try {
-          payloadMap = jsonDecode(row['payload_json'] as String)
-              as Map<String, dynamic>;
+          payloadMap =
+              jsonDecode(row['payload_json'] as String) as Map<String, dynamic>;
         } catch (_) {}
       }
     }
@@ -8103,8 +8121,7 @@ class DataManager {
         'entries': entries,
       });
       if (id == null) {
-        throw Exception(
-            '시험 기록 스냅샷을 저장하지 못했습니다. 네트워크와 로그인 상태를 확인한 뒤 다시 시도하세요.');
+        throw Exception('시험 기록 스냅샷을 저장하지 못했습니다. 네트워크와 로그인 상태를 확인한 뒤 다시 시도하세요.');
       }
     }
     await bumpActiveExamSeasonId();
@@ -8130,9 +8147,8 @@ class DataManager {
       try {
         final academyId = await TenantService.instance.getActiveAcademyId() ??
             await TenantService.instance.ensureActiveAcademy();
-        await Supabase.instance.client
-            .from('academy_settings')
-            .update({'active_exam_season_id': next}).eq('academy_id', academyId);
+        await Supabase.instance.client.from('academy_settings').update(
+            {'active_exam_season_id': next}).eq('academy_id', academyId);
       } catch (e, st) {
         // ignore: avoid_print
         print('[bumpActiveExamSeasonId][supa] $e\n$st');

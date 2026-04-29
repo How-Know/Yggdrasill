@@ -709,7 +709,10 @@ class RightSheetGradingSearchService {
   String _formatHomeworkAssignmentCode(String? raw, {String fallback = '-'}) {
     final compact =
         (raw ?? '').trim().toUpperCase().replaceAll(RegExp(r'[^A-Z0-9]'), '');
-    return compact.isEmpty ? fallback : compact;
+    if (!RegExp(r'^(CL|PL|FL|EL)[A-Z]{2}[0-9]{4}$').hasMatch(compact)) {
+      return fallback;
+    }
+    return compact;
   }
 
   String _resolveHomeworkPrintStudentName(String studentId) {
@@ -825,8 +828,16 @@ class RightSheetGradingSearchService {
                   (cell) => <String, dynamic>{
                     'key': cell.key,
                     'questionIndex': cell.questionIndex,
+                    if (cell.questionLabel.trim().isNotEmpty)
+                      'questionLabel': cell.questionLabel.trim(),
                     'answer': cell.answer,
                     'answerMode': cell.answerMode,
+                    if (cell.answerImageUrl.trim().isNotEmpty)
+                      'answerImageUrl': cell.answerImageUrl.trim(),
+                    if (cell.answerImageWidth != null)
+                      'answerImageWidth': cell.answerImageWidth,
+                    if (cell.answerImageHeight != null)
+                      'answerImageHeight': cell.answerImageHeight,
                   },
                 )
                 .toList(growable: false),

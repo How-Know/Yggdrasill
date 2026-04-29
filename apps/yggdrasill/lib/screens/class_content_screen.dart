@@ -213,7 +213,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
               groupHomeworkTitle: resolvedGroupTitle,
               homeworkTitle: homeworkTitle,
               hasTextbookLink: _hasDirectHomeworkTextbookLink(hw),
-              isTestHomework: _isTestHomeworkType(hw.type),
+              isTestHomework: _isTestHomeworkItem(hw),
               isSubmitted: _isSubmittedHomeworkForGradingSearch(hw),
             ),
             score: score,
@@ -1819,7 +1819,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
               : ((part.flowId ?? '').trim().isEmpty ? null : part.flowId),
           'testOriginFlowId':
               isTestPart ? resolvedOriginFlowId : part.testOriginFlowId,
-          'type': partType,
+          'type': isTestPart ? '프린트' : partType,
           'page': part.page,
           'count': part.count,
           'timeLimitMinutes': part.timeLimitMinutes,
@@ -1873,7 +1873,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         color: part.color,
         flowId: resolvedFlowId,
         testOriginFlowId: resolvedTestOriginFlowId,
-        type: part.type,
+        type: isTestPart ? '프린트' : part.type,
         page: part.page,
         count: part.count,
         timeLimitMinutes: part.timeLimitMinutes,
@@ -2006,9 +2006,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
             return;
           }
           final selectedFlowId = (item['flowId'] as String?)?.trim();
-          final hasTestEntries = entries.any(
-            (entry) => _isTestHomeworkTypeLabel(entry['type'] as String?),
-          );
+          final hasTestEntries = entries.any(_isTestHomeworkEntry);
           if (hasTestEntries) {
             final testFlowId = await _ensureTestFlowIdForStudent(studentId);
             if (testFlowId == null || testFlowId.isEmpty) {
@@ -2019,8 +2017,9 @@ class _ClassContentScreenState extends State<ClassContentScreen>
               return;
             }
             for (final entry in entries) {
-              if (!_isTestHomeworkTypeLabel(entry['type'] as String?)) continue;
+              if (!_isTestHomeworkEntry(entry)) continue;
               entry['flowId'] = testFlowId;
+              entry['type'] = '프린트';
               final existingOrigin =
                   (entry['testOriginFlowId'] as String?)?.trim() ?? '';
               if (existingOrigin.isEmpty &&
@@ -2065,9 +2064,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         } else {
           entries.add(item);
         }
-        final hasTestEntries = entries.any(
-          (entry) => _isTestHomeworkTypeLabel(entry['type'] as String?),
-        );
+        final hasTestEntries = entries.any(_isTestHomeworkEntry);
         String? testFlowId;
         if (hasTestEntries) {
           testFlowId = await _ensureTestFlowIdForStudent(studentId);
@@ -2104,8 +2101,9 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         for (final entry in entries) {
           final splitParts =
               parseSplitParts(entry['splitParts'] ?? item['splitParts']);
-          final typeLabel = (entry['type'] as String?)?.trim();
-          final bool isTestCard = _isTestHomeworkTypeLabel(typeLabel);
+          final bool isTestCard = _isTestHomeworkEntry(entry);
+          final typeLabel =
+              isTestCard ? '프린트' : (entry['type'] as String?)?.trim();
           final resolvedFlowId = isTestCard ? testFlowId : flowId;
           final existingOrigin =
               (entry['testOriginFlowId'] as String?)?.trim() ?? '';
@@ -2884,8 +2882,16 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                   (cell) => <String, dynamic>{
                     'key': cell.key,
                     'questionIndex': cell.questionIndex,
+                    if (cell.questionLabel.trim().isNotEmpty)
+                      'questionLabel': cell.questionLabel.trim(),
                     'answer': cell.answer,
                     'answerMode': cell.answerMode,
+                    if (cell.answerImageUrl.trim().isNotEmpty)
+                      'answerImageUrl': cell.answerImageUrl.trim(),
+                    if (cell.answerImageWidth != null)
+                      'answerImageWidth': cell.answerImageWidth,
+                    if (cell.answerImageHeight != null)
+                      'answerImageHeight': cell.answerImageHeight,
                   },
                 )
                 .toList(growable: false),
@@ -3071,6 +3077,333 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     );
   }
 
+  int? _intFromDynamic(dynamic raw) {
+    if (raw == null) return null;
+    if (raw is int) return raw;
+    if (raw is num) return raw.toInt();
+    return int.tryParse('$raw'.trim());
+  }
+
+  String _trimDynamic(dynamic raw) => '${raw ?? ''}'.trim();
+
+  Set<String> _textbookProblemCropIdsFromItem(HomeworkItem item) {
+    final out = <String>{};
+    for (final rawMapping
+        in item.unitMappings ?? const <Map<String, dynamic>>[]) {
+      final mapping = Map<String, dynamic>.from(rawMapping);
+      final crops = mapping['problemCrops'];
+      if (crops is! List) continue;
+      for (final rawCrop in crops) {
+        if (rawCrop is! Map) continue;
+        final cropId = _trimDynamic(rawCrop['cropId']);
+        if (cropId.isNotEmpty) out.add(cropId);
+      }
+    }
+    return out;
+  }
+
+  Set<int> _textbookProblemPagesFromItem(HomeworkItem item) {
+    final out = <int>{...parseHomeworkPageNumbers(item.page ?? '')};
+    for (final rawMapping
+        in item.unitMappings ?? const <Map<String, dynamic>>[]) {
+      final mapping = Map<String, dynamic>.from(rawMapping);
+      final pageCounts = mapping['pageCounts'];
+      if (pageCounts is Map) {
+        for (final rawKey in pageCounts.keys) {
+          final page = _intFromDynamic(rawKey);
+          if (page != null && page > 0) out.add(page);
+        }
+      }
+      final startPage = _intFromDynamic(mapping['startPage']);
+      final endPage = _intFromDynamic(mapping['endPage']);
+      if (startPage != null && endPage != null) {
+        final start = math.min(startPage, endPage);
+        final end = math.max(startPage, endPage);
+        for (var page = start; page <= end; page++) {
+          if (page > 0) out.add(page);
+        }
+      }
+    }
+    return out;
+  }
+
+  int _textbookQuestionIndexFromRow(
+    Map<String, dynamic> row,
+    int fallbackIndex,
+  ) {
+    final raw = _trimDynamic(row['problem_number']);
+    final exact = int.tryParse(raw);
+    if (exact != null && exact > 0) return exact;
+    final match = RegExp(r'\d+').firstMatch(raw);
+    final parsed = match == null ? null : int.tryParse(match.group(0)!);
+    return parsed != null && parsed > 0 ? parsed : fallbackIndex;
+  }
+
+  String _textbookQuestionLabelFromRow(Map<String, dynamic> row) {
+    final label = _trimDynamic(row['label']);
+    if (label.isNotEmpty) return label;
+    final raw = _trimDynamic(row['problem_number']);
+    return raw.isEmpty ? '-' : raw;
+  }
+
+  String _textbookProblemNumberKey(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) return '';
+    final exact = RegExp(r'^\d+$');
+    if (!exact.hasMatch(trimmed)) return '';
+    final parsed = int.tryParse(trimmed);
+    return parsed == null || parsed <= 0 ? '' : '$parsed';
+  }
+
+  Set<String> _textbookProblemNumberKeysFromItem(HomeworkItem item) {
+    final out = <String>{};
+    void collectText(String raw) {
+      final marker = RegExp(r'(?:문항|문제)\s*[:：]\s*([^\n\r]+)').firstMatch(raw);
+      if (marker == null) return;
+      final target = marker.group(1) ?? '';
+      for (final match in RegExp(r'\d+').allMatches(target)) {
+        final key = _textbookProblemNumberKey(match.group(0) ?? '');
+        if (key.isNotEmpty) out.add(key);
+      }
+    }
+
+    collectText(item.content ?? '');
+    for (final rawMapping
+        in item.unitMappings ?? const <Map<String, dynamic>>[]) {
+      final mapping = Map<String, dynamic>.from(rawMapping);
+      final crops = mapping['problemCrops'];
+      if (crops is! List) continue;
+      for (final rawCrop in crops) {
+        if (rawCrop is! Map) continue;
+        final crop = Map<String, dynamic>.from(rawCrop);
+        final key = _textbookProblemNumberKey('${crop['problemNumber'] ?? ''}');
+        if (key.isNotEmpty) out.add(key);
+      }
+    }
+    return out;
+  }
+
+  bool _textbookBoolFromDynamic(dynamic raw) {
+    if (raw is bool) return raw;
+    if (raw is num) return raw != 0;
+    final text = _trimDynamic(raw).toLowerCase();
+    return text == 'true' || text == 't' || text == '1' || text == 'yes';
+  }
+
+  String _textbookAnswerModeFromRow(Map<String, dynamic> row) {
+    final kind = _trimDynamic(row['answer_kind']).toLowerCase();
+    if (kind == 'objective') return 'objective';
+    if (kind == 'subjective') return 'subjective';
+    if (kind == 'image') return 'image';
+    return '';
+  }
+
+  String _textbookAnswerTextFromRow(Map<String, dynamic> row) {
+    final mode = _textbookAnswerModeFromRow(row);
+    if (mode == 'image') {
+      final answerText = _trimDynamic(row['answer_text']);
+      return answerText.isEmpty ? '[그림]' : answerText;
+    }
+    if (mode == 'subjective') {
+      final latex2d = _trimDynamic(row['answer_latex_2d']);
+      if (latex2d.isNotEmpty) return latex2d;
+    }
+    final answerText = _trimDynamic(row['answer_text']);
+    if (answerText.isNotEmpty) return answerText;
+    final fallbackLatex = _trimDynamic(row['answer_latex_2d']);
+    return fallbackLatex.isEmpty ? '-' : fallbackLatex;
+  }
+
+  Future<
+      ({
+        String homeworkId,
+        String title,
+        List<HomeworkAnswerGradingPage> gradingPages,
+        Map<String, double> scoreByQuestionKey,
+      })?> _resolveTextbookProblemGradingPayload({
+    required HomeworkItem seedHomework,
+    required List<({String studentId, String itemId})> keys,
+  }) async {
+    final seenItemIds = <String>{};
+    final allItems = <HomeworkItem>[];
+    for (final key in keys) {
+      final item = HomeworkStore.instance.getById(key.studentId, key.itemId);
+      if (item == null) continue;
+      if (!seenItemIds.add(item.id)) continue;
+      allItems.add(item);
+    }
+    if (allItems.isEmpty) {
+      allItems.add(seedHomework);
+    }
+    final textbookItems =
+        allItems.where(_hasDirectHomeworkTextbookLink).toList(growable: false);
+    if (textbookItems.isEmpty) return null;
+
+    final baseItem = textbookItems.firstWhere(
+      (item) => item.id == seedHomework.id,
+      orElse: () => textbookItems.first,
+    );
+    final bookId = (baseItem.bookId ?? '').trim();
+    final gradeLabel = (baseItem.gradeLabel ?? '').trim();
+    if (bookId.isEmpty || gradeLabel.isEmpty) return null;
+
+    final cropIds = <String>{};
+    final displayPages = <int>{};
+    final problemNumberKeys = <String>{};
+    for (final item in textbookItems) {
+      if ((item.bookId ?? '').trim() != bookId ||
+          (item.gradeLabel ?? '').trim() != gradeLabel) {
+        continue;
+      }
+      problemNumberKeys.addAll(_textbookProblemNumberKeysFromItem(item));
+      final itemCropIds = _textbookProblemCropIdsFromItem(item);
+      if (itemCropIds.isNotEmpty) {
+        cropIds.addAll(itemCropIds);
+      } else {
+        displayPages.addAll(_textbookProblemPagesFromItem(item));
+      }
+    }
+    if (cropIds.isEmpty && displayPages.isEmpty) return null;
+
+    final rowsByCropId = <String, Map<String, dynamic>>{};
+    if (cropIds.isNotEmpty) {
+      final rows =
+          await DataManager.instance.loadTextbookProblemRegionsForGrading(
+        bookId: bookId,
+        gradeLabel: gradeLabel,
+        cropIds: cropIds,
+      );
+      for (final row in rows) {
+        final cropId = _trimDynamic(row['id']);
+        if (cropId.isNotEmpty) rowsByCropId[cropId] = row;
+      }
+    }
+    if (displayPages.isNotEmpty) {
+      final rows =
+          await DataManager.instance.loadTextbookProblemRegionsForGrading(
+        bookId: bookId,
+        gradeLabel: gradeLabel,
+        displayPages: displayPages,
+      );
+      for (final row in rows) {
+        if (problemNumberKeys.isNotEmpty) {
+          final numberKey =
+              _textbookProblemNumberKey(_trimDynamic(row['problem_number']));
+          if (!problemNumberKeys.contains(numberKey)) continue;
+        }
+        final cropId = _trimDynamic(row['id']);
+        if (cropId.isNotEmpty) rowsByCropId.putIfAbsent(cropId, () => row);
+      }
+    }
+    if (rowsByCropId.isEmpty) return null;
+
+    final rows = rowsByCropId.values.toList(growable: false)
+      ..sort((a, b) {
+        final byPage = (_intFromDynamic(a['display_page']) ??
+                _intFromDynamic(a['raw_page']) ??
+                0)
+            .compareTo(_intFromDynamic(b['display_page']) ??
+                _intFromDynamic(b['raw_page']) ??
+                0);
+        if (byPage != 0) return byPage;
+        return _trimDynamic(a['problem_number'])
+            .compareTo(_trimDynamic(b['problem_number']));
+      });
+
+    final cellsByPage = <int, List<HomeworkAnswerGradingCell>>{};
+    var fallbackIndex = 0;
+    for (final row in rows) {
+      fallbackIndex += 1;
+      if (_textbookBoolFromDynamic(row['is_set_header'])) continue;
+      final pageNumber = _intFromDynamic(row['display_page']) ??
+          _intFromDynamic(row['raw_page']);
+      if (pageNumber == null || pageNumber <= 0) continue;
+      final cropId = _trimDynamic(row['id']);
+      if (cropId.isEmpty) continue;
+      final questionIndex = _textbookQuestionIndexFromRow(row, fallbackIndex);
+      final questionUid = _trimDynamic(row['pb_question_uid']).isNotEmpty
+          ? _trimDynamic(row['pb_question_uid'])
+          : cropId;
+      final key = '${baseItem.id}|$pageNumber|$questionIndex|$questionUid';
+      cellsByPage
+          .putIfAbsent(pageNumber, () => <HomeworkAnswerGradingCell>[])
+          .add(
+            HomeworkAnswerGradingCell(
+              key: key,
+              questionIndex: questionIndex,
+              questionLabel: _textbookQuestionLabelFromRow(row),
+              answer: _textbookAnswerTextFromRow(row),
+              answerMode: _textbookAnswerModeFromRow(row),
+              answerImageUrl: _trimDynamic(row['answer_image_url']),
+              answerImageWidth: _intFromDynamic(row['answer_image_width_px']),
+              answerImageHeight: _intFromDynamic(row['answer_image_height_px']),
+            ),
+          );
+    }
+    if (cellsByPage.isEmpty) return null;
+
+    final gradingPages = cellsByPage.entries
+        .map(
+          (entry) => HomeworkAnswerGradingPage(
+            pageNumber: entry.key,
+            cells: entry.value
+              ..sort((a, b) => a.questionIndex.compareTo(b.questionIndex)),
+          ),
+        )
+        .toList(growable: false)
+      ..sort((a, b) => a.pageNumber.compareTo(b.pageNumber));
+    final title =
+        baseItem.title.trim().isEmpty ? '교재 문항 채점' : baseItem.title.trim();
+    return (
+      homeworkId: baseItem.id,
+      title: title,
+      gradingPages: gradingPages,
+      scoreByQuestionKey: const <String, double>{},
+    );
+  }
+
+  String _resolveGradingGroupTitleForPending({
+    required List<({String studentId, String itemId})> keys,
+    required HomeworkItem fallbackHomework,
+    required String payloadTitle,
+  }) {
+    final homeworkStore = HomeworkStore.instance;
+    for (final key in keys) {
+      final item = homeworkStore.getById(key.studentId, key.itemId);
+      if (item == null) continue;
+      final groupId = (homeworkStore.groupIdOfItem(item.id) ?? '').trim();
+      if (groupId.isEmpty) continue;
+      final group = homeworkStore.groupById(key.studentId, groupId);
+      final title = (group?.title ?? '').trim();
+      if (title.isNotEmpty) return title;
+    }
+    final fallbackGroupId =
+        (homeworkStore.groupIdOfItem(fallbackHomework.id) ?? '').trim();
+    if (fallbackGroupId.isNotEmpty) {
+      final group = homeworkStore.groupById(
+        keys.isNotEmpty ? keys.first.studentId : '',
+        fallbackGroupId,
+      );
+      final title = (group?.title ?? '').trim();
+      if (title.isNotEmpty) return title;
+    }
+    final fallbackTitle = fallbackHomework.title.trim();
+    if (fallbackTitle.isNotEmpty) return fallbackTitle;
+    final safePayloadTitle = payloadTitle.trim();
+    return safePayloadTitle.isEmpty ? '그룹 과제' : safePayloadTitle;
+  }
+
+  String _safeAssignmentCodeForGrading(HomeworkItem homework) {
+    final normalizedAssignmentCode = (homework.assignmentCode ?? '')
+        .trim()
+        .toUpperCase()
+        .replaceAll(RegExp(r'[^A-Z0-9]'), '');
+    return RegExp(r'^(CL|PL|FL|EL)[A-Z]{2}[0-9]{4}$')
+            .hasMatch(normalizedAssignmentCode)
+        ? normalizedAssignmentCode
+        : '';
+  }
+
   Future<void> _handleSubmittedChipTapForPending({
     required BuildContext context,
     required String studentId,
@@ -3151,13 +3484,17 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         final normalizedAssignmentCode = rawAssignmentCode
             .toUpperCase()
             .replaceAll(RegExp(r'[^A-Z0-9]'), '');
+        final safeAssignmentCode = RegExp(r'^(CL|PL|FL|EL)[A-Z]{2}[0-9]{4}$')
+                .hasMatch(normalizedAssignmentCode)
+            ? normalizedAssignmentCode
+            : '';
         rightSideSheetTestGradingSession.value =
             RightSideSheetTestGradingSession(
           sessionId: 'student:$studentId|test_pb_grade:${payload.homeworkId}',
           title: payload.title,
           studentName: studentName,
           groupHomeworkTitle: groupHomeworkTitle,
-          assignmentCode: normalizedAssignmentCode,
+          assignmentCode: safeAssignmentCode,
           gradingPages: _toRightSheetGradingPages(payload.gradingPages),
           scoreByQuestionKey: payload.scoreByQuestionKey,
           overlayEntries: overlayEntries
@@ -3254,6 +3591,143 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         return;
       }
       _showHomeworkChipSnackBar(context, '테스트 답안 매핑에 실패해 기본 답지 흐름으로 전환했어요.');
+    }
+
+    final textbookProblemPayload = await _resolveTextbookProblemGradingPayload(
+      seedHomework: hw,
+      keys: keys,
+    );
+    if (!context.mounted) return;
+    if (textbookProblemPayload != null) {
+      final cachedStates = _testGradingDraftStatesByHomeworkId[
+              textbookProblemPayload.homeworkId] ??
+          const <String, HomeworkAnswerCellState>{};
+      final savedSession =
+          await _gradingResultService.loadLatestSavedSessionForHomework(
+        homeworkItemId: textbookProblemPayload.homeworkId,
+      );
+      if (!context.mounted) return;
+      final initialStates = savedSession?.states.isNotEmpty == true
+          ? savedSession!.states
+          : cachedStates;
+      final hasSavedGrading = savedSession != null ||
+          _testGradingSavedHomeworkIds
+              .contains(textbookProblemPayload.homeworkId);
+      final studentName = _resolveHomeworkPrintStudentName(studentId);
+      final groupHomeworkTitle = _resolveGradingGroupTitleForPending(
+        keys: keys,
+        fallbackHomework: hw,
+        payloadTitle: textbookProblemPayload.title,
+      );
+      rightSideSheetTestGradingSession.value = RightSideSheetTestGradingSession(
+        sessionId:
+            'student:$studentId|textbook_problem_grade:${textbookProblemPayload.homeworkId}',
+        title: textbookProblemPayload.title,
+        studentName: studentName,
+        groupHomeworkTitle: groupHomeworkTitle,
+        assignmentCode: _safeAssignmentCodeForGrading(hw),
+        gradingPages: _toRightSheetGradingPages(
+          textbookProblemPayload.gradingPages,
+        ),
+        scoreByQuestionKey: textbookProblemPayload.scoreByQuestionKey,
+        overlayEntries: overlayEntries
+            .map(
+              (entry) => <String, String>{
+                'title': entry.title,
+                'page': entry.page,
+                'memo': entry.memo,
+              },
+            )
+            .toList(growable: false),
+        initialStates: _toRightSheetStateMap(initialStates),
+        gradingLocked: hasSavedGrading,
+        onRequestEditReset: () async {
+          final reset = await _gradingResultService.resetAttemptsForHomework(
+            homeworkItemId: textbookProblemPayload.homeworkId,
+          );
+          if (!mounted) return false;
+          if (!reset) {
+            _showHomeworkChipSnackBar(this.context, '기존 채점 결과 리셋에 실패했습니다.');
+            return false;
+          }
+          _testGradingDraftStatesByHomeworkId.remove(
+            textbookProblemPayload.homeworkId,
+          );
+          _testGradingSerializedDraftByHomeworkId.remove(
+            textbookProblemPayload.homeworkId,
+          );
+          _testGradingSavedHomeworkIds
+              .remove(textbookProblemPayload.homeworkId);
+          _showHomeworkChipSnackBar(
+            this.context,
+            '기존 채점 결과를 리셋했습니다. 다시 확인하면 새 결과로 저장됩니다.',
+          );
+          return true;
+        },
+        onStatesChanged: (states) {
+          final decoded = _fromRightSheetStateMap(states);
+          _testGradingDraftStatesByHomeworkId[textbookProblemPayload
+              .homeworkId] = Map<String, HomeworkAnswerCellState>.from(decoded);
+          _testGradingSerializedDraftByHomeworkId[textbookProblemPayload
+              .homeworkId] = _serializeTestGradingDraftRows(
+            homeworkId: textbookProblemPayload.homeworkId,
+            gradingPages: textbookProblemPayload.gradingPages,
+            states: decoded,
+          );
+        },
+        onAction: (action, states) async {
+          if (!mounted) return;
+          final decoded = _fromRightSheetStateMap(states);
+          _testGradingDraftStatesByHomeworkId[textbookProblemPayload
+              .homeworkId] = Map<String, HomeworkAnswerCellState>.from(decoded);
+          _testGradingSerializedDraftByHomeworkId[textbookProblemPayload
+              .homeworkId] = _serializeTestGradingDraftRows(
+            homeworkId: textbookProblemPayload.homeworkId,
+            gradingPages: textbookProblemPayload.gradingPages,
+            states: decoded,
+          );
+          var savedGrading = true;
+          if (action == 'complete' || action == 'confirm') {
+            final targetItem = HomeworkStore.instance.getById(
+                  studentId,
+                  textbookProblemPayload.homeworkId,
+                ) ??
+                hw;
+            final saved = await _gradingResultService.saveAttemptFromSession(
+              studentId: studentId,
+              homeworkItem: targetItem,
+              action: action,
+              states: decoded,
+              gradingPages: textbookProblemPayload.gradingPages,
+              scoreByQuestionKey: textbookProblemPayload.scoreByQuestionKey,
+              groupHomeworkTitleSnapshot: groupHomeworkTitle,
+            );
+            if (!mounted) return;
+            if (!saved) {
+              savedGrading = false;
+              _showHomeworkChipSnackBar(this.context, '채점 결과 저장에 실패했습니다.');
+            } else {
+              _testGradingSavedHomeworkIds
+                  .add(textbookProblemPayload.homeworkId);
+            }
+          }
+          if (!mounted || !savedGrading) return;
+          setState(() {
+            for (final key in keys) {
+              _pendingConfirms[key] = action == 'complete';
+            }
+          });
+          _batchConfirmService.syncPendingCount();
+        },
+      );
+      blockRightSideSheetOpen.value = false;
+      if (!rightSideSheetOpen.value) {
+        final toggleAction = toggleRightSideSheetAction;
+        if (toggleAction != null) {
+          await toggleAction();
+        }
+      }
+      return;
     }
     rightSideSheetTestGradingSession.value = null;
 
@@ -6641,7 +7115,7 @@ Future<void> _showHomeworkChipDetailDialog(
   final int totalMs = hw.accumulatedMs + runningMs;
   final String durationText = _formatDurationMs(totalMs);
   final int? testLimitMinutes =
-      (_isTestHomeworkType(hw.type) && (hw.timeLimitMinutes ?? 0) > 0)
+      (_isTestHomeworkItem(hw) && (hw.timeLimitMinutes ?? 0) > 0)
           ? hw.timeLimitMinutes
           : null;
   final String durationDisplay = testLimitMinutes == null
@@ -6800,6 +7274,7 @@ Future<void> _openHomeworkEditDialogForHome(
   final updated = HomeworkItem(
     id: item.id,
     assignmentCode: item.assignmentCode,
+    learningTrackCode: item.learningTrackCode,
     title: (edited['title'] as String).trim(),
     body: (edited['body'] as String).trim(),
     color: (edited['color'] as Color),
@@ -6851,6 +7326,7 @@ HomeworkItem _copyHomeworkItemForInlineEdit(
   return HomeworkItem(
     id: source.id,
     assignmentCode: source.assignmentCode,
+    learningTrackCode: source.learningTrackCode,
     title: source.title,
     body: source.body,
     color: source.color,
@@ -7103,9 +7579,7 @@ Future<void> _showAddChildHomeworkDialog({
   }
 
   final flowId = (result['flowId'] as String?)?.trim();
-  final hasTestEntries = entries.any(
-    (entry) => _isTestHomeworkType(entry['type'] as String?),
-  );
+  final hasTestEntries = entries.any(_isTestHomeworkEntry);
   String? testFlowId;
   if (hasTestEntries) {
     try {
@@ -7124,8 +7598,8 @@ Future<void> _showAddChildHomeworkDialog({
   }
   int createdCount = 0;
   for (final entry in entries) {
-    final typeLabel = (entry['type'] as String?)?.trim();
-    final isTestCard = _isTestHomeworkType(typeLabel);
+    final isTestCard = _isTestHomeworkEntry(entry);
+    final typeLabel = isTestCard ? '프린트' : (entry['type'] as String?)?.trim();
     final resolvedFlowId = isTestCard ? testFlowId : flowId;
     final existingOrigin = (entry['testOriginFlowId'] as String?)?.trim() ?? '';
     final resolvedTestOriginFlowId = isTestCard
@@ -7398,7 +7872,9 @@ final ValueNotifier<int> _reservedGroupUiRevision = ValueNotifier<int>(0);
 
 String _formatHomeworkAssignmentCode(String? raw, {String fallback = '-'}) {
   final code = (raw ?? '').trim().toUpperCase();
-  if (!RegExp(r'^[A-Z]{4}[0-9]{4}$').hasMatch(code)) return fallback;
+  if (!RegExp(r'^(CL|PL|FL|EL)[A-Z]{2}[0-9]{4}$').hasMatch(code)) {
+    return fallback;
+  }
   return code;
 }
 
@@ -8633,6 +9109,7 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
     return HomeworkItem(
       id: (runningChild ?? first).id,
       assignmentCode: assignmentCodeSource.assignmentCode,
+      learningTrackCode: group.learningTrackCode,
       title: group.title.trim().isEmpty ? first.title : group.title.trim(),
       body: first.body,
       color: first.color,
@@ -8719,8 +9196,7 @@ List<Widget> _buildHomeworkChipsOnceForStudent(
     final bool groupIsSubmitted = submittedKeys.isNotEmpty;
     final bool groupIsWaiting = summary.phase == 1;
     final bool groupIsConfirmed = summary.phase == 4;
-    final bool hasTestChild =
-        children.any((child) => _isTestHomeworkType(child.type));
+    final bool hasTestChild = children.any(_isTestHomeworkItem);
     final bool blockDoubleTapForUncheckedHomework =
         hasHomeworkAssignment && !groupIsSubmitted && !groupIsConfirmed;
     final bool groupSlideDownIsEdit = groupIsWaiting || groupIsConfirmed;
@@ -9170,7 +9646,7 @@ Future<_HomeworkPrintOverlayMeta> _resolveHomeworkPrintOverlayMeta({
       bookCourseText: '교재 미기재',
       studentName: _resolveHomeworkPrintStudentName(studentId),
       assignmentCodeText: '-',
-      isTest: _isTestHomeworkType(fallbackHomework.type),
+      isTest: _isTestHomeworkItem(fallbackHomework),
     );
   }
 
@@ -9222,9 +9698,8 @@ Future<_HomeworkPrintOverlayMeta> _resolveHomeworkPrintOverlayMeta({
       : (sortedCodes.length == 1
           ? sortedCodes.first
           : '${sortedCodes.first} 외 ${sortedCodes.length - 1}건');
-  final bool isTestMeta =
-      byId.values.any((hw) => _isTestHomeworkType(hw.type)) ||
-          _isTestHomeworkType(fallbackHomework.type);
+  final bool isTestMeta = byId.values.any(_isTestHomeworkItem) ||
+      _isTestHomeworkItem(fallbackHomework);
   return _HomeworkPrintOverlayMeta(
     assignedDateText: assignedDateText,
     bookCourseText: bookCourseText,
@@ -9694,7 +10169,7 @@ Future<void> _showHomeworkGroupActionDialog({
   final runningCount = children.where((e) => e.phase == 2).length;
   final submittedCount = children.where((e) => e.phase == 3).length;
   final confirmedCount = children.where((e) => e.phase == 4).length;
-  final hasTestChild = children.any((child) => _isTestHomeworkType(child.type));
+  final hasTestChild = children.any(_isTestHomeworkItem);
 
   await showDialog<void>(
     context: context,
@@ -11854,6 +12329,24 @@ Future<void> _handleSubmittedChipTapWithAnswerViewer({
 bool _isTestHomeworkType(String? typeLabel) =>
     (typeLabel ?? '').trim() == '테스트';
 
+bool _isTestHomeworkEntry(Map<String, dynamic> entry) {
+  final typeLabel = (entry['type'] as String?)?.trim();
+  final sourceUnitLevel = (entry['sourceUnitLevel'] as String?)?.trim();
+  final testOriginFlowId = (entry['testOriginFlowId'] as String?)?.trim();
+  return _isTestHomeworkType(typeLabel) ||
+      entry['testMode'] == true ||
+      sourceUnitLevel == 'naesin' ||
+      (testOriginFlowId != null && testOriginFlowId.isNotEmpty);
+}
+
+bool _isTestHomeworkItem(HomeworkItem item) {
+  final sourceUnitLevel = (item.sourceUnitLevel ?? '').trim();
+  final testOriginFlowId = (item.testOriginFlowId ?? '').trim();
+  return _isTestHomeworkType(item.type) ||
+      testOriginFlowId.isNotEmpty ||
+      (sourceUnitLevel == 'naesin' && (item.timeLimitMinutes ?? 0) > 0);
+}
+
 Widget _buildFlowChip(
   String flowName, {
   String? dueLabel,
@@ -11875,7 +12368,8 @@ Widget _buildFlowChip(
               : (normalizedFlowName.isEmpty
                   ? normalizedDueLabel
                   : '$normalizedFlowName · $normalizedDueLabel')));
-  final bool isDefault = normalizedFlowName == '현행' && !isHomeworkDue;
+  final bool isDefault =
+      StudentFlow.normalizeName(normalizedFlowName) == '개념' && !isHomeworkDue;
   final Color backgroundColor = overrideBackgroundColor ??
       (isHomeworkDue
           ? const Color(0x1F4FBF97)
@@ -12100,8 +12594,8 @@ Widget _buildHomeworkChipVisual(
   final double maxRowW = fixedWidth - leftPad - rightPad;
   final bool hasGroupChildren = groupChildren.isNotEmpty;
   final bool isTestCard = hasGroupChildren
-      ? groupChildren.any((child) => _isTestHomeworkType(child.type))
-      : _isTestHomeworkType(hw.type);
+      ? groupChildren.any(_isTestHomeworkItem)
+      : _isTestHomeworkItem(hw);
   final int progressMsForDisplay =
       isTestCard ? totalMs : cycleProgressMsForDisplay;
   final int progressMinutes =

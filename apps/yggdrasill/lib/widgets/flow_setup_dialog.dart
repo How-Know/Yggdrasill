@@ -13,6 +13,7 @@ Future<List<StudentFlow>> ensureEnabledFlowsForHomework(
   final flows = await StudentFlowStore.instance.loadForStudent(studentId);
   final enabled = flows.where((f) => f.enabled).toList();
   if (enabled.isNotEmpty) return enabled;
+  if (!context.mounted) return const <StudentFlow>[];
 
   final updated = await showDialog<List<StudentFlow>>(
     context: context,
@@ -42,7 +43,7 @@ class FlowSetupDialog extends StatefulWidget {
 }
 
 class _FlowSetupDialogState extends State<FlowSetupDialog> {
-  final Uuid _uuid = Uuid();
+  final Uuid _uuid = const Uuid();
   late List<StudentFlow> _flows;
   bool _saving = false;
 
@@ -56,8 +57,13 @@ class _FlowSetupDialogState extends State<FlowSetupDialog> {
 
   List<StudentFlow> _seedDefaultFlows() {
     return [
-      StudentFlow(id: _uuid.v4(), name: '현행', enabled: false, orderIndex: 0),
-      StudentFlow(id: _uuid.v4(), name: '선행', enabled: false, orderIndex: 1),
+      for (var i = 0; i < StudentFlow.defaultNames.length; i++)
+        StudentFlow(
+          id: _uuid.v4(),
+          name: StudentFlow.defaultNames[i],
+          enabled: true,
+          orderIndex: i,
+        ),
     ];
   }
 
@@ -136,7 +142,7 @@ class _FlowSetupDialogState extends State<FlowSetupDialog> {
             ),
             Text(
               '플로우를 1개 이상 켜야 과제를 추가할 수 있어요.',
-              style: TextStyle(color: kDlgTextSub.withOpacity(0.9)),
+              style: TextStyle(color: kDlgTextSub.withValues(alpha: 0.9)),
             ),
             const SizedBox(height: 12),
             if (_flows.isEmpty)
@@ -173,8 +179,9 @@ class _FlowSetupDialogState extends State<FlowSetupDialog> {
                           Switch(
                             value: flow.enabled,
                             onChanged: (v) => _toggleFlow(flow.id, v),
-                            activeColor: kDlgAccent,
-                            activeTrackColor: kDlgAccent.withOpacity(0.35),
+                            activeThumbColor: kDlgAccent,
+                            activeTrackColor:
+                                kDlgAccent.withValues(alpha: 0.35),
                             inactiveThumbColor: kDlgTextSub,
                             inactiveTrackColor: kDlgBorder,
                           ),
@@ -189,12 +196,14 @@ class _FlowSetupDialogState extends State<FlowSetupDialog> {
               icon: const Icon(Icons.add, size: 18, color: kDlgTextSub),
               label: const Text(
                 '플로우 추가',
-                style: TextStyle(color: kDlgTextSub, fontWeight: FontWeight.w700),
+                style:
+                    TextStyle(color: kDlgTextSub, fontWeight: FontWeight.w700),
               ),
               style: OutlinedButton.styleFrom(
                 side: const BorderSide(color: kDlgBorder),
                 backgroundColor: kDlgPanelBg,
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(10),
                 ),

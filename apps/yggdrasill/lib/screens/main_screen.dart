@@ -3763,6 +3763,8 @@ extension on _MainScreenState {
     final countStr = (edited['count'] as String?)?.trim();
     final updated = HomeworkItem(
       id: item.id,
+      assignmentCode: item.assignmentCode,
+      learningTrackCode: item.learningTrackCode,
       title: (edited['title'] as String).trim(),
       body: (edited['body'] as String).trim(),
       color: (edited['color'] as Color),
@@ -3942,9 +3944,7 @@ extension on _MainScreenState {
             return;
           }
           final selectedFlowId = (result['flowId'] as String?)?.trim();
-          final hasTestEntries = entries.any(
-            (entry) => ((entry['type'] as String?)?.trim() ?? '') == '테스트',
-          );
+          final hasTestEntries = entries.any(_isTestHomeworkEntry);
           if (hasTestEntries) {
             String? testFlowId;
             try {
@@ -3962,9 +3962,9 @@ extension on _MainScreenState {
               return;
             }
             for (final entry in entries) {
-              final type = (entry['type'] as String?)?.trim() ?? '';
-              if (type != '테스트') continue;
+              if (!_isTestHomeworkEntry(entry)) continue;
               entry['flowId'] = testFlowId;
+              entry['type'] = '프린트';
               final existingOrigin =
                   (entry['testOriginFlowId'] as String?)?.trim() ?? '';
               if (existingOrigin.isEmpty &&
@@ -4010,9 +4010,7 @@ extension on _MainScreenState {
         } else {
           entries.add(result);
         }
-        final hasTestEntries = entries.any(
-          (entry) => ((entry['type'] as String?)?.trim() ?? '') == '테스트',
-        );
+        final hasTestEntries = entries.any(_isTestHomeworkEntry);
         String? testFlowId;
         if (hasTestEntries) {
           try {
@@ -4056,8 +4054,9 @@ extension on _MainScreenState {
           final splitParts = _parseSplitParts(
             entry['splitParts'] ?? result['splitParts'],
           );
-          final typeLabel = (entry['type'] as String?)?.trim();
-          final isTestCard = (typeLabel ?? '') == '테스트';
+          final isTestCard = _isTestHomeworkEntry(entry);
+          final typeLabel =
+              isTestCard ? '프린트' : (entry['type'] as String?)?.trim();
           final resolvedFlowId = isTestCard ? testFlowId : flowId;
           final existingOrigin =
               (entry['testOriginFlowId'] as String?)?.trim() ?? '';
@@ -4735,6 +4734,16 @@ class _RecordNoteDialogState extends State<_RecordNoteDialog> {
 
 // 회전 보더 페인터: 내부 child의 레이아웃을 바꾸지 않고, 외곽선만 회전시키며 그린다
 /// 홈 하단 줄용: [HomeBottomActionPill]으로 확인 FAB와 동일 레이아웃·그림자·타이포.
+bool _isTestHomeworkEntry(Map<String, dynamic> entry) {
+  final typeLabel = (entry['type'] as String?)?.trim();
+  final sourceUnitLevel = (entry['sourceUnitLevel'] as String?)?.trim();
+  final testOriginFlowId = (entry['testOriginFlowId'] as String?)?.trim();
+  return typeLabel == '테스트' ||
+      entry['testMode'] == true ||
+      sourceUnitLevel == 'naesin' ||
+      (testOriginFlowId != null && testOriginFlowId.isNotEmpty);
+}
+
 class _HomeM5QuestionChip extends StatelessWidget {
   final String label;
   final VoidCallback onAck;

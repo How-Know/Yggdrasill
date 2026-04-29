@@ -90,6 +90,10 @@ bool _isRemoteUrl(String path) {
   return path.startsWith('http://') || path.startsWith('https://');
 }
 
+bool _isStorageBackedTextbookLink(String path) {
+  return path.trim().toLowerCase().startsWith('storage://textbook/');
+}
+
 String _normalizeLocalPath(String path) {
   if (path.startsWith('file://')) {
     final uri = Uri.tryParse(path);
@@ -808,7 +812,8 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
         final w = sw * scaleX;
         final h = sh * scaleY;
         try {
-          newPage.graphics.drawPdfTemplate(tmpl, const Offset(0, 0), Size(w, h));
+          newPage.graphics
+              .drawPdfTemplate(tmpl, const Offset(0, 0), Size(w, h));
         } catch (_) {
           newPage.graphics.drawPdfTemplate(tmpl, const Offset(0, 0));
         }
@@ -1067,11 +1072,27 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
   List<String> _linkedGradeLabelsForFile(_ResourceFile file) {
     if (_currentCategory == 'other') return <String>[];
     final linked = <String>[];
+    final seen = <String>{};
     for (final g in _grades) {
       final body = file.linksByGrade['$g#body']?.trim() ?? '';
       final ans = file.linksByGrade['$g#ans']?.trim() ?? '';
       final sol = file.linksByGrade['$g#sol']?.trim() ?? '';
-      if (body.isNotEmpty || ans.isNotEmpty || sol.isNotEmpty) linked.add(g);
+      if ((body.isNotEmpty || ans.isNotEmpty || sol.isNotEmpty) &&
+          seen.add(g)) {
+        linked.add(g);
+      }
+    }
+    for (final entry in file.linksByGrade.entries) {
+      if (entry.value.trim().isEmpty) continue;
+      final key = entry.key.trim();
+      final sep = key.indexOf('#');
+      if (sep <= 0) continue;
+      final grade = key.substring(0, sep).trim();
+      final kind = key.substring(sep + 1).trim();
+      if (grade.isEmpty || !const {'body', 'ans', 'sol'}.contains(kind)) {
+        continue;
+      }
+      if (seen.add(grade)) linked.add(grade);
     }
     return linked;
   }
@@ -1084,7 +1105,6 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
 
   String? _effectiveGradeLabelForFile(_ResourceFile file) {
     if (_currentCategory == 'other') return null;
-    if (_grades.isEmpty) return null;
     final linked = _linkedGradeLabelsForFile(file);
     final fallback = _fileGradeLabels[file.id] ?? _defaultGradeLabel();
     if (linked.isEmpty) return fallback;
@@ -1094,7 +1114,6 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
 
   void _changeFileGradeByDelta(_ResourceFile file, int delta) {
     if (_currentCategory == 'other') return;
-    if (_grades.isEmpty) return;
     final linked = _linkedGradeLabelsForFile(file);
     if (linked.isEmpty) return;
     final current = _effectiveGradeLabelForFile(file) ?? linked.first;
@@ -3064,8 +3083,8 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                                       rightActionWidth: _folderRightActionWidth,
                                       borderRadius: BorderRadius.circular(8),
                                       leftActionPane: Padding(
-                                        padding:
-                                            const EdgeInsets.symmetric(horizontal: 8),
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 8),
                                         child: Material(
                                           color: _rsAccent,
                                           borderRadius:
@@ -3094,8 +3113,8 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                                         ),
                                       ),
                                       rightActionPane: Padding(
-                                        padding:
-                                            const EdgeInsets.symmetric(horizontal: 8),
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 8),
                                         child: Row(
                                           children: [
                                             Expanded(
@@ -3118,9 +3137,10 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                                                     child: Center(
                                                       child: Icon(
                                                         Icons.edit_outlined,
-                                                        color:
-                                                            const Color(0xFFEAF2F2),
-                                                        size: _folderActionIconSize,
+                                                        color: const Color(
+                                                            0xFFEAF2F2),
+                                                        size:
+                                                            _folderActionIconSize,
                                                       ),
                                                     ),
                                                   ),
@@ -3150,7 +3170,8 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                                                         Icons
                                                             .delete_outline_rounded,
                                                         color: Colors.white,
-                                                        size: _folderActionIconSize,
+                                                        size:
+                                                            _folderActionIconSize,
                                                       ),
                                                     ),
                                                   ),
@@ -3223,7 +3244,8 @@ extension _ResourcesScreenTree on _ResourcesScreenState {
                                                       color: Colors.white,
                                                       fontWeight:
                                                           FontWeight.w800,
-                                                      fontSize: _folderNameFontSize,
+                                                      fontSize:
+                                                          _folderNameFontSize,
                                                       letterSpacing: -0.2),
                                                 ),
                                               ),
@@ -5857,11 +5879,14 @@ class _GridFileCardState extends State<_GridFileCard> {
         return;
       }
       if (currentGrade == null) return;
+      final key = '${currentGrade}#body';
+      final link = file.linksByGrade[key]?.trim() ?? '';
       // Textbook category: the in-app viewer is opt-in while we stabilise
       // the Supabase Storage migration. When the per-card switch is off we
       // fall back to the previous external-launcher / Dropbox flow.
       if (isTextbook &&
-          TextbookViewerPreference.instance.useInApp) {
+          (TextbookViewerPreference.instance.useInApp ||
+              _isStorageBackedTextbookLink(link))) {
         await _openTextbookInAppViewer(
           context,
           fileId: file.id,
@@ -5871,8 +5896,6 @@ class _GridFileCardState extends State<_GridFileCard> {
         );
         return;
       }
-      final key = '${currentGrade}#body';
-      final link = file.linksByGrade[key]?.trim() ?? '';
       if (link.isEmpty) return;
       try {
         if (link.startsWith('http://') || link.startsWith('https://')) {
@@ -6617,8 +6640,7 @@ class _TextbookViewerModeToggle extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder<bool>(
-      valueListenable:
-          TextbookViewerPreference.instance.useInAppListenable,
+      valueListenable: TextbookViewerPreference.instance.useInAppListenable,
       builder: (context, useInApp, _) {
         final label = useInApp ? '신규' : '기존';
         final tooltip = useInApp
@@ -6627,9 +6649,7 @@ class _TextbookViewerModeToggle extends StatelessWidget {
         final bg = useInApp
             ? const Color(0xFF1F3A28).withOpacity(0.85)
             : Colors.black.withOpacity(0.45);
-        final fg = useInApp
-            ? const Color(0xFF7CC67C)
-            : Colors.white70;
+        final fg = useInApp ? const Color(0xFF7CC67C) : Colors.white70;
         return Tooltip(
           message: tooltip,
           waitDuration: const Duration(milliseconds: 400),
@@ -6641,8 +6661,7 @@ class _TextbookViewerModeToggle extends StatelessWidget {
               },
               borderRadius: BorderRadius.circular(999),
               child: Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 8, vertical: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
                   color: bg,
                   borderRadius: BorderRadius.circular(999),
@@ -6657,9 +6676,7 @@ class _TextbookViewerModeToggle extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Icon(
-                      useInApp
-                          ? Icons.picture_as_pdf
-                          : Icons.open_in_new,
+                      useInApp ? Icons.picture_as_pdf : Icons.open_in_new,
                       size: 12,
                       color: fg,
                     ),
@@ -6739,13 +6756,14 @@ class _SmallLinkButton extends StatelessWidget {
                 // ans/sol buttons live on textbook cards only. The in-app
                 // viewer is gated behind the per-card toggle during the
                 // migration so we can compare the old and new flows.
-                final useInApp =
-                    TextbookViewerPreference.instance.useInApp;
-                if (useInApp && currentGrade != null) {
+                final useInApp = TextbookViewerPreference.instance.useInApp;
+                if ((useInApp || _isStorageBackedTextbookLink(link)) &&
+                    currentGrade != null) {
                   await _openTextbookInAppViewer(
                     context,
                     fileId: file.id,
-                    displayName: '${file.name} · ${kind == 'ans' ? '정답' : '해설'}',
+                    displayName:
+                        '${file.name} · ${kind == 'ans' ? '정답' : '해설'}',
                     gradeLabel: currentGrade!,
                     kind: kind,
                   );
@@ -6780,7 +6798,9 @@ class _SmallLinkButtonPill extends StatelessWidget {
     final isAns = kind == 'ans';
     // 확장자 계산 (호버 시에만 보여줌)
     String? ext;
-    if (link.endsWith('.pdf'))
+    if (_isStorageBackedTextbookLink(link))
+      ext = 'PDF';
+    else if (link.endsWith('.pdf'))
       ext = 'PDF';
     else if (link.endsWith('.hwp')) ext = 'HWP';
     return Tooltip(
@@ -6789,9 +6809,9 @@ class _SmallLinkButtonPill extends StatelessWidget {
         onTap: !enabled
             ? null
             : () async {
-                final useInApp =
-                    TextbookViewerPreference.instance.useInApp;
-                if (useInApp && currentGrade != null) {
+                final useInApp = TextbookViewerPreference.instance.useInApp;
+                if ((useInApp || _isStorageBackedTextbookLink(link)) &&
+                    currentGrade != null) {
                   await _openTextbookInAppViewer(
                     context,
                     fileId: file.id,
@@ -6897,7 +6917,9 @@ class _BodyExtBadge extends StatelessWidget {
     final link = key != null ? (file.linksByGrade[key]?.trim() ?? '') : '';
     if (link.isEmpty) return const SizedBox();
     String? ext;
-    if (link.endsWith('.pdf'))
+    if (_isStorageBackedTextbookLink(link))
+      ext = 'PDF';
+    else if (link.endsWith('.pdf'))
       ext = 'PDF';
     else if (link.endsWith('.hwp'))
       ext = 'HWP';
@@ -7133,8 +7155,8 @@ class _PrintRangeDialogState extends State<_PrintRangeDialog> {
         .whereType<Map>()
         .map((e) => Map<String, dynamic>.from(e))
         .toList()
-      ..sort((a, b) =>
-          _orderIndex(a['order_index']).compareTo(_orderIndex(b['order_index'])));
+      ..sort((a, b) => _orderIndex(a['order_index'])
+          .compareTo(_orderIndex(b['order_index'])));
 
     final out = <_PrintBigUnitNode>[];
     for (final u in units) {
@@ -7174,8 +7196,8 @@ class _PrintRangeDialogState extends State<_PrintRangeDialog> {
                       ? (s['name'] as String).trim()
                       : '소단원',
                   orderIndex: _orderIndex(s['order_index']),
-                  startPage:
-                      _toDisplayPageNullable(_toInt(s['start_page']), pageOffset),
+                  startPage: _toDisplayPageNullable(
+                      _toInt(s['start_page']), pageOffset),
                   endPage:
                       _toDisplayPageNullable(_toInt(s['end_page']), pageOffset),
                 ),
@@ -7275,7 +7297,8 @@ class _PrintRangeDialogState extends State<_PrintRangeDialog> {
   ) {
     small.selected = selected;
     mid.selected = mid.smalls.isNotEmpty && mid.smalls.every((s) => s.selected);
-    big.selected = big.middles.isNotEmpty && big.middles.every((m) => m.selected);
+    big.selected =
+        big.middles.isNotEmpty && big.middles.every((m) => m.selected);
     setState(() {});
   }
 
@@ -7548,8 +7571,7 @@ class _PrintRangeDialogState extends State<_PrintRangeDialog> {
                                         child: InkWell(
                                           borderRadius:
                                               BorderRadius.circular(8),
-                                          mouseCursor:
-                                              SystemMouseCursors.click,
+                                          mouseCursor: SystemMouseCursors.click,
                                           onTap: () => _toggleSmall(
                                             big,
                                             mid,
@@ -7570,14 +7592,16 @@ class _PrintRangeDialogState extends State<_PrintRangeDialog> {
                                               border: Border.all(
                                                 color: small.selected
                                                     ? _rsAccent
-                                                    : _rsBorder.withOpacity(0.8),
+                                                    : _rsBorder
+                                                        .withOpacity(0.8),
                                               ),
                                             ),
                                             child: Row(
                                               children: [
                                                 _buildTreeCheckbox(
                                                   value: small.selected,
-                                                  onChanged: (v) => _toggleSmall(
+                                                  onChanged: (v) =>
+                                                      _toggleSmall(
                                                     big,
                                                     mid,
                                                     small,
@@ -7640,7 +7664,8 @@ class _PrintRangeDialogState extends State<_PrintRangeDialog> {
   @override
   Widget build(BuildContext context) {
     final gradeLabel = widget.gradeLabel;
-    final hasUnitFeature = _unitLoading || _unitErrorText != null || _units.isNotEmpty;
+    final hasUnitFeature =
+        _unitLoading || _unitErrorText != null || _units.isNotEmpty;
     return AlertDialog(
       backgroundColor: _rsBg,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -9047,6 +9072,16 @@ class _FileLinkButton extends StatelessWidget {
         onTap: !enabled
             ? null
             : () async {
+                if (_isStorageBackedTextbookLink(link) && current != null) {
+                  await _openTextbookInAppViewer(
+                    context,
+                    fileId: file.id,
+                    displayName: '${file.name} · $label',
+                    gradeLabel: current,
+                    kind: kind,
+                  );
+                  return;
+                }
                 if (link.startsWith('http://') || link.startsWith('https://')) {
                   final uri = Uri.parse(link);
                   await launchUrl(uri, mode: LaunchMode.platformDefault);

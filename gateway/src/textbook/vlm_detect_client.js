@@ -232,8 +232,14 @@ export function normalizeDetectResult(parsedJson) {
     const colRaw = raw.column;
     const column =
       colRaw === 1 || colRaw === 2 ? colRaw : colRaw == null ? null : null;
-    const bbox = parseBbox4(raw.bbox);
-    const itemRegion = parseBbox4(raw.item_region);
+    const bbox = parseBbox4(raw.bbox ?? raw.bounding_box ?? raw.number_bbox);
+    const itemRegion = parseBbox4(
+      raw.item_region ??
+        raw.itemRegion ??
+        raw.region ??
+        raw.content_region ??
+        raw.content_bbox,
+    );
     const group =
       out.section === 'mastery'
         ? { kind: 'none', label: '', title: '', order: null }
@@ -253,6 +259,7 @@ export function normalizeDetectResult(parsedJson) {
       item_region: itemRegion,
     });
   }
+  backfillMissingItemRegions(out);
   return out;
 }
 
@@ -272,10 +279,69 @@ function normalizeContentGroup(raw) {
 }
 
 function parseBbox4(arr) {
-  if (!Array.isArray(arr) || arr.length !== 4) return null;
-  const [ymin, xmin, ymax, xmax] = arr.map((v) => Number(v));
+  // Gemini occasionally wraps coordinates once: [[ymin, xmin, ymax, xmax]].
+  // Treat that as the same bbox instead of dropping the whole page silently.
+  const value =
+    Array.isArray(arr) &&
+    arr.length === 1 &&
+    Array.isArray(arr[0]) &&
+    arr[0].length === 4
+      ? arr[0]
+      : arr;
+  if (!Array.isArray(value) || value.length !== 4) return null;
+  const [ymin, xmin, ymax, xmax] = value.map((v) => Number(v));
   if (![ymin, xmin, ymax, xmax].every((v) => Number.isFinite(v))) return null;
   return [clamp01k(ymin), clamp01k(xmin), clamp01k(ymax), clamp01k(xmax)];
+}
+
+function backfillMissingItemRegions(result) {
+  if (!result || !Array.isArray(result.items) || result.items.length === 0) return;
+  if (result.items.every((item) => Array.isArray(item.item_region))) return;
+  const canUseVerticalFallback =
+    result.page_kind !== 'concept_page' &&
+    (result.section === 'type_practice' || result.section === 'mastery');
+  if (!canUseVerticalFallback) return;
+
+  const itemsWithBbox = result.items.filter((item) => Array.isArray(item.bbox));
+  if (itemsWithBbox.length === 0) return;
+  const columns = new Map();
+  for (const item of itemsWithBbox) {
+    const bbox = item.bbox;
+    const key = item.column === 1 || item.column === 2 ? item.column : inferColumn(bbox);
+    if (!columns.has(key)) columns.set(key, []);
+    columns.get(key).push(item);
+  }
+  const columnMins = Array.from(columns.entries())
+    .map(([column, items]) => ({
+      column,
+      minX: Math.min(...items.map((item) => item.bbox[1])),
+    }))
+    .sort((a, b) => a.minX - b.minX);
+
+  for (const [column, items] of columns.entries()) {
+    items.sort((a, b) => a.bbox[0] - b.bbox[0]);
+    const xMin = Math.max(0, Math.min(...items.map((item) => item.bbox[1])) - 2);
+    const nextColumn = columnMins.find((entry) => entry.minX > xMin + 40);
+    const xMax = clamp01k(
+      nextColumn
+        ? nextColumn.minX - 8
+        : Math.max(...items.map((item) => item.bbox[3]), xMin + 403),
+    );
+    for (let i = 0; i < items.length; i += 1) {
+      const item = items[i];
+      if (Array.isArray(item.item_region)) continue;
+      const bbox = item.bbox;
+      const next = items[i + 1]?.bbox || null;
+      const yMin = clamp01k(bbox[2] + 7);
+      const yMax = clamp01k(next ? Math.max(yMin + 20, next[0] - 8) : 980);
+      item.item_region = [yMin, xMin, yMax, clamp01k(Math.max(xMax, xMin + 40))];
+    }
+  }
+}
+
+function inferColumn(bbox) {
+  const centerX = (bbox[1] + bbox[3]) / 2;
+  return centerX >= 500 ? 2 : 1;
 }
 
 function clamp01k(v) {

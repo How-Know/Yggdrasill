@@ -97,8 +97,13 @@ class _AllStudentsViewState extends State<AllStudentsView> {
 
   List<StudentFlow> _defaultFlows() {
     return [
-      StudentFlow(id: _nextFlowId(), name: '현행', enabled: false),
-      StudentFlow(id: _nextFlowId(), name: '선행', enabled: false),
+      for (var i = 0; i < StudentFlow.defaultNames.length; i++)
+        StudentFlow(
+          id: _nextFlowId(),
+          name: StudentFlow.defaultNames[i],
+          enabled: true,
+          orderIndex: i,
+        ),
     ];
   }
 
@@ -2006,10 +2011,7 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
   });
 
   int _flowPriority(StudentFlow flow) {
-    final name = flow.name.trim();
-    if (name == '현행') return 0;
-    if (name == '선행') return 1;
-    return 2;
+    return StudentFlow.defaultPriority(flow.name);
   }
 
   List<StudentFlow> _sortedFlowsForDisplay(List<StudentFlow> input) {
@@ -2018,7 +2020,7 @@ class _EmbeddedStudentDetailsCard extends StatelessWidget {
       final pa = _flowPriority(a);
       final pb = _flowPriority(b);
       if (pa != pb) return pa - pb;
-      if (pa == 2) {
+      if (pa == StudentFlow.defaultNames.length) {
         final oi = a.orderIndex.compareTo(b.orderIndex);
         if (oi != 0) return oi;
       }

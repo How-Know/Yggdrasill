@@ -74,6 +74,22 @@ flutter:
         - asset: assets/fonts/hancom/HCRBatang.ttf
         - asset: assets/fonts/hancom/HCRBatang-Bold.ttf
           weight: 700
+    - family: KakaoSmallSans
+      fonts:
+        - asset: assets/fonts/kakao/카카오작은글씨/TTF/KakaoSmallSans-Light.ttf
+          weight: 300
+        - asset: assets/fonts/kakao/카카오작은글씨/TTF/KakaoSmallSans-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/kakao/카카오작은글씨/TTF/KakaoSmallSans-Bold.ttf
+          weight: 700
+    - family: KakaoBigSans
+      fonts:
+        - asset: assets/fonts/kakao/카카오큰글씨/TTF/KakaoBigSans-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/kakao/카카오큰글씨/TTF/KakaoBigSans-Bold.ttf
+          weight: 700
+        - asset: assets/fonts/kakao/카카오큰글씨/TTF/KakaoBigSans-ExtraBold.ttf
+          weight: 800
 
   # To add assets to your application, add an assets section, like this:
   # assets:
