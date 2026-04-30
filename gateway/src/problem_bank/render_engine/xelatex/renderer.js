@@ -255,12 +255,15 @@ async function makeWhiteBackgroundTransparent(pngBuffer, {
       const g = data[idx + 1];
       const b = data[idx + 2];
       const darkness = 255 - Math.min(r, g, b);
-      const alpha = Math.max(0, Math.min(255, Math.round(darkness * 2.2)));
+      const normalized = Math.max(0, Math.min(1, darkness / 255));
+      const alpha = normalized <= 0
+        ? 0
+        : Math.max(0, Math.min(255, Math.round(255 * Math.pow(normalized, 0.68))));
       data[idx] = rgb[0];
       data[idx + 1] = rgb[1];
       data[idx + 2] = rgb[2];
       data[idx + 3] = alpha;
-      if (alpha > 8) {
+      if (alpha > 3) {
         if (x < minX) minX = x;
         if (y < minY) minY = y;
         if (x > maxX) maxX = x;
@@ -289,7 +292,7 @@ async function makeWhiteBackgroundTransparent(pngBuffer, {
   const cropHeight = Math.max(1, bottom - top + 1);
   const output = await sharp(data, { raw: { width, height, channels } })
     .extract({ left, top, width: cropWidth, height: cropHeight })
-    .png({ compressionLevel: 9 })
+    .png({ compressionLevel: 9, adaptiveFiltering: true })
     .toBuffer();
   return { pngBuffer: output, width: cropWidth, height: cropHeight };
 }

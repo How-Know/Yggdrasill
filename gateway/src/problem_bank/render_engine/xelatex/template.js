@@ -3416,6 +3416,35 @@ function splitAnswerRenderLines(answer) {
   return lines.length > 0 ? lines : [source];
 }
 
+function scaleAnswerCjkTextInTex(tex, fontSizePt) {
+  const size = Math.max(7, Math.min(36, Number(fontSizePt) || 16));
+  const lead = size * 1.35;
+  const parts = [];
+  let buf = '';
+  let inMath = false;
+  for (let i = 0; i < String(tex || '').length; i += 1) {
+    const ch = tex[i];
+    if (ch === '$' && tex[i - 1] !== '\\') {
+      if (buf) {
+        parts.push({ math: inMath, text: buf });
+        buf = '';
+      }
+      parts.push({ math: inMath, text: ch });
+      inMath = !inMath;
+      continue;
+    }
+    buf += ch;
+  }
+  if (buf) parts.push({ math: inMath, text: buf });
+  return parts.map((part) => {
+    if (part.math || part.text === '$') return part.text;
+    return part.text.replace(
+      KOREAN_SEG_RE,
+      (match) => `{\\fontsize{${size.toFixed(2)}pt}{${lead.toFixed(2)}pt}\\selectfont ${match}}`,
+    );
+  }).join('');
+}
+
 export function buildAnswerTexSource(answer, options = {}) {
   const {
     fontFamily = 'Malgun Gothic',
@@ -3427,10 +3456,12 @@ export function buildAnswerTexSource(answer, options = {}) {
   } = options;
 
   const safeFontSize = Math.max(8, Math.min(32, Number(fontSizePt) || 18));
+  const answerCjkFontSize = Math.max(7, safeFontSize * 0.88);
   const safeWidth = Math.max(4, Math.min(18, Number(maxWidthCm) || 13.5));
   const colorHex = String(textColor || '000000').replace(/[^0-9A-Fa-f]/g, '').slice(0, 6) || '000000';
   const bodyLines = splitAnswerRenderLines(answer)
     .map((line) => smartTexLine(line, []))
+    .map((line) => scaleAnswerCjkTextInTex(line, answerCjkFontSize))
     .filter((line) => line && line.trim())
     .map((line) => `{${line}\\par}`)
     .join('\n');

@@ -1066,6 +1066,53 @@ class ResourceService {
             });
           }
         }
+        for (final ids in chunks(byCropId.keys.toList(growable: false), 250)) {
+          final renderRows = await supa
+              .from('textbook_answer_render_assets')
+              .select(
+                'crop_id, storage_bucket, storage_path, width_px, height_px, '
+                'pixel_ratio, source_hash, engine, style_version, render_error',
+              )
+              .eq('engine', 'xelatex')
+              .eq('style_version', 'textbook-answer-xelatex-v1-alpha')
+              .eq('render_error', '')
+              .inFilter('crop_id', ids);
+          for (final raw in renderRows) {
+            final render = Map<String, dynamic>.from(raw);
+            final cropId = '${render['crop_id'] ?? ''}'.trim();
+            final crop = byCropId[cropId];
+            if (crop == null) continue;
+            final answerKind =
+                '${crop['answer_kind'] ?? ''}'.trim().toLowerCase();
+            if (answerKind == 'image') continue;
+            final bucket =
+                '${render['storage_bucket'] ?? 'textbook-answer-renders'}'
+                    .trim();
+            final storagePath = '${render['storage_path'] ?? ''}'.trim();
+            if (bucket.isEmpty || storagePath.isEmpty) continue;
+            var renderUrl = '';
+            try {
+              renderUrl = await supa.storage
+                  .from(bucket)
+                  .createSignedUrl(storagePath, 60 * 30);
+            } catch (_) {
+              renderUrl = '';
+            }
+            if (renderUrl.isEmpty) continue;
+            crop.addAll({
+              'answer_render_image_bucket': bucket,
+              'answer_render_image_path': storagePath,
+              'answer_render_image_url': renderUrl,
+              'answer_render_image_width_px': render['width_px'],
+              'answer_render_image_height_px': render['height_px'],
+              'answer_render_pixel_ratio': render['pixel_ratio'],
+              'answer_render_source_hash': render['source_hash'],
+              'answer_image_url': renderUrl,
+              'answer_image_width_px': render['width_px'],
+              'answer_image_height_px': render['height_px'],
+            });
+          }
+        }
       } catch (_) {
         // Stage-2 answer sidecar can be absent while crop metadata is present.
       }

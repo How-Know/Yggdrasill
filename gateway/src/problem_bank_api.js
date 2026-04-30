@@ -3719,6 +3719,13 @@ const ANSWER_RENDER_BUCKET = process.env.PB_ANSWER_RENDER_BUCKET || 'problem-pre
 const ANSWER_RENDER_EXPIRES_SEC = 60 * 60 * 24 * 7;
 const ANSWER_RENDER_STYLE_VERSION = 'answer-xelatex-v5-hires';
 const ANSWER_RENDER_PIXEL_RATIO = 5;
+const TEXTBOOK_ANSWER_RENDER_BUCKET =
+  process.env.TEXTBOOK_ANSWER_RENDER_BUCKET || 'textbook-answer-renders';
+const TEXTBOOK_ANSWER_RENDER_STYLE_VERSION = 'textbook-answer-xelatex-v1-alpha';
+const TEXTBOOK_ANSWER_RENDER_ENGINE = 'xelatex';
+const TEXTBOOK_ANSWER_RENDER_FONT_SIZE = 19;
+const TEXTBOOK_ANSWER_RENDER_TEXT_COLOR = 'EAF2F7';
+const TEXTBOOK_ANSWER_RENDER_PIXEL_RATIO = 5;
 const ANSWER_RENDER_CONCURRENCY = Math.max(
   1,
   Math.min(4, Number.parseInt(process.env.PB_ANSWER_RENDER_CONCURRENCY || '2', 10) || 2),
@@ -3827,6 +3834,146 @@ async function createAnswerRenderSignedUrl(storagePath) {
     .from(ANSWER_RENDER_BUCKET)
     .createSignedUrl(storagePath, ANSWER_RENDER_EXPIRES_SEC);
   return String(data?.signedUrl || '').trim();
+}
+
+function normalizeTextbookAnswerForRender(answerRow) {
+  const kind = String(answerRow?.answer_kind || '').trim().toLowerCase();
+  if (kind === 'image') return '';
+  const latex2d = normalizeTextbookAnswerValue(answerRow?.answer_latex_2d);
+  if (kind === 'subjective' && latex2d) return latex2d;
+  const text = normalizeTextbookAnswerValue(answerRow?.answer_text);
+  if (text) return text;
+  return latex2d;
+}
+
+function textbookAnswerRenderSourceHash(answerRow, answerText) {
+  return createHash('sha256')
+    .update(JSON.stringify({
+      crop_id: String(answerRow?.crop_id || '').trim(),
+      answer_kind: String(answerRow?.answer_kind || '').trim().toLowerCase(),
+      answer: answerText,
+      engine: TEXTBOOK_ANSWER_RENDER_ENGINE,
+      style_version: TEXTBOOK_ANSWER_RENDER_STYLE_VERSION,
+      font_size_pt: TEXTBOOK_ANSWER_RENDER_FONT_SIZE,
+      text_color: TEXTBOOK_ANSWER_RENDER_TEXT_COLOR,
+      pixel_ratio: TEXTBOOK_ANSWER_RENDER_PIXEL_RATIO,
+      transparent: true,
+    }))
+    .digest('hex');
+}
+
+async function upsertTextbookAnswerRenderAsset({
+  academyId,
+  answerRow,
+  font,
+}) {
+  const cropId = String(answerRow?.crop_id || '').trim();
+  if (!isUuid(academyId) || !isUuid(cropId)) return { ok: false, skipped: true };
+  const answerText = normalizeTextbookAnswerForRender(answerRow);
+  if (!answerText) return { ok: false, skipped: true };
+
+  const sourceHash = textbookAnswerRenderSourceHash(answerRow, answerText);
+  const storagePath = `academies/${academyId}/answer-renders/${cropId}/${sourceHash}.png`;
+  const baseRow = {
+    academy_id: academyId,
+    crop_id: cropId,
+    source_hash: sourceHash,
+    engine: TEXTBOOK_ANSWER_RENDER_ENGINE,
+    style_version: TEXTBOOK_ANSWER_RENDER_STYLE_VERSION,
+    storage_bucket: TEXTBOOK_ANSWER_RENDER_BUCKET,
+    storage_path: storagePath,
+    pixel_ratio: TEXTBOOK_ANSWER_RENDER_PIXEL_RATIO,
+    font_size_pt: TEXTBOOK_ANSWER_RENDER_FONT_SIZE,
+    text_color: TEXTBOOK_ANSWER_RENDER_TEXT_COLOR,
+    transparent: true,
+  };
+
+  try {
+    const rendered = await renderAnswerWithXeLatex({
+      answer: answerText,
+      viewportWidth: 640,
+      deviceScaleFactor: TEXTBOOK_ANSWER_RENDER_PIXEL_RATIO,
+      fontFamily: font.family,
+      fontBold: `${font.family} Bold`,
+      fontRegularPath: font.path || '',
+      fontSizePt: TEXTBOOK_ANSWER_RENDER_FONT_SIZE,
+      textColor: TEXTBOOK_ANSWER_RENDER_TEXT_COLOR,
+    });
+    const uploaded = await storageUploadBytes({
+      driver: DEFAULT_TEXTBOOK_DRIVER,
+      bucket: TEXTBOOK_ANSWER_RENDER_BUCKET,
+      key: storagePath,
+      contentType: 'image/png',
+      bytes: rendered.pngBuffer,
+    });
+    if (!uploaded.ok) {
+      throw new Error(uploaded.error || 'render_asset_upload_failed');
+    }
+    const { error } = await supa
+      .from('textbook_answer_render_assets')
+      .upsert({
+        ...baseRow,
+        width_px: rendered.width || 0,
+        height_px: rendered.height || 0,
+        render_error: '',
+        rendered_at: new Date().toISOString(),
+      }, {
+        onConflict: 'academy_id,crop_id,engine,style_version',
+      });
+    if (error) throw error;
+    return { ok: true, cropId, cached: false };
+  } catch (err) {
+    try {
+      await supa
+        .from('textbook_answer_render_assets')
+        .upsert({
+          ...baseRow,
+          width_px: 0,
+          height_px: 0,
+          render_error: compact(err?.message || err, 500),
+          rendered_at: new Date().toISOString(),
+        }, {
+          onConflict: 'academy_id,crop_id,engine,style_version',
+        });
+    } catch (_) {
+      // Migration may not be deployed yet; never fail answer save.
+    }
+    return { ok: false, cropId, error: compact(err?.message || err, 300) };
+  }
+}
+
+async function renderTextbookAnswerAssetsForRows({
+  academyId,
+  answerRows,
+}) {
+  const rows = Array.isArray(answerRows) ? answerRows : [];
+  const targets = rows.filter((row) => normalizeTextbookAnswerForRender(row));
+  if (!isUuid(academyId) || targets.length === 0) {
+    return { attempted: 0, rendered: 0, failed: 0, errors: [] };
+  }
+  const font = resolveBatchPreviewFont();
+  let cursor = 0;
+  let rendered = 0;
+  let failed = 0;
+  const errors = [];
+  const workerCount = Math.min(ANSWER_RENDER_CONCURRENCY, targets.length);
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (cursor < targets.length) {
+      const row = targets[cursor];
+      cursor += 1;
+      const result = await upsertTextbookAnswerRenderAsset({
+        academyId,
+        answerRow: row,
+        font,
+      });
+      if (result.ok) rendered += 1;
+      else if (!result.skipped) {
+        failed += 1;
+        if (errors.length < 5) errors.push(result.error || 'render_failed');
+      }
+    }
+  }));
+  return { attempted: targets.length, rendered, failed, errors };
 }
 
 async function previewAnswerRenders(res, req) {
@@ -5668,10 +5815,63 @@ async function handleTextbookAnswersBatchUpsert(body, res) {
     return;
   }
 
+  const renderAssets = await renderTextbookAnswerAssetsForRows({
+    academyId,
+    answerRows: rows,
+  });
+
   sendJson(res, 200, {
     ok: true,
     upserted: Array.isArray(data) ? data.length : 0,
+    render_assets: renderAssets,
     rows: data || [],
+  });
+}
+
+async function handleTextbookAnswerRenderAssetsBackfill(body, res) {
+  const academyId = String(body?.academy_id || body?.academyId || '').trim();
+  if (!isUuid(academyId)) {
+    sendJson(res, 400, { ok: false, error: 'academy_id(uuid) required' });
+    return;
+  }
+  const rawCropIds = Array.isArray(body?.crop_ids)
+    ? body.crop_ids.map((v) => String(v || '').trim()).filter(isUuid)
+    : [];
+  const limit = Math.max(
+    1,
+    Math.min(200, Number.parseInt(String(body?.limit || '80'), 10) || 80),
+  );
+
+  let query = supa
+    .from('textbook_problem_answers')
+    .select(
+      'crop_id, academy_id, answer_kind, answer_text, answer_latex_2d, '
+      + 'answer_source, raw_page, display_page, answer_image_path, updated_at',
+    )
+    .eq('academy_id', academyId)
+    .neq('answer_kind', 'image')
+    .limit(limit);
+  if (rawCropIds.length > 0) {
+    query = query.in('crop_id', rawCropIds);
+  }
+  const { data, error } = await query;
+  if (error) {
+    sendJson(res, 500, {
+      ok: false,
+      error: `answer_fetch_failed: ${error.message || error}`,
+    });
+    return;
+  }
+
+  const rows = Array.isArray(data) ? data : [];
+  const renderAssets = await renderTextbookAnswerAssetsForRows({
+    academyId,
+    answerRows: rows,
+  });
+  sendJson(res, 200, {
+    ok: true,
+    fetched: rows.length,
+    render_assets: renderAssets,
   });
 }
 
@@ -6473,6 +6673,15 @@ async function handler(req, res) {
     ) {
       const body = await readJson(req);
       await handleTextbookAnswersBatchUpsert(body, res);
+      return;
+    }
+
+    if (
+      method === 'POST' &&
+      url.pathname === '/textbook/answers/render-assets/backfill'
+    ) {
+      const body = await readJson(req);
+      await handleTextbookAnswerRenderAssetsBackfill(body, res);
       return;
     }
 
