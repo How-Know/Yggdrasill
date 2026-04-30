@@ -3140,6 +3140,8 @@ class _ClassContentScreenState extends State<ClassContentScreen>
   }
 
   String _textbookQuestionLabelFromRow(Map<String, dynamic> row) {
+    final questionLabel = _trimDynamic(row['question_label']);
+    if (questionLabel.isNotEmpty) return questionLabel;
     final label = _trimDynamic(row['label']);
     if (label.isNotEmpty) return label;
     final raw = _trimDynamic(row['problem_number']);
@@ -3188,6 +3190,43 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     if (raw is num) return raw != 0;
     final text = _trimDynamic(raw).toLowerCase();
     return text == 'true' || text == 't' || text == '1' || text == 'yes';
+  }
+
+  Future<List<Map<String, dynamic>>> _loadAssignedTextbookProblemRows({
+    required List<HomeworkItem> textbookItems,
+    required String bookId,
+    required String gradeLabel,
+  }) async {
+    final itemIds = <String>[];
+    for (final item in textbookItems) {
+      if ((item.bookId ?? '').trim() != bookId ||
+          (item.gradeLabel ?? '').trim() != gradeLabel) {
+        continue;
+      }
+      final itemId = item.id.trim();
+      if (itemId.isNotEmpty) itemIds.add(itemId);
+    }
+    if (itemIds.isEmpty) return const <Map<String, dynamic>>[];
+    final rows = await DataManager.instance.loadHomeworkItemProblemSnapshots(
+      homeworkItemIds: itemIds,
+    );
+    final out = <Map<String, dynamic>>[];
+    for (final row in rows) {
+      final cropId = _trimDynamic(row['crop_id']);
+      if (cropId.isEmpty) continue;
+      out.add(row);
+    }
+    out.sort((a, b) {
+      final itemCompare = _trimDynamic(a['homework_item_id'])
+          .compareTo(_trimDynamic(b['homework_item_id']));
+      if (itemCompare != 0) return itemCompare;
+      final byOrder = (_intFromDynamic(a['sort_order']) ?? 0)
+          .compareTo(_intFromDynamic(b['sort_order']) ?? 0);
+      if (byOrder != 0) return byOrder;
+      return _trimDynamic(a['problem_number'])
+          .compareTo(_trimDynamic(b['problem_number']));
+    });
+    return out;
   }
 
   String _textbookAnswerModeFromRow(Map<String, dynamic> row) {
@@ -3247,20 +3286,35 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     final gradeLabel = (baseItem.gradeLabel ?? '').trim();
     if (bookId.isEmpty || gradeLabel.isEmpty) return null;
 
+    final assignedRows = await _loadAssignedTextbookProblemRows(
+      textbookItems: textbookItems,
+      bookId: bookId,
+      gradeLabel: gradeLabel,
+    );
+    final assignedRowsByCropId = <String, Map<String, dynamic>>{};
+    for (final row in assignedRows) {
+      final cropId = _trimDynamic(row['crop_id']);
+      if (cropId.isNotEmpty) assignedRowsByCropId[cropId] = row;
+    }
+
     final cropIds = <String>{};
     final displayPages = <int>{};
     final problemNumberKeys = <String>{};
-    for (final item in textbookItems) {
-      if ((item.bookId ?? '').trim() != bookId ||
-          (item.gradeLabel ?? '').trim() != gradeLabel) {
-        continue;
-      }
-      problemNumberKeys.addAll(_textbookProblemNumberKeysFromItem(item));
-      final itemCropIds = _textbookProblemCropIdsFromItem(item);
-      if (itemCropIds.isNotEmpty) {
-        cropIds.addAll(itemCropIds);
-      } else {
-        displayPages.addAll(_textbookProblemPagesFromItem(item));
+    if (assignedRowsByCropId.isNotEmpty) {
+      cropIds.addAll(assignedRowsByCropId.keys);
+    } else {
+      for (final item in textbookItems) {
+        if ((item.bookId ?? '').trim() != bookId ||
+            (item.gradeLabel ?? '').trim() != gradeLabel) {
+          continue;
+        }
+        problemNumberKeys.addAll(_textbookProblemNumberKeysFromItem(item));
+        final itemCropIds = _textbookProblemCropIdsFromItem(item);
+        if (itemCropIds.isNotEmpty) {
+          cropIds.addAll(itemCropIds);
+        } else {
+          displayPages.addAll(_textbookProblemPagesFromItem(item));
+        }
       }
     }
     if (cropIds.isEmpty && displayPages.isEmpty) return null;
@@ -3275,7 +3329,22 @@ class _ClassContentScreenState extends State<ClassContentScreen>
       );
       for (final row in rows) {
         final cropId = _trimDynamic(row['id']);
-        if (cropId.isNotEmpty) rowsByCropId[cropId] = row;
+        if (cropId.isNotEmpty) {
+          final assigned = assignedRowsByCropId[cropId];
+          if (assigned != null) {
+            row.addAll(assigned);
+            row['id'] = cropId;
+            row['display_page'] = assigned['display_page'] ??
+                assigned['page_number'] ??
+                row['display_page'];
+            row['raw_page'] = assigned['raw_page'] ?? row['raw_page'];
+            row['pb_question_uid'] =
+                _trimDynamic(assigned['pb_question_uid']).isNotEmpty
+                    ? assigned['pb_question_uid']
+                    : row['pb_question_uid'];
+          }
+          rowsByCropId[cropId] = row;
+        }
       }
     }
     if (displayPages.isNotEmpty) {
@@ -3299,6 +3368,11 @@ class _ClassContentScreenState extends State<ClassContentScreen>
 
     final rows = rowsByCropId.values.toList(growable: false)
       ..sort((a, b) {
+        final aOrder = _intFromDynamic(a['sort_order']);
+        final bOrder = _intFromDynamic(b['sort_order']);
+        if (aOrder != null && bOrder != null && aOrder != bOrder) {
+          return aOrder.compareTo(bOrder);
+        }
         final byPage = (_intFromDynamic(a['display_page']) ??
                 _intFromDynamic(a['raw_page']) ??
                 0)

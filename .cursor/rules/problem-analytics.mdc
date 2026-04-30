@@ -1,0 +1,26 @@
+---
+description: Guidance for textbook problem snapshots and future analytics
+globs: apps/yggdrasill/lib/**,supabase/migrations/**,gateway/src/**,docs/**
+alwaysApply: false
+---
+
+# Problem Analytics Guidance
+
+When working on migrated textbook homework, problem-level grading, iPad solving
+logs, or analytics, first read `docs/architecture/problem-analytics.md`.
+
+Before implementing broad analytics changes, offer the user 2-3 choices based on
+the current code and data shape. The user may change direction over time.
+
+Current default direction:
+
+- New migrated textbook homework should store assigned problems in
+  `homework_item_problems`.
+- `homework_item_problems` is the canonical source for new problem-level
+  grading; keep `unitMappings`, `content`, and page fallbacks for old homework.
+- Store assignment-time snapshots: original problem number, source crop/problem
+  IDs, unit/type metadata, display pages, and coordinates.
+- Future iPad solving logs should be append-only and link to assigned problems
+  plus original problem identity.
+- App screens should query summary tables or batch results for analytics, not
+  scan raw solve logs on demand.

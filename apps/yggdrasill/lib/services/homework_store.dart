@@ -2482,6 +2482,7 @@ class HomeworkStore {
         'academy_id': academyId,
         'homework_item_id': item.id,
       });
+
       int? asIntOpt(dynamic v) {
         if (v == null) return null;
         if (v is int) return v;
@@ -2490,8 +2491,82 @@ class HomeworkStore {
         return null;
       }
 
+      String asString(dynamic v, {String fallback = ''}) {
+        final s = v == null ? '' : v.toString().trim();
+        return s.isEmpty ? fallback : s;
+      }
+
+      bool asBool(dynamic v) {
+        if (v is bool) return v;
+        if (v is num) return v != 0;
+        final s = asString(v).toLowerCase();
+        return s == 'true' || s == 't' || s == '1' || s == 'yes';
+      }
+
+      final uuidPattern = RegExp(
+        r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
+      );
+      String? asUuidOpt(dynamic v) {
+        final s = asString(v);
+        return uuidPattern.hasMatch(s) ? s : null;
+      }
+
+      int? problemNumberNumeric(String value) {
+        final s = value.trim();
+        if (!RegExp(r'^\d+$').hasMatch(s)) return null;
+        final parsed = int.tryParse(s);
+        return parsed != null && parsed > 0 ? parsed : null;
+      }
+
+      String normalizeContentGroupKind(dynamic v) {
+        final s = asString(v).toLowerCase();
+        return s == 'basic_subtopic' || s == 'type' ? s : 'none';
+      }
+
+      Iterable<List<T>> chunks<T>(List<T> values, int size) sync* {
+        for (var i = 0; i < values.length; i += size) {
+          final end = (i + size) > values.length ? values.length : i + size;
+          yield values.sublist(i, end);
+        }
+      }
+
+      final cropIds = <String>{};
+      for (final rawMapping in mappings) {
+        final mapping = Map<String, dynamic>.from(rawMapping);
+        final crops = mapping['problemCrops'];
+        if (crops is! List) continue;
+        for (final rawCrop in crops) {
+          if (rawCrop is! Map) continue;
+          final cropId = asUuidOpt(rawCrop['cropId']);
+          if (cropId != null) cropIds.add(cropId);
+        }
+      }
+
+      final cropRowsById = <String, Map<String, dynamic>>{};
+      for (final ids in chunks(cropIds.toList(growable: false), 250)) {
+        final cropRows = await supa
+            .from('textbook_problem_crops')
+            .select(
+              'id, big_order, mid_order, sub_key, big_name, mid_name, '
+              'raw_page, display_page, section, '
+              'problem_number, label, is_set_header, set_from, set_to, '
+              'content_group_kind, content_group_label, content_group_title, '
+              'content_group_order, pb_question_uid, bbox_1k, item_region_1k',
+            )
+            .eq('academy_id', academyId)
+            .eq('book_id', bookId)
+            .eq('grade_label', gradeLabel)
+            .inFilter('id', ids);
+        for (final raw in cropRows) {
+          final row = Map<String, dynamic>.from(raw);
+          final id = asUuidOpt(row['id']);
+          if (id != null) cropRowsById[id] = row;
+        }
+      }
+
       final rows = <Map<String, dynamic>>[];
       final seen = <String>{};
+      var sortOrder = 0;
       for (final rawMapping in mappings) {
         final mapping = Map<String, dynamic>.from(rawMapping);
         final crops = mapping['problemCrops'];
@@ -2503,28 +2578,129 @@ class HomeworkStore {
         for (final rawCrop in crops) {
           if (rawCrop is! Map) continue;
           final crop = Map<String, dynamic>.from(rawCrop);
-          final cropId = '${crop['cropId'] ?? ''}'.trim();
-          final problemNumber = '${crop['problemNumber'] ?? ''}'.trim();
-          final pageNumber = asIntOpt(crop['displayPage']);
-          final key = cropId.isNotEmpty
-              ? cropId
-              : '$problemNumber|${pageNumber ?? ''}|${crop['subKey'] ?? ''}';
+          final cropId = asUuidOpt(crop['cropId']);
+          final source = cropId == null
+              ? const <String, dynamic>{}
+              : (cropRowsById[cropId] ?? const <String, dynamic>{});
+          final problemNumber = asString(
+            crop['problemNumber'],
+            fallback: asString(source['problem_number']),
+          );
+          final pageNumber =
+              asIntOpt(crop['displayPage']) ?? asIntOpt(source['display_page']);
+          final rawPage =
+              asIntOpt(crop['rawPage']) ?? asIntOpt(source['raw_page']);
+          final key = cropId ??
+              '$problemNumber|${pageNumber ?? ''}|${crop['subKey'] ?? ''}';
           if (key.trim().isEmpty || !seen.add(key)) continue;
+          sortOrder += 1;
+          final bigOrder =
+              asIntOpt(crop['bigOrder']) ?? asIntOpt(source['big_order']);
+          final midOrder =
+              asIntOpt(crop['midOrder']) ?? asIntOpt(source['mid_order']);
+          final subKey = asString(
+            crop['subKey'],
+            fallback: asString(source['sub_key']),
+          );
+          final bigName = asString(
+            crop['bigName'],
+            fallback: asString(source['big_name']),
+          );
+          final midName = asString(
+            crop['midName'],
+            fallback: asString(source['mid_name']),
+          );
+          final contentGroupKind = normalizeContentGroupKind(
+            crop['typeKind'] ?? source['content_group_kind'],
+          );
+          final contentGroupLabel = asString(
+            crop['typeLabel'],
+            fallback: asString(source['content_group_label']),
+          );
+          final contentGroupTitle = asString(
+            crop['typeTitle'],
+            fallback: asString(source['content_group_title']),
+          );
+          final contentGroupOrder = asIntOpt(crop['typeOrder']) ??
+              asIntOpt(source['content_group_order']);
+          final label = asString(
+            crop['label'],
+            fallback: asString(source['label']),
+          );
+          final section = asString(
+            crop['section'],
+            fallback: asString(source['section']),
+          );
+          final typeGroupKey = [
+            bigOrder ?? '',
+            midOrder ?? '',
+            subKey,
+            contentGroupKind == 'none' ? section : contentGroupKind,
+            contentGroupOrder ?? '',
+            contentGroupLabel,
+          ].join('|');
+          final resolvedTypeGroupLabel = typeGroupLabel.isNotEmpty
+              ? typeGroupLabel
+              : [
+                  if (contentGroupLabel.isNotEmpty) contentGroupLabel,
+                  if (contentGroupTitle.isNotEmpty) contentGroupTitle,
+                ].join(' ').trim();
+          final pbQuestionUid = asUuidOpt(
+            crop['pbQuestionUid'] ?? source['pb_question_uid'],
+          );
+          final snapshot = <String, dynamic>{
+            'cropId': cropId,
+            'pbQuestionUid': pbQuestionUid,
+            'bigOrder': bigOrder,
+            'midOrder': midOrder,
+            'subKey': subKey,
+            'bigName': bigName,
+            'midName': midName,
+            'rawPage': rawPage,
+            'displayPage': pageNumber,
+            'problemNumber': problemNumber,
+            'label': label,
+            'section': section,
+            'isSetHeader': asBool(source['is_set_header']),
+            'setFrom': asIntOpt(source['set_from']),
+            'setTo': asIntOpt(source['set_to']),
+            'contentGroupKind': contentGroupKind,
+            'contentGroupLabel': contentGroupLabel,
+            'contentGroupTitle': contentGroupTitle,
+            'contentGroupOrder': contentGroupOrder,
+            'typeGroupKey': typeGroupKey,
+            'typeGroupLabel': resolvedTypeGroupLabel,
+            'bbox1k': crop['bbox1k'] ?? source['bbox_1k'],
+            'itemRegion1k': crop['itemRegion1k'] ?? source['item_region_1k'],
+          };
           rows.add({
             'academy_id': academyId,
             'homework_item_id': item.id,
             'student_id': studentId,
             'book_id': bookId,
             'grade_label': gradeLabel,
-            'crop_id': cropId.isEmpty ? null : cropId,
+            'crop_id': cropId,
+            'pb_question_uid': pbQuestionUid,
+            'sort_order': sortOrder,
             'problem_number': problemNumber,
+            'problem_number_numeric': problemNumberNumeric(problemNumber),
+            'question_label': problemNumber,
             'page_number': pageNumber,
-            'raw_page': asIntOpt(crop['rawPage']),
-            'type_group_key':
-                '${crop['typeKind'] ?? ''}|${crop['typeLabel'] ?? ''}|${crop['typeOrder'] ?? ''}',
-            'type_group_label': typeGroupLabel,
-            'bbox_1k': crop['bbox1k'],
-            'item_region_1k': crop['itemRegion1k'],
+            'display_page': pageNumber,
+            'raw_page': rawPage,
+            'big_order': bigOrder,
+            'mid_order': midOrder,
+            'sub_key': subKey,
+            'big_name': bigName,
+            'mid_name': midName,
+            'content_group_kind': contentGroupKind,
+            'content_group_label': contentGroupLabel,
+            'content_group_title': contentGroupTitle,
+            'type_group_key': typeGroupKey,
+            'type_group_label': resolvedTypeGroupLabel,
+            'bbox_1k': crop['bbox1k'] ?? source['bbox_1k'],
+            'item_region_1k': crop['itemRegion1k'] ?? source['item_region_1k'],
+            'crop_snapshot': snapshot,
           });
         }
       }

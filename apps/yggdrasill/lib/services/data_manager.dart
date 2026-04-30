@@ -7522,6 +7522,14 @@ class DataManager {
         cropIds: cropIds,
         displayPages: displayPages,
       );
+
+  Future<List<Map<String, dynamic>>> loadHomeworkItemProblemSnapshots({
+    required Iterable<String> homeworkItemIds,
+  }) =>
+      ResourceService.instance.loadHomeworkItemProblemSnapshots(
+        homeworkItemIds: homeworkItemIds,
+      );
+
   Future<List<Map<String, dynamic>>> loadHomeworkUnitStats({
     required String bookId,
     required String gradeLabel,

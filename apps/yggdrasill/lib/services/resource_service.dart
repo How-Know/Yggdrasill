@@ -905,7 +905,7 @@ class ResourceService {
             'raw_page, display_page, section, '
             'problem_number, label, is_set_header, set_from, set_to, '
             'content_group_kind, content_group_label, content_group_title, '
-            'content_group_order, '
+            'content_group_order, pb_question_uid, '
             'column_index, bbox_1k, item_region_1k',
           )
           .eq('academy_id', academyId)
@@ -1091,6 +1091,54 @@ class ResourceService {
     } catch (e, st) {
       // ignore: avoid_print
       print('[RES][textbookProblemRegionsForGrading] load failed: $e\n$st');
+      return <Map<String, dynamic>>[];
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> loadHomeworkItemProblemSnapshots({
+    required Iterable<String> homeworkItemIds,
+  }) async {
+    final safeIds = homeworkItemIds
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    if (safeIds.isEmpty) return <Map<String, dynamic>>[];
+
+    Iterable<List<T>> chunks<T>(List<T> values, int size) sync* {
+      for (var i = 0; i < values.length; i += size) {
+        final end = (i + size) > values.length ? values.length : i + size;
+        yield values.sublist(i, end);
+      }
+    }
+
+    try {
+      final academyId = await TenantService.instance.getActiveAcademyId() ??
+          await TenantService.instance.ensureActiveAcademy();
+      final supa = Supabase.instance.client;
+      final out = <Map<String, dynamic>>[];
+      for (final ids in chunks(safeIds, 250)) {
+        final rows = await supa
+            .from('homework_item_problems')
+            .select(
+              'id, homework_item_id, student_id, book_id, grade_label, '
+              'crop_id, pb_question_uid, sort_order, problem_number, '
+              'problem_number_numeric, question_label, page_number, '
+              'display_page, raw_page, big_order, mid_order, sub_key, '
+              'big_name, mid_name, content_group_kind, content_group_label, '
+              'content_group_title, type_group_key, type_group_label, '
+              'bbox_1k, item_region_1k, crop_snapshot',
+            )
+            .eq('academy_id', academyId)
+            .inFilter('homework_item_id', ids)
+            .order('homework_item_id')
+            .order('sort_order');
+        for (final row in rows) {
+          out.add(Map<String, dynamic>.from(row));
+        }
+      }
+      return out;
+    } catch (_) {
       return <Map<String, dynamic>>[];
     }
   }

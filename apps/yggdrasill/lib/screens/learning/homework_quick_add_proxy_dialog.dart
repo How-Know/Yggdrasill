@@ -1301,12 +1301,15 @@ class HomeworkQuickAddProxyDialogState
           bigOrder: bigOrder,
           midOrder: midOrder,
           subKey: subKey,
+          bigName: '${row['big_name'] ?? ''}'.trim(),
+          midName: '${row['mid_name'] ?? ''}'.trim(),
           rawPage: rawPage,
           displayPage: displayPage,
           problemNumber: problemNumber,
           label: '${row['label'] ?? ''}'.trim(),
           section: '${row['section'] ?? ''}'.trim(),
           isSetHeader: row['is_set_header'] == true,
+          pbQuestionUid: '${row['pb_question_uid'] ?? ''}'.trim(),
           typeKind: typeKind,
           typeLabel: typeLabel,
           typeTitle: typeTitle,
@@ -7235,12 +7238,15 @@ class _TextbookProblemRegion {
   final int bigOrder;
   final int midOrder;
   final String subKey;
+  final String bigName;
+  final String midName;
   final int? rawPage;
   final int displayPage;
   final String problemNumber;
   final String label;
   final String section;
   final bool isSetHeader;
+  final String pbQuestionUid;
   final String typeKind;
   final String typeLabel;
   final String typeTitle;
@@ -7253,12 +7259,15 @@ class _TextbookProblemRegion {
     required this.bigOrder,
     required this.midOrder,
     required this.subKey,
+    required this.bigName,
+    required this.midName,
     required this.rawPage,
     required this.displayPage,
     required this.problemNumber,
     required this.label,
     required this.section,
     required this.isSetHeader,
+    required this.pbQuestionUid,
     required this.typeKind,
     required this.typeLabel,
     required this.typeTitle,
@@ -7293,11 +7302,14 @@ class _TextbookProblemRegion {
         'bigOrder': bigOrder,
         'midOrder': midOrder,
         'subKey': subKey,
+        'bigName': bigName,
+        'midName': midName,
         'rawPage': rawPage,
         'displayPage': displayPage,
         'problemNumber': problemNumber,
         'label': label,
         'section': section,
+        'pbQuestionUid': pbQuestionUid,
         'typeKind': typeKind,
         'typeLabel': typeLabel,
         'typeTitle': typeTitle,
