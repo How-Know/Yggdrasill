@@ -230,7 +230,15 @@ function normalizeHexColor(raw, fallback = 'EAF2F7') {
 
 async function makeWhiteBackgroundTransparent(pngBuffer, {
   textColor = 'EAF2F7',
-  paddingPx = 8,
+  backgroundColor = '151C21',
+  transparent = true,
+  paddingPx = 12,
+  topPaddingPx = 22,
+  bottomPaddingPx = 14,
+  alphaGamma = 0.68,
+  cropAlphaThreshold = 3,
+  topBleedPx = 0,
+  strokePx = 0,
 } = {}) {
   const color = normalizeHexColor(textColor);
   const rgb = [
@@ -238,15 +246,25 @@ async function makeWhiteBackgroundTransparent(pngBuffer, {
     Number.parseInt(color.slice(2, 4), 16),
     Number.parseInt(color.slice(4, 6), 16),
   ];
+  const background = normalizeHexColor(backgroundColor, '151C21');
+  const bgRgb = [
+    Number.parseInt(background.slice(0, 2), 16),
+    Number.parseInt(background.slice(2, 4), 16),
+    Number.parseInt(background.slice(4, 6), 16),
+  ];
   const { data, info } = await sharp(pngBuffer)
     .ensureAlpha()
     .raw()
     .toBuffer({ resolveWithObject: true });
   const { width, height, channels } = info;
+  const alphaData = new Uint8Array(width * height);
   let minX = width;
   let minY = height;
   let maxX = -1;
   let maxY = -1;
+  const safeGamma = Number.isFinite(Number(alphaGamma))
+    ? Math.max(0.35, Math.min(1.2, Number(alphaGamma)))
+    : 0.68;
 
   for (let y = 0; y < height; y += 1) {
     for (let x = 0; x < width; x += 1) {
@@ -258,12 +276,142 @@ async function makeWhiteBackgroundTransparent(pngBuffer, {
       const normalized = Math.max(0, Math.min(1, darkness / 255));
       const alpha = normalized <= 0
         ? 0
-        : Math.max(0, Math.min(255, Math.round(255 * Math.pow(normalized, 0.68))));
-      data[idx] = rgb[0];
-      data[idx + 1] = rgb[1];
-      data[idx + 2] = rgb[2];
-      data[idx + 3] = alpha;
-      if (alpha > 3) {
+        : Math.max(0, Math.min(255, Math.round(255 * Math.pow(normalized, safeGamma))));
+      alphaData[y * width + x] = alpha;
+      if (alpha > cropAlphaThreshold) {
+        if (x < minX) minX = x;
+        if (y < minY) minY = y;
+        if (x > maxX) maxX = x;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+
+  const radius = Math.max(0, Math.min(2, Math.round(Number(strokePx) || 0)));
+  const finalAlphaData = radius > 0 ? new Uint8Array(alphaData) : alphaData;
+  if (radius > 0) {
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        let maxAlpha = alphaData[y * width + x];
+        for (let dy = -radius; dy <= radius; dy += 1) {
+          const yy = y + dy;
+          if (yy < 0 || yy >= height) continue;
+          for (let dx = -radius; dx <= radius; dx += 1) {
+            const xx = x + dx;
+            if (xx < 0 || xx >= width) continue;
+            const candidate = alphaData[yy * width + xx];
+            if (candidate > maxAlpha) maxAlpha = candidate;
+          }
+        }
+        finalAlphaData[y * width + x] = maxAlpha;
+        if (maxAlpha > cropAlphaThreshold) {
+          if (x < minX) minX = x;
+          if (y < minY) minY = y;
+          if (x > maxX) maxX = x;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
+  }
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const idx = (y * width + x) * channels;
+      const alpha = finalAlphaData[y * width + x];
+      if (transparent) {
+        data[idx] = rgb[0];
+        data[idx + 1] = rgb[1];
+        data[idx + 2] = rgb[2];
+        data[idx + 3] = alpha;
+      } else {
+        const a = alpha / 255;
+        data[idx] = Math.round((rgb[0] * a) + (bgRgb[0] * (1 - a)));
+        data[idx + 1] = Math.round((rgb[1] * a) + (bgRgb[1] * (1 - a)));
+        data[idx + 2] = Math.round((rgb[2] * a) + (bgRgb[2] * (1 - a)));
+        data[idx + 3] = 255;
+      }
+    }
+  }
+
+  if (maxX < minX || maxY < minY) {
+    const empty = await sharp({
+      create: {
+        width: 16,
+        height: 16,
+        channels: 4,
+        background: transparent
+          ? { r: 0, g: 0, b: 0, alpha: 0 }
+          : { r: bgRgb[0], g: bgRgb[1], b: bgRgb[2], alpha: 1 },
+      },
+    }).png({ compressionLevel: 9 }).toBuffer();
+    return { pngBuffer: empty, width: 16, height: 16 };
+  }
+
+  const safeTopBleedPx = Math.max(0, Math.min(8, Math.round(Number(topBleedPx) || 0)));
+  const desiredTop = minY - topPaddingPx - safeTopBleedPx;
+  const left = Math.max(0, minX - paddingPx);
+  const top = Math.max(0, desiredTop);
+  const right = Math.min(width - 1, maxX + paddingPx);
+  const bottom = Math.min(height - 1, maxY + bottomPaddingPx);
+  const cropWidth = Math.max(1, right - left + 1);
+  const cropHeight = Math.max(1, bottom - top + 1);
+  const extendTop = desiredTop < 0
+    ? Math.min(safeTopBleedPx, Math.round(-desiredTop))
+    : 0;
+  const extendBackground = transparent
+    ? { r: 0, g: 0, b: 0, alpha: 0 }
+    : { r: bgRgb[0], g: bgRgb[1], b: bgRgb[2], alpha: 1 };
+  let pipeline = sharp(data, { raw: { width, height, channels } })
+    .extract({ left, top, width: cropWidth, height: cropHeight });
+  if (extendTop > 0) {
+    pipeline = pipeline.extend({
+      top: extendTop,
+      bottom: 0,
+      left: 0,
+      right: 0,
+      background: extendBackground,
+    });
+  }
+  const output = await pipeline
+    .png({ compressionLevel: 9, adaptiveFiltering: true })
+    .toBuffer();
+  return { pngBuffer: output, width: cropWidth, height: cropHeight + extendTop };
+}
+
+async function cropOpaqueBackground(pngBuffer, {
+  backgroundColor = '151C21',
+  paddingPx = 12,
+  topPaddingPx = 22,
+  bottomPaddingPx = 14,
+  cropThreshold = 3,
+} = {}) {
+  const background = normalizeHexColor(backgroundColor, '151C21');
+  const bgRgb = [
+    Number.parseInt(background.slice(0, 2), 16),
+    Number.parseInt(background.slice(2, 4), 16),
+    Number.parseInt(background.slice(4, 6), 16),
+  ];
+  const { data, info } = await sharp(pngBuffer)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const { width, height, channels } = info;
+  let minX = width;
+  let minY = height;
+  let maxX = -1;
+  let maxY = -1;
+  const threshold = Math.max(0, Math.min(64, Number(cropThreshold) || 3));
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const idx = (y * width + x) * channels;
+      const diff = Math.max(
+        Math.abs(data[idx] - bgRgb[0]),
+        Math.abs(data[idx + 1] - bgRgb[1]),
+        Math.abs(data[idx + 2] - bgRgb[2]),
+      );
+      data[idx + 3] = 255;
+      if (diff > threshold) {
         if (x < minX) minX = x;
         if (y < minY) minY = y;
         if (x > maxX) maxX = x;
@@ -278,16 +426,16 @@ async function makeWhiteBackgroundTransparent(pngBuffer, {
         width: 16,
         height: 16,
         channels: 4,
-        background: { r: 0, g: 0, b: 0, alpha: 0 },
+        background: { r: bgRgb[0], g: bgRgb[1], b: bgRgb[2], alpha: 1 },
       },
     }).png({ compressionLevel: 9 }).toBuffer();
     return { pngBuffer: empty, width: 16, height: 16 };
   }
 
   const left = Math.max(0, minX - paddingPx);
-  const top = Math.max(0, minY - paddingPx);
+  const top = Math.max(0, minY - topPaddingPx);
   const right = Math.min(width - 1, maxX + paddingPx);
-  const bottom = Math.min(height - 1, maxY + paddingPx);
+  const bottom = Math.min(height - 1, maxY + bottomPaddingPx);
   const cropWidth = Math.max(1, right - left + 1);
   const cropHeight = Math.max(1, bottom - top + 1);
   const output = await sharp(data, { raw: { width, height, channels } })
@@ -365,7 +513,11 @@ export async function renderAnswerWithXeLatex({
   fontBold,
   fontRegularPath = '',
   fontSizePt = 19,
+  maxWidthCm = 13.5,
   textColor = 'EAF2F7',
+  backgroundColor = '151C21',
+  transparent = true,
+  transparentOptions = {},
 }) {
   await ensureInstalled();
 
@@ -381,8 +533,11 @@ export async function renderAnswerWithXeLatex({
       fontBold,
       fontRegularPath,
       fontSizePt,
-      // 내부 렌더는 검정으로 출력한 뒤 알파 마스크를 만들고 최종 색상을 입힌다.
+      maxWidthCm,
+      // V10 path: render black on white first, then reuse the established
+      // alpha/composite pass that looked better in the right sheet.
       textColor: '000000',
+      backgroundColor: 'FFFFFF',
     });
     fs.writeFileSync(texPath, texSource, 'utf-8');
     await runXeLatex(texPath, workDir);
@@ -407,9 +562,14 @@ export async function renderAnswerWithXeLatex({
 </body></html>`;
       whitePng = await renderHtmlToImageBuffer(html, viewportWidth, deviceScaleFactor);
     }
-    const transparent = await makeWhiteBackgroundTransparent(whitePng, { textColor });
+    const renderedPng = await makeWhiteBackgroundTransparent(whitePng, {
+      textColor,
+      backgroundColor,
+      transparent,
+      ...transparentOptions,
+    });
     return {
-      ...transparent,
+      ...renderedPng,
       pixelRatio: Number(deviceScaleFactor || 3),
       texSource,
     };

@@ -173,7 +173,7 @@ function compactErrMsg(err) {
   return `${name}${String(err?.message || err).slice(0, 300)}`;
 }
 
-export function normalizeDetectResult(parsedJson) {
+export function normalizeDetectResult(parsedJson, opts = {}) {
   const out = {
     section: 'unknown',
     page_kind: 'unknown',
@@ -189,6 +189,10 @@ export function normalizeDetectResult(parsedJson) {
   )
     ? section
     : 'unknown';
+  const sectionHint = String(opts?.sectionHint || '').trim();
+  if (['basic_drill', 'type_practice', 'mastery'].includes(sectionHint)) {
+    out.section = sectionHint;
+  }
 
   const layout = String(parsedJson.page_layout || '').trim();
   out.page_layout = ['two_column', 'one_column', 'unknown'].includes(layout)

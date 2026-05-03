@@ -126,11 +126,21 @@ Future<PageAnalysisOutcome> analyzeSinglePageWithRetry({
       );
       final result = await detector(imageBytes: png, rawPage: rawPage);
       final hasItems = result.items.isNotEmpty;
-      final hasAnyRegion =
-          result.items.any((item) => (item.itemRegion?.length ?? 0) == 4);
-      if (result.pageKind != 'concept_page' && hasItems && !hasAnyRegion) {
+      final isProblemSection =
+          result.section == 'type_practice' || result.section == 'mastery';
+      if (result.pageKind != 'concept_page' && isProblemSection && !hasItems) {
         throw StateError(
-          'missing item_region for all ${result.items.length} VLM items '
+          'missing VLM items on ${result.section} page $rawPage',
+        );
+      }
+      final missingRegionCount = result.items
+          .where((item) => (item.itemRegion?.length ?? 0) != 4)
+          .length;
+      if (result.pageKind != 'concept_page' &&
+          hasItems &&
+          missingRegionCount > 0) {
+        throw StateError(
+          'missing item_region for $missingRegionCount/${result.items.length} VLM items '
           'on page $rawPage',
         );
       }

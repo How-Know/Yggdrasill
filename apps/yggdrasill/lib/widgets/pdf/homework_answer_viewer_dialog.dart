@@ -25,6 +25,12 @@ class HomeworkAnswerGradingCell {
   final String answerImageUrl;
   final int? answerImageWidth;
   final int? answerImageHeight;
+  final double? answerImagePixelRatio;
+  final String answerRenderPolicy;
+  final String answerSourceKind;
+  final String answerSourceId;
+  final String answerAssetKind;
+  final String answerRenderStyleVersion;
 
   const HomeworkAnswerGradingCell({
     required this.key,
@@ -35,6 +41,12 @@ class HomeworkAnswerGradingCell {
     this.answerImageUrl = '',
     this.answerImageWidth,
     this.answerImageHeight,
+    this.answerImagePixelRatio,
+    this.answerRenderPolicy = '',
+    this.answerSourceKind = '',
+    this.answerSourceId = '',
+    this.answerAssetKind = '',
+    this.answerRenderStyleVersion = '',
   });
 }
 

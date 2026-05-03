@@ -298,8 +298,12 @@ class HomeworkStore {
   static const String _homeworkItemSelectLegacyNoMemoNoCycleBase =
       'id,student_id,title,body,color,flow_id,type,page,count,content,book_id,grade_label,source_unit_level,source_unit_path,order_index,check_count,status,phase,accumulated_ms,run_start,completed_at,first_started_at,submitted_at,confirmed_at,waiting_at,created_at,updated_at,version';
   static const String _homeworkGroupSelect =
-      'id,student_id,title,flow_id,order_index,status,source_homework_item_id,cycle_started_at,created_at,updated_at,version';
+      'id,student_id,title,flow_id,learning_track_code,order_index,status,source_homework_item_id,cycle_started_at,created_at,updated_at,version';
   static const String _homeworkGroupSelectNoCycleStarted =
+      'id,student_id,title,flow_id,learning_track_code,order_index,status,source_homework_item_id,created_at,updated_at,version';
+  static const String _homeworkGroupSelectNoLearningTrack =
+      'id,student_id,title,flow_id,order_index,status,source_homework_item_id,cycle_started_at,created_at,updated_at,version';
+  static const String _homeworkGroupSelectLegacy =
       'id,student_id,title,flow_id,order_index,status,source_homework_item_id,created_at,updated_at,version';
   static const String _homeworkGroupRuntimeSelect =
       'group_id,student_id,phase,accumulated_ms,run_start,first_started_at,check_count,updated_at';
@@ -1243,43 +1247,42 @@ class HomeworkStore {
         return (rowsRaw as List<dynamic>).cast<Map<String, dynamic>>();
       }
 
-      Future<List<Map<String, dynamic>>> attachGroupLearningTrackCodes(
-        List<Map<String, dynamic>> baseRows,
-      ) async {
-        if (baseRows.isEmpty) return baseRows;
-        if (!_supportsLearningTrackColumn) return baseRows;
+      Future<List<Map<String, dynamic>>>
+          runGroupQueryWithoutLearningTrack() async {
         try {
-          final ids = <String>[];
-          for (final row in baseRows) {
-            final id = (row['id'] as String?)?.trim();
-            if (id != null && id.isNotEmpty) ids.add(id);
-          }
-          if (ids.isEmpty) return baseRows;
-          final raw = await supa
-              .from('homework_groups')
-              .select('id,learning_track_code')
-              .inFilter('id', ids);
-          final rows = (raw as List<dynamic>).cast<Map<String, dynamic>>();
-          final byId = <String, String>{
-            for (final row in rows)
-              (row['id'] as String? ?? '').trim(): _normalizeLearningTrackCode(
-                row['learning_track_code'] as String?,
-              ),
-          }..remove('');
-          for (final row in baseRows) {
-            final id = (row['id'] as String?)?.trim();
-            if (id != null && byId.containsKey(id)) {
-              row['learning_track_code'] = byId[id];
-            }
-          }
+          return await runGroupQuery(_homeworkGroupSelectNoLearningTrack);
         } catch (e) {
-          if (_isMissingLearningTrackColumnError(e)) {
-            _supportsLearningTrackColumn = false;
-            return baseRows;
+          if (_isMissingGroupCycleStartedColumnError(e)) {
+            return await runGroupQuery(_homeworkGroupSelectLegacy);
           }
           rethrow;
         }
-        return baseRows;
+      }
+
+      Future<List<Map<String, dynamic>>> runGroupQueryWithFallback() async {
+        if (!_supportsLearningTrackColumn) {
+          return await runGroupQueryWithoutLearningTrack();
+        }
+        try {
+          return await runGroupQuery(_homeworkGroupSelect);
+        } catch (e) {
+          if (_isMissingGroupCycleStartedColumnError(e)) {
+            try {
+              return await runGroupQuery(_homeworkGroupSelectNoCycleStarted);
+            } catch (noCycleError) {
+              if (_isMissingLearningTrackColumnError(noCycleError)) {
+                _supportsLearningTrackColumn = false;
+                return await runGroupQueryWithoutLearningTrack();
+              }
+              rethrow;
+            }
+          }
+          if (_isMissingLearningTrackColumnError(e)) {
+            _supportsLearningTrackColumn = false;
+            return await runGroupQueryWithoutLearningTrack();
+          }
+          rethrow;
+        }
       }
 
       dynamic groupItemQuery = supa
@@ -1293,17 +1296,7 @@ class HomeworkStore {
           .order('item_order_index', ascending: true)
           .order('updated_at', ascending: false);
 
-      List<Map<String, dynamic>> groupRows;
-      try {
-        groupRows = await runGroupQuery(_homeworkGroupSelect);
-      } catch (e) {
-        if (_isMissingGroupCycleStartedColumnError(e)) {
-          groupRows = await runGroupQuery(_homeworkGroupSelectNoCycleStarted);
-        } else {
-          rethrow;
-        }
-      }
-      groupRows = await attachGroupLearningTrackCodes(groupRows);
+      final groupRows = await runGroupQueryWithFallback();
       final groupItemRowsRaw = await groupItemQuery;
       final groupItemRows =
           (groupItemRowsRaw as List<dynamic>).cast<Map<String, dynamic>>();

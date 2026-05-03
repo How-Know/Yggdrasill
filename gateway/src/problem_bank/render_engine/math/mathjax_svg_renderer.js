@@ -140,16 +140,18 @@ export function createMathSvgRenderer() {
     cacheHit: 0,
   };
 
-  const renderInline = (latex) => {
+  const renderInline = (latex, options = {}) => {
     let safeLatex = normalizeMathLatex(latex);
     if (!safeLatex) return { ok: false, svg: '', latex: '' };
-    if (isFractionLatex(safeLatex) && !safeLatex.startsWith('\\displaystyle')) {
+    const displayFractions = options?.displayFractions !== false;
+    const cacheKey = `${displayFractions ? 'display' : 'inline'}\n${safeLatex}`;
+    if (displayFractions && isFractionLatex(safeLatex) && !safeLatex.startsWith('\\displaystyle')) {
       safeLatex = `\\displaystyle ${safeLatex}`;
     }
     stats.requested += 1;
-    if (cache.has(safeLatex)) {
+    if (cache.has(cacheKey)) {
       stats.cacheHit += 1;
-      const cached = cache.get(safeLatex);
+      const cached = cache.get(cacheKey);
       if (!cached.ok) stats.failed += 1;
       return cached;
     }
@@ -162,7 +164,7 @@ export function createMathSvgRenderer() {
           const { svg, verticalAlign } = normalizeSvgForInline(raw);
           if (!svg) continue;
           const ok = { ok: true, svg, latex: candidate, verticalAlign };
-          cache.set(safeLatex, ok);
+          cache.set(cacheKey, ok);
           stats.rendered += 1;
           return ok;
         } catch (_) {
@@ -170,12 +172,12 @@ export function createMathSvgRenderer() {
         }
       }
       const failed = { ok: false, svg: '', latex: safeLatex };
-      cache.set(safeLatex, failed);
+      cache.set(cacheKey, failed);
       stats.failed += 1;
       return failed;
     } catch (_) {
       const failed = { ok: false, svg: '', latex: safeLatex };
-      cache.set(safeLatex, failed);
+      cache.set(cacheKey, failed);
       stats.failed += 1;
       return failed;
     }

@@ -782,6 +782,7 @@ class _TextbookUnitAuthoringDialogState
         academyId: widget.academyId,
         bookId: widget.bookId,
         gradeLabel: widget.gradeLabel,
+        sectionHint: _sectionForSubKey(focus.subKey),
       );
     }
 
@@ -876,6 +877,7 @@ class _TextbookUnitAuthoringDialogState
         academyId: widget.academyId,
         bookId: widget.bookId,
         gradeLabel: widget.gradeLabel,
+        sectionHint: _sectionForSubKey(focus.subKey),
       );
     }
 

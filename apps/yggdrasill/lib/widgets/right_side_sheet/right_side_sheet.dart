@@ -13,6 +13,7 @@ import 'package:mneme_flutter/widgets/pdf/pdf_editor_dialog.dart';
 import 'package:mneme_flutter/widgets/pdf/homework_answer_viewer_dialog.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart' as sf;
 import 'package:uuid/uuid.dart';
 import 'file_shortcut_tab.dart';
@@ -1330,6 +1331,7 @@ class _RightSideSheetState extends State<RightSideSheet> {
           padding: const EdgeInsets.fromLTRB(10, 12, 10, 12),
           child: _AnswerKeyGradingTabPanel(
             session: _testGradingSession,
+            dialogContext: widget.dialogContext,
             onClearSession: () {
               rightSideSheetTestGradingSession.value = null;
             },
@@ -2640,6 +2642,12 @@ class _RightSheetGradingCellVm {
   final String answerImageUrl;
   final int? answerImageWidth;
   final int? answerImageHeight;
+  final double? answerImagePixelRatio;
+  final String answerRenderPolicy;
+  final String answerSourceKind;
+  final String answerSourceId;
+  final String answerAssetKind;
+  final String answerRenderStyleVersion;
 
   const _RightSheetGradingCellVm({
     required this.key,
@@ -2650,6 +2658,12 @@ class _RightSheetGradingCellVm {
     this.answerImageUrl = '',
     this.answerImageWidth,
     this.answerImageHeight,
+    this.answerImagePixelRatio,
+    this.answerRenderPolicy = '',
+    this.answerSourceKind = '',
+    this.answerSourceId = '',
+    this.answerAssetKind = '',
+    this.answerRenderStyleVersion = '',
   });
 
   String get displayQuestionLabel {
@@ -2670,10 +2684,12 @@ class _RightSheetGradingPageVm {
 
 class _AnswerKeyGradingTabPanel extends StatefulWidget {
   final RightSideSheetTestGradingSession? session;
+  final BuildContext? dialogContext;
   final VoidCallback onClearSession;
 
   const _AnswerKeyGradingTabPanel({
     required this.session,
+    this.dialogContext,
     required this.onClearSession,
   });
 
@@ -2688,6 +2704,12 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
   static const int _historyLimit = 10;
   static const int _suggestDebounceMs = 200;
   static const double _answerSlotHeight = 46.0;
+  static const double _answerImageTopPadding = 8.0;
+  static const double _answerImageBottomPadding = 10.0;
+  static const double _answerImageVerticalPadding =
+      _answerImageTopPadding + _answerImageBottomPadding;
+  static const double _answerRenderDefaultPixelRatio = 7.0;
+  static const double _inlineAnswerLineHeight = 30.0;
 
   final TextEditingController _searchCtrl = ImeAwareTextEditingController();
   final FocusNode _searchFocus = FocusNode();
@@ -2719,6 +2741,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       <String, LearningProblemAnswerRender>{};
   Set<String> _answerRenderFailedKeys = <String>{};
   int _answerRenderRequestSeq = 0;
+  String _lastAnswerRenderRouteLogKey = '';
 
   @override
   void initState() {
@@ -2847,6 +2870,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         _gradingEditLocked = false;
         _answerRenders = <String, LearningProblemAnswerRender>{};
         _answerRenderFailedKeys = <String>{};
+        _lastAnswerRenderRouteLogKey = '';
       });
       return;
     }
@@ -2859,6 +2883,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       _gradingEditLocked = session.gradingLocked;
       _answerRenders = <String, LearningProblemAnswerRender>{};
       _answerRenderFailedKeys = <String>{};
+      _lastAnswerRenderRouteLogKey = '';
     });
     unawaited(_loadAnswerRendersForSession(session));
   }
@@ -2876,18 +2901,17 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     RightSideSheetTestGradingSession session,
   ) async {
     final requestSeq = ++_answerRenderRequestSeq;
-    final answersByKey = <String, String>{};
+    final sourceIdsByKind = <String, Set<String>>{};
+    final cellKeysBySourceLookup = <String, List<String>>{};
+    final expectedAssetKeys = <String>{};
+    final missingSourceKeys = <String>{};
     for (final rawPage in session.gradingPages) {
       final rawCells = rawPage['cells'];
       if (rawCells is! List) continue;
       for (final rawCell in rawCells) {
         if (rawCell is! Map) continue;
         final key = '${rawCell['key'] ?? ''}'.trim();
-        if (key.isEmpty || answersByKey.containsKey(key)) continue;
-        final answerImageUrl =
-            '${rawCell['answerImageUrl'] ?? rawCell['answer_image_url'] ?? ''}'
-                .trim();
-        if (answerImageUrl.isNotEmpty) continue;
+        if (key.isEmpty) continue;
         final answer = '${rawCell['answer'] ?? ''}'.trim();
         final answerMode = '${rawCell['answerMode'] ?? rawCell['mode'] ?? ''}'
             .trim()
@@ -2895,34 +2919,76 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
         if (_isObjectiveAnswer(answer: answer, answerMode: answerMode)) {
           continue;
         }
-        answersByKey[key] = answer.isEmpty ? '-' : answer;
+        final assetKind =
+            '${rawCell['answerAssetKind'] ?? rawCell['answer_asset_kind'] ?? ''}'
+                .trim()
+                .toLowerCase();
+        final answerImageUrl =
+            '${rawCell['answerImageUrl'] ?? rawCell['answer_image_url'] ?? ''}'
+                .trim();
+        if (assetKind == 'raw_answer_image' && answerImageUrl.isNotEmpty) {
+          continue;
+        }
+        expectedAssetKeys.add(key);
+        final answerSourceKind =
+            '${rawCell['answerSourceKind'] ?? rawCell['answer_source_kind'] ?? rawCell['sourceKind'] ?? rawCell['source_kind'] ?? ''}'
+                .trim()
+                .toLowerCase();
+        final answerSourceId =
+            '${rawCell['answerSourceId'] ?? rawCell['answer_source_id'] ?? rawCell['sourceId'] ?? rawCell['source_id'] ?? ''}'
+                .trim();
+        if (answerSourceKind.isNotEmpty && answerSourceId.isNotEmpty) {
+          sourceIdsByKind
+              .putIfAbsent(answerSourceKind, () => <String>{})
+              .add(answerSourceId);
+          cellKeysBySourceLookup
+              .putIfAbsent(
+                  '$answerSourceKind\n$answerSourceId', () => <String>[])
+              .add(key);
+        } else {
+          missingSourceKeys.add(key);
+        }
       }
     }
-    if (answersByKey.isEmpty) return;
+    if (expectedAssetKeys.isEmpty) {
+      _debugLogAnswerRenderRoutesForSession(session);
+      return;
+    }
     try {
       final academyId = await _resolveActiveAcademyId();
       if (academyId.isEmpty) return;
-      final renders = await _problemBankService.batchRenderAnswerLatex(
-        academyId: academyId,
-        answersByKey: answersByKey,
-        textColor: 'EAF2F7',
-        fontSize: 17,
-        engine: 'mathjax',
-      );
+      final storedRendersByKey = <String, LearningProblemAnswerRender>{};
+      for (final entry in sourceIdsByKind.entries) {
+        final rendersBySourceId =
+            await _problemBankService.loadUnifiedAnswerRenderAssets(
+          academyId: academyId,
+          sourceKind: entry.key,
+          sourceIds: entry.value,
+        );
+        for (final renderEntry in rendersBySourceId.entries) {
+          final cellKeys =
+              cellKeysBySourceLookup['${entry.key}\n${renderEntry.key}'] ??
+                  const <String>[];
+          for (final cellKey in cellKeys) {
+            storedRendersByKey[cellKey] = renderEntry.value;
+          }
+        }
+      }
+      final missingKeys = <String>{
+        ...missingSourceKeys,
+        ...expectedAssetKeys
+            .where((key) => !storedRendersByKey.containsKey(key)),
+      };
       if (!mounted ||
           requestSeq != _answerRenderRequestSeq ||
           widget.session?.sessionId != session.sessionId) {
         return;
       }
-      final failed = <String>{};
-      for (final entry in answersByKey.entries) {
-        final render = renders[entry.key];
-        if (render == null || !render.hasImage) failed.add(entry.key);
-      }
       setState(() {
-        _answerRenders = renders;
-        _answerRenderFailedKeys = failed;
+        _answerRenders = storedRendersByKey;
+        _answerRenderFailedKeys = missingKeys;
       });
+      _debugLogAnswerRenderRoutesForSession(session);
     } catch (_) {
       if (!mounted ||
           requestSeq != _answerRenderRequestSeq ||
@@ -2931,8 +2997,113 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       }
       setState(() {
         _answerRenders = <String, LearningProblemAnswerRender>{};
-        _answerRenderFailedKeys = answersByKey.keys.toSet();
+        _answerRenderFailedKeys = expectedAssetKeys;
       });
+      _debugLogAnswerRenderRoutesForSession(session);
+    }
+  }
+
+  String _answerRenderRouteForRawCell(Map rawCell) {
+    final key = '${rawCell['key'] ?? ''}'.trim();
+    final answer = '${rawCell['answer'] ?? ''}'.trim();
+    final answerMode = '${rawCell['answerMode'] ?? rawCell['mode'] ?? ''}'
+        .trim()
+        .toLowerCase();
+    if (_isObjectiveAnswer(answer: answer, answerMode: answerMode)) {
+      return 'objective';
+    }
+    final assetKind =
+        '${rawCell['answerAssetKind'] ?? rawCell['answer_asset_kind'] ?? ''}'
+            .trim()
+            .toLowerCase();
+    final answerImageUrl =
+        '${rawCell['answerImageUrl'] ?? rawCell['answer_image_url'] ?? ''}'
+            .trim();
+    if (assetKind == 'raw_answer_image' && answerImageUrl.isNotEmpty) {
+      return 'raw_answer_image';
+    }
+    final render = _answerRenders[key];
+    if (render != null && render.hasImage) {
+      final style = render.styleVersion.trim();
+      if (style == kUnifiedAnswerRenderStyleVersion) {
+        return 'xelatex_asset';
+      }
+      return 'missing_xelatex_asset';
+    }
+    return 'missing_xelatex_asset';
+  }
+
+  void _debugLogAnswerRenderRoutesForSession(
+    RightSideSheetTestGradingSession session,
+  ) {
+    if (!kDebugMode) return;
+    final logKey =
+        '${session.sessionId}|${_answerRenders.length}|${_answerRenderFailedKeys.length}';
+    if (_lastAnswerRenderRouteLogKey == logKey) return;
+    _lastAnswerRenderRouteLogKey = logKey;
+    debugPrint(
+      '[ANSWER_ROUTE] session=${session.sessionId} '
+      'stored=${_answerRenders.length} failed=${_answerRenderFailedKeys.length}',
+    );
+    final routeRows = <({Map rawCell, String route})>[];
+    for (final rawPage in session.gradingPages) {
+      final rawCells = rawPage['cells'];
+      if (rawCells is! List) continue;
+      for (final rawCell in rawCells) {
+        if (rawCell is! Map) continue;
+        final key = '${rawCell['key'] ?? ''}'.trim();
+        if (key.isEmpty) continue;
+        routeRows.add(
+            (rawCell: rawCell, route: _answerRenderRouteForRawCell(rawCell)));
+      }
+    }
+    int routePriority(String route) {
+      if (route == 'xelatex_asset') return 0;
+      if (route == 'missing_xelatex_asset') return 1;
+      if (route == 'raw_answer_image') return 2;
+      if (route == 'objective') return 3;
+      return 5;
+    }
+
+    routeRows.sort((a, b) {
+      final byRoute = routePriority(a.route).compareTo(routePriority(b.route));
+      if (byRoute != 0) return byRoute;
+      return '${a.rawCell['questionIndex'] ?? ''}'
+          .compareTo('${b.rawCell['questionIndex'] ?? ''}');
+    });
+
+    var shown = 0;
+    for (final row in routeRows) {
+      final rawCell = row.rawCell;
+      final key = '${rawCell['key'] ?? ''}'.trim();
+      final sourceKind =
+          '${rawCell['answerSourceKind'] ?? rawCell['answer_source_kind'] ?? rawCell['sourceKind'] ?? rawCell['source_kind'] ?? ''}'
+              .trim();
+      final sourceId =
+          '${rawCell['answerSourceId'] ?? rawCell['answer_source_id'] ?? rawCell['sourceId'] ?? rawCell['source_id'] ?? ''}'
+              .trim();
+      final render = _answerRenders[key];
+      final style = render?.styleVersion.trim() ?? '';
+      final width = render?.width;
+      final height = render?.height;
+      final effectivePixelRatio = render?.pixelRatio ?? 1.0;
+      final displayHeight = render?.displayHeightDp ??
+          (height == null
+              ? null
+              : _answerImageNaturalDisplayHeight(
+                  rawHeight: height.toDouble(),
+                  pixelRatio: effectivePixelRatio,
+                ));
+      final rowHeight = render?.rowHeightDp;
+      debugPrint(
+        '[ANSWER_ROUTE] cell=$shown route=${row.route} '
+        'key=$key source=$sourceKind/$sourceId style=$style '
+        'size=${width ?? '-'}x${height ?? '-'} pr=$effectivePixelRatio '
+        'displayH=${displayHeight?.toStringAsFixed(1) ?? '-'} '
+        'rowH=${rowHeight?.toStringAsFixed(1) ?? '-'}',
+      );
+      shown += 1;
+      if (shown >= 12) return;
     }
   }
 
@@ -3630,6 +3801,11 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
           return value != null && value > 0 ? value : null;
         }
 
+        double? parsePositiveDouble(dynamic raw) {
+          final value = raw is num ? raw.toDouble() : double.tryParse('$raw');
+          return value != null && value > 0 ? value : null;
+        }
+
         parsedCells.add(
           _RightSheetGradingCellVm(
             key: key,
@@ -3645,6 +3821,30 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
             answerImageHeight: parsePositiveInt(
               rawCell['answerImageHeight'] ?? rawCell['answer_image_height_px'],
             ),
+            answerImagePixelRatio: parsePositiveDouble(
+              rawCell['answerImagePixelRatio'] ??
+                  rawCell['answer_image_pixel_ratio'] ??
+                  rawCell['answerRenderPixelRatio'] ??
+                  rawCell['answer_render_pixel_ratio'],
+            ),
+            answerRenderPolicy:
+                '${rawCell['answerRenderPolicy'] ?? rawCell['answer_render_policy'] ?? ''}'
+                    .trim()
+                    .toLowerCase(),
+            answerSourceKind:
+                '${rawCell['answerSourceKind'] ?? rawCell['answer_source_kind'] ?? rawCell['sourceKind'] ?? rawCell['source_kind'] ?? ''}'
+                    .trim()
+                    .toLowerCase(),
+            answerSourceId:
+                '${rawCell['answerSourceId'] ?? rawCell['answer_source_id'] ?? rawCell['sourceId'] ?? rawCell['source_id'] ?? ''}'
+                    .trim(),
+            answerAssetKind:
+                '${rawCell['answerAssetKind'] ?? rawCell['answer_asset_kind'] ?? ''}'
+                    .trim()
+                    .toLowerCase(),
+            answerRenderStyleVersion:
+                '${rawCell['answerRenderStyleVersion'] ?? rawCell['answer_render_style_version'] ?? ''}'
+                    .trim(),
           ),
         );
       }
@@ -4192,17 +4392,150 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
           ],
         ),
         const SizedBox(height: 2),
-        Text(
-          groupHomeworkTitle,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
-            color: _rsText,
-            fontWeight: FontWeight.w900,
-            fontSize: 20,
-          ),
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                groupHomeworkTitle,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: _rsText,
+                  fontWeight: FontWeight.w900,
+                  fontSize: 20,
+                ),
+              ),
+            ),
+            if (session.answerPathRaw.trim().isNotEmpty) ...[
+              const SizedBox(width: 8),
+              OutlinedButton.icon(
+                onPressed: () => unawaited(_openSessionAnswerSheet(session)),
+                icon: const Icon(Icons.picture_as_pdf_outlined, size: 15),
+                label: const Text('답지보기'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: _rsTextSub,
+                  side: const BorderSide(color: _rsBorder),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  textStyle: const TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+            ],
+          ],
         ),
       ],
+    );
+  }
+
+  bool _isSessionAnswerWebUrl(String raw) {
+    final lower = raw.trim().toLowerCase();
+    return lower.startsWith('http://') || lower.startsWith('https://');
+  }
+
+  String _sessionTextbookStorageKey(String rawPath) {
+    final trimmed = rawPath.trim();
+    if (trimmed.isEmpty || _isSessionAnswerWebUrl(trimmed)) return '';
+    final withoutScheme =
+        trimmed.toLowerCase().startsWith('storage://textbook/')
+            ? trimmed.substring('storage://textbook/'.length)
+            : trimmed;
+    final key = withoutScheme.split('?').first.trim();
+    if (!RegExp(r'^academies/.+\.pdf$', caseSensitive: false).hasMatch(key)) {
+      return '';
+    }
+    return key;
+  }
+
+  Future<String> _sessionSignedTextbookPdfUrl(String rawPath) async {
+    final key = _sessionTextbookStorageKey(rawPath);
+    if (key.isEmpty) return '';
+    try {
+      return await Supabase.instance.client.storage
+          .from('textbooks')
+          .createSignedUrl(key, 60 * 60);
+    } catch (_) {
+      return '';
+    }
+  }
+
+  String _sessionLocalFilePath(String rawPath) {
+    final trimmed = rawPath.trim();
+    if (trimmed.isEmpty || _isSessionAnswerWebUrl(trimmed)) return '';
+    if (_sessionTextbookStorageKey(trimmed).isNotEmpty) return '';
+    if (trimmed.toLowerCase().startsWith('file://')) {
+      try {
+        return Uri.parse(trimmed).toFilePath(windows: Platform.isWindows);
+      } catch (_) {
+        return trimmed.replaceFirst(RegExp(r'^file:///?'), '');
+      }
+    }
+    return trimmed;
+  }
+
+  BuildContext get _navigatorContext => widget.dialogContext ?? context;
+
+  Future<void> _openSessionAnswerSheet(
+    RightSideSheetTestGradingSession session,
+  ) async {
+    final raw = session.answerPathRaw.trim();
+    if (raw.isEmpty) return;
+    var isUrl = _isSessionAnswerWebUrl(raw);
+    var answerPath = isUrl ? raw : await _sessionSignedTextbookPdfUrl(raw);
+    if (answerPath.trim().isNotEmpty) {
+      isUrl = true;
+    } else {
+      answerPath = _sessionLocalFilePath(raw);
+    }
+    if (answerPath.trim().isEmpty) return;
+    if (!isUrl) {
+      final file = File(answerPath);
+      if (!answerPath.toLowerCase().endsWith('.pdf') || !await file.exists()) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(_navigatorContext).showSnackBar(
+          const SnackBar(content: Text('답지 PDF 파일을 찾을 수 없습니다.')),
+        );
+        return;
+      }
+    }
+
+    String? solutionPath;
+    final solutionRaw = session.solutionPathRaw.trim();
+    if (_isSessionAnswerWebUrl(solutionRaw)) {
+      solutionPath = solutionRaw;
+    } else if (solutionRaw.isNotEmpty) {
+      final signedSolution = await _sessionSignedTextbookPdfUrl(solutionRaw);
+      if (signedSolution.trim().isNotEmpty) {
+        solutionPath = signedSolution.trim();
+      }
+      final candidate = _sessionLocalFilePath(solutionRaw);
+      if (solutionPath == null &&
+          candidate.toLowerCase().endsWith('.pdf') &&
+          await File(candidate).exists()) {
+        solutionPath = candidate;
+      }
+    }
+    if (!mounted) return;
+    await openHomeworkAnswerViewerPage(
+      _navigatorContext,
+      filePath: answerPath,
+      title: session.title.trim().isEmpty ? '답지 확인' : session.title.trim(),
+      solutionFilePath: solutionPath,
+      cacheKey: session.answerViewerCacheKey.trim().isEmpty
+          ? 'right_sheet_answer:$answerPath'
+          : session.answerViewerCacheKey.trim(),
+      enableConfirm: false,
+      overlayEntries: session.overlayEntries
+          .map(
+            (entry) => HomeworkAnswerOverlayEntry(
+              title: '${entry['title'] ?? ''}',
+              page: '${entry['page'] ?? ''}',
+              memo: '${entry['memo'] ?? ''}',
+            ),
+          )
+          .toList(growable: false),
     );
   }
 
@@ -4363,28 +4696,31 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     final answer = cell.answer.trim().isEmpty ? '-' : cell.answer.trim();
     final numbers = _objectiveAnswerNumbers(answer);
     if (numbers.isNotEmpty) {
-      return Align(
-        alignment: Alignment.centerRight,
-        child: Wrap(
-          alignment: WrapAlignment.end,
-          crossAxisAlignment: WrapCrossAlignment.center,
-          spacing: 10,
-          runSpacing: 6,
-          children: [
-            for (final rune in answer.runes)
-              if (_circledObjectiveNumber(String.fromCharCode(rune)) != null)
-                Text(
-                  String.fromCharCode(rune),
-                  textAlign: TextAlign.right,
-                  style: const TextStyle(
-                    color: _rsText,
-                    fontFamily: 'ChosunNm',
-                    fontWeight: FontWeight.w400,
-                    fontSize: 40.5,
-                    height: 1.0,
+      return Padding(
+        padding: const EdgeInsets.only(right: 24),
+        child: Align(
+          alignment: Alignment.centerRight,
+          child: Wrap(
+            alignment: WrapAlignment.end,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 10,
+            runSpacing: 6,
+            children: [
+              for (final rune in answer.runes)
+                if (_circledObjectiveNumber(String.fromCharCode(rune)) != null)
+                  Text(
+                    String.fromCharCode(rune),
+                    textAlign: TextAlign.right,
+                    style: const TextStyle(
+                      color: _rsText,
+                      fontFamily: 'ChosunNm',
+                      fontWeight: FontWeight.w400,
+                      fontSize: 39.5,
+                      height: 1.0,
+                    ),
                   ),
-                ),
-          ],
+            ],
+          ),
         ),
       );
     }
@@ -4403,82 +4739,332 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     );
   }
 
-  Widget _buildAnswerImageOrFallback(_RightSheetGradingCellVm cell) {
-    if (cell.answerImageUrl.trim().isNotEmpty) {
-      return LayoutBuilder(
-        builder: (context, constraints) {
-          final rawWidth = cell.answerImageWidth?.toDouble() ?? 0;
-          final rawHeight = cell.answerImageHeight?.toDouble() ?? 0;
-          final aspect =
-              rawWidth > 0 && rawHeight > 0 ? rawWidth / rawHeight : 3.0;
-          const displayHeight = _answerSlotHeight;
-          final displayWidth = math.min(
-            constraints.maxWidth.isFinite ? constraints.maxWidth : 220.0,
-            displayHeight * aspect,
-          );
-          return SizedBox(
-            height: _answerSlotHeight,
-            child: Align(
-              alignment: Alignment.centerRight,
-              child: Image.network(
-                cell.answerImageUrl,
-                width: displayWidth,
-                height: displayHeight,
-                fit: BoxFit.contain,
-                alignment: Alignment.centerRight,
-                filterQuality: FilterQuality.high,
-                errorBuilder: (_, __, ___) => _buildAnswerFallback(cell),
-              ),
-            ),
-          );
-        },
+  double _answerImageNaturalDisplayHeight({
+    required double rawHeight,
+    required double pixelRatio,
+  }) {
+    if (!rawHeight.isFinite || rawHeight <= 0) return 28.0;
+    final safePixelRatio = pixelRatio.isFinite && pixelRatio > 0
+        ? pixelRatio
+        : _answerRenderDefaultPixelRatio;
+    final naturalHeight = rawHeight / safePixelRatio;
+    if (!naturalHeight.isFinite || naturalHeight <= 0) {
+      return _answerSlotHeight;
+    }
+    return naturalHeight;
+  }
+
+  List<({String label, String value})> _splitSetAnswerParts(String raw) {
+    final text = raw.trim();
+    if (text.isEmpty) return const [];
+    final matches = RegExp(r'(?<![\d.])[(（]\s*(\d{1,2})\s*[)）]')
+        .allMatches(text)
+        .toList(growable: false);
+    if (matches.length < 2) return const [];
+    return [
+      for (var i = 0; i < matches.length; i += 1)
+        (
+          label: '(${matches[i].group(1) ?? (i + 1).toString()})',
+          value: text
+              .substring(
+                matches[i].end,
+                i + 1 < matches.length ? matches[i + 1].start : text.length,
+              )
+              .trim(),
+        ),
+    ].where((part) => part.value.isNotEmpty).toList(growable: false);
+  }
+
+  int _estimatedInlineAnswerLineCount(_RightSheetGradingCellVm cell) {
+    final answer = cell.answer.trim();
+    if (answer.isEmpty) return 1;
+    final setParts = _splitSetAnswerParts(answer);
+    if (setParts.isNotEmpty) {
+      var lines = 0;
+      for (final part in setParts) {
+        final plain = part.value
+            .replaceAll(
+                RegExp(r'\\(?:dfrac|tfrac|frac)\s*\{([^{}]+)\}\s*\{([^{}]+)\}'),
+                r'$1/$2')
+            .replaceAll(RegExp(r'\\[a-zA-Z]+'), ' ')
+            .replaceAll(RegExp(r'[{}$\\^_]'), '')
+            .replaceAll(RegExp(r'\s+'), ' ')
+            .trim();
+        final extra = (plain.length / 28).ceil();
+        lines += math.max(1, extra);
+      }
+      return lines;
+    }
+    final normalized = _normalizeAnswerForOverflowDisplay(answer);
+    final explicitLines = '\n'.allMatches(normalized).length + 1;
+    final plainLength = normalized
+        .replaceAll(
+            RegExp(r'\\(?:dfrac|tfrac|frac)\s*\{([^{}]+)\}\s*\{([^{}]+)\}'),
+            r'$1/$2')
+        .replaceAll(RegExp(r'\\[a-zA-Z]+'), ' ')
+        .replaceAll(RegExp(r'[{}$\\^_]'), '')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim()
+        .length;
+    final estimatedByLength = (plainLength / 34).ceil();
+    final tallMathExtra =
+        RegExp(r'\\(?:dfrac|tfrac|frac)\b|\\left|\\right').hasMatch(answer)
+            ? 1
+            : 0;
+    return math.max(explicitLines, estimatedByLength) + tallMathExtra;
+  }
+
+  double _inlineAnswerSlotHeight(_RightSheetGradingCellVm cell) {
+    final lineCount = _estimatedInlineAnswerLineCount(cell);
+    final height = (lineCount * _inlineAnswerLineHeight) + 6.0;
+    return math.max(_answerSlotHeight, height);
+  }
+
+  double _answerSlotHeightForCell(_RightSheetGradingCellVm cell) {
+    if (_isObjectiveAnswer(
+      answer: cell.answer,
+      answerMode: cell.answerMode,
+    )) {
+      return _answerSlotHeight;
+    }
+    if (_isRawAnswerImageCell(cell)) {
+      final rawHeight = (cell.answerImageHeight ?? 0).toDouble();
+      final pixelRatio = cell.answerImagePixelRatio != null &&
+              cell.answerImagePixelRatio!.isFinite &&
+              cell.answerImagePixelRatio! > 0
+          ? cell.answerImagePixelRatio!
+          : 1.0;
+      final displayHeight = rawHeight > 0 ? rawHeight / pixelRatio : 38.0;
+      return math.max(
+        _answerSlotHeight,
+        displayHeight + _answerImageVerticalPadding,
       );
     }
+    final render = _answerRenders[cell.key];
+    if (render != null && render.hasImage) {
+      if (render.styleVersion.trim() != kUnifiedAnswerRenderStyleVersion) {
+        return _answerSlotHeight;
+      }
+      final rowHeight = render.rowHeightDp;
+      final displayHeight = render.displayHeightDp;
+      final minimumAssetDrivenHeight =
+          displayHeight != null && displayHeight.isFinite && displayHeight > 0
+              ? displayHeight + _answerImageVerticalPadding
+              : 0.0;
+      if (rowHeight != null && rowHeight.isFinite && rowHeight > 0) {
+        return math.max(rowHeight, minimumAssetDrivenHeight);
+      }
+      final pixelRatio = render.pixelRatio <= 0
+          ? _answerRenderDefaultPixelRatio
+          : render.pixelRatio;
+      final fallbackDisplayHeight = render.height > 0
+          ? render.height.toDouble() / pixelRatio
+          : _answerSlotHeight;
+      return math.max(
+        _answerSlotHeight,
+        fallbackDisplayHeight + _answerImageVerticalPadding,
+      );
+    }
+    return _answerSlotHeight;
+  }
+
+  Widget _buildAnswerNetworkImage({
+    required String url,
+    required double rawWidth,
+    required double rawHeight,
+    required double pixelRatio,
+    required String styleVersion,
+    double? displayWidthDp,
+    double? displayHeightDp,
+    required double slotHeight,
+    required BoxConstraints constraints,
+    required Widget Function() fallbackBuilder,
+    bool alignLeft = false,
+  }) {
+    final aspect = rawWidth > 0 && rawHeight > 0 ? rawWidth / rawHeight : 3.0;
+    final maxWidth =
+        constraints.maxWidth.isFinite ? constraints.maxWidth : 220.0;
+    final displayHeight = displayHeightDp != null &&
+            displayHeightDp.isFinite &&
+            displayHeightDp > 0
+        ? displayHeightDp
+        : rawHeight / math.max(1.0, pixelRatio);
+    final displayWidth =
+        displayWidthDp != null && displayWidthDp.isFinite && displayWidthDp > 0
+            ? displayWidthDp
+            : displayHeight * aspect;
+    final keepReadableWithHorizontalScroll = displayWidth > maxWidth;
+
+    final imageAlignment =
+        alignLeft ? Alignment.centerLeft : Alignment.centerRight;
+    final image = Image.network(
+      url,
+      width: displayWidth,
+      height: displayHeight,
+      fit: BoxFit.contain,
+      alignment: imageAlignment,
+      filterQuality: FilterQuality.high,
+      errorBuilder: (_, __, ___) => fallbackBuilder(),
+    );
+    final content = keepReadableWithHorizontalScroll
+        ? SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: image,
+          )
+        : image;
+
+    final safeSlotHeight =
+        math.max(slotHeight, displayHeight + _answerImageVerticalPadding);
+    return SizedBox(
+      height: safeSlotHeight,
+      child: Padding(
+        padding: const EdgeInsets.only(
+          top: _answerImageTopPadding,
+          bottom: _answerImageBottomPadding,
+        ),
+        child: Align(
+          alignment: imageAlignment,
+          child: content,
+        ),
+      ),
+    );
+  }
+
+  bool _isRawAnswerImageCell(_RightSheetGradingCellVm cell) {
+    return cell.answerAssetKind.trim().toLowerCase() == 'raw_answer_image' &&
+        cell.answerImageUrl.trim().isNotEmpty;
+  }
+
+  Future<void> _openRawAnswerImageDialog(_RightSheetGradingCellVm cell) async {
+    final url = cell.answerImageUrl.trim();
+    if (url.isEmpty || !mounted) return;
+    await showDialog<void>(
+      context: _navigatorContext,
+      useRootNavigator: true,
+      builder: (ctx) => Dialog(
+        backgroundColor: _rsPanelBg,
+        insetPadding: const EdgeInsets.all(20),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: const BorderSide(color: _rsBorder),
+        ),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 920, maxHeight: 720),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        '${cell.displayQuestionLabel}번 이미지 정답',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: _rsText,
+                          fontSize: 15,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () => Navigator.of(ctx).pop(),
+                      icon: const Icon(Icons.close_rounded),
+                      color: _rsTextSub,
+                      tooltip: '닫기',
+                    ),
+                  ],
+                ),
+              ),
+              Flexible(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: Container(
+                      color: _rsFieldBg,
+                      child: InteractiveViewer(
+                        minScale: 0.5,
+                        maxScale: 6,
+                        child: Center(
+                          child: Image.network(
+                            url,
+                            fit: BoxFit.contain,
+                            filterQuality: FilterQuality.high,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAnswerImageOrFallback(_RightSheetGradingCellVm cell) {
+    final slotHeight = _answerSlotHeightForCell(cell);
     if (_isObjectiveAnswer(
       answer: cell.answer,
       answerMode: cell.answerMode,
     )) {
       return SizedBox(
-        height: _answerSlotHeight,
+        height: slotHeight,
         child: _buildObjectiveAnswerFlutter(cell),
       );
     }
     final render = _answerRenders[cell.key];
-    if (render != null && render.hasImage) {
-      return SizedBox(
-        height: _answerSlotHeight,
+    if (_isRawAnswerImageCell(cell)) {
+      return GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () => unawaited(_openRawAnswerImageDialog(cell)),
         child: LayoutBuilder(
-          builder: (context, constraints) {
-            const answerLogicalScale = 1.815;
-            final pixelRatio = render.pixelRatio <= 0 ? 3.0 : render.pixelRatio;
-            final rawWidth = render.width <= 0 ? 1.0 : render.width.toDouble();
-            final rawHeight =
-                render.height <= 0 ? 1.0 : render.height.toDouble();
-            var displayWidth = rawWidth / pixelRatio * answerLogicalScale;
-            var displayHeight = rawHeight / pixelRatio * answerLogicalScale;
-            final heightScale = _answerSlotHeight / displayHeight;
-            if (heightScale.isFinite && heightScale > 0 && heightScale < 1) {
-              displayWidth *= heightScale;
-              displayHeight *= heightScale;
-            }
-            if (displayWidth > constraints.maxWidth && displayWidth > 0) {
-              final downscale = constraints.maxWidth / displayWidth;
-              displayWidth *= downscale;
-              displayHeight *= downscale;
-            }
-            return Align(
-              alignment: Alignment.centerRight,
-              child: Image.network(
-                render.url,
-                width: displayWidth,
-                height: displayHeight,
-                fit: BoxFit.contain,
-                alignment: Alignment.centerRight,
-                filterQuality: FilterQuality.high,
-                errorBuilder: (_, __, ___) => _buildAnswerFallback(cell),
-              ),
-            );
-          },
+          builder: (context, constraints) => _buildAnswerNetworkImage(
+            url: cell.answerImageUrl,
+            rawWidth: (cell.answerImageWidth ?? 0) <= 0
+                ? 1.0
+                : cell.answerImageWidth!.toDouble(),
+            rawHeight: (cell.answerImageHeight ?? 0) <= 0
+                ? 1.0
+                : cell.answerImageHeight!.toDouble(),
+            pixelRatio: cell.answerImagePixelRatio != null &&
+                    cell.answerImagePixelRatio!.isFinite &&
+                    cell.answerImagePixelRatio! > 0
+                ? cell.answerImagePixelRatio!
+                : 1.0,
+            styleVersion: '',
+            slotHeight: slotHeight,
+            constraints: constraints,
+            fallbackBuilder: () => _buildAnswerFallback(cell),
+          ),
+        ),
+      );
+    }
+    if (render != null && render.hasImage) {
+      if (render.styleVersion.trim() != kUnifiedAnswerRenderStyleVersion) {
+        return _buildAnswerFallback(cell);
+      }
+      return LayoutBuilder(
+        builder: (context, constraints) => _buildAnswerNetworkImage(
+          url: render.url,
+          rawWidth: render.width <= 0 ? 1.0 : render.width.toDouble(),
+          rawHeight: render.height <= 0 ? 1.0 : render.height.toDouble(),
+          pixelRatio: render.pixelRatio <= 0
+              ? _answerRenderDefaultPixelRatio
+              : render.pixelRatio,
+          styleVersion: render.styleVersion,
+          displayWidthDp: render.displayWidthDp,
+          displayHeightDp: render.displayHeightDp,
+          slotHeight: slotHeight,
+          constraints: constraints,
+          fallbackBuilder: () => _buildAnswerFallback(cell),
+          alignLeft: _splitSetAnswerParts(cell.answer).isNotEmpty,
         ),
       );
     }
@@ -4486,18 +5072,101 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
   }
 
   Widget _buildAnswerFallback(_RightSheetGradingCellVm cell) {
-    final failed = _answerRenderFailedKeys.contains(cell.key);
     return SizedBox(
-      height: _answerSlotHeight,
-      child: Align(
+      height: _answerSlotHeightForCell(cell),
+      child: const Align(
         alignment: Alignment.centerRight,
         child: Text(
-          failed ? '렌더 실패' : '정답 렌더링 중...',
+          '렌더 준비 안 됨',
           textAlign: TextAlign.right,
           style: TextStyle(
-            color: failed ? const Color(0xFFFFD7DE) : _rsTextSub,
+            color: Color(0xFFFFD7DE),
             fontWeight: FontWeight.w800,
             fontSize: 12,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildInlineAnswerText(_RightSheetGradingCellVm cell) {
+    final answer = cell.answer.trim().isEmpty ? '-' : cell.answer.trim();
+    final setParts = _splitSetAnswerParts(answer);
+    if (setParts.isNotEmpty) {
+      return SizedBox(
+        height: _answerSlotHeightForCell(cell),
+        child: Align(
+          alignment: Alignment.centerRight,
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (var i = 0; i < setParts.length; i += 1) ...[
+                if (i > 0) const SizedBox(height: 4),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SizedBox(
+                      width: 34,
+                      child: Text(
+                        setParts[i].label,
+                        textAlign: TextAlign.right,
+                        style: const TextStyle(
+                          color: _rsText,
+                          fontFamily: 'ChosunNm',
+                          fontWeight: FontWeight.w700,
+                          fontSize: 20,
+                          height: 1.2,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 7),
+                    Expanded(
+                      child: LatexTextRenderer(
+                        _normalizeAnswerForOverflowDisplay(setParts[i].value),
+                        textAlign: TextAlign.start,
+                        overflow: TextOverflow.visible,
+                        softWrap: true,
+                        enableDisplayMath: false,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        inlineMathScale: 0.88,
+                        fractionInlineMathScale: 1.0,
+                        style: const TextStyle(
+                          color: _rsText,
+                          fontFamily: 'ChosunNm',
+                          fontWeight: FontWeight.w700,
+                          fontSize: 23,
+                          height: 1.18,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ],
+          ),
+        ),
+      );
+    }
+    return SizedBox(
+      height: _answerSlotHeightForCell(cell),
+      child: Align(
+        alignment: Alignment.centerRight,
+        child: LatexTextRenderer(
+          _normalizeAnswerForOverflowDisplay(answer),
+          textAlign: TextAlign.right,
+          overflow: TextOverflow.visible,
+          softWrap: true,
+          enableDisplayMath: false,
+          crossAxisAlignment: CrossAxisAlignment.end,
+          inlineMathScale: 0.9,
+          fractionInlineMathScale: 1.02,
+          style: const TextStyle(
+            color: _rsText,
+            fontFamily: 'ChosunNm',
+            fontWeight: FontWeight.w700,
+            fontSize: 25,
+            height: 1.1,
           ),
         ),
       ),
@@ -4508,6 +5177,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     final state = _normalizeState(_gradingStates[cell.key]);
     final colors = _resolveAnswerRowStyle(state);
     final questionLabel = cell.displayQuestionLabel;
+    final answerSlotHeight = _answerSlotHeightForCell(cell);
     return Tooltip(
       message: _gradingEditLocked
           ? '$questionLabel번 · 저장된 채점 결과'
@@ -4556,7 +5226,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
                     const SizedBox(width: 14),
                     Expanded(
                       child: SizedBox(
-                        height: _answerSlotHeight,
+                        height: answerSlotHeight,
                         child: _buildAnswerImageOrFallback(cell),
                       ),
                     ),

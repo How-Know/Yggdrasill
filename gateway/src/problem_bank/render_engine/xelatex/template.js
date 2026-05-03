@@ -3445,6 +3445,15 @@ function scaleAnswerCjkTextInTex(tex, fontSizePt) {
   }).join('');
 }
 
+function answerSubpartLine(line) {
+  const match = String(line || '').match(/^\s*((?:\(\s*\d{1,2}\s*\)|[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]))\s*([\s\S]*)$/);
+  if (!match) return null;
+  return {
+    label: match[1].replace(/\s+/g, ''),
+    value: match[2].trim() || '-',
+  };
+}
+
 export function buildAnswerTexSource(answer, options = {}) {
   const {
     fontFamily = 'Malgun Gothic',
@@ -3452,18 +3461,31 @@ export function buildAnswerTexSource(answer, options = {}) {
     fontRegularPath = '',
     fontSizePt = 18,
     textColor = '000000',
+    backgroundColor = 'FFFFFF',
     maxWidthCm = 13.5,
   } = options;
 
   const safeFontSize = Math.max(8, Math.min(32, Number(fontSizePt) || 18));
-  const answerCjkFontSize = Math.max(7, safeFontSize * 0.88);
+  const answerCjkFontSize = Math.max(7, safeFontSize * 0.9);
   const safeWidth = Math.max(4, Math.min(18, Number(maxWidthCm) || 13.5));
   const colorHex = String(textColor || '000000').replace(/[^0-9A-Fa-f]/g, '').slice(0, 6) || '000000';
+  const backgroundHex = String(backgroundColor || 'FFFFFF').replace(/[^0-9A-Fa-f]/g, '').slice(0, 6) || 'FFFFFF';
   const bodyLines = splitAnswerRenderLines(answer)
-    .map((line) => smartTexLine(line, []))
-    .map((line) => scaleAnswerCjkTextInTex(line, answerCjkFontSize))
+    .map((line) => {
+      const subpart = answerSubpartLine(line);
+      if (!subpart) {
+        const tex = scaleAnswerCjkTextInTex(smartTexLine(line, []), answerCjkFontSize);
+        return tex && tex.trim() ? `{${tex}\\par}` : '';
+      }
+      const label = escapeLatexText(subpart.label);
+      const valueTex = scaleAnswerCjkTextInTex(smartTexLine(subpart.value, []), answerCjkFontSize);
+      return [
+        '\\noindent\\begin{tabular}{@{}l@{\\hspace{0.58em}}>{\\raggedright\\arraybackslash}p{\\dimexpr\\linewidth-2.65em\\relax}@{}}',
+        `{${label}} & {${valueTex}}`,
+        '\\end{tabular}\\par',
+      ].join('');
+    })
     .filter((line) => line && line.trim())
-    .map((line) => `{${line}\\par}`)
     .join('\n');
 
   const lines = [
@@ -3489,15 +3511,19 @@ export function buildAnswerTexSource(answer, options = {}) {
     '',
     '\\pagestyle{empty}',
     '\\setlength{\\parindent}{0pt}',
-    '\\setlength{\\parskip}{0.28em}',
-    '\\setstretch{1.55}',
-    '\\lineskiplimit=0.35em',
-    '\\lineskip=0.95em',
+    '\\setlength{\\parskip}{0.22em}',
+    '\\setstretch{1.45}',
+    '\\lineskiplimit=0.45em',
+    '\\lineskip=1.05em',
     '\\begin{document}',
+    `\\pagecolor[HTML]{${backgroundHex}}`,
     `\\color[HTML]{${colorHex}}`,
-    `\\fontsize{${safeFontSize}pt}{${(safeFontSize * 1.55).toFixed(2)}pt}\\selectfont`,
+    `\\fontsize{${safeFontSize}pt}{${(safeFontSize * 1.55).toFixed(2)}pt}\\selectfont\\mdseries`,
+    `\\begin{minipage}{${safeWidth}cm}`,
     '\\raggedright',
+    '\\noindent\\rule{0pt}{0.92em}\\ignorespaces',
     bodyLines || '-',
+    '\\end{minipage}',
     '\\end{document}',
     '',
   ];

@@ -18,6 +18,7 @@ import '../services/student_flow_store.dart';
 import '../services/homework_assignment_store.dart';
 import '../services/learning_problem_bank_service.dart';
 import '../services/print_routing_service.dart';
+import '../services/textbook_pdf_service.dart';
 import '../models/attendance_record.dart';
 import '../models/student_flow.dart';
 import 'learning/homework_quick_add_proxy_dialog.dart';
@@ -2892,6 +2893,19 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                       'answerImageWidth': cell.answerImageWidth,
                     if (cell.answerImageHeight != null)
                       'answerImageHeight': cell.answerImageHeight,
+                    if (cell.answerImagePixelRatio != null)
+                      'answerImagePixelRatio': cell.answerImagePixelRatio,
+                    if (cell.answerRenderPolicy.trim().isNotEmpty)
+                      'answerRenderPolicy': cell.answerRenderPolicy.trim(),
+                    if (cell.answerSourceKind.trim().isNotEmpty)
+                      'answerSourceKind': cell.answerSourceKind.trim(),
+                    if (cell.answerSourceId.trim().isNotEmpty)
+                      'answerSourceId': cell.answerSourceId.trim(),
+                    if (cell.answerAssetKind.trim().isNotEmpty)
+                      'answerAssetKind': cell.answerAssetKind.trim(),
+                    if (cell.answerRenderStyleVersion.trim().isNotEmpty)
+                      'answerRenderStyleVersion':
+                          cell.answerRenderStyleVersion.trim(),
                   },
                 )
                 .toList(growable: false),
@@ -2968,6 +2982,12 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         questionByKey.putIfAbsent(id, () => question);
       }
     }
+    final answerRenderByQuestionId =
+        await _problemBankService.loadUnifiedAnswerRenderAssets(
+      academyId: academyId,
+      sourceKind: 'pb_question',
+      sourceIds: questions.map((question) => question.id),
+    );
 
     final modeByUid = preset.questionModeByQuestionUid;
     final presetScoreByUid = preset.questionScoreByQuestionUid;
@@ -3018,6 +3038,7 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           : (question.sourceOrder > 0 ? question.sourceOrder : fallbackIndex);
       final answerMode = (modeByUid[uid] ?? '').trim().toLowerCase();
       final answer = previewAnswerForMode(question, answerMode).trim();
+      final answerRender = answerRenderByQuestionId[question.id.trim()];
 
       int pageNumber;
       if (orderedPageNumbers.isNotEmpty) {
@@ -3052,6 +3073,15 @@ class _ClassContentScreenState extends State<ClassContentScreen>
               questionIndex: questionIndex,
               answer: answer.isEmpty ? '-' : answer,
               answerMode: answerMode,
+              answerImageUrl: answerRender?.url ?? '',
+              answerImageWidth: answerRender?.width,
+              answerImageHeight: answerRender?.height,
+              answerImagePixelRatio: answerRender?.pixelRatio,
+              answerSourceKind: 'pb_question',
+              answerSourceId: question.id.trim(),
+              answerAssetKind:
+                  answerRender == null ? '' : 'unified_answer_render',
+              answerRenderStyleVersion: answerRender?.styleVersion ?? '',
             ),
           );
     }
@@ -3082,6 +3112,12 @@ class _ClassContentScreenState extends State<ClassContentScreen>
     if (raw is int) return raw;
     if (raw is num) return raw.toInt();
     return int.tryParse('$raw'.trim());
+  }
+
+  double? _doubleFromDynamic(dynamic raw) {
+    if (raw == null) return null;
+    if (raw is num) return raw.toDouble();
+    return double.tryParse('$raw'.trim());
   }
 
   String _trimDynamic(dynamic raw) => '${raw ?? ''}'.trim();
@@ -3140,12 +3176,11 @@ class _ClassContentScreenState extends State<ClassContentScreen>
   }
 
   String _textbookQuestionLabelFromRow(Map<String, dynamic> row) {
+    final raw = _trimDynamic(row['problem_number']);
+    if (raw.isNotEmpty) return raw;
     final questionLabel = _trimDynamic(row['question_label']);
     if (questionLabel.isNotEmpty) return questionLabel;
-    final label = _trimDynamic(row['label']);
-    if (label.isNotEmpty) return label;
-    final raw = _trimDynamic(row['problem_number']);
-    return raw.isEmpty ? '-' : raw;
+    return '-';
   }
 
   String _textbookProblemNumberKey(String raw) {
@@ -3399,6 +3434,9 @@ class _ClassContentScreenState extends State<ClassContentScreen>
           ? _trimDynamic(row['pb_question_uid'])
           : cropId;
       final key = '${baseItem.id}|$pageNumber|$questionIndex|$questionUid';
+      final answerKind = _trimDynamic(row['answer_kind']).toLowerCase();
+      final renderStyleVersion =
+          _trimDynamic(row['answer_render_style_version']);
       cellsByPage
           .putIfAbsent(pageNumber, () => <HomeworkAnswerGradingCell>[])
           .add(
@@ -3411,6 +3449,14 @@ class _ClassContentScreenState extends State<ClassContentScreen>
               answerImageUrl: _trimDynamic(row['answer_image_url']),
               answerImageWidth: _intFromDynamic(row['answer_image_width_px']),
               answerImageHeight: _intFromDynamic(row['answer_image_height_px']),
+              answerImagePixelRatio:
+                  _doubleFromDynamic(row['answer_render_pixel_ratio']),
+              answerSourceKind: 'textbook_crop',
+              answerSourceId: cropId,
+              answerAssetKind: answerKind == 'image'
+                  ? 'raw_answer_image'
+                  : (renderStyleVersion.isEmpty ? '' : 'unified_answer_render'),
+              answerRenderStyleVersion: renderStyleVersion,
             ),
           );
     }
@@ -3476,6 +3522,75 @@ class _ClassContentScreenState extends State<ClassContentScreen>
             .hasMatch(normalizedAssignmentCode)
         ? normalizedAssignmentCode
         : '';
+  }
+
+  Future<Map<String, String>> _resolveRightSheetAnswerViewerLinks({
+    required String studentId,
+    required HomeworkItem hw,
+  }) async {
+    try {
+      final assignmentByItemId = await _loadActiveAssignmentByItemId(studentId);
+      final assignment = assignmentByItemId[hw.id.trim()];
+      if (_isPbPrintTarget(hw: hw, assignment: assignment)) {
+        final pbSource = await _resolvePbPrintSource(
+          hw,
+          assignment: assignment,
+          ensureExportJob: true,
+        );
+        final pathRaw = (pbSource?.pathRaw ?? '').trim();
+        if (pathRaw.isNotEmpty) {
+          final sourceKey = (pbSource?.sourceKey ?? '').trim();
+          return <String, String>{
+            'answerPathRaw': pathRaw,
+            'solutionPathRaw': '',
+            'cacheKey': sourceKey.isEmpty
+                ? 'student:$studentId|right_sheet_answer:$pathRaw'
+                : 'student:$studentId|right_sheet_answer:$sourceKey',
+          };
+        }
+      }
+    } catch (_) {}
+
+    final textbookLinks = await _resolveHomeworkPdfLinks(
+      hw,
+      allowFlowFallback: true,
+    );
+    final answerPathRaw = await _resolveTextbookPdfPathForRightSheet(
+      textbookLinks: textbookLinks,
+      kind: 'ans',
+    );
+    final solutionPathRaw = await _resolveTextbookPdfPathForRightSheet(
+      textbookLinks: textbookLinks,
+      kind: 'sol',
+    );
+    return <String, String>{
+      'answerPathRaw': answerPathRaw,
+      'solutionPathRaw': solutionPathRaw,
+      'cacheKey': 'student:$studentId|right_sheet_answer:$answerPathRaw',
+    };
+  }
+
+  Future<String> _resolveTextbookPdfPathForRightSheet({
+    required _ResolvedHomeworkPdfLinks textbookLinks,
+    required String kind,
+  }) async {
+    final normalizedKind = kind.trim().toLowerCase();
+    final raw = normalizedKind == 'sol'
+        ? textbookLinks.solutionPathRaw.trim()
+        : textbookLinks.answerPathRaw.trim();
+    if (raw.isEmpty) return '';
+    try {
+      final source = await TextbookPdfService.instance.resolve(
+        TextbookPdfRef(
+          fileId: textbookLinks.bookId,
+          gradeLabel: textbookLinks.gradeLabel,
+          kind: normalizedKind == 'sol' ? 'sol' : 'ans',
+        ),
+      );
+      return (source.localPath ?? source.url ?? '').trim();
+    } catch (_) {
+      return raw;
+    }
   }
 
   Future<void> _handleSubmittedChipTapForPending({
@@ -3562,6 +3677,11 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                 .hasMatch(normalizedAssignmentCode)
             ? normalizedAssignmentCode
             : '';
+        final gradingPdfLinks = await _resolveRightSheetAnswerViewerLinks(
+          studentId: studentId,
+          hw: hw,
+        );
+        if (!mounted) return;
         rightSideSheetTestGradingSession.value =
             RightSideSheetTestGradingSession(
           sessionId: 'student:$studentId|test_pb_grade:${payload.homeworkId}',
@@ -3580,6 +3700,9 @@ class _ClassContentScreenState extends State<ClassContentScreen>
                 },
               )
               .toList(growable: false),
+          answerPathRaw: gradingPdfLinks['answerPathRaw'] ?? '',
+          solutionPathRaw: gradingPdfLinks['solutionPathRaw'] ?? '',
+          answerViewerCacheKey: gradingPdfLinks['cacheKey'] ?? '',
           initialStates: _toRightSheetStateMap(initialStates),
           gradingLocked: hasSavedGrading,
           onRequestEditReset: () async {
@@ -3693,6 +3816,11 @@ class _ClassContentScreenState extends State<ClassContentScreen>
         fallbackHomework: hw,
         payloadTitle: textbookProblemPayload.title,
       );
+      final gradingPdfLinks = await _resolveRightSheetAnswerViewerLinks(
+        studentId: studentId,
+        hw: hw,
+      );
+      if (!mounted) return;
       rightSideSheetTestGradingSession.value = RightSideSheetTestGradingSession(
         sessionId:
             'student:$studentId|textbook_problem_grade:${textbookProblemPayload.homeworkId}',
@@ -3713,6 +3841,9 @@ class _ClassContentScreenState extends State<ClassContentScreen>
               },
             )
             .toList(growable: false),
+        answerPathRaw: gradingPdfLinks['answerPathRaw'] ?? '',
+        solutionPathRaw: gradingPdfLinks['solutionPathRaw'] ?? '',
+        answerViewerCacheKey: gradingPdfLinks['cacheKey'] ?? '',
         initialStates: _toRightSheetStateMap(initialStates),
         gradingLocked: hasSavedGrading,
         onRequestEditReset: () async {

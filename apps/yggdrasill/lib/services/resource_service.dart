@@ -1066,15 +1066,140 @@ class ResourceService {
             });
           }
         }
-        for (final ids in chunks(byCropId.keys.toList(growable: false), 250)) {
+        final renderedCropIds = <String>{};
+        Future<void> applyUnifiedRenderAssetsForStyle(
+          String styleVersion,
+        ) async {
+          final remainingIds = byCropId.keys
+              .where((id) => !renderedCropIds.contains(id))
+              .toList(growable: false);
+          if (remainingIds.isEmpty) return;
+          for (final ids in chunks(remainingIds, 250)) {
+            final renderRows = await supa
+                .from('answer_render_assets')
+                .select(
+                  'source_id, storage_bucket, storage_path, width_px, height_px, '
+                  'pixel_ratio, source_hash, engine, style_version, render_error',
+                )
+                .eq('academy_id', academyId)
+                .eq('source_kind', 'textbook_crop')
+                .eq('engine', 'xelatex')
+                .eq('style_version', styleVersion)
+                .eq('render_error', '')
+                .inFilter('source_id', ids);
+            for (final raw in renderRows) {
+              final render = Map<String, dynamic>.from(raw);
+              final cropId = '${render['source_id'] ?? ''}'.trim();
+              final crop = byCropId[cropId];
+              if (crop == null) continue;
+              if (renderedCropIds.contains(cropId)) continue;
+              final answerKind =
+                  '${crop['answer_kind'] ?? ''}'.trim().toLowerCase();
+              if (answerKind == 'image') continue;
+              final bucket =
+                  '${render['storage_bucket'] ?? 'textbook-answer-renders'}'
+                      .trim();
+              final storagePath = '${render['storage_path'] ?? ''}'.trim();
+              if (bucket.isEmpty || storagePath.isEmpty) continue;
+              var renderUrl = '';
+              try {
+                renderUrl = await supa.storage
+                    .from(bucket)
+                    .createSignedUrl(storagePath, 60 * 30);
+              } catch (_) {
+                renderUrl = '';
+              }
+              if (renderUrl.isEmpty) continue;
+              crop.addAll({
+                'answer_render_image_bucket': bucket,
+                'answer_render_image_path': storagePath,
+                'answer_render_image_url': renderUrl,
+                'answer_render_image_width_px': render['width_px'],
+                'answer_render_image_height_px': render['height_px'],
+                'answer_render_pixel_ratio': render['pixel_ratio'],
+                'answer_render_source_hash': render['source_hash'],
+                'answer_render_style_version': render['style_version'],
+                'answer_image_url': renderUrl,
+                'answer_image_width_px': render['width_px'],
+                'answer_image_height_px': render['height_px'],
+              });
+              renderedCropIds.add(cropId);
+            }
+          }
+        }
+
+        await applyUnifiedRenderAssetsForStyle(
+          'answer-xelatex-v5-rightsheet-bold',
+        );
+        await applyUnifiedRenderAssetsForStyle(
+          'answer-xelatex-v4-rightsheet-opaque',
+        );
+        final v3FallbackIds = byCropId.keys
+            .where((id) => !renderedCropIds.contains(id))
+            .toList(growable: false);
+        for (final ids in chunks(v3FallbackIds, 250)) {
+          final renderRows = await supa
+              .from('answer_render_assets')
+              .select(
+                'source_id, storage_bucket, storage_path, width_px, height_px, '
+                'pixel_ratio, source_hash, engine, style_version, render_error',
+              )
+              .eq('academy_id', academyId)
+              .eq('source_kind', 'textbook_crop')
+              .eq('engine', 'xelatex')
+              .eq('style_version', 'answer-xelatex-v3-unified')
+              .eq('render_error', '')
+              .inFilter('source_id', ids);
+          for (final raw in renderRows) {
+            final render = Map<String, dynamic>.from(raw);
+            final cropId = '${render['source_id'] ?? ''}'.trim();
+            final crop = byCropId[cropId];
+            if (crop == null) continue;
+            final answerKind =
+                '${crop['answer_kind'] ?? ''}'.trim().toLowerCase();
+            if (answerKind == 'image') continue;
+            final bucket =
+                '${render['storage_bucket'] ?? 'answer-renders'}'.trim();
+            final storagePath = '${render['storage_path'] ?? ''}'.trim();
+            if (bucket.isEmpty || storagePath.isEmpty) continue;
+            var renderUrl = '';
+            try {
+              renderUrl = await supa.storage
+                  .from(bucket)
+                  .createSignedUrl(storagePath, 60 * 30);
+            } catch (_) {
+              renderUrl = '';
+            }
+            if (renderUrl.isEmpty) continue;
+            crop.addAll({
+              'answer_render_image_bucket': bucket,
+              'answer_render_image_path': storagePath,
+              'answer_render_image_url': renderUrl,
+              'answer_render_image_width_px': render['width_px'],
+              'answer_render_image_height_px': render['height_px'],
+              'answer_render_pixel_ratio': render['pixel_ratio'],
+              'answer_render_source_hash': render['source_hash'],
+              'answer_render_style_version': render['style_version'],
+              'answer_image_url': renderUrl,
+              'answer_image_width_px': render['width_px'],
+              'answer_image_height_px': render['height_px'],
+            });
+            renderedCropIds.add(cropId);
+          }
+        }
+        final legacyFallbackIds = byCropId.keys
+            .where((id) => !renderedCropIds.contains(id))
+            .toList(growable: false);
+        for (final ids in chunks(legacyFallbackIds, 250)) {
           final renderRows = await supa
               .from('textbook_answer_render_assets')
               .select(
                 'crop_id, storage_bucket, storage_path, width_px, height_px, '
                 'pixel_ratio, source_hash, engine, style_version, render_error',
               )
+              .eq('academy_id', academyId)
               .eq('engine', 'xelatex')
-              .eq('style_version', 'textbook-answer-xelatex-v1-alpha')
+              .eq('style_version', 'textbook-answer-xelatex-v2-hires')
               .eq('render_error', '')
               .inFilter('crop_id', ids);
           for (final raw in renderRows) {
@@ -1107,6 +1232,7 @@ class ResourceService {
               'answer_render_image_height_px': render['height_px'],
               'answer_render_pixel_ratio': render['pixel_ratio'],
               'answer_render_source_hash': render['source_hash'],
+              'answer_render_style_version': render['style_version'],
               'answer_image_url': renderUrl,
               'answer_image_width_px': render['width_px'],
               'answer_image_height_px': render['height_px'],

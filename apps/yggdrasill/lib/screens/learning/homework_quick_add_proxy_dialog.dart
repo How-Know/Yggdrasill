@@ -121,6 +121,7 @@ class HomeworkQuickAddProxyDialogState
   final ScrollController _leftTreeScrollController = ScrollController();
   final ScrollController _rangeFallbackScrollController = ScrollController();
   final ScrollController _inputPanelScrollController = ScrollController();
+  final ScrollController _rangeContentScrollController = ScrollController();
   final Map<String, GlobalKey> _smallHeaderKeys = <String, GlobalKey>{};
   final Map<String, GlobalKey> _leftSmallRowKeys = <String, GlobalKey>{};
 
@@ -309,6 +310,7 @@ class HomeworkQuickAddProxyDialogState
     _leftTreeScrollController.dispose();
     _rangeFallbackScrollController.dispose();
     _inputPanelScrollController.dispose();
+    _rangeContentScrollController.dispose();
     super.dispose();
   }
 
@@ -4339,6 +4341,10 @@ class HomeworkQuickAddProxyDialogState
   }
 
   Widget _buildRangeInlineEditors() {
+    const singleLineInputHeight = 58.0;
+    const readonlyLineHeight = 20.0;
+    const readonlyLineGap = 4.0;
+    const contentPreviewHeight = 72.0;
     final hasSelection = _rangeAutoUnitMappings.isNotEmpty;
     final pageText =
         _rangeAutoPage.trim().isEmpty ? '-' : 'p.${_rangeAutoPage.trim()}';
@@ -4346,7 +4352,12 @@ class HomeworkQuickAddProxyDialogState
         _rangeAutoCount.trim().isEmpty ? '-' : '${_rangeAutoCount.trim()}문항';
     final scopeText =
         _rangeAutoScope.trim().isEmpty ? '-' : _rangeAutoScope.trim();
-    Widget readonlyLine(String label, String value) {
+    Widget readonlyLine(
+      String label,
+      String value, {
+      int? maxLines,
+      TextOverflow overflow = TextOverflow.clip,
+    }) {
       return Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -4358,6 +4369,7 @@ class HomeworkQuickAddProxyDialogState
                 color: kDlgTextSub,
                 fontSize: 12.5,
                 fontWeight: FontWeight.w700,
+                height: 1.35,
               ),
             ),
           ),
@@ -4371,6 +4383,68 @@ class HomeworkQuickAddProxyDialogState
                 height: 1.35,
               ),
               softWrap: true,
+              maxLines: maxLines,
+              overflow: overflow,
+            ),
+          ),
+        ],
+      );
+    }
+
+    Widget boundedReadonlyLine(
+      String label,
+      String value, {
+      required double height,
+      int? maxLines,
+      TextOverflow overflow = TextOverflow.clip,
+    }) {
+      return SizedBox(
+        height: height,
+        child: readonlyLine(
+          label,
+          value,
+          maxLines: maxLines,
+          overflow: overflow,
+        ),
+      );
+    }
+
+    Widget readonlyScrollableContentLine(String value) {
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SizedBox(
+            width: 58,
+            child: Text(
+              '내용',
+              style: TextStyle(
+                color: kDlgTextSub,
+                fontSize: 12.5,
+                fontWeight: FontWeight.w700,
+                height: 1.35,
+              ),
+            ),
+          ),
+          Expanded(
+            child: SizedBox(
+              height: contentPreviewHeight,
+              child: Scrollbar(
+                controller: _rangeContentScrollController,
+                thumbVisibility: false,
+                child: SingleChildScrollView(
+                  controller: _rangeContentScrollController,
+                  child: LatexTextRenderer(
+                    value,
+                    style: const TextStyle(
+                      color: kDlgText,
+                      fontSize: 13.2,
+                      fontWeight: FontWeight.w600,
+                      height: 1.35,
+                    ),
+                    softWrap: true,
+                  ),
+                ),
+              ),
             ),
           ),
         ],
@@ -4380,57 +4454,74 @@ class HomeworkQuickAddProxyDialogState
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        TextField(
-          controller: _rangeTitle,
-          enabled: hasSelection,
-          style: const TextStyle(color: kDlgText, fontWeight: FontWeight.w600),
-          decoration: _inputDecoration(
-            '하위 과제명',
-            hint: hasSelection ? '자동 생성된 과제명을 수정할 수 있어요' : '범위를 선택하면 자동 생성됩니다',
+        SizedBox(
+          height: singleLineInputHeight,
+          child: TextField(
+            controller: _rangeTitle,
+            enabled: hasSelection,
+            style:
+                const TextStyle(color: kDlgText, fontWeight: FontWeight.w600),
+            decoration: _inputDecoration(
+              '하위 과제명',
+              hint:
+                  hasSelection ? '자동 생성된 과제명을 수정할 수 있어요' : '범위를 선택하면 자동 생성됩니다',
+            ),
           ),
         ),
         const SizedBox(height: 10.4),
-        TextField(
-          controller: _memo,
-          enabled: hasSelection,
-          minLines: 1,
-          maxLines: 1,
-          style: const TextStyle(color: kDlgText),
-          decoration: _inputDecoration(
-            '메모',
-            hint: hasSelection ? '예: 홀수 번호만 풀기' : '범위를 선택하면 입력할 수 있어요',
+        SizedBox(
+          height: singleLineInputHeight,
+          child: TextField(
+            controller: _memo,
+            enabled: hasSelection,
+            minLines: 1,
+            maxLines: 1,
+            style: const TextStyle(color: kDlgText),
+            decoration: _inputDecoration(
+              '메모',
+              hint: hasSelection ? '예: 홀수 번호만 풀기' : '범위를 선택하면 입력할 수 있어요',
+            ),
           ),
         ),
         const SizedBox(height: 6),
         if (_isCurrentHomeworkTypeTest()) ...[
           const SizedBox(height: 10.4),
-          TextField(
-            controller: _timeLimitMinutes,
-            enabled: hasSelection,
-            keyboardType: TextInputType.number,
-            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-            style: const TextStyle(
-              color: kDlgText,
-              fontWeight: FontWeight.w600,
-            ),
-            decoration: _inputDecoration(
-              '제한시간(분)',
-              hint: hasSelection ? '예: 50' : '범위를 선택하면 입력할 수 있어요',
+          SizedBox(
+            height: singleLineInputHeight,
+            child: TextField(
+              controller: _timeLimitMinutes,
+              enabled: hasSelection,
+              keyboardType: TextInputType.number,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              style: const TextStyle(
+                color: kDlgText,
+                fontWeight: FontWeight.w600,
+              ),
+              decoration: _inputDecoration(
+                '제한시간(분)',
+                hint: hasSelection ? '예: 50' : '범위를 선택하면 입력할 수 있어요',
+              ),
             ),
           ),
         ],
         const SizedBox(height: 12),
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(child: readonlyLine('범위', scopeText)),
-            const SizedBox(width: 12),
-            Expanded(child: readonlyLine('페이지', '$pageText  ·  $countText')),
-          ],
+        boundedReadonlyLine(
+          '범위',
+          scopeText,
+          height: readonlyLineHeight,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
         ),
-        const SizedBox(height: 10),
-        readonlyLine(
-          '내용',
+        const SizedBox(height: readonlyLineGap),
+        boundedReadonlyLine(
+          '페이지',
+          '$pageText  ·  $countText',
+          height: readonlyLineHeight,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+        const SizedBox(height: readonlyLineGap),
+        readonlyScrollableContentLine(
           _rangeContent.text.trim().isEmpty
               ? (hasSelection ? '-' : '범위를 선택하면 자동 생성됩니다')
               : _rangeContent.text.trim(),
@@ -6683,7 +6774,7 @@ class HomeworkQuickAddProxyDialogState
     Widget detailsPanel({
       required bool compact,
     }) {
-      final content = Column(
+      final detailContent = Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           YggDialogSectionHeader(
@@ -6695,15 +6786,27 @@ class HomeworkQuickAddProxyDialogState
             waitingSelectedBook: waitingSelectedBook,
             selectedBook: selectedBook,
           ),
-          const SizedBox(height: 22),
+        ],
+      );
+      final optionsContent = Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
           const Divider(height: 1, thickness: 1, color: kDlgBorder),
-          const SizedBox(height: 14),
+          const SizedBox(height: 10),
           const YggDialogSectionHeader(
             icon: Icons.tune_rounded,
             title: '출제 옵션',
           ),
           const SizedBox(height: 6),
           _buildAssignmentOptions(),
+        ],
+      );
+      final content = Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          detailContent,
+          const SizedBox(height: 14),
+          optionsContent,
         ],
       );
       final pinChildActions = _useCustomSource || hasBookSelection;
@@ -6719,17 +6822,17 @@ class HomeworkQuickAddProxyDialogState
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Expanded(
-                    child: _useCustomSource
-                        ? Scrollbar(
-                            controller: _inputPanelScrollController,
-                            thumbVisibility: false,
-                            child: SingleChildScrollView(
-                              controller: _inputPanelScrollController,
-                              child: content,
-                            ),
-                          )
-                        : content,
+                    child: Scrollbar(
+                      controller: _inputPanelScrollController,
+                      thumbVisibility: false,
+                      child: SingleChildScrollView(
+                        controller: _inputPanelScrollController,
+                        child: detailContent,
+                      ),
+                    ),
                   ),
+                  const SizedBox(height: 10),
+                  optionsContent,
                   const SizedBox(height: 12),
                   secondaryActions(),
                 ],

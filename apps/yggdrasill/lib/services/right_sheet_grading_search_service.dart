@@ -12,6 +12,7 @@ import 'homework_test_grading_result_service.dart';
 import 'homework_store.dart';
 import 'learning_problem_bank_service.dart';
 import 'tenant_service.dart';
+import 'textbook_pdf_service.dart';
 
 class RightSheetGradingSearchService {
   RightSheetGradingSearchService._();
@@ -272,6 +273,11 @@ class RightSheetGradingSearchService {
       fallback: '',
     );
     final overlayEntries = _buildOverlayEntriesForHomework(hw);
+    final gradingPdfLinks = await _resolveRightSheetAnswerViewerLinks(
+      studentId: studentId,
+      hw: hw,
+    );
+    if (!context.mounted) return false;
 
     rightSideSheetTestGradingSession.value = RightSideSheetTestGradingSession(
       sessionId: 'student:$studentId|test_pb_grade:${payload.homeworkId}',
@@ -282,6 +288,9 @@ class RightSheetGradingSearchService {
       gradingPages: _toRightSheetGradingPages(payload.gradingPages),
       scoreByQuestionKey: payload.scoreByQuestionKey,
       overlayEntries: overlayEntries,
+      answerPathRaw: gradingPdfLinks['answerPathRaw'] ?? '',
+      solutionPathRaw: gradingPdfLinks['solutionPathRaw'] ?? '',
+      answerViewerCacheKey: gradingPdfLinks['cacheKey'] ?? '',
       initialStates: _toRightSheetStateMap(initialStates),
       gradingLocked: hasSavedGrading,
       onRequestEditReset: () async {
@@ -427,6 +436,88 @@ class RightSheetGradingSearchService {
     );
   }
 
+  Future<Map<String, String>> _resolveRightSheetAnswerViewerLinks({
+    required String studentId,
+    required HomeworkItem hw,
+  }) async {
+    final presetId = (hw.pbPresetId ?? '').trim();
+    if (presetId.isNotEmpty) {
+      try {
+        final academyId = await _resolveAcademyIdForPrint();
+        final release = await _problemBankService.getLatestLiveReleaseForPreset(
+          academyId: academyId,
+          presetId: presetId,
+        );
+        final exportJobId =
+            (release?.activeExportJobId.trim().isNotEmpty == true)
+                ? release!.activeExportJobId.trim()
+                : (release?.frozenExportJobId ?? '').trim();
+        if (exportJobId.isNotEmpty) {
+          var signedUrl = await _problemBankService.regenerateExportSignedUrl(
+            academyId: academyId,
+            exportJobId: exportJobId,
+          );
+          if (signedUrl.trim().isEmpty) {
+            final job = await _problemBankService.getExportJob(
+              academyId: academyId,
+              jobId: exportJobId,
+            );
+            signedUrl = job?.outputUrl.trim() ?? '';
+          }
+          if (signedUrl.trim().isNotEmpty) {
+            return <String, String>{
+              'answerPathRaw': signedUrl.trim(),
+              'solutionPathRaw': '',
+              'cacheKey':
+                  'student:$studentId|right_sheet_answer:pb:$exportJobId',
+            };
+          }
+        }
+      } catch (_) {}
+    }
+
+    final textbookLinks = await _resolveHomeworkPdfLinks(
+      hw,
+      allowFlowFallback: true,
+    );
+    final answerPathRaw = await _resolveTextbookPdfPathForRightSheet(
+      textbookLinks: textbookLinks,
+      kind: 'ans',
+    );
+    final solutionPathRaw = await _resolveTextbookPdfPathForRightSheet(
+      textbookLinks: textbookLinks,
+      kind: 'sol',
+    );
+    return <String, String>{
+      'answerPathRaw': answerPathRaw,
+      'solutionPathRaw': solutionPathRaw,
+      'cacheKey': 'student:$studentId|right_sheet_answer:$answerPathRaw',
+    };
+  }
+
+  Future<String> _resolveTextbookPdfPathForRightSheet({
+    required _ResolvedHomeworkPdfLinks textbookLinks,
+    required String kind,
+  }) async {
+    final normalizedKind = kind.trim().toLowerCase();
+    final raw = normalizedKind == 'sol'
+        ? textbookLinks.solutionPathRaw.trim()
+        : textbookLinks.answerPathRaw.trim();
+    if (raw.isEmpty) return '';
+    try {
+      final source = await TextbookPdfService.instance.resolve(
+        TextbookPdfRef(
+          fileId: textbookLinks.bookId,
+          gradeLabel: textbookLinks.gradeLabel,
+          kind: normalizedKind == 'sol' ? 'sol' : 'ans',
+        ),
+      );
+      return (source.localPath ?? source.url ?? '').trim();
+    } catch (_) {
+      return raw;
+    }
+  }
+
   Future<
       ({
         String homeworkId,
@@ -497,6 +588,12 @@ class RightSheetGradingSearchService {
         questionByKey.putIfAbsent(id, () => question);
       }
     }
+    final answerRenderByQuestionId =
+        await _problemBankService.loadUnifiedAnswerRenderAssets(
+      academyId: academyId,
+      sourceKind: 'pb_question',
+      sourceIds: questions.map((question) => question.id),
+    );
 
     final modeByUid = preset.questionModeByQuestionUid;
     final presetScoreByUid = preset.questionScoreByQuestionUid;
@@ -546,6 +643,7 @@ class RightSheetGradingSearchService {
           : (question.sourceOrder > 0 ? question.sourceOrder : fallbackIndex);
       final answerMode = (modeByUid[uid] ?? '').trim().toLowerCase();
       final answer = previewAnswerForMode(question, answerMode).trim();
+      final answerRender = answerRenderByQuestionId[question.id.trim()];
       int pageNumber;
       if (orderedPageNumbers.isNotEmpty) {
         while (
@@ -578,6 +676,15 @@ class RightSheetGradingSearchService {
               questionIndex: questionIndex,
               answer: answer.isEmpty ? '-' : answer,
               answerMode: answerMode,
+              answerImageUrl: answerRender?.url ?? '',
+              answerImageWidth: answerRender?.width,
+              answerImageHeight: answerRender?.height,
+              answerImagePixelRatio: answerRender?.pixelRatio,
+              answerSourceKind: 'pb_question',
+              answerSourceId: question.id.trim(),
+              answerAssetKind:
+                  answerRender == null ? '' : 'unified_answer_render',
+              answerRenderStyleVersion: answerRender?.styleVersion ?? '',
             ),
           );
     }
@@ -838,6 +945,19 @@ class RightSheetGradingSearchService {
                       'answerImageWidth': cell.answerImageWidth,
                     if (cell.answerImageHeight != null)
                       'answerImageHeight': cell.answerImageHeight,
+                    if (cell.answerImagePixelRatio != null)
+                      'answerImagePixelRatio': cell.answerImagePixelRatio,
+                    if (cell.answerRenderPolicy.trim().isNotEmpty)
+                      'answerRenderPolicy': cell.answerRenderPolicy.trim(),
+                    if (cell.answerSourceKind.trim().isNotEmpty)
+                      'answerSourceKind': cell.answerSourceKind.trim(),
+                    if (cell.answerSourceId.trim().isNotEmpty)
+                      'answerSourceId': cell.answerSourceId.trim(),
+                    if (cell.answerAssetKind.trim().isNotEmpty)
+                      'answerAssetKind': cell.answerAssetKind.trim(),
+                    if (cell.answerRenderStyleVersion.trim().isNotEmpty)
+                      'answerRenderStyleVersion':
+                          cell.answerRenderStyleVersion.trim(),
                   },
                 )
                 .toList(growable: false),

@@ -60,6 +60,9 @@ class RightSideSheetTestGradingSession {
   final RightSheetTestGradingEditResetAction? onRequestEditReset;
   final bool closeSheetOnAction;
   final Map<String, double> scoreByQuestionKey;
+  final String answerPathRaw;
+  final String solutionPathRaw;
+  final String answerViewerCacheKey;
 
   const RightSideSheetTestGradingSession({
     required this.sessionId,
@@ -76,6 +79,9 @@ class RightSideSheetTestGradingSession {
     this.onRequestEditReset,
     this.closeSheetOnAction = true,
     this.scoreByQuestionKey = const <String, double>{},
+    this.answerPathRaw = '',
+    this.solutionPathRaw = '',
+    this.answerViewerCacheKey = '',
   });
 }
 

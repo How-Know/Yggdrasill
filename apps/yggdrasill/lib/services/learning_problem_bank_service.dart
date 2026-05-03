@@ -502,6 +502,11 @@ class LearningProblemAnswerRender {
     required this.pixelRatio,
     required this.cached,
     required this.error,
+    this.styleVersion = '',
+    this.displayWidthDp,
+    this.displayHeightDp,
+    this.rowHeightDp,
+    this.layoutProfile = '',
   });
 
   final String key;
@@ -511,6 +516,11 @@ class LearningProblemAnswerRender {
   final double pixelRatio;
   final bool cached;
   final String error;
+  final String styleVersion;
+  final double? displayWidthDp;
+  final double? displayHeightDp;
+  final double? rowHeightDp;
+  final String layoutProfile;
 
   bool get hasImage => url.trim().isNotEmpty;
 
@@ -521,13 +531,27 @@ class LearningProblemAnswerRender {
       width: _intOrZero(map['width']),
       height: _intOrZero(map['height']),
       pixelRatio: _doubleOrZero(map['pixelRatio']) <= 0
-          ? 3.0
+          ? 7.0
           : _doubleOrZero(map['pixelRatio']),
       cached: map['cached'] == true,
       error: '${map['error'] ?? ''}'.trim(),
+      styleVersion:
+          '${map['styleVersion'] ?? map['style_version'] ?? ''}'.trim(),
+      displayWidthDp: _positiveDoubleOrNull(
+          map['displayWidthDp'] ?? map['display_width_dp']),
+      displayHeightDp: _positiveDoubleOrNull(
+          map['displayHeightDp'] ?? map['display_height_dp']),
+      rowHeightDp:
+          _positiveDoubleOrNull(map['rowHeightDp'] ?? map['row_height_dp']),
+      layoutProfile:
+          '${map['layoutProfile'] ?? map['layout_profile'] ?? ''}'.trim(),
     );
   }
 }
+
+const String kUnifiedAnswerRenderStyleVersion =
+    'answer-xelatex-v10-rightsheet-asset-driven';
+const List<String> kUnifiedAnswerRenderStyleVersionFallbacks = <String>[];
 
 class LearningProblemDocumentExportPreset {
   const LearningProblemDocumentExportPreset({
@@ -2353,8 +2377,10 @@ class LearningProblemBankService {
     required String academyId,
     required Map<String, String> answersByKey,
     String textColor = 'EAF2F7',
+    String backgroundColor = '151C21',
     int fontSize = 19,
     String engine = 'xelatex',
+    bool transparent = false,
   }) async {
     if (!hasGateway || academyId.trim().isEmpty || answersByKey.isEmpty) {
       return <String, LearningProblemAnswerRender>{};
@@ -2379,8 +2405,9 @@ class LearningProblemBankService {
           'engine': engine.trim().isEmpty ? 'xelatex' : engine.trim(),
           'style': <String, dynamic>{
             'textColor': textColor,
+            'backgroundColor': backgroundColor,
             'fontSize': fontSize,
-            'transparent': true,
+            'transparent': transparent,
           },
         },
       );
@@ -2398,6 +2425,58 @@ class LearningProblemBankService {
       return out;
     } catch (_) {
       return <String, LearningProblemAnswerRender>{};
+    }
+  }
+
+  Future<Map<String, LearningProblemAnswerRender>>
+      loadUnifiedAnswerRenderAssets({
+    required String academyId,
+    required String sourceKind,
+    required Iterable<String> sourceIds,
+    String styleVersion = kUnifiedAnswerRenderStyleVersion,
+    List<String> fallbackStyleVersions =
+        kUnifiedAnswerRenderStyleVersionFallbacks,
+  }) async {
+    final safeAcademyId = academyId.trim();
+    final safeSourceKind = sourceKind.trim();
+    final ids = sourceIds
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    if (safeAcademyId.isEmpty || safeSourceKind.isEmpty || ids.isEmpty) {
+      return const <String, LearningProblemAnswerRender>{};
+    }
+    if (!hasGateway) return const <String, LearningProblemAnswerRender>{};
+    try {
+      final result = await _gatewayPost(
+        '/answers/render-assets/resolve',
+        body: <String, dynamic>{
+          'academyId': safeAcademyId,
+          'sourceKind': safeSourceKind,
+          'sourceIds': ids,
+          'styleVersions': <String>[styleVersion],
+        },
+      );
+      final rawRenders = result['renders'];
+      if (rawRenders is! List) {
+        return const <String, LearningProblemAnswerRender>{};
+      }
+      final out = <String, LearningProblemAnswerRender>{};
+      for (final raw in rawRenders) {
+        if (raw is! Map) continue;
+        final render = LearningProblemAnswerRender.fromMap(
+          Map<String, dynamic>.from(raw),
+        );
+        if (render.key.isNotEmpty &&
+            render.hasImage &&
+            render.styleVersion == styleVersion) {
+          out[render.key] = render;
+        }
+      }
+      return out;
+    } catch (_) {
+      return const <String, LearningProblemAnswerRender>{};
     }
   }
 
@@ -2687,6 +2766,11 @@ double _doubleOrZero(dynamic value) {
   if (value is double) return value;
   if (value is num) return value.toDouble();
   return double.tryParse('$value') ?? 0;
+}
+
+double? _positiveDoubleOrNull(dynamic value) {
+  final parsed = _doubleOrZero(value);
+  return parsed > 0 && parsed.isFinite ? parsed : null;
 }
 
 /// 세트형 문항의 부분 답 하나.

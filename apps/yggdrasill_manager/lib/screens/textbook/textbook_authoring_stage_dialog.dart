@@ -656,8 +656,8 @@ class _TextbookAuthoringStageDialogState
     }
   }
 
-  Future<void> _saveAnswers() async {
-    if (_savingAnswers) return;
+  Future<bool> _saveAnswers() async {
+    if (_savingAnswers) return false;
     final uploads = <TextbookAnswerUpload>[];
     for (final entry in _answersByCropId.values) {
       if (entry.answerText.trim().isEmpty) continue;
@@ -677,7 +677,7 @@ class _TextbookAuthoringStageDialogState
     }
     if (uploads.isEmpty) {
       _toast('저장할 정답이 없습니다', error: true);
-      return;
+      return false;
     }
     setState(() => _savingAnswers = true);
     try {
@@ -688,13 +688,15 @@ class _TextbookAuthoringStageDialogState
       for (final d in _answersByCropId.values) {
         d.dirty = false;
       }
-      if (!mounted) return;
+      if (!mounted) return true;
       _toast('$count개 정답 저장 완료');
       widget.onStageChanged?.call();
       setState(() {});
+      return true;
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted) return false;
       _toast('저장 실패: $e', error: true);
+      return false;
     } finally {
       if (mounted) setState(() => _savingAnswers = false);
     }
@@ -1073,8 +1075,8 @@ class _TextbookAuthoringStageDialogState
     }
   }
 
-  Future<void> _saveSolutionRefs() async {
-    if (_savingSolRefs) return;
+  Future<bool> _saveSolutionRefs() async {
+    if (_savingSolRefs) return false;
     final uploads = <TextbookSolutionRefUpload>[];
     for (final d in _solRefsByCropId.values) {
       uploads.add(TextbookSolutionRefUpload(
@@ -1088,7 +1090,7 @@ class _TextbookAuthoringStageDialogState
     }
     if (uploads.isEmpty) {
       _toast('저장할 해설 좌표가 없습니다', error: true);
-      return;
+      return false;
     }
     setState(() => _savingSolRefs = true);
     try {
@@ -1099,13 +1101,15 @@ class _TextbookAuthoringStageDialogState
       for (final d in _solRefsByCropId.values) {
         d.dirty = false;
       }
-      if (!mounted) return;
+      if (!mounted) return true;
       _toast('$count개 해설 좌표 저장 완료');
       widget.onStageChanged?.call();
       setState(() {});
+      return true;
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted) return false;
       _toast('저장 실패: $e', error: true);
+      return false;
     } finally {
       if (mounted) setState(() => _savingSolRefs = false);
     }
@@ -2168,6 +2172,120 @@ class _TextbookAuthoringStageDialogState
     return updated;
   }
 
+  bool _sameIntList(List<int>? a, List<int>? b) {
+    if (a == null && b == null) return true;
+    if (a == null || b == null || a.length != b.length) return false;
+    for (var i = 0; i < a.length; i += 1) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
+
+  bool _matchesPersistedAnswer(
+    _AnswerDraft draft,
+    Map<String, dynamic> row,
+  ) {
+    final savedKind = '${row['answer_kind'] ?? ''}'.trim();
+    final savedText = '${row['answer_text'] ?? ''}'.trim();
+    final savedLatex = '${row['answer_latex_2d'] ?? ''}'.trim();
+    final savedRawPage = row['raw_page'];
+    final savedImagePath = '${row['answer_image_path'] ?? ''}'.trim();
+    if (savedKind != draft.kind.trim()) return false;
+    if (savedText != draft.answerText.trim()) return false;
+    if (savedLatex != draft.answerLatex2d.trim()) return false;
+    if (draft.rawPage != null && '$savedRawPage' != '${draft.rawPage}') {
+      return false;
+    }
+    if (draft.answerImageBytes != null &&
+        draft.answerImageBytes!.isNotEmpty &&
+        savedImagePath.isEmpty) {
+      return false;
+    }
+    return true;
+  }
+
+  bool _matchesPersistedSolRef(
+    _SolRefDraft draft,
+    Map<String, dynamic> row,
+  ) {
+    final savedRawPage = int.tryParse('${row['raw_page'] ?? ''}');
+    final savedNumberRegion = _parseIntList(row['number_region_1k']);
+    final savedContentRegion = _parseIntList(row['content_region_1k']);
+    if (savedRawPage != draft.rawPage) return false;
+    if (!_sameIntList(savedNumberRegion, draft.numberRegion1k)) return false;
+    if (draft.contentRegion1k != null &&
+        !_sameIntList(savedContentRegion, draft.contentRegion1k)) {
+      return false;
+    }
+    return true;
+  }
+
+  List<int>? _parseIntList(dynamic raw) {
+    if (raw is! List) return null;
+    final out = <int>[];
+    for (final item in raw) {
+      final n = item is int ? item : int.tryParse('$item');
+      if (n == null) return null;
+      out.add(n);
+    }
+    return out;
+  }
+
+  Future<void> _reconcilePersistedDirtyDrafts() async {
+    final dirtyAnswerIds = _answersByCropId.values
+        .where((d) => d.dirty)
+        .map((d) => d.cropId)
+        .toList(growable: false);
+    final dirtySolRefIds = _solRefsByCropId.values
+        .where((d) => d.dirty)
+        .map((d) => d.cropId)
+        .toList(growable: false);
+    if (dirtyAnswerIds.isEmpty && dirtySolRefIds.isEmpty) return;
+
+    final savedAnswers = <String, Map<String, dynamic>>{};
+    if (dirtyAnswerIds.isNotEmpty) {
+      final rows = await _supa
+          .from('textbook_problem_answers')
+          .select('crop_id, answer_kind, answer_text, answer_latex_2d, '
+              'raw_page, answer_image_path')
+          .inFilter('crop_id', dirtyAnswerIds);
+      for (final row in (rows as List).cast<Map<String, dynamic>>()) {
+        final cropId = '${row['crop_id'] ?? ''}';
+        if (cropId.isNotEmpty) savedAnswers[cropId] = row;
+      }
+    }
+
+    final savedSolRefs = <String, Map<String, dynamic>>{};
+    if (dirtySolRefIds.isNotEmpty) {
+      final rows = await _supa
+          .from('textbook_problem_solution_refs')
+          .select('crop_id, raw_page, number_region_1k, content_region_1k')
+          .inFilter('crop_id', dirtySolRefIds);
+      for (final row in (rows as List).cast<Map<String, dynamic>>()) {
+        final cropId = '${row['crop_id'] ?? ''}';
+        if (cropId.isNotEmpty) savedSolRefs[cropId] = row;
+      }
+    }
+
+    if (!mounted) return;
+    setState(() {
+      for (final draft in _answersByCropId.values.where((d) => d.dirty)) {
+        final saved = savedAnswers[draft.cropId];
+        if (saved != null && _matchesPersistedAnswer(draft, saved)) {
+          draft.dirty = false;
+          draft.answerImageBytes = null;
+          draft.answerImagePath = '${saved['answer_image_path'] ?? ''}';
+        }
+      }
+      for (final draft in _solRefsByCropId.values.where((d) => d.dirty)) {
+        final saved = savedSolRefs[draft.cropId];
+        if (saved != null && _matchesPersistedSolRef(draft, saved)) {
+          draft.dirty = false;
+        }
+      }
+    });
+  }
+
   Future<void> _completeIfReady() async {
     final hasDirtyAnswers = _answersByCropId.values.any((d) => d.dirty);
     final hasDirtySolRefs = _solRefsByCropId.values.any((d) => d.dirty);
@@ -2179,9 +2297,15 @@ class _TextbookAuthoringStageDialogState
       await _saveSolutionRefs();
     }
     if (!mounted) return;
-    if (_answersByCropId.values.any((d) => d.dirty) ||
-        _solRefsByCropId.values.any((d) => d.dirty)) {
-      _toast('저장되지 않은 정답/해설 좌표가 있습니다', error: true);
+    await _reconcilePersistedDirtyDrafts();
+    if (!mounted) return;
+    final dirtyAnswers = _answersByCropId.values.where((d) => d.dirty).length;
+    final dirtySolRefs = _solRefsByCropId.values.where((d) => d.dirty).length;
+    if (dirtyAnswers > 0 || dirtySolRefs > 0) {
+      _toast(
+        '저장되지 않은 정답 $dirtyAnswers개 / 해설 좌표 $dirtySolRefs개가 있습니다',
+        error: true,
+      );
       return;
     }
     await _refreshPbRunStatuses();

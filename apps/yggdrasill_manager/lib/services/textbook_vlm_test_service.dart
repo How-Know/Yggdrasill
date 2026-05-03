@@ -79,6 +79,7 @@ class TextbookVlmTestService {
     required String academyId,
     required String bookId,
     required String gradeLabel,
+    String? sectionHint,
     String mimeType = 'image/png',
   }) async {
     final body = <String, dynamic>{
@@ -88,6 +89,8 @@ class TextbookVlmTestService {
       'academy_id': academyId,
       'book_id': bookId,
       'grade_label': gradeLabel,
+      if ((sectionHint ?? '').trim().isNotEmpty)
+        'section_hint': sectionHint!.trim(),
     };
     final res = await _http.post(
       _uri('/textbook/vlm/detect-problems'),
