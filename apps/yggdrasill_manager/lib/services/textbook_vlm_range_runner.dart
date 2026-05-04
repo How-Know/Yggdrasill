@@ -102,6 +102,7 @@ bool isRetriableVlmError(Object err) {
       s.contains('socketexception') ||
       s.contains('os error: connection') ||
       s.contains('timeoutexception') ||
+      s.contains('missing bbox') ||
       s.contains('missing item_region');
 }
 
@@ -141,6 +142,16 @@ Future<PageAnalysisOutcome> analyzeSinglePageWithRetry({
           missingRegionCount > 0) {
         throw StateError(
           'missing item_region for $missingRegionCount/${result.items.length} VLM items '
+          'on page $rawPage',
+        );
+      }
+      final missingBboxCount =
+          result.items.where((item) => (item.bbox?.length ?? 0) != 4).length;
+      if (result.pageKind != 'concept_page' &&
+          hasItems &&
+          missingBboxCount > 0) {
+        throw StateError(
+          'missing bbox for $missingBboxCount/${result.items.length} VLM items '
           'on page $rawPage',
         );
       }

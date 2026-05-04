@@ -4475,6 +4475,85 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     return trimmed;
   }
 
+  HomeworkAnswerCellState _answerViewerStateFromRaw(String? raw) {
+    switch (_normalizeState(raw)) {
+      case 'wrong':
+        return HomeworkAnswerCellState.wrong;
+      case 'unsolved':
+        return HomeworkAnswerCellState.unsolved;
+      case 'correct':
+      default:
+        return HomeworkAnswerCellState.correct;
+    }
+  }
+
+  String _answerViewerStateToRaw(HomeworkAnswerCellState state) {
+    switch (state) {
+      case HomeworkAnswerCellState.correct:
+        return 'correct';
+      case HomeworkAnswerCellState.wrong:
+        return 'wrong';
+      case HomeworkAnswerCellState.unsolved:
+        return 'unsolved';
+    }
+  }
+
+  Map<String, HomeworkAnswerCellState> _answerViewerInitialStates() {
+    final out = <String, HomeworkAnswerCellState>{};
+    _gradingStates.forEach((key, value) {
+      final safeKey = key.trim();
+      if (safeKey.isEmpty) return;
+      out[safeKey] = _answerViewerStateFromRaw(value);
+    });
+    return out;
+  }
+
+  void _syncAnswerViewerStates(
+    Map<String, HomeworkAnswerCellState> states,
+  ) {
+    if (!mounted) return;
+    final mapped = <String, String>{};
+    states.forEach((key, value) {
+      final safeKey = key.trim();
+      if (safeKey.isEmpty) return;
+      mapped[safeKey] = _answerViewerStateToRaw(value);
+    });
+    setState(() {
+      _gradingStates = mapped;
+    });
+    _emitStateChanged();
+  }
+
+  List<HomeworkAnswerGradingPage> _answerViewerGradingPages() {
+    return _visiblePages()
+        .map(
+          (page) => HomeworkAnswerGradingPage(
+            pageNumber: page.pageNumber,
+            cells: page.cells
+                .map(
+                  (cell) => HomeworkAnswerGradingCell(
+                    key: cell.key,
+                    questionIndex: cell.questionIndex,
+                    questionLabel: cell.questionLabel,
+                    answer: cell.answer,
+                    answerMode: cell.answerMode,
+                    answerImageUrl: cell.answerImageUrl,
+                    answerImageWidth: cell.answerImageWidth,
+                    answerImageHeight: cell.answerImageHeight,
+                    answerImagePixelRatio: cell.answerImagePixelRatio,
+                    answerRenderPolicy: cell.answerRenderPolicy,
+                    answerSourceKind: cell.answerSourceKind,
+                    answerSourceId: cell.answerSourceId,
+                    answerAssetKind: cell.answerAssetKind,
+                    answerRenderStyleVersion: cell.answerRenderStyleVersion,
+                  ),
+                )
+                .toList(growable: false),
+          ),
+        )
+        .toList(growable: false);
+  }
+
   BuildContext get _navigatorContext => widget.dialogContext ?? context;
 
   Future<void> _openSessionAnswerSheet(
@@ -4518,7 +4597,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       }
     }
     if (!mounted) return;
-    await openHomeworkAnswerViewerPage(
+    final action = await openHomeworkAnswerViewerPage(
       _navigatorContext,
       filePath: answerPath,
       title: session.title.trim().isEmpty ? '답지 확인' : session.title.trim(),
@@ -4526,7 +4605,6 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
       cacheKey: session.answerViewerCacheKey.trim().isEmpty
           ? 'right_sheet_answer:$answerPath'
           : session.answerViewerCacheKey.trim(),
-      enableConfirm: false,
       overlayEntries: session.overlayEntries
           .map(
             (entry) => HomeworkAnswerOverlayEntry(
@@ -4536,7 +4614,20 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
             ),
           )
           .toList(growable: false),
+      gradingPages: _answerViewerGradingPages(),
+      initialGradingStates: _answerViewerInitialStates(),
+      onGradingStatesChanged: _syncAnswerViewerStates,
+      enableConfirm: true,
     );
+    if (!mounted || action == null) return;
+    switch (action) {
+      case HomeworkAnswerViewerAction.complete:
+        await _runAction('complete');
+        break;
+      case HomeworkAnswerViewerAction.confirm:
+        await _runAction('confirm');
+        break;
+    }
   }
 
   ({double correctScore, double totalScore}) _computeScoreResult(
@@ -4697,7 +4788,7 @@ class _AnswerKeyGradingTabPanelState extends State<_AnswerKeyGradingTabPanel> {
     final numbers = _objectiveAnswerNumbers(answer);
     if (numbers.isNotEmpty) {
       return Padding(
-        padding: const EdgeInsets.only(right: 24),
+        padding: const EdgeInsets.only(right: 12),
         child: Align(
           alignment: Alignment.centerRight,
           child: Wrap(

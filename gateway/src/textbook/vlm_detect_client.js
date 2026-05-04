@@ -264,6 +264,7 @@ export function normalizeDetectResult(parsedJson, opts = {}) {
     });
   }
   backfillMissingItemRegions(out);
+  backfillMissingBboxes(out);
   return out;
 }
 
@@ -341,6 +342,57 @@ function backfillMissingItemRegions(result) {
       item.item_region = [yMin, xMin, yMax, clamp01k(Math.max(xMax, xMin + 40))];
     }
   }
+}
+
+function backfillMissingBboxes(result) {
+  if (!result || !Array.isArray(result.items) || result.items.length === 0) return;
+  const canUseFallback =
+    result.page_kind !== 'concept_page' &&
+    ['basic_drill', 'type_practice', 'mastery'].includes(result.section);
+  if (!canUseFallback) return;
+
+  let filled = 0;
+  for (const item of result.items) {
+    if (Array.isArray(item.bbox)) continue;
+    if (!Array.isArray(item.item_region) || item.item_region.length !== 4) continue;
+    const synthesized = synthesizeNumberBboxFromItemRegion(item, result.section);
+    if (!synthesized) continue;
+    item.bbox = synthesized;
+    filled += 1;
+  }
+  if (filled > 0) {
+    const suffix = `synthesized_bbox=${filled}`;
+    result.notes = result.notes ? `${result.notes}; ${suffix}` : suffix;
+  }
+}
+
+function synthesizeNumberBboxFromItemRegion(item, section) {
+  const region = item.item_region;
+  if (!Array.isArray(region) || region.length !== 4) return null;
+  const [yMin, xMin, yMax, xMax] = region.map((v) => Number(v));
+  if (![yMin, xMin, yMax, xMax].every((v) => Number.isFinite(v))) return null;
+
+  const label = String(item.label || '').trim();
+  const number = String(item.number || '').trim();
+  const labelExtra = label ? Math.min(80, label.length * 15) : 0;
+  const numberExtra = Math.min(70, Math.max(40, number.length * 12));
+  const width = Math.max(82, Math.min(170, numberExtra + labelExtra + 24));
+
+  if (section === 'basic_drill') {
+    const right = clamp01k(xMin - 8);
+    const left = clamp01k(right - width);
+    const top = clamp01k(yMin);
+    const bottom = clamp01k(Math.min(yMax, yMin + 22));
+    if (left >= right || top >= bottom) return null;
+    return [top, left, bottom, right];
+  }
+
+  const top = clamp01k(yMin - 28);
+  const bottom = clamp01k(yMin - 7);
+  const left = clamp01k(xMin);
+  const right = clamp01k(Math.min(xMax, xMin + width));
+  if (left >= right || top >= bottom) return null;
+  return [top, left, bottom, right];
 }
 
 function inferColumn(bbox) {
